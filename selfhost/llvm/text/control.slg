@@ -2236,6 +2236,7 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
     (matchOwnerIndex! >= 0 and context.ir[matchOwnerIndex!].kind != 0 and context.ir[matchOwnerIndex!].kind != 11) -> while {
         matchOwnerIndex! - 1 => matchOwnerIndex!
     }
+    matchIndex -> irValueUsed(matchOwner!, context, state) => matchValueUsed
     -1 => ownedMatchFileTypeId!
     (subject.typeId >= 0 and context.types[subject.typeId].kind == 7 and context.types[subject.typeId].first >= 0) -> if {
         context.types[subject.typeId].first => matchPayloadTypeId
@@ -2254,7 +2255,7 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
     " " -> print
     (subject.kind == 5 and subject.parent >= 0 and context.ir[subject.parent].kind == 1 and context.ir[subject.parent].parent >= 0 and context.ir[context.ir[subject.parent].parent].operand1 >= 0 and subject.symbol == context.ir[context.ir[context.ir[subject.parent].parent].operand1].symbol) -> if { "%arg" -> print } else { "%v$(match.operand0)" -> print }
     ", ptr %v$(matchIndex)_subject_slot, align 8" -> println
-    not (match.typeOrigin == 1 and match.typeSymbol == 0) -> if {
+    (matchValueUsed and not (match.typeOrigin == 1 and match.typeSymbol == 0)) -> if {
         "  %v$(matchIndex)_result = alloca " -> print
         match -> writeIrType(context, state)
         ", align " -> print
@@ -2297,7 +2298,7 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
             not nestedArmHasExplicitReturn! -> if { arm.operand1 => emittedArmRegion! }
         }
         emittedArmRegion! -> emitRegion(context, state)
-        not (match.typeOrigin == 1 and match.typeSymbol == 0) -> if {
+        (matchValueUsed and not (match.typeOrigin == 1 and match.typeSymbol == 0)) -> if {
             armIndex! -> matchRegionResultValueIndex(context, state) => armValueIndex
             context.ir[armValueIndex] => armValue
             (armValue.kind == 26 and armValue.parent != armIndex! and armValue.parent != emittedArmRegion!) -> if {
@@ -2361,7 +2362,7 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "match$(matchIndex)_merge:" -> println
-    not (match.typeOrigin == 1 and match.typeSymbol == 0) -> if {
+    (matchValueUsed and not (match.typeOrigin == 1 and match.typeSymbol == 0)) -> if {
         "  %v$(matchIndex) = load " -> print
         match -> writeIrType(context, state)
         ", ptr %v$(matchIndex)_result, align " -> print

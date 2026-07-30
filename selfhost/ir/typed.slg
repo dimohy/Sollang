@@ -6503,6 +6503,37 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
         }
     }
+    0 => finalCallTypeIndex!
+    finalCallTypeIndex! < (results! -> len) -> while {
+        results![finalCallTypeIndex!] => finalCallType!
+        (finalCallType!.kind == 6
+            and finalCallType!.targetModule >= 0
+            and finalCallType!.symbol >= 0) -> if {
+            finalCallType!.targetModule -> functionResultTypeId(finalCallType!.symbol) => finalCallResultTypeId
+            finalCallResultTypeId >= 0 -> if {
+                frozenRecursiveSemanticTypes[finalCallResultTypeId] => finalCallResultType
+                (not finalCallResultType.containsParameter
+                    and finalCallResultType.kind == 1
+                    and finalCallType!.typeKind == 7) -> if {
+                finalCallResultType.origin => finalCallType!.typeOrigin
+                finalCallResultType.module => finalCallType!.typeModule
+                finalCallResultType.symbol => finalCallType!.typeSymbol
+                finalCallResultTypeId => finalCallType!.typeId
+                finalCallResultType.kind => finalCallType!.typeKind
+                recursiveTypeFlags[finalCallResultTypeId] => finalCallType!.typeFlags
+                finalCallResultType.kind == 7 -> if {
+                    17 => finalCallType!.typeOrigin
+                    finalCallResultType.first >= 0 -> if {
+                        frozenRecursiveSemanticTypes[finalCallResultType.first].module => finalCallType!.typeModule
+                        frozenRecursiveSemanticTypes[finalCallResultType.first].symbol => finalCallType!.typeSymbol
+                    }
+                }
+                finalCallType! => results![finalCallTypeIndex!]
+                }
+            }
+        }
+        finalCallTypeIndex! + 1 => finalCallTypeIndex!
+    }
     0 => finalControlBindingIndex!
     finalControlBindingIndex! < (results! -> len) -> while {
         results![finalControlBindingIndex!] => finalControlBinding!
@@ -6785,11 +6816,11 @@ public movesFrom ir: [TypedIrNode; ~] -> [MoveEvent; ~] {
         ((site.kind == 5 or site.kind == 13) and (site.typeOrigin == 13 or site.typeOrigin == 15 or site.typeFlags % 2 == 1)) -> if {
             site.parent => aggregateOwner!
             false => aggregateMemberPath!
-            (aggregateOwner! >= 0 and ir[aggregateOwner!].kind != 0 and ir[aggregateOwner!].kind != 1 and ir[aggregateOwner!].kind != 11 and ir[aggregateOwner!].kind != 12 and ir[aggregateOwner!].kind != 14 and ir[aggregateOwner!].kind != 16 and ir[aggregateOwner!].kind != 19 and ir[aggregateOwner!].kind != 20) -> while {
+            (aggregateOwner! >= 0 and ir[aggregateOwner!].kind != 0 and ir[aggregateOwner!].kind != 1 and ir[aggregateOwner!].kind != 11 and ir[aggregateOwner!].kind != 12 and ir[aggregateOwner!].kind != 14 and ir[aggregateOwner!].kind != 16 and ir[aggregateOwner!].kind != 19 and ir[aggregateOwner!].kind != 20 and ir[aggregateOwner!].kind != 26) -> while {
                 ir[aggregateOwner!].kind == 13 -> if { true => aggregateMemberPath! }
                 ir[aggregateOwner!].parent => aggregateOwner!
             }
-            (not aggregateMemberPath! and aggregateOwner! >= 0 and (ir[aggregateOwner!].kind == 12 or ir[aggregateOwner!].kind == 14 or ir[aggregateOwner!].kind == 16)) -> if {
+            (not aggregateMemberPath! and aggregateOwner! >= 0 and (ir[aggregateOwner!].kind == 12 or ir[aggregateOwner!].kind == 14 or ir[aggregateOwner!].kind == 16 or ir[aggregateOwner!].kind == 26)) -> if {
                 movedValueIrs! -> push(siteIndex!)
             }
         }

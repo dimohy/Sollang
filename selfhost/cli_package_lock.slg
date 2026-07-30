@@ -1,0 +1,376 @@
+namespace sollang.compiler.cli_package_lock
+
+import sollang.compiler.project
+import sys.file as file
+import sys.path as path
+
+unitValue: -> Unit {
+    false => ignored
+}
+
+appendText bytes: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes -> push(value -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+}
+
+appendLine bytes: mut [UInt8; ~], value: Text -> Unit {
+    bytes -> appendText(value)
+    bytes -> push(UInt8(10))
+}
+
+appendPath bytes: mut [UInt8; ~], value: ref path.Path -> Unit {
+    0 => index!
+    index! < (value.bytes -> len) -> while {
+        value.bytes[index!] == UInt8(34) -> if {
+            bytes -> push(UInt8(92))
+            bytes -> push(UInt8(34))
+        } else {
+            value.bytes[index!] == UInt8(92) -> if {
+                bytes -> push(UInt8(47))
+            } else {
+                bytes -> push(value.bytes[index!])
+            }
+        }
+        index! + 1 => index!
+    }
+}
+
+directoryOf value: Text -> Text {
+    value -> len => length
+    length => index!
+    (index! > UIntSize(0)) -> while {
+        value -> byte(index! - UIntSize(1)) => current
+        (current == UInt8(47) or current == UInt8(92)) -> if {
+            value -> slice(UIntSize(0), index! - UIntSize(1)) => directory
+            directory -> return
+        }
+        index! - UIntSize(1) => index!
+    }
+    "."
+}
+
+separator value: UInt8, style: path.Style -> Bool {
+    false => separated!
+    style -> when {
+        Windows {
+            value == UInt8(47) or value == UInt8(92) => separated!
+            unitValue()
+        }
+        Posix {
+            value == UInt8(47) => separated!
+            unitValue()
+        }
+    }
+    separated!
+}
+
+sameComponent left: Text, leftStart: UIntSize, leftLength: UIntSize, right: Text, rightStart: UIntSize, rightLength: UIntSize -> Bool {
+    leftLength == rightLength => same!
+    UIntSize(0) => index!
+    (same! and index! < leftLength) -> while {
+        (left -> byte(leftStart + index!)) != (right -> byte(rightStart + index!)) -> if {
+            false => same!
+        }
+        index! + UIntSize(1) => index!
+    }
+    same!
+}
+
+relativeDirectory root: Text, target: Text, style: path.Style -> path.Path {
+    [UIntSize; ~] => rootStarts!
+    [UIntSize; ~] => rootLengths!
+    [UIntSize; ~] => targetStarts!
+    [UIntSize; ~] => targetLengths!
+
+    UIntSize(0) => index!
+    index! < (root -> len) -> while {
+        (index! < (root -> len) and ((root -> byte(index!)) -> separator(style))) -> while {
+            index! + UIntSize(1) => index!
+        }
+        index! < (root -> len) -> if {
+            index! => start
+            (index! < (root -> len) and not ((root -> byte(index!)) -> separator(style))) -> while {
+                index! + UIntSize(1) => index!
+            }
+            rootStarts! -> push(start)
+            rootLengths! -> push(index! - start)
+        }
+    }
+
+    UIntSize(0) => index!
+    index! < (target -> len) -> while {
+        (index! < (target -> len) and ((target -> byte(index!)) -> separator(style))) -> while {
+            index! + UIntSize(1) => index!
+        }
+        index! < (target -> len) -> if {
+            index! => start
+            (index! < (target -> len) and not ((target -> byte(index!)) -> separator(style))) -> while {
+                index! + UIntSize(1) => index!
+            }
+            targetStarts! -> push(start)
+            targetLengths! -> push(index! - start)
+        }
+    }
+
+    0 => common!
+    (common! < (rootStarts! -> len) and common! < (targetStarts! -> len) and (root -> sameComponent(rootStarts![common!], rootLengths![common!], target, targetStarts![common!], targetLengths![common!]))) -> while {
+        common! + 1 => common!
+    }
+
+    [UInt8; ~] => bytes!
+    common! => rootIndex!
+    rootIndex! < (rootStarts! -> len) -> while {
+        (bytes! -> len) > 0 -> if { bytes! -> push(UInt8(47)) }
+        bytes! -> push(UInt8(46))
+        bytes! -> push(UInt8(46))
+        rootIndex! + 1 => rootIndex!
+    }
+    common! => targetIndex!
+    targetIndex! < (targetStarts! -> len) -> while {
+        (bytes! -> len) > 0 -> if { bytes! -> push(UInt8(47)) }
+        targetStarts![targetIndex!] => byteIndex!
+        byteIndex! < targetStarts![targetIndex!] + targetLengths![targetIndex!] -> while {
+            target -> byte(byteIndex!) => current
+            current == UInt8(92) -> if { UInt8(47) } else { current } => portable
+            bytes! -> push(portable)
+            byteIndex! + UIntSize(1) => byteIndex!
+        }
+        targetIndex! + 1 => targetIndex!
+    }
+    (bytes! -> len) == 0 -> if { bytes! -> push(UInt8(46)) }
+    path.Path { bytes: bytes!, style: path.Style.Posix } => result!
+    result!
+}
+
+comparePath left: ref path.Path, right: ref path.Path -> Int {
+    left.bytes -> len => leftLength
+    right.bytes -> len => rightLength
+    leftLength < rightLength -> if { leftLength } else { rightLength } => shared
+    0 => result!
+    0 => index!
+    (result! == 0 and index! < shared) -> while {
+        left.bytes[index!] < right.bytes[index!] -> if { -1 => result! }
+        left.bytes[index!] > right.bytes[index!] -> if { 1 => result! }
+        index! + 1 => index!
+    }
+    (result! == 0 and leftLength < rightLength) -> if { -1 => result! }
+    (result! == 0 and leftLength > rightLength) -> if { 1 => result! }
+    result!
+}
+
+sortedIndexes values: [path.Path; ~] -> [Int; ~] {
+    [Int; ~] => order!
+    0 => index!
+    index! < (values -> len) -> while {
+        order! -> push(index!)
+        (order! -> len) - 1 => position!
+        (position! > 0 and (values[order![position!]] -> comparePath(values[order![position! - 1]])) < 0) -> while {
+            order![position! - 1] => previous
+            order![position!] => current
+            current => order![position! - 1]
+            previous => order![position!]
+            position! - 1 => position!
+        }
+        index! + 1 => index!
+    }
+    order!
+}
+
+public render packageManifests: [path.Path; ~], packageNames: [path.Path; ~], packageVersions: [path.Path; ~], style: path.Style -> [UInt8; ~] uses File {
+    [UInt8; ~] => bytes!
+    bytes! -> appendLine("lock {")
+    bytes! -> appendLine("    format: 2")
+    bytes! -> appendLine("    packages: [")
+    packageNames -> sortedIndexes => order!
+    path.pathText(packageManifests[0]) => rootManifestText
+    rootManifestText -> directoryOf => rootDirectory
+
+    0 => orderIndex!
+    orderIndex! < (order! -> len) -> while {
+        order![orderIndex!] => packageIndex
+        path.pathText(packageManifests[packageIndex]) => manifestText
+        manifestText -> directoryOf => packageDirectory
+        rootDirectory -> relativeDirectory(packageDirectory, style) => relative!
+
+        bytes! -> appendLine("        {")
+        bytes! -> appendText("            id: ")
+        bytes! -> push(UInt8(34))
+        bytes! -> appendPath(packageNames[packageIndex])
+        bytes! -> appendText("@")
+        bytes! -> appendPath(packageVersions[packageIndex])
+        bytes! -> push(UInt8(34))
+        bytes! -> push(UInt8(10))
+        bytes! -> appendText("            source: ")
+        bytes! -> push(UInt8(34))
+        bytes! -> appendText("path:")
+        bytes! -> appendPath(relative!)
+        bytes! -> push(UInt8(34))
+        bytes! -> push(UInt8(10))
+
+        manifestText -> file.mapText => source!
+        source! -> len => sourceLength
+        source! -> slice(UIntSize(0), sourceLength) => sourceView
+        sourceView -> project.parse => parsed!
+        [Int; ~] => dependencyPackages!
+        0 => dependencyIndex!
+        dependencyIndex! < (parsed!.dependencies -> len) -> while {
+            source! -> slice(parsed!.dependencies[dependencyIndex!].name.start, parsed!.dependencies[dependencyIndex!].name.length) => dependencyName
+            0 => candidate!
+            false => found!
+            (not found! and candidate! < (packageNames -> len)) -> while {
+                path.equalsText(packageNames[candidate!], dependencyName) -> if {
+                    dependencyPackages! -> push(candidate!)
+                    true => found!
+                }
+                candidate! + 1 => candidate!
+            }
+            dependencyIndex! + 1 => dependencyIndex!
+        }
+        1 => sortIndex!
+        sortIndex! < (dependencyPackages! -> len) -> while {
+            sortIndex! => position!
+            (position! > 0 and (packageNames[dependencyPackages![position!]] -> comparePath(packageNames[dependencyPackages![position! - 1]])) < 0) -> while {
+                dependencyPackages![position! - 1] => previous
+                dependencyPackages![position!] => current
+                current => dependencyPackages![position! - 1]
+                previous => dependencyPackages![position!]
+                position! - 1 => position!
+            }
+            sortIndex! + 1 => sortIndex!
+        }
+
+        bytes! -> appendText("            dependencies: [")
+        (dependencyPackages! -> len) > 0 -> if {
+            bytes! -> push(UInt8(10))
+            0 => dependencyPackageIndex!
+            dependencyPackageIndex! < (dependencyPackages! -> len) -> while {
+                dependencyPackages![dependencyPackageIndex!] => dependencyPackage
+                bytes! -> appendText("                ")
+                bytes! -> push(UInt8(34))
+                bytes! -> appendPath(packageNames[dependencyPackage])
+                bytes! -> appendText("@")
+                bytes! -> appendPath(packageVersions[dependencyPackage])
+                bytes! -> push(UInt8(34))
+                bytes! -> push(UInt8(10))
+                dependencyPackageIndex! + 1 => dependencyPackageIndex!
+            }
+            bytes! -> appendText("            ")
+        }
+        bytes! -> appendLine("]")
+        bytes! -> appendLine("        }")
+        orderIndex! + 1 => orderIndex!
+    }
+    bytes! -> appendLine("    ]")
+    bytes! -> appendLine("}")
+    bytes!
+}
+
+sameFile pathValue: Text, expected: [UInt8; ~] -> Bool uses File {
+    false => same!
+    pathValue -> file.openRead -> when {
+        Ok(_) {
+            pathValue -> file.mapText => source!
+            (source! -> len) == UIntSize(expected -> len) => same!
+            UIntSize(0) => index!
+            (same! and index! < (source! -> len)) -> while {
+                (source! -> byte(index!)) != expected[Int(index!)] -> if { false => same! }
+                index! + UIntSize(1) => index!
+            }
+        }
+        Err(_) {}
+    }
+    same!
+}
+
+fileExists pathValue: Text -> Bool uses File {
+    false => exists!
+    pathValue -> file.openRead -> when {
+        Ok(_) { true => exists! }
+        Err(_) {}
+    }
+    exists!
+}
+
+writeSucceeded result: Result<Unit, Text> -> Bool {
+    result -> when {
+        Ok(_) { true }
+        Err(_) { false }
+    }
+}
+
+writeBytes destination: Text, temporary: Text, bytes: [UInt8; ~] -> Bool uses File {
+    false => written!
+    temporary -> file.openWrite -> when {
+        Ok(writer) {
+            true => valid!
+            0 => index!
+            (valid! and index! < (bytes -> len)) -> while {
+                writer -> writeAt<UInt8>(bytes[index!], UInt64(index!)) -> writeSucceeded => valid!
+                index! + 1 => index!
+            }
+            valid! -> if { writer -> file.sync => valid! }
+            valid! => written!
+        }
+        Err(_) {}
+    }
+    written! -> if {
+        file.AtomicReplaceRequest {
+            temporary: temporary
+            destination: destination
+        } -> file.atomicReplace
+    } else { false }
+}
+
+lockPath manifest: ref path.Path, style: path.Style -> path.Path {
+    path.pathText(manifest) => manifestText
+    manifestText -> directoryOf => directory
+    [UInt8; ~] => bytes!
+    bytes! -> appendText(directory)
+    (bytes! -> len) > 0 -> if {
+        style -> when {
+            Windows { bytes! -> push(UInt8(92)) }
+            Posix { bytes! -> push(UInt8(47)) }
+        }
+    }
+    bytes! -> appendText("sollang.lock")
+    path.Path { bytes: bytes!, style: style } => result!
+    result!
+}
+
+temporaryPath destination: ref path.Path -> path.Path {
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < (destination.bytes -> len) -> while {
+        bytes! -> push(destination.bytes[index!])
+        index! + 1 => index!
+    }
+    bytes! -> push(UInt8(46))
+    bytes! -> push(UInt8(116))
+    bytes! -> push(UInt8(109))
+    bytes! -> push(UInt8(112))
+    path.Path { bytes: bytes!, style: destination.style } => result!
+    result!
+}
+
+public destination packageManifests: [path.Path; ~], style: path.Style -> path.Path {
+    packageManifests[0] -> lockPath(style)
+}
+
+# Status: 0 absent/current/written, 1 no graph, 2 locked mismatch,
+# 3 write failure. writeMissing is true for explicit resolve/workspaces.
+public ensure packageManifests: [path.Path; ~], packageNames: [path.Path; ~], packageVersions: [path.Path; ~], locked: Bool, writeMissing: Bool, style: path.Style -> Int uses File {
+    (packageManifests -> len) == 0 -> if { 1 -> return }
+    packageManifests -> render(packageNames, packageVersions, style) => expected!
+    packageManifests[0] -> lockPath(style) => destination!
+    path.pathText(destination!) => destinationText
+    destinationText -> sameFile(expected!) -> if { 0 -> return }
+    destinationText -> fileExists => exists
+    (not exists and not locked and not writeMissing) -> if { 0 -> return }
+    locked -> if { 2 -> return }
+    destination! -> temporaryPath => temporary!
+    path.pathText(temporary!) => temporaryText
+    destinationText -> writeBytes(temporaryText, expected!) -> if { 0 } else { 3 }
+}

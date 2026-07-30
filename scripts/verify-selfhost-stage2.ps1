@@ -22,6 +22,11 @@ $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhos
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
+$interpolationLengthSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-interpolation-len.slg"
+$nestedUInt8IfSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-if-uint8-value.slg"
+$unusedIfAssignmentSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-unused-if-assignment.slg"
+$unusedMatchAssignmentSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-unused-match-assignment.slg"
+$mutableResetAfterWhileSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-mutable-reset-after-while.slg"
 $sequenceSource = Join-Path $repoRoot "stdlib\std\sequence.slg"
 $streamTableSource = Join-Path $repoRoot "examples\regression\576-linq-multiplication-table.slg"
 $streamDeferredTextSource = Join-Path $repoRoot "examples\regression\580-deferred-text-evaluation.slg"
@@ -223,6 +228,101 @@ if (-not ([System.IO.File]::ReadAllText($groupedStage2Llvm).Contains("xor i1")))
 }
 Write-Host "[stage2 3/7] PASS grouped-not $groupedStage2Hash"
 
+$interpolationLengthStage1Llvm = Join-Path $artifactsDir "stage2-check-interpolation-len-stage1.ll"
+$interpolationLengthStage2Llvm = Join-Path $artifactsDir "stage2-check-interpolation-len-stage2.ll"
+$interpolationLengthStage1Error = Join-Path $artifactsDir "stage2-check-interpolation-len-stage1.err"
+$interpolationLengthStage2Error = Join-Path $artifactsDir "stage2-check-interpolation-len-stage2.err"
+$interpolationLengthArguments = @("windows", $interpolationLengthSource)
+$interpolationLengthStage1Process = Invoke-ProcessToFile $stage1Path $interpolationLengthArguments $interpolationLengthStage1Llvm $interpolationLengthStage1Error
+$interpolationLengthStage2Process = Invoke-ProcessToFile $stage2Path $interpolationLengthArguments $interpolationLengthStage2Llvm $interpolationLengthStage2Error
+Assert-ProcessSucceeded $interpolationLengthStage1Process $interpolationLengthStage1Error "stage-1 interpolation length emission"
+Assert-ProcessSucceeded $interpolationLengthStage2Process $interpolationLengthStage2Error "stage-2 interpolation length emission"
+$interpolationLengthStage1Hash = Get-NormalizedHash $interpolationLengthStage1Llvm
+$interpolationLengthStage2Hash = Get-NormalizedHash $interpolationLengthStage2Llvm
+if ($interpolationLengthStage1Hash -ne $interpolationLengthStage2Hash) {
+    throw "interpolation length normalized LLVM differs: stage1=$interpolationLengthStage1Hash stage2=$interpolationLengthStage2Hash"
+}
+Write-Host "[stage2 3/7] PASS interpolation-len $interpolationLengthStage2Hash"
+
+$nestedUInt8IfStage1Llvm = Join-Path $artifactsDir "stage2-check-if-uint8-stage1.ll"
+$nestedUInt8IfStage2Llvm = Join-Path $artifactsDir "stage2-check-if-uint8-stage2.ll"
+$nestedUInt8IfStage1Error = Join-Path $artifactsDir "stage2-check-if-uint8-stage1.err"
+$nestedUInt8IfStage2Error = Join-Path $artifactsDir "stage2-check-if-uint8-stage2.err"
+$nestedUInt8IfArguments = @("windows", $nestedUInt8IfSource)
+$nestedUInt8IfStage1Process = Invoke-ProcessToFile $stage1Path $nestedUInt8IfArguments $nestedUInt8IfStage1Llvm $nestedUInt8IfStage1Error
+$nestedUInt8IfStage2Process = Invoke-ProcessToFile $stage2Path $nestedUInt8IfArguments $nestedUInt8IfStage2Llvm $nestedUInt8IfStage2Error
+Assert-ProcessSucceeded $nestedUInt8IfStage1Process $nestedUInt8IfStage1Error "stage-1 nested UInt8 if emission"
+Assert-ProcessSucceeded $nestedUInt8IfStage2Process $nestedUInt8IfStage2Error "stage-2 nested UInt8 if emission"
+$nestedUInt8IfStage1Hash = Get-NormalizedHash $nestedUInt8IfStage1Llvm
+$nestedUInt8IfStage2Hash = Get-NormalizedHash $nestedUInt8IfStage2Llvm
+if ($nestedUInt8IfStage1Hash -ne $nestedUInt8IfStage2Hash) {
+    throw "nested UInt8 if normalized LLVM differs: stage1=$nestedUInt8IfStage1Hash stage2=$nestedUInt8IfStage2Hash"
+}
+if ([System.IO.File]::ReadAllText($nestedUInt8IfStage2Llvm).Contains("freeze void")) {
+    throw "nested UInt8 if stage-2 LLVM contains a void value operation"
+}
+Write-Host "[stage2 3/7] PASS if-uint8 $nestedUInt8IfStage2Hash"
+
+$unusedIfStage1Llvm = Join-Path $artifactsDir "stage2-check-unused-if-stage1.ll"
+$unusedIfStage2Llvm = Join-Path $artifactsDir "stage2-check-unused-if-stage2.ll"
+$unusedIfStage1Error = Join-Path $artifactsDir "stage2-check-unused-if-stage1.err"
+$unusedIfStage2Error = Join-Path $artifactsDir "stage2-check-unused-if-stage2.err"
+$unusedIfArguments = @("windows", $unusedIfAssignmentSource)
+$unusedIfStage1Process = Invoke-ProcessToFile $stage1Path $unusedIfArguments $unusedIfStage1Llvm $unusedIfStage1Error
+$unusedIfStage2Process = Invoke-ProcessToFile $stage2Path $unusedIfArguments $unusedIfStage2Llvm $unusedIfStage2Error
+Assert-ProcessSucceeded $unusedIfStage1Process $unusedIfStage1Error "stage-1 unused if emission"
+Assert-ProcessSucceeded $unusedIfStage2Process $unusedIfStage2Error "stage-2 unused if emission"
+$unusedIfStage1Hash = Get-NormalizedHash $unusedIfStage1Llvm
+$unusedIfStage2Hash = Get-NormalizedHash $unusedIfStage2Llvm
+if ($unusedIfStage1Hash -ne $unusedIfStage2Hash) {
+    throw "unused if normalized LLVM differs: stage1=$unusedIfStage1Hash stage2=$unusedIfStage2Hash"
+}
+if ([System.IO.File]::ReadAllText($unusedIfStage2Llvm) -match '%if\d+_result = alloca i1') {
+    throw "unused statement-position if allocated a Boolean result slot"
+}
+Write-Host "[stage2 3/7] PASS unused-if $unusedIfStage2Hash"
+
+$unusedMatchStage1Llvm = Join-Path $artifactsDir "stage2-check-unused-match-stage1.ll"
+$unusedMatchStage2Llvm = Join-Path $artifactsDir "stage2-check-unused-match-stage2.ll"
+$unusedMatchStage1Error = Join-Path $artifactsDir "stage2-check-unused-match-stage1.err"
+$unusedMatchStage2Error = Join-Path $artifactsDir "stage2-check-unused-match-stage2.err"
+$unusedMatchArguments = @("windows", $unusedMatchAssignmentSource)
+$unusedMatchStage1Process = Invoke-ProcessToFile $stage1Path $unusedMatchArguments $unusedMatchStage1Llvm $unusedMatchStage1Error
+$unusedMatchStage2Process = Invoke-ProcessToFile $stage2Path $unusedMatchArguments $unusedMatchStage2Llvm $unusedMatchStage2Error
+Assert-ProcessSucceeded $unusedMatchStage1Process $unusedMatchStage1Error "stage-1 unused match emission"
+Assert-ProcessSucceeded $unusedMatchStage2Process $unusedMatchStage2Error "stage-2 unused match emission"
+$unusedMatchStage1Hash = Get-NormalizedHash $unusedMatchStage1Llvm
+$unusedMatchStage2Hash = Get-NormalizedHash $unusedMatchStage2Llvm
+if ($unusedMatchStage1Hash -ne $unusedMatchStage2Hash) {
+    throw "unused match normalized LLVM differs: stage1=$unusedMatchStage1Hash stage2=$unusedMatchStage2Hash"
+}
+if ([System.IO.File]::ReadAllText($unusedMatchStage2Llvm) -match '%v\d+_result = alloca i1') {
+    throw "unused statement-position match allocated a Boolean result slot"
+}
+Write-Host "[stage2 3/7] PASS unused-match $unusedMatchStage2Hash"
+
+$mutableResetStage1Llvm = Join-Path $artifactsDir "stage2-check-mutable-reset-after-while-stage1.ll"
+$mutableResetAfterWhileStage2Llvm = Join-Path $artifactsDir "stage2-check-mutable-reset-after-while-stage2.ll"
+$mutableResetStage1Error = Join-Path $artifactsDir "stage2-check-mutable-reset-after-while-stage1.err"
+$mutableResetStage2Error = Join-Path $artifactsDir "stage2-check-mutable-reset-after-while-stage2.err"
+$mutableResetArguments = @("windows", $mutableResetAfterWhileSource)
+$mutableResetStage1Process = Invoke-ProcessToFile $stage1Path $mutableResetArguments $mutableResetStage1Llvm $mutableResetStage1Error
+$mutableResetStage2Process = Invoke-ProcessToFile $stage2Path $mutableResetArguments $mutableResetAfterWhileStage2Llvm $mutableResetStage2Error
+Assert-ProcessSucceeded $mutableResetStage1Process $mutableResetStage1Error "stage-1 mutable reset after while emission"
+Assert-ProcessSucceeded $mutableResetStage2Process $mutableResetStage2Error "stage-2 mutable reset after while emission"
+$mutableResetStage1Hash = Get-NormalizedHash $mutableResetStage1Llvm
+$mutableResetStage2Hash = Get-NormalizedHash $mutableResetAfterWhileStage2Llvm
+if ($mutableResetStage1Hash -ne $mutableResetStage2Hash) {
+    throw "mutable reset after while normalized LLVM differs: stage1=$mutableResetStage1Hash stage2=$mutableResetStage2Hash"
+}
+$mutableResetStage2Text = [System.IO.File]::ReadAllText($mutableResetAfterWhileStage2Llvm)
+$mutableResetFirstWhileExit = $mutableResetStage2Text.IndexOf("while", [System.StringComparison]::Ordinal)
+$mutableResetStore = $mutableResetStage2Text.IndexOf("store i32 0", $mutableResetFirstWhileExit, [System.StringComparison]::Ordinal)
+if ($mutableResetFirstWhileExit -lt 0 -or $mutableResetStore -lt $mutableResetFirstWhileExit) {
+    throw "mutable reset after while was not emitted after the first control-flow region"
+}
+Write-Host "[stage2 3/7] PASS mutable-reset-after-while $mutableResetStage2Hash"
+
 Write-Host "[stage2 4/7] Compare stage-1 and stage-2 LLVM for imported source files."
 $multiStage1Llvm = Join-Path $artifactsDir "stage2-check-multi-stage1.ll"
 $multiStage2Llvm = Join-Path $artifactsDir "stage2-check-multi-stage2.ll"
@@ -274,14 +374,19 @@ Write-Host "[stage2 5/7] Assemble, link, execute, and exercise the native build 
 foreach ($case in @(
     @($singleStage2Llvm, "stage2-check-single.exe", "stage2-single-ok"),
     @($multiStage2Llvm, "stage2-check-multi.exe", "stage2-multi-ok"),
-    @($groupedStage2Llvm, "stage2-check-grouped-not.exe", "grouped-not-ok")
+    @($groupedStage2Llvm, "stage2-check-grouped-not.exe", "grouped-not-ok"),
+    @($interpolationLengthStage2Llvm, "stage2-check-interpolation-len.exe", "count=4"),
+    @($nestedUInt8IfStage2Llvm, "stage2-check-if-uint8.exe", "ok"),
+    @($unusedIfStage2Llvm, "stage2-check-unused-if.exe", "ok"),
+    @($unusedMatchStage2Llvm, "stage2-check-unused-match.exe", "ok"),
+    @($mutableResetAfterWhileStage2Llvm, "stage2-check-mutable-reset-after-while.exe", "4`ntrue")
 )) {
     $executablePath = Join-Path $artifactsDir $case[1]
     & $llvmAsPath $case[0] -o ([System.IO.Path]::ChangeExtension($executablePath, ".bc"))
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & $clangPath -Wno-override-module $case[0] -o $executablePath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    $actual = (& $executablePath | Out-String).TrimEnd("`r", "`n")
+    $actual = (& $executablePath | Out-String).Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
     if ($LASTEXITCODE -ne 0 -or $actual -ne $case[2]) {
         throw "stage-2 smoke execution failed: expected '$($case[2])', actual '$actual'"
     }

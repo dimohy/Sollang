@@ -55,6 +55,29 @@ callHasDeclaredEffects node: typedIr.TypedIrNode, context: ref emitterContext.Em
             }
         }
     }
+    (node.kind == 6 and node.targetModule >= 0 and node.symbol >= 0 and not hasEffects!) -> if {
+        0 => targetFunctionIndex!
+        targetFunctionIndex! < (context.ir -> len) -> while {
+            context.ir[targetFunctionIndex!] => targetFunction
+            (targetFunction.kind == 0
+                and targetFunction.sourceModule == node.targetModule
+                and targetFunction.symbol == node.symbol) -> if {
+                targetFunction.operand1 => targetParameterIndex!
+                0 => targetParameterOrdinal!
+                targetParameterIndex! >= 0 -> while {
+                    context.ir[targetParameterIndex!] => targetParameter
+                    targetParameter.flags / 2 % 2 == 1 -> if { true => hasEffects! }
+                    targetParameterOrdinal! == 0 -> if {
+                        targetFunction.nextOperand => targetParameterIndex!
+                    } else {
+                        targetParameter.nextOperand => targetParameterIndex!
+                    }
+                    targetParameterOrdinal! + 1 => targetParameterOrdinal!
+                }
+            }
+            targetFunctionIndex! + 1 => targetFunctionIndex!
+        }
+    }
     hasEffects!
 }
 
@@ -470,6 +493,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                     }
                                 }
                                 false => readsCurrentRebindPreviousValue!
+                                mutableReadBarrier -> callHasDeclaredEffects(context, state) => mutableReadBarrierHasEffects
                                 (scheduleNode.kind == 5
                                     and scheduleNode.operand0 == mutableReadBarrierSearch!
                                     and mutableReadBarrier.kind == 17
@@ -487,8 +511,10 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                     and not expressionScheduled![mutableReadBarrierSearch! - expressionStart]
                                     and (mutableReadBarrier.kind == 18
                                         or mutableReadBarrier.kind == 20
+                                        or mutableReadBarrier.kind == 27
                                         or mutableReadBarrier.kind == 24
                                         or mutableReadBarrier.kind == 25
+                                        or (mutableReadBarrier.kind == 6 and mutableReadBarrierHasEffects)
                                         or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)
                                         or (mutableReadBarrier.kind == 9 and (mutableReadBarrier.opcode == -204 or mutableReadBarrier.opcode == -213 or mutableReadBarrier.opcode == -229)))
                                     and (mutableReadBarrier -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))) -> if {
@@ -498,23 +524,28 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             }
                         }
                     }
-                    (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205 or scheduleNode.opcode == -213 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221 or scheduleNode.opcode == -229)))) -> if {
+                    (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 27 or scheduleNode.kind == 33 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205 or scheduleNode.opcode == -213 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221 or scheduleNode.opcode == -229)))) -> if {
                         true => rootEffect!
                         scheduleNode.parent => effectAncestor!
                         (effectAncestor! >= expressionStart and rootEffect!) -> while {
-                            (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -204 or context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -213 or context.ir[effectAncestor!].opcode == -220 or context.ir[effectAncestor!].opcode == -221 or context.ir[effectAncestor!].opcode == -229))) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
+                            (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 27 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -204 or context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -213 or context.ir[effectAncestor!].opcode == -220 or context.ir[effectAncestor!].opcode == -221 or context.ir[effectAncestor!].opcode == -229))) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
                         }
-                        (rootEffect! and not (scheduleNode.kind == 17 and scheduleNode.flags == 1)) -> if {
+                        false => mutableRebindEffect!
+                        (scheduleNode.kind == 17 and scheduleNode.flags == 1) -> if {
+                            scheduleCandidate! -> mutableBindingRoot(context, state) => scheduleEffectMutableRoot
+                            scheduleEffectMutableRoot != scheduleCandidate! -> if { true => mutableRebindEffect! }
+                        }
+                        (rootEffect! and (not (scheduleNode.kind == 17 and scheduleNode.flags == 1) or mutableRebindEffect!)) -> if {
                             expressionStart => earlierEffectSearch!
                             earlierEffectSearch! < functionEnd! -> while {
                                 context.ir[earlierEffectSearch!] => earlierEffect
-                            (not expressionScheduled![earlierEffectSearch! - expressionStart] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -213 or earlierEffect.opcode == -229))) and (earlierEffect -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))) -> if {
+                            (not expressionScheduled![earlierEffectSearch! - expressionStart] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 27 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -213 or earlierEffect.opcode == -229))) and (earlierEffect -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))) -> if {
                                     earlierEffect.parent => earlierEffectAncestor!
                                     true => earlierRootEffect!
                                     false => earlierInsideRegion!
                                     (earlierEffectAncestor! >= expressionStart and earlierRootEffect! and not earlierInsideRegion!) -> while {
                                         (context.ir[earlierEffectAncestor!].kind == 19 or context.ir[earlierEffectAncestor!].kind == 20) -> if { true => earlierInsideRegion! } else {
-                                        (context.ir[earlierEffectAncestor!].kind == 6 or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -213 or context.ir[earlierEffectAncestor!].opcode == -220 or context.ir[earlierEffectAncestor!].opcode == -221 or context.ir[earlierEffectAncestor!].opcode == -229))) -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
+                                        (context.ir[earlierEffectAncestor!].kind == 6 or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 27 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -213 or context.ir[earlierEffectAncestor!].opcode == -220 or context.ir[earlierEffectAncestor!].opcode == -221 or context.ir[earlierEffectAncestor!].opcode == -229))) -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
                                         }
                                     }
                                     (earlierRootEffect! and not earlierInsideRegion!) -> if { false => scheduleReady! }

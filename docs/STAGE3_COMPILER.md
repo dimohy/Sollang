@@ -29,13 +29,18 @@ project-directory (including explicit `--product` selection), and
 workspace-package `build`, plus `run` and literal program-argument forwarding.
 Project and workspace inputs retain the public `--project`, `--product`,
 `--workspace`, and `--package` spellings. Selected products now include the
-transitive source closure of local path dependencies. These are verified
-implementation slices, not the complete replacement contract: dependency
-cycle diagnostics, locking and remote package resolution, library and Wasm
-output, default project output placement, `test`, `format`, `language-server`,
-`resolve`, `bind-cpp`, and exact diagnostic-stream compatibility remain gated.
-Those commands remain on `sollang` in 0.3. The C# executable can be removed
-only after the complete cross-platform compatibility matrix passes.
+transitive source closure of local path dependencies. The native path resolver
+normalizes and deduplicates diamond graphs, rejects cycles, package-name drift,
+and incompatible semantic versions, writes a deterministic portable
+`sollang.lock`, and enforces that snapshot with `build --locked`. Explicit
+`resolve --project <path>` is available for this path-only graph.
+
+These are verified implementation slices, not the complete replacement
+contract: Git and registry materialization, workspace resolution/locking,
+library and Wasm output, default project output placement, `test`, `format`,
+`language-server`, `bind-cpp`, and exact diagnostic-stream compatibility remain
+gated. Those commands remain on `sollang` in 0.3. The C# executable can be
+removed only after the complete cross-platform compatibility matrix passes.
 
 ## 0.4 Release Boundary
 
@@ -48,3 +53,10 @@ CLI contract. Release packaging is blocked until command, diagnostic, output,
 and exit-code compatibility is verified on Windows x64 and Linux x64. The C#
 compiler may still build and differentially verify the native compiler inside
 the development pipeline, but it is never copied into a 0.4 archive.
+
+This boundary has a permanent no-fallback rule. Temporary fallback paths,
+defensive success defaults, diagnostic suppression, command-specific hard-coded
+bypasses, and silent feature reduction are release failures, not compatibility
+solutions. Every discovered parity gap must be corrected at its root and pass
+focused reproduction, the complete regression suite, and the cross-platform
+fixed-point gates before 0.4 can be published.

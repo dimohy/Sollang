@@ -332,8 +332,14 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         "  %v$(request.callIndex) = icmp ne i32 %v$(request.callIndex)_file_replace_raw, 0" -> println
     }
     call.opcode == -221 -> if {
-        call.operand0 -> aggregateValueIndex(context, state) => scalarIndex
-        call.operand1 -> aggregateValueIndex(context, state) => offsetIndex
+        call.operand0 => scalarArgumentIndex!
+        context.ir[scalarArgumentIndex!].nextOperand => offsetArgumentIndex!
+        context.ir[offsetArgumentIndex!].nextOperand >= 0 -> while {
+            offsetArgumentIndex! => scalarArgumentIndex!
+            context.ir[offsetArgumentIndex!].nextOperand => offsetArgumentIndex!
+        }
+        scalarArgumentIndex! -> aggregateValueIndex(context, state) => scalarIndex
+        offsetArgumentIndex! -> aggregateValueIndex(context, state) => offsetIndex
         context.ir[scalarIndex] => scalar
         scalar.typeId => scalarTypeId!
         scalarTypeId! < 0 -> if { scalar.typeSymbol => scalarTypeId! }
@@ -399,7 +405,11 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         ", ptr %v$(request.callIndex)_file_result_slot, align 8" -> println
     }
     call.opcode == -220 -> if {
-        call.operand0 -> aggregateValueIndex(context, state) => offsetIndex
+        call.operand0 => offsetArgumentIndex!
+        context.ir[offsetArgumentIndex!].nextOperand >= 0 -> while {
+            context.ir[offsetArgumentIndex!].nextOperand => offsetArgumentIndex!
+        }
+        offsetArgumentIndex! -> aggregateValueIndex(context, state) => offsetIndex
         context.types[call.typeId].first => optionTypeId
         context.types[optionTypeId].first => scalarTypeId
         context.typeSizes[scalarTypeId] => scalarSize

@@ -1,9 +1,14 @@
 namespace sollang.compiler.cli_project
 
 import sollang.compiler.project
+import sollang.compiler.package_versions as versions
 import sollang.compiler.source_root as sourceRoot
 import sys.file as file
 import sys.path as path
+
+unitValue: -> Unit {
+    false => ignored
+}
 
 public struct ProjectInput {
     status: Int
@@ -66,18 +71,26 @@ spanText source: file.SourceText, span: project.TextSpan -> Text {
     source -> slice(span.start, span.length)
 }
 
-joinedPath base: Text, child: Text -> path.Path {
+joinedPath base: Text, child: Text, style: path.Style -> path.Path {
     [UInt8; ~] => bytes!
     UIntSize(0) => baseIndex!
     baseIndex! < (base -> len) -> while {
-        bytes! -> push(base -> byte(baseIndex!))
+        base -> byte(baseIndex!) => current
+        current => normalized!
+        style -> when {
+            Windows {
+                current == UInt8(47) -> if { UInt8(92) => normalized! }
+            }
+            Posix {}
+        }
+        bytes! -> push(normalized!)
         baseIndex! + UIntSize(1) => baseIndex!
     }
     (bytes! -> len) > 0 -> if {
         bytes![(bytes! -> len) - 1] => last
         (last == UInt8(47) or last == UInt8(92)) => separated!
         not separated! -> if {
-            path.nativeStyle() -> when {
+            style -> when {
                 Windows { bytes! -> push(UInt8(92)) }
                 Posix { bytes! -> push(UInt8(47)) }
             }
@@ -85,18 +98,119 @@ joinedPath base: Text, child: Text -> path.Path {
     }
     UIntSize(0) => childIndex!
     childIndex! < (child -> len) -> while {
-        bytes! -> push(child -> byte(childIndex!))
+        child -> byte(childIndex!) => current
+        current => normalized!
+        style -> when {
+            Windows {
+                current == UInt8(47) -> if { UInt8(92) => normalized! }
+            }
+            Posix {}
+        }
+        bytes! -> push(normalized!)
         childIndex! + UIntSize(1) => childIndex!
     }
-    path.Path { bytes: bytes!, style: path.nativeStyle() } => result!
+    path.Path { bytes: bytes!, style: style } => result!
     result!
 }
 
-manifestOwnedPath option: Text -> path.Path {
+normalizePath value: move path.Path -> Result<path.Path, Text> {
+    value.style => style
+    value.bytes => source!
+    [UInt8; ~] => output!
+    [UIntSize; ~] => componentStarts!
+    false => windows!
+    style -> when {
+        Posix { unitValue() }
+        Windows {
+            true => windows!
+            unitValue()
+        }
+    }
+    UIntSize(source! -> len) => sourceLength
+    UIntSize(0) => index!
+    false => wroteComponent!
+
+    windows! -> if {
+        (sourceLength >= UIntSize(3) and source![1] == UInt8(58) and source![2] == UInt8(92)) -> if {
+            output! -> push(source![0])
+            output! -> push(UInt8(58))
+            output! -> push(UInt8(92))
+            UIntSize(3) => index!
+            (index! < sourceLength and source![Int(index!)] == UInt8(92)) -> while {
+                index! + UIntSize(1) => index!
+            }
+        }
+    } else {
+        (sourceLength > UIntSize(0) and source![0] == UInt8(47)) -> if {
+            output! -> push(UInt8(47))
+            UIntSize(1) => index!
+            (index! < sourceLength and source![Int(index!)] == UInt8(47)) -> while {
+                index! + UIntSize(1) => index!
+            }
+        }
+    }
+
+    false => escaped!
+    (index! < sourceLength and not escaped!) -> while {
+        index! => componentStart
+        (index! < sourceLength and (windows! -> if { source![Int(index!)] != UInt8(92) } else { source![Int(index!)] != UInt8(47) })) -> while {
+            index! + UIntSize(1) => index!
+        }
+        index! => componentEnd
+        componentEnd - componentStart => componentLength
+        (index! < sourceLength and (windows! -> if { source![Int(index!)] == UInt8(92) } else { source![Int(index!)] == UInt8(47) })) -> while {
+            index! + UIntSize(1) => index!
+        }
+
+        componentLength == UIntSize(1) and source![Int(componentStart)] == UInt8(46) => currentDirectory
+        componentLength == UIntSize(2) and source![Int(componentStart)] == UInt8(46) and source![Int(componentStart + UIntSize(1))] == UInt8(46) => parentDirectory
+        (componentLength > UIntSize(0) and not currentDirectory and not parentDirectory) -> if {
+            UIntSize(output! -> len) => truncateStart
+            wroteComponent! -> if {
+                windows! -> if { output! -> push(UInt8(92)) } else { output! -> push(UInt8(47)) }
+            }
+            componentStarts! -> push(truncateStart)
+            componentStart => componentByteIndex!
+            componentByteIndex! < componentEnd -> while {
+                output! -> push(source![Int(componentByteIndex!)])
+                componentByteIndex! + UIntSize(1) => componentByteIndex!
+            }
+            true => wroteComponent!
+        }
+        parentDirectory -> if {
+            UIntSize(componentStarts! -> len) > UIntSize(0) -> if {
+                componentStarts! -> take(Int(UIntSize(componentStarts! -> len) - UIntSize(1))) => truncateTo
+                UIntSize(output! -> len) > truncateTo -> while {
+                    output! -> take(Int(UIntSize(output! -> len) - UIntSize(1))) => removed
+                }
+                UIntSize(componentStarts! -> len) > UIntSize(0) => wroteComponent!
+            } else {
+                true => escaped!
+            }
+        }
+    }
+
+    escaped! -> if {
+        Result<path.Path, Text>.Err("path escapes root") -> return
+    }
+    UIntSize(output! -> len) == UIntSize(0) -> if { output! -> push(UInt8(46)) }
+    path.Path { bytes: output!, style: style } => normalized!
+    Result<path.Path, Text>.Ok(normalized!)
+}
+
+manifestOwnedPath option: Text, style: path.Style -> path.Path {
     [UInt8; ~] => bytes!
     UIntSize(0) => index!
     index! < (option -> len) -> while {
-        bytes! -> push(option -> byte(index!))
+        option -> byte(index!) => current
+        current => normalized!
+        style -> when {
+            Windows {
+                current == UInt8(47) -> if { UInt8(92) => normalized! }
+            }
+            Posix {}
+        }
+        bytes! -> push(normalized!)
         index! + UIntSize(1) => index!
     }
     not (option -> textEndsWith(".project")) -> if {
@@ -104,7 +218,7 @@ manifestOwnedPath option: Text -> path.Path {
             bytes![(bytes! -> len) - 1] => last
             (last == UInt8(47) or last == UInt8(92)) => separated!
             not separated! -> if {
-                path.nativeStyle() -> when {
+                style -> when {
                     Windows { bytes! -> push(UInt8(92)) }
                     Posix { bytes! -> push(UInt8(47)) }
                 }
@@ -117,7 +231,7 @@ manifestOwnedPath option: Text -> path.Path {
             nameIndex! + UIntSize(1) => nameIndex!
         }
     }
-    path.Path { bytes: bytes!, style: path.nativeStyle() } => result!
+    path.Path { bytes: bytes!, style: style } => result!
     result!
 }
 
@@ -144,73 +258,168 @@ emptyInput status: Int -> ProjectInput {
     result!
 }
 
-# Appends every transitive path-dependency source closure.
+# Appends every transitive path-dependency source closure once.
 # Status: 0 valid, 20 non-path dependency, 21 invalid dependency manifest,
-# 22 dependency does not expose its same-named product, 23 graph limit.
-public appendDependencySources option: Text, sources: mut [path.Path; ~] -> Int uses File {
+# 22 dependency does not expose its same-named product, 23 graph limit,
+# 24 dependency cycle, 25 dependency/project name mismatch,
+# 26 dependency version requirement mismatch, 27 canonical-path query,
+# 28 dependency manifest open, 29 dependency manifest syntax.
+public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManifests: mut [path.Path; ~], packageNames: mut [path.Path; ~], packageVersions: mut [path.Path; ~], style: path.Style -> Int uses File {
     [path.Path; ~] => manifests!
-    manifests! -> push(option -> manifestOwnedPath)
-    0 => processed!
     0 => status!
+    option -> manifestOwnedPath(style) -> normalizePath -> when {
+        Ok(normalized) {
+            path.pathText(normalized) => normalizedText
+            manifests! -> push(normalizedText -> path.fromText(style))
+            unitValue()
+        }
+        Err(_) {
+            27 => status!
+            manifests! -> push("" -> path.fromText(style))
+            unitValue()
+        }
+    }
+    [path.Path; ~] => canonicalManifests!
+    [Int; ~] => parents!
+    parents! -> push(-1)
+    [path.Path; ~] => expectedNames!
+    expectedNames! -> push("" -> path.fromText(style))
+    [path.Path; ~] => requirements!
+    requirements! -> push("" -> path.fromText(style))
+    0 => processed!
     (status! == 0 and processed! < (manifests! -> len)) -> while {
         processed! >= 64 -> if { 23 => status! }
         status! == 0 -> if {
             path.pathText(manifests![processed!]) => queuedManifestText
-            queuedManifestText -> path.fromText(path.nativeStyle()) => manifestPath!
+            queuedManifestText -> path.fromText(style) => manifestPath!
             path.pathText(manifestPath!) => manifestText
+            false => skipCurrent!
+            status! == 0 -> if {
+                parents![processed!] => ancestor!
+                (not skipCurrent! and ancestor! >= 0) -> while {
+                    path.equalsText(canonicalManifests![ancestor!], manifestText) -> if {
+                        24 => status!
+                    }
+                    parents![ancestor!] => ancestor!
+                }
+                0 => seenIndex!
+                (status! == 0 and not skipCurrent! and seenIndex! < processed!) -> while {
+                    path.equalsText(canonicalManifests![seenIndex!], manifestText) -> if {
+                        true => skipCurrent!
+                    }
+                    seenIndex! + 1 => seenIndex!
+                }
+                canonicalManifests! -> push(manifestText -> path.fromText(style))
+            }
             manifestText -> directoryOf => manifestDirectoryText
-            manifestDirectoryText -> path.fromText(path.nativeStyle()) => manifestDirectory!
-            manifestPath! -> file.mapPath => source!
-            source! -> len => sourceLength
-            source! -> slice(UIntSize(0), sourceLength) => sourceView
-            sourceView -> project.parse => parsed!
-            parsed!.status != 0 -> if { 21 => status! }
+            manifestDirectoryText -> path.fromText(style) => manifestDirectory!
+            (status! == 0 and not skipCurrent!) -> if {
+            manifestText -> file.openRead -> when {
+                Ok(_) {}
+                Err(_) { 28 => status! }
+            }
+            status! == 0 -> if {
+                manifestText -> file.mapText => source!
+                source! -> len => sourceLength
+                source! -> slice(UIntSize(0), sourceLength) => sourceView
+                sourceView -> project.parse => parsed!
+                parsed!.status != 0 -> if { 29 => status! }
 
-            (status! == 0 and processed! > 0) -> if {
-                -1 => productIndex!
-                0 => candidateIndex!
-                candidateIndex! < (parsed!.products -> len) -> while {
-                    source! -> sameSpanText(parsed!.products[candidateIndex!].name, parsed!.name) -> if {
-                        candidateIndex! => productIndex!
+                (status! == 0 and processed! > 0) -> if {
+                    source! -> spanText(parsed!.name) => manifestName
+                    not (path.equalsText(expectedNames![processed!], manifestName)) -> if {
+                        25 => status!
                     }
-                    candidateIndex! + 1 => candidateIndex!
-                }
-                productIndex! < 0 -> if {
-                    22 => status!
-                } else {
-                    source! -> spanText(parsed!.products[productIndex!].root) => rootRelative
-                    path.pathText(manifestDirectory!) => directoryText
-                    directoryText -> joinedPath(rootRelative) => rootPath!
-                    path.pathText(rootPath!) => rootText
-                    rootText -> directoryOf => sourceDirectoryText
-                    sourceDirectoryText -> path.fromText(path.nativeStyle()) => sourceDirectory!
-                    sourceDirectory! -> sourceRoot.discoverDirect => discovered!
-                    0 => discoveredIndex!
-                    discoveredIndex! < (discovered! -> len) -> while {
-                        path.pathText(discovered![discoveredIndex!]) => discoveredText
-                        sources -> push(discoveredText -> path.fromText(path.nativeStyle()))
-                        discoveredIndex! + 1 => discoveredIndex!
+                    status! == 0 -> if {
+                        path.pathText(requirements![processed!]) => requirementText
+                        source! -> spanText(parsed!.version) => manifestVersion
+                        requirementText -> versions.accepts(manifestVersion) => accepted
+                        (accepted.status != 0 or not accepted.accepted) -> if { 26 => status! }
                     }
                 }
-            }
 
-            0 => dependencyIndex!
-            (status! == 0 and dependencyIndex! < (parsed!.dependencies -> len)) -> while {
-                parsed!.dependencies[dependencyIndex!].path.length == UIntSize(0) -> if {
-                    20 => status!
-                } else {
-                    source! -> spanText(parsed!.dependencies[dependencyIndex!].path) => dependencyRelative
-                    path.pathText(manifestDirectory!) => directoryText
-                    directoryText -> joinedPath(dependencyRelative) => dependencyDirectory!
-                    path.pathText(dependencyDirectory!) => dependencyDirectoryText
-                    manifests! -> push(dependencyDirectoryText -> joinedPath("sollang.project"))
+                status! == 0 -> if {
+                    packageManifests -> push(manifestText -> path.fromText(style))
+                    source! -> spanText(parsed!.name) => packageName
+                    packageNames -> push(packageName -> path.fromText(style))
+                    source! -> spanText(parsed!.version) => packageVersion
+                    packageVersions -> push(packageVersion -> path.fromText(style))
                 }
-                dependencyIndex! + 1 => dependencyIndex!
+
+                (status! == 0 and processed! > 0) -> if {
+                    -1 => productIndex!
+                    0 => candidateIndex!
+                    candidateIndex! < (parsed!.products -> len) -> while {
+                        source! -> sameSpanText(parsed!.products[candidateIndex!].name, parsed!.name) -> if {
+                            candidateIndex! => productIndex!
+                        }
+                        candidateIndex! + 1 => candidateIndex!
+                    }
+                    productIndex! < 0 -> if {
+                        22 => status!
+                    } else {
+                        source! -> spanText(parsed!.products[productIndex!].root) => rootRelative
+                        path.pathText(manifestDirectory!) => directoryText
+                        directoryText -> joinedPath(rootRelative, style) => rootPath!
+                        path.pathText(rootPath!) => rootText
+                        rootText -> directoryOf => sourceDirectoryText
+                        sourceDirectoryText -> path.fromText(style) => sourceDirectory!
+                        sourceDirectory! -> sourceRoot.discoverDirect => discovered!
+                        0 => discoveredIndex!
+                        discoveredIndex! < (discovered! -> len) -> while {
+                            path.pathText(discovered![discoveredIndex!]) => discoveredText
+                            sources -> push(discoveredText -> path.fromText(style))
+                            discoveredIndex! + 1 => discoveredIndex!
+                        }
+                    }
+                }
+
+                0 => dependencyIndex!
+                (status! == 0 and dependencyIndex! < (parsed!.dependencies -> len)) -> while {
+                    parsed!.dependencies[dependencyIndex!].path.length == UIntSize(0) -> if {
+                        20 => status!
+                    } else {
+                        source! -> spanText(parsed!.dependencies[dependencyIndex!].path) => dependencyRelative
+                        path.pathText(manifestDirectory!) => directoryText
+                        directoryText -> joinedPath(dependencyRelative, style) => dependencyDirectory!
+                        path.pathText(dependencyDirectory!) => dependencyDirectoryText
+                        dependencyDirectoryText -> joinedPath("sollang.project", style) => dependencyManifest!
+                        dependencyManifest! -> normalizePath -> when {
+                            Ok(normalized) {
+                                path.pathText(normalized) => dependencyManifestText
+                                manifests! -> push(dependencyManifestText -> path.fromText(style))
+                                parents! -> push(processed!)
+                                source! -> spanText(parsed!.dependencies[dependencyIndex!].name) => dependencyName
+                                expectedNames! -> push(dependencyName -> path.fromText(style))
+                                parsed!.dependencies[dependencyIndex!].version.length > UIntSize(0) -> if {
+                                    source! -> spanText(parsed!.dependencies[dependencyIndex!].version)
+                                } else {
+                                    "*"
+                                } => dependencyRequirement
+                                requirements! -> push(dependencyRequirement -> path.fromText(style))
+                                unitValue()
+                            }
+                            Err(_) {
+                                27 => status!
+                                unitValue()
+                            }
+                        }
+                    }
+                    dependencyIndex! + 1 => dependencyIndex!
+                }
             }
-            processed! + 1 => processed!
+            }
+            status! == 0 -> if { processed! + 1 => processed! }
         }
     }
     status!
+}
+
+public appendDependencySources option: Text, sources: mut [path.Path; ~], style: path.Style -> Int uses File {
+    [path.Path; ~] => packageManifests!
+    [path.Path; ~] => packageNames!
+    [path.Path; ~] => packageVersions!
+    option -> resolvePathGraph(sources, packageManifests!, packageNames!, packageVersions!, style)
 }
 
 # Status: 0 valid, 1 invalid manifest, 2 requested product missing,

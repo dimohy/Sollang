@@ -118,13 +118,15 @@ Current verified implementation slices:
 - [x] Transitive local path-dependency source closure for selected products.
 - [x] Full bundled-standard-library compilation for explicit-source builds.
 - [x] Literal program-argument forwarding after `run ... --`.
+- [x] Deterministic transitive path-dependency resolution, canonical lock-file
+  generation, and `--locked` stale-lock rejection.
 - [ ] Complete project/workspace dependency, lock, default-output, diagnostic,
   library, and Wasm parity plus the remaining public commands listed above.
 
 The current Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
 gates and reproduce at Stage 3. The source/project/local-dependency/workspace
-CLI matrix passes 9/9 on both fixed-point compilers. The full platform suites now contain 895
-Windows cases and 894 Linux-applicable cases. These partial results deliberately
+CLI matrix passes 10/10 on both fixed-point compilers. The full platform suites now contain 898
+Windows cases and 897 Linux-applicable cases. These partial results deliberately
 do not create the `native-cli-full-parity` proof required by
 `publish-release.ps1`, so a 0.4 archive cannot be produced prematurely.
 

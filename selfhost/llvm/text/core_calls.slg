@@ -164,16 +164,39 @@ nativeSymbolToken function: typedIr.TypedIrNode, context: ref emitterContext.Emi
 irValueUsed nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => used!
     context.ir[nodeIndex] => valueCandidate
-    (valueCandidate.kind == 18
-        and valueCandidate.nextOperand >= 0
-        and not (valueCandidate.typeOrigin == 1 and valueCandidate.typeSymbol == 0)) -> if {
-        true => used!
+    valueCandidate.parent => valueParentIndex!
+    (not used! and valueParentIndex! >= 0) -> while {
+        context.ir[valueParentIndex!] => valueParent
+        (valueParent.kind == 6
+            or valueParent.kind == 12
+            or valueParent.kind == 14
+            or valueParent.kind == 16) -> if {
+            true => used!
+        } else {
+            valueParent.kind == 9 -> if {
+                valueParent.parent => valueParentIndex!
+            } else {
+                -1 => valueParentIndex!
+            }
+        }
     }
     ownerIndex + 1 => useIndex!
     ownerIndex -> functionEnd(context, state) => useEnd
     (not used! and useIndex! < useEnd) -> while {
         context.ir[useIndex!] => useNode
-        (useIndex! != nodeIndex and (useNode.operand0 == nodeIndex or useNode.operand1 == nodeIndex or useNode.nextOperand == nodeIndex)) -> if { true => used! }
+        false => internalUse!
+        useNode.parent => useAncestor!
+        (useAncestor! >= 0 and not internalUse!) -> while {
+            useAncestor! == nodeIndex -> if { true => internalUse! } else {
+                context.ir[useAncestor!].parent => useAncestor!
+            }
+        }
+        (useIndex! != nodeIndex
+            and not internalUse!
+            and (useNode.operand0 == nodeIndex
+                or useNode.operand1 == nodeIndex)) -> if {
+            true => used!
+        }
         useIndex! + 1 => useIndex!
     }
     used!

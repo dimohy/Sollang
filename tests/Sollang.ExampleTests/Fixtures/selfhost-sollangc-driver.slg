@@ -10,6 +10,7 @@ import sollang.compiler.semantic.module_cache_io as moduleCacheIo
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.cli_project as cliProject
+import sollang.compiler.cli_package_lock as cliLock
 import sollang.compiler.cli_workspace as cliWorkspace
 import sollang.compiler.source_root as sourceRoot
 import sys.path as path
@@ -550,12 +551,19 @@ runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Tex
     }
 }
 
-runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectInput, includeDependencies: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectInput, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
     [path.Path; ~] => productSources!
     productSources! -> push(projectInput.source -> path.fromText(path.nativeStyle()))
+    [path.Path; ~] => packageManifests!
+    [path.Path; ~] => packageNames!
+    [path.Path; ~] => packageVersions!
     0 => dependencyStatus!
-    (includeDependencies and projectInput.dependencyCount > 0) -> if {
-        projectOption -> cliProject.appendDependencySources(productSources!) => dependencyStatus!
+    includeDependencies -> if {
+        hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => hostStyle
+        projectOption -> cliProject.resolvePathGraph(productSources!, packageManifests!, packageNames!, packageVersions!, hostStyle) => dependencyStatus!
+        dependencyStatus! == 0 -> if {
+            packageManifests! -> cliLock.ensure(packageNames!, packageVersions!, locked, false, hostStyle) => dependencyStatus!
+        }
     }
     dependencyStatus! != 0 -> if {
         dependencyStatus! => dependencyCode
@@ -566,13 +574,20 @@ runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectIn
     }
 }
 
-runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectInput, sourceDirectory: Text, includeDependencies: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectInput, sourceDirectory: Text, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
     sourceDirectory -> path.fromText(path.nativeStyle()) => projectSourceRoot!
     projectSourceRoot! -> sourceRoot.discoverDirect => projectSources!
+    [path.Path; ~] => packageManifests!
+    [path.Path; ~] => packageNames!
+    [path.Path; ~] => packageVersions!
     0 => dependencyStatus!
     (projectSources! -> len) > 0 -> if {
-        (includeDependencies and projectInput.dependencyCount > 0) -> if {
-            projectOption -> cliProject.appendDependencySources(projectSources!) => dependencyStatus!
+        includeDependencies -> if {
+            hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => hostStyle
+            projectOption -> cliProject.resolvePathGraph(projectSources!, packageManifests!, packageNames!, packageVersions!, hostStyle) => dependencyStatus!
+            dependencyStatus! == 0 -> if {
+                packageManifests! -> cliLock.ensure(packageNames!, packageVersions!, locked, false, hostStyle) => dependencyStatus!
+            }
         }
     }
     (projectSources! -> len) == 0 -> if {
@@ -587,6 +602,58 @@ runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectI
             projectSources! -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments)
         }
     }
+}
+
+runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
+    process.arguments() => arguments
+    arguments -> len => argumentCount
+    "" => projectOption!
+    0 => status!
+    UIntSize(2) => index!
+    index! < argumentCount -> while {
+        arguments[index!] -> textEquals("--project") -> if {
+            index! + UIntSize(1) < argumentCount -> if {
+                index! + UIntSize(1) => index!
+                arguments[index!] => projectOption!
+            } else { 1 => status! }
+        } else {
+            arguments[index!] -> textEquals("--workspace") -> if {
+                2 => status!
+            } else {
+                3 => status!
+            }
+        }
+        index! + UIntSize(1) => index!
+    }
+    status! != 0 -> if {
+        "sollang: invalid or not-yet-native resolve option (status $(status!))" -> println
+        1 -> return
+    }
+    (projectOption! -> len) == UIntSize(0) -> if {
+        "sollang: resolve currently requires --project <path>" -> println
+        1 -> return
+    }
+
+    hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => hostStyle
+    [path.Path; ~] => sources!
+    [path.Path; ~] => packageManifests!
+    [path.Path; ~] => packageNames!
+    [path.Path; ~] => packageVersions!
+    projectOption! -> cliProject.resolvePathGraph(sources!, packageManifests!, packageNames!, packageVersions!, hostStyle) => graphStatus
+    graphStatus != 0 -> if {
+        "sollang: native project dependency graph failed (status $graphStatus)" -> println
+        1 -> return
+    }
+    packageManifests! -> cliLock.ensure(packageNames!, packageVersions!, false, true, hostStyle) => lockStatus
+    lockStatus != 0 -> if {
+        "sollang: native package lock failed (status $lockStatus)" -> println
+        1 -> return
+    }
+    packageManifests! -> cliLock.destination(hostStyle) => lockPath!
+    path.pathText(lockPath!) => lockPathText
+    packageManifests! -> len => packageCount
+    "Resolved $packageCount package(s) into $lockPathText" -> println
+    0
 }
 
 runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Process {
@@ -769,7 +836,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         }
         projectInput!.multiProduct -> if {
             (workspaceSourceDirectory! -> len) == UIntSize(0) => includeDependencies
-            projectOption! -> runNativeSelectedProduct(projectInput!, includeDependencies, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+            projectOption! -> runNativeSelectedProduct(projectInput!, includeDependencies, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
         } else {
             (workspaceSourceDirectory! -> len) > UIntSize(0) -> if {
                 workspaceSourceDirectory!
@@ -777,7 +844,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
                 projectInput!.sourceDirectory
             } => sourceDirectory
             (workspaceSourceDirectory! -> len) == UIntSize(0) => includeDependencies
-            projectOption! -> runNativeProjectDirectory(projectInput!, sourceDirectory, includeDependencies, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+            projectOption! -> runNativeProjectDirectory(projectInput!, sourceDirectory, includeDependencies, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
         } => projectCode
         projectCode -> return
     }
@@ -826,6 +893,11 @@ dispatchArguments: -> Unit uses Console, File, Process {
     }
     arguments[1] -> textEquals("run") -> if {
         true -> runNativeCli(hostTarget) => exitCode!
+        exitCode! < 0 -> if { 1 => exitCode! }
+        process.exit(exitCode!)
+    }
+    arguments[1] -> textEquals("resolve") -> if {
+        hostTarget -> runNativeResolve => exitCode!
         exitCode! < 0 -> if { 1 => exitCode! }
         process.exit(exitCode!)
     }

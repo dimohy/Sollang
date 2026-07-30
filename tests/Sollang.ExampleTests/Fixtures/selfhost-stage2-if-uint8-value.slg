@@ -1,0 +1,23 @@
+convert target: Text -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    0 => outer!
+    outer! < 1 -> while {
+        UIntSize(0) => index!
+        index! < (target -> len) -> while {
+            target -> byte(index!) => current
+            current == UInt8(92) -> if { UInt8(47) } else { current } => portable
+            bytes! -> push(portable)
+            index! + UIntSize(1) => index!
+        }
+        outer! + 1 => outer!
+    }
+    bytes!
+}
+
+# A Text byte is UInt8. A value-producing if nested in two loops must preserve
+# that common branch type and emit a byte-valued result slot, never `freeze void`.
+main {
+    "a\\b" -> convert => bytes!
+    bytes![0] == UInt8(47) -> if { "ok" -> println }
+    bytes![1] == UInt8(47) -> if { "ok" -> println }
+}

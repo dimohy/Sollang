@@ -18,6 +18,10 @@ public struct Product {
 public struct Dependency {
     name: TextSpan
     path: TextSpan
+    git: TextSpan
+    revision: TextSpan
+    registry: TextSpan
+    version: TextSpan
 }
 
 public struct ProjectManifest {
@@ -109,6 +113,10 @@ parseDependency source: Text, name: TextSpan, start: Int, tokens: [syntax.Syntax
     start => index!
     tokens[index!].kind == grammar.tokenIdLeftBrace() -> if { index! + 1 => index! } else { -1 -> return }
     emptySpan() => dependencyPath!
+    emptySpan() => dependencyGit!
+    emptySpan() => dependencyRevision!
+    emptySpan() => dependencyRegistry!
+    emptySpan() => dependencyVersion!
     index! -> skipSeparators(tokens) => index!
     tokens[index!].kind != grammar.tokenIdRightBrace() -> while {
         tokens[index!].kind != grammar.tokenIdIdentifier() -> if { -1 -> return }
@@ -120,15 +128,31 @@ parseDependency source: Text, name: TextSpan, start: Int, tokens: [syntax.Syntax
         index! -> skipSeparators(tokens) => index!
         tokens[index!].kind == grammar.tokenIdString() -> if {
             source -> textIs(field, "path") -> if { tokens[index!] -> stringSpan => dependencyPath! }
+            source -> textIs(field, "git") -> if { tokens[index!] -> stringSpan => dependencyGit! }
+            source -> textIs(field, "rev") -> if { tokens[index!] -> stringSpan => dependencyRevision! }
+            source -> textIs(field, "registry") -> if { tokens[index!] -> stringSpan => dependencyRegistry! }
+            source -> textIs(field, "version") -> if { tokens[index!] -> stringSpan => dependencyVersion! }
+            (not (source -> textIs(field, "path")) and not (source -> textIs(field, "git")) and not (source -> textIs(field, "rev")) and not (source -> textIs(field, "registry")) and not (source -> textIs(field, "version"))) -> if { -1 -> return }
             index! + 1 => index!
-        } else {
-            tokens[index!].kind == grammar.tokenIdLeftBrace() -> if {
-                index! -> skipObject(tokens) => index!
-            } else { -1 -> return }
-        }
+        } else { -1 -> return }
         index! -> skipSeparators(tokens) => index!
     }
-    dependencies -> push(Dependency { name: name, path: dependencyPath! })
+    0 => sourceCount!
+    dependencyPath!.length > UIntSize(0) -> if { sourceCount! + 1 => sourceCount! }
+    dependencyGit!.length > UIntSize(0) -> if { sourceCount! + 1 => sourceCount! }
+    dependencyRegistry!.length > UIntSize(0) -> if { sourceCount! + 1 => sourceCount! }
+    sourceCount! != 1 -> if { -1 -> return }
+    dependencyGit!.length > UIntSize(0) => hasGit
+    dependencyRevision!.length > UIntSize(0) => hasRevision
+    ((hasGit and not hasRevision) or (not hasGit and hasRevision)) -> if { -1 -> return }
+    dependencies -> push(Dependency {
+        name: name
+        path: dependencyPath!
+        git: dependencyGit!
+        revision: dependencyRevision!
+        registry: dependencyRegistry!
+        version: dependencyVersion!
+    })
     index! + 1
 }
 

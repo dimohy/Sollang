@@ -13,6 +13,15 @@ main {
                     path: "../core"
                     version: "^1.2.0"
                 }
+                remote: {
+                    git: "https://example.com/remote.git"
+                    rev: "0123456789abcdef0123456789abcdef01234567"
+                    version: "=2.0.0"
+                }
+                package: {
+                    registry: "https://packages.example"
+                    version: "~3.1.0"
+                }
             }
         }
         """ => source
@@ -20,11 +29,29 @@ main {
     manifest!.products[0] => app
     manifest!.products[1] => tool
     manifest!.dependencies[0] => core
+    manifest!.dependencies[1] => remote
+    manifest!.dependencies[2] => package
     source -> slice(manifest!.name.start, manifest!.name.length) => name
     source -> slice(app.name.start, app.name.length) => appName
     source -> slice(app.root.start, app.root.length) => appRoot
     source -> slice(tool.name.start, tool.name.length) => toolName
     source -> slice(core.name.start, core.name.length) => dependencyName
     source -> slice(core.path.start, core.path.length) => dependencyPath
+    source -> slice(core.version.start, core.version.length) => dependencyVersion
+    source -> slice(remote.git.start, remote.git.length) => gitLocation
+    source -> slice(remote.revision.start, remote.revision.length) => gitRevision
+    source -> slice(package.registry.start, package.registry.length) => registryLocation
     "project = $(manifest!.status),$name,$appName,$appRoot,$toolName,$dependencyName,$dependencyPath" -> println
+    "dependency fields = $dependencyVersion,$gitLocation,$gitRevision,$registryLocation" -> println
+
+    """project {
+            name: "invalid"
+            version: "1.0.0"
+            root: "src/main.slg"
+            dependencies: {
+                mixed: { path: "../local", registry: "https://packages.example" }
+            }
+        }
+        """ -> projects.parse => mixed!
+    "mixed source = $(mixed!.status)" -> println
 }
