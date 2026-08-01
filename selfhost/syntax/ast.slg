@@ -249,7 +249,7 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 61 stream state binding, 62 stream stop statement, 63 range expression,
 # 64 fold flow target, 65 native library declaration, 66 COM class declaration,
 # 67 COM interface declaration, 68 native affine handle declaration,
-# 69 Sollang library interface import.
+# 69 Sollang library interface import, 70 subject when condition.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream,
 # 128 native ABI declaration, 512 COM declaration, 32768 status/out native
 # Result declaration. Struct flag 256 marks an
@@ -335,6 +335,7 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdStreamStopStatement() -> if { 62 => kind! }
     rule == grammar.ruleIdRangeExpression() -> if { 63 => kind! }
     rule == grammar.ruleIdFoldFlowTarget() -> if { 64 => kind! }
+    rule == grammar.ruleIdSubjectWhenCondition() -> if { 70 => kind! }
     kind! => selected
     selected
 }
@@ -396,6 +397,14 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 70 and (candidateOperator == grammar.tokenIdEqualEqual() or candidateOperator == grammar.tokenIdBangEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreater() or candidateOperator == grammar.tokenIdGreaterEqual()) -> if {
+                candidateOperator => operatorKind!
+                operatorTokenIndex! => operatorPayloadToken!
+            }
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 63 and (candidateOperator == grammar.tokenIdRange() or candidateOperator == grammar.tokenIdRangeUntil()) -> if {
+                candidateOperator => operatorKind!
+                operatorTokenIndex! => operatorPayloadToken!
+            }
             (operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdDot()) -> if {
                 postfixKinds! -> push(36)
                 postfixOperatorTokens! -> push(operatorTokenIndex!)
@@ -416,6 +425,14 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 postfixBoundaryTokens! -> push(postfixBoundaryToken!)
                 true => postfixHasIndex!
                 41 => astKind!
+                candidateOperator => operatorKind!
+                operatorTokenIndex! => operatorPayloadToken!
+            }
+            (operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdQuestion()) -> if {
+                postfixKinds! -> push(71)
+                postfixOperatorTokens! -> push(operatorTokenIndex!)
+                postfixBoundaryTokens! -> push(operatorTokenIndex!)
+                71 => astKind!
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
@@ -491,6 +508,9 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 -1 => astKind!
             }
             astKind! == 36 -> if {
+                -1 => astKind!
+            }
+            astKind! == 70 -> if {
                 -1 => astKind!
             }
         }
@@ -1299,14 +1319,19 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
         }
         declaration!.kind == 61 -> if {
-            declaration!.firstToken + 1 => stateBindingToken!
+            declaration!.firstToken => stateBindingToken!
             declaration!.firstToken + declaration!.tokenCount => stateBindingEnd
-            (stateBindingToken! < stateBindingEnd and (tokens![stateBindingToken!].kind == grammar.triviaIdWhitespace() or tokens![stateBindingToken!].kind == grammar.triviaIdComment())) -> while {
+            # A state declaration includes its initializer and flow arrow in
+            # the same CST span. The declared state is the final identifier,
+            # immediately before the optional mutable `!` suffix.
+            stateBindingToken! < stateBindingEnd -> while {
+                tokens![stateBindingToken!].kind == grammar.tokenIdIdentifier() -> if {
+                    stateBindingToken! => declaration!.payloadToken
+                }
                 stateBindingToken! + 1 => stateBindingToken!
             }
-            stateBindingToken! < stateBindingEnd -> if {
-                stateBindingToken! => declaration!.payloadToken
-                stateBindingToken! + 1 => stateBindingSuffixToken!
+            declaration!.payloadToken >= 0 -> if {
+                declaration!.payloadToken + 1 => stateBindingSuffixToken!
                 (stateBindingSuffixToken! < stateBindingEnd and (tokens![stateBindingSuffixToken!].kind == grammar.triviaIdWhitespace() or tokens![stateBindingSuffixToken!].kind == grammar.triviaIdComment())) -> while {
                     stateBindingSuffixToken! + 1 => stateBindingSuffixToken!
                 }

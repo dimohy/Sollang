@@ -1,0 +1,31 @@
+import sollang.compiler.ir.typed as typedIr
+
+# A resolved namespace-qualified callee path belongs to its call node; it must
+# not survive as an unbased member-access node in final Typed IR.
+main {
+    [
+        """
+        import sys.process as process
+
+        main {
+            sys.process.arguments() => value
+            value -> println
+        }
+        """,
+        """
+        namespace sys.process
+
+        public arguments: -> Int { 1 }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => calls!
+    0 => unbasedMembers!
+    ir! -> each node {
+        node.kind == 6 -> if { calls! + 1 => calls! }
+        (node.kind == 13 and node.operand0 < 0) -> if {
+            unbasedMembers! + 1 => unbasedMembers!
+        }
+    }
+    "calls=$(calls!),unbased=$(unbasedMembers!)" -> println
+}

@@ -1,15 +1,20 @@
 import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.analysis as analysis
 
 main {
     [
         """
         namespace sample.math
         public double value: Int -> Int => value + value
+        public current: -> Int => 42
         """,
         """
         namespace app.main
         import sample.math as math
-        main { math.double(2) }
+        main {
+            math.double(2)
+            math.current => value
+        }
         """; ~
     ] => sources!
     sources! -> calls.resolveModules => resolved!
@@ -17,5 +22,19 @@ main {
         call.sourceModule == 1 -> if {
             "imported call = $(call.origin),$(call.targetSourceModule),$(call.functionSymbol),$(call.status)" -> println
         }
+    }
+    [
+        """
+        namespace app.missing
+        import absent.module as absent
+        main {
+            absent.work()
+        }
+        """; ~
+    ] => missingSources!
+    missingSources! -> analysis.analyze => missingPackage
+    missingPackage -> calls.resolveModulesAnalyzed => missingResolved!
+    missingResolved! -> each call {
+        "missing imported call = $(call.origin),$(call.targetModule),$(call.targetSourceModule),$(call.functionSymbol),$(call.status)" -> println
     }
 }

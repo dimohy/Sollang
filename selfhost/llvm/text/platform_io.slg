@@ -244,9 +244,6 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         "  %v$(request.callIndex)_file_open_handle = extractvalue %sollang.file_handle_result %v$(request.callIndex)_file_open_raw, 0" -> println
         "  %v$(request.callIndex)_file_open_status = extractvalue %sollang.file_handle_result %v$(request.callIndex)_file_open_raw, 1" -> println
         "  %v$(request.callIndex)_file_open_ok = icmp ne i32 %v$(request.callIndex)_file_open_status, 0" -> println
-        "  %v$(request.callIndex)_file_result_slot = alloca " -> print
-        call -> writeIrType(context, state)
-        ", align 8" -> println
         "  store " -> print
         call -> writeIrType(context, state)
         " zeroinitializer, ptr %v$(request.callIndex)_file_result_slot, align 8" -> println
@@ -345,9 +342,6 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         scalarTypeId! < 0 -> if { scalar.typeSymbol => scalarTypeId! }
         context.typeSizes[scalarTypeId!] => scalarSize
         context.typeAligns[scalarTypeId!] => scalarAlign
-        "  %v$(request.callIndex)_file_write_slot = alloca " -> print
-        scalarTypeId! -> writeSemanticTypeId(context, state)
-        ", align $scalarAlign" -> println
         "  store " -> print
         scalarTypeId! -> writeSemanticTypeId(context, state)
         " " -> print
@@ -374,9 +368,6 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         "  %v$(request.callIndex)_file_write_called = icmp ne i32 %v$(request.callIndex)_file_write_status, 0" -> println
         "  %v$(request.callIndex)_file_write_full = icmp eq i64 %v$(request.callIndex)_file_write_count, $scalarSize" -> println
         "  %v$(request.callIndex)_file_write_ok = and i1 %v$(request.callIndex)_file_write_called, %v$(request.callIndex)_file_write_full" -> println
-        "  %v$(request.callIndex)_file_result_slot = alloca " -> print
-        call -> writeIrType(context, state)
-        ", align 8" -> println
         "  store " -> print
         call -> writeIrType(context, state)
         " zeroinitializer, ptr %v$(request.callIndex)_file_result_slot, align 8" -> println
@@ -414,9 +405,6 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         context.types[optionTypeId].first => scalarTypeId
         context.typeSizes[scalarTypeId] => scalarSize
         context.typeAligns[scalarTypeId] => scalarAlign
-        "  %v$(request.callIndex)_file_read_slot = alloca " -> print
-        scalarTypeId == 23 -> if { "i8" -> print } else { scalarTypeId -> writeSemanticTypeId(context, state) }
-        ", align $scalarAlign" -> println
         enclosingFileMatch! >= 0 -> if {
             context.ir[enclosingFileMatch!] => fileReaderMatch
             context.types[context.ir[fileReaderMatch.operand0].typeId].first => fileReaderTypeId
@@ -436,9 +424,6 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         "  %v$(request.callIndex)_file_read_count = extractvalue %sollang.file_count_result %v$(request.callIndex)_file_read_raw, 0" -> println
         "  %v$(request.callIndex)_file_read_status = extractvalue %sollang.file_count_result %v$(request.callIndex)_file_read_raw, 1" -> println
         "  %v$(request.callIndex)_file_read_ok = icmp ne i32 %v$(request.callIndex)_file_read_status, 0" -> println
-        "  %v$(request.callIndex)_file_result_slot = alloca " -> print
-        call -> writeIrType(context, state)
-        ", align 8" -> println
         "  store " -> print
         call -> writeIrType(context, state)
         " zeroinitializer, ptr %v$(request.callIndex)_file_result_slot, align 8" -> println
@@ -470,9 +455,6 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         }
         "file$(request.callIndex)_read_valid:" -> println
         scalarTypeId == 23 -> if { "  %v$(request.callIndex)_file_read_scalar = trunc i8 %v$(request.callIndex)_file_read_loaded to i1" -> println }
-        "  %v$(request.callIndex)_file_option_slot = alloca " -> print
-        optionTypeId -> writeSemanticTypeId(context, state)
-        ", align 8" -> println
         "  store " -> print
         optionTypeId -> writeSemanticTypeId(context, state)
         " zeroinitializer, ptr %v$(request.callIndex)_file_option_slot, align 8" -> println
@@ -1031,7 +1013,9 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
 arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     -1 => elementTypeId!
     node.typeId >= 0 -> if {
-        context.types[node.typeId].kind == 3 -> if { context.types[node.typeId].first => elementTypeId! }
+        node.typeId => arrayTypeId!
+        context.types[arrayTypeId!].kind == 8 -> if { context.types[arrayTypeId!].first => arrayTypeId! }
+        context.types[arrayTypeId!].kind == 3 -> if { context.types[arrayTypeId!].first => elementTypeId! }
     } else {
         # A freshly lowered non-empty array literal can temporarily retain the
         # legacy dynamic-array projection while its canonical container type is

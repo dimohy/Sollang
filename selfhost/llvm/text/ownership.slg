@@ -42,6 +42,131 @@ moveRegionFor nodeIndex: Int, context: ref emitterContext.EmitContext, state: re
     }
     region!
 }
+nodeBelongsToOwnershipRegion nodeIndex: Int, regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[nodeIndex].parent => ancestor!
+    false => belongs!
+    false => blocked!
+    (ancestor! >= 0 and not belongs! and not blocked!) -> while {
+        ancestor! == regionIndex -> if {
+            true => belongs!
+        } else {
+            (context.ir[ancestor!].kind == 19 or context.ir[ancestor!].kind == 20) -> if {
+                true => blocked!
+            } else {
+                context.ir[ancestor!].parent => ancestor!
+            }
+        }
+    }
+    belongs!
+}
+regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterStart: UIntSize, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => moved!
+    0 => moveIndex!
+    (moveIndex! < (context.moves -> len) and not moved!) -> while {
+        context.moves[moveIndex!] => candidateMove
+        (candidateMove.memberIr < 0
+            and candidateMove.regionIr == regionIndex
+            and candidateMove.sourceModule == sourceModule
+            and candidateMove.symbol == symbol
+            and (context.ir[candidateMove.siteIr] -> sourceStart(context, state)) > afterStart) -> if {
+            true => moved!
+        }
+        moveIndex! + 1 => moveIndex!
+    }
+    0 => controlIndex!
+    (controlIndex! < (context.ir -> len) and not moved!) -> while {
+        context.ir[controlIndex!] => control
+        controlIndex! -> nodeBelongsToOwnershipRegion(regionIndex, context, state) -> if {
+            (control.kind == 18 and control.nextOperand >= 0 and (control -> sourceStart(context, state)) > afterStart) -> if {
+                control.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) => thenMoves
+                control.nextOperand -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) => elseMoves
+                (thenMoves and elseMoves) -> if { true => moved! }
+            }
+            (control.kind == 27 and control.operand1 >= 0 and (control -> sourceStart(context, state)) > afterStart) -> if {
+                true => allArmsMove!
+                false => hasArm!
+                control.operand1 => armIndex!
+                armIndex! >= 0 -> while {
+                    true => hasArm!
+                    armIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                        false => allArmsMove!
+                    }
+                    context.ir[armIndex!].nextOperand => armIndex!
+                }
+                (hasArm! and allArmsMove!) -> if { true => moved! }
+            }
+            (control.kind == 33 and control.operand0 >= 0 and (control -> sourceStart(context, state)) > afterStart) -> if {
+                true => allWhenArmsMove!
+                false => hasWhenArm!
+                false => hasWhenElse!
+                control.operand0 => whenArmIndex!
+                true => whenArmOpen!
+                (whenArmIndex! >= 0 and whenArmOpen!) -> while {
+                    context.ir[whenArmIndex!] => whenArm
+                    (whenArm.kind != 19 or whenArm.parent != controlIndex!) -> if {
+                        false => allWhenArmsMove!
+                        false => whenArmOpen!
+                    } else {
+                        true => hasWhenArm!
+                        (whenArm.operand0 >= 0 and whenArm.operand1 >= 0 and whenArm.operand0 != whenArm.operand1 and context.ir[whenArm.operand0].kind != 19) => conditionalWhenArm
+                        conditionalWhenArm -> if {
+                            whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                                false => allWhenArmsMove!
+                            }
+                            whenArm.nextOperand => whenArmIndex!
+                        } else {
+                            true => hasWhenElse!
+                            whenArm.operand1 >= 0 -> if {
+                                whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                                    false => allWhenArmsMove!
+                                }
+                            } else {
+                                whenArm.operand0 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                                    false => allWhenArmsMove!
+                                }
+                            }
+                            false => whenArmOpen!
+                        }
+                    }
+                }
+                (hasWhenArm! and hasWhenElse! and allWhenArmsMove!) -> if { true => moved! }
+            }
+            (control.kind == 34 and control.operand1 >= 0 and (control -> sourceStart(context, state)) > afterStart) -> if {
+                true => allSubjectWhenArmsMove!
+                false => hasSubjectWhenArm!
+                false => hasSubjectWhenElse!
+                control.operand1 => subjectWhenArmIndex!
+                true => subjectWhenArmOpen!
+                (subjectWhenArmIndex! >= 0 and subjectWhenArmOpen!) -> while {
+                    context.ir[subjectWhenArmIndex!] => subjectWhenArm
+                    (subjectWhenArm.kind != 19 or subjectWhenArm.parent != controlIndex!) -> if {
+                        false => allSubjectWhenArmsMove!
+                        false => subjectWhenArmOpen!
+                    } else {
+                        true => hasSubjectWhenArm!
+                        subjectWhenArm -> sourceNode(context, state) => subjectWhenArmSource
+                        subjectWhenArmSource.kind == 58 => conditionalSubjectWhenArm
+                        conditionalSubjectWhenArm -> if {
+                            subjectWhenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                                false => allSubjectWhenArmsMove!
+                            }
+                            subjectWhenArm.nextOperand => subjectWhenArmIndex!
+                        } else {
+                            true => hasSubjectWhenElse!
+                            subjectWhenArmIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                                false => allSubjectWhenArmsMove!
+                            }
+                            false => subjectWhenArmOpen!
+                        }
+                    }
+                }
+                (hasSubjectWhenArm! and hasSubjectWhenElse! and allSubjectWhenArmsMove!) -> if { true => moved! }
+            }
+        }
+        controlIndex! + 1 => controlIndex!
+    }
+    moved!
+}
 memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     context.moves[moveIndex] => candidateMove
     context.ir[assignmentIndex] => candidateAssignment
@@ -119,6 +244,7 @@ sourceInterpolations node: typedIr.TypedIrNode, context: ref emitterContext.Emit
         interpolationNode!.parent >= 0 -> if { interpolationNode!.parent - interpolationRange.nodeStart => interpolationNode!.parent }
         interpolationNode!.operand0 >= 0 -> if { interpolationNode!.operand0 - interpolationRange.nodeStart => interpolationNode!.operand0 }
         interpolationNode!.operand1 >= 0 -> if { interpolationNode!.operand1 - interpolationRange.nodeStart => interpolationNode!.operand1 }
+        interpolationNode!.operand2 >= 0 -> if { interpolationNode!.operand2 - interpolationRange.nodeStart => interpolationNode!.operand2 }
         sourceNodes! -> push(interpolationNode!)
         interpolationIndex! + 1 => interpolationIndex!
     }
@@ -895,7 +1021,14 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
         "i$(effectiveIntegerWidth)" -> print
     } else {
         node -> effectiveTypeId(context, state) => typeId
-        typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeType }
+        (typeId >= 0 and context.types[typeId].kind == 4) -> if {
+            # Fixed-array expression values use the documented borrowed
+            # pointer/length ABI. Their canonical storage type remains inline
+            # and is still written by writeSemanticTypeId for owner layouts.
+            "{ ptr, i64 }" -> print
+        } else {
+            typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeType }
+        }
     }
     }
     }
@@ -956,7 +1089,28 @@ integerNodeSigned node: typedIr.TypedIrNode, context: ref emitterContext.EmitCon
 }
 memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     0 => width!
-    (node.kind == 13 and node.operand0 >= 0) -> if {
+    -1 => canonicalMemberOwnerTypeId!
+    (node.kind == 13 and node.operand0 >= 0 and node.operand0 < (context.ir -> len)) -> if {
+        context.ir[node.operand0] -> effectiveTypeId(context, state) => canonicalMemberOwnerTypeId!
+        (canonicalMemberOwnerTypeId! >= 0 and context.types[canonicalMemberOwnerTypeId!].kind == 8) -> if {
+            context.types[canonicalMemberOwnerTypeId!].first => canonicalMemberOwnerTypeId!
+        }
+        0 => canonicalMemberFieldSearch!
+        canonicalMemberFieldSearch! < (context.fields -> len) -> while {
+            context.fields[canonicalMemberFieldSearch!] => canonicalMemberField
+            (canonicalMemberField.status == 0
+                and canonicalMemberField.ownerType == canonicalMemberOwnerTypeId!
+                and canonicalMemberField.ordinal == node.symbol) -> if {
+                context.types[canonicalMemberField.fieldType] => canonicalMemberFieldType
+                (canonicalMemberFieldType.kind == 1 and canonicalMemberFieldType.origin == 1) -> if {
+                    canonicalMemberFieldType.symbol -> integerWidth(context, state) => width!
+                    (canonicalMemberFieldType.symbol == 12 or canonicalMemberFieldType.symbol == 13) -> if { context.pointerBitWidth => width! }
+                }
+            }
+            canonicalMemberFieldSearch! + 1 => canonicalMemberFieldSearch!
+        }
+    }
+    (node.kind == 13 and node.operand0 >= 0 and canonicalMemberOwnerTypeId! < 0) -> if {
         context.ir[node.operand0] => memberBase
         memberBase.typeOrigin => currentOrigin!
         memberBase.typeModule => currentModule!
@@ -1106,6 +1260,14 @@ integerComparisonOperation expression: typedIr.TypedIrNode, context: ref emitter
             }
         }
     }
+}
+integerQuotientOperation expression: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text {
+    context.ir[expression.operand0] => operand
+    operand -> integerNodeSigned(context, state) -> if { "sdiv" } else { "udiv" }
+}
+integerRemainderOperation expression: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text {
+    context.ir[expression.operand0] => operand
+    operand -> integerNodeSigned(context, state) -> if { "srem" } else { "urem" }
 }
 legacyStorageAlign symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     4 => result!

@@ -1,0 +1,33 @@
+import sollang.compiler.llvm.text as llvm
+
+# Canonical member chains inside a control region must project every field
+# before arithmetic consumes the final scalar value.
+main {
+    [
+        """
+        struct Span {
+            start: UIntSize
+            length: UIntSize
+        }
+
+        struct Token {
+            span: Span
+        }
+
+        position token: Token -> UIntSize {
+            UIntSize(0) => index!
+            UIntSize(0) => result!
+            index! < UIntSize(1) -> while {
+                token.span.start + index! => result!
+                index! + UIntSize(1) => index!
+            }
+            result!
+        }
+
+        main {
+            Token { span: Span { start: UIntSize(7), length: UIntSize(2) } } -> position -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

@@ -1,0 +1,56 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import syntax.generated.slg as grammar
+
+operatorOpcodeValid opcode: Int -> Bool {
+    ((opcode >= grammar.tokenIdPlus() and opcode <= grammar.tokenIdPercent())
+        or opcode == grammar.tokenIdEqualEqual()
+        or opcode == grammar.tokenIdBangEqual()
+        or (opcode >= grammar.tokenIdLessEqual() and opcode <= grammar.tokenIdGreater())
+        or opcode == -24
+        or opcode == -25)
+}
+
+# Final Typed IR for the runtime-file composition must not expose parser-only
+# wrappers, missing operands, or syntax opcodes to LLVM lowering.
+main {
+    [
+        "tests/Sollang.ExampleTests/Fixtures/selfhost-stage2-directory-create.slg",
+        "stdlib/sys/process.slg",
+        "stdlib/sys/path.slg",
+        "selfhost/runtime/file.slg",
+        "stdlib/sys/directory.slg",
+        "stdlib/sys/directory/kind.slg"; ~
+    ] => sourcePaths!
+    sourcePaths! -> semanticContext.prepareFiles => prepared!
+    prepared! -> typedIr.lowerContext => ir!
+    0 => invalid!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        node.kind == 7 -> if {
+            (node.operand0 < 0 or node.operand0 >= (ir! -> len)) -> if {
+                invalid! + 1 => invalid!
+            } else {
+                ir![node.operand0] => operand
+                (operand.kind == 9 and operand.opcode == -1) -> if { invalid! + 1 => invalid! }
+            }
+        }
+        node.kind == 8 -> if {
+            (node.operand0 < 0 or node.operand0 >= (ir! -> len)
+                or node.operand1 < 0 or node.operand1 >= (ir! -> len)
+                or not (node.opcode -> operatorOpcodeValid)) -> if {
+                invalid! + 1 => invalid!
+            } else {
+                ir![node.operand0] => left
+                ir![node.operand1] => right
+                ((left.kind == 9 and left.opcode == -1)
+                    or (right.kind == 9 and right.opcode == -1)) -> if {
+                    invalid! + 1 => invalid!
+                }
+            }
+        }
+        index! + 1 => index!
+    }
+    "invalid=$(invalid!)" -> println
+}

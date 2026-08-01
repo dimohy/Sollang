@@ -30,6 +30,7 @@ public struct SourceAnalysisRange {
 
 public struct PackageAnalysis {
     sources: [file.SourceText; ~]
+    entrySourceModule: Int
     ranges: [SourceAnalysisRange; ~]
     nodes: [ast.AstNode; ~]
     tokens: [syntax.SyntaxToken; ~]
@@ -37,6 +38,23 @@ public struct PackageAnalysis {
     names: [resolution.ResolvedName; ~]
     terms: [typeTerms.TypeTerm; ~]
     typeUses: [types.TypeUse; ~]
+}
+
+withSelectedFunctionFlag symbol: symbols.Symbol, selected: Bool -> symbols.Symbol {
+    symbol.flags => flags!
+    (selected and ((flags! / 4) % 2) == 0) -> if { flags! + 4 => flags! }
+    symbols.Symbol {
+        kind: symbol.kind
+        parent: symbol.parent
+        astNode: symbol.astNode
+        nameToken: symbol.nameToken
+        typeNode: symbol.typeNode
+        secondaryTypeNode: symbol.secondaryTypeNode
+        blockNameToken: symbol.blockNameToken
+        blockTypeNode: symbol.blockTypeNode
+        blockResultTypeNode: symbol.blockResultTypeNode
+        flags: flags!
+    }
 }
 
 # A source-local product is safe to compute on a native worker: it borrows only
@@ -121,7 +139,7 @@ public analyzeSource sourceText: file.SourceText -> SourceAnalysis {
     result!
 }
 
-public analyzeSources sources: move [file.SourceText; ~] -> PackageAnalysis {
+analyzeSelectedSources sources: move [file.SourceText; ~], selectedSourceIndices: [Int; ~], selectedSymbolIndices: [Int; ~] -> PackageAnalysis {
     [SourceAnalysisRange; ~] => ranges!
     [ast.AstNode; ~] => nodes!
     [syntax.SyntaxToken; ~] => tokens!
@@ -165,7 +183,14 @@ public analyzeSources sources: move [file.SourceText; ~] -> PackageAnalysis {
         0 => symbolCopyIndex95!
         symbolCopyIndex95! < (sourceAnalysis.symbols -> len) -> while {
             (sourceAnalysis.symbols)[symbolCopyIndex95!] => symbol
-            symbolTable! -> push(symbol)
+            false => selected!
+            0 => selectedIndex!
+            selectedIndex! < (selectedSourceIndices -> len) -> while {
+                (selectedSourceIndices[selectedIndex!] == sourceIndex! and selectedSymbolIndices[selectedIndex!] == symbolCopyIndex95!) -> if { true => selected! }
+                selectedIndex! + 1 => selectedIndex!
+            }
+            symbol -> withSelectedFunctionFlag(selected!) => promotedSymbol
+            symbolTable! -> push(promotedSymbol)
             symbolCopyIndex95! + 1 => symbolCopyIndex95!
         }
         0 => nameCopyIndex96!
@@ -189,8 +214,11 @@ public analyzeSources sources: move [file.SourceText; ~] -> PackageAnalysis {
         sourceIndex! + 1 => sourceIndex!
     }
 
+    -1 => entrySourceModule!
+    (selectedSourceIndices -> len) > 0 -> if { (sources -> len) - 1 => entrySourceModule! }
     PackageAnalysis {
         sources: sources
+        entrySourceModule: entrySourceModule!
         ranges: ranges!
         nodes: nodes!
         tokens: tokens!
@@ -200,6 +228,16 @@ public analyzeSources sources: move [file.SourceText; ~] -> PackageAnalysis {
         typeUses: typeUses!
     } => result!
     result!
+}
+
+public analyzeSources sources: move [file.SourceText; ~] -> PackageAnalysis {
+    [Int; ~] => selectedSourceIndices!
+    [Int; ~] => selectedSymbolIndices!
+    sources -> analyzeSelectedSources(selectedSourceIndices!, selectedSymbolIndices!)
+}
+
+public analyzeTestSources sources: move [file.SourceText; ~], selectedSourceIndices: [Int; ~], selectedSymbolIndices: [Int; ~] -> PackageAnalysis {
+    sources -> analyzeSelectedSources(selectedSourceIndices, selectedSymbolIndices)
 }
 
 public analyze sources: [Text; ~] -> PackageAnalysis {

@@ -1,0 +1,30 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Package-library calls are projected after base lowering. A qualified flow
+# invocation must therefore survive as call IR with a valid result binding.
+main {
+    [
+        """
+        namespace fixture
+
+        import sys.file as file
+
+        save writer: Int -> Bool uses File {
+            writer -> file.sync => valid!
+            valid!
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => calls!
+    0 => invalid!
+    ir! -> each node {
+        node.kind == 6 -> if { calls! + 1 => calls! }
+        (node.kind == 17 and (node.operand0 < 0 or node.operand0 >= (ir! -> len))) -> if {
+            invalid! + 1 => invalid!
+        }
+    }
+    "calls=$(calls!),invalid=$(invalid!)" -> println
+}

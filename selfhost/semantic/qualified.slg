@@ -361,6 +361,84 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                             siblingModuleIndex! + 1 => siblingModuleIndex!
                         }
                     }
+                    # A source may use a module's canonical namespace path
+                    # instead of an import alias. Resolve every identifier
+                    # before the final member as the module path so this works
+                    # for namespaces of any depth.
+                    not localVariantResolved! -> if {
+                        UInt64(1469598103934665603) => qualifiedModuleHash!
+                        firstIdentifier! => qualifiedModuleToken!
+                        qualifiedModuleToken! <= previousIdentifier! -> while {
+                            package.tokens[sourceRange.tokenStart + qualifiedModuleToken!] => qualifiedModulePathToken
+                            qualifiedModulePathToken.kind == grammar.triviaIdWhitespace() -> if {
+                            } else {
+                                qualifiedModulePathToken.kind == grammar.triviaIdComment() -> if {
+                                } else {
+                                    UIntSize(0) => qualifiedModuleByte!
+                                    qualifiedModuleByte! < qualifiedModulePathToken.span.length -> while {
+                                        source -> byte(qualifiedModulePathToken.span.start + qualifiedModuleByte!) => qualifiedModuleValue
+                                        qualifiedModuleHash! * UInt64(1099511628211) + UInt64(qualifiedModuleValue) => qualifiedModuleHash!
+                                        qualifiedModuleByte! + UIntSize(1) => qualifiedModuleByte!
+                                    }
+                                }
+                            }
+                            qualifiedModuleToken! + 1 => qualifiedModuleToken!
+                        }
+                        false => qualifiedModuleFound!
+                        -1 => qualifiedModuleTarget!
+                        -1 => qualifiedModuleSymbol!
+                        false => qualifiedModulePublic!
+                        0 => qualifiedModuleSearch!
+                        qualifiedModuleSearch! < (identities! -> len) -> while {
+                            identities![qualifiedModuleSearch!] => qualifiedIdentity
+                            qualifiedIdentity.pathHash == qualifiedModuleHash! -> if {
+                                true => qualifiedModuleFound!
+                                qualifiedIdentity.sourceIndex => qualifiedSourceIndex
+                                package.sources[qualifiedSourceIndex] -> len => qualifiedSourceLength
+                                package.sources[qualifiedSourceIndex] -> slice(UIntSize(0), qualifiedSourceLength) => qualifiedSource
+                                package.ranges[qualifiedSourceIndex] => qualifiedRange
+                                0 => qualifiedSymbolSearch!
+                                qualifiedSymbolSearch! < qualifiedRange.symbolCount -> while {
+                                    package.symbols[qualifiedRange.symbolStart + qualifiedSymbolSearch!] => qualifiedCandidate
+                                    (qualifiedCandidate.parent < 0 and qualifiedCandidate.kind != 6 and qualifiedCandidate.nameToken >= 0) -> if {
+                                        package.tokens[qualifiedRange.tokenStart + qualifiedCandidate.nameToken] => qualifiedCandidateName
+                                        package.tokens[sourceRange.tokenStart + lastIdentifier!] => qualifiedMemberName
+                                        qualifiedCandidateName.span.length == qualifiedMemberName.span.length => qualifiedMemberEqual!
+                                        UIntSize(0) => qualifiedMemberByte!
+                                        (qualifiedMemberEqual! and qualifiedMemberByte! < qualifiedCandidateName.span.length) -> while {
+                                            (qualifiedSource -> byte(qualifiedCandidateName.span.start + qualifiedMemberByte!)) != (source -> byte(qualifiedMemberName.span.start + qualifiedMemberByte!)) -> if {
+                                                false => qualifiedMemberEqual!
+                                            }
+                                            qualifiedMemberByte! + UIntSize(1) => qualifiedMemberByte!
+                                        }
+                                        qualifiedMemberEqual! -> if {
+                                            qualifiedModuleSearch! => qualifiedModuleTarget!
+                                            qualifiedSymbolSearch! => qualifiedModuleSymbol!
+                                            qualifiedCandidate.flags / 4 % 2 == 1 -> if { true => qualifiedModulePublic! }
+                                            qualifiedRange.symbolCount => qualifiedSymbolSearch!
+                                            identities! -> len => qualifiedModuleSearch!
+                                        }
+                                    }
+                                    qualifiedSymbolSearch! + 1 => qualifiedSymbolSearch!
+                                }
+                            }
+                            qualifiedModuleSearch! + 1 => qualifiedModuleSearch!
+                        }
+                        qualifiedModuleFound! -> if {
+                            2 => qualifiedModuleStatus!
+                            qualifiedModuleSymbol! >= 0 -> if {
+                                qualifiedModulePublic! -> if { 0 => qualifiedModuleStatus! } else { 3 => qualifiedModuleStatus! }
+                            }
+                            results! -> push(QualifiedResolution {
+                                sourceModule: sourceIndex!
+                                pathAst: pathAstIndex!
+                                targetModule: qualifiedModuleTarget!
+                                targetSymbol: qualifiedModuleSymbol!
+                                status: qualifiedModuleStatus!
+                            })
+                            true => localVariantResolved!
+                        }
+                    }
                     0 => edgeIndex!
                     localVariantResolved! -> if { importCount => edgeIndex! }
                     edgeIndex! < importCount -> while {

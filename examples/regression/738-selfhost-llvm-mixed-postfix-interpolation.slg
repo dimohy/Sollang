@@ -1,0 +1,31 @@
+import sollang.compiler.llvm.text as llvm
+
+# Interpolation preserves left-to-right member/index/member postfix flow and
+# emits each aggregate projection before the value that consumes it.
+main {
+    [
+        """
+        public struct Item {
+            value: Int
+        }
+
+        public struct Context {
+            items: [Item; ~]
+        }
+
+        show context: ref Context, index: Int -> Unit {
+            "function=$(context.items[index].value)" -> println
+            true -> if {
+                "region=$(context.items[index].value)" -> println
+            }
+        }
+
+        main {
+            Context { items: [Item { value: 42 }; ~] } => context!
+            "entry=$(context!.items[0].value)" -> println
+            context! -> show(0)
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

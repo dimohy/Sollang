@@ -1,0 +1,28 @@
+import sollang.compiler.llvm.text as llvm
+
+# A readonly array reference indexed inside a while condition is loaded before
+# aggregate projection; the pointer itself is never passed to extractvalue.
+main {
+    [
+        """
+        contains values: ref [Int; ~], target: Int -> Bool {
+            0 => index!
+            false => found!
+            index! < (values -> len) -> while {
+                (values[index!] == target and values[index!] >= 0) -> if {
+                    true => found!
+                }
+                index! + 1 => index!
+            }
+            found!
+        }
+
+        main {
+            [1, 2, 3; ~] => values!
+            values! -> contains(2) => found
+            "found=$(found)" -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

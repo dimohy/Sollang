@@ -179,26 +179,49 @@ internal static partial class LanguageServer
     private static JsonDocument? ReadMessage(Stream input)
     {
         int? contentLength = null;
+        var sawHeader = false;
+        var terminatedHeader = false;
         while (ReadHeaderLine(input) is { } line)
         {
-            if (line.Length == 0) break;
+            sawHeader = true;
+            if (line.Length == 0)
+            {
+                terminatedHeader = true;
+                break;
+            }
             const string prefix = "Content-Length:";
             if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                && int.TryParse(line[prefix.Length..].Trim(), out var length))
+                && int.TryParse(line[prefix.Length..].Trim(), out var length)
+                && length >= 0)
             {
                 contentLength = length;
             }
         }
-        if (contentLength is null) return null;
+        if (!sawHeader) return null;
+        if (!terminatedHeader)
+        {
+            throw new SollangException("incomplete LSP message");
+        }
+        if (contentLength is null)
+        {
+            throw new SollangException("invalid LSP header");
+        }
         var payload = new byte[contentLength.Value];
         var offset = 0;
         while (offset < payload.Length)
         {
             var read = input.Read(payload, offset, payload.Length - offset);
-            if (read == 0) throw new EndOfStreamException("incomplete LSP message");
+            if (read == 0) throw new SollangException("incomplete LSP message");
             offset += read;
         }
-        return JsonDocument.Parse(payload);
+        try
+        {
+            return JsonDocument.Parse(payload);
+        }
+        catch (JsonException)
+        {
+            throw new SollangException("invalid LSP message");
+        }
     }
 
     private static string? ReadHeaderLine(Stream input)

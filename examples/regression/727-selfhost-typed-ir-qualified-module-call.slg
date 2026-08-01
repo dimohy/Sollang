@@ -1,0 +1,43 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Imported aliases and canonical namespace paths of different depths resolve
+# to call nodes; no qualified callee path survives as an unbased member node.
+main {
+    [
+        """
+        namespace sys.process
+
+        public arguments: -> [Text; ~] uses Process = intrinsic
+        """,
+        """
+        namespace platform.sys.process
+
+        public answer: -> Int { 42 }
+        """,
+        """
+        import sys.process as process
+
+        readCount: -> Int uses Process {
+            process.arguments() -> len
+        }
+
+        readQualifiedCount: -> Int uses Process {
+            sys.process.arguments() -> len
+        }
+
+        readDeepQualified: -> Int {
+            platform.sys.process.answer()
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => invalidMembers!
+    0 => calls!
+    ir! -> each node {
+        (node.kind == 13 and node.operand0 < 0) -> if { invalidMembers! + 1 => invalidMembers! }
+        node.kind == 6 -> if { calls! + 1 => calls! }
+    }
+    "invalidMembers=$(invalidMembers!),calls=$(calls!)" -> println
+}

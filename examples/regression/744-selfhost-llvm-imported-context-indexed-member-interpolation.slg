@@ -1,0 +1,37 @@
+import sollang.compiler.llvm.text as llvm
+
+# Imported nominal context fields keep their canonical owner type through a
+# member -> index -> member interpolation chain in every emission region.
+main {
+    [
+        """
+        namespace fixture.data
+
+        public struct Field {
+            ordinal: Int
+        }
+
+        public struct Context {
+            fields: [Field; ~]
+        }
+        """,
+        """
+        namespace fixture.main
+        import fixture.data as data
+
+        show context: ref data.Context, index: Int -> Unit {
+            "function=$(context.fields[index].ordinal)" -> println
+            true -> if {
+                "region=$(context.fields[index].ordinal)" -> println
+            }
+        }
+
+        main {
+            data.Context { fields: [data.Field { ordinal: 42 }; ~] } => context!
+            "entry=$(context!.fields[0].ordinal)" -> println
+            context! -> show(0)
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

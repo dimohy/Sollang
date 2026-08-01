@@ -1,0 +1,30 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# Mutable struct member assignments inside control flow must remain explicit in
+# typed IR so every backend can preserve their writes through the borrowed slot.
+main {
+    [
+        """
+        struct Options {
+            status: Int
+            message: Text
+        }
+
+        fail options: mut Options, message: Text -> Unit {
+            options.status == 0 -> if {
+                1 => options.status
+                message => options.message
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> semanticContext.prepare => snapshot!
+    snapshot! -> typedIr.lowerContext => ir!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        "$(index!):$(node.kind),$(node.parent),$(node.opcode),$(node.operand0),$(node.operand1),$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.typeId),$(node.flags)" -> println
+        index! + 1 => index!
+    }
+}

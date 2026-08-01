@@ -1,0 +1,40 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# Every segment of an indexed nested member chain used as a call argument must
+# exist in Typed IR, and the outer leaf must retain its Text type.
+main {
+    [
+        """
+        struct Inner {
+            text: Text
+        }
+
+        struct Outer {
+            inner: Inner
+        }
+
+        consume value: Text -> Unit { }
+
+        render values: ref [Outer; ~], index: Int -> Unit {
+            values[index].inner.text -> consume
+        }
+        """; ~
+    ] => sources!
+    sources! -> semanticContext.prepare => prepared!
+    prepared! -> typedIr.lowerContext => ir!
+    0 => members!
+    0 => textMembers!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        node.kind == 13 -> if {
+            members! + 1 => members!
+            (node.typeOrigin == 1 and node.typeSymbol == 1) -> if {
+                textMembers! + 1 => textMembers!
+            }
+        }
+        index! + 1 => index!
+    }
+    "members=$(members!),text-members=$(textMembers!)" -> println
+}

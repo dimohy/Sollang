@@ -7,6 +7,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "selfhost-verification-lock.ps1")
+$selfHostVerificationLock = Enter-SelfHostVerificationLock
+try {
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
 $manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
@@ -20,8 +24,6 @@ $stage3Path = Join-Path $artifactsDir "selfhost-stage3-linux"
 $stage3ErrorPath = Join-Path $artifactsDir "selfhost-stage3-linux.err.log"
 $llvmAsPath = Join-Path $repoRoot ".tools\llvm-22.1.8\bin\llvm-as.exe"
 $clangPath = Join-Path $repoRoot ".tools\llvm-22.1.8\bin\clang.exe"
-$linuxStackLinkerOption = "-Wl,-z,stack-size=268435456"
-$stage3RunnerPath = Join-Path $PSScriptRoot "run-selfhost-stage3-linux.sh"
 
 function Convert-ToWslPath {
     param([string]$Path)
@@ -72,7 +74,6 @@ Write-Host "[linux-stage3 2/3] Generate Linux stage 3 from the stage-2 compiler.
 Remove-Item -LiteralPath $stage3LlvmPath, $stage3ErrorPath -ErrorAction SilentlyContinue
 $stage3Arguments = @(
     "-d", $Distribution, "--",
-    "bash", (Convert-ToWslPath $stage3RunnerPath),
     (Convert-ToWslPath $stage2Path), "linux", "--jobs", $Jobs.ToString()
 )
 $stage3Arguments += $sourcePaths | ForEach-Object { Convert-ToWslPath $_ }
@@ -107,8 +108,12 @@ if ($stage2Hash -ne $stage3Hash) {
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $clangPath --target=x86_64-unknown-linux-gnu -c $stage3LlvmPath -O1 -o $stage3ObjectPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage3ObjectPath) -pthread $linuxStackLinkerOption -o (Convert-ToWslPath $stage3Path)
+& wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage3ObjectPath) -pthread -o (Convert-ToWslPath $stage3Path)
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & wsl.exe -d $Distribution -- test -x (Convert-ToWslPath $stage3Path)
 if ($LASTEXITCODE -ne 0) { throw "Linux stage-3 compiler is not executable" }
 Write-Host "[linux-stage3 3/3] PASS fixed point $stage3Hash"
+}
+finally {
+    Release-SelfHostVerificationLock $selfHostVerificationLock
+}

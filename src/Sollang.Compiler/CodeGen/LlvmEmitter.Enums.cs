@@ -105,11 +105,15 @@ internal sealed partial class LlvmEmitter
             removedNamedSubject = true;
         }
 
+        var entryScope = CaptureLocals();
         var endLabel = NextLabel("enum_when_end");
         var valueResults = new List<(RuntimeValue Value, string Label)>();
+        var scopeResults = new List<(LocalScope Scope, string Label)>();
+        var hasEndPredecessor = false;
         var nextConditionLabel = _currentBlockLabel;
         foreach (var arm in expression.Arms)
         {
+            RestoreLocals(entryScope);
             _currentBlockLabel = nextConditionLabel;
             var pattern = (EnumPatternExpression)arm.Condition;
             var variant = definition.Variants.First(candidate => candidate.Name == pattern.VariantName);
@@ -128,44 +132,76 @@ internal sealed partial class LlvmEmitter
             }
 
             var armResult = EmitEnumArmBody(arm.Body, pattern.BindingName, payload);
-            if (armResult.Value is not null)
+            var armTerminated = _currentBlockTerminated;
+            if (!armTerminated && armResult.Value is not null)
             {
                 valueResults.Add((armResult.Value, armResult.EndLabel));
             }
-            if (ownsStorage
+            if (!armTerminated)
+            {
+                scopeResults.Add((armResult.ExitScope, armResult.EndLabel));
+            }
+            if (!armTerminated
+                && ownsStorage
                 && (anonymousSubject || removedNamedSubject)
                 && !armTransfers[arm])
             {
                 DropOwnedRuntimeValue(subject);
             }
-            EmitBranch(endLabel);
+            if (!armTerminated)
+            {
+                EmitBranch(endLabel);
+                hasEndPredecessor = true;
+            }
 
             EmitLabel(nextLabel);
             nextConditionLabel = nextLabel;
         }
 
         _currentBlockLabel = nextConditionLabel;
+        RestoreLocals(entryScope);
         if (expression.Else is not null)
         {
             var elseResult = EmitScopedBlockBody(expression.Else);
-            if (elseResult.Value is not null)
+            var elseTerminated = _currentBlockTerminated;
+            if (!elseTerminated && elseResult.Value is not null)
             {
                 valueResults.Add((elseResult.Value, elseResult.EndLabel));
             }
-            if (ownsStorage && (anonymousSubject || removedNamedSubject))
+            if (!elseTerminated)
+            {
+                scopeResults.Add((elseResult.ExitScope, elseResult.EndLabel));
+            }
+            if (!elseTerminated && ownsStorage && (anonymousSubject || removedNamedSubject))
             {
                 DropOwnedRuntimeValue(subject);
             }
-            EmitBranch(endLabel);
+            if (!elseTerminated)
+            {
+                EmitBranch(endLabel);
+                hasEndPredecessor = true;
+            }
         }
         else
         {
-            EmitInstruction("call void @llvm.trap()");
-            EmitInstruction("unreachable");
+            EmitTrap();
+        }
+
+        if (!hasEndPredecessor)
+        {
+            return RuntimeUnit.Instance;
         }
 
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
+        if (_activeAsyncCfg is not null)
+        {
+            MergeAsyncOuterScope(entryScope, scopeResults);
+        }
+        else
+        {
+            MergeSynchronousOuterScope(entryScope, scopeResults);
+        }
         var result = valueResults.Count == 0
             ? RuntimeUnit.Instance
             : EmitPhiValue("enum_when", valueResults);

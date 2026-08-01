@@ -90,6 +90,15 @@ internal sealed partial class LlvmEmitter
             return EmitReadIntPrompt(prompt);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeFlushStandardOutput)
+        {
+            if (expression.Arguments.Count != 0)
+            {
+                throw new SollangException($"{path} does not accept arguments");
+            }
+            return EmitRuntimeFlushStandardOutputIntrinsic();
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeNowMillis)
         {
             if (expression.Arguments.Count != 0)
@@ -226,6 +235,15 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{path} does not accept arguments");
             }
             return EmitReadStandardInputSourceText();
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeReadStandardInputChunk)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one UIntSize capacity");
+            }
+            return EmitReadStandardInputChunk(EmitExpression(expression.Arguments[0]));
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeMapSourcePath)
@@ -1447,6 +1465,10 @@ internal sealed partial class LlvmEmitter
         {
             var parameter = parameters[index];
             var value = additionalArguments[index];
+            if (value is RuntimeFormattedText && parameter.Type == BoundType.Text)
+            {
+                value = EmitTransientText(value);
+            }
             EnsureFunctionArgumentRuntimeType(value, parameter.Type, function.Name);
             if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
             {
@@ -1490,6 +1512,11 @@ internal sealed partial class LlvmEmitter
         if (argument is null)
         {
             throw new SollangException($"function '{function.Name}' expects exactly one argument");
+        }
+
+        if (argument is RuntimeFormattedText && function.InputType == BoundType.Text)
+        {
+            argument = EmitTransientText(argument);
         }
 
         if (function.HasValueGenericFixedArrayInput)

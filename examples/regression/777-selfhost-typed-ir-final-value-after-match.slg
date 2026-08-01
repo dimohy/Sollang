@@ -1,0 +1,45 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A top-level match that mutates a result binding is not the function result
+# when a later lexical value expression follows it.
+main {
+    [
+        """
+        enum Attempt {
+            Ok(Int)
+            Err(Text)
+        }
+
+        select result: Attempt -> Int uses Console {
+            -1 => code!
+            result -> when {
+                Ok(value) { value => code! }
+                Err(error) { error -> println }
+            }
+            code!
+        }
+        """; ~
+    ] => sources!
+    sources! -> semanticContext.prepare => prepared!
+    prepared! -> typedIr.lowerContext => ir!
+    0 => functions!
+    0 => controlReturns!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        (node.kind == 0 and node.operand0 >= 0) -> if {
+            functions! + 1 => functions!
+            ir![node.operand0] => returnNode
+            (returnNode.operand0 >= 0
+                and (ir![returnNode.operand0].kind == 18
+                    or ir![returnNode.operand0].kind == 27
+                    or ir![returnNode.operand0].kind == 33
+                    or ir![returnNode.operand0].kind == 34)) -> if {
+                controlReturns! + 1 => controlReturns!
+            }
+        }
+        index! + 1 => index!
+    }
+    "functions=$(functions!),control-returns=$(controlReturns!)" -> println
+}

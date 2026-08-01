@@ -1,0 +1,36 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# Test selection promotes one namespaced function before a generated harness
+# calls it through an import alias. The qualified call must retain valid IR.
+main {
+    """
+    namespace sample.tests
+    test_addition: -> Bool => true
+    """ => testSource
+    """
+    import sample.tests as test_module_0
+    main {
+        test_module_0.test_addition() -> if {}
+    }
+    """ => harnessSource
+    [testSource, harnessSource; ~] => sources!
+    [0; ~] => selectedSources!
+    [0; ~] => selectedSymbols!
+    sources! -> semanticContext.prepareTests(selectedSources!, selectedSymbols!) => prepared!
+    prepared!.calls -> each call {
+        "call=$(call.sourceModule),$(call.callAst),$(call.origin),$(call.targetModule),$(call.targetSourceModule),$(call.functionSymbol),$(call.status)" -> println
+    }
+    prepared!.qualified -> each qualified {
+        "qualified=$(qualified.sourceModule),$(qualified.pathAst),$(qualified.targetModule),$(qualified.targetSymbol),$(qualified.status)" -> println
+    }
+    prepared! -> typedIr.lowerContext => ir!
+    0 => nodeIndex!
+    nodeIndex! < (ir! -> len) -> while {
+        ir![nodeIndex!] => node
+        (node.kind == 0 or node.kind == 6 or node.kind == 11 or node.kind == 13) -> if {
+            "ir=$(nodeIndex!),$(node.kind),$(node.sourceModule),$(node.symbol),$(node.targetModule),$(node.operand0),$(node.operand1),$(node.nextOperand),$(node.flags)" -> println
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+}

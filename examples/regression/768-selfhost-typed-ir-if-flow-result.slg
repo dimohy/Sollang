@@ -1,0 +1,38 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# Structured-if result regions must retain the terminal flow intrinsic as the
+# branch value so the if node and both branches have UIntSize type identity.
+main {
+    ["tests/Sollang.ExampleTests/Fixtures/selfhost-stage2-if-flow-result.slg"; ~] => sourcePaths!
+    sourcePaths! -> semanticContext.prepareFiles => prepared!
+    prepared! -> typedIr.lowerContext => ir!
+    0 => ifCount!
+    0 => invalid!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        node.kind == 18 -> if {
+            ifCount! + 1 => ifCount!
+            (node.operand1 < 0 or node.nextOperand < 0) -> if {
+                invalid! + 1 => invalid!
+            } else {
+                ir![node.operand1] => thenRegion
+                ir![node.nextOperand] => elseRegion
+                (thenRegion.operand1 < 0 or elseRegion.operand1 < 0) -> if {
+                    invalid! + 1 => invalid!
+                } else {
+                    ir![thenRegion.operand1] => thenValue
+                    ir![elseRegion.operand1] => elseValue
+                    (node.typeOrigin != 1 or node.typeSymbol != 13
+                        or thenValue.typeOrigin != 1 or thenValue.typeSymbol != 13
+                        or elseValue.typeOrigin != 1 or elseValue.typeSymbol != 13) -> if {
+                        invalid! + 1 => invalid!
+                    }
+                }
+            }
+        }
+        index! + 1 => index!
+    }
+    "ifs=$(ifCount!),invalid=$(invalid!)" -> println
+}

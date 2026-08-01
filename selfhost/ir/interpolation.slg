@@ -10,7 +10,10 @@ import syntax.generated.slg as grammar
 # inside the source string token. Expression-node indexes are global offsets in
 # one owned table, matching the rest of the self-hosted compiler IR.
 # Kinds: 0 integer literal, 1 lexical name, 2 unary, 3 binary,
-# 4 boolean literal, 5 member access, 6 intrinsic flow call. Builtin result ids match the nominal
+# 4 boolean literal, 5 member access, 6 intrinsic flow call, 7 index access,
+# 8 resolved source function call, 9 builtin scalar conversion,
+# 10 unresolved source call retained for diagnostics.
+# Builtin result ids match the nominal
 # table. Member nodes retain their absolute source span and point at the
 # lexical base through operand0 so code generation can project the field.
 public struct InterpolationNode {
@@ -24,6 +27,7 @@ public struct InterpolationNode {
     payloadLength: UIntSize
     operand0: Int
     operand1: Int
+    operand2: Int
     sourceToken: Int
     literalStart: UIntSize
     literalLength: UIntSize
@@ -45,12 +49,48 @@ public struct PreparedInterpolationRequest {
     symbols: [symbols.Symbol; ~]
 }
 
+builtinConversionSymbol source: Text, token: syntax.SyntaxToken -> Int {
+    ["Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Bool"; ~] => names
+    [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 23; ~] => symbols
+    -1 => symbol!
+    0 => nameIndex!
+    nameIndex! < (names -> len) -> while {
+        names[nameIndex!] => name
+        token.span.length == UIntSize(name -> len) => equal!
+        UIntSize(0) => byteIndex!
+        (equal! and byteIndex! < token.span.length) -> while {
+            (source -> byte(token.span.start + byteIndex!)) != (name -> byte(byteIndex!)) -> if { false => equal! }
+            byteIndex! + UIntSize(1) => byteIndex!
+        }
+        equal! -> if { symbols[nameIndex!] => symbol! }
+        nameIndex! + 1 => nameIndex!
+    }
+    symbol!
+}
+
 public lowerPrepared request: move PreparedInterpolationRequest -> [InterpolationNode; ~] {
     isIdentifierStart value: UInt8 -> Bool {
         (value >= UInt8(65) and value <= UInt8(90)) or (value >= UInt8(97) and value <= UInt8(122)) or value == UInt8(95) or value >= UInt8(128)
     }
     isIdentifierContinue value: UInt8 -> Bool {
         (value -> isIdentifierStart) or (value >= UInt8(48) and value <= UInt8(57))
+    }
+    decodedSpanLength source: Text, start: UIntSize, end: UIntSize, decodeEscapes: Bool -> UIntSize {
+        UIntSize(0) => length!
+        start => byteIndex!
+        byteIndex! < end -> while {
+            false => decodedEscape!
+            (decodeEscapes and (source -> byte(byteIndex!)) == UInt8(92) and byteIndex! + UIntSize(1) < end) -> if {
+                source -> byte(byteIndex! + UIntSize(1)) => escaped
+                (escaped == UInt8(110) or escaped == UInt8(114) or escaped == UInt8(116) or escaped == UInt8(92)) -> if {
+                    true => decodedEscape!
+                }
+            }
+            decodedEscape! -> if { byteIndex! + UIntSize(1) => byteIndex! }
+            length! + UIntSize(1) => length!
+            byteIndex! + UIntSize(1) => byteIndex!
+        }
+        length!
     }
     [InterpolationNode; ~] => nodes!
     request.source => source
@@ -62,6 +102,14 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
         stringToken.kind == grammar.tokenIdString() -> if {
             stringToken.span.start + UIntSize(1) => contentStart
             stringToken.span.start + stringToken.span.length - UIntSize(1) => contentEnd
+            true => decodeStringEscapes!
+            stringToken.span.length >= UIntSize(6) -> if {
+                ((source -> byte(stringToken.span.start)) == UInt8(34)
+                    and (source -> byte(stringToken.span.start + UIntSize(1))) == UInt8(34)
+                    and (source -> byte(stringToken.span.start + UIntSize(2))) == UInt8(34)) -> if {
+                    false => decodeStringEscapes!
+                }
+            }
             contentStart => literalStart!
             contentStart => cursor!
             cursor! < contentEnd -> while {
@@ -136,24 +184,79 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                             }
                             fragmentNode.kind == 22 -> if { 2 => loweredKind! }
                             fragmentNode.kind == 36 -> if { 5 => loweredKind! }
+                            fragmentNode.kind == 41 -> if { 7 => loweredKind! }
                             (fragmentChildCount! >= 2 and ((fragmentNode.kind >= 18 and fragmentNode.kind <= 21) or fragmentNode.kind == 24 or fragmentNode.kind == 25)) -> if { 3 => loweredKind! }
                             -1 => intrinsicFlowOpcode!
+                            -1 => flowTargetPayloadToken!
+                            false => flowFunctionTarget!
+                            false => flowQualifiedTarget!
+                            -1 => resolvedFlowSymbol!
+                            -1 => flowConversionSymbol!
                             fragmentNode.kind == 10 -> if {
                                 0 => flowTargetSearch!
                                 flowTargetSearch! < (fragmentAst! -> len) -> while {
                                     fragmentAst![flowTargetSearch!] => flowTarget
-                                    (flowTarget.parent == fragmentAstIndex! and flowTarget.kind == 16 and flowTarget.payloadToken >= 0) -> if {
+                                    (flowTarget.parent == fragmentAstIndex! and flowTarget.kind == 36) -> if { true => flowQualifiedTarget! }
+                                    (flowTarget.parent == fragmentAstIndex!
+                                        and (flowTarget.kind == 16 or (flowTarget.kind == 11 and not flowFunctionTarget!))
+                                        and flowTarget.payloadToken >= 0) -> if {
+                                        flowTarget.payloadToken => flowTargetPayloadToken!
+                                        flowTarget.kind == 16 -> if { true => flowFunctionTarget! }
                                         fragmentTokens![flowTarget.payloadToken] => flowTargetName
+                                        (flowTarget.kind == 16
+                                            and flowTargetName.span.start + flowTargetName.span.length < UIntSize(fragment -> len)
+                                            and (fragment -> byte(flowTargetName.span.start + flowTargetName.span.length)) == UInt8(46)) -> if {
+                                            true => flowQualifiedTarget!
+                                        }
                                         (flowTargetName.span.length == UIntSize(3)
                                             and (fragment -> byte(flowTargetName.span.start)) == UInt8(108)
                                             and (fragment -> byte(flowTargetName.span.start + UIntSize(1))) == UInt8(101)
                                             and (fragment -> byte(flowTargetName.span.start + UIntSize(2))) == UInt8(110)) -> if {
                                             -101 => intrinsicFlowOpcode!
                                         }
+                                        (flowTargetName.span.length == UIntSize(4)
+                                            and (fragment -> byte(flowTargetName.span.start)) == UInt8(98)
+                                            and (fragment -> byte(flowTargetName.span.start + UIntSize(1))) == UInt8(121)
+                                            and (fragment -> byte(flowTargetName.span.start + UIntSize(2))) == UInt8(116)
+                                            and (fragment -> byte(flowTargetName.span.start + UIntSize(3))) == UInt8(101)) -> if {
+                                            -202 => intrinsicFlowOpcode!
+                                        }
+                                        (flowTargetName.span.length == UIntSize(5)
+                                            and (fragment -> byte(flowTargetName.span.start)) == UInt8(115)
+                                            and (fragment -> byte(flowTargetName.span.start + UIntSize(1))) == UInt8(108)
+                                            and (fragment -> byte(flowTargetName.span.start + UIntSize(2))) == UInt8(105)
+                                            and (fragment -> byte(flowTargetName.span.start + UIntSize(3))) == UInt8(99)
+                                            and (fragment -> byte(flowTargetName.span.start + UIntSize(4))) == UInt8(101)) -> if {
+                                            -203 => intrinsicFlowOpcode!
+                                        }
                                     }
                                     flowTargetSearch! + 1 => flowTargetSearch!
                                 }
-                                intrinsicFlowOpcode! == -101 -> if { 6 => loweredKind! }
+                                (flowTargetPayloadToken! >= 0 and intrinsicFlowOpcode! >= -1) -> if {
+                                    fragmentTokens![flowTargetPayloadToken!] => requestedFlowName
+                                    0 => functionSymbolSearch!
+                                    functionSymbolSearch! < (request.symbols -> len) -> while {
+                                        request.symbols[functionSymbolSearch!] => functionSymbol
+                                        (functionSymbol.kind == 7 and functionSymbol.nameToken >= 0) -> if {
+                                            request.tokens[functionSymbol.nameToken] => declaredFunctionName
+                                            declaredFunctionName.span.length == requestedFlowName.span.length => functionNamesEqual!
+                                            UIntSize(0) => functionNameByte!
+                                            (functionNamesEqual! and functionNameByte! < declaredFunctionName.span.length) -> while {
+                                                (source -> byte(declaredFunctionName.span.start + functionNameByte!)) != (fragment -> byte(requestedFlowName.span.start + functionNameByte!)) -> if {
+                                                    false => functionNamesEqual!
+                                                }
+                                                functionNameByte! + UIntSize(1) => functionNameByte!
+                                            }
+                                            functionNamesEqual! -> if { functionSymbolSearch! => resolvedFlowSymbol! }
+                                        }
+                                        functionSymbolSearch! + 1 => functionSymbolSearch!
+                                    }
+                                    fragment -> builtinConversionSymbol(requestedFlowName) => flowConversionSymbol!
+                                }
+                                intrinsicFlowOpcode! < -1 -> if { 6 => loweredKind! }
+                                resolvedFlowSymbol! >= 0 -> if { 8 => loweredKind! }
+                                flowConversionSymbol! >= 0 -> if { 9 => loweredKind! }
+                                (flowFunctionTarget! and not flowQualifiedTarget! and flowTargetPayloadToken! >= 0 and loweredKind! < 0) -> if { 10 => loweredKind! }
                             }
                             loweredKind! >= 0 -> if {
                                 -1 => loweredParent!
@@ -162,7 +265,7 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                     astToNode![parentAst!] => mappedParent
                                     mappedParent >= 0 -> if { mappedParent => loweredParent! } else { fragmentAst![parentAst!].parent => parentAst! }
                                 }
-                                -1 => resolvedSymbol!
+                                resolvedFlowSymbol! => resolvedSymbol!
                                 -1 => resolvedOwner!
                                 loweredKind! == 1 -> if {
                                     fragmentTokens![fragmentNode.payloadToken] => fragmentName
@@ -202,7 +305,7 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                         0 => candidateSymbol!
                                         candidateSymbol! < (request.symbols -> len) -> while {
                                             request.symbols[candidateSymbol!] => candidate
-                                            ((candidate.kind == 9 or candidate.kind == 35) and candidate.parent == searchScope!) -> if {
+                                            ((candidate.kind == 9 or candidate.kind == 61 or candidate.kind == 35) and candidate.parent == searchScope!) -> if {
                                                 request.tokens[candidate.nameToken] => candidateName
                                                 candidateName.span.length => candidateNameLength
                                                 fragmentName.span.length => fragmentNameRawLength
@@ -224,7 +327,7 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                                 nameEqual! -> if {
                                                     request.nodes[candidate.astNode].start => candidateStart
                                                     candidate.kind == 35 => candidateVisible!
-                                                    candidate.kind == 9 -> if {
+                                                    (candidate.kind == 9 or candidate.kind == 61) -> if {
                                                         -1 => candidateBlockAst!
                                                         candidate.astNode => candidateOwnerAst!
                                                         (candidateOwnerAst! >= 0 and candidateBlockAst! < 0) -> while {
@@ -261,6 +364,52 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                             }
                                         }
                                     }
+                                    # A mutable reassignment has its own source
+                                    # symbol, but every read and write targets
+                                    # the original mutable storage binding.
+                                    # Normalize the interpolation reference to
+                                    # that declaration so type lookup and LLVM
+                                    # slot lookup share one identity.
+                                    (resolvedSymbol! >= 0
+                                        and (request.symbols[resolvedSymbol!].kind == 9 or request.symbols[resolvedSymbol!].kind == 61)
+                                        and request.symbols[resolvedSymbol!].flags == 1) -> if {
+                                        request.symbols[resolvedSymbol!] => mutableReassignment
+                                        request.tokens[mutableReassignment.nameToken] => mutableReassignmentName
+                                        -1 => mutableDeclarationSymbol!
+                                        UIntSize(0) => mutableDeclarationStart!
+                                        0 => mutableDeclarationSearch!
+                                        mutableDeclarationSearch! < (request.symbols -> len) -> while {
+                                            request.symbols[mutableDeclarationSearch!] => mutableDeclaration
+                                            (mutableDeclaration.kind == 9 and mutableDeclaration.flags == 1) -> if {
+                                                request.tokens[mutableDeclaration.nameToken] => mutableDeclarationName
+                                                mutableDeclarationName.span.length == mutableReassignmentName.span.length => mutableDeclarationNameEqual!
+                                                UIntSize(0) => mutableDeclarationNameByte!
+                                                (mutableDeclarationNameEqual! and mutableDeclarationNameByte! < mutableDeclarationName.span.length) -> while {
+                                                    (source -> byte(mutableDeclarationName.span.start + mutableDeclarationNameByte!)) != (source -> byte(mutableReassignmentName.span.start + mutableDeclarationNameByte!)) -> if {
+                                                        false => mutableDeclarationNameEqual!
+                                                    }
+                                                    mutableDeclarationNameByte! + UIntSize(1) => mutableDeclarationNameByte!
+                                                }
+                                                mutableDeclaration.parent == mutableReassignment.parent => mutableDeclarationVisible!
+                                                mutableReassignment.parent => mutableDeclarationScope!
+                                                (not mutableDeclarationVisible! and mutableDeclarationScope! >= 0) -> while {
+                                                    request.symbols[mutableDeclarationScope!].parent => mutableDeclarationScope!
+                                                    mutableDeclarationScope! == mutableDeclaration.parent -> if { true => mutableDeclarationVisible! }
+                                                }
+                                                request.nodes[mutableDeclaration.astNode].start => mutableDeclarationCandidateStart
+                                                request.nodes[mutableReassignment.astNode].start => mutableReassignmentStart
+                                                (mutableDeclarationNameEqual!
+                                                    and mutableDeclarationVisible!
+                                                    and mutableDeclarationCandidateStart < mutableReassignmentStart
+                                                    and (mutableDeclarationSymbol! < 0 or mutableDeclarationCandidateStart < mutableDeclarationStart!)) -> if {
+                                                    mutableDeclarationSearch! => mutableDeclarationSymbol!
+                                                    mutableDeclarationCandidateStart => mutableDeclarationStart!
+                                                }
+                                            }
+                                            mutableDeclarationSearch! + 1 => mutableDeclarationSearch!
+                                        }
+                                        mutableDeclarationSymbol! >= 0 -> if { mutableDeclarationSymbol! => resolvedSymbol! }
+                                    }
                                 }
                                 -1 => loweredTypeSymbol!
                                 loweredKind! == 0 -> if { 2 => loweredTypeSymbol! }
@@ -271,9 +420,18 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                 loweredKind! == 3 -> if {
                                     (fragmentNode.operatorKind == grammar.tokenIdEqualEqual() or fragmentNode.operatorKind == grammar.tokenIdBangEqual() or fragmentNode.operatorKind == grammar.tokenIdLess() or fragmentNode.operatorKind == grammar.tokenIdLessEqual() or fragmentNode.operatorKind == grammar.tokenIdGreater() or fragmentNode.operatorKind == grammar.tokenIdGreaterEqual() or fragmentNode.operatorKind == -24 or fragmentNode.operatorKind == -25) -> if { 23 => loweredTypeSymbol! } else { 2 => loweredTypeSymbol! }
                                 }
-                                loweredKind! == 6 -> if { 13 => loweredTypeSymbol! }
+                                loweredKind! == 6 -> if {
+                                    intrinsicFlowOpcode! == -101 -> if { 13 => loweredTypeSymbol! }
+                                    intrinsicFlowOpcode! == -202 -> if { 8 => loweredTypeSymbol! }
+                                    intrinsicFlowOpcode! == -203 -> if { 1 => loweredTypeSymbol! }
+                                }
+                                loweredKind! == 9 -> if { flowConversionSymbol! => loweredTypeSymbol! }
                                 fragmentStart! - contentStart => loweredExpressionStart!
                                 not parenthesizedInterpolation! -> if { cursor! - contentStart => loweredExpressionStart! }
+                                fragmentEnd! => loweredInterpolationEnd!
+                                parenthesizedInterpolation! -> if { fragmentEnd! + UIntSize(1) => loweredInterpolationEnd! }
+                                source -> decodedSpanLength(contentStart, contentStart + loweredExpressionStart!, decodeStringEscapes!) => loweredDecodedExpressionStart
+                                source -> decodedSpanLength(contentStart, loweredInterpolationEnd!, decodeStringEscapes!) => loweredDecodedSuffixStart
                                 InterpolationNode {
                                     kind: loweredKind!
                                     segment: segmentIndex!
@@ -285,11 +443,12 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                     payloadLength: fragmentNode.length
                                     operand0: -1
                                     operand1: -1
+                                    operand2: -1
                                     sourceToken: stringTokenIndex!
-                                    literalStart: literalStart! - contentStart
-                                    literalLength: cursor! - literalStart!
-                                    expressionStart: loweredExpressionStart!
-                                    expressionLength: fragmentEnd! - fragmentStart!
+                                    literalStart: source -> decodedSpanLength(contentStart, literalStart!, decodeStringEscapes!)
+                                    literalLength: source -> decodedSpanLength(literalStart!, cursor!, decodeStringEscapes!)
+                                    expressionStart: loweredDecodedExpressionStart
+                                    expressionLength: loweredDecodedSuffixStart - loweredDecodedExpressionStart - UIntSize(1)
                                     typeSymbol: loweredTypeSymbol!
                                 } => lowered
                                 nodes! -> len => loweredIndex
@@ -317,12 +476,19 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
         nodes![nodeIndex!] => node
         node.operand0 => operand0!
         node.operand1 => operand1!
+        node.operand2 => operand2!
         0 => childIndex!
         childIndex! < (nodes! -> len) -> while {
             nodes![childIndex!].parent == nodeIndex! -> if {
-                operand0! < 0 => firstOperand
-                firstOperand -> if { childIndex! => operand0! }
-                not firstOperand -> if { childIndex! => operand1! }
+                operand0! < 0 -> if {
+                    childIndex! => operand0!
+                } else {
+                    operand1! < 0 -> if {
+                        childIndex! => operand1!
+                    } else {
+                        childIndex! => operand2!
+                    }
+                }
             }
             childIndex! + 1 => childIndex!
         }
@@ -337,6 +503,7 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
             payloadLength: node.payloadLength
             operand0: operand0!
             operand1: operand1!
+            operand2: operand2!
             sourceToken: node.sourceToken
             literalStart: node.literalStart
             literalLength: node.literalLength
@@ -345,6 +512,45 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
             typeSymbol: node.typeSymbol
         })
         nodeIndex! + 1 => nodeIndex!
+    }
+    # The parser keeps repeated postfix suffixes as siblings of the outer
+    # member node. Fold every suffix-only index into the value chain so the
+    # interpolation IR preserves the same left-to-right postfix semantics as
+    # ordinary Typed IR: base -> index -> index -> member.
+    0 => postfixParentIndex!
+    postfixParentIndex! < (wiredNodes! -> len) -> while {
+        wiredNodes![postfixParentIndex!] => postfixParent!
+        postfixParent!.kind == 5 -> if {
+            -1 => postfixValue!
+            true => postfixChainValid!
+            0 => postfixChildIndex!
+            postfixChildIndex! < (nodes! -> len) -> while {
+                nodes![postfixChildIndex!].parent == postfixParentIndex! -> if {
+                    postfixValue! < 0 -> if {
+                        postfixChildIndex! => postfixValue!
+                    } else {
+                        wiredNodes![postfixChildIndex!] => postfixSuffix!
+                        (postfixSuffix!.kind == 7 and postfixSuffix!.operand0 >= 0 and postfixSuffix!.operand1 < 0) -> if {
+                            postfixSuffix!.operand0 => postfixSubscript
+                            postfixValue! => postfixSuffix!.operand0
+                            postfixSubscript => postfixSuffix!.operand1
+                            postfixSuffix! => wiredNodes![postfixChildIndex!]
+                            postfixChildIndex! => postfixValue!
+                        } else {
+                            false => postfixChainValid!
+                        }
+                    }
+                }
+                postfixChildIndex! + 1 => postfixChildIndex!
+            }
+            (postfixChainValid! and postfixValue! >= 0) -> if {
+                postfixValue! => postfixParent!.operand0
+                -1 => postfixParent!.operand1
+                -1 => postfixParent!.operand2
+                postfixParent! => wiredNodes![postfixParentIndex!]
+            }
+        }
+        postfixParentIndex! + 1 => postfixParentIndex!
     }
     wiredNodes!
 }

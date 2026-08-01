@@ -1,0 +1,33 @@
+import sollang.compiler.llvm.text as llvm
+
+# A member projected from an indexed readonly struct array remains the scalar
+# operand of a short-circuit comparison inside a while body.
+main {
+    [
+        """
+        struct Item {
+            sourceToken: Int
+            segment: Int
+        }
+
+        contains items: ref [Item; ~], sourceToken: Int, segment: Int -> Bool {
+            0 => index!
+            false => found!
+            index! < (items -> len) -> while {
+                (items[index!].sourceToken == sourceToken and items[index!].segment == segment) -> if {
+                    true => found!
+                }
+                index! + 1 => index!
+            }
+            found!
+        }
+
+        main {
+            [Item { sourceToken: 5, segment: 1 }, Item { sourceToken: 7, segment: 2 }; ~] => items!
+            items! -> contains(7, 2) => found
+            "found=$(found)" -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

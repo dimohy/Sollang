@@ -520,6 +520,37 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                             source -> byte(flowToken.span.start + UIntSize(3)) => flowByte3
                             source -> byte(flowToken.span.start + UIntSize(4)) => flowByte4
                             (flowByte0 == UInt8(115) and flowByte1 == UInt8(108) and flowByte2 == UInt8(105) and flowByte3 == UInt8(99) and flowByte4 == UInt8(101)) -> if { 1 => builtinTypeId! }
+                            (flowByte0 == UInt8(121) and flowByte1 == UInt8(105) and flowByte2 == UInt8(101) and flowByte3 == UInt8(108) and flowByte4 == UInt8(100)) -> if {
+                                node.parent => yieldOwnerAst!
+                                -1 => yieldFunctionAst!
+                                (yieldOwnerAst! >= 0 and yieldFunctionAst! < 0) -> while {
+                                    prepared.package.nodes[sourceRange.astStart + yieldOwnerAst!] => yieldOwner
+                                    yieldOwner.kind == 7 -> if {
+                                        yieldOwnerAst! => yieldFunctionAst!
+                                    } else {
+                                        yieldOwner.parent => yieldOwnerAst!
+                                    }
+                                }
+                                -1 => yieldFunctionSymbol!
+                                0 => yieldFunctionSearch!
+                                (yieldFunctionSearch! < sourceRange.symbolCount and yieldFunctionSymbol! < 0) -> while {
+                                    prepared.package.symbols[sourceRange.symbolStart + yieldFunctionSearch!] => yieldFunctionCandidate
+                                    (yieldFunctionCandidate.kind == 7 and yieldFunctionCandidate.astNode == yieldFunctionAst!) -> if {
+                                        yieldFunctionSearch! => yieldFunctionSymbol!
+                                    }
+                                    yieldFunctionSearch! + 1 => yieldFunctionSearch!
+                                }
+                                yieldFunctionSymbol! >= 0 -> if {
+                                    prepared.package.symbols[sourceRange.symbolStart + yieldFunctionSymbol!] => yieldFunction
+                                    yieldFunction.blockResultTypeNode >= 0 -> if {
+                                        referenceIndexByTypeAst![sourceRange.astStart + yieldFunction.blockResultTypeNode] => yieldResultReferenceIndex
+                                        yieldResultReferenceIndex >= 0 -> if {
+                                            references![yieldResultReferenceIndex] => yieldResultReference
+                                            yieldResultReference.status == 0 -> if { yieldResultReference.typeId => builtinTypeId! }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     flowTokenIndex! + 1 => flowTokenIndex!
@@ -730,6 +761,31 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             astIndex! + 1 => astIndex!
         }
 
+        # An impl's target is the last Path child in its header. Index that
+        # child once instead of scanning the source AST again for every
+        # synthetic self symbol.
+        [Int; ~] => lastPathChildByAst!
+        [UIntSize; ~] => lastPathStartByAst!
+        0 => lastPathSlot!
+        lastPathSlot! < sourceRange.astCount -> while {
+            lastPathChildByAst! -> push(-1)
+            lastPathStartByAst! -> push(UIntSize(0))
+            lastPathSlot! + 1 => lastPathSlot!
+        }
+        0 => lastPathCandidateIndex!
+        lastPathCandidateIndex! < sourceRange.astCount -> while {
+            prepared.package.nodes[sourceRange.astStart + lastPathCandidateIndex!] => lastPathCandidate
+            (lastPathCandidate.kind == 16
+                and lastPathCandidate.parent >= 0
+                and lastPathCandidate.parent < sourceRange.astCount
+                and (lastPathChildByAst![lastPathCandidate.parent] < 0
+                    or lastPathCandidate.start > lastPathStartByAst![lastPathCandidate.parent])) -> if {
+                lastPathCandidateIndex! => lastPathChildByAst![lastPathCandidate.parent]
+                lastPathCandidate.start => lastPathStartByAst![lastPathCandidate.parent]
+            }
+            lastPathCandidateIndex! + 1 => lastPathCandidateIndex!
+        }
+
         0 => resolvedNameIndex!
         resolvedNameIndex! < (resolvedNames! -> len) -> while {
             resolvedNames![resolvedNameIndex!] => resolvedName
@@ -811,17 +867,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 (selfOwner.kind == 31 and selfOwner.parent >= 0) -> if {
                     prepared.package.symbols[sourceRange.symbolStart + selfOwner.parent] => selfImpl
                     selfImpl.kind == 6 -> if {
-                        -1 => selfTargetPath!
-                        UIntSize(0) => selfTargetStart!
-                        0 => selfPathSearch!
-                        selfPathSearch! < sourceRange.astCount -> while {
-                            prepared.package.nodes[sourceRange.astStart + selfPathSearch!] => selfPathCandidate
-                            (selfPathCandidate.kind == 16 and selfPathCandidate.parent == selfImpl.astNode and (selfTargetPath! < 0 or selfPathCandidate.start > selfTargetStart!)) -> if {
-                                selfPathSearch! => selfTargetPath!
-                                selfPathCandidate.start => selfTargetStart!
-                            }
-                            selfPathSearch! + 1 => selfPathSearch!
-                        }
+                        lastPathChildByAst![selfImpl.astNode] => selfTargetPath!
                         selfTargetPath! >= 0 -> if {
                             prepared.package.nodes[sourceRange.astStart + selfTargetPath!] => selfTargetNode
                             -1 => selfTargetToken!
@@ -1176,6 +1222,32 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         }
     }
 
+    # Resolve each flow call's target token once. Generic result inference used
+    # to rescan the complete source AST for every call, which became quadratic
+    # for the compiler's own large modules.
+    [Int; ~] => flowTargetTokenByAst!
+    0 => flowTargetSlot!
+    flowTargetSlot! < (prepared.package.nodes -> len) -> while {
+        flowTargetTokenByAst! -> push(-1)
+        flowTargetSlot! + 1 => flowTargetSlot!
+    }
+    0 => flowTargetSource!
+    flowTargetSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[flowTargetSource!] => flowTargetRange
+        0 => flowTargetNode!
+        flowTargetNode! < flowTargetRange.astCount -> while {
+            prepared.package.nodes[flowTargetRange.astStart + flowTargetNode!] => flowTargetCandidate
+            (flowTargetCandidate.parent >= 0
+                and flowTargetCandidate.parent < flowTargetRange.astCount
+                and flowTargetCandidate.kind == 16
+                and flowTargetCandidate.payloadToken >= 0) -> if {
+                flowTargetCandidate.payloadToken => flowTargetTokenByAst![flowTargetRange.astStart + flowTargetCandidate.parent]
+            }
+            flowTargetNode! + 1 => flowTargetNode!
+        }
+        flowTargetSource! + 1 => flowTargetSource!
+    }
+
     0 => callIndex!
     callIndex! < (prepared.calls -> len) -> while {
         prepared.calls[callIndex!] => call
@@ -1216,13 +1288,9 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         prepared.package.nodes[callRange.astStart + call.callAst] => callNode
                         callNode.start + callNode.length => callRuntimeArgumentEnd!
                         callNode.kind == 10 -> if {
-                            0 => callTargetSearch!
-                            callTargetSearch! < callRange.astCount -> while {
-                                prepared.package.nodes[callRange.astStart + callTargetSearch!] => callTargetCandidate
-                                (callTargetCandidate.parent == call.callAst and callTargetCandidate.kind == 16 and callTargetCandidate.payloadToken >= 0) -> if {
-                                    prepared.package.tokens[callRange.tokenStart + callTargetCandidate.payloadToken].span.start => callRuntimeArgumentEnd!
-                                }
-                                callTargetSearch! + 1 => callTargetSearch!
+                            flowTargetTokenByAst![callRange.astStart + call.callAst] => callTargetToken
+                            callTargetToken >= 0 -> if {
+                                prepared.package.tokens[callRange.tokenStart + callTargetToken].span.start => callRuntimeArgumentEnd!
                             }
                         }
                         callNode.kind == 48 -> if {
@@ -1258,29 +1326,11 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                             (argumentTypeReference.status == 0 and not argumentSemanticType.containsParameter) -> if { true => concreteArgument! }
                         }
                         (inputReference! >= 0 and concreteArgument!) -> if {
-                            [typeIds.SemanticType; ~] => requestTypes!
-                            0 => currentTypeIndex!
-                            currentTypeIndex! < (types! -> len) -> while {
-                                requestTypes! -> push(types![currentTypeIndex!])
-                                currentTypeIndex! + 1 => currentTypeIndex!
-                            }
                             references![inputReference!].typeId => inputTemplateTypeId
                             expressions![argumentExpression!].typeId => actualInputTypeId
                             reference.typeId => resultTemplateTypeId
-                            typeIds.SpecializationRequest {
-                                types: requestTypes!
-                                inputTemplate: inputTemplateTypeId
-                                actualInput: actualInputTypeId
-                                resultTemplate: resultTemplateTypeId
-                            } => specializationRequest!
-                            specializationRequest! -> typeIds.specialize => specialization
+                            types! -> typeIds.specializeInto(inputTemplateTypeId, actualInputTypeId, resultTemplateTypeId) => specialization
                             specialization.status == 0 -> if {
-                                types! -> len => previousTypeCount
-                                previousTypeCount => specializedTypeIndex!
-                                specializedTypeIndex! < (specialization.types -> len) -> while {
-                                    types! -> push(specialization.types[specializedTypeIndex!])
-                                    specializedTypeIndex! + 1 => specializedTypeIndex!
-                                }
                                 specialization.root => resultTypeId!
                                 0 => resultStatus!
                             }
@@ -1322,26 +1372,8 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 blockResultSearch! + 1 => blockResultSearch!
                             }
                             (blockResultReference! >= 0 and blockResultExpression! >= 0) -> if {
-                                [typeIds.SemanticType; ~] => blockSpecializationTypes!
-                                0 => blockSpecializationTypeIndex!
-                                blockSpecializationTypeIndex! < (types! -> len) -> while {
-                                    blockSpecializationTypes! -> push(types![blockSpecializationTypeIndex!])
-                                    blockSpecializationTypeIndex! + 1 => blockSpecializationTypeIndex!
-                                }
-                                typeIds.SpecializationRequest {
-                                    types: blockSpecializationTypes!
-                                    inputTemplate: references![blockResultReference!].typeId
-                                    actualInput: expressions![blockResultExpression!].typeId
-                                    resultTemplate: resultTypeId!
-                                } => blockSpecializationRequest
-                                blockSpecializationRequest -> typeIds.specialize => blockSpecialization
+                                types! -> typeIds.specializeInto(references![blockResultReference!].typeId, expressions![blockResultExpression!].typeId, resultTypeId!) => blockSpecialization
                                 blockSpecialization.status == 0 -> if {
-                                    types! -> len => blockPreviousTypeCount
-                                    blockPreviousTypeCount => blockSpecializedTypeIndex!
-                                    blockSpecializedTypeIndex! < (blockSpecialization.types -> len) -> while {
-                                        types! -> push(blockSpecialization.types[blockSpecializedTypeIndex!])
-                                        blockSpecializedTypeIndex! + 1 => blockSpecializedTypeIndex!
-                                    }
                                     blockSpecialization.root => resultTypeId!
                                     0 => resultStatus!
                                 }
@@ -1840,6 +1872,134 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         controlBranchSource! + 1 => controlBranchSource!
     }
 
+    # The enclosing value branch for an AST node is structural and immutable.
+    # Resolve it once instead of re-walking the same parent chain for every
+    # typed expression on every fixed-point pass.
+    [Int; ~] => controlRootByAst!
+    [Int; ~] => controlBranchByAst!
+    [Int; ~] => controlDistanceByAst!
+    0 => controlAncestorSeed!
+    controlAncestorSeed! < (prepared.package.nodes -> len) -> while {
+        controlRootByAst! -> push(-1)
+        controlBranchByAst! -> push(-1)
+        controlDistanceByAst! -> push(1000000)
+        controlAncestorSeed! + 1 => controlAncestorSeed!
+    }
+    0 => controlAncestorSource!
+    controlAncestorSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[controlAncestorSource!] => controlAncestorRange
+        0 => controlAncestorAst!
+        controlAncestorAst! < controlAncestorRange.astCount -> while {
+            controlAncestorRange.astStart + controlAncestorAst! => controlAncestorGlobal
+            controlAncestorAst! => controlRoot!
+            prepared.package.nodes[controlAncestorGlobal].parent => controlAncestor!
+            1 => controlDistance!
+            -1 => controlBranch!
+            false => controlNested!
+            (controlAncestor! >= 0 and controlBranch! < 0 and not controlNested!) -> while {
+                prepared.package.nodes[controlAncestorRange.astStart + controlAncestor!] => controlAncestorNode
+                (controlAncestorNode.kind == 43 and controlAncestorNode.parent >= 0) -> if {
+                    controlAncestorRange.astStart + controlAncestor! => controlBranch!
+                } else {
+                    (controlAncestorNode.kind == 7 or controlAncestorNode.kind == 29 or controlAncestorNode.kind == 31) -> if {
+                        true => controlNested!
+                    } else {
+                        controlAncestor! => controlRoot!
+                        controlAncestorNode.parent => controlAncestor!
+                        controlDistance! + 1 => controlDistance!
+                    }
+                }
+            }
+            controlRoot! => controlRootByAst![controlAncestorGlobal]
+            controlBranch! => controlBranchByAst![controlAncestorGlobal]
+            controlDistance! => controlDistanceByAst![controlAncestorGlobal]
+            controlAncestorAst! + 1 => controlAncestorAst!
+        }
+        controlAncestorSource! + 1 => controlAncestorSource!
+    }
+
+    # Parent chains are immutable. Cache the nearest semantically relevant
+    # binding and path ancestors, then follow only those links in each round.
+    # This preserves all nested owners while skipping unrelated AST parents.
+    [Int; ~] => nearestBindingAncestorByAst!
+    [Int; ~] => nearestBindingDistanceByAst!
+    [Int; ~] => nearestPathAncestorByAst!
+    [Int; ~] => nearestPathDistanceByAst!
+    0 => semanticAncestorSeed!
+    semanticAncestorSeed! < (prepared.package.nodes -> len) -> while {
+        nearestBindingAncestorByAst! -> push(-1)
+        nearestBindingDistanceByAst! -> push(1000000)
+        nearestPathAncestorByAst! -> push(-1)
+        nearestPathDistanceByAst! -> push(1000000)
+        semanticAncestorSeed! + 1 => semanticAncestorSeed!
+    }
+    0 => semanticAncestorSource!
+    semanticAncestorSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[semanticAncestorSource!] => semanticAncestorRange
+        0 => semanticAncestorAst!
+        semanticAncestorAst! < semanticAncestorRange.astCount -> while {
+            semanticAncestorRange.astStart + semanticAncestorAst! => semanticAncestorGlobal
+            prepared.package.nodes[semanticAncestorGlobal].parent => semanticParent!
+            1 => semanticDistance!
+            (semanticParent! >= 0 and nearestBindingAncestorByAst![semanticAncestorGlobal] < 0) -> while {
+                semanticAncestorRange.astStart + semanticParent! => semanticParentGlobal
+                bindingSymbolByAst![semanticParentGlobal] >= 0 -> if {
+                    semanticParentGlobal => nearestBindingAncestorByAst![semanticAncestorGlobal]
+                    semanticDistance! => nearestBindingDistanceByAst![semanticAncestorGlobal]
+                } else {
+                    prepared.package.nodes[semanticParentGlobal].parent => semanticParent!
+                    semanticDistance! + 1 => semanticDistance!
+                }
+            }
+            prepared.package.nodes[semanticAncestorGlobal].parent => pathSemanticParent!
+            1 => pathSemanticDistance!
+            (pathSemanticParent! >= 0 and nearestPathAncestorByAst![semanticAncestorGlobal] < 0) -> while {
+                semanticAncestorRange.astStart + pathSemanticParent! => pathSemanticParentGlobal
+                prepared.package.nodes[pathSemanticParentGlobal] => pathSemanticParentNode
+                (pathSemanticParentNode.kind == 36 or pathSemanticParentNode.kind == 41 or pathSemanticParentNode.kind == 10) -> if {
+                    pathSemanticParentGlobal => nearestPathAncestorByAst![semanticAncestorGlobal]
+                    pathSemanticDistance! => nearestPathDistanceByAst![semanticAncestorGlobal]
+                } else {
+                    pathSemanticParentNode.parent => pathSemanticParent!
+                    pathSemanticDistance! + 1 => pathSemanticDistance!
+                }
+            }
+            semanticAncestorAst! + 1 => semanticAncestorAst!
+        }
+        semanticAncestorSource! + 1 => semanticAncestorSource!
+    }
+
+    # Field lookup is keyed by its canonical owner type. Preserve declaration
+    # order within each owner while avoiding a complete field-table scan for
+    # every member token on every fixed-point iteration.
+    [Int; ~] => firstFieldByOwnerType!
+    [Int; ~] => lastFieldByOwnerType!
+    0 => fieldOwnerSeed!
+    fieldOwnerSeed! < (types! -> len) -> while {
+        firstFieldByOwnerType! -> push(-1)
+        lastFieldByOwnerType! -> push(-1)
+        fieldOwnerSeed! + 1 => fieldOwnerSeed!
+    }
+    [Int; ~] => nextFieldByField!
+    0 => fieldLinkSeed!
+    fieldLinkSeed! < (fields! -> len) -> while {
+        nextFieldByField! -> push(-1)
+        fieldLinkSeed! + 1 => fieldLinkSeed!
+    }
+    0 => indexedField!
+    indexedField! < (fields! -> len) -> while {
+        fields![indexedField!] => indexedFieldValue
+        (indexedFieldValue.status == 0 and indexedFieldValue.ownerType >= 0 and indexedFieldValue.ownerType < (firstFieldByOwnerType! -> len)) -> if {
+            lastFieldByOwnerType![indexedFieldValue.ownerType] >= 0 -> if {
+                indexedField! => nextFieldByField![lastFieldByOwnerType![indexedFieldValue.ownerType]]
+            } else {
+                indexedField! => firstFieldByOwnerType![indexedFieldValue.ownerType]
+            }
+            indexedField! => lastFieldByOwnerType![indexedFieldValue.ownerType]
+        }
+        indexedField! + 1 => indexedField!
+    }
+
     true => pathChanged!
     pathChanged! -> while {
         false => pathChanged!
@@ -1857,25 +2017,10 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             expressions![controlExpressionSearch!] => controlExpression
             (controlExpression.status == 0 and controlExpression.sourceModule >= 0 and controlExpression.sourceModule < (prepared.package.ranges -> len)) -> if {
                 prepared.package.ranges[controlExpression.sourceModule] => controlExpressionRange
-                controlExpression.astNode => controlExpressionRoot!
-                prepared.package.nodes[controlExpressionRange.astStart + controlExpressionRoot!].parent => controlExpressionAncestor!
-                1 => controlExpressionDistance!
-                -1 => controlExpressionBranch!
-                false => controlExpressionNested!
-                (controlExpressionAncestor! >= 0 and controlExpressionBranch! < 0 and not controlExpressionNested!) -> while {
-                    prepared.package.nodes[controlExpressionRange.astStart + controlExpressionAncestor!] => controlExpressionAncestorNode
-                    (controlExpressionAncestorNode.kind == 43 and controlExpressionAncestorNode.parent >= 0) -> if {
-                        controlExpressionRange.astStart + controlExpressionAncestor! => controlExpressionBranch!
-                    } else {
-                        (controlExpressionAncestorNode.kind == 7 or controlExpressionAncestorNode.kind == 29 or controlExpressionAncestorNode.kind == 31) -> if {
-                            true => controlExpressionNested!
-                        } else {
-                            controlExpressionAncestor! => controlExpressionRoot!
-                            controlExpressionAncestorNode.parent => controlExpressionAncestor!
-                            controlExpressionDistance! + 1 => controlExpressionDistance!
-                        }
-                    }
-                }
+                controlExpressionRange.astStart + controlExpression.astNode => controlExpressionGlobal
+                controlRootByAst![controlExpressionGlobal] => controlExpressionRoot!
+                controlBranchByAst![controlExpressionGlobal] => controlExpressionBranch!
+                controlDistanceByAst![controlExpressionGlobal] => controlExpressionDistance!
                 controlExpressionBranch! >= 0 -> if {
                     prepared.package.nodes[controlExpressionRange.astStart + controlExpression.astNode] => controlExpressionNode
                     prepared.package.nodes[controlExpressionRange.astStart + controlExpressionRoot!] => controlExpressionRootNode
@@ -1959,6 +2104,27 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         # type from the nearest typed argument at each call site. The parser
         # records the omission in flag 16 and symbols.collectPrepared creates
         # a synthetic parameter with no declared type node.
+        [Int; ~] => parameterFirstExpressionBySource!
+        [Int; ~] => parameterLastExpressionBySource!
+        0 => parameterExpressionSourceSeed!
+        parameterExpressionSourceSeed! < (prepared.package.ranges -> len) -> while {
+            parameterFirstExpressionBySource! -> push(-1)
+            parameterLastExpressionBySource! -> push(-1)
+            parameterExpressionSourceSeed! + 1 => parameterExpressionSourceSeed!
+        }
+        [Int; ~] => parameterNextExpressionInSource!
+        0 => parameterExpressionIndexSeed!
+        parameterExpressionIndexSeed! < (expressions! -> len) -> while {
+            expressions![parameterExpressionIndexSeed!] => parameterIndexedExpression
+            parameterLastExpressionBySource![parameterIndexedExpression.sourceModule] >= 0 -> if {
+                parameterExpressionIndexSeed! => parameterNextExpressionInSource![parameterLastExpressionBySource![parameterIndexedExpression.sourceModule]]
+            } else {
+                parameterExpressionIndexSeed! => parameterFirstExpressionBySource![parameterIndexedExpression.sourceModule]
+            }
+            parameterExpressionIndexSeed! => parameterLastExpressionBySource![parameterIndexedExpression.sourceModule]
+            parameterNextExpressionInSource! -> push(-1)
+            parameterExpressionIndexSeed! + 1 => parameterExpressionIndexSeed!
+        }
         0 => inferredParameterCallIndex!
         inferredParameterCallIndex! < (prepared.calls -> len) -> while {
             prepared.calls[inferredParameterCallIndex!] => inferredParameterCall
@@ -1969,8 +2135,8 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     -1 => inferredParameterArgumentExpression!
                     1000000 => inferredParameterArgumentDistance!
                     prepared.package.ranges[inferredParameterCall.sourceModule] => inferredParameterCallRange
-                    0 => inferredParameterArgumentSearch!
-                    inferredParameterArgumentSearch! < (expressions! -> len) -> while {
+                    parameterFirstExpressionBySource![inferredParameterCall.sourceModule] => inferredParameterArgumentSearch!
+                    inferredParameterArgumentSearch! >= 0 -> while {
                         expressions![inferredParameterArgumentSearch!] => inferredParameterArgument
                         (inferredParameterArgument.status == 0 and inferredParameterArgument.sourceModule == inferredParameterCall.sourceModule and inferredParameterArgument.astNode != inferredParameterCall.callAst) -> if {
                             prepared.package.nodes[inferredParameterCallRange.astStart + inferredParameterArgument.astNode].parent => inferredParameterArgumentAncestor!
@@ -1989,7 +2155,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 inferredParameterDistance! => inferredParameterArgumentDistance!
                             }
                         }
-                        inferredParameterArgumentSearch! + 1 => inferredParameterArgumentSearch!
+                        parameterNextExpressionInSource![inferredParameterArgumentSearch!] => inferredParameterArgumentSearch!
                     }
                     -1 => inferredParameterSymbol!
                     0 => inferredParameterSymbolSearch!
@@ -2028,6 +2194,27 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         # Flag 32 denotes an omitted return type. Once an expression owned by
         # that function is typed, expose the last top-level body expression as
         # the type of every call. Nested functions never contribute candidates.
+        [Int; ~] => returnFirstExpressionBySource!
+        [Int; ~] => returnLastExpressionBySource!
+        0 => returnExpressionSourceSeed!
+        returnExpressionSourceSeed! < (prepared.package.ranges -> len) -> while {
+            returnFirstExpressionBySource! -> push(-1)
+            returnLastExpressionBySource! -> push(-1)
+            returnExpressionSourceSeed! + 1 => returnExpressionSourceSeed!
+        }
+        [Int; ~] => returnNextExpressionInSource!
+        0 => returnExpressionIndexSeed!
+        returnExpressionIndexSeed! < (expressions! -> len) -> while {
+            expressions![returnExpressionIndexSeed!] => returnIndexedExpression
+            returnLastExpressionBySource![returnIndexedExpression.sourceModule] >= 0 -> if {
+                returnExpressionIndexSeed! => returnNextExpressionInSource![returnLastExpressionBySource![returnIndexedExpression.sourceModule]]
+            } else {
+                returnExpressionIndexSeed! => returnFirstExpressionBySource![returnIndexedExpression.sourceModule]
+            }
+            returnExpressionIndexSeed! => returnLastExpressionBySource![returnIndexedExpression.sourceModule]
+            returnNextExpressionInSource! -> push(-1)
+            returnExpressionIndexSeed! + 1 => returnExpressionIndexSeed!
+        }
         0 => inferredReturnCallIndex!
         inferredReturnCallIndex! < (prepared.calls -> len) -> while {
             prepared.calls[inferredReturnCallIndex!] => inferredReturnCall
@@ -2040,8 +2227,8 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     -1 => inferredReturnExpression!
                     UIntSize(0) => inferredReturnTopLevelStart!
                     1000000 => inferredReturnDistance!
-                    0 => inferredReturnSearch!
-                    inferredReturnSearch! < (expressions! -> len) -> while {
+                    returnFirstExpressionBySource![inferredReturnCall.targetSourceModule] => inferredReturnSearch!
+                    inferredReturnSearch! >= 0 -> while {
                         expressions![inferredReturnSearch!] => inferredReturnCandidate
                         (inferredReturnCandidate.status == 0 and inferredReturnCandidate.sourceModule == inferredReturnCall.targetSourceModule) -> if {
                             prepared.package.nodes[inferredReturnTargetRange.astStart + inferredReturnCandidate.astNode].parent => inferredReturnAncestor!
@@ -2072,7 +2259,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 }
                             }
                         }
-                        inferredReturnSearch! + 1 => inferredReturnSearch!
+                        returnNextExpressionInSource![inferredReturnSearch!] => inferredReturnSearch!
                     }
                     inferredReturnExpression! >= 0 -> if {
                         expressions![inferredReturnExpression!] => inferredReturnType
@@ -2096,6 +2283,27 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         # The intrinsic each role binds its block item to the source
         # collection's element type. Repeat this with the surrounding fixed
         # point because the collection can itself be a newly inferred local.
+        [Int; ~] => eachFirstExpressionBySource!
+        [Int; ~] => eachLastExpressionBySource!
+        0 => eachExpressionSourceSeed!
+        eachExpressionSourceSeed! < (prepared.package.ranges -> len) -> while {
+            eachFirstExpressionBySource! -> push(-1)
+            eachLastExpressionBySource! -> push(-1)
+            eachExpressionSourceSeed! + 1 => eachExpressionSourceSeed!
+        }
+        [Int; ~] => eachNextExpressionInSource!
+        0 => eachExpressionIndexSeed!
+        eachExpressionIndexSeed! < (expressions! -> len) -> while {
+            expressions![eachExpressionIndexSeed!] => eachIndexedExpression
+            eachLastExpressionBySource![eachIndexedExpression.sourceModule] >= 0 -> if {
+                eachExpressionIndexSeed! => eachNextExpressionInSource![eachLastExpressionBySource![eachIndexedExpression.sourceModule]]
+            } else {
+                eachExpressionIndexSeed! => eachFirstExpressionBySource![eachIndexedExpression.sourceModule]
+            }
+            eachExpressionIndexSeed! => eachLastExpressionBySource![eachIndexedExpression.sourceModule]
+            eachNextExpressionInSource! -> push(-1)
+            eachExpressionIndexSeed! + 1 => eachExpressionIndexSeed!
+        }
         0 => eachReferenceSource!
         eachReferenceSource! < (prepared.package.ranges -> len) -> while {
             prepared.package.ranges[eachReferenceSource!] => eachReferenceRange
@@ -2115,8 +2323,8 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     intrinsicEach! -> if {
                         -1 => eachSourceExpression!
                         1000000 => eachSourceDistance!
-                        0 => eachSourceSearch!
-                        eachSourceSearch! < (expressions! -> len) -> while {
+                        eachFirstExpressionBySource![eachReferenceSource!] => eachSourceSearch!
+                        eachSourceSearch! >= 0 -> while {
                             expressions![eachSourceSearch!] => eachSourceCandidate
                             eachSourceCandidate.sourceModule == eachReferenceSource! -> if {
                                 prepared.package.nodes[eachReferenceRange.astStart + eachSourceCandidate.astNode] => eachSourceNode
@@ -2136,10 +2344,12 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     }
                                 }
                             }
-                            eachSourceSearch! + 1 => eachSourceSearch!
+                            eachNextExpressionInSource![eachSourceSearch!] => eachSourceSearch!
                         }
                         (eachSourceExpression! >= 0 and expressions![eachSourceExpression!].typeId >= 0 and expressions![eachSourceExpression!].typeId < (types! -> len)) -> if {
-                            types![expressions![eachSourceExpression!].typeId] => eachCollectionType
+                            expressions![eachSourceExpression!].typeId => eachCollectionTypeId!
+                            types![eachCollectionTypeId!].kind == 8 -> if { types![eachCollectionTypeId!].first => eachCollectionTypeId! }
+                            types![eachCollectionTypeId!] => eachCollectionType
                             -1 => eachElementType!
                             (eachCollectionType.kind >= 2 and eachCollectionType.kind <= 4) -> if { eachCollectionType.first => eachElementType! }
                             (eachCollectionType.kind == 1 and eachCollectionType.origin == 1 and eachCollectionType.symbol == 25) -> if { 2 => eachElementType! }
@@ -2192,17 +2402,16 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     bindingCandidate.typeId => bindingValueType![directBindingGlobalSymbol]
                     0 => bindingValueDistance![directBindingGlobalSymbol]
                 }
-                prepared.package.nodes[bindingCandidateRange.astStart + bindingCandidate.astNode].parent => bindingAncestor!
-                1 => bindingDistance!
-                bindingAncestor! >= 0 -> while {
-                    bindingCandidateRange.astStart + bindingAncestor! => bindingAncestorGlobal
-                    bindingSymbolByAst![bindingAncestorGlobal] => bindingGlobalSymbol
+                nearestBindingAncestorByAst![bindingCandidateGlobalAst] => bindingAncestorGlobal!
+                nearestBindingDistanceByAst![bindingCandidateGlobalAst] => bindingDistance!
+                bindingAncestorGlobal! >= 0 -> while {
+                    bindingSymbolByAst![bindingAncestorGlobal!] => bindingGlobalSymbol
                     (bindingGlobalSymbol >= 0 and bindingDistance! < bindingValueDistance![bindingGlobalSymbol]) -> if {
                         bindingCandidate.typeId => bindingValueType![bindingGlobalSymbol]
                         bindingDistance! => bindingValueDistance![bindingGlobalSymbol]
                     }
-                    prepared.package.nodes[bindingAncestorGlobal].parent => bindingAncestor!
-                    bindingDistance! + 1 => bindingDistance!
+                    nearestBindingDistanceByAst![bindingAncestorGlobal!] + bindingDistance! => bindingDistance!
+                    nearestBindingAncestorByAst![bindingAncestorGlobal!] => bindingAncestorGlobal!
                 }
             }
             bindingCandidateIndex! + 1 => bindingCandidateIndex!
@@ -2241,6 +2450,9 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             }
             bindingReferenceSource! + 1 => bindingReferenceSource!
         }
+        true => pathRoundChanged!
+        pathRoundChanged! -> while {
+        false => pathRoundChanged!
         [Int; ~] => pathBaseExpression!
         [Int; ~] => pathBaseDistance!
         0 => pathSeed!
@@ -2255,11 +2467,11 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             (pathCandidate.status == 0 and pathCandidate.typeId >= 0 and pathCandidate.typeId < (types! -> len)) -> if {
                 prepared.package.ranges[pathCandidate.sourceModule] => pathCandidateRange
                 prepared.package.nodes[pathCandidateRange.astStart + pathCandidate.astNode] => pathCandidateNode
-                prepared.package.nodes[pathCandidateRange.astStart + pathCandidate.astNode].parent => pathAncestor!
-                1 => pathDistance!
-                pathAncestor! >= 0 -> while {
-                    pathCandidateRange.astStart + pathAncestor! => pathAncestorGlobal
-                    prepared.package.nodes[pathAncestorGlobal] => pathAncestorNode
+                pathCandidateRange.astStart + pathCandidate.astNode => pathCandidateGlobal
+                nearestPathAncestorByAst![pathCandidateGlobal] => pathAncestorGlobal!
+                nearestPathDistanceByAst![pathCandidateGlobal] => pathDistance!
+                pathAncestorGlobal! >= 0 -> if {
+                    prepared.package.nodes[pathAncestorGlobal!] => pathAncestorNode
                     # Canonical path resolution must also revisit an AST that
                     # has a legacy inferred entry. Indexed-member chains can
                     # initially inherit the aggregate base type; skipping an
@@ -2267,7 +2479,11 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     false => usablePathBase!
                     (pathAncestorNode.kind == 36 and pathCandidateNode.start == pathAncestorNode.start) -> if { true => usablePathBase! }
                     pathAncestorNode.kind == 41 -> if {
-                        types![pathCandidate.typeId] => indexedCandidateType
+                        pathCandidate.typeId => indexedCandidateTypeId!
+                        (types![indexedCandidateTypeId!].kind == 8 and types![indexedCandidateTypeId!].first >= 0) -> if {
+                            types![indexedCandidateTypeId!].first => indexedCandidateTypeId!
+                        }
+                        types![indexedCandidateTypeId!] => indexedCandidateType
                         (pathCandidateNode.start == pathAncestorNode.start and ((indexedCandidateType.kind >= 2 and indexedCandidateType.kind <= 5) or (indexedCandidateType.kind == 1 and indexedCandidateType.origin == 1 and (indexedCandidateType.symbol == 16 or indexedCandidateType.symbol == 24)))) -> if { true => usablePathBase! }
                     }
                     # A mutating take flow derives its result from the owned
@@ -2276,12 +2492,10 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     # nested below the flow target call and therefore cannot
                     # replace that base.
                     pathAncestorNode.kind == 10 -> if { true => usablePathBase! }
-                    (usablePathBase! and pathDistance! < pathBaseDistance![pathAncestorGlobal]) -> if {
-                        pathCandidateIndex! => pathBaseExpression![pathAncestorGlobal]
-                        pathDistance! => pathBaseDistance![pathAncestorGlobal]
+                    (usablePathBase! and pathDistance! < pathBaseDistance![pathAncestorGlobal!]) -> if {
+                        pathCandidateIndex! => pathBaseExpression![pathAncestorGlobal!]
+                        pathDistance! => pathBaseDistance![pathAncestorGlobal!]
                     }
-                    pathAncestorNode.parent => pathAncestor!
-                    pathDistance! + 1 => pathDistance!
                 }
             }
             pathCandidateIndex! + 1 => pathCandidateIndex!
@@ -2305,19 +2519,15 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     # so it cannot be overwritten by the conservative seed.
                     pathNode.kind == 10 -> if {
                         false => canonicalLengthFlow!
-                        0 => canonicalLengthChildSearch!
-                        canonicalLengthChildSearch! < pathRange.astCount -> while {
-                            prepared.package.nodes[pathRange.astStart + canonicalLengthChildSearch!] => canonicalLengthChild
-                            (canonicalLengthChild.parent == pathAstIndex! and canonicalLengthChild.kind == 16) -> if {
-                                prepared.package.tokens[pathRange.tokenStart + canonicalLengthChild.payloadToken] => canonicalLengthName
-                                TextMatchRequest {
-                                    source: pathSource
-                                    start: canonicalLengthName.span.start
-                                    length: canonicalLengthName.span.length
-                                    expected: "len"
-                                } -> textMatches -> if { true => canonicalLengthFlow! }
-                            }
-                            canonicalLengthChildSearch! + 1 => canonicalLengthChildSearch!
+                        flowTargetTokenByAst![pathGlobalAst] => canonicalLengthToken
+                        canonicalLengthToken >= 0 -> if {
+                            prepared.package.tokens[pathRange.tokenStart + canonicalLengthToken] => canonicalLengthName
+                            TextMatchRequest {
+                                source: pathSource
+                                start: canonicalLengthName.span.start
+                                length: canonicalLengthName.span.length
+                                expected: "len"
+                            } -> textMatches -> if { true => canonicalLengthFlow! }
                         }
                         canonicalLengthFlow! -> if {
                             baseExpression.typeId => canonicalLengthBaseTypeId!
@@ -2337,6 +2547,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     })
                                     canonicalLengthExpression! => expressionIndexByAst![pathGlobalAst]
                                     true => pathChanged!
+                                    true => pathRoundChanged!
                                 } else {
                                     expressions![canonicalLengthExpression!] => existingCanonicalLength!
                                     (existingCanonicalLength!.typeId != 2 or existingCanonicalLength!.status != 0) -> if {
@@ -2344,6 +2555,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                         0 => existingCanonicalLength!.status
                                         existingCanonicalLength! => expressions![canonicalLengthExpression!]
                                         true => pathChanged!
+                                        true => pathRoundChanged!
                                     }
                                 }
                             }
@@ -2364,26 +2576,27 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 memberCurrentType! => memberOwnerType!
                                 (memberReadonlyProjection! and types![memberOwnerType!].kind == 8) -> if { types![memberOwnerType!].first => memberOwnerType! }
                                 -1 => matchedFieldType!
-                                0 => memberFieldIndex!
-                                memberFieldIndex! < (fields! -> len) -> while {
+                                -1 => memberFieldIndex!
+                                (memberOwnerType! >= 0 and memberOwnerType! < (firstFieldByOwnerType! -> len)) -> if {
+                                    firstFieldByOwnerType![memberOwnerType!] => memberFieldIndex!
+                                }
+                                memberFieldIndex! >= 0 -> while {
                                     fields![memberFieldIndex!] => memberField
-                                    (memberField.status == 0 and memberField.ownerType == memberOwnerType!) -> if {
-                                        prepared.package.ranges[memberField.sourceModule] => memberFieldRange
-                                        prepared.package.sources[memberField.sourceModule] -> len => memberFieldSourceLength
-                                        prepared.package.sources[memberField.sourceModule] -> slice(UIntSize(0), memberFieldSourceLength) => memberFieldSource
-                                        prepared.package.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
-                                        prepared.package.tokens[memberFieldRange.tokenStart + memberFieldSymbol.nameToken] => memberFieldName
-                                        memberToken.span.length == memberFieldName.span.length => memberNameEqual!
-                                        UIntSize(0) => memberNameByte!
-                                        (memberNameEqual! and memberNameByte! < memberToken.span.length) -> while {
-                                            pathSource -> byte(memberToken.span.start + memberNameByte!) => memberLeftByte
-                                            memberFieldSource -> byte(memberFieldName.span.start + memberNameByte!) => memberRightByte
-                                            memberLeftByte != memberRightByte -> if { false => memberNameEqual! }
-                                            memberNameByte! + UIntSize(1) => memberNameByte!
-                                        }
-                                        memberNameEqual! -> if { memberField.fieldType => matchedFieldType! }
+                                    prepared.package.ranges[memberField.sourceModule] => memberFieldRange
+                                    prepared.package.sources[memberField.sourceModule] -> len => memberFieldSourceLength
+                                    prepared.package.sources[memberField.sourceModule] -> slice(UIntSize(0), memberFieldSourceLength) => memberFieldSource
+                                    prepared.package.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
+                                    prepared.package.tokens[memberFieldRange.tokenStart + memberFieldSymbol.nameToken] => memberFieldName
+                                    memberToken.span.length == memberFieldName.span.length => memberNameEqual!
+                                    UIntSize(0) => memberNameByte!
+                                    (memberNameEqual! and memberNameByte! < memberToken.span.length) -> while {
+                                        pathSource -> byte(memberToken.span.start + memberNameByte!) => memberLeftByte
+                                        memberFieldSource -> byte(memberFieldName.span.start + memberNameByte!) => memberRightByte
+                                        memberLeftByte != memberRightByte -> if { false => memberNameEqual! }
+                                        memberNameByte! + UIntSize(1) => memberNameByte!
                                     }
-                                    memberFieldIndex! + 1 => memberFieldIndex!
+                                    memberNameEqual! -> if { memberField.fieldType => matchedFieldType! }
+                                    nextFieldByField![memberFieldIndex!] => memberFieldIndex!
                                 }
                                 matchedFieldType! >= 0 -> if {
                                     # A field read through a readonly reference is still a value
@@ -2404,6 +2617,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 expressions! -> push(ExpressionTypeId { sourceModule: pathSourceIndex!, astNode: pathAstIndex!, typeId: memberCurrentType!, status: 0 })
                                 memberExpressionIndex! => expressionIndexByAst![pathGlobalAst]
                                 true => pathChanged!
+                                true => pathRoundChanged!
                             } else {
                                 expressions![memberExpressionIndex!] => existingMemberExpression!
                                 (existingMemberExpression!.typeId != memberCurrentType! or existingMemberExpression!.status != 0) -> if {
@@ -2411,12 +2625,17 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     0 => existingMemberExpression!.status
                                     existingMemberExpression! => expressions![memberExpressionIndex!]
                                     true => pathChanged!
+                                    true => pathRoundChanged!
                                 }
                             }
                         }
                     }
                     pathNode.kind == 41 -> if {
-                        types![baseExpression.typeId] => indexedBaseType
+                        baseExpression.typeId => indexedBaseTypeId!
+                        (types![indexedBaseTypeId!].kind == 8 and types![indexedBaseTypeId!].first >= 0) -> if {
+                            types![indexedBaseTypeId!].first => indexedBaseTypeId!
+                        }
+                        types![indexedBaseTypeId!] => indexedBaseType
                         -1 => indexedElementType!
                         (indexedBaseType.kind >= 2 and indexedBaseType.kind <= 4) -> if { indexedBaseType.first => indexedElementType! }
                         indexedBaseType.kind == 5 -> if { indexedBaseType.second => indexedElementType! }
@@ -2429,6 +2648,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 expressions! -> push(ExpressionTypeId { sourceModule: pathSourceIndex!, astNode: pathAstIndex!, typeId: indexedElementType!, status: 0 })
                                 indexExpressionIndex! => expressionIndexByAst![pathGlobalAst]
                                 true => pathChanged!
+                                true => pathRoundChanged!
                             } else {
                                 expressions![indexExpressionIndex!] => existingIndexExpression!
                                 (existingIndexExpression!.typeId != indexedElementType! or existingIndexExpression!.status != 0) -> if {
@@ -2436,21 +2656,17 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     0 => existingIndexExpression!.status
                                     existingIndexExpression! => expressions![indexExpressionIndex!]
                                     true => pathChanged!
+                                    true => pathRoundChanged!
                                 }
                             }
                         }
                     }
                     pathNode.kind == 10 -> if {
                         false => takeFlow!
-                        pathNode.firstToken => takeTokenIndex!
-                        takeTokenIndex! < pathNode.firstToken + pathNode.tokenCount -> while {
-                            prepared.package.tokens[pathRange.tokenStart + takeTokenIndex!] => takeToken
-                            takeToken.kind == grammar.tokenIdIdentifier() -> if {
-                                takeToken.span.length == UIntSize(4) -> if {
-                                    ((pathSource -> byte(takeToken.span.start)) == UInt8(116) and (pathSource -> byte(takeToken.span.start + UIntSize(1))) == UInt8(97) and (pathSource -> byte(takeToken.span.start + UIntSize(2))) == UInt8(107) and (pathSource -> byte(takeToken.span.start + UIntSize(3))) == UInt8(101)) -> if { true => takeFlow! }
-                                }
-                            }
-                            takeTokenIndex! + 1 => takeTokenIndex!
+                        flowTargetTokenByAst![pathGlobalAst] => takeTargetToken
+                        takeTargetToken >= 0 -> if {
+                            prepared.package.tokens[pathRange.tokenStart + takeTargetToken] => takeTargetName
+                            TextMatchRequest { source: pathSource, start: takeTargetName.span.start, length: takeTargetName.span.length, expected: "take" } -> textMatches -> if { true => takeFlow! }
                         }
                         takeFlow! -> if {
                             types![baseExpression.typeId] => takeBaseType
@@ -2464,6 +2680,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     expressions! -> push(ExpressionTypeId { sourceModule: pathSourceIndex!, astNode: pathAstIndex!, typeId: takeResultType!, status: 0 })
                                     takeExpressionIndex! => expressionIndexByAst![pathGlobalAst]
                                     true => pathChanged!
+                                    true => pathRoundChanged!
                                 } else {
                                     expressions![takeExpressionIndex!] => existingTakeExpression!
                                     (existingTakeExpression!.typeId != takeResultType! or existingTakeExpression!.status != 0) -> if {
@@ -2471,6 +2688,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                         0 => existingTakeExpression!.status
                                         existingTakeExpression! => expressions![takeExpressionIndex!]
                                         true => pathChanged!
+                                        true => pathRoundChanged!
                                     }
                                 }
                             }
@@ -2480,6 +2698,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 pathAstIndex! + 1 => pathAstIndex!
             }
             pathSourceIndex! + 1 => pathSourceIndex!
+        }
         }
     }
 
@@ -2749,6 +2968,7 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
     typeIds.SemanticTypeSet { types: types!, references: references!, fields: fields! } => contextSemantic!
     analysis.PackageAnalysis {
         sources: sources!
+        entrySourceModule: -1
         ranges: ranges!
         nodes: nodes!
         tokens: tokens!

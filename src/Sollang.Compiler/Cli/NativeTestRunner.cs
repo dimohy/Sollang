@@ -163,7 +163,7 @@ internal static class NativeTestRunner
             var invocation = test.Function.ModuleName.Length == 0
                 ? SimpleName(test.Function)
                 : moduleAliases[test.Function.ModuleName] + "." + SimpleName(test.Function);
-            source.Append("    ").Append(invocation).AppendLine(" -> if {");
+            source.Append("    ").Append(invocation).AppendLine("() -> if {");
             source.Append("        \"test ").Append(test.Name).AppendLine(" ... ok\" -> io.println");
             source.AppendLine("    } else {");
             source.Append("        \"test ").Append(test.Name).AppendLine(" ... FAILED\" -> io.println");

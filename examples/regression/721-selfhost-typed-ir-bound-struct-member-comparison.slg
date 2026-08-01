@@ -1,0 +1,52 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Record the Typed IR edge used when a member of a bound struct call result is
+# consumed by a scalar comparison.
+main {
+    [
+        """
+        struct Value {
+            kind: Int
+            start: UIntSize
+            end: UIntSize
+            contentStart: UIntSize
+            contentEnd: UIntSize
+        }
+
+        struct Source {
+            length: UIntSize
+        }
+
+        struct Decision {
+            status: Int
+            shutdown: Bool
+            exitRequested: Bool
+            exitCode: Int
+        }
+
+        sourceLength source: Source -> UIntSize { source.length }
+
+        make source: Source, start: UIntSize, end: UIntSize -> Value {
+            Value { kind: 5, start: start, end: start, contentStart: start, contentEnd: start }
+        }
+
+        check source: Source, documents: mut [Int; ~], shutdown: Bool -> Bool {
+            source -> make(UIntSize(0), source -> sourceLength) => root
+            Decision { status: 1, shutdown: shutdown, exitRequested: false, exitCode: 1 } => result!
+            (root.kind) == 5 -> println
+            true
+        }
+
+        main {
+            [Int; ~] => documents!
+            Source { length: UIntSize(0) } -> check(documents!, false)
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    ir! -> each node {
+        "$(index!):$(node.kind),$(node.parent),$(node.opcode),$(node.operand0),$(node.operand1),$(node.typeOrigin),$(node.typeSymbol)" -> println
+        index! + 1 => index!
+    }
+}

@@ -1,0 +1,28 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Chained additions inside a while body must retain the `+` opcode on every
+# nested binary node.
+main {
+    [
+        """
+        combine first: UInt64, second: UInt64, third: UInt64 -> UInt64 {
+            UInt64(0) => result!
+            0 => bit!
+            bit! < 1 -> while {
+                ((first % UInt64(2)) + (second % UInt64(2)) + (third % UInt64(2))) % UInt64(2) => value
+                result! + value => result!
+                bit! + 1 => bit!
+            }
+            result!
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    ir! -> each node {
+        "$(index!):$(node.kind),$(node.parent),$(node.opcode),$(node.operand0),$(node.operand1),$(node.typeOrigin),$(node.typeSymbol)" -> println
+        index! + 1 => index!
+    }
+}

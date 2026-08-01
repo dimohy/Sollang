@@ -1,0 +1,121 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.syntax as syntax
+
+main {
+    [
+        """
+        import fixture.path as path
+
+        main {
+            [path.Owned; ~] => values!
+            [path.Owned; ~] => firstPending!
+            [path.Owned; ~] => secondPending!
+            [path.Owned; ~] => thirdPending!
+            [UInt8(7); ~] => bytes!
+            firstPending! -> push(path.Owned { bytes: bytes!, style: path.Style.Windows })
+            (firstPending! -> len) > 0 -> while {
+                firstPending! -> take(0) => item!
+                values! -> push(item!)
+            }
+            [UInt8(8); ~] => secondBytes!
+            secondPending! -> push(path.Owned { bytes: secondBytes!, style: path.Style.Windows })
+            (secondPending! -> len) > 0 -> while {
+                secondPending! -> take(0) => item!
+                values! -> push(item!)
+            }
+            [UInt8(9); ~] => thirdBytes!
+            thirdPending! -> push(path.Owned { bytes: thirdBytes!, style: path.Style.Windows })
+            (thirdPending! -> len) > 0 -> while {
+                thirdPending! -> take(0) => item!
+                values! -> push(item!)
+            }
+            "" => projectDirectory!
+            true -> if {
+                "project" => projectDirectory!
+                "$(projectDirectory!)/tests" -> println
+            }
+        }
+        """,
+        """
+        namespace fixture.path
+
+        public enum Style {
+            Posix
+            Windows
+        }
+
+        public struct Owned {
+            bytes: [UInt8; ~]
+            style: Style
+        }
+        """; ~
+    ] => sources!
+    sources! -> semanticContext.prepare => prepared!
+    prepared! -> typedIr.lowerContext => ir!
+    ir! -> typedIr.movesFrom => moves!
+    0 => pushMoves!
+    0 => matchingRegions!
+    moves! -> each event {
+        ir![event.siteIr].opcode == -204 -> if {
+            pushMoves! + 1 => pushMoves!
+            0 => bindingIndex!
+            bindingIndex! < (ir! -> len) -> while {
+                (ir![bindingIndex!].kind == 17
+                    and ir![bindingIndex!].sourceModule == event.sourceModule
+                    and ir![bindingIndex!].symbol == event.symbol
+                    and ir![bindingIndex!].parent == event.regionIr) -> if {
+                    matchingRegions! + 1 => matchingRegions!
+                }
+                bindingIndex! + 1 => bindingIndex!
+            }
+        }
+    }
+    "owned push move events=$(pushMoves!)" -> println
+    "owned push matching regions=$(matchingRegions!)" -> println
+
+    prepared!.package.ranges[0] => sourceRange
+    [ast.AstNode; ~] => sourceNodes!
+    0 => sourceNodeIndex!
+    sourceNodeIndex! < sourceRange.astCount -> while {
+        sourceNodes! -> push(prepared!.package.nodes[sourceRange.astStart + sourceNodeIndex!])
+        sourceNodeIndex! + 1 => sourceNodeIndex!
+    }
+    [syntax.SyntaxToken; ~] => sourceTokens!
+    0 => sourceTokenIndex!
+    sourceTokenIndex! < sourceRange.tokenCount -> while {
+        sourceTokens! -> push(prepared!.package.tokens[sourceRange.tokenStart + sourceTokenIndex!])
+        sourceTokenIndex! + 1 => sourceTokenIndex!
+    }
+    [symbols.Symbol; ~] => sourceSymbols!
+    0 => sourceSymbolIndex!
+    sourceSymbolIndex! < sourceRange.symbolCount -> while {
+        sourceSymbols! -> push(prepared!.package.symbols[sourceRange.symbolStart + sourceSymbolIndex!])
+        sourceSymbolIndex! + 1 => sourceSymbolIndex!
+    }
+    interpolation.PreparedInterpolationRequest {
+        source: sources![0]
+        nodes: sourceNodes!
+        tokens: sourceTokens!
+        symbols: sourceSymbols!
+    } => interpolationRequest!
+    interpolationRequest! -> interpolation.lowerPrepared => interpolationNodes!
+    0 => interpolationStorageMatches!
+    interpolationNodes! -> each interpolationNode {
+        interpolationNode.kind == 1 -> if {
+            0 => bindingSearch!
+            bindingSearch! < (ir! -> len) -> while {
+                (ir![bindingSearch!].kind == 17
+                    and ir![bindingSearch!].sourceModule == 0
+                    and ir![bindingSearch!].symbol == interpolationNode.symbol) -> if {
+                    interpolationStorageMatches! + 1 => interpolationStorageMatches!
+                }
+                bindingSearch! + 1 => bindingSearch!
+            }
+        }
+    }
+    "interpolation storage matches=$(interpolationStorageMatches!)" -> println
+}

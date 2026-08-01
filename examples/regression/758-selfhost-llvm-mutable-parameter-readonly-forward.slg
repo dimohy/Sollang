@@ -1,0 +1,32 @@
+import sollang.compiler.llvm.text as llvm
+
+# A mutable container forwarded to a readonly call must use its live ABI fields.
+# This covers both primary and additional mutable parameters after reallocation.
+main {
+    [
+        """
+        readLast values: [Int; ~] -> Int {
+            values[(values -> len) - 1]
+        }
+
+        mutatePrimary values: mut [Int; ~] -> Int {
+            values -> push(11)
+            values -> readLast
+        }
+
+        mutateAdditional seed: Int, values: mut [Int; ~] -> Int {
+            values -> push(seed)
+            values -> readLast
+        }
+
+        main {
+            [Int; ~] => primary!
+            primary! -> mutatePrimary -> println
+
+            [Int; ~] => additional!
+            17 -> mutateAdditional(additional!) -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

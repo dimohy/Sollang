@@ -1,0 +1,42 @@
+import sollang.compiler.llvm.text as llvm
+
+# A mutable container forwarded from a while body must use its live ABI fields.
+# This covers both primary and additional mutable parameters after reallocation.
+main {
+    [
+        """
+        readLast values: [Int; ~] -> Int {
+            values[(values -> len) - 1]
+        }
+
+        mutatePrimary values: mut [Int; ~] -> Int {
+            0 => index!
+            index! < 2 -> while {
+                values -> push(20 + index!)
+                values -> readLast -> println
+                index! + 1 => index!
+            }
+            values -> readLast
+        }
+
+        mutateAdditional seed: Int, values: mut [Int; ~] -> Int {
+            0 => index!
+            index! < 2 -> while {
+                values -> push(seed + index!)
+                values -> readLast -> println
+                index! + 1 => index!
+            }
+            values -> readLast
+        }
+
+        main {
+            [Int; ~] => primary!
+            primary! -> mutatePrimary -> println
+
+            [Int; ~] => additional!
+            30 -> mutateAdditional(additional!) -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

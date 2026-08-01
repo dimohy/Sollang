@@ -274,6 +274,45 @@ internal sealed partial class LlvmEmitter
         return new RuntimeText(destination, totalLength);
     }
 
+    private RuntimeText EmitTransientText(RuntimeValue value)
+    {
+        var segments = PrepareMaterializedTextSegments(value);
+        var totalLength = "0";
+        foreach (var segment in segments)
+        {
+            var nextLength = NextTemp("transient_text_length");
+            EmitBinary(nextLength, "add", "i64", totalLength, segment.LengthName);
+            var noOverflow = NextTemp("transient_text_length_ok");
+            EmitCompare(noOverflow, "uge", "i64", nextLength, totalLength);
+            EmitTrapUnless(noOverflow, "transient_text_length_overflow");
+            totalLength = nextLength;
+        }
+
+        var allocationLength = NextTemp("transient_text_allocation_length");
+        var isEmpty = NextTemp("transient_text_is_empty");
+        EmitCompare(isEmpty, "eq", "i64", totalLength, "0");
+        EmitAssign(allocationLength, $"select i1 {isEmpty}, i64 1, i64 {totalLength}");
+        var destination = NextTemp("transient_text");
+        EmitAssign(destination, $"alloca i8, i64 {allocationLength}, align 1");
+
+        var offset = "0";
+        foreach (var segment in segments)
+        {
+            var segmentDestination = NextTemp("transient_text_segment");
+            EmitAssign(
+                segmentDestination,
+                $"getelementptr i8, ptr {destination}, i64 {offset}");
+            EmitInstruction(
+                $"call void @llvm.memcpy.p0.p0.i64(ptr {segmentDestination}, "
+                + $"ptr {segment.PointerName}, i64 {segment.LengthName}, i1 false)");
+            var nextOffset = NextTemp("transient_text_offset");
+            EmitBinary(nextOffset, "add", "i64", offset, segment.LengthName);
+            offset = nextOffset;
+        }
+
+        return new RuntimeText(destination, totalLength);
+    }
+
     private IReadOnlyList<RuntimeText> PrepareMaterializedTextSegments(RuntimeValue value)
     {
         var segments = new List<RuntimeText>();

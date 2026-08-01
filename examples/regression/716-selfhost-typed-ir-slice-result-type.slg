@@ -1,0 +1,27 @@
+import sollang.compiler.ir.typed as typedIr
+
+# The slice intrinsic always produces Text, regardless of the receiver and
+# UIntSize arguments whose types surround it in the flow.
+main {
+    [
+        """
+        import sys.file as file
+
+        emit source: Text -> Unit uses Console {
+            source -> slice(UIntSize(1), UIntSize(2)) -> print
+        }
+
+        emitSource source: file.SourceText -> Unit uses Console {
+            source -> slice(UIntSize(1), UIntSize(2)) -> print
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> each node {
+        node.opcode == -203 -> if {
+            "type=$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol)" -> println
+        }
+    }
+}

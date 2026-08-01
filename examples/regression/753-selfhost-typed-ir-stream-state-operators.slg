@@ -1,0 +1,32 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Stream-stage state and an additional parameter must both remain attached to
+# every binary operator in the final Typed IR.
+main {
+    [
+        """
+        public take<T> value: T, count: Int -> stream T {
+            0 => state taken!
+            taken! < count -> if {
+                taken! + 1 => taken!
+                value -> emit
+            }
+        }
+
+        public skip<T> value: T, count: Int -> stream T {
+            0 => state skipped!
+            skipped! < count -> if {
+                skipped! + 1 => skipped!
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => missing!
+    ir! -> each node {
+        (node.kind == 8 and (node.operand0 < 0 or node.operand1 < 0)) -> if {
+            missing! + 1 => missing!
+        }
+    }
+    "missing=$(missing!)" -> println
+}

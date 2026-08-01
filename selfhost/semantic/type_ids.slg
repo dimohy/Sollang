@@ -77,6 +77,11 @@ public struct SpecializationResult {
     status: Int
 }
 
+public struct SpecializationRoot {
+    root: Int
+    status: Int
+}
+
 public struct TypeClassificationRequest {
     types: [SemanticType; ~]
     fields: [NominalField; ~]
@@ -736,24 +741,17 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
 }
 
 # Structurally unifies a generic input template with one concrete argument,
-# then rebuilds and interns the complete result template in the same arena.
-public specialize request: SpecializationRequest -> SpecializationResult {
-    request.inputTemplate => inputTemplate
-    request.actualInput => actualInput
-    request.resultTemplate => resultTemplate
-    [SemanticType; ~] => types!
-    0 => copyTypeIndex!
-    copyTypeIndex! < (request.types -> len) -> while {
-        types! -> push(request.types[copyTypeIndex!])
-        copyTypeIndex! + 1 => copyTypeIndex!
-    }
+# then rebuilds and interns only the changed result nodes in the caller's type
+# arena. This is the canonical compiler path: specialization must not copy the
+# complete, steadily growing arena for every call.
+public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualInput: Int, resultTemplate: Int -> SpecializationRoot {
     [Int; ~] => templateStack!
     [Int; ~] => actualStack!
     [Int; ~] => parameterModules!
     [Int; ~] => parameterSymbols!
     [Int; ~] => replacements!
     0 => status!
-    (inputTemplate < 0 or inputTemplate >= (types! -> len) or actualInput < 0 or actualInput >= (types! -> len) or resultTemplate < 0 or resultTemplate >= (types! -> len)) -> if {
+    (inputTemplate < 0 or inputTemplate >= (types -> len) or actualInput < 0 or actualInput >= (types -> len) or resultTemplate < 0 or resultTemplate >= (types -> len)) -> if {
         2 => status!
     } else {
         templateStack! -> push(inputTemplate)
@@ -764,8 +762,8 @@ public specialize request: SpecializationRequest -> SpecializationResult {
     (status! == 0 and workIndex! < (templateStack! -> len)) -> while {
         templateStack![workIndex!] => templateId
         actualStack![workIndex!] => actualId
-        types![templateId] => template
-        types![actualId] => actual
+        types[templateId] => template
+        types[actualId] => actual
         (template.kind == 1 and template.origin == 3) -> if {
             -1 => parameterIndex!
             0 => parameterSearch!
@@ -811,65 +809,148 @@ public specialize request: SpecializationRequest -> SpecializationResult {
 
     -1 => specializedRoot!
     status! == 0 -> if {
-        types! -> len => originalCount
-        [Int; ~] => substituted!
-        0 => typeIndex!
-        typeIndex! < originalCount -> while {
-            types![typeIndex!] => current
-            -1 => replacementType!
-            (current.kind == 1 and current.origin == 3) -> if {
-                0 => replacementSearch!
-                (replacementSearch! < (parameterSymbols! -> len) and replacementType! < 0) -> while {
-                    (parameterModules![replacementSearch!] == current.module and parameterSymbols![replacementSearch!] == current.symbol) -> if {
-                        replacements![replacementSearch!] => replacementType!
-                    }
-                    replacementSearch! + 1 => replacementSearch!
+        # Rebuild only the result graph reachable from resultTemplate. Walking
+        # the complete type arena here makes generic calls quadratic in every
+        # unrelated type accumulated by the compilation.
+        [Int; ~] => nodeStack!
+        [Int; ~] => stateStack!
+        [Int; ~] => resolvedNodes!
+        [Int; ~] => resolvedTypes!
+        nodeStack! -> push(resultTemplate)
+        stateStack! -> push(0)
+        (nodeStack! -> len) > 0 -> while {
+            (nodeStack! -> len) - 1 => topIndex
+            nodeStack![topIndex] => nodeId
+            stateStack![topIndex] => nodeState
+
+            -1 => alreadyResolved!
+            0 => resolvedSearch!
+            (resolvedSearch! < (resolvedNodes! -> len) and alreadyResolved! < 0) -> while {
+                resolvedNodes![resolvedSearch!] == nodeId -> if {
+                    resolvedTypes![resolvedSearch!] => alreadyResolved!
                 }
+                resolvedSearch! + 1 => resolvedSearch!
             }
-            replacementType! < 0 -> if {
-                -1 => first!
-                current.first >= 0 -> if { substituted![current.first] => first! }
-                -1 => second!
-                current.second >= 0 -> if { substituted![current.second] => second! }
-                (first! == current.first and second! == current.second) -> if {
-                    typeIndex! => replacementType!
-                } else {
-                    current.origin == 3 => containsParameter!
-                    first! >= 0 -> if { types![first!].containsParameter -> if { true => containsParameter! } }
-                    second! >= 0 -> if { types![second!].containsParameter -> if { true => containsParameter! } }
-                    -1 => existing!
-                    0 => existingSearch!
-                    (existingSearch! < (types! -> len) and existing! < 0) -> while {
-                        types![existingSearch!] => known
-                        (known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first! and known.second == second! and known.lengthHash == current.lengthHash and known.status == current.status) -> if {
-                            existingSearch! => existing!
+
+            alreadyResolved! >= 0 -> if {
+                nodeStack! -> take(topIndex) => discardedNode
+                stateStack! -> take(topIndex) => discardedState
+            } else {
+                types[nodeId] => current
+                -1 => parameterReplacement!
+                (current.kind == 1 and current.origin == 3) -> if {
+                    0 => parameterReplacementSearch!
+                    (parameterReplacementSearch! < (parameterSymbols! -> len) and parameterReplacement! < 0) -> while {
+                        (parameterModules![parameterReplacementSearch!] == current.module and parameterSymbols![parameterReplacementSearch!] == current.symbol) -> if {
+                            replacements![parameterReplacementSearch!] => parameterReplacement!
                         }
-                        existingSearch! + 1 => existingSearch!
+                        parameterReplacementSearch! + 1 => parameterReplacementSearch!
                     }
-                    existing! < 0 -> if {
-                        types! -> len => existing!
-                        types! -> push(SemanticType {
-                            kind: current.kind
-                            origin: current.origin
-                            module: current.module
-                            symbol: current.symbol
-                            first: first!
-                            second: second!
-                            length: current.length
-                            lengthHash: current.lengthHash
-                            containsParameter: containsParameter!
-                            status: current.status
-                        })
+                }
+
+                parameterReplacement! >= 0 -> if {
+                    resolvedNodes! -> push(nodeId)
+                    resolvedTypes! -> push(parameterReplacement!)
+                    nodeStack! -> take(topIndex) => discardedNode
+                    stateStack! -> take(topIndex) => discardedState
+                } else {
+                    nodeState == 0 -> if {
+                        1 => stateStack![topIndex]
+                        current.first >= 0 -> if {
+                            nodeStack! -> push(current.first)
+                            stateStack! -> push(0)
+                        }
+                    } else {
+                        nodeState == 1 -> if {
+                            2 => stateStack![topIndex]
+                            current.second >= 0 -> if {
+                                nodeStack! -> push(current.second)
+                                stateStack! -> push(0)
+                            }
+                        } else {
+                            current.first => first!
+                            current.first >= 0 -> if {
+                                -1 => first!
+                                0 => firstSearch!
+                                (firstSearch! < (resolvedNodes! -> len) and first! < 0) -> while {
+                                    resolvedNodes![firstSearch!] == current.first -> if { resolvedTypes![firstSearch!] => first! }
+                                    firstSearch! + 1 => firstSearch!
+                                }
+                            }
+                            current.second => second!
+                            current.second >= 0 -> if {
+                                -1 => second!
+                                0 => secondSearch!
+                                (secondSearch! < (resolvedNodes! -> len) and second! < 0) -> while {
+                                    resolvedNodes![secondSearch!] == current.second -> if { resolvedTypes![secondSearch!] => second! }
+                                    secondSearch! + 1 => secondSearch!
+                                }
+                            }
+
+                            nodeId => replacementType!
+                            (first! != current.first or second! != current.second) -> if {
+                                current.origin == 3 => containsParameter!
+                                first! >= 0 -> if { types[first!].containsParameter -> if { true => containsParameter! } }
+                                second! >= 0 -> if { types[second!].containsParameter -> if { true => containsParameter! } }
+                                -1 => existing!
+                                0 => existingSearch!
+                                (existingSearch! < (types -> len) and existing! < 0) -> while {
+                                    types[existingSearch!] => known
+                                    (known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first! and known.second == second! and known.lengthHash == current.lengthHash and known.status == current.status) -> if {
+                                        existingSearch! => existing!
+                                    }
+                                    existingSearch! + 1 => existingSearch!
+                                }
+                                existing! < 0 -> if {
+                                    types -> len => existing!
+                                    types -> push(SemanticType {
+                                        kind: current.kind
+                                        origin: current.origin
+                                        module: current.module
+                                        symbol: current.symbol
+                                        first: first!
+                                        second: second!
+                                        length: current.length
+                                        lengthHash: current.lengthHash
+                                        containsParameter: containsParameter!
+                                        status: current.status
+                                    })
+                                }
+                                existing! => replacementType!
+                            }
+                            resolvedNodes! -> push(nodeId)
+                            resolvedTypes! -> push(replacementType!)
+                            nodeStack! -> take(topIndex) => discardedNode
+                            stateStack! -> take(topIndex) => discardedState
+                        }
                     }
-                    existing! => replacementType!
                 }
             }
-            substituted! -> push(replacementType!)
-            typeIndex! + 1 => typeIndex!
         }
-        substituted![resultTemplate] => specializedRoot!
+        0 => resultSearch!
+        (resultSearch! < (resolvedNodes! -> len) and specializedRoot! < 0) -> while {
+            resolvedNodes![resultSearch!] == resultTemplate -> if { resolvedTypes![resultSearch!] => specializedRoot! }
+            resultSearch! + 1 => resultSearch!
+        }
     }
 
-    SpecializationResult { types: types!, root: specializedRoot!, status: status! } => result!
+    SpecializationRoot { root: specializedRoot!, status: status! } => result!
+    result!
+}
+
+# Compatibility value API for callers that intentionally want an independent
+# arena. Ownership moves into the wrapper; no redundant copy is performed.
+public specialize request: SpecializationRequest -> SpecializationResult {
+    request.inputTemplate => inputTemplate
+    request.actualInput => actualInput
+    request.resultTemplate => resultTemplate
+    [SemanticType; ~] => types!
+    0 => compatibilityTypeIndex!
+    compatibilityTypeIndex! < (request.types -> len) -> while {
+        types! -> push(request.types[compatibilityTypeIndex!])
+        compatibilityTypeIndex! + 1 => compatibilityTypeIndex!
+    }
+    types! -> specializeInto(inputTemplate, actualInput, resultTemplate) => specialized
+    SpecializationResult { types: types!, root: specialized.root, status: specialized.status } => result!
     result!
 }

@@ -20,6 +20,13 @@ if ([string]::IsNullOrWhiteSpace($LlvmHome)) {
 $Compiler = [IO.Path]::GetFullPath($Compiler)
 $StdlibRoot = [IO.Path]::GetFullPath($StdlibRoot)
 $LlvmHome = [IO.Path]::GetFullPath($LlvmHome)
+$managedCompiler = Get-ChildItem -LiteralPath (Join-Path $repoRoot "src\Sollang.Compiler\bin\Release") `
+    -Recurse -Filter "Sollang.Compiler.dll" | Sort-Object LastWriteTimeUtc -Descending | `
+    Select-Object -First 1 -ExpandProperty FullName
+$expectedVersion = (& dotnet $managedCompiler --version | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($expectedVersion)) {
+    throw "managed compiler version contract is unavailable"
+}
 $artifacts = Join-Path $repoRoot "artifacts\native-cli-build-run-linux"
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 
@@ -59,7 +66,7 @@ $llvmHomeWsl = Convert-ToWslPath $LlvmHome
 Write-Host "[linux native CLI 1/10] Version."
 $version = (& wsl.exe -d $Distribution -- $compilerWsl --version | Out-String)
 Assert-ExitCode 0 "version"
-Assert-Output $version "Sollang 0.4.0" "version"
+Assert-Output $version $expectedVersion "version"
 
 Write-Host "[linux native CLI 2/10] Help and empty invocation status."
 $help = (& wsl.exe -d $Distribution -- $compilerWsl --help | Out-String)

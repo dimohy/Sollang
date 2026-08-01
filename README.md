@@ -307,9 +307,11 @@ public answer: -> Int => 42
 
 ## Install A Release
 
-Sollang 0.3 provides self-contained compiler packages for Windows x64 and Linux
-x64. Extract the archive for your operating system, keep the bundled `stdlib`
-next to the compiler, and set `SOLLANG_LLVM_HOME` to an LLVM installation.
+Sollang 0.4 provides fixed-point native compiler packages for Windows x64 and
+Linux x64. Extract the archive for your operating system, keep the bundled
+`stdlib` next to the compiler, and set `SOLLANG_LLVM_HOME` to an LLVM
+installation. The release archives contain no C# compiler or `.NET` runtime
+artifacts.
 Linux uses `/usr` automatically when no explicit LLVM home is supplied.
 
 ```powershell
@@ -332,17 +334,12 @@ sollang run hello.slg
 sollang run hello.slg -- first second
 ```
 
-The 0.3 archives also include `sollangc-stage3`, the native compiler reproduced
-by the Sollang-written compiler at its verified Stage 3 fixed point. The
-supported `sollang` CLI remains alongside it during the transition. See
-[`STAGE3_COMPILER.md`](docs/STAGE3_COMPILER.md) for the Stage 3 driver's direct
-LLVM-emission contract and current CLI limits.
-
-The next 0.4 release completes that transition: only the fixed-point compiler
-built from `.slg` sources is published as `sollang`. The C# bootstrap remains a
-development tool and is excluded from release archives. The command-line usage
-shown above remains unchanged; 0.4 packaging is blocked until the native
-compiler passes the complete CLI compatibility gate.
+The only compiler executable in a 0.4 archive is `sollang`, reproduced by the
+Sollang-written compiler at its verified Stage 3 fixed point. The C# bootstrap
+remains a development and differential-verification tool and is excluded from
+release archives. The command-line usage shown above is unchanged. See
+[`STAGE3_COMPILER.md`](docs/STAGE3_COMPILER.md) for the fixed-point and release
+verification evidence.
 
 ## Run A Sample
 

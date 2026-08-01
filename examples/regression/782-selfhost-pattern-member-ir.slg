@@ -1,0 +1,48 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        struct Raw {
+            value: Int32
+        }
+
+        load: -> Result<Raw, Text> {
+            Result<Raw, Text>.Ok(Raw { value: 42 })
+        }
+
+        unwrap result: Result<Raw, Text> -> Int32 {
+            result -> when {
+                Result<Raw, Text>.Ok(raw) => raw.value
+                Result<Raw, Text>.Err(error) => 0
+            }
+        }
+
+        unwrapFromCall: -> Int32 {
+            load -> when {
+                Ok(raw) { raw.value }
+                Err(error) { 0 }
+            }
+        }
+
+        unwrapIntoMutable result: Result<Int32, Text> -> Int32 {
+            -1 => value!
+            result -> when {
+                Ok(payload) {
+                    payload => value!
+                }
+                Err(error) {
+                }
+            }
+            value!
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        "pattern member IR = $(index!),$(node.kind),$(node.parent),$(node.symbol),$(node.typeId),$(node.typeKind),$(node.typeOrigin),$(node.typeSymbol),$(node.operand0),$(node.operand1),$(node.nextOperand),$(node.opcode)" -> println
+        index! + 1 => index!
+    }
+}

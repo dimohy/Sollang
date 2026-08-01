@@ -1511,7 +1511,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %read64 = call i64 @read(i32 0, ptr %data, i64 %len64)
               %read32 = trunc i64 %read64 to i32
               store i32 %read32, ptr %read, align 4
-              %ok = icmp sgt i64 %read64, 0
+              %ok = icmp sge i64 %read64, 0
               %ok32 = zext i1 %ok to i32
               ret i32 %ok32
             }

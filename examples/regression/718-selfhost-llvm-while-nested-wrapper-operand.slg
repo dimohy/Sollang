@@ -1,0 +1,24 @@
+import sollang.compiler.llvm.text as llvm
+
+# Nested arithmetic inside a short-circuit while condition must consume the
+# value node beneath transparent parser wrappers.
+main {
+    [
+        """
+        trimContinuation source: Text -> UIntSize {
+            UIntSize(1) => prefix!
+            (prefix! < (source -> len)
+                and prefix! > UIntSize(0)
+                and ((source -> byte(prefix!)) / UInt8(64)) == UInt8(2)) -> while {
+                prefix! - UIntSize(1) => prefix!
+            }
+            prefix!
+        }
+
+        main {
+            "é" -> trimContinuation -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

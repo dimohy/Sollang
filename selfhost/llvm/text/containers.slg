@@ -140,6 +140,20 @@ mutableBorrowParameterOrdinal bindingIndex: Int, ownerIndex: Int, context: ref e
     }
     ordinal!
 }
+mutableBorrowUsesStructPointer parameter: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    parameter.flags / 2 % 2 == 1 and (parameter -> isNominalStructType)
+}
+writeMutableStructParameterPointer ordinal: Int -> Unit uses Console {
+    ordinal == 0 -> if { "%arg_mut_struct" -> print } else { "%arg$(ordinal)_mut_struct" -> print }
+}
+writeMutableStoragePointer bindingIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    bindingIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => parameterOrdinal
+    (parameterOrdinal >= 0 and (context.ir[bindingIndex] -> mutableBorrowUsesStructPointer(context))) -> if {
+        parameterOrdinal -> writeMutableStructParameterPointer
+    } else {
+        "%slot$(bindingIndex)" -> print
+    }
+}
 bindingBelongsToOwner request: BindingOwnerRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     context.ir[request.bindingIndex].parent => bindingOwner!
     (bindingOwner! >= 0 and context.ir[bindingOwner!].kind != 0 and context.ir[bindingOwner!].kind != 11) -> while {
@@ -174,31 +188,29 @@ emitArenaConstructor request: WhileValueRequest, context: ref emitterContext.Emi
     "  %v$(arenaIndex) = insertvalue %sollang.array.i32 %v$(arenaIndex)_1, i64 %v$(arenaIndex)_allocation, 2" -> println
 }
 
-writeMaterializeTextReference symbol: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    false => materializeReferenceWritten!
+materializeTextReferenceNode symbol: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => materializeReferenceNode!
     ownerIndex >= 0 -> if {
         context.ir[ownerIndex] => materializeOwner
         materializeOwner.kind == 0 -> if {
             materializeOwner.operand1 >= 0 -> if {
                 context.ir[materializeOwner.operand1].symbol == symbol -> if {
-                    "%arg" -> print
-                    true => materializeReferenceWritten!
+                    materializeOwner.operand1 => materializeReferenceNode!
                 }
             }
             1 => materializeParameterOrdinal!
             materializeOwner.nextOperand => materializeParameterIndex!
-            (materializeParameterIndex! >= 0 and not materializeReferenceWritten!) -> while {
+            (materializeParameterIndex! >= 0 and materializeReferenceNode! < 0) -> while {
                 context.ir[materializeParameterIndex!] => materializeParameter
                 materializeParameter.symbol == symbol -> if {
-                    "%arg$(materializeParameterOrdinal!)" -> print
-                    true => materializeReferenceWritten!
+                    materializeParameterIndex! => materializeReferenceNode!
                 }
                 materializeParameter.nextOperand => materializeParameterIndex!
                 materializeParameterOrdinal! + 1 => materializeParameterOrdinal!
             }
         }
     }
-    not materializeReferenceWritten! -> if {
+    materializeReferenceNode! < 0 -> if {
         -1 => materializeBindingIndex!
         0 => materializeBindingSearch!
         materializeBindingSearch! < beforeIndex -> while {
@@ -211,16 +223,44 @@ writeMaterializeTextReference symbol: Int, ownerIndex: Int, beforeIndex: Int, co
             materializeBindingSearch! + 1 => materializeBindingSearch!
         }
         materializeBindingIndex! >= 0 -> if {
-            "%v" -> print
-            context.ir[materializeBindingIndex!].operand0 -> writeDecimal
+            context.ir[materializeBindingIndex!].operand0 => materializeReferenceNode!
         }
+    }
+    materializeReferenceNode!
+}
+
+writeMaterializeTextReference symbol: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    symbol -> materializeTextReferenceNode(ownerIndex, beforeIndex, context, state) => materializeReferenceNode
+    false => materializeReferenceWritten!
+    ownerIndex >= 0 -> if {
+        context.ir[ownerIndex] => materializeOwner
+        materializeOwner.kind == 0 -> if {
+            materializeOwner.operand1 == materializeReferenceNode -> if {
+                "%arg" -> print
+                true => materializeReferenceWritten!
+            }
+            1 => materializeParameterOrdinal!
+            materializeOwner.nextOperand => materializeParameterIndex!
+            (materializeParameterIndex! >= 0 and not materializeReferenceWritten!) -> while {
+                materializeParameterIndex! == materializeReferenceNode -> if {
+                    "%arg$(materializeParameterOrdinal!)" -> print
+                    true => materializeReferenceWritten!
+                }
+                context.ir[materializeParameterIndex!].nextOperand => materializeParameterIndex!
+                materializeParameterOrdinal! + 1 => materializeParameterOrdinal!
+            }
+        }
+    }
+    not materializeReferenceWritten! -> if {
+        "%v$(materializeReferenceNode)" -> print
     }
 }
 
 emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     request.whileIndex => materializeIndex
     context.ir[materializeIndex] => materializeNode
-    context.ir[materializeNode.operand0] => materializeText
+    materializeNode.operand0 -> producerValueIndex(context, state) => materializeTextIndex
+    context.ir[materializeTextIndex] => materializeText
     materializeNode.operand1 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => materializeBorrowOrdinal
     materializeNode.operand1 -> mutableBindingRoot(context, state) => materializeRoot
     materializeText -> sourceInterpolations(context, state) => materializeInterpolations!
@@ -241,12 +281,50 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
         materializeRootOrdinal! < materializeRootCount -> while {
             materializeRoots![materializeRootOrdinal!] => materializeInterpolationIndex
             materializeInterpolations![materializeInterpolationIndex] => materializeInterpolationRoot
-            "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_ptr = extractvalue %sollang.text " -> print
-            materializeInterpolationRoot.symbol -> writeMaterializeTextReference(request.ownerIndex, materializeIndex, context, state)
-            ", 0" -> println
-            "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_length = extractvalue %sollang.text " -> print
-            materializeInterpolationRoot.symbol -> writeMaterializeTextReference(request.ownerIndex, materializeIndex, context, state)
-            ", 1" -> println
+            materializeInterpolations! -> interpolationEmissionOrder(materializeText.payloadToken, materializeInterpolationRoot.segment) => materializeExpressionOrder!
+            0 => materializeExpressionOrderIndex!
+            materializeExpressionOrderIndex! < (materializeExpressionOrder! -> len) -> while {
+                materializeExpressionOrder![materializeExpressionOrderIndex!] => materializeExpressionNodeIndex
+                materializeInterpolations![materializeExpressionNodeIndex] => materializeExpressionNode
+                materializeExpressionNodeIndex -> interpolationHasLogicalAncestor(materializeInterpolations!) => materializeInsideLogical
+                not materializeInsideLogical -> if {
+                    (materializeExpressionNode.kind == 3 and (materializeExpressionNode.opcode == -24 or materializeExpressionNode.opcode == -25)) -> if {
+                        materializeIndex -> emitInterpolationSubtree(materializeExpressionNodeIndex, materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, true, context, state)
+                    } else {
+                        materializeIndex -> emitInterpolationIntrinsic(materializeExpressionNodeIndex, materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, true, context, state)
+                        materializeIndex -> emitInterpolationOperation(materializeExpressionNodeIndex, materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
+                    }
+                }
+                materializeExpressionOrderIndex! + 1 => materializeExpressionOrderIndex!
+            }
+            materializeInterpolationIndex -> interpolationNodeIntegerWidth(materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state) => materializeIntegerWidth
+            materializeIntegerWidth > 0 -> if {
+                "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_buffer = alloca [21 x i8], align 1" -> println
+                materializeIntegerWidth < 64 -> if {
+                    "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_integer = " -> print
+                    materializeInterpolationIndex -> interpolationNodeSigned(materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state) -> if { "sext" -> print } else { "zext" -> print }
+                    " i$(materializeIntegerWidth) " -> print
+                    materializeIndex -> writeInterpolationValue(materializeInterpolationIndex, materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
+                    " to i64" -> println
+                }
+                "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_length = call i64 @" -> print
+                materializeInterpolationIndex -> interpolationNodeSigned(materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state) -> if { "sollang_format_i64" -> print } else { "sollang_format_u64" -> print }
+                "(ptr %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_buffer, i64 " -> print
+                materializeIntegerWidth < 64 -> if {
+                    "%materialize$(materializeIndex)_root$(materializeRootOrdinal!)_integer" -> print
+                } else {
+                    materializeIndex -> writeInterpolationValue(materializeInterpolationIndex, materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
+                }
+                ")" -> println
+                "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_ptr = getelementptr [21 x i8], ptr %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_buffer, i64 0, i64 0" -> println
+            } else {
+                "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_ptr = extractvalue %sollang.text " -> print
+                materializeIndex -> writeInterpolationValue(materializeInterpolationIndex, materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
+                ", 0" -> println
+                "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_length = extractvalue %sollang.text " -> print
+                materializeIndex -> writeInterpolationValue(materializeInterpolationIndex, materializeInterpolations!, materializeText.sourceModule, request.ownerIndex, materializeIndex, context, state)
+                ", 1" -> println
+            }
             materializeStaticLength! + materializeInterpolationRoot.literalLength => materializeStaticLength!
             materializeInterpolationRoot.expressionStart + materializeInterpolationRoot.expressionLength + UIntSize(1) => materializeSuffixStart!
             materializeRootOrdinal! + 1 => materializeRootOrdinal!
@@ -320,7 +398,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
             materializeInterpolations![materializeCopyIndex] => materializeCopyRoot
             "  %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_target = getelementptr i8, ptr %materialize$(materializeIndex)_target, i64 %materialize$(materializeIndex)_copy_offset" -> print
             materializeCopyOrdinal! * 2 -> writeDecimalLine
-            "  %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeNode.operand0), i64 $(materializeCopyRoot.literalStart)" -> println
+            "  %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex), i64 $(materializeCopyRoot.literalStart)" -> println
             "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_target, ptr %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_source, i64 $(materializeCopyRoot.literalLength), i1 false)" -> println
             "  %materialize$(materializeIndex)_copy_offset" -> print
             materializeCopyOrdinal! * 2 + 1 -> writeDecimal
@@ -342,7 +420,7 @@ emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.Emit
         materializeSuffixRawLength - materializeSuffixStart! => materializeSuffixLength
         "  %materialize$(materializeIndex)_suffix_target = getelementptr i8, ptr %materialize$(materializeIndex)_target, i64 %materialize$(materializeIndex)_copy_offset" -> print
         materializeRootCount * 2 -> writeDecimalLine
-        "  %materialize$(materializeIndex)_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeNode.operand0), i64 $(materializeSuffixStart!)" -> println
+        "  %materialize$(materializeIndex)_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeTextIndex), i64 $(materializeSuffixStart!)" -> println
         "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_suffix_target, ptr %materialize$(materializeIndex)_suffix_source, i64 $(materializeSuffixLength), i1 false)" -> println
     } else {
         "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_target, ptr %materialize$(materializeIndex)_source_ptr, i64 %materialize$(materializeIndex)_source_length, i1 false)" -> println
@@ -880,6 +958,7 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
     takeNode.operand1 -> aggregateValueIndex(context, state) => takeArgumentIndex
     context.ir[takeArgumentIndex] => takeArgument
     takeNode.operand0 -> mutableBindingRoot(context, state) => takeRoot
+    takeNode.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => takeBorrowOrdinal
     takeSource -> isDictionaryType -> if {
         -1 => takeKeyTypeId!
         -1 => takeValueTypeId!
@@ -1035,9 +1114,21 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         "  %take$(takeIndex)_result = insertvalue %sollang.dict %take$(takeIndex)_dictionary, i64 %take$(takeIndex)_new_length, 2" -> println
         "  store %sollang.dict %take$(takeIndex)_result, ptr %slot$(takeRoot), align 8" -> println
     } else {
-        "  %take$(takeIndex)_data = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 0" -> println
-        "  %take$(takeIndex)_length = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 1" -> println
-        "  %take$(takeIndex)_capacity = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 2" -> println
+        takeBorrowOrdinal >= 0 -> if {
+            "  %take$(takeIndex)_data = load ptr, ptr " -> print
+            takeBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(takeBorrowOrdinal)_mut_ptr_addr" -> print }
+            ", align 8" -> println
+            "  %take$(takeIndex)_length = load i64, ptr " -> print
+            takeBorrowOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(takeBorrowOrdinal)_mut_len_addr" -> print }
+            ", align 8" -> println
+            "  %take$(takeIndex)_capacity = load i64, ptr " -> print
+            takeBorrowOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(takeBorrowOrdinal)_mut_capacity_addr" -> print }
+            ", align 8" -> println
+        } else {
+            "  %take$(takeIndex)_data = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 0" -> println
+            "  %take$(takeIndex)_length = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 1" -> println
+            "  %take$(takeIndex)_capacity = extractvalue %sollang.array.i32 %v$(takeNode.operand0), 2" -> println
+        }
         takeArgument -> integerNodeWidth(context, state) => takeArgumentWidth
         (takeArgument.kind != 3 and takeArgumentWidth > 0 and takeArgumentWidth < 64) -> if {
             "  %take$(takeIndex)_index = " -> print
@@ -1099,7 +1190,19 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         "  %take$(takeIndex)_array0 = insertvalue %sollang.array.i32 poison, ptr %take$(takeIndex)_data, 0" -> println
         "  %take$(takeIndex)_array1 = insertvalue %sollang.array.i32 %take$(takeIndex)_array0, i64 %take$(takeIndex)_new_length, 1" -> println
         "  %take$(takeIndex)_array2 = insertvalue %sollang.array.i32 %take$(takeIndex)_array1, i64 %take$(takeIndex)_capacity, 2" -> println
-        "  store %sollang.array.i32 %take$(takeIndex)_array2, ptr %slot$(takeRoot), align 8" -> println
+        takeBorrowOrdinal >= 0 -> if {
+            "  store ptr %take$(takeIndex)_data, ptr " -> print
+            takeBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(takeBorrowOrdinal)_mut_ptr_addr" -> print }
+            ", align 8" -> println
+            "  store i64 %take$(takeIndex)_new_length, ptr " -> print
+            takeBorrowOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(takeBorrowOrdinal)_mut_len_addr" -> print }
+            ", align 8" -> println
+            "  store i64 %take$(takeIndex)_capacity, ptr " -> print
+            takeBorrowOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(takeBorrowOrdinal)_mut_capacity_addr" -> print }
+            ", align 8" -> println
+        } else {
+            "  store %sollang.array.i32 %take$(takeIndex)_array2, ptr %slot$(takeRoot), align 8" -> println
+        }
     }
 }
 writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -1124,7 +1227,11 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
             }
         }
         whileParameterOrdinal! >= 0 -> if {
-            whileParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(whileParameterOrdinal!)" -> print }
+            value.flags / 2 % 2 == 1 -> if {
+                "%v$(request.nodeIndex)" -> print
+            } else {
+                whileParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(whileParameterOrdinal!)" -> print }
+            }
         } else {
             false => capturedWhileValue!
             (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and value.kind == 5 and value.operand0 < 0) -> if {
@@ -1150,7 +1257,11 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
                 }
             }
             request.nodeIndex -> eachRoleOwner(context, state) => whileEachRoleOwner
-            (capturedWhileValue! or whileEachRoleOwner >= 0) -> if { "%v$(request.nodeIndex)" -> print } else { "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print }
+            (value.kind == 8 and (value.opcode == -24 or value.opcode == -25)) -> if {
+                "%v$(request.nodeIndex)" -> print
+            } else {
+                (capturedWhileValue! or whileEachRoleOwner >= 0) -> if { "%v$(request.nodeIndex)" -> print } else { "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print }
+            }
         }
     }
     }
@@ -1270,14 +1381,21 @@ emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.Emit
                 "assign$(request.nodeIndex)_done:" -> println
             } else {
             assignmentBinding.kind == 10 -> if {
-                "  %assign$(request.nodeIndex)_data = extractvalue %sollang.array.i32 " -> print
+                -1 => assignmentParameterOrdinal!
                 (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and context.ir[context.ir[request.ownerIndex].operand1].symbol == assignmentBinding.symbol) -> if {
-                    "%arg" -> print
+                    0 => assignmentParameterOrdinal!
                 } else {
-                    request.ownerIndex -> additionalParameterOrdinal(assignmentBinding.symbol, context, state) => assignmentParameterOrdinal
-                    "%arg$(assignmentParameterOrdinal)" -> print
+                    request.ownerIndex -> additionalParameterOrdinal(assignmentBinding.symbol, context, state) => assignmentParameterOrdinal!
                 }
-                ", 0" -> println
+                assignmentBinding.flags / 2 % 2 == 1 -> if {
+                    "  %assign$(request.nodeIndex)_data = load ptr, ptr " -> print
+                    assignmentParameterOrdinal! == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(assignmentParameterOrdinal!)_mut_ptr_addr" -> print }
+                    ", align 8" -> println
+                } else {
+                    "  %assign$(request.nodeIndex)_data = extractvalue %sollang.array.i32 " -> print
+                    assignmentParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(assignmentParameterOrdinal!)" -> print }
+                    ", 0" -> println
+                }
             } else {
                 "  %assign$(request.nodeIndex)_array = load %sollang.array.i32, ptr %slot$(assignmentRoot), align 4" -> println
                 "  %assign$(request.nodeIndex)_data = extractvalue %sollang.array.i32 %assign$(request.nodeIndex)_array, 0" -> println
@@ -1458,7 +1576,9 @@ emitMemberAssignment request: WhileValueRequest, context: ref emitterContext.Emi
                 }
                 assignmentMoveSearch! + 1 => assignmentMoveSearch!
             }
-            "  %member_assign$(request.nodeIndex)_current = load %sollang.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol), ptr %slot$(assignmentRoot), align " -> print
+            "  %member_assign$(request.nodeIndex)_current = load %sollang.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol), ptr " -> print
+            assignmentRoot -> writeMutableStoragePointer(request.ownerIndex, context, state)
+            ", align " -> print
             assignmentBinding -> storageAlign(context, state) -> writeDecimalLine
             (not assignmentFieldWasMoved! and assignmentTargetFieldTypeId! >= 0 and (assignmentTargetFieldTypeId! -> semanticTypeOwns(context, state))) -> if {
                 "  %member_assign$(request.nodeIndex)_previous = extractvalue %sollang.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol) %member_assign$(request.nodeIndex)_current, $(assignmentFieldOrdinal!)" -> println
@@ -1482,7 +1602,9 @@ emitMemberAssignment request: WhileValueRequest, context: ref emitterContext.Emi
                 }
             }
             ", $(assignmentFieldOrdinal!)" -> println
-            "  store %sollang.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol) %member_assign$(request.nodeIndex)_updated, ptr %slot$(assignmentRoot), align " -> print
+            "  store %sollang.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol) %member_assign$(request.nodeIndex)_updated, ptr " -> print
+            assignmentRoot -> writeMutableStoragePointer(request.ownerIndex, context, state)
+            ", align " -> print
             assignmentBinding -> storageAlign(context, state) -> writeDecimalLine
         }
     }
@@ -1779,7 +1901,8 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                         0 - valueNodeIndex - 1 => emitValueTask
                         valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(emitValueTask) } else { emitValueTask => valueTasks![valueTaskSize!] }
                         valueTaskSize! + 1 => valueTaskSize!
-                        (valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8 or valueNode.kind == 9 or valueNode.kind == 13 or valueNode.kind == 15 or valueNode.kind == 18) -> if {
+                        ((valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8 or valueNode.kind == 9 or valueNode.kind == 13 or valueNode.kind == 15 or valueNode.kind == 18)
+                            and not (valueNode.kind == 8 and (valueNode.opcode == -24 or valueNode.opcode == -25))) -> if {
                             ((valueNode.kind == 8 or valueNode.kind == 15 or ((valueNode.kind == 9 or valueNode.kind == 6) and (valueNode.opcode == -202 or valueNode.opcode == -203))) and valueNode.operand1 >= 0) -> if {
                                 valueNode.operand1 => secondValueIndex!
                                 ((valueNode.kind == 9 or valueNode.kind == 6) and valueNode.opcode == -202) -> if {
@@ -1813,6 +1936,9 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                     } else {
                         0 - valueTask - 1 => valueNodeIndex
                         context.ir[valueNodeIndex] => valueNode
+                        (valueNode.kind == 8 and (valueNode.opcode == -24 or valueNode.opcode == -25)) -> if {
+                            valueNodeIndex -> emitLogicalValue(ownerIndex, context, state)
+                        }
                         valueNode.kind == 5 -> if {
                             false => parameterValue!
                             (ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].operand1 >= 0 and valueNode.symbol == context.ir[context.ir[ownerIndex].operand1].symbol) -> if { true => parameterValue! }
@@ -1882,32 +2008,30 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                             }
                         }
                         ((valueNode.kind == 9 or valueNode.kind == 6) and valueNode.opcode == -201 and valueNode.operand0 >= 0) -> if {
-                            context.ir[valueNode.operand0] => whileLengthBase
-                            whileLengthBase -> isArgumentsType -> if {
-                                "  %while$(whileIndex)_v$(valueNodeIndex) = call i64 @sollang_argument_count()" -> println
-                            } else {
-                                "  %while$(whileIndex)_v$(valueNodeIndex)" -> print
-                                valueNode.typeSymbol == 2 -> if { "_raw" -> print }
-                                " = extractvalue " -> print
-                                whileLengthBase -> writeIrType(context, state)
-                                " " -> print
-                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
-                                ", " -> print
-                                whileLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
-                                valueNode.typeSymbol == 2 -> if {
-                                    "  %while$(whileIndex)_v$(valueNodeIndex) = trunc i64 %while$(whileIndex)_v$(valueNodeIndex)_raw to i32" -> println
-                                }
-                            }
+                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNodeIndex } -> emitWhileLengthIntrinsic(context, state)
                         }
                         ((valueNode.kind == 9 or valueNode.kind == 6) and valueNode.opcode == -202 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0) -> if {
                             context.ir[valueNode.operand0] => whileByteBase
                             valueNode.operand1 -> aggregateValueIndex(context, state) => whileByteIndexValue
                             context.ir[whileByteIndexValue] => whileByteIndex
                             whileByteIndex -> integerNodeWidth(context, state) => whileByteIndexWidth
+                            whileByteBase.typeId => whileByteBaseTypeId!
+                            false => whileByteBaseReference!
+                            (whileByteBaseTypeId! >= 0 and context.types[whileByteBaseTypeId!].kind == 8) -> if {
+                                context.types[whileByteBaseTypeId!].first => whileByteBaseTypeId!
+                                true => whileByteBaseReference!
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_base_source = load " -> print
+                                whileByteBaseTypeId! -> writeSemanticTypeId(context, state)
+                                ", ptr " -> print
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                                ", align 8" -> println
+                            }
                             "  %while$(whileIndex)_v$(valueNodeIndex)_base = extractvalue " -> print
-                            whileByteBase -> writeTextLikeType
+                            whileByteBaseReference! -> if { whileByteBaseTypeId! -> writeSemanticTypeId(context, state) } else { whileByteBase -> writeTextLikeType }
                             " " -> print
-                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                            whileByteBaseReference! -> if { "%while$(whileIndex)_v$(valueNodeIndex)_base_source" -> print } else {
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                            }
                             ", 0" -> println
                             (whileByteIndexWidth > 0 and whileByteIndexWidth < 64) -> if {
                                 "  %while$(whileIndex)_v$(valueNodeIndex)_index = " -> print
@@ -1930,10 +2054,23 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                             context.ir[valueNode.operand1].nextOperand => whileSliceLength
                             context.ir[whileSliceLength] => whileSliceLengthNode
                             whileSliceLengthNode -> integerNodeWidth(context, state) => whileSliceLengthWidth
+                            whileSliceBase.typeId => whileSliceBaseTypeId!
+                            false => whileSliceBaseReference!
+                            (whileSliceBaseTypeId! >= 0 and context.types[whileSliceBaseTypeId!].kind == 8) -> if {
+                                context.types[whileSliceBaseTypeId!].first => whileSliceBaseTypeId!
+                                true => whileSliceBaseReference!
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_base_source = load " -> print
+                                whileSliceBaseTypeId! -> writeSemanticTypeId(context, state)
+                                ", ptr " -> print
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                                ", align 8" -> println
+                            }
                             "  %while$(whileIndex)_v$(valueNodeIndex)_base = extractvalue " -> print
-                            whileSliceBase -> writeTextLikeType
+                            whileSliceBaseReference! -> if { whileSliceBaseTypeId! -> writeSemanticTypeId(context, state) } else { whileSliceBase -> writeTextLikeType }
                             " " -> print
-                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                            whileSliceBaseReference! -> if { "%while$(whileIndex)_v$(valueNodeIndex)_base_source" -> print } else {
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                            }
                             ", 0" -> println
                             (whileSliceIndexWidth > 0 and whileSliceIndexWidth < 64) -> if {
                                 "  %while$(whileIndex)_v$(valueNodeIndex)_index = " -> print
@@ -1970,6 +2107,18 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                             context.ir[valueNode.operand0] => whileIndexedArray
                             context.ir[valueNode.operand1] => whileIndexValue
                             whileIndexValue -> integerNodeWidth(context, state) => whileIndexWidth
+                            whileIndexedArray.typeId => whileIndexedContainerTypeId!
+                            false => whileIndexedReadonlyReference!
+                            (whileIndexedContainerTypeId! >= 0 and context.types[whileIndexedContainerTypeId!].kind == 8) -> if {
+                                context.types[whileIndexedContainerTypeId!].first => whileIndexedContainerTypeId!
+                                true => whileIndexedReadonlyReference!
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_indexed_source = load " -> print
+                                whileIndexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                                ", ptr " -> print
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                                ", align " -> print
+                                context.typeAligns[whileIndexedContainerTypeId!] -> writeDecimalLine
+                            }
                             whileIndexedArray -> isArgumentsType -> if {
                                 (whileIndexValue.kind != 3 and whileIndexWidth > 0 and whileIndexWidth < 64) -> if {
                                     "  %while$(whileIndex)_v$(valueNodeIndex)_argument_index = " -> print
@@ -1993,9 +2142,17 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                                 ")" -> println
                             } else {
                             "  %while$(whileIndex)_v$(valueNodeIndex)_data = extractvalue " -> print
-                            whileIndexedArray -> writeIrType(context, state)
+                            whileIndexedReadonlyReference! -> if {
+                                whileIndexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                            } else {
+                                whileIndexedArray -> writeIrType(context, state)
+                            }
                             " " -> print
-                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                            whileIndexedReadonlyReference! -> if {
+                                "%while$(whileIndex)_v$(valueNodeIndex)_indexed_source" -> print
+                            } else {
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                            }
                             ", 0" -> println
                             whileIndexWidth == 64 -> if {
                                 "  %while$(whileIndex)_v$(valueNodeIndex)_index = add i64 0, " -> print
@@ -2017,10 +2174,6 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                             }
                         }
                         (valueNode.kind == 18 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0 and valueNode.nextOperand >= 0) -> if {
-                            "  %if$(valueNodeIndex)_result = alloca " -> print
-                            valueNode -> writeIrType(context, state)
-                            ", align " -> print
-                            valueNode -> storageAlign(context, state) -> writeDecimalLine
                             context.ir[valueNode.operand0] => whileIfCondition
                             (whileIfCondition.kind == 8 and (whileIfCondition.opcode == -25 or whileIfCondition.opcode == -24) or (whileIfCondition.kind == 7 and whileIfCondition.opcode == -26)) => whileIfShortCircuit
                             whileIfShortCircuit -> if {
@@ -2053,7 +2206,7 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                         (valueNode.kind == 8 and (valueNode.operand0 < 0 or valueNode.operand1 < 0)) -> if {
                             "; invalid while binary ir=$(valueNodeIndex) op0=$(valueNode.operand0) op1=$(valueNode.operand1) opcode=$(valueNode.opcode)" -> println
                         }
-                        ((valueNode.kind == 7 and valueNode.operand0 >= 0) or (valueNode.kind == 8 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0)) -> if {
+                        ((valueNode.kind == 7 and valueNode.operand0 >= 0) or (valueNode.kind == 8 and valueNode.opcode != -24 and valueNode.opcode != -25 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0)) -> if {
                             context.ir[valueNode.operand0] => left
                             0 => whileBinaryWidth!
                             false => whileLeftPromoted!
@@ -2089,8 +2242,8 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                                 valueNode.opcode == grammar.tokenIdPlus() -> if { "add" -> print }
                                 valueNode.opcode == grammar.tokenIdMinus() -> if { "sub" -> print }
                                 valueNode.opcode == grammar.tokenIdStar() -> if { "mul" -> print }
-                                valueNode.opcode == grammar.tokenIdSlash() -> if { "sdiv" -> print }
-                                valueNode.opcode == grammar.tokenIdPercent() -> if { "srem" -> print }
+                                valueNode.opcode == grammar.tokenIdSlash() -> if { valueNode -> integerQuotientOperation(context, state) -> print }
+                                valueNode.opcode == grammar.tokenIdPercent() -> if { valueNode -> integerRemainderOperation(context, state) -> print }
                                 valueNode.opcode == grammar.tokenIdEqualEqual() -> if { "icmp eq" -> print }
                                 valueNode.opcode == grammar.tokenIdBangEqual() -> if { "icmp ne" -> print }
                                 (valueNode.opcode == grammar.tokenIdLess() or valueNode.opcode == grammar.tokenIdLessEqual() or valueNode.opcode == grammar.tokenIdGreater() or valueNode.opcode == grammar.tokenIdGreaterEqual()) -> if {
@@ -2140,6 +2293,20 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
         }
     }
 }
+
+# Logical operators are values, but their right operand is evaluated only along
+# the branch selected by the left operand. Reuse the condition tree emitter and
+# merge its true/false exits into the SSA value expected for the logical node.
+emitLogicalValue logicalIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    WhileBranchRequest { whileIndex: logicalIndex, ownerIndex: ownerIndex, conditionIndex: logicalIndex } -> emitWhileBranch(context, state)
+    "while$(logicalIndex)_body:" -> println
+    "  br label %logical$(logicalIndex)_merge" -> println
+    "while$(logicalIndex)_exit:" -> println
+    "  br label %logical$(logicalIndex)_merge" -> println
+    "logical$(logicalIndex)_merge:" -> println
+    "  %v$(logicalIndex) = phi i1 [ true, %while$(logicalIndex)_body ], [ false, %while$(logicalIndex)_exit ]" -> println
+}
+
 writeCleanupName edgeIndex: Int, bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     "%cleanup" -> print
     edgeIndex -> writeDecimal
@@ -2163,6 +2330,18 @@ producerPipelineConsumesBinding bindingIndex: Int, context: ref emitterContext.E
     }
     consumed!
 }
+ownershipRegionContainsEdge regionIndex: Int, edgeNodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    edgeNodeIndex => edgeAncestor!
+    false => contains!
+    (edgeAncestor! >= 0 and not contains!) -> while {
+        edgeAncestor! == regionIndex -> if {
+            true => contains!
+        } else {
+            context.ir[edgeAncestor!].parent => edgeAncestor!
+        }
+    }
+    contains!
+}
 emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.pointerBitWidth / 8 => ownedPointerAlignment
     context.ir[request.regionIndex] => dropRegion
@@ -2171,6 +2350,17 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
     request.regionIndex => ownedDropOwner!
     (ownedDropOwner! >= 0 and context.ir[ownedDropOwner!].kind != 0 and context.ir[ownedDropOwner!].kind != 11) -> while {
         context.ir[ownedDropOwner!].parent => ownedDropOwner!
+    }
+    request.edgeIndex / 10 => ownedDropEdgeNode
+    request.transferredSymbol => ownedTransferredSymbol!
+    (ownedDropEdgeNode >= 0 and ownedDropEdgeNode < (context.ir -> len) and context.ir[ownedDropEdgeNode].kind == 23 and context.ir[ownedDropEdgeNode].operand0 >= 0) -> if {
+        context.ir[context.ir[ownedDropEdgeNode].operand0] => ownedReturnedValue
+        (ownedReturnedValue.kind == 5 and ownedReturnedValue.operand0 >= 0 and ownedReturnedValue.operand0 < (context.ir -> len)) -> if {
+            ownedReturnedValue.operand0 -> mutableBindingRoot(context, state) => ownedReturnedRoot
+            (ownedReturnedRoot >= 0 and ownedReturnedRoot < (context.ir -> len) and context.ir[ownedReturnedRoot].kind == 17) -> if {
+                context.ir[ownedReturnedRoot].symbol => ownedTransferredSymbol!
+            }
+        }
     }
     ownedDropOwner! + 1 => ownedDropStart
     ownedDropOwner! -> functionEnd(context, state) => ownedDropIndex!
@@ -2196,7 +2386,8 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
             (ownedMoveIndex! < (context.moves -> len) and not ownedDropMoved!) -> while {
                 context.moves[ownedMoveIndex!] => ownedMove
                 (ownedMove.memberIr >= 0 and ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol and (ownedMoveIndex! -> partialMoveActiveBefore(request.regionIndex, request.beforeAst, context, state))) -> if { true => ownedDropHasPartialMoves! }
-                (ownedMove.memberIr < 0 and ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol and ownedMove.regionIr == request.regionIndex) -> if {
+                (ownedMove.regionIr == request.regionIndex or (ownedMove.regionIr -> ownershipRegionContainsEdge(ownedDropEdgeNode, context, state))) => ownedMoveOnEdge
+                (ownedMove.memberIr < 0 and ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol and ownedMoveOnEdge) -> if {
                     context.ir[ownedMove.siteIr] => ownedMoveCall
                     true => ownedMoveBeforeEdge!
                     request.beforeAst >= 0 -> if {
@@ -2241,7 +2432,7 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
             }
         }
         ownedDropIndex! => cleanupBindingIndex
-        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and not ownedDropHasPartialMoves! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId >= 0 and (ownedDropCandidate.typeId -> semanticTypeOwns(context, state)) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and not ownedDropHasPartialMoves! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId >= 0 and (ownedDropCandidate.typeId -> semanticTypeOwns(context, state)) and ownedDropCandidate.symbol != ownedTransferredSymbol!) -> if {
             ownedDropCandidate.flags == 1 -> if {
                 "  " -> print
                 request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
@@ -2259,7 +2450,7 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
             } else { "%v$(ownedDropCandidate.operand0)" -> print }
             ")" -> println
         }
-        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDynamicArrayType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDynamicArrayType) and ownedDropCandidate.symbol != ownedTransferredSymbol!) -> if {
             ownedDropCandidate.flags == 1 -> if {
                 "  " -> print
                 request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
@@ -2279,7 +2470,7 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
             request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
             ")" -> println
         }
-        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDictionaryType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDictionaryType) and ownedDropCandidate.symbol != ownedTransferredSymbol!) -> if {
             ownedDropCandidate.flags == 1 -> if {
                 "  " -> print
                 request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
@@ -2313,7 +2504,7 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
             request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
             "_values)" -> println
         }
-        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and ownedDropCandidate.typeOrigin == 16 and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and ownedDropCandidate.typeOrigin == 16 and ownedDropCandidate.symbol != ownedTransferredSymbol!) -> if {
             ownedDropCandidate.flags == 1 -> if {
                 "  " -> print
                 request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
@@ -2352,7 +2543,7 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
             request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
             "_data)" -> println
         }
-        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate.typeId < 0 or ownedDropHasPartialMoves!) and (ownedDropCandidate -> isGenericEnumType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate.typeId < 0 or ownedDropHasPartialMoves!) and (ownedDropCandidate -> isGenericEnumType) and ownedDropCandidate.symbol != ownedTransferredSymbol!) -> if {
             0 => ownedEnumValueKind!
             ownedDropCandidate.flags == 1 -> if { 2 => ownedEnumValueKind! }
             EnumDropRequest {
@@ -2364,7 +2555,7 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
                 regionIndex: request.regionIndex
             } -> emitEnumDrop(context, state)
         }
-        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate.typeId < 0 or ownedDropHasPartialMoves!) and (ownedDropCandidate -> isNominalStructType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+        (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate.typeId < 0 or ownedDropHasPartialMoves!) and (ownedDropCandidate -> isNominalStructType) and ownedDropCandidate.symbol != ownedTransferredSymbol!) -> if {
             request.edgeIndex * 1000 + ownedDropIndex! => ownedDropNameRoot
             ownedDropCandidate.flags == 1 -> if {
                 "  %dropg$(ownedDropNameRoot)_p0 = load %sollang.struct.m$(ownedDropCandidate.typeModule)_s$(ownedDropCandidate.typeSymbol), ptr %slot$(ownedDropRoot!), align " -> print

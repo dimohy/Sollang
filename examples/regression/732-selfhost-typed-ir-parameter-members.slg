@@ -1,0 +1,34 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Parameter-backed struct members are value expressions. Their bindings must
+# retain the member IR operands through final Typed IR normalization.
+main {
+    [
+        """
+        namespace fixture
+
+        public struct Value {
+            style: Int
+            bytes: [UInt8; ~]
+        }
+
+        inspect value: move Value -> UIntSize {
+            value.style => style
+            value.bytes => bytes
+            bytes -> len
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => members!
+    0 => invalid!
+    ir! -> each node {
+        node.kind == 13 -> if { members! + 1 => members! }
+        (node.kind == 17 and (node.operand0 < 0 or node.operand0 >= (ir! -> len))) -> if {
+            invalid! + 1 => invalid!
+        }
+    }
+    "members=$(members!),invalid=$(invalid!)" -> println
+}

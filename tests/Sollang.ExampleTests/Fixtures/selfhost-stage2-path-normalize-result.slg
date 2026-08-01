@@ -1,0 +1,49 @@
+import sys.path as path
+
+# A normalized owned Path returned through Result must transfer exactly once.
+struct ResolvedPath {
+    valid: Bool
+    value: path.Path
+}
+
+resolveAbsolutePath value: Text -> ResolvedPath {
+    path.nativeStyle() => style
+    path.fromText(value, style) => candidate!
+    candidate! -> path.normalizeConfined -> when {
+        Ok(normalized) {
+            path.pathText(normalized) => normalizedText
+            path.fromText(normalizedText, style) => resolved!
+            ResolvedPath { valid: true, value: resolved! } => result!
+            result! -> return
+        }
+        Err(_) {
+            path.fromText("", style) => unresolved!
+            ResolvedPath { valid: false, value: unresolved! } => result!
+            result! -> return
+        }
+    }
+    path.fromText("", style) => unresolved!
+    ResolvedPath { valid: false, value: unresolved! } => result!
+    result!
+}
+
+printResolved resolved: ResolvedPath -> Unit {
+    path.pathText(resolved.value) -> println
+}
+
+main {
+    "artifacts/native-grammar-build/probe/generated.slg" -> resolveAbsolutePath => resolved!
+    resolved! -> printResolved
+
+    path.nativeStyle() => style
+    path.fromText(".", style) => currentRequest!
+    currentRequest! -> path.query -> when {
+        Ok(currentInfo) {
+            path.pathText(currentInfo.canonical) -> resolveAbsolutePath => absolute!
+            absolute.valid -> println
+        }
+        Err(_) {
+            false -> println
+        }
+    }
+}

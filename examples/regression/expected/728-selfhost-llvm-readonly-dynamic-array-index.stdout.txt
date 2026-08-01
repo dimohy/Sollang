@@ -1,0 +1,196 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @GetConsoleMode(ptr, ptr)
+declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @GetProcessHeap()
+declare ptr @HeapAlloc(ptr, i32, i64)
+declare i32 @HeapFree(ptr, i32, ptr)
+define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+entry:
+  %mode = alloca i32, align 4
+  %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+  %is_console = icmp ne i32 %console_status, 0
+  br i1 %is_console, label %console_prepare, label %redirected
+redirected:
+  %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
+  ret i32 %redirected_ok
+console_prepare:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @GetProcessHeap()
+  %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+convert:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+console_write:
+  %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
+  %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  ret i32 %console_ok
+conversion_free:
+  %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+conversion_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+}
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+@sollang_runtime_bool_true = private constant [4 x i8] c"true"
+@sollang_runtime_bool_false = private constant [5 x i8] c"false"
+define internal void @sollang_runtime_print_i1(i1 %value, i1 %newline) {
+entry:
+  %data = select i1 %value, ptr @sollang_runtime_bool_true, ptr @sollang_runtime_bool_false
+  %length = select i1 %value, i64 4, i64 5
+  call void @sollang_runtime_print(ptr %data, i64 %length, i1 %newline)
+  ret void
+}
+%sollang.array.i32 = type { ptr, i64, i64 }
+%sollang.mutable_container = type { ptr, ptr, ptr }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+define internal void @sollang_drop_t26(%sollang.array.i32 %value) {
+entry:
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+%sollang.text = type { ptr, i64 }
+@sollang_str_52 = private unnamed_addr constant [2 x i8] c"ab"
+define i1 @sollang_m0_s0(ptr %arg, %sollang.text %arg1) {
+entry:
+  %slot4 = alloca i1, align 1
+  %slot5 = alloca i64, align 8
+  %v13 = freeze %sollang.text %arg1
+  %v10_length_source = load %sollang.array.i32, ptr %arg, align 8
+  %v10_raw = extractvalue %sollang.array.i32 %v10_length_source, 1
+  %v10 = trunc i64 %v10_raw to i32
+  %v12 = extractvalue %sollang.text %arg1, 1
+  %v14 = add i64 0, 0
+  store i64 %v14, ptr %slot5, align 8
+  %v9_left_wide = sext i32 %v10 to i64
+  %v9 = icmp eq i64 %v9_left_wide, %v12
+  store i1 %v9, ptr %slot4, align 1
+  br label %while24_header
+while24_header:
+  %while24_v19 = load i1, ptr %slot4, align 1
+  br i1 %while24_v19, label %while24_bool18_rhs, label %while24_exit
+while24_bool18_rhs:
+  %while24_v21 = load i64, ptr %slot5, align 8
+  %while24_v22 = extractvalue %sollang.text %arg1, 1
+  %while24_v20 = icmp ult i64 %while24_v21, %while24_v22
+  br i1 %while24_v20, label %while24_body, label %while24_exit
+while24_body:
+  %v31 = load i64, ptr %slot5, align 8
+  %v33 = freeze %sollang.text %arg1
+  %v34 = load i64, ptr %slot5, align 8
+  %v30 = trunc i64 %v31 to i32
+  %v32_base = extractvalue %sollang.text %v33, 0
+  %v32_address = getelementptr i8, ptr %v32_base, i64 %v34
+  %v32 = load i8, ptr %v32_address, align 1
+  %v28_indexed_source = load %sollang.array.i32, ptr %arg, align 8
+  %v28_data = extractvalue %sollang.array.i32 %v28_indexed_source, 0
+  %v28_index = sext i32 %v30 to i64
+  %v28_ptr = getelementptr i8, ptr %v28_data, i64 %v28_index
+  %v28 = load i8, ptr %v28_ptr, align 1
+  %v27 = icmp ne i8 %v28, %v32
+  br i1 %v27, label %if35_then, label %if35_merge
+if35_then:
+  store i1 0, ptr %slot4, align 1
+  br label %if35_merge
+if35_merge:
+  %v39 = load i64, ptr %slot5, align 8
+  %v40 = add i64 1, 0
+  %v38 = add i64 %v39, %v40
+  store i64 %v38, ptr %slot5, align 8
+  br label %while24_header
+while24_exit:
+  %v42 = load i1, ptr %slot4, align 1
+  ret i1 %v42
+}
+define i32 @main() {
+entry:
+  %slot44 = alloca %sollang.array.i32, align 8
+  %v52_ptr = insertvalue %sollang.text poison, ptr @sollang_str_52, 0
+  %v52 = insertvalue %sollang.text %v52_ptr, i64 2, 1
+  %v46 = add i8 97, 0
+  %v48 = add i8 98, 0
+  %v45_data = call ptr @malloc(i64 2)
+  %v45_ptr0 = getelementptr i8, ptr %v45_data, i64 0
+  store i8 %v46, ptr %v45_ptr0, align 1
+  %v45_ptr1 = getelementptr i8, ptr %v45_data, i64 1
+  store i8 %v48, ptr %v45_ptr1, align 1
+  %v45_0 = insertvalue %sollang.array.i32 poison, ptr %v45_data, 0
+  %v45_1 = insertvalue %sollang.array.i32 %v45_0, i64 2, 1
+  %v45 = insertvalue %sollang.array.i32 %v45_1, i64 2, 2
+  store %sollang.array.i32 %v45, ptr %slot44, align 8
+  %v51 = load %sollang.array.i32, ptr %slot44, align 8
+  %v53 = call i1 @sollang_m0_s0(ptr %slot44, %sollang.text { ptr @sollang_str_52, i64 2 })
+  call void @sollang_runtime_print_i1(i1 %v53, i1 true)
+  %cleanup436_b44_current = load %sollang.array.i32, ptr %slot44, align 8
+  call void @sollang_drop_t26(%sollang.array.i32 %cleanup436_b44_current)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

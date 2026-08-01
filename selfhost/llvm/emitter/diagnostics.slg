@@ -4,12 +4,20 @@ import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.emitter.type_queries as typeQueries
 import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.modules as modules
 import syntax.generated.slg as grammar
 public usesTextRuntime context: ref emitterContext.EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
-        (context.ir[nodeIndex!].symbol == -101 or context.ir[nodeIndex!].symbol == -102 or context.ir[nodeIndex!].symbol == -103 or context.ir[nodeIndex!].symbol == -116) -> if { true => usesRuntime! }
+        context.ir[nodeIndex!] => node
+        (node.symbol == -101
+            or node.symbol == -102
+            or node.symbol == -103
+            or node.symbol == -116
+            or (node.kind == 6 and (node.targetModule -> runtimeFunctionNamed(node.symbol, "flushStandardOutput", context)))) -> if {
+            true => usesRuntime!
+        }
         nodeIndex! + 1 => nodeIndex!
     }
     context -> usesStandardError -> if { true => usesRuntime! }
@@ -134,7 +142,7 @@ public usesStandardInputSourceTextRuntime context: ref emitterContext.EmitContex
     false => usesRuntime!
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
-        context.ir[nodeIndex!].opcode == -231 -> if { true => usesRuntime! }
+        (context.ir[nodeIndex!].opcode == -231 or context.ir[nodeIndex!].opcode == -234) -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
@@ -220,6 +228,47 @@ public usesIntInterpolation context: ref emitterContext.EmitContext -> Bool {
         nodeIndex! + 1 => nodeIndex!
     }
     usesInterpolation!
+}
+
+public usesIntMaterialization context: ref emitterContext.EmitContext -> Bool {
+    false => usesMaterialization!
+    0 => nodeIndex!
+    (nodeIndex! < (context.ir -> len) and not usesMaterialization!) -> while {
+        context.ir[nodeIndex!] => node
+        (node.opcode == -229
+            and node.sourceModule >= 0
+            and node.sourceModule < (context.interpolationRanges -> len)) -> if {
+            context.interpolationRanges[node.sourceModule] => interpolationRange
+            0 => interpolationIndex!
+            (interpolationIndex! < interpolationRange.nodeCount and not usesMaterialization!) -> while {
+                context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
+                (interpolationNode.parent < 0
+                    and interpolationNode.typeSymbol >= 2
+                    and interpolationNode.typeSymbol <= 14) -> if {
+                    true => usesMaterialization!
+                }
+                (interpolationNode.parent < 0
+                    and interpolationNode.kind == 1
+                    and not usesMaterialization!) -> if {
+                    0 => valueSearch!
+                    (valueSearch! < (context.ir -> len) and not usesMaterialization!) -> while {
+                        context.ir[valueSearch!] => valueNode
+                        ((valueNode.kind == 10 or valueNode.kind == 17)
+                            and valueNode.sourceModule == node.sourceModule
+                            and valueNode.symbol == interpolationNode.symbol
+                            and valueNode.typeSymbol >= 2
+                            and valueNode.typeSymbol <= 14) -> if {
+                            true => usesMaterialization!
+                        }
+                        valueSearch! + 1 => valueSearch!
+                    }
+                }
+                interpolationIndex! + 1 => interpolationIndex!
+            }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesMaterialization!
 }
 
 public usesBoolInterpolation context: ref emitterContext.EmitContext -> Bool {
@@ -912,6 +961,77 @@ public emitMouseEventDiagnostics context: ref emitterContext.EmitContext -> Unit
     }
 }
 
+importPathEquals context: ref emitterContext.EmitContext, edge: modules.ImportEdge, expected: Text -> Bool {
+    edge.pathLength == (expected -> len) => equal!
+    UIntSize(0) => index!
+    (equal! and index! < edge.pathLength) -> while {
+        (context.sources[edge.sourceModule] -> byte(edge.pathStart + index!)) != (expected -> byte(index!)) -> if { false => equal! }
+        index! + UIntSize(1) => index!
+    }
+    equal!
+}
+
+isIntrinsicModuleImport context: ref emitterContext.EmitContext, edge: modules.ImportEdge -> Bool {
+    false => intrinsic!
+    context -> importPathEquals(edge, "sys.directory") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.event") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.file") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.io") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.path") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.process") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.random") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.runtime") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.text") -> if { true => intrinsic! }
+    context -> importPathEquals(edge, "sys.time") -> if { true => intrinsic! }
+    intrinsic!
+}
+
+isBlockingModuleImport context: ref emitterContext.EmitContext, resolvedIndex: Int -> Bool {
+    context.resolvedImports[resolvedIndex] => resolved
+    resolved.status != 0 => blocking!
+    (blocking! and resolved.status == 1) -> if {
+        context.imports[resolved.edge] => edge
+        context -> isIntrinsicModuleImport(edge) -> if { false => blocking! }
+    }
+    blocking!
+}
+
+public moduleImportDiagnosticCount context: ref emitterContext.EmitContext -> Int {
+    0 => count!
+    0 => resolvedIndex!
+    resolvedIndex! < (context.resolvedImports -> len) -> while {
+        context -> isBlockingModuleImport(resolvedIndex!) -> if { count! + 1 => count! }
+        resolvedIndex! + 1 => resolvedIndex!
+    }
+    count!
+}
+
+public emitModuleImportDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
+    0 => resolvedIndex!
+    resolvedIndex! < (context.resolvedImports -> len) -> while {
+        context.resolvedImports[resolvedIndex!] => resolved
+        context -> isBlockingModuleImport(resolvedIndex!) -> if {
+            context.imports[resolved.edge] => edge
+            context.ranges[edge.sourceModule] => sourceRange
+            resolved.status == 1 -> if {
+                context.sources[edge.sourceModule] -> slice(edge.pathStart, edge.pathLength) => importPath
+                edge.sourceModule => sourceModule
+                edge.pathStart => pathStart
+                edge.pathLength => pathLength
+                "; sollang semantic error: unresolved import '$importPath' (source $sourceModule, byte $pathStart, length $pathLength)" -> println
+            } else {
+                context.tokens[sourceRange.tokenStart + edge.aliasToken] => aliasToken
+                context.sources[edge.sourceModule] -> slice(aliasToken.span.start, aliasToken.span.length) => alias
+                edge.sourceModule => sourceModule
+                aliasToken.span.start => aliasStart
+                aliasToken.span.length => aliasLength
+                "; sollang semantic error: duplicate import alias '$alias' (source $sourceModule, byte $aliasStart, length $aliasLength)" -> println
+            }
+        }
+        resolvedIndex! + 1 => resolvedIndex!
+    }
+}
+
 public libraryImportDiagnosticCount context: ref emitterContext.EmitContext -> Int {
     # Read the nested scalar through a borrowed catalog place. This avoids
     # copying the owned arrays inside LibraryCatalog.
@@ -999,6 +1119,8 @@ public blockingDiagnosticCount context: ref emitterContext.EmitContext -> Int {
     }
     context -> invalidMouseEventCapacityCount => invalidMouseCapacities
     count! + invalidMouseCapacities => count!
+    context -> moduleImportDiagnosticCount => invalidModuleImports
+    count! + invalidModuleImports => count!
     context -> libraryImportDiagnosticCount => invalidLibraryImports
     count! + invalidLibraryImports => count!
     context -> nativeAbiUnsafeTypeCount => invalidNativeAbiTypes
@@ -1013,6 +1135,7 @@ public emitBlockingDiagnostics context: ref emitterContext.EmitContext -> Unit u
     context -> emitInterpolationDiagnostics
     context -> emitCallDiagnostics
     context -> emitMouseEventDiagnostics
+    context -> emitModuleImportDiagnostics
     context -> emitLibraryImportDiagnostics
     context -> emitNativeAbiDiagnostics
     context -> emitNativeHandleForgeryDiagnostics

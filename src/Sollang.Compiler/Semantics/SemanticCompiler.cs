@@ -2419,6 +2419,13 @@ internal sealed partial class SemanticCompiler
                 BoundType.Text,
                 BoundType.Unit,
                 BoundFunctionKind.RuntimePrintErrorLine),
+            "sys.runtime.flushStandardOutput" => RequireIntrinsicSignature(
+                function,
+                inputType,
+                returnType,
+                expectedInputType: null,
+                BoundType.Unit,
+                BoundFunctionKind.RuntimeFlushStandardOutput),
             "sys.runtime.readInt" => RequireIntrinsicSignature(
                 function,
                 inputType,
@@ -2575,6 +2582,9 @@ internal sealed partial class SemanticCompiler
             "sys.file.readStandardInput" => RequireIntrinsicSignature(
                 function, inputType, returnType, expectedInputType: null, BoundType.SourceText,
                 BoundFunctionKind.RuntimeReadStandardInputSourceText),
+            "sys.file.readStandardInputChunk" => RequireIntrinsicSignature(
+                function, inputType, returnType, BoundType.UIntSize, BoundType.SourceText,
+                BoundFunctionKind.RuntimeReadStandardInputChunk),
             "sys.file.mapPath" => RequireIntrinsicSignature(
                 function, inputType, returnType, TypeId.Path, BoundType.SourceText,
                 BoundFunctionKind.RuntimeMapSourcePath),
@@ -7159,12 +7169,14 @@ internal sealed partial class SemanticCompiler
                     case BoundFunctionKind.RuntimeRandomBelow:
                     case BoundFunctionKind.RuntimeClosestInt:
                     case BoundFunctionKind.RuntimeLimitParallelWorkers:
+                    case BoundFunctionKind.RuntimeReadStandardInputChunk:
                         EnsureRuntimeIntrinsicAllowed(function, allowReadIntCall, expression.Line, expression.Column, path);
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = function.ReturnType;
                         continue;
                     case BoundFunctionKind.RuntimeCloseIntWriter:
                     case BoundFunctionKind.RuntimeCloseIntReader:
+                    case BoundFunctionKind.RuntimeFlushStandardOutput:
                         throw Error(expression.Line, expression.Column, $"{path} does not accept a flowed input");
                     case BoundFunctionKind.RuntimeEnvironment:
                     case BoundFunctionKind.RuntimeBorrowSourceText:
@@ -8405,6 +8417,7 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeOpenIntReader:
             case BoundFunctionKind.RuntimeClosestInt:
             case BoundFunctionKind.RuntimeLimitParallelWorkers:
+            case BoundFunctionKind.RuntimeReadStandardInputChunk:
                 EnsureRuntimeIntrinsicAllowed(function, allowReadIntCall, expression.Line, expression.Column, path);
                 if (expression.Arguments.Count != 1)
                 {
@@ -8441,6 +8454,13 @@ internal sealed partial class SemanticCompiler
                 }
 
                 return function.ReturnType;
+            case BoundFunctionKind.RuntimeFlushStandardOutput:
+                if (expression.Arguments.Count != 0)
+                {
+                    throw Error(expression.Line, expression.Column, $"{path} does not accept arguments");
+                }
+
+                return BoundType.Unit;
             case BoundFunctionKind.RuntimeArguments:
                 if (expression.Arguments.Count != 0)
                 {
@@ -9833,6 +9853,7 @@ internal sealed partial class SemanticCompiler
             BoundFunctionKind.RuntimePrint
                 or BoundFunctionKind.RuntimePrintLine
                 or BoundFunctionKind.RuntimePrintErrorLine
+                or BoundFunctionKind.RuntimeFlushStandardOutput
                 or BoundFunctionKind.RuntimeReadInt => ["Console"],
             BoundFunctionKind.RuntimeSeedRandom
                 or BoundFunctionKind.RuntimeRandomBelow => ["Random"],
@@ -9862,6 +9883,7 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeAtomicReplaceFile
                 or BoundFunctionKind.RuntimeMapSourceText
                 or BoundFunctionKind.RuntimeReadStandardInputSourceText
+                or BoundFunctionKind.RuntimeReadStandardInputChunk
                 or BoundFunctionKind.RuntimeMapSourcePath => ["File"],
             _ => []
         };

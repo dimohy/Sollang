@@ -24,6 +24,7 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.library_imports as libraryImports
 import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
 import sollang.compiler.semantic.nominal_types as nominalTypes
 import sollang.compiler.semantic.ownership_check as ownershipCheck
 import sollang.compiler.semantic.symbols as symbols
@@ -72,6 +73,7 @@ runtimeFunctionSymbols runtimeModule: Int, context: ref emitterContext.EmitConte
         closeIntReaderSymbol: runtimeModule -> runtimeFunctionSymbol("closeIntReader", context)
         nowMillisSymbol: runtimeModule -> runtimeFunctionSymbol("nowMillis", context)
         eprintlnSymbol: runtimeModule -> runtimeFunctionSymbol("eprintln", context)
+        flushStandardOutputSymbol: runtimeModule -> runtimeFunctionSymbol("flushStandardOutput", context)
     }
 }
 
@@ -119,6 +121,18 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         prepared.modules[moduleIdentityCopyIndex359!] => moduleIdentity
         moduleIdentities! -> push(moduleIdentity)
         moduleIdentityCopyIndex359! + 1 => moduleIdentityCopyIndex359!
+    }
+    [modules.ImportEdge; ~] => importEdges!
+    0 => importEdgeCopyIndex!
+    importEdgeCopyIndex! < (prepared.imports -> len) -> while {
+        importEdges! -> push(prepared.imports[importEdgeCopyIndex!])
+        importEdgeCopyIndex! + 1 => importEdgeCopyIndex!
+    }
+    [moduleResolve.ResolvedImport; ~] => resolvedImports!
+    0 => resolvedImportCopyIndex!
+    resolvedImportCopyIndex! < (prepared.resolvedImports -> len) -> while {
+        resolvedImports! -> push(prepared.resolvedImports[resolvedImportCopyIndex!])
+        resolvedImportCopyIndex! + 1 => resolvedImportCopyIndex!
     }
     [analysis.SourceAnalysisRange; ~] => analysisRanges!
     0 => sourceRangeCopyIndex361!
@@ -198,6 +212,7 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
             globalInterpolation!.parent >= 0 -> if { globalInterpolation!.parent + interpolationStart => globalInterpolation!.parent }
             globalInterpolation!.operand0 >= 0 -> if { globalInterpolation!.operand0 + interpolationStart => globalInterpolation!.operand0 }
             globalInterpolation!.operand1 >= 0 -> if { globalInterpolation!.operand1 + interpolationStart => globalInterpolation!.operand1 }
+            globalInterpolation!.operand2 >= 0 -> if { globalInterpolation!.operand2 + interpolationStart => globalInterpolation!.operand2 }
             analysisInterpolations! -> push(globalInterpolation!)
             sourceInterpolationIndex! + 1 => sourceInterpolationIndex!
         }
@@ -416,6 +431,8 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         nominal: nominal!
         composite: composite!
         modules: moduleIdentities!
+        imports: importEdges!
+        resolvedImports: resolvedImports!
         types: semanticTypes!
         fields: semanticFields!
         typeSizes: typeSizes!
@@ -449,6 +466,7 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime(usesStandardError) }
     capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime() }
+    context -> diagnostics.usesIntMaterialization -> if { numberFormat.emitIntFormatRuntime() }
     context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
     context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime() }
     (usesStandardError and (context -> diagnostics.usesIntInterpolation)) -> if { numberFormat.emitIntStandardErrorRuntime() }
@@ -540,6 +558,7 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime(usesStandardError) }
     capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime() }
+    context -> diagnostics.usesIntMaterialization -> if { numberFormat.emitIntFormatRuntime() }
     context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
     context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime() }
     (usesStandardError and (context -> diagnostics.usesIntInterpolation)) -> if { numberFormat.emitIntStandardErrorRuntime() }
@@ -568,6 +587,7 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
 
 emitWasmContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesTextRuntime -> if { textOutputRuntime.emitWasmTextRuntime() }
+    context -> diagnostics.usesIntMaterialization -> if { numberFormat.emitIntFormatRuntime() }
     context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
     context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime() }
     context -> emitCore
@@ -608,17 +628,113 @@ public emitWasm sources: move [Text; ~] -> Unit uses Console {
     }
 }
 
+binaryOpcodeValid opcode: Int -> Bool {
+    ((opcode >= grammar.tokenIdPlus() and opcode <= grammar.tokenIdPercent())
+        or opcode == grammar.tokenIdEqualEqual()
+        or opcode == grammar.tokenIdBangEqual()
+        or (opcode >= grammar.tokenIdLessEqual() and opcode <= grammar.tokenIdGreater())
+        or opcode == -24
+        or opcode == -25)
+}
+
+# Typed IR must be structurally valid before any LLVM text is emitted. These
+# codes identify the producer invariant, not an LLVM parser failure.
+irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int -> Int {
+    context.ir[irIndex] => node
+    context.ir -> len => irCount
+    0 => code!
+    node.kind == 7 -> if {
+        (node.operand0 < 0 or node.operand0 >= irCount) -> if {
+            1 => code!
+        } else {
+            context.ir[node.operand0] => operand
+            (operand.kind == 9 and operand.opcode == -1) -> if { 2 => code! }
+        }
+    }
+    node.kind == 8 -> if {
+        false => enumPatternMarker!
+        (node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len)) -> if {
+            context.ranges[node.sourceModule] => binaryRange
+            (node.astNode >= 0 and node.astNode < binaryRange.astCount) -> if {
+                context.nodes[binaryRange.astStart + node.astNode] => binaryAst
+                # A qualified enum payload pattern is represented by the
+                # parser's kind-70 marker with one Typed-IR operand. Ordinary
+                # subject-when comparisons share the same AST wrapper but
+                # retain both binary operands, so they are not pattern nodes.
+                (node.operand1 < 0
+                    and binaryAst.kind == 70
+                    and binaryAst.parent >= 0
+                    and context.nodes[binaryRange.astStart + binaryAst.parent].kind == 58) -> if {
+                    true => enumPatternMarker!
+                }
+            }
+        }
+        (node.operand0 < 0 or node.operand0 >= irCount) -> if { 3 => code! }
+        (not enumPatternMarker! and code! == 0 and (node.operand1 < 0 or node.operand1 >= irCount)) -> if { 4 => code! }
+        (not enumPatternMarker! and code! == 0 and not (node.opcode -> binaryOpcodeValid)) -> if { 5 => code! }
+        (not enumPatternMarker! and code! == 0) -> if {
+            context.ir[node.operand0] => left
+            context.ir[node.operand1] => right
+            (left.kind == 9 and left.opcode == -1) -> if { 6 => code! }
+            (code! == 0 and right.kind == 9 and right.opcode == -1) -> if { 7 => code! }
+        }
+        (enumPatternMarker! and code! == 0 and context.ir[node.operand0].kind != 29) -> if { 11 => code! }
+    }
+    node.kind == 13 -> if {
+        (node.operand0 < 0 or node.operand0 >= irCount) -> if { 8 => code! }
+    }
+    node.kind == 17 -> if {
+        (node.operand0 < 0 or node.operand0 >= irCount) -> if { 9 => code! }
+    }
+    node.kind == 18 -> if {
+        (node.operand0 < 0 or node.operand0 >= irCount) -> if { 10 => code! }
+    }
+    code!
+}
+
+irInvariantDiagnosticCount context: ref emitterContext.EmitContext -> Int {
+    0 => count!
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        (context -> irInvariantCode(irIndex!)) != 0 -> if { count! + 1 => count! }
+        irIndex! + 1 => irIndex!
+    }
+    count!
+}
+
+emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        context -> irInvariantCode(irIndex!) => invariantCode
+        invariantCode != 0 -> if {
+            context.ir[irIndex!] => node
+            irIndex! => diagnosticIrIndex
+            node.sourceModule => sourceModule
+            node.astNode => astNode
+            context.ranges[sourceModule] => diagnosticRange
+            context.nodes[diagnosticRange.astStart + astNode] => diagnosticAst
+            "; sollang ir error: invariant $invariantCode at ir $diagnosticIrIndex (kind $(node.kind), parent $(node.parent), operand0 $(node.operand0), operand1 $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+        }
+        irIndex! + 1 => irIndex!
+    }
+}
+
 public emitChecked sources: move [Text; ~] -> Int uses Console {
     llvmTarget.windowsX64() => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount
-    diagnosticCount == 0 -> if {
+    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> irInvariantDiagnosticCount => irDiagnosticCount
+    diagnosticCount! + irDiagnosticCount => diagnosticCount!
+    diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitWindowsContext
-    } else { context! -> diagnostics.emitBlockingDiagnostics }
-    diagnosticCount
+    } else {
+        context! -> diagnostics.emitBlockingDiagnostics
+        context! -> emitIrInvariantDiagnostics
+    }
+    diagnosticCount!
 }
 
 public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
@@ -626,6 +742,8 @@ public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> irInvariantDiagnosticCount => irDiagnosticCount
+    diagnosticCount! + irDiagnosticCount => diagnosticCount!
     context! -> diagnostics.comInteropFunctionCount => comInteropCount
     comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     diagnosticCount! == 0 -> if {
@@ -634,6 +752,7 @@ public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
         context! -> emitLinuxContext
     } else {
         context! -> diagnostics.emitBlockingDiagnostics
+        context! -> emitIrInvariantDiagnostics
         comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
     }
     diagnosticCount!
@@ -644,6 +763,8 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> irInvariantDiagnosticCount => irDiagnosticCount
+    diagnosticCount! + irDiagnosticCount => diagnosticCount!
     context! -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents
     usesUnsupportedMouseEvents -> if { diagnosticCount! + 1 => diagnosticCount! }
     context! -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount
@@ -656,6 +777,7 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
         context! -> emitWasmContext
     } else {
         context! -> diagnostics.emitBlockingDiagnostics
+        context! -> emitIrInvariantDiagnostics
         usesUnsupportedMouseEvents -> if {
             "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
         }
@@ -672,6 +794,13 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
 
 prepareLibraryFiles request: ref PrepareRequest, paths: [Text; ~], targetName: Text, style: path.Style -> emitterContext.EmitContext uses File {
     request.sources -> semanticContext.prepare => basePrepared!
+    basePrepared!.package -> libraryImports.load(paths, targetName, style) => libraries!
+    basePrepared!.package -> libraryImports.resolveQualified(libraries!) => libraryCalls!
+    request -> prepareSnapshot(basePrepared!, libraries!, libraryCalls!)
+}
+
+prepareTestLibraryFiles request: ref PrepareRequest, paths: [Text; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~], targetName: Text, style: path.Style -> emitterContext.EmitContext uses File {
+    request.sources -> semanticContext.prepareTests(sourceIndices, symbolIndices) => basePrepared!
     basePrepared!.package -> libraryImports.load(paths, targetName, style) => libraries!
     basePrepared!.package -> libraryImports.resolveQualified(libraries!) => libraryCalls!
     request -> prepareSnapshot(basePrepared!, libraries!, libraryCalls!)
@@ -770,14 +899,19 @@ public emitCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
     llvmTarget.windowsX64() => target
     PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
     prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context!
-    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount
-    diagnosticCount == 0 -> if {
+    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> irInvariantDiagnosticCount => irDiagnosticCount
+    diagnosticCount! + irDiagnosticCount => diagnosticCount!
+    diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitWindowsContext
-    } else { context! -> diagnostics.emitBlockingDiagnostics }
+    } else {
+        context! -> diagnostics.emitBlockingDiagnostics
+        context! -> emitIrInvariantDiagnostics
+    }
     owners! -> len => ownerCount
-    diagnosticCount
+    diagnosticCount!
 }
 
 public emitLinuxCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
@@ -800,6 +934,8 @@ public emitLinuxCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
     PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle()) => context!
     context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> irInvariantDiagnosticCount => irDiagnosticCount
+    diagnosticCount! + irDiagnosticCount => diagnosticCount!
     context! -> diagnostics.comInteropFunctionCount => comInteropCount
     comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     diagnosticCount! == 0 -> if {
@@ -808,7 +944,48 @@ public emitLinuxCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
         context! -> emitLinuxContext
     } else {
         context! -> diagnostics.emitBlockingDiagnostics
+        context! -> emitIrInvariantDiagnostics
         comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    }
+    owners! -> len => ownerCount
+    diagnosticCount!
+}
+
+public emitCheckedTestFiles paths: [Text; ~], harness: ref [UInt8; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~], targetKind: Int -> Int uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    harness -> file.borrowBytes => harnessOwner
+    owners! -> push(harnessOwner)
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    targetKind == 0 -> if { llvmTarget.windowsX64() } else { llvmTarget.linuxX64() } => target
+    targetKind == 0 -> if { 1 } else { 0 } => expectedStyle
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: expectedStyle } => prepareRequest!
+    targetKind == 0 -> if { "windows-x64" } else { "linux-x64" } => targetName
+    prepareRequest! -> prepareTestLibraryFiles(paths, sourceIndices, symbolIndices, targetName, path.nativeStyle()) => context!
+    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> irInvariantDiagnosticCount => irDiagnosticCount
+    diagnosticCount! + irDiagnosticCount => diagnosticCount!
+    context! -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    diagnosticCount! == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        targetKind == 0 -> if { context! -> emitWindowsContext } else { context! -> emitLinuxContext }
+    } else {
+        context! -> diagnostics.emitBlockingDiagnostics
+        context! -> emitIrInvariantDiagnostics
     }
     owners! -> len => ownerCount
     diagnosticCount!

@@ -1,0 +1,27 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Record the exact Typed IR edge from a nested while comparison through its
+# transparent wrapper to the arithmetic value node.
+main {
+    [
+        """
+        trimContinuation source: Text -> UIntSize {
+            UIntSize(1) => prefix!
+            (prefix! < (source -> len)
+                and prefix! > UIntSize(0)
+                and ((source -> byte(prefix!)) / UInt8(64)) == UInt8(2)) -> while {
+                prefix! - UIntSize(1) => prefix!
+            }
+            prefix!
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    ir! -> each node {
+        "$(index!):$(node.kind),$(node.parent),$(node.opcode),$(node.operand0),$(node.operand1),$(node.typeOrigin),$(node.typeSymbol)" -> println
+        index! + 1 => index!
+    }
+}

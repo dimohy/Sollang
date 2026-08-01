@@ -121,6 +121,24 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
             typeOwnerSymbol! >= 0 -> if {
                 symbols![typeOwnerSymbol!] => owner!
                 nodes[owner!.astNode] => ownerAst
+                true => ownerTypeAllowed!
+                (owner!.kind == 7 or owner!.kind == 31) -> if {
+                    false => ownerTypeAllowed!
+                    # Method return annotations can be direct children of the
+                    # declaration even when the method has no caller-supplied
+                    # block parameter. Direct ownership is structural and
+                    # must not depend on blockNameToken being present.
+                    typeAst.parent == owner!.astNode -> if { true => ownerTypeAllowed! }
+                    typeAst.parent => ownerTypeAncestor!
+                    (ownerTypeAncestor! >= 0 and ownerTypeAncestor! != owner!.astNode and not ownerTypeAllowed!) -> while {
+                        (nodes[ownerTypeAncestor!].kind == 17 or nodes[ownerTypeAncestor!].kind == 60) -> if {
+                            true => ownerTypeAllowed!
+                        } else {
+                            nodes[ownerTypeAncestor!].parent => ownerTypeAncestor!
+                        }
+                    }
+                }
+                ownerTypeAllowed! -> if {
                 owner!.kind == 7 and ownerAst.tertiaryToken >= 0 -> if {
                     owner!.typeNode < 0 -> if {
                         typeAstIndex! => owner!.typeNode
@@ -165,6 +183,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                     }
                 }
                 owner! => symbols![typeOwnerSymbol!]
+                }
             }
         }
         typeAstIndex! + 1 => typeAstIndex!
@@ -431,7 +450,11 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
             0 => enumPatternAstIndex!
             enumPatternAstIndex! < astCount -> while {
                 nodes[enumPatternAstIndex!] => enumPatternAst
-                (enumPatternAst.kind == 59 and enumPatternAst.parent == enumArmScope.astNode and enumPatternAst.secondaryToken >= 0) -> if {
+                enumPatternAst.parent => enumPatternOwnerAst!
+                (enumPatternOwnerAst! >= 0 and nodes[enumPatternOwnerAst!].kind == 70) -> if {
+                    nodes[enumPatternOwnerAst!].parent => enumPatternOwnerAst!
+                }
+                (enumPatternAst.kind == 59 and enumPatternOwnerAst! == enumArmScope.astNode and enumPatternAst.secondaryToken >= 0) -> if {
                     symbols! -> push(Symbol {
                         kind: 35
                         parent: enumArmScopeIndex!

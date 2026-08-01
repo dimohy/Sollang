@@ -455,6 +455,28 @@ callTargetParameter callIndex: Int, ordinal: Int, context: ref emitterContext.Em
     }
     parameter!
 }
+callMutatesBinding callIndex: Int, bindingIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => mutates!
+    (callIndex >= 0 and callIndex < (context.ir -> len) and bindingIndex >= 0 and bindingIndex < (context.ir -> len)) -> if {
+        context.ir[callIndex].operand0 => argumentIndex!
+        0 => ordinal!
+        (argumentIndex! >= 0 and not mutates!) -> while {
+            callIndex -> callTargetParameter(ordinal!, context, state) => parameterIndex
+            (parameterIndex >= 0 and context.ir[parameterIndex].flags / 2 % 2 == 1) -> if {
+                argumentIndex! -> aggregateValueIndex(context, state) => argumentValueIndex
+                argumentValueIndex -> referencePlaceRootBindingForOwner(ownerIndex, context, state) => argumentRoot!
+                argumentRoot! >= 0 -> if {
+                    argumentRoot! -> mutableBindingRoot(context, state) => argumentMutableRoot
+                    bindingIndex -> mutableBindingRoot(context, state) => readMutableRoot
+                    argumentMutableRoot == readMutableRoot -> if { true => mutates! }
+                }
+            }
+            context.ir[argumentIndex!].nextOperand => argumentIndex!
+            ordinal! + 1 => ordinal!
+        }
+    }
+    mutates!
+}
 sourceTokenIs sourceIndex: Int, tokenIndex: Int, expected: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => equal!
     (sourceIndex >= 0 and sourceIndex < (context.ranges -> len) and tokenIndex >= 0) -> if {
@@ -794,7 +816,12 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                 "  store " -> print
                 referenceOwnerType -> writeSemanticTypeId(context, state)
                 " " -> print
-                referenceArgumentIndex -> writeValue(ownerIndex, context, state)
+                referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveReferenceParameterOrdinal
+                liveReferenceParameterOrdinal >= 0 -> if {
+                    "%v$(referenceArgumentIndex)" -> print
+                } else {
+                    referenceArgumentIndex -> writeValue(ownerIndex, context, state)
+                }
                 ", ptr %callref" -> print
                 callIndex -> writeDecimal
                 "_arg" -> print
@@ -828,15 +855,40 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
                 referenceUsesMutableSlot! -> if {
                     referenceArgumentIndex -> emitMutableReferencePlace(referenceRootBinding, callIndex, ordinal, ownerIndex, context, state) => emittedReferenceProjectionDepth
                 } else {
-                    "  %callref$(callIndex)_arg$(ordinal) = alloca " -> print
+                "  %callref$(callIndex)_arg$(ordinal) = alloca " -> print
+                referenceOwnerType -> writeSemanticTypeId(context, state)
+                ", align " -> print
+                context.typeAligns[referenceOwnerType] -> writeDecimalLine
+                referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveWhileReferenceOrdinal
+                liveWhileReferenceOrdinal >= 0 -> if {
+                    "  %callref$(callIndex)_arg$(ordinal)_live_ptr = load ptr, ptr " -> print
+                    liveWhileReferenceOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(liveWhileReferenceOrdinal)_mut_ptr_addr" -> print }
+                    ", align 8" -> println
+                    "  %callref$(callIndex)_arg$(ordinal)_live_len = load i64, ptr " -> print
+                    liveWhileReferenceOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(liveWhileReferenceOrdinal)_mut_len_addr" -> print }
+                    ", align 8" -> println
+                    "  %callref$(callIndex)_arg$(ordinal)_live_capacity = load i64, ptr " -> print
+                    liveWhileReferenceOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(liveWhileReferenceOrdinal)_mut_capacity_addr" -> print }
+                    ", align 8" -> println
+                    "  %callref$(callIndex)_arg$(ordinal)_live0 = insertvalue " -> print
                     referenceOwnerType -> writeSemanticTypeId(context, state)
-                    ", align " -> print
-                    context.typeAligns[referenceOwnerType] -> writeDecimalLine
-                    "  store " -> print
+                    " poison, ptr %callref$(callIndex)_arg$(ordinal)_live_ptr, 0" -> println
+                    "  %callref$(callIndex)_arg$(ordinal)_live1 = insertvalue " -> print
                     referenceOwnerType -> writeSemanticTypeId(context, state)
-                    " " -> print
+                    " %callref$(callIndex)_arg$(ordinal)_live0, i64 %callref$(callIndex)_arg$(ordinal)_live_len, 1" -> println
+                    "  %callref$(callIndex)_arg$(ordinal)_live = insertvalue " -> print
+                    referenceOwnerType -> writeSemanticTypeId(context, state)
+                    " %callref$(callIndex)_arg$(ordinal)_live1, i64 %callref$(callIndex)_arg$(ordinal)_live_capacity, 2" -> println
+                }
+                "  store " -> print
+                referenceOwnerType -> writeSemanticTypeId(context, state)
+                " " -> print
+                liveWhileReferenceOrdinal >= 0 -> if {
+                    "%callref$(callIndex)_arg$(ordinal)_live" -> print
+                } else {
                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
-                    ", ptr %callref$(callIndex)_arg$(ordinal), align " -> print
+                }
+                ", ptr %callref$(callIndex)_arg$(ordinal), align " -> print
                     context.typeAligns[referenceOwnerType] -> writeDecimalLine
                 }
             }
@@ -853,41 +905,222 @@ emitMutableBorrowArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: 
             argumentIndex -> aggregateValueIndex(context, state) => mutableValueIndex
             mutableValueIndex -> referencePlaceRootBindingForOwner(ownerIndex, context, state) => mutableRootBinding
             mutableValueIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => forwardedOrdinal
-            forwardedOrdinal >= 0 -> if {
-                forwardedOrdinal == 0 -> if {
-                    "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %arg_mut_ptr_addr, 0" -> println
-                    "  %callmut$(callIndex)_arg$(ordinal)_1 = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_0, ptr %arg_mut_len_addr, 1" -> println
-                    "  %callmut$(callIndex)_arg$(ordinal) = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_1, ptr %arg_mut_capacity_addr, 2" -> println
+            context.ir[mutableParameterIndex] -> mutableBorrowUsesStructPointer(context) -> if {
+                "  %callmut$(callIndex)_arg$(ordinal) = getelementptr i8, ptr " -> print
+                forwardedOrdinal >= 0 -> if {
+                    forwardedOrdinal -> writeMutableStructParameterPointer
                 } else {
-                    "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %arg$(forwardedOrdinal)_mut_ptr_addr, 0" -> println
-                    "  %callmut$(callIndex)_arg$(ordinal)_1 = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_0, ptr %arg$(forwardedOrdinal)_mut_len_addr, 1" -> println
-                    "  %callmut$(callIndex)_arg$(ordinal) = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_1, ptr %arg$(forwardedOrdinal)_mut_capacity_addr, 2" -> println
+                    mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
+                    "%slot$(mutableRoot)" -> print
                 }
+                ", i64 0" -> println
             } else {
-                mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
-                "  %callmut$(callIndex)_arg$(ordinal)_ptr = getelementptr inbounds " -> print
-                context.ir[mutableRoot] -> writeIrType(context, state)
-                ", ptr %slot$(mutableRoot), i32 0, i32 0" -> println
-                "  %callmut$(callIndex)_arg$(ordinal)_len = getelementptr inbounds " -> print
-                context.ir[mutableRoot] -> writeIrType(context, state)
-                ", ptr %slot$(mutableRoot), i32 0, i32 1" -> println
-                "  %callmut$(callIndex)_arg$(ordinal)_capacity = getelementptr inbounds " -> print
-                context.ir[mutableRoot] -> writeIrType(context, state)
-                ", ptr %slot$(mutableRoot), i32 0, i32 2" -> println
-                "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %callmut$(callIndex)_arg$(ordinal)_ptr, 0" -> println
-                "  %callmut$(callIndex)_arg$(ordinal)_1 = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_0, ptr %callmut$(callIndex)_arg$(ordinal)_len, 1" -> println
-                "  %callmut$(callIndex)_arg$(ordinal) = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_1, ptr %callmut$(callIndex)_arg$(ordinal)_capacity, 2" -> println
+                forwardedOrdinal >= 0 -> if {
+                    forwardedOrdinal == 0 -> if {
+                        "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %arg_mut_ptr_addr, 0" -> println
+                        "  %callmut$(callIndex)_arg$(ordinal)_1 = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_0, ptr %arg_mut_len_addr, 1" -> println
+                        "  %callmut$(callIndex)_arg$(ordinal) = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_1, ptr %arg_mut_capacity_addr, 2" -> println
+                    } else {
+                        "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %arg$(forwardedOrdinal)_mut_ptr_addr, 0" -> println
+                        "  %callmut$(callIndex)_arg$(ordinal)_1 = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_0, ptr %arg$(forwardedOrdinal)_mut_len_addr, 1" -> println
+                        "  %callmut$(callIndex)_arg$(ordinal) = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_1, ptr %arg$(forwardedOrdinal)_mut_capacity_addr, 2" -> println
+                    }
+                } else {
+                    mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
+                    "  %callmut$(callIndex)_arg$(ordinal)_ptr = getelementptr inbounds " -> print
+                    context.ir[mutableRoot] -> writeIrType(context, state)
+                    ", ptr %slot$(mutableRoot), i32 0, i32 0" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal)_len = getelementptr inbounds " -> print
+                    context.ir[mutableRoot] -> writeIrType(context, state)
+                    ", ptr %slot$(mutableRoot), i32 0, i32 1" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal)_capacity = getelementptr inbounds " -> print
+                    context.ir[mutableRoot] -> writeIrType(context, state)
+                    ", ptr %slot$(mutableRoot), i32 0, i32 2" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %callmut$(callIndex)_arg$(ordinal)_ptr, 0" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal)_1 = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_0, ptr %callmut$(callIndex)_arg$(ordinal)_len, 1" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal) = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_1, ptr %callmut$(callIndex)_arg$(ordinal)_capacity, 2" -> println
+                }
             }
         }
         context.ir[argumentIndex].nextOperand -> emitMutableBorrowArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
     }
 }
+emitCurrentMutableParameterValue valueIndex: Int, parameterOrdinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[valueIndex] => value
+    context -> parameterIndexAtOrdinal(ownerIndex, parameterOrdinal) => parameterIndex
+    (parameterIndex >= 0 and (context.ir[parameterIndex] -> mutableBorrowUsesStructPointer(context))) -> if {
+        "  %v$(valueIndex) = load " -> print
+        value -> writeIrType(context, state)
+        ", ptr " -> print
+        parameterOrdinal -> writeMutableStructParameterPointer
+        ", align " -> print
+        value -> storageAlign(context, state) -> writeDecimalLine
+    } else {
+        "  %v$(valueIndex)_current_ptr = load ptr, ptr " -> print
+        parameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(parameterOrdinal)_mut_ptr_addr" -> print }
+        ", align 8" -> println
+        "  %v$(valueIndex)_current_len = load i64, ptr " -> print
+        parameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(parameterOrdinal)_mut_len_addr" -> print }
+        ", align 8" -> println
+        "  %v$(valueIndex)_current_capacity = load i64, ptr " -> print
+        parameterOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(parameterOrdinal)_mut_capacity_addr" -> print }
+        ", align 8" -> println
+        "  %v$(valueIndex)_current0 = insertvalue " -> print
+        value -> writeIrType(context, state)
+        " poison, ptr %v$(valueIndex)_current_ptr, 0" -> println
+        "  %v$(valueIndex)_current1 = insertvalue " -> print
+        value -> writeIrType(context, state)
+        " %v$(valueIndex)_current0, i64 %v$(valueIndex)_current_len, 1" -> println
+        "  %v$(valueIndex) = insertvalue " -> print
+        value -> writeIrType(context, state)
+        " %v$(valueIndex)_current1, i64 %v$(valueIndex)_current_capacity, 2" -> println
+    }
+}
+interpolatedTextRoots textIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] {
+    [Int; ~] => roots!
+    context.ir[textIndex] => textNode
+    textNode -> sourceInterpolations(context, state) => interpolations!
+    0 => search!
+    search! < (interpolations! -> len) -> while {
+        interpolations![search!] => currentInterpolation
+        (currentInterpolation.sourceToken == textNode.payloadToken and currentInterpolation.parent < 0) -> if {
+            roots! -> push(search!)
+        }
+        search! + 1 => search!
+    }
+    roots!
+}
+transientTextArgumentSource argumentIndex: Int, callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    -1 => textIndex!
+    (parameterIndex >= 0 and (context.ir[parameterIndex] -> isTextType)) -> if {
+        argumentIndex -> aggregateValueIndex(context, state) => argumentValueIndex
+        argumentValueIndex -> producerValueIndex(context, state) => producedValueIndex
+        (producedValueIndex >= 0 and context.ir[producedValueIndex].kind == 2) -> if {
+            producedValueIndex -> interpolatedTextRoots(context, state) => roots!
+            (roots! -> len) > 0 -> if { producedValueIndex => textIndex! }
+        }
+    }
+    textIndex!
+}
+emitTransientTextArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    argumentIndex -> transientTextArgumentSource(callIndex, ordinal, context, state) => textIndex
+    textIndex >= 0 -> if {
+        context.ir[textIndex] => textNode
+        textNode -> sourceInterpolations(context, state) => interpolations!
+        textIndex -> interpolatedTextRoots(context, state) => roots!
+        Int(roots! -> len) => rootCount
+        UIntSize(0) => staticLength!
+        UIntSize(0) => suffixStart!
+        0 => rootOrdinal!
+        rootOrdinal! < rootCount -> while {
+            roots![rootOrdinal!] => interpolationIndex
+            interpolations![interpolationIndex] => interpolationRoot
+            interpolations! -> interpolationEmissionOrder(textNode.payloadToken, interpolationRoot.segment) => expressionOrder!
+            0 => expressionOrderIndex!
+            expressionOrderIndex! < (expressionOrder! -> len) -> while {
+                expressionOrder![expressionOrderIndex!] => expressionNodeIndex
+                interpolations![expressionNodeIndex] => expressionNode
+                expressionNodeIndex -> interpolationHasLogicalAncestor(interpolations!) => insideLogical
+                not insideLogical -> if {
+                    (expressionNode.kind == 3 and (expressionNode.opcode == -24 or expressionNode.opcode == -25)) -> if {
+                        callIndex -> emitInterpolationSubtree(expressionNodeIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, true, context, state)
+                    } else {
+                        callIndex -> emitInterpolationIntrinsic(expressionNodeIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, true, context, state)
+                        callIndex -> emitInterpolationOperation(expressionNodeIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                    }
+                }
+                expressionOrderIndex! + 1 => expressionOrderIndex!
+            }
+            interpolationIndex -> interpolationNodeIntegerWidth(interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state) => integerWidth
+            integerWidth > 0 -> if {
+                "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_buffer = alloca [21 x i8], align 1" -> println
+                integerWidth < 64 -> if {
+                    "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_integer = " -> print
+                    interpolationIndex -> interpolationNodeSigned(interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state) -> if { "sext" -> print } else { "zext" -> print }
+                    " i$(integerWidth) " -> print
+                    callIndex -> writeInterpolationValue(interpolationIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                    " to i64" -> println
+                }
+                "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_length = call i64 @" -> print
+                interpolationIndex -> interpolationNodeSigned(interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state) -> if { "sollang_format_i64" -> print } else { "sollang_format_u64" -> print }
+                "(ptr %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_buffer, i64 " -> print
+                integerWidth < 64 -> if { "%calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_integer" -> print } else {
+                    callIndex -> writeInterpolationValue(interpolationIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                }
+                ")" -> println
+                "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_ptr = getelementptr [21 x i8], ptr %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_buffer, i64 0, i64 0" -> println
+            } else {
+                "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_ptr = extractvalue %sollang.text " -> print
+                callIndex -> writeInterpolationValue(interpolationIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                ", 0" -> println
+                "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_length = extractvalue %sollang.text " -> print
+                callIndex -> writeInterpolationValue(interpolationIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                ", 1" -> println
+            }
+            staticLength! + interpolationRoot.literalLength => staticLength!
+            interpolationRoot.expressionStart + interpolationRoot.expressionLength + UIntSize(1) => suffixStart!
+            rootOrdinal! + 1 => rootOrdinal!
+        }
+        textNode -> sourceToken(context, state) => textToken
+        TextLiteralRequest { sourceModule: textNode.sourceModule, token: textToken } -> textLiteralLength(context, state) => rawLength
+        staticLength! + rawLength - suffixStart! => staticLength!
+        "  %calltext$(callIndex)_arg$(ordinal)_length0 = add i64 0, " -> print
+        Int(staticLength!) -> writeDecimalLine
+        0 => lengthOrdinal!
+        lengthOrdinal! < rootCount -> while {
+            "  %calltext$(callIndex)_arg$(ordinal)_length" -> print
+            lengthOrdinal! + 1 -> writeDecimal
+            " = add i64 %calltext$(callIndex)_arg$(ordinal)_length" -> print
+            lengthOrdinal! -> writeDecimal
+            ", %calltext$(callIndex)_arg$(ordinal)_root$(lengthOrdinal!)_length" -> println
+            "  %calltext$(callIndex)_arg$(ordinal)_length$(lengthOrdinal! + 1)_ok = icmp uge i64 %calltext$(callIndex)_arg$(ordinal)_length$(lengthOrdinal! + 1), %calltext$(callIndex)_arg$(ordinal)_length$(lengthOrdinal!)" -> println
+            "  br i1 %calltext$(callIndex)_arg$(ordinal)_length$(lengthOrdinal! + 1)_ok, label %calltext$(callIndex)_arg$(ordinal)_length$(lengthOrdinal! + 1)_ready, label %calltext$(callIndex)_arg$(ordinal)_length$(lengthOrdinal! + 1)_overflow" -> println
+            "calltext$(callIndex)_arg$(ordinal)_length$(lengthOrdinal! + 1)_overflow:" -> println
+            "  call void @llvm.trap()" -> println
+            "  unreachable" -> println
+            "calltext$(callIndex)_arg$(ordinal)_length$(lengthOrdinal! + 1)_ready:" -> println
+            lengthOrdinal! + 1 => lengthOrdinal!
+        }
+        "  %calltext$(callIndex)_arg$(ordinal)_empty = icmp eq i64 %calltext$(callIndex)_arg$(ordinal)_length$(rootCount), 0" -> println
+        "  %calltext$(callIndex)_arg$(ordinal)_allocation_length = select i1 %calltext$(callIndex)_arg$(ordinal)_empty, i64 1, i64 %calltext$(callIndex)_arg$(ordinal)_length$(rootCount)" -> println
+        "  %calltext$(callIndex)_arg$(ordinal)_buffer = alloca i8, i64 %calltext$(callIndex)_arg$(ordinal)_allocation_length, align 1" -> println
+        "  %calltext$(callIndex)_arg$(ordinal)_offset0 = add i64 0, 0" -> println
+        0 => copyOrdinal!
+        copyOrdinal! < rootCount -> while {
+            roots![copyOrdinal!] => copyIndex
+            interpolations![copyIndex] => copyRoot
+            "  %calltext$(callIndex)_arg$(ordinal)_literal$(copyOrdinal!)_target = getelementptr i8, ptr %calltext$(callIndex)_arg$(ordinal)_buffer, i64 %calltext$(callIndex)_arg$(ordinal)_offset$(copyOrdinal! * 2)" -> println
+            "  %calltext$(callIndex)_arg$(ordinal)_literal$(copyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(textIndex), i64 $(copyRoot.literalStart)" -> println
+            "  call void @llvm.memcpy.p0.p0.i64(ptr %calltext$(callIndex)_arg$(ordinal)_literal$(copyOrdinal!)_target, ptr %calltext$(callIndex)_arg$(ordinal)_literal$(copyOrdinal!)_source, i64 $(copyRoot.literalLength), i1 false)" -> println
+            "  %calltext$(callIndex)_arg$(ordinal)_offset$(copyOrdinal! * 2 + 1) = add i64 %calltext$(callIndex)_arg$(ordinal)_offset$(copyOrdinal! * 2), $(copyRoot.literalLength)" -> println
+            "  %calltext$(callIndex)_arg$(ordinal)_root$(copyOrdinal!)_target = getelementptr i8, ptr %calltext$(callIndex)_arg$(ordinal)_buffer, i64 %calltext$(callIndex)_arg$(ordinal)_offset$(copyOrdinal! * 2 + 1)" -> println
+            "  call void @llvm.memcpy.p0.p0.i64(ptr %calltext$(callIndex)_arg$(ordinal)_root$(copyOrdinal!)_target, ptr %calltext$(callIndex)_arg$(ordinal)_root$(copyOrdinal!)_ptr, i64 %calltext$(callIndex)_arg$(ordinal)_root$(copyOrdinal!)_length, i1 false)" -> println
+            "  %calltext$(callIndex)_arg$(ordinal)_offset$(copyOrdinal! * 2 + 2) = add i64 %calltext$(callIndex)_arg$(ordinal)_offset$(copyOrdinal! * 2 + 1), %calltext$(callIndex)_arg$(ordinal)_root$(copyOrdinal!)_length" -> println
+            copyOrdinal! + 1 => copyOrdinal!
+        }
+        rawLength - suffixStart! => suffixLength
+        "  %calltext$(callIndex)_arg$(ordinal)_suffix_target = getelementptr i8, ptr %calltext$(callIndex)_arg$(ordinal)_buffer, i64 %calltext$(callIndex)_arg$(ordinal)_offset$(rootCount * 2)" -> println
+        "  %calltext$(callIndex)_arg$(ordinal)_suffix_source = getelementptr i8, ptr @sollang_str_$(textIndex), i64 $(suffixStart!)" -> println
+        "  call void @llvm.memcpy.p0.p0.i64(ptr %calltext$(callIndex)_arg$(ordinal)_suffix_target, ptr %calltext$(callIndex)_arg$(ordinal)_suffix_source, i64 $(suffixLength), i1 false)" -> println
+        "  %calltext$(callIndex)_arg$(ordinal)_value0 = insertvalue %sollang.text poison, ptr %calltext$(callIndex)_arg$(ordinal)_buffer, 0" -> println
+        "  %calltext$(callIndex)_arg$(ordinal) = insertvalue %sollang.text %calltext$(callIndex)_arg$(ordinal)_value0, i64 %calltext$(callIndex)_arg$(ordinal)_length$(rootCount), 1" -> println
+    }
+}
+emitTransientTextArguments argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex) -> if {
+        argumentIndex -> emitTransientTextArgument(callIndex, ownerIndex, ordinal, context, state)
+        context.ir[argumentIndex].nextOperand -> emitTransientTextArguments(callIndex, ownerIndex, ordinal + 1, context, state)
+    }
+}
 emitCallEnvironmentValues request: CallEnvironmentRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[request.callIndex].operand0 -> emitTransientTextArguments(request.callIndex, request.callerIndex, 0, context, state)
     context.ir[request.callIndex].operand0 -> emitReferenceArgumentValues(request.callIndex, request.callerIndex, 0, context, state)
     context.ir[request.callIndex].operand0 -> emitMutableBorrowArgumentValues(request.callIndex, request.callerIndex, 0, context, state)
     request -> emitCallCaptureEnvironmentValues(context, state)
 }
 emitWhileCallEnvironmentValues request: CallEnvironmentRequest, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[request.callIndex].operand0 -> emitTransientTextArguments(request.callIndex, request.callerIndex, 0, context, state)
     context.ir[request.callIndex].operand0 -> emitWhileReferenceArgumentValues(request.callIndex, whileIndex, request.callerIndex, 0, context, state)
     request -> emitCallCaptureEnvironmentValues(context, state)
 }
@@ -1012,13 +1245,146 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
         }
     }
 }
+
+emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => call
+    context.ir[call.operand0] => base
+    call -> integerNodeWidth(context, state) => resultWidth
+    call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableLengthParameterOrdinal
+    mutableLengthParameterOrdinal >= 0 -> if {
+        "  %v$(callIndex)" -> print
+        resultWidth == 32 -> if { "_raw" -> print }
+        " = load i64, ptr " -> print
+        mutableLengthParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(mutableLengthParameterOrdinal)_mut_len_addr" -> print }
+        ", align 8" -> println
+        resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
+    } else {
+        base -> isArgumentsType -> if {
+            "  %v$(callIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = call i64 @sollang_argument_count()" -> println
+            resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
+        } else {
+            base.typeId => valueTypeId!
+            false => readonlyReference!
+            (valueTypeId! >= 0 and context.types[valueTypeId!].kind == 8) -> if {
+                context.types[valueTypeId!].first => valueTypeId!
+                true => readonlyReference!
+            }
+            -1 => mutableRoot!
+            (not readonlyReference! and base.typeOrigin == 15) -> if {
+                call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
+            }
+            mutableRoot! >= 0 -> if {
+                "  %v$(callIndex)_length_source = load %sollang.dict, ptr %slot$(mutableRoot!), align 8" -> println
+            }
+            readonlyReference! -> if {
+                "  %v$(callIndex)_length_source = load " -> print
+                valueTypeId! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                call.operand0 -> writeValue(ownerIndex, context, state)
+                ", align 8" -> println
+            }
+            "  %v$(callIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = extractvalue " -> print
+            readonlyReference! -> if {
+                valueTypeId! -> writeSemanticTypeId(context, state)
+            } else {
+                base -> writeIrType(context, state)
+            }
+            " " -> print
+            (mutableRoot! >= 0 or readonlyReference!) -> if {
+                "%v$(callIndex)_length_source" -> print
+            } else {
+                call.operand0 -> writeValue(ownerIndex, context, state)
+            }
+            ", " -> print
+            ((readonlyReference! and context.types[valueTypeId!].kind == 5) or (not readonlyReference! and base.typeOrigin == 15)) -> if {
+                "2" -> println
+            } else {
+                "1" -> println
+            }
+            resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
+        }
+    }
+}
+
+emitWhileLengthIntrinsic request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[request.nodeIndex] => call
+    context.ir[call.operand0] => base
+    call -> integerNodeWidth(context, state) => resultWidth
+    call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => mutableLengthParameterOrdinal
+    mutableLengthParameterOrdinal >= 0 -> if {
+        "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+        resultWidth == 32 -> if { "_raw" -> print }
+        " = load i64, ptr " -> print
+        mutableLengthParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(mutableLengthParameterOrdinal)_mut_len_addr" -> print }
+        ", align 8" -> println
+        resultWidth == 32 -> if {
+            "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
+        }
+    } else {
+        base -> isArgumentsType -> if {
+            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = call i64 @sollang_argument_count()" -> println
+            resultWidth == 32 -> if {
+                "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
+            }
+        } else {
+            base.typeId => valueTypeId!
+            false => readonlyReference!
+            (valueTypeId! >= 0 and context.types[valueTypeId!].kind == 8) -> if {
+                context.types[valueTypeId!].first => valueTypeId!
+                true => readonlyReference!
+            }
+            readonlyReference! -> if {
+                "  %while$(request.whileIndex)_v$(request.nodeIndex)_length_source = load " -> print
+                valueTypeId! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: call.operand0 } -> writeWhileValue(context, state)
+                ", align 8" -> println
+            }
+            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = extractvalue " -> print
+            readonlyReference! -> if {
+                valueTypeId! -> writeSemanticTypeId(context, state)
+            } else {
+                base -> writeIrType(context, state)
+            }
+            " " -> print
+            readonlyReference! -> if {
+                "%while$(request.whileIndex)_v$(request.nodeIndex)_length_source" -> print
+            } else {
+                WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: call.operand0 } -> writeWhileValue(context, state)
+            }
+            ", " -> print
+            ((readonlyReference! and context.types[valueTypeId!].kind == 5) or (not readonlyReference! and base.typeOrigin == 15)) -> if {
+                "2" -> println
+            } else {
+                "1" -> println
+            }
+            resultWidth == 32 -> if {
+                "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
+            }
+        }
+    }
+}
+
 isSourceTextFileIntrinsic node: typedIr.TypedIrNode -> Bool {
-    node.kind == 6 and (node.opcode == -231 or node.opcode == -232)
+    node.kind == 6 and (node.opcode == -231 or node.opcode == -232 or node.opcode == -234)
 }
 emitSourceTextFileIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[callIndex] => call
     call.opcode == -231 -> if {
         "  %v$(callIndex) = call %sollang.source_text @sollang_runtime_read_standard_input()" -> println
+    }
+    (call.opcode == -234 and call.operand0 >= 0) -> if {
+        "  %v$(callIndex) = call %sollang.source_text @sollang_runtime_read_standard_input_chunk_once(i64 " -> print
+        call.operand0 -> writeValue(ownerIndex, context, state)
+        ")" -> println
     }
     (call.opcode == -232 and call.operand0 >= 0) -> if {
         context.ir[call.operand0] => borrowedBytes
@@ -1203,7 +1569,8 @@ aggregateValueIndex wrapperIndex: Int, context: ref emitterContext.EmitContext, 
             context.ir[controlSearch!] => aggregateCandidate
             # Explicit conversions around aggregate fields are represented
             # by a value wrapper whose direct result is a call node.
-            (aggregateCandidate.parent == wrapperIndex and (aggregateCandidate.kind == 2 or aggregateCandidate.kind == 3 or aggregateCandidate.kind == 4 or aggregateCandidate.kind == 6 or aggregateCandidate.kind == 7 or aggregateCandidate.kind == 8 or aggregateCandidate.kind == 12 or aggregateCandidate.kind == 14 or aggregateCandidate.kind == 16 or aggregateCandidate.kind == 18 or aggregateCandidate.kind == 26 or aggregateCandidate.kind == 27)) -> if { controlSearch! => resolved! }
+            (aggregateCandidate.parent == wrapperIndex and (aggregateCandidate.kind == 2 or aggregateCandidate.kind == 3 or aggregateCandidate.kind == 4 or aggregateCandidate.kind == 6 or aggregateCandidate.kind == 7 or aggregateCandidate.kind == 8 or aggregateCandidate.kind == 12 or aggregateCandidate.kind == 14 or aggregateCandidate.kind == 15 or aggregateCandidate.kind == 16 or aggregateCandidate.kind == 18 or aggregateCandidate.kind == 26 or aggregateCandidate.kind == 27 or aggregateCandidate.kind == 34)) -> if { controlSearch! => resolved! }
+            (aggregateCandidate.parent == wrapperIndex and aggregateCandidate.kind == 13) -> if { controlSearch! => resolved! }
             controlSearch! + 1 => controlSearch!
         }
     }
@@ -1397,6 +1764,19 @@ referencePlaceAddressDepth placeIndex: Int, context: ref emitterContext.EmitCont
         addressDepth!
     }
 }
+writeReferenceRootAddress rootBinding: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[rootBinding].kind == 10 -> if {
+        (ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].operand1 >= 0 and context.ir[context.ir[ownerIndex].operand1].symbol == context.ir[rootBinding].symbol) -> if {
+            "%arg" -> print
+        } else {
+            ownerIndex -> additionalParameterOrdinal(context.ir[rootBinding].symbol, context, state) => referenceParameterOrdinal
+            "%arg$(referenceParameterOrdinal)" -> print
+        }
+    } else {
+        rootBinding -> mutableBindingRoot(context, state) => referenceMutableRoot
+        "%slot$(referenceMutableRoot)" -> print
+    }
+}
 emitMutableReferencePlace placeIndex: Int, rootBinding: Int, callIndex: Int, ordinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
     context.ir[placeIndex].kind == 15 -> if {
         placeIndex -> emitMutableReferenceIndexPlace(rootBinding, callIndex, ordinal, ownerIndex, context, state)
@@ -1407,11 +1787,12 @@ emitMutableReferencePlace placeIndex: Int, rootBinding: Int, callIndex: Int, ord
 emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int, ordinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
     context.ir[placeIndex] => indexedPlace
     context.ir[indexedPlace.operand1] => referenceIndex
-    rootBinding -> mutableBindingRoot(context, state) => referenceMutableRoot
     callIndex + 0 => referenceCallIndex
     ordinal + 0 => referenceArgumentOrdinal
     ownerIndex + 0 => referenceOwnerIndex
-    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_array = load %sollang.array.i32, ptr %slot$(referenceMutableRoot), align 8" -> println
+    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_array = load %sollang.array.i32, ptr " -> print
+    rootBinding -> writeReferenceRootAddress(referenceOwnerIndex, context, state)
+    ", align 8" -> println
     "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data = extractvalue %sollang.array.i32 %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_array, 0" -> println
     "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_length = extractvalue %sollang.array.i32 %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_array, 1" -> println
     referenceIndex -> integerNodeWidth(context, state) => referenceIndexWidth
@@ -1510,17 +1891,7 @@ emitMutableReferenceMemberPlace placeIndex: Int, rootBinding: Int, callIndex: In
                     memberOwnerType! -> writeSemanticTypeId(context, state)
                     ", ptr " -> print
                     memberProjectionOrdinal! == 0 -> if {
-                        context.ir[rootBinding].kind == 10 -> if {
-                            (ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].operand1 >= 0 and context.ir[context.ir[ownerIndex].operand1].symbol == context.ir[rootBinding].symbol) -> if {
-                                "%arg" -> print
-                            } else {
-                                ownerIndex -> additionalParameterOrdinal(context.ir[rootBinding].symbol, context, state) => referenceParameterOrdinal
-                                "%arg$(referenceParameterOrdinal)" -> print
-                            }
-                        } else {
-                            rootBinding -> mutableBindingRoot(context, state) => referenceMutableRoot
-                            "%slot$(referenceMutableRoot)" -> print
-                        }
+                        rootBinding -> writeReferenceRootAddress(ownerIndex, context, state)
                     } else {
                         "%callref" -> print
                         callIndex -> writeDecimal
@@ -1587,11 +1958,17 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
         ((context.ir[callIndex] -> targetsNativeFunction(context, state)) and argumentParameter.flags / 2 % 2 == 1 and (context -> diagnostics.nativeAbiStructTypeSafe(argumentParameter.typeId, 0))) -> if { true => argumentNeedsReferenceSlot! }
     }
     false => argumentIsMutableBorrow!
+    false => argumentIsMutableStructBorrow!
     (argumentParameterIndex >= 0 and context.ir[argumentParameterIndex].flags / 2 % 2 == 1 and not (context.ir[callIndex] -> targetsNativeFunction(context, state))) -> if {
         true => argumentIsMutableBorrow!
+        context.ir[argumentParameterIndex] -> mutableBorrowUsesStructPointer(context) -> if { true => argumentIsMutableStructBorrow! }
     }
     argumentIsMutableBorrow! -> if {
-        "%sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)" -> print
+        argumentIsMutableStructBorrow! -> if {
+            "ptr %callmut$(callIndex)_arg$(ordinal)" -> print
+        } else {
+            "%sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)" -> print
+        }
     } else {
     argumentNeedsReferenceSlot! -> if {
         argumentValueIndex -> aggregateValueIndex(context, state) => referenceValueIndex
@@ -1646,6 +2023,10 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
             (nativeScalarParameterType.kind == 1 and nativeScalarParameterType.origin == 1 and (nativeScalarParameterType.symbol == 8 or nativeScalarParameterType.symbol == 9)) -> if { "zeroext " -> print }
         }
     }
+    argumentIndex -> transientTextArgumentSource(callIndex, ordinal, context, state) => transientTextSource
+    transientTextSource >= 0 -> if {
+        "%calltext$(callIndex)_arg$(ordinal)" -> print
+    } else {
     argument.kind == 2 -> if {
         (callOwnerIndex >= 0 and context.ir[callOwnerIndex].kind == 0) -> if {
             "%v$(argumentValueIndex)" -> print
@@ -1675,8 +2056,14 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
         } else {
             false => primaryParameterArgument!
             (callOwnerIndex >= 0 and context.ir[callOwnerIndex].kind == 0 and context.ir[callOwnerIndex].operand1 >= 0 and argument.kind == 5 and argument.symbol == context.ir[context.ir[callOwnerIndex].operand1].symbol) -> if { true => primaryParameterArgument! }
-            primaryParameterArgument! -> if { "%arg" -> print } else { "%v$(argumentValueIndex)" -> print }
+            argumentValueIndex -> mutableBorrowParameterOrdinal(callOwnerIndex, context, state) => liveMutableParameterOrdinal
+            liveMutableParameterOrdinal >= 0 -> if {
+                "%v$(argumentValueIndex)" -> print
+            } else {
+                primaryParameterArgument! -> if { "%arg" -> print } else { "%v$(argumentValueIndex)" -> print }
+            }
         }
+    }
     }
     }
     }
@@ -1687,12 +2074,12 @@ emitCallArgumentChain argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordin
     ownerIndex => chainOwnerIndex
     separator => chainSeparator
     (argumentIndex >= 0 and (context.ir[argumentIndex].parent == chainCallIndex or (argumentIndex == context.ir[chainCallIndex].operand0 and (context.ir[argumentIndex].kind == 18 or context.ir[argumentIndex].kind == 27)))) -> if {
-        chainCallIndex -> callTargetParameter(ordinal, context, state) => chainParameterIndex
-        chainParameterIndex >= 0 -> if {
-            chainSeparator -> if { ", " -> print }
-            argumentIndex -> writeCallArgument(chainCallIndex, chainOwnerIndex, ordinal, context, state)
-        }
-        context.ir[argumentIndex].nextOperand -> emitCallArgumentChain(chainCallIndex, chainOwnerIndex, ordinal + 1, chainSeparator or chainParameterIndex >= 0, context, state)
+        # Explicit call operands remain ABI arguments even when an intrinsic has
+        # no function-body IR from which parameter metadata can be recovered.
+        # writeCallArgument deliberately falls back to the operand's own type.
+        chainSeparator -> if { ", " -> print }
+        argumentIndex -> writeCallArgument(chainCallIndex, chainOwnerIndex, ordinal, context, state)
+        context.ir[argumentIndex].nextOperand -> emitCallArgumentChain(chainCallIndex, chainOwnerIndex, ordinal + 1, true, context, state)
     }
 }
 emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {

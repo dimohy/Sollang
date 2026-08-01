@@ -1,0 +1,39 @@
+import sollang.compiler.llvm.text as llvm
+
+# A readonly array reference with imported nominal elements remains a pointer
+# only at the ABI boundary; nested computed indexes load its array aggregate.
+main {
+    [
+        """
+        namespace fixture.data
+
+        public struct Node {
+            value: Int
+            next: Int
+        }
+        """,
+        """
+        namespace fixture.main
+        import fixture.data as data
+
+        follows nodes: ref [data.Node; ~], expected: Int -> Bool {
+            0 => index!
+            false => found!
+            index! < (nodes -> len) -> while {
+                nodes[index!] => candidate
+                (candidate.next >= 0 and nodes[candidate.next].value == expected) -> if {
+                    true => found!
+                }
+                index! + 1 => index!
+            }
+            found!
+        }
+
+        main {
+            [data.Node { value: 10, next: 1 }, data.Node { value: 42, next: -1 }; ~] => nodes!
+            nodes! -> follows(42) -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

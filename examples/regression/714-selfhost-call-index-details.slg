@@ -1,0 +1,43 @@
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+
+main {
+    [
+        """
+        native fixture from "artifacts/native-interop/native_fixture" {
+            add left: Int32, right: Int32 -> Int32 as "native_add"
+        }
+
+        main {
+            fixture.add(20, 22)
+        }
+        """; ~
+    ] => sources!
+    sources![0] -> ast.lower => nodes!
+    sources![0] -> lexer.lex => tokens!
+    [Int; ~] => indexed!
+    0 => indexedInit!
+    indexedInit! < (nodes! -> len) -> while {
+        indexed! -> push(-1)
+        indexedInit! + 1 => indexedInit!
+    }
+    0 => nodeIndex!
+    nodeIndex! < (nodes! -> len) -> while {
+        nodes![nodeIndex!].kind == 16 -> if {
+            nodeIndex! => currentNodeIndex
+            nodes![nodeIndex!].payloadToken => payload
+            tokens![payload] => token
+            sources![0] -> slice(token.span.start, token.span.length) => name
+            "flow=$currentNodeIndex,$(nodes![nodeIndex!].parent),$payload,$name" -> println
+            payload => indexed![nodes![nodeIndex!].parent]
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    "indexed13=$(indexed![13])" -> println
+    sources! -> calls.resolveModules => resolved!
+    "count=$(resolved! -> len)" -> println
+    resolved! -> each call {
+        "call=$(call.origin),$(call.targetSourceModule),$(call.functionSymbol),$(call.status)" -> println
+    }
+}

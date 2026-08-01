@@ -1,82 +1,81 @@
-# Sollang Stage 3 Compiler
+# Sollang 0.4 Fixed-Point Compiler
 
-Sollang 0.3 ships two compiler executables during the transition to a fully
-self-hosted distribution:
+Sollang 0.4 publishes one compiler executable per platform: `sollang.exe` on
+Windows x64 and `sollang` on Linux x64. Each executable is compiled from the
+`.slg` self-host compiler sources and reproduces itself at the verified Stage 3
+fixed point. The public archives do not contain the C# bootstrap compiler,
+`sollangc-stage3`, or `.NET` support artifacts.
 
-- `sollang` is the supported command-line interface. It provides project and
-  workspace builds, tests, formatting, language-server startup, dependency
-  resolution, and version/help output.
-- `sollangc-stage3` is the native compiler reproduced by the Sollang-written
-  compiler at the verified Stage 3 fixed point. It is an advanced compiler
-  driver, not yet a drop-in replacement for the supported CLI.
+The native executable preserves the public CLI used by earlier releases:
 
-The Stage 3 driver accepts a target mode followed by source paths and writes
-LLVM IR to standard output:
-
-```powershell
-.\sollangc-stage3.exe windows .\hello.slg > hello.ll
+```text
+sollang --version
+sollang build <source-or-project> [options]
+sollang run <source-or-project> [options] [-- program-arguments]
+sollang test <project> [options]
+sollang format <source> [options]
+sollang resolve --project <project>
+sollang grammar build <grammar> [options]
+sollang language-server
+sollang bind-cpp <source-or-project> [options]
 ```
 
-```bash
-./sollangc-stage3 linux ./hello.slg > hello.ll
-```
+Project, product, package, workspace, dependency, lock-file, diagnostic,
+stdout/stderr, and exit-code behavior is checked against the C# reference
+compiler during development. The C# compiler is an oracle and bootstrap input,
+not a release asset.
 
-It also accepts `--jobs N` immediately after the target mode. The target modes
-used for direct source compilation are `windows`, `linux`, and `wasm`.
+## Bootstrap and fixed-point proof
 
-The native driver now implements `--version`, help, explicit-source,
-project-directory (including explicit `--product` selection), and
-workspace-package `build`, plus `run` and literal program-argument forwarding.
-Project and workspace inputs retain the public `--project`, `--product`,
-`--workspace`, and `--package` spellings. Selected products now include the
-transitive source closure of local path dependencies. The native path resolver
-normalizes and deduplicates diamond graphs, rejects cycles, package-name drift,
-and incompatible semantic versions, writes a deterministic portable
-`sollang.lock`, and enforces that snapshot with `build --locked`. Explicit
-`resolve --project <path>` is available for this path-only graph.
+The release chain is:
 
-These are verified implementation slices, not the complete replacement
-contract: Git and registry materialization, workspace resolution/locking,
-library and Wasm output, default project output placement, `test`, `format`,
-`language-server`, `bind-cpp`, and exact diagnostic-stream compatibility remain
-gated. Those commands remain on `sollang` in 0.3. The C# executable can be
-removed only after the complete cross-platform compatibility matrix passes.
+1. the C# bootstrap compiles the complete `.slg` compiler into Stage 2;
+2. Stage 2 compiles the same ordered source manifest into Stage 3;
+3. normalized Stage 2 and Stage 3 LLVM must have the same SHA-256;
+4. Stage 3 LLVM must assemble and link into the native compiler;
+5. the immutable native executable must pass the complete public CLI matrix;
+6. the packaged executable hash must equal that verified Stage 3 executable.
 
-## 0.4 Release Boundary
+Current fixed-point evidence:
 
-Version 0.4 is the hard transition boundary. Its public archives contain only
-the fixed-point native compiler built from `.slg` compiler sources; the C#
-bootstrap executable and its `.NET` support artifacts are not published.
+| Target | LLVM bytes | Normalized LLVM SHA-256 | Native executable SHA-256 |
+| --- | ---: | --- | --- |
+| Windows x64 | 24,934,632 | `BDECDDCCAA23A3C8DBEE135FF525550EAD47C77D4A6CB5ED909EEE1290290434` | `5E81D0ECBFD65687A42FB17668D5DB4818967D7D0534FC13F3D4C3056AF44617` |
+| Linux x64 | 24,917,845 | `417AC4E06F2D99C0419DF8EA386C672426D0EB0339FA9F1C8B6518E5A31E1CEC` | `0F63C12FF0E3422EEC7D543888102B1AE186E28356E7597631E30FCE01764098` |
 
-The native executable keeps the final name `sollang` and must preserve the 0.3
-CLI contract. Release packaging is blocked until command, diagnostic, output,
-and exit-code compatibility is verified on Windows x64 and Linux x64. The C#
-compiler may still build and differentially verify the native compiler inside
-the development pipeline, but it is never copied into a 0.4 archive.
+The complete logical catalog contains 10 user examples, 770 regression cases,
+and 231 diagnostics. Windows passes 1001/1001 selected cases. Linux passes all
+1000/1000 applicable cases; the Windows COM case is structurally validated on
+Linux but is not executed there.
 
-This boundary has an absolute root-cause-only rule, regardless of how frequently
-the compiler changes or how many failures are uncovered in sequence. Temporary
-fallback paths, symptom patches, defensive success defaults, swallowed errors,
+Each fixed-point executable passes 16 exact top-level command contracts plus
+the following retained matrices:
+
+- native source/project/dependency/workspace/lock build and run;
+- grammar build 4/4;
+- native test 10/10;
+- format 11/11;
+- streaming language server 4/4;
+- bind-cpp generation, compilation, and execution 6/6.
+
+## Native-only release boundary
+
+`publish-release.ps1` accepts only the hash-bound fixed-point executables. For
+0.4 it rejects `.dll`, `.deps.json`, `.runtimeconfig.json`, `.pdb`, and Stage
+driver files, verifies `sollang --version`, and uses the compiler and bundled
+standard library to build and run a smoke program before archiving.
+
+The `0.4.260801` packages contain only the native compiler, `stdlib`, `README`,
+and `LICENSE`. Their archive SHA-256 values are:
+
+- Windows x64 ZIP: `ac7b268b88ce817754c3e453be54dbf5efd4987d892da5151949345e844db9f8`
+- Linux x64 tar.gz: `f661f88a51d2330de7a41b8ddee7a817d076d5c542467d74aadfc7e2b365d38f`
+
+## Root-cause-only gate
+
+Temporary fallback paths, defensive success defaults, swallowed errors,
 diagnostic suppression, command- or test-specific hard-coded branches, and
-silent feature reduction are release failures, not compatibility solutions.
-Every defect must follow the same mandatory sequence:
-
-1. reduce it to a permanent focused reproduction;
-2. identify the owning compiler layer and the violated shared invariant;
-3. correct that invariant in the owning layer;
-4. retain the reproduction as a regression;
-5. pass focused, complete, cross-platform, and fixed-point verification.
-
-A change that cannot yet satisfy this sequence remains an unresolved defect. It
-must never be described as a fix or used to unblock 0.4 packaging.
-
-The current verified fixed points include the canonical control-result and
-deterministic parent-assisted parallel-start corrections. Windows Stage 3
-reproduces 19,967,212 LLVM bytes with SHA-256
-`2593D82C61F36E056710262BAB80D35065BF01836FB662D288D62FA7E7A24491`;
-Linux Stage 3 reproduces 19,950,197 LLVM bytes with SHA-256
-`9A8461F01035385F4A1554241CA9EC7418D0122786151811EF9970B2AA11BEAB`.
-The complete source suites pass 905/905 on Windows and 904/904 on Linux. The
-currently implemented native CLI slices pass build/run 10/10 and format 11/11
-on each fixed-point executable; these results do not waive the remaining
-public-command parity gates.
+silent feature reduction are release failures. Every defect requires a
+permanent focused reproduction, owning-layer diagnosis, shared-invariant
+correction, retained regression, complete cross-platform suites, and the
+applicable fixed-point proofs.

@@ -1,0 +1,23 @@
+import sollang.compiler.llvm.text as llvm
+
+# A mut dynamic-array parameter can reallocate during push. Later indexed
+# assignments must reload the caller-owned data pointer from the borrow.
+main {
+    [
+        """
+        patch values: mut [Int; ~] -> Unit {
+            values -> push(10)
+            values -> push(20)
+            30 => values[0]
+        }
+
+        main {
+            [Int; ~] => values!
+            values! -> patch
+            values![0] -> println
+            values![1] -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

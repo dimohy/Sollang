@@ -3,6 +3,43 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 windows_clang="$repo_root/.tools/llvm-22.1.8/bin/clang.exe"
+original_arguments=("$@")
+
+to_windows_path() {
+    local path="$1"
+    if [[ "$path" =~ ^/mnt/([a-zA-Z])/(.*)$ ]]; then
+        printf '%s:/%s' "${BASH_REMATCH[1]^^}" "${BASH_REMATCH[2]}"
+        return
+    fi
+    echo "path is not on a WSL mounted drive: $path" >&2
+    exit 2
+}
+
+ast_dump=false
+shared_cpp=false
+for argument in "${original_arguments[@]}"; do
+    [[ "$argument" == "-ast-dump=json" ]] && ast_dump=true
+    [[ "$argument" == "-shared" ]] && shared_cpp=true
+done
+
+if $ast_dump; then
+    converted=()
+    for argument in "${original_arguments[@]}"; do
+        if [[ "$argument" =~ ^/mnt/[a-zA-Z]/ ]]; then
+            converted+=("$(to_windows_path "$argument")")
+        elif [[ "$argument" =~ ^(-working-directory=)(/mnt/[a-zA-Z]/.*)$ ]]; then
+            converted+=("${BASH_REMATCH[1]}$(to_windows_path "${BASH_REMATCH[2]}")")
+        else
+            converted+=("$argument")
+        fi
+    done
+    exec "$windows_clang" "${converted[@]}"
+fi
+
+if $shared_cpp; then
+    exec c++ "${original_arguments[@]}"
+fi
+
 input=""
 output=""
 optimization="-O0"
@@ -39,16 +76,6 @@ if [[ -z "$input" || -z "$output" ]]; then
     echo "linux-cross clang adapter requires one LLVM input and -o output" >&2
     exit 2
 fi
-
-to_windows_path() {
-    local path="$1"
-    if [[ "$path" =~ ^/mnt/([a-zA-Z])/(.*)$ ]]; then
-        printf '%s:/%s' "${BASH_REMATCH[1]^^}" "${BASH_REMATCH[2]}"
-        return
-    fi
-    echo "path is not on a WSL mounted drive: $path" >&2
-    exit 2
-}
 
 object="$output.sollang-link.o"
 trap 'rm -f -- "$object"' EXIT

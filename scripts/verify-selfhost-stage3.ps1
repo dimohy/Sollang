@@ -6,6 +6,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "selfhost-verification-lock.ps1")
+$selfHostVerificationLock = Enter-SelfHostVerificationLock
+try {
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
 $manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
@@ -89,3 +93,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $clangPath -Wno-override-module $stage3LlvmPath -O1 -o $stage3Path -lshell32
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "[stage3 3/3] PASS fixed point $stage3Hash"
+}
+finally {
+    Release-SelfHostVerificationLock $selfHostVerificationLock
+}

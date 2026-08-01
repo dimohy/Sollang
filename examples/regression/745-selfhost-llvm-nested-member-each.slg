@@ -1,0 +1,27 @@
+import sollang.compiler.llvm.text as llvm
+
+# A canonical member path may contain multiple projections in one AST node.
+# The self-host emitter must project every field before using the final array.
+main {
+    [
+        """
+        struct TypeSet {
+            types: [Int; ~]
+        }
+
+        struct Snapshot {
+            semantic: TypeSet
+        }
+
+        main {
+            Snapshot { semantic: TypeSet { types: [1, 2, 3; ~] } } => snapshot!
+            0 => total!
+            snapshot!.semantic.types -> each value {
+                total! + value => total!
+            }
+            "total=$(total!)" -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

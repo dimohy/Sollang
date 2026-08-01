@@ -1,0 +1,51 @@
+import sollang.compiler.ir.typed as typedIr
+
+# A late compiler-provided writeAt producer, not its operandless syntax
+# wrapper, is the subject of the following Result match.
+main {
+    """"
+        namespace sys.file
+
+        public struct FileWriter {
+            token: UInt64
+        }
+
+        public openWrite path: Text -> Result<FileWriter, Text> uses File = intrinsic
+    """" => fileSource
+    """"
+        namespace sample
+
+        import sys.file as file
+
+        main {
+            "probe.tmp" -> file.openWrite -> when {
+                Ok(writer) {
+                    writer -> writeAt<UInt8>(UInt8(1), UInt64(0)) -> when {
+                        Ok(_) {}
+                        Err(_) {}
+                    }
+                }
+                Err(_) {}
+            }
+        }
+    """" => sampleSource
+    [fileSource, sampleSource; ~] -> typedIr.lower => ir!
+    0 => writeMatches!
+    0 => linkedSubjects!
+    ir! -> each node {
+        node.kind == 27 -> if {
+            node.operand0 >= 0 -> if {
+                ir![node.operand0] => subject
+                subject.opcode == -221 -> if {
+                    writeMatches! + 1 => writeMatches!
+                    subject.nextOperand >= 0 -> if {
+                        ir![subject.nextOperand].kind == 27 -> if {
+                            linkedSubjects! + 1 => linkedSubjects!
+                        }
+                    }
+                }
+            }
+        }
+    }
+    "file write matches=$(writeMatches!), linked subjects=$(linkedSubjects!)" -> println
+}

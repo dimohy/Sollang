@@ -1,0 +1,36 @@
+import sollang.compiler.llvm.text as llvm
+
+# Imported nested value members in function and entry arithmetic must project
+# every canonical field before the scalar operation.
+main {
+    [
+        """
+        namespace fixture.syntax
+
+        public struct Span {
+            start: UIntSize
+            length: UIntSize
+        }
+
+        public struct Token {
+            kind: Int
+            span: Span
+        }
+        """,
+        """
+        namespace fixture.main
+        import fixture.syntax as syntax
+
+        offset token: syntax.Token, index: UIntSize -> UIntSize {
+            token.span.start + index
+        }
+
+        main {
+            syntax.Token { kind: 1, span: syntax.Span { start: UIntSize(40), length: UIntSize(2) } } => token
+            "function=$(token -> offset(UIntSize(2)))" -> println
+            "entry=$(token.span.start + UIntSize(2))" -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

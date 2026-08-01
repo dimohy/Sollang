@@ -1,0 +1,40 @@
+import sollang.compiler.llvm.text as llvm
+
+# A qualified runtime flush must resolve to the declared sys.runtime intrinsic
+# and emit its native wrapper, never an unresolved (-1, -1) call target.
+main {
+    [
+        """
+        import sys.runtime as runtime
+
+        main {
+            "ready" -> println
+            runtime.flushStandardOutput()
+        }
+        """,
+        """
+        namespace sys.runtime
+
+        public print value: Text -> Unit = intrinsic
+        public println value: Text -> Unit = intrinsic
+        public readInt prompt: Text -> Int = intrinsic
+        public seedRandom value: Int -> Unit = intrinsic
+        public randomBelow maxExclusive: Int -> Int = intrinsic
+        public openIntWriter path: Text -> Unit = intrinsic
+        public writeInt value: Int -> Unit = intrinsic
+        public closeIntWriter: -> Unit = intrinsic
+        public openIntReader path: Text -> Unit = intrinsic
+        public closestInt target: Int -> Int = intrinsic
+        public closeIntReader: -> Unit = intrinsic
+        public nowMillis: -> Long = intrinsic
+        public parallel<T, R> values: [T; ~] -> [R; ~] block item: T -> R = intrinsic
+        public tryParallel<T, R, E> values: [T; ~] -> Result<[R; ~], E> block item: T -> Result<R, E> = intrinsic
+        public limitParallelWorkers maxWorkers: Int -> Int = intrinsic
+        public parallelWorkers: -> Int = intrinsic
+        public parallelPeakWorkers: -> Int = intrinsic
+        public eprintln value: Text -> Unit = intrinsic
+        public flushStandardOutput: -> Unit uses Console = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

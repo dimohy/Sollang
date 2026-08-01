@@ -1,0 +1,39 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A generated test entry must retain qualified intrinsic calls after selected
+# test symbols are promoted in a multi-source package.
+main {
+    """
+    test_failure: -> Bool => false
+    """ => testSource
+    """
+    namespace sys.process
+    public exit code: Int -> Unit uses Process = intrinsic
+    """ => processSource
+    """
+    import sys.process as process
+    main {
+        false -> if { 0 -> process.exit } else { 1 -> process.exit }
+    }
+    """ => harnessSource
+    [testSource, processSource, harnessSource; ~] => sources!
+    [0; ~] => selectedSources!
+    [0; ~] => selectedSymbols!
+    sources! -> semanticContext.prepareTests(selectedSources!, selectedSymbols!) => prepared!
+    prepared!.calls -> each call {
+        "call=$(call.sourceModule),$(call.callAst),$(call.origin),$(call.targetModule),$(call.targetSourceModule),$(call.functionSymbol),$(call.status)" -> println
+    }
+    prepared!.qualified -> each qualified {
+        "qualified=$(qualified.sourceModule),$(qualified.pathAst),$(qualified.targetModule),$(qualified.targetSymbol),$(qualified.status)" -> println
+    }
+    prepared! -> typedIr.lowerContext => ir!
+    0 => nodeIndex!
+    nodeIndex! < (ir! -> len) -> while {
+        ir![nodeIndex!] => node
+        (node.kind == 6 or node.kind == 11 or node.kind == 13) -> if {
+            "ir=$(nodeIndex!),$(node.kind),$(node.sourceModule),$(node.symbol),$(node.targetModule),$(node.opcode),$(node.operand0),$(node.operand1),$(node.nextOperand),$(node.flags)" -> println
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+}

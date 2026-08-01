@@ -6,6 +6,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "selfhost-verification-lock.ps1")
+$selfHostVerificationLock = Enter-SelfHostVerificationLock
+try {
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
 $runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
@@ -24,6 +28,7 @@ $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\self
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
 $fileIntrinsicsControlSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-file-intrinsics-control.slg"
 $directoryCreateSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-directory-create.slg"
+$pathNormalizeResultSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-path-normalize-result.slg"
 $runtimeEprintlnSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln.slg"
 $runtimeEprintlnInterpolationSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln-interpolation.slg"
 $runtimeEprintlnSourceTextSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln-source-text.slg"
@@ -88,13 +93,17 @@ function Invoke-ProcessToFile {
     )
 
     Remove-Item -LiteralPath $OutputPath, $ErrorPath -ErrorAction SilentlyContinue
-    $process = Start-Process `
-        -FilePath $FilePath `
-        -ArgumentList $ArgumentList `
-        -RedirectStandardOutput $OutputPath `
-        -RedirectStandardError $ErrorPath `
-        -PassThru `
-        -WindowStyle Hidden
+    $startParameters = @{
+        FilePath = $FilePath
+        RedirectStandardOutput = $OutputPath
+        RedirectStandardError = $ErrorPath
+        PassThru = $true
+        WindowStyle = "Hidden"
+    }
+    if ($ArgumentList.Count -gt 0) {
+        $startParameters.ArgumentList = $ArgumentList
+    }
+    $process = Start-Process @startParameters
     $null = $process.Handle
     return $process
 }
@@ -292,6 +301,34 @@ if ($directoryCreateActual -ne "created`nexists" -or -not (Test-Path -LiteralPat
     throw "directory creation contract mismatch: '$directoryCreateActual'"
 }
 Write-Host "[stage2 1/7] PASS directory creation and existing-directory idempotence."
+
+$pathNormalizeResultLlvm = Join-Path $artifactsDir "stage2-check-path-normalize-result.ll"
+$pathNormalizeResultBitcode = Join-Path $artifactsDir "stage2-check-path-normalize-result.bc"
+$pathNormalizeResultExecutable = Join-Path $artifactsDir "stage2-check-path-normalize-result.exe"
+$pathNormalizeResultStdout = Join-Path $artifactsDir "stage2-check-path-normalize-result.stdout.txt"
+$pathNormalizeResultStderr = Join-Path $artifactsDir "stage2-check-path-normalize-result.stderr.txt"
+$pathNormalizeResultError = Join-Path $artifactsDir "stage2-check-path-normalize-result.err"
+$pathNormalizeResultProcess = Invoke-ProcessToFile `
+    $stage1Path `
+    (@("windows", $pathNormalizeResultSource) + $compilerRuntimeSources) `
+    $pathNormalizeResultLlvm `
+    $pathNormalizeResultError
+Assert-ProcessSucceeded $pathNormalizeResultProcess $pathNormalizeResultError "stage-1 owned Result path normalization emission"
+& $llvmAsPath $pathNormalizeResultLlvm -o $pathNormalizeResultBitcode
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $clangPath -Wno-override-module $pathNormalizeResultLlvm -o $pathNormalizeResultExecutable -lshell32 -Xlinker /subsystem:console
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$pathNormalizeResultRun = Invoke-ProcessToFile `
+    $pathNormalizeResultExecutable `
+    @() `
+    $pathNormalizeResultStdout `
+    $pathNormalizeResultStderr
+Assert-ProcessSucceeded $pathNormalizeResultRun $pathNormalizeResultStderr "stage-1 owned Result path normalization execution"
+$pathNormalizeResultActual = [System.IO.File]::ReadAllText($pathNormalizeResultStdout).Replace("`r`n", "`n").TrimEnd("`n")
+if ($pathNormalizeResultActual -ne "artifacts\native-grammar-build\probe\generated.slg`ntrue") {
+    throw "owned Result path normalization contract mismatch: '$pathNormalizeResultActual'"
+}
+Write-Host "[stage2 1/7] PASS owned Result nested-return path normalization."
 
 Write-Host "[stage2 2/7] Build or reuse the complete stage-2 compiler."
 if (Test-Stage2IsCurrent) {
@@ -526,7 +563,7 @@ foreach ($case in @(
     @($singleStage2Llvm, "stage2-check-single.exe", "stage2-single-ok"),
     @($multiStage2Llvm, "stage2-check-multi.exe", "stage2-multi-ok"),
     @($groupedStage2Llvm, "stage2-check-grouped-not.exe", "grouped-not-ok"),
-    @($interpolationLengthStage2Llvm, "stage2-check-interpolation-len.exe", "count=4"),
+    @($interpolationLengthStage2Llvm, "stage2-check-interpolation-len.exe", "count=4`nmaterialized=4"),
     @($nestedUInt8IfStage2Llvm, "stage2-check-if-uint8.exe", "ok"),
     @($unusedIfStage2Llvm, "stage2-check-unused-if.exe", "ok"),
     @($unusedMatchStage2Llvm, "stage2-check-unused-match.exe", "ok"),
@@ -904,3 +941,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "[stage2 7/7] PASS complete stage-2 differential verification."
+}
+finally {
+    Release-SelfHostVerificationLock $selfHostVerificationLock
+}

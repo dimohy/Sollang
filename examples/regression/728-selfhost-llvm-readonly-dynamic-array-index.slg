@@ -1,0 +1,28 @@
+import sollang.compiler.llvm.text as llvm
+
+# Indexing a readonly reference loads its pointee aggregate first. Both the
+# function body and its while region must extract from that aggregate type,
+# never from the reference pointer type.
+main {
+    [
+        """
+        bytesEqualText bytes: ref [UInt8; ~], value: Text -> Bool {
+            (bytes -> len) == (value -> len) => equal!
+            UIntSize(0) => index!
+            (equal! and index! < (value -> len)) -> while {
+                bytes[Int(index!)] != (value -> byte(index!)) -> if {
+                    false => equal!
+                }
+                index! + UIntSize(1) => index!
+            }
+            equal!
+        }
+
+        main {
+            [UInt8(97), UInt8(98); ~] => bytes!
+            bytes! -> bytesEqualText("ab") -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

@@ -1,0 +1,25 @@
+import sollang.compiler.llvm.text as llvm
+
+# Value-producing control expressions inside loops must allocate their result
+# slots once in the function entry instead of consuming stack per iteration.
+main {
+    [
+        """
+        main {
+            0 => index!
+            0 => total!
+            index! < 200000 -> while {
+                (index! % 2 == 0 -> if {
+                    1
+                } else {
+                    2
+                }) => amount
+                total! + amount => total!
+                index! + 1 => index!
+            }
+            "total=$(total!)" -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

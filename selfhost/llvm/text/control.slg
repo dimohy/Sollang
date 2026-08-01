@@ -44,6 +44,75 @@ regionReturns regionIndex: Int, context: ref emitterContext.EmitContext, state: 
     }
     returns!
 }
+emitResultPropagation tryIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[tryIndex] => tryNode
+    context.ir[tryNode.operand0] => operand
+    context.ir[ownerIndex] => owner
+    operand.typeId => operandTypeId
+    owner.typeId => ownerTypeId
+    context.types[operandTypeId] => operandType
+    operandType.first => okTypeId
+    operandType.second => errorTypeId
+
+    "  %try$(tryIndex)_slot = alloca " -> print
+    operandTypeId -> writeSemanticTypeId(context, state)
+    ", align $(context.typeAligns[operandTypeId])" -> println
+    "  store " -> print
+    operandTypeId -> writeSemanticTypeId(context, state)
+    " " -> print
+    tryNode.operand0 -> writeValue(ownerIndex, context, state)
+    ", ptr %try$(tryIndex)_slot, align $(context.typeAligns[operandTypeId])" -> println
+    "  %try$(tryIndex)_tag = extractvalue " -> print
+    operandTypeId -> writeSemanticTypeId(context, state)
+    " " -> print
+    tryNode.operand0 -> writeValue(ownerIndex, context, state)
+    ", 0" -> println
+    "  %try$(tryIndex)_is_error = icmp eq i32 %try$(tryIndex)_tag, 1" -> println
+    "  br i1 %try$(tryIndex)_is_error, label %try$(tryIndex)_error, label %try$(tryIndex)_ok" -> println
+    "try$(tryIndex)_error:" -> println
+    "  %try$(tryIndex)_error_addr = getelementptr inbounds " -> print
+    operandTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %try$(tryIndex)_slot, i32 0, i32 1" -> println
+    "  %try$(tryIndex)_error_value = load " -> print
+    errorTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %try$(tryIndex)_error_addr, align $(context.typeAligns[errorTypeId])" -> println
+    "  %try$(tryIndex)_return_slot = alloca " -> print
+    ownerTypeId -> writeSemanticTypeId(context, state)
+    ", align $(context.typeAligns[ownerTypeId])" -> println
+    "  store " -> print
+    ownerTypeId -> writeSemanticTypeId(context, state)
+    " zeroinitializer, ptr %try$(tryIndex)_return_slot, align $(context.typeAligns[ownerTypeId])" -> println
+    "  %try$(tryIndex)_return_tag = getelementptr inbounds " -> print
+    ownerTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %try$(tryIndex)_return_slot, i32 0, i32 0" -> println
+    "  store i32 1, ptr %try$(tryIndex)_return_tag, align 4" -> println
+    "  %try$(tryIndex)_return_payload = getelementptr inbounds " -> print
+    ownerTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %try$(tryIndex)_return_slot, i32 0, i32 1" -> println
+    "  store " -> print
+    errorTypeId -> writeSemanticTypeId(context, state)
+    " %try$(tryIndex)_error_value, ptr %try$(tryIndex)_return_payload, align $(context.typeAligns[errorTypeId])" -> println
+    "  %try$(tryIndex)_return_value = load " -> print
+    ownerTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %try$(tryIndex)_return_slot, align $(context.typeAligns[ownerTypeId])" -> println
+    tryNode.parent => tryCleanupAncestor!
+    (tryCleanupAncestor! >= 0 and tryCleanupAncestor! != ownerIndex) -> while {
+        (context.ir[tryCleanupAncestor!].kind == 19 or context.ir[tryCleanupAncestor!].kind == 1) -> if {
+            OwnedDropRequest { regionIndex: tryCleanupAncestor!, beforeAst: tryNode.astNode, edgeIndex: tryIndex * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+        }
+        context.ir[tryCleanupAncestor!].parent => tryCleanupAncestor!
+    }
+    "  ret " -> print
+    ownerTypeId -> writeSemanticTypeId(context, state)
+    " %try$(tryIndex)_return_value" -> println
+    "try$(tryIndex)_ok:" -> println
+    "  %try$(tryIndex)_ok_addr = getelementptr inbounds " -> print
+    operandTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %try$(tryIndex)_slot, i32 0, i32 1" -> println
+    "  %v$(tryIndex) = load " -> print
+    okTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %try$(tryIndex)_ok_addr, align $(context.typeAligns[okTypeId])" -> println
+}
 emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.pointerBitWidth / 8 => regionPointerAlignment
     context.ir[regionIndex] => region
@@ -124,6 +193,16 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                     }
                                 }
                                 localIfSearch! + 1 => localIfSearch!
+                            }
+                            false => localInsideLogicalValue!
+                            localCandidate.parent => localLogicalAncestor!
+                            (localLogicalAncestor! >= 0 and localLogicalAncestor! != regionTaskNode and not localInsideLogicalValue!) -> while {
+                                context.ir[localLogicalAncestor!] => localLogicalAncestorNode
+                                (localLogicalAncestorNode.kind == 8 and (localLogicalAncestorNode.opcode == -24 or localLogicalAncestorNode.opcode == -25)) -> if {
+                                    true => localInsideLogicalValue!
+                                } else {
+                                    localLogicalAncestorNode.parent => localLogicalAncestor!
+                                }
                             }
                             localIfCondition! -> if {
                                 true => localScheduled![localCandidateIndex! - regionLocalStart]
@@ -248,7 +327,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                     }
                                 }
                                 localReady! -> if {
-                                    localOrder! -> push(localCandidateIndex!)
+                                    not localInsideLogicalValue! -> if { localOrder! -> push(localCandidateIndex!) }
                                     true => localScheduled![localCandidateIndex! - regionLocalStart]
                                     true => localProgress!
                                 }
@@ -367,8 +446,24 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
         regionNode.kind == 23 -> if {
             -1 => returnedSymbol!
             regionNode.operand0 >= 0 -> if {
-                context.ir[regionNode.operand0] => returnedNode
-                returnedNode.kind == 5 -> if { returnedNode.symbol => returnedSymbol! }
+                regionNode.operand0 => returnedValueIndex!
+                true => resolvingReturnedValue!
+                resolvingReturnedValue! -> while {
+                    false => resolvingReturnedValue!
+                    returnedValueIndex! -> aggregateValueIndex(context, state) => returnedAggregateIndex
+                    returnedAggregateIndex != returnedValueIndex! -> if {
+                        returnedAggregateIndex => returnedValueIndex!
+                        true => resolvingReturnedValue!
+                    } else {
+                        context.ir[returnedValueIndex!] => returnedValueNode
+                        (returnedValueNode.kind == 26 and returnedValueNode.operand0 >= 0) -> if {
+                            returnedValueNode.operand0 => returnedValueIndex!
+                            true => resolvingReturnedValue!
+                        }
+                    }
+                }
+                context.ir[returnedValueIndex!] => returnedNode
+                (returnedNode.kind == 5 or returnedNode.kind == 17) -> if { returnedNode.symbol => returnedSymbol! }
             }
             regionNode.parent => returnCleanupAncestor!
             (returnCleanupAncestor! >= 0 and returnCleanupAncestor! != ownerIndex!) -> while {
@@ -473,7 +568,12 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             "  %v$(regionNodeIndex!)_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(regionNodeIndex!), 0" -> println
             "  %v$(regionNodeIndex!) = insertvalue %sollang.text %v$(regionNodeIndex!)_ptr, i64 $regionTextLength, 1" -> println
         }
-        (regionNode.kind == 5 and not (regionNode -> isArgumentsType) and ownerIndex! >= 0 and not (context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionNode.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol)) -> if {
+        (regionNode.kind == 5 and not (regionNode -> isArgumentsType) and ownerIndex! >= 0) -> if {
+            regionNodeIndex! -> mutableBorrowParameterOrdinal(ownerIndex!, context, state) => regionMutableParameterOrdinal
+            regionMutableParameterOrdinal >= 0 -> if {
+                regionNodeIndex! -> emitCurrentMutableParameterValue(regionMutableParameterOrdinal, ownerIndex!, context, state)
+            } else {
+            not (context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionNode.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if {
             regionNode.symbol => regionParameterSymbol
             ownerIndex! -> additionalParameterOrdinal(regionParameterSymbol, context, state) => regionParameterOrdinal
             regionParameterOrdinal >= 0 -> if {
@@ -512,6 +612,8 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 }
             }
             }
+            }
+            }
         }
         (regionNode.kind == 17 and regionNode.flags == 1) -> if {
             regionNodeIndex! -> mutableBindingRoot(context, state) => mutableRegionRoot
@@ -537,7 +639,9 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                     ((context.sources[mutableRegionValue.sourceModule] -> byte(mutableRegionToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                 }
             } else { castMutableRegionValue! -> if { "%v$(regionNodeIndex!)_mutable_cast" -> print } else { "%v$(regionNode.operand0)" -> print } }
-            ", ptr %slot$(mutableRegionRoot), align " -> print
+            ", ptr " -> print
+            mutableRegionRoot -> writeMutableStoragePointer(ownerIndex!, context, state)
+            ", align " -> print
             mutableRegionBinding -> storageAlign(context, state) -> writeDecimalLine
         }
         regionNode.kind == 24 -> if {
@@ -550,6 +654,10 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: regionNodeIndex! } -> emitEnumConstructor(context, state)
         }
         regionNode.kind == 27 -> if { regionNodeIndex! -> emitEnumMatch(context, state) }
+        regionNode.kind == 34 -> if { regionNodeIndex! -> emitSubjectWhen(context, state) }
+        (regionNode.kind == 30 and context.nodes[context.ranges[regionNode.sourceModule].astStart + regionNode.astNode].kind == 71) -> if {
+            regionNodeIndex! -> emitResultPropagation(ownerIndex!, context, state)
+        }
         regionNode.kind == 12 -> if {
             regionNode.operand0 < 0 -> if {
                 "  %v$(regionNodeIndex!) = freeze " -> print
@@ -671,22 +779,94 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             }
         }
         regionNode.kind == 13 -> if {
-            (regionNode.operand0 >= 0 and context.ir[regionNode.operand0].typeId >= 0 and context.types[context.ir[regionNode.operand0].typeId].kind == 8) -> if {
-                context.ir[regionNode.operand0] => regionReferenceMemberBase
-                context.types[regionReferenceMemberBase.typeId].first => regionReferenceMemberOwnerType
-                "  %v$(regionNodeIndex!)_address = getelementptr inbounds " -> print
-                regionReferenceMemberOwnerType -> writeSemanticTypeId(context, state)
-                ", ptr " -> print
-                ownerIndex! -> writeReferencePlaceValue(regionNode.operand0, context, state)
-                ", i32 0, i32 $(regionNode.symbol)" -> println
-                regionNode.typeId => regionReferenceMemberValueType!
-                (regionReferenceMemberValueType! >= 0 and context.types[regionReferenceMemberValueType!].kind == 8) -> if {
-                    context.types[regionReferenceMemberValueType!].first => regionReferenceMemberValueType!
+            (regionNodeIndex! -> canonicalMemberPathAvailable(context, state)) -> if {
+                context.ir[regionNode.operand0] => regionCanonicalMemberBase
+                regionNode -> sourceNode(context, state) => regionCanonicalMemberAst
+                regionCanonicalMemberBase -> sourceNode(context, state) => regionCanonicalMemberBaseAst
+                regionCanonicalMemberBaseAst.start + regionCanonicalMemberBaseAst.length => regionCanonicalMemberBaseEnd
+                regionCanonicalMemberAst.firstToken => regionCanonicalMemberTokenIndex!
+                true => regionCanonicalBeforeMemberBaseEnd!
+                (regionCanonicalBeforeMemberBaseEnd! and regionCanonicalMemberTokenIndex! < regionCanonicalMemberAst.firstToken + regionCanonicalMemberAst.tokenCount) -> while {
+                    context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionCanonicalMemberTokenIndex!].span.start < regionCanonicalMemberBaseEnd -> if {
+                        regionCanonicalMemberTokenIndex! + 1 => regionCanonicalMemberTokenIndex!
+                    } else { false => regionCanonicalBeforeMemberBaseEnd! }
                 }
-                "  %v$(regionNodeIndex!) = load " -> print
-                regionReferenceMemberValueType! >= 0 -> if { regionReferenceMemberValueType! -> writeSemanticTypeId(context, state) } else { regionNode -> writeIrType(context, state) }
-                ", ptr %v$(regionNodeIndex!)_address, align " -> print
-                regionReferenceMemberValueType! >= 0 -> if { context.typeAligns[regionReferenceMemberValueType!] -> writeDecimalLine } else { regionNode -> storageAlign(context, state) -> writeDecimalLine }
+                regionCanonicalMemberTokenIndex! => regionCanonicalMemberPathStart
+                0 => regionCanonicalMemberCount!
+                regionCanonicalMemberTokenIndex! < regionCanonicalMemberAst.firstToken + regionCanonicalMemberAst.tokenCount -> while {
+                    context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionCanonicalMemberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+                        regionCanonicalMemberCount! + 1 => regionCanonicalMemberCount!
+                    }
+                    regionCanonicalMemberTokenIndex! + 1 => regionCanonicalMemberTokenIndex!
+                }
+                regionCanonicalMemberBase.typeId => regionCanonicalMemberOwnerType!
+                0 => regionCanonicalMemberOrdinal!
+                regionCanonicalMemberPathStart => regionCanonicalMemberTokenIndex!
+                regionCanonicalMemberTokenIndex! < regionCanonicalMemberAst.firstToken + regionCanonicalMemberAst.tokenCount -> while {
+                    context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionCanonicalMemberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+                        false => regionCanonicalMemberReference!
+                        context.types[regionCanonicalMemberOwnerType!].kind == 8 -> if {
+                            context.types[regionCanonicalMemberOwnerType!].first => regionCanonicalMemberOwnerType!
+                            true => regionCanonicalMemberReference!
+                        }
+                        regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1 -> if {
+                            regionCanonicalMemberOwnerType! -> canonicalMemberFieldOrdinalIndex(regionNode.symbol, context)
+                        } else {
+                            regionCanonicalMemberOwnerType! -> canonicalMemberFieldIndex(regionNode.sourceModule, regionCanonicalMemberTokenIndex!, context)
+                        } => regionCanonicalMemberResolvedField
+                        context.fields[regionCanonicalMemberResolvedField] => regionCanonicalMemberField
+                        "  " -> print
+                        regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1 -> if { "%v$(regionNodeIndex!)" -> print } else { "%v$(regionNodeIndex!)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                        regionCanonicalMemberReference! -> if {
+                            "_address = getelementptr inbounds " -> print
+                            regionCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
+                            ", ptr " -> print
+                            regionCanonicalMemberOrdinal! == 0 -> if { ownerIndex! -> writeReferencePlaceValue(regionNode.operand0, context, state) } else { "%v$(regionNodeIndex!)_m$(regionCanonicalMemberOrdinal! - 1)" -> print }
+                            ", i32 0, i32 $(regionCanonicalMemberField.ordinal)" -> println
+                            "  " -> print
+                            regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1 -> if { "%v$(regionNodeIndex!)" -> print } else { "%v$(regionNodeIndex!)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                            " = load " -> print
+                            regionCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                            ", ptr " -> print
+                            regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1 -> if { "%v$(regionNodeIndex!)" -> print } else { "%v$(regionNodeIndex!)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                            "_address, align $(context.typeAligns[regionCanonicalMemberField.fieldType])" -> println
+                        } else {
+                            " = extractvalue " -> print
+                            regionCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
+                            " " -> print
+                            regionCanonicalMemberOrdinal! == 0 -> if { regionNode.operand0 -> writeValue(ownerIndex!, context, state) } else { "%v$(regionNodeIndex!)_m$(regionCanonicalMemberOrdinal! - 1)" -> print }
+                            ", $(regionCanonicalMemberField.ordinal)" -> println
+                        }
+                        regionCanonicalMemberField.fieldType => regionCanonicalMemberOwnerType!
+                        regionCanonicalMemberOrdinal! + 1 => regionCanonicalMemberOrdinal!
+                    }
+                    regionCanonicalMemberTokenIndex! + 1 => regionCanonicalMemberTokenIndex!
+                }
+            } else {
+            (regionNode.operand0 >= 0 and context.ir[regionNode.operand0].typeId >= 0) -> if {
+                context.ir[regionNode.operand0] => regionReferenceMemberBase
+                context.types[regionReferenceMemberBase.typeId].kind == 8 -> if {
+                    context.types[regionReferenceMemberBase.typeId].first => regionReferenceMemberOwnerType
+                    "  %v$(regionNodeIndex!)_address = getelementptr inbounds " -> print
+                    regionReferenceMemberOwnerType -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    ownerIndex! -> writeReferencePlaceValue(regionNode.operand0, context, state)
+                    ", i32 0, i32 $(regionNode.symbol)" -> println
+                    regionNode.typeId => regionReferenceMemberValueType!
+                    (regionReferenceMemberValueType! >= 0 and context.types[regionReferenceMemberValueType!].kind == 8) -> if {
+                        context.types[regionReferenceMemberValueType!].first => regionReferenceMemberValueType!
+                    }
+                    "  %v$(regionNodeIndex!) = load " -> print
+                    regionReferenceMemberValueType! >= 0 -> if { regionReferenceMemberValueType! -> writeSemanticTypeId(context, state) } else { regionNode -> writeIrType(context, state) }
+                    ", ptr %v$(regionNodeIndex!)_address, align " -> print
+                    regionReferenceMemberValueType! >= 0 -> if { context.typeAligns[regionReferenceMemberValueType!] -> writeDecimalLine } else { regionNode -> storageAlign(context, state) -> writeDecimalLine }
+                } else {
+                    "  %v$(regionNodeIndex!) = extractvalue " -> print
+                    regionReferenceMemberBase.typeId -> writeSemanticTypeId(context, state)
+                    " " -> print
+                    ownerIndex! -> writeReferencePlaceValue(regionNode.operand0, context, state)
+                    ", $(regionNode.symbol)" -> println
+                }
             } else {
             regionNode -> isArgumentsType -> if {
             } else {
@@ -795,6 +975,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             }
             }
             }
+            }
         }
         (regionNode.kind == 9 and regionNode.opcode == -224 and regionNode.operand0 >= 0) -> if {
             context.ir[regionNode.operand0] => regionDynConcrete
@@ -829,37 +1010,30 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             }
         }
         ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -201 and regionNode.operand0 >= 0) -> if {
-            context.ir[regionNode.operand0] => regionLengthBase
-            regionNode -> integerNodeWidth(context, state) => regionLengthResultWidth
-            regionLengthBase -> isArgumentsType -> if {
-                "  %v$(regionNodeIndex!)" -> print
-                regionLengthResultWidth == 32 -> if { "_raw" -> print }
-                " = call i64 @sollang_argument_count()" -> println
-                regionLengthResultWidth == 32 -> if { "  %v$(regionNodeIndex!) = trunc i64 %v$(regionNodeIndex!)_raw to i32" -> println }
-            } else {
-                -1 => regionLengthMutableRoot!
-                regionLengthBase.typeOrigin == 15 -> if { regionNode.operand0 -> mutableStorageRoot(context, state) => regionLengthMutableRoot! }
-                regionLengthMutableRoot! >= 0 -> if { "  %v$(regionNodeIndex!)_length_source = load %sollang.dict, ptr %slot$(regionLengthMutableRoot!), align 8" -> println }
-                "  %v$(regionNodeIndex!)" -> print
-                regionLengthResultWidth == 32 -> if { "_raw" -> print }
-                " = extractvalue " -> print
-                regionLengthBase -> writeIrType(context, state)
-                " " -> print
-                regionLengthMutableRoot! >= 0 -> if { "%v$(regionNodeIndex!)_length_source" -> print } else { (regionLengthBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionLengthBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print } }
-                ", " -> print
-                regionLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
-                regionLengthResultWidth == 32 -> if { "  %v$(regionNodeIndex!) = trunc i64 %v$(regionNodeIndex!)_raw to i32" -> println }
-            }
+            regionNodeIndex! -> emitLengthIntrinsic(ownerIndex!, context, state)
         }
         ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -202 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
             context.ir[regionNode.operand0] => regionByteBase
             regionNode.operand1 -> aggregateValueIndex(context, state) => regionByteIndexValue
             context.ir[regionByteIndexValue] => regionByteIndex
             regionByteIndex -> integerNodeWidth(context, state) => regionByteIndexWidth
+            regionByteBase.typeId => regionByteBaseTypeId!
+            false => regionByteBaseReference!
+            (regionByteBaseTypeId! >= 0 and context.types[regionByteBaseTypeId!].kind == 8) -> if {
+                context.types[regionByteBaseTypeId!].first => regionByteBaseTypeId!
+                true => regionByteBaseReference!
+                "  %v$(regionNodeIndex!)_base_source = load " -> print
+                regionByteBaseTypeId! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                regionNode.operand0 -> writeValue(ownerIndex!, context, state)
+                ", align 8" -> println
+            }
             "  %v$(regionNodeIndex!)_base = extractvalue " -> print
-            regionByteBase -> writeTextLikeType
+            regionByteBaseReference! -> if { regionByteBaseTypeId! -> writeSemanticTypeId(context, state) } else { regionByteBase -> writeTextLikeType }
             " " -> print
-            (regionByteBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionByteBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+            regionByteBaseReference! -> if { "%v$(regionNodeIndex!)_base_source" -> print } else {
+                (regionByteBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionByteBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+            }
             ", 0" -> println
             (regionByteIndexWidth > 0 and regionByteIndexWidth < 64) -> if {
                 "  %v$(regionNodeIndex!)_index = " -> print
@@ -871,16 +1045,29 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             "  %v$(regionNodeIndex!) = load i8, ptr %v$(regionNodeIndex!)_address, align 1" -> println
         }
         ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -203 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
-            context.ir[regionNode.operand1].nextOperand => regionSliceLength
+            context.ir[regionNode.operand1].nextOperand -> aggregateValueIndex(context, state) => regionSliceLength
             context.ir[regionNode.operand0] => regionSliceBase
             context.ir[regionNode.operand1] => regionSliceIndex
             context.ir[regionSliceLength] => regionSliceLengthNode
             regionSliceIndex -> integerNodeWidth(context, state) => regionSliceIndexWidth
             regionSliceLengthNode -> integerNodeWidth(context, state) => regionSliceLengthWidth
+            regionSliceBase.typeId => regionSliceBaseTypeId!
+            false => regionSliceBaseReference!
+            (regionSliceBaseTypeId! >= 0 and context.types[regionSliceBaseTypeId!].kind == 8) -> if {
+                context.types[regionSliceBaseTypeId!].first => regionSliceBaseTypeId!
+                true => regionSliceBaseReference!
+                "  %v$(regionNodeIndex!)_base_source = load " -> print
+                regionSliceBaseTypeId! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                regionNode.operand0 -> writeValue(ownerIndex!, context, state)
+                ", align 8" -> println
+            }
             "  %v$(regionNodeIndex!)_base = extractvalue " -> print
-            regionSliceBase -> writeTextLikeType
+            regionSliceBaseReference! -> if { regionSliceBaseTypeId! -> writeSemanticTypeId(context, state) } else { regionSliceBase -> writeTextLikeType }
             " " -> print
-            (regionSliceBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionSliceBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+            regionSliceBaseReference! -> if { "%v$(regionNodeIndex!)_base_source" -> print } else {
+                (regionSliceBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionSliceBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+            }
             ", 0" -> println
             (regionSliceIndexWidth > 0 and regionSliceIndexWidth < 64) -> if {
                 "  %v$(regionNodeIndex!)_index = " -> print
@@ -1003,7 +1190,13 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
         (regionNode.kind == 6 and regionNode.opcode == -233) -> if {
             DirectoryCallRequest { callIndex: regionNodeIndex!, ownerIndex: ownerIndex! } -> emitCreateDirectoryCall(context, state)
         }
-        (regionNode.kind == 14 and (regionNode.typeOrigin == 13 or regionNode.typeOrigin == 14 or regionNode.typeKind == 3)) -> if {
+        (regionNode.kind == 6 and regionNode.symbol < 0 and regionNode.opcode == -1 and regionNode.typeOrigin == 1 and regionNode.typeSymbol == 15 and regionNode.operand0 >= 0) -> if {
+            WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: 0 } -> emitArenaConstructor(context, state)
+        }
+        ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -229 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
+            WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: 0 } -> emitTextMaterialize(context, state)
+        }
+        (regionNode.kind == 14 and ((regionNode -> isDynamicArrayType) or (regionNode -> isFixedArrayType))) -> if {
             0 => regionArrayLength!
             regionNode.operand0 => regionArrayCountIndex!
             regionArrayCountIndex! >= 0 -> while {
@@ -1011,7 +1204,11 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 context.ir[regionArrayCountIndex!].nextOperand => regionArrayCountIndex!
             }
             regionArrayLength! * (regionNode -> arrayElementSize(context, state)) => regionArrayByteLength
-            "  %v$(regionNodeIndex!)_data = call ptr @malloc(i64 $regionArrayByteLength)" -> println
+            regionArrayByteLength == 0 -> if {
+                "  %v$(regionNodeIndex!)_data = inttoptr i64 0 to ptr" -> println
+            } else {
+                "  %v$(regionNodeIndex!)_data = call ptr @malloc(i64 $regionArrayByteLength)" -> println
+            }
             regionNode.operand0 => regionArrayElementIndex!
             0 => regionArrayElementPosition!
             regionArrayElementIndex! >= 0 -> while {
@@ -1031,9 +1228,14 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 regionArrayElement.nextOperand => regionArrayElementIndex!
                 regionArrayElementPosition! + 1 => regionArrayElementPosition!
             }
-            "  %v$(regionNodeIndex!)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(regionNodeIndex!)_data, 0" -> println
-            "  %v$(regionNodeIndex!)_1 = insertvalue %sollang.array.i32 %v$(regionNodeIndex!)_0, i64 $(regionArrayLength!), 1" -> println
-            "  %v$(regionNodeIndex!) = insertvalue %sollang.array.i32 %v$(regionNodeIndex!)_1, i64 $(regionArrayLength!), 2" -> println
+            regionNode -> isFixedArrayType -> if {
+                "  %v$(regionNodeIndex!)_0 = insertvalue { ptr, i64 } poison, ptr %v$(regionNodeIndex!)_data, 0" -> println
+                "  %v$(regionNodeIndex!) = insertvalue { ptr, i64 } %v$(regionNodeIndex!)_0, i64 $(regionArrayLength!), 1" -> println
+            } else {
+                "  %v$(regionNodeIndex!)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(regionNodeIndex!)_data, 0" -> println
+                "  %v$(regionNodeIndex!)_1 = insertvalue %sollang.array.i32 %v$(regionNodeIndex!)_0, i64 $(regionArrayLength!), 1" -> println
+                "  %v$(regionNodeIndex!) = insertvalue %sollang.array.i32 %v$(regionNodeIndex!)_1, i64 $(regionArrayLength!), 2" -> println
+            }
         }
         (regionNode.kind == 16 and regionNode.typeOrigin == 15) -> if {
             0 => regionDictionaryItemCount!
@@ -1177,6 +1379,19 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
         regionNode.kind == 15 -> if {
             context.ir[regionNode.operand0] => regionIndexedValue
             context.ir[regionNode.operand1] => regionIndexValue
+            regionIndexedValue.typeId => regionIndexedContainerTypeId!
+            false => regionIndexedReadonlyReference!
+            (regionIndexedContainerTypeId! >= 0 and context.types[regionIndexedContainerTypeId!].kind == 8) -> if {
+                context.types[regionIndexedContainerTypeId!].first => regionIndexedContainerTypeId!
+                true => regionIndexedReadonlyReference!
+                "  %v$(regionNodeIndex!)_indexed_source = load " -> print
+                regionIndexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                regionNode.operand0 -> writeValue(ownerIndex!, context, state)
+                ", align 8" -> println
+            }
+            regionNode.operand0 -> mutableBorrowParameterOrdinal(ownerIndex!, context, state) => regionIndexedMutableParameterOrdinal
+            (regionIndexedValue.typeOrigin == 15 or (regionIndexedReadonlyReference! and context.types[regionIndexedContainerTypeId!].kind == 5)) => regionIndexedIsDictionary
             regionIndexedValue -> isArgumentsType -> if {
                 regionIndexValue -> integerNodeWidth(context, state) => regionArgumentIndexWidth
                 (regionIndexValue.kind != 3 and regionArgumentIndexWidth > 0 and regionArgumentIndexWidth < 64) -> if {
@@ -1198,29 +1413,29 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 }
                 ")" -> println
             } else {
-                regionIndexedValue.typeOrigin == 15 -> if {
+                regionIndexedIsDictionary -> if {
                     regionNode.operand0 -> mutableStorageRoot(context, state) => regionIndexedMutableRoot
                     regionIndexedMutableRoot >= 0 -> if { "  %v$(regionNodeIndex!)_dictionary = load %sollang.dict, ptr %slot$(regionIndexedMutableRoot), align 8" -> println }
                     -1 => regionIndexedDictionaryKeyTypeId!
                     -1 => regionIndexedDictionaryValueTypeId!
-                    regionIndexedValue.typeId >= 0 -> if {
-                        context.types[regionIndexedValue.typeId] => regionIndexedDictionaryType
+                    regionIndexedContainerTypeId! >= 0 -> if {
+                        context.types[regionIndexedContainerTypeId!] => regionIndexedDictionaryType
                         regionIndexedDictionaryType.kind == 5 -> if {
                             regionIndexedDictionaryType.first => regionIndexedDictionaryKeyTypeId!
                             regionIndexedDictionaryType.second => regionIndexedDictionaryValueTypeId!
                         }
                     }
                     "  %v$(regionNodeIndex!)_keys = extractvalue %sollang.dict " -> print
-                    regionIndexedMutableRoot >= 0 -> if { "%v$(regionNodeIndex!)_dictionary" -> print } else { (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print } }
+                    regionIndexedMutableRoot >= 0 -> if { "%v$(regionNodeIndex!)_dictionary" -> print } else { regionIndexedReadonlyReference! -> if { "%v$(regionNodeIndex!)_indexed_source" -> print } else { regionNode.operand0 -> writeValue(ownerIndex!, context, state) } }
                     ", 0" -> println
                     "  %v$(regionNodeIndex!)_values = extractvalue %sollang.dict " -> print
-                    regionIndexedMutableRoot >= 0 -> if { "%v$(regionNodeIndex!)_dictionary" -> print } else { (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print } }
+                    regionIndexedMutableRoot >= 0 -> if { "%v$(regionNodeIndex!)_dictionary" -> print } else { regionIndexedReadonlyReference! -> if { "%v$(regionNodeIndex!)_indexed_source" -> print } else { regionNode.operand0 -> writeValue(ownerIndex!, context, state) } }
                     ", 1" -> println
                     "  %v$(regionNodeIndex!)_length = extractvalue %sollang.dict " -> print
-                    regionIndexedMutableRoot >= 0 -> if { "%v$(regionNodeIndex!)_dictionary" -> print } else { (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print } }
+                    regionIndexedMutableRoot >= 0 -> if { "%v$(regionNodeIndex!)_dictionary" -> print } else { regionIndexedReadonlyReference! -> if { "%v$(regionNodeIndex!)_indexed_source" -> print } else { regionNode.operand0 -> writeValue(ownerIndex!, context, state) } }
                     ", 2" -> println
                     "  %v$(regionNodeIndex!)_capacity = extractvalue %sollang.dict " -> print
-                    regionIndexedMutableRoot >= 0 -> if { "%v$(regionNodeIndex!)_dictionary" -> print } else { (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print } }
+                    regionIndexedMutableRoot >= 0 -> if { "%v$(regionNodeIndex!)_dictionary" -> print } else { regionIndexedReadonlyReference! -> if { "%v$(regionNodeIndex!)_indexed_source" -> print } else { regionNode.operand0 -> writeValue(ownerIndex!, context, state) } }
                     ", 3" -> println
                     -1 => regionIndexedDictionaryKeyStorageSize!
                     regionIndexedDictionaryKeyTypeId! >= 0 -> if { context.typeSizes[regionIndexedDictionaryKeyTypeId!] => regionIndexedDictionaryKeyStorageSize! }
@@ -1428,9 +1643,21 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                     ", ptr %v$(regionNodeIndex!)_value_ptr, align " -> print
                     regionIndexedDictionaryValueTypeId! >= 0 -> if { context.typeAligns[regionIndexedDictionaryValueTypeId!] -> writeDecimalLine } else { regionIndexedValue.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
                 } else {
-                "  %v$(regionNodeIndex!)_data = extractvalue %sollang.array.i32 " -> print
-                (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
-                ", 0" -> println
+                regionIndexedMutableParameterOrdinal >= 0 -> if {
+                    "  %v$(regionNodeIndex!)_data = load ptr, ptr " -> print
+                    regionIndexedMutableParameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(regionIndexedMutableParameterOrdinal)_mut_ptr_addr" -> print }
+                    ", align 8" -> println
+                } else {
+                    "  %v$(regionNodeIndex!)_data = extractvalue " -> print
+                    regionIndexedReadonlyReference! -> if {
+                        regionIndexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                    } else {
+                        regionIndexedValue -> writeIrType(context, state)
+                    }
+                    " " -> print
+                    regionIndexedReadonlyReference! -> if { "%v$(regionNodeIndex!)_indexed_source" -> print } else { regionNode.operand0 -> writeValue(ownerIndex!, context, state) }
+                    ", 0" -> println
+                }
                 false => regionNestedIndex!
                 regionIndexValue -> integerNodeWidth(context, state) => regionIndexWidth!
                 regionIndexValue -> integerNodeSigned(context, state) => regionIndexSigned!
@@ -1497,6 +1724,9 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             }
         }
         ((regionNode.kind == 7 and regionNode.operand0 >= 0) or (regionNode.kind == 8 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0)) -> if {
+            (regionNode.kind == 8 and (regionNode.opcode == -24 or regionNode.opcode == -25)) -> if {
+                regionNodeIndex! -> emitLogicalValue(ownerIndex!, context, state)
+            } else {
             context.ir[regionNode.operand0] => regionLeft
             0 => regionBinaryWidth!
             false => regionLeftPromoted!
@@ -1518,8 +1748,8 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 regionNode.opcode == grammar.tokenIdPlus() -> if { "add" => regionOperation! }
                 regionNode.opcode == grammar.tokenIdMinus() -> if { "sub" => regionOperation! }
                 regionNode.opcode == grammar.tokenIdStar() -> if { "mul" => regionOperation! }
-                regionNode.opcode == grammar.tokenIdSlash() -> if { "sdiv" => regionOperation! }
-                regionNode.opcode == grammar.tokenIdPercent() -> if { "srem" => regionOperation! }
+                regionNode.opcode == grammar.tokenIdSlash() -> if { regionNode -> integerQuotientOperation(context, state) => regionOperation! }
+                regionNode.opcode == grammar.tokenIdPercent() -> if { regionNode -> integerRemainderOperation(context, state) => regionOperation! }
                 regionNode.opcode == grammar.tokenIdEqualEqual() -> if { "icmp eq" => regionOperation! }
                 regionNode.opcode == grammar.tokenIdBangEqual() -> if { "icmp ne" => regionOperation! }
                 (regionNode.opcode == grammar.tokenIdLess() or regionNode.opcode == grammar.tokenIdLessEqual() or regionNode.opcode == grammar.tokenIdGreater() or regionNode.opcode == grammar.tokenIdGreaterEqual()) -> if {
@@ -1564,6 +1794,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                         (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionRight.kind == 5 and regionRight.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> println } else { "%v$(regionNode.operand1)" -> println }
                     }
                 }
+            }
             }
         }
         (regionNode.kind == 6 and regionNode.opcode == -209 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
@@ -1751,7 +1982,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 "  %v$(regionNodeIndex!) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
             }
         }
-        (regionNode.kind == 6 and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and regionNode.opcode != -230 and regionNode.opcode != -233 and not (regionNode -> isSourceTextFileIntrinsic) and (regionNode.opcode > -216 or regionNode.opcode < -221) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+        (regionNode.kind == 6 and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and not (regionNode.symbol < 0 and regionNode.opcode == -1 and regionNode.typeOrigin == 1 and regionNode.typeSymbol == 15) and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and regionNode.opcode != -229 and regionNode.opcode != -230 and regionNode.opcode != -233 and not (regionNode -> isSourceTextFileIntrinsic) and (regionNode.opcode > -216 or regionNode.opcode < -221) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
             (regionNode.symbol == -101 or regionNode.symbol == -102 or regionNode.symbol == -116) -> if {
                 regionNodeIndex! -> callArgumentIndex(context, state) => regionArgumentIndex
                 context.ir[regionArgumentIndex] => regionArgument
@@ -1783,12 +2014,24 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                 } else {
                                     "  call void @sollang_runtime_print(ptr %v$(regionNodeIndex!)_expression_literal$(regionExpressionSegment!), i64 $(regionExpressionRoot.literalLength), i1 false)" -> println
                                 }
-                                Int(regionExpressionInterpolation! -> len) - 1 => regionExpressionNodeIndex!
-                                regionExpressionNodeIndex! >= 0 -> while {
+                                regionExpressionInterpolation! -> interpolationEmissionOrder(regionArgument.payloadToken, regionExpressionRoot.segment) => regionExpressionOrder!
+                                0 => regionExpressionOrderIndex!
+                                regionExpressionOrderIndex! < (regionExpressionOrder! -> len) -> while {
+                                    regionExpressionOrder![regionExpressionOrderIndex!] => regionExpressionNodeIndex!
                                     regionExpressionInterpolation![regionExpressionNodeIndex!] => regionExpressionNode
+                                    regionExpressionNodeIndex! -> interpolationHasLogicalAncestor(regionExpressionInterpolation!) => regionExpressionInsideLogical
                                     (regionExpressionNode.sourceToken == regionArgument.payloadToken
                                         and regionExpressionNode.segment == regionExpressionRoot.segment
+                                        and not regionExpressionInsideLogical) -> if {
+                                        regionNodeIndex! -> emitInterpolationIntrinsic(regionExpressionNodeIndex!, regionExpressionInterpolation!, regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, true, context, state)
+                                    }
+                                    (regionExpressionNode.sourceToken == regionArgument.payloadToken
+                                        and regionExpressionNode.segment == regionExpressionRoot.segment
+                                        and not regionExpressionInsideLogical
                                         and (regionExpressionNode.kind == 2 or regionExpressionNode.kind == 3)) -> if {
+                                        (regionExpressionNode.kind == 3 and (regionExpressionNode.opcode == -24 or regionExpressionNode.opcode == -25)) -> if {
+                                            regionNodeIndex! -> emitInterpolationSubtree(regionExpressionNodeIndex!, regionExpressionInterpolation!, regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, true, context, state)
+                                        } else {
                                         "" => regionExpressionOperation!
                                         regionExpressionNode.kind == 2 -> if { "sub" => regionExpressionOperation! }
                                         (regionExpressionNode.kind == 2 and regionExpressionNode.opcode == -26) -> if { "xor" => regionExpressionOperation! }
@@ -1826,8 +2069,17 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                                 }
                                             }
                                         }
-                                        regionExpressionBoolOperands! -> if { "i1" } else { "i32" } => regionExpressionOperandType
-                                        "  %v$(regionNodeIndex!)_expression$(regionExpressionNodeIndex!) = $(regionExpressionOperation!) $regionExpressionOperandType " -> print
+                                        "  %v$(regionNodeIndex!)_expression$(regionExpressionNodeIndex!) = $(regionExpressionOperation!) " -> print
+                                        regionExpressionBoolOperands! -> if { "i1 " -> print } else {
+                                            regionExpressionNode.operand0 -> interpolationNodeIntegerWidth(regionExpressionInterpolation!, regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, context, state) => regionExpressionLeftWidth
+                                            regionExpressionLeftWidth => regionExpressionRightWidth!
+                                            regionExpressionNode.kind == 3 -> if {
+                                                regionExpressionNode.operand1 -> interpolationNodeIntegerWidth(regionExpressionInterpolation!, regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, context, state) => regionExpressionRightWidth!
+                                            }
+                                            regionExpressionLeftWidth > regionExpressionRightWidth! -> if { regionExpressionLeftWidth } else { regionExpressionRightWidth! } => regionExpressionWidth!
+                                            regionExpressionWidth! <= 0 -> if { 32 => regionExpressionWidth! }
+                                            "i$(regionExpressionWidth!) " -> print
+                                        }
                                         (regionExpressionNode.kind == 2 and regionExpressionNode.opcode != -26) -> if { "0" -> print } else {
                                             regionExpressionInterpolation![regionExpressionNode.operand0] => regionExpressionLeft
                                             (regionExpressionLeft.kind == 0 or regionExpressionLeft.kind == 4) -> if {
@@ -1837,20 +2089,19 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                             } else {
                                                 regionExpressionLeft.kind == 1 -> if {
                                                     (ownerIndex! >= 0 and (context -> writeParameterReference(ownerIndex!, regionExpressionLeft.symbol))) -> if { } else {
-                                                        -1 => regionExpressionLeftBinding!
-                                                        regionOwnerStart => regionExpressionLeftBindingSearch!
-                                                        regionExpressionLeftBindingSearch! < regionOwnerEnd! -> while {
-                                                            (context.ir[regionExpressionLeftBindingSearch!].kind == 17 and context.ir[regionExpressionLeftBindingSearch!].symbol == regionExpressionLeft.symbol) -> if { regionExpressionLeftBindingSearch! => regionExpressionLeftBinding! }
-                                                            regionExpressionLeftBindingSearch! + 1 => regionExpressionLeftBindingSearch!
-                                                        }
+                                                        regionExpressionLeft -> interpolationBindingIndex(regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, context, state) => regionExpressionLeftBinding!
                                                         regionExpressionLeftBinding! >= 0 -> if {
-                                                            context.ir[context.ir[regionExpressionLeftBinding!].operand0] => regionExpressionLeftValue
-                                                            regionExpressionLeftValue.kind == 3 -> if {
-                                                                regionExpressionLeftValue -> sourceToken(context, state) => regionExpressionLeftToken
-                                                                context.sources[regionExpressionLeftValue.sourceModule] -> slice(regionExpressionLeftToken.span.start, regionExpressionLeftToken.span.length) -> print
+                                                            context.ir[regionExpressionLeftBinding!].flags == 1 -> if {
+                                                                "%v$(regionNodeIndex!)_expression$(regionExpressionNode.operand0)_mutable" -> print
                                                             } else {
-                                                                "%v" -> print
-                                                                context.ir[regionExpressionLeftBinding!].operand0 -> writeDecimal
+                                                                context.ir[context.ir[regionExpressionLeftBinding!].operand0] => regionExpressionLeftValue
+                                                                regionExpressionLeftValue.kind == 3 -> if {
+                                                                    regionExpressionLeftValue -> sourceToken(context, state) => regionExpressionLeftToken
+                                                                    context.sources[regionExpressionLeftValue.sourceModule] -> slice(regionExpressionLeftToken.span.start, regionExpressionLeftToken.span.length) -> print
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[regionExpressionLeftBinding!].operand0 -> writeDecimal
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -1868,15 +2119,14 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                                 } else {
                                                     regionExpressionUnary.kind == 1 -> if {
                                                         (ownerIndex! >= 0 and (context -> writeParameterReference(ownerIndex!, regionExpressionUnary.symbol))) -> if { "" -> println } else {
-                                                            -1 => regionExpressionUnaryBinding!
-                                                            regionOwnerStart => regionExpressionUnaryBindingSearch!
-                                                            regionExpressionUnaryBindingSearch! < regionOwnerEnd! -> while {
-                                                                (context.ir[regionExpressionUnaryBindingSearch!].kind == 17 and context.ir[regionExpressionUnaryBindingSearch!].symbol == regionExpressionUnary.symbol) -> if { regionExpressionUnaryBindingSearch! => regionExpressionUnaryBinding! }
-                                                                regionExpressionUnaryBindingSearch! + 1 => regionExpressionUnaryBindingSearch!
-                                                            }
+                                                            regionExpressionUnary -> interpolationBindingIndex(regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, context, state) => regionExpressionUnaryBinding!
                                                             regionExpressionUnaryBinding! >= 0 -> if {
-                                                                "%v" -> print
-                                                                context.ir[regionExpressionUnaryBinding!].operand0 -> writeDecimalLine
+                                                                context.ir[regionExpressionUnaryBinding!].flags == 1 -> if {
+                                                                    "%v$(regionNodeIndex!)_expression$(regionExpressionNode.operand0)_mutable" -> println
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[regionExpressionUnaryBinding!].operand0 -> writeDecimalLine
+                                                                }
                                                             }
                                                         }
                                                     } else { "%v$(regionNodeIndex!)_expression$(regionExpressionNode.operand0)" -> println }
@@ -1891,24 +2141,28 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                             } else {
                                                 regionExpressionRight.kind == 1 -> if {
                                                     (ownerIndex! >= 0 and (context -> writeParameterReference(ownerIndex!, regionExpressionRight.symbol))) -> if { "" -> println } else {
-                                                        -1 => regionExpressionRightBinding!
-                                                        regionOwnerStart => regionExpressionRightBindingSearch!
-                                                        regionExpressionRightBindingSearch! < regionOwnerEnd! -> while {
-                                                            (context.ir[regionExpressionRightBindingSearch!].kind == 17 and context.ir[regionExpressionRightBindingSearch!].symbol == regionExpressionRight.symbol) -> if { regionExpressionRightBindingSearch! => regionExpressionRightBinding! }
-                                                            regionExpressionRightBindingSearch! + 1 => regionExpressionRightBindingSearch!
-                                                        }
+                                                        regionExpressionRight -> interpolationBindingIndex(regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, context, state) => regionExpressionRightBinding!
                                                         regionExpressionRightBinding! >= 0 -> if {
-                                                            "%v" -> print
-                                                            context.ir[regionExpressionRightBinding!].operand0 -> writeDecimalLine
+                                                            context.ir[regionExpressionRightBinding!].flags == 1 -> if {
+                                                                "%v$(regionNodeIndex!)_expression$(regionExpressionNode.operand1)_mutable" -> println
+                                                            } else {
+                                                                "%v" -> print
+                                                                context.ir[regionExpressionRightBinding!].operand0 -> writeDecimalLine
+                                                            }
                                                         }
                                                     }
                                                 } else { "%v$(regionNodeIndex!)_expression$(regionExpressionNode.operand1)" -> println }
                                             }
                                         }
+                                        }
                                     }
-                                    regionExpressionNodeIndex! - 1 => regionExpressionNodeIndex!
+                                    regionExpressionOrderIndex! + 1 => regionExpressionOrderIndex!
                                 }
                                 regionExpressionRoot.typeSymbol => regionExpressionRootTypeSymbol!
+                                (regionExpressionRoot.kind == 5 or regionExpressionRoot.kind == 7 or regionExpressionRoot.kind == 8) -> if {
+                                    regionExpressionRootSearch! -> interpolationNodeTypeId(regionExpressionInterpolation!, regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, context, state) => regionExpressionRootTypeId
+                                    regionExpressionRootTypeId >= 0 -> if { context.types[regionExpressionRootTypeId].symbol => regionExpressionRootTypeSymbol! }
+                                }
                                 -1 => regionExpressionRootBinding!
                                 -1 => regionExpressionRootParameterIndex!
                                 regionExpressionRoot.kind == 1 -> if {
@@ -1920,7 +2174,13 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                     } else {
                                         regionOwnerStart => regionExpressionBindingSearch!
                                         regionExpressionBindingSearch! < regionOwnerEnd! -> while {
-                                            (context.ir[regionExpressionBindingSearch!].kind == 17 and context.ir[regionExpressionBindingSearch!].symbol == regionExpressionRoot.symbol) -> if { regionExpressionBindingSearch! => regionExpressionRootBinding! }
+                                            context.ir[regionExpressionBindingSearch!] => regionExpressionBindingCandidate
+                                            ((regionExpressionBindingCandidate.kind == 17
+                                                    or regionExpressionBindingCandidate.kind == 29
+                                                    or (regionExpressionBindingCandidate.kind == 5 and regionExpressionBindingCandidate.operand0 < 0))
+                                                and regionExpressionBindingCandidate.symbol == regionExpressionRoot.symbol) -> if {
+                                                regionExpressionBindingSearch! => regionExpressionRootBinding!
+                                            }
                                             regionExpressionBindingSearch! + 1 => regionExpressionBindingSearch!
                                         }
                                         regionExpressionRootBinding! >= 0 -> if {
@@ -1932,10 +2192,13 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                     }
                                 }
                                 false => regionExpressionRootMutable!
+                                false => regionExpressionRootDirect!
                                 regionExpressionRootBinding! >= 0 -> if {
                                     context.ir[regionExpressionRootBinding!] => regionExpressionRootBindingNode
-                                    regionExpressionRootBindingNode.flags == 1 -> if {
-                                        regionExpressionRootBinding! -> mutableBindingRoot(context, state) => regionExpressionRootMutableRoot
+                                    (regionExpressionRootBindingNode.kind == 29
+                                        or (regionExpressionRootBindingNode.kind == 5 and regionExpressionRootBindingNode.operand0 < 0)) -> if { true => regionExpressionRootDirect! }
+                                    regionExpressionRootBinding! -> mutableStorageRoot(context, state) => regionExpressionRootMutableRoot
+                                    regionExpressionRootMutableRoot >= 0 -> if {
                                         "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current = load " -> print
                                         regionExpressionRootBindingNode -> writeIrType(context, state)
                                         ", ptr %slot$(regionExpressionRootMutableRoot), align " -> print
@@ -1944,7 +2207,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                     }
                                 }
                                 false => regionExpressionRootMember!
-                                regionExpressionRoot.kind == 5 -> if {
+                                (regionExpressionRoot.kind == 5 and (regionExpressionRootSearch! -> interpolationMemberFieldIndex(regionExpressionInterpolation!, regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, context, state)) < 0) -> if {
                                     regionExpressionInterpolation![regionExpressionRoot.operand0] => regionExpressionMemberBase
                                     -1 => regionExpressionMemberBaseIr!
                                     -1 => regionExpressionMemberBinding!
@@ -2040,6 +2303,8 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                 }
                                 regionExpressionRootTypeSymbol! -> integerWidth(context, state) => regionExpressionRootWidth!
                                 (regionExpressionRootTypeSymbol! == 12 or regionExpressionRootTypeSymbol! == 13) -> if { context.pointerBitWidth => regionExpressionRootWidth! }
+                                regionExpressionRootSearch! -> interpolationNodeIntegerWidth(regionExpressionInterpolation!, regionArgument.sourceModule, ownerIndex!, regionNodeIndex!, context, state) => regionExpressionInferredWidth
+                                (regionExpressionInferredWidth > 0 and regionExpressionRootTypeSymbol! != 23) -> if { regionExpressionInferredWidth => regionExpressionRootWidth! }
                                 (regionExpressionRootBinding! >= 0 and not regionExpressionRootMutable! and context.ir[regionExpressionRootBinding!].operand0 >= 0) -> if {
                                     context.ir[context.ir[regionExpressionRootBinding!].operand0] -> integerNodeWidth(context, state) => regionExpressionBoundWidth
                                     (regionExpressionBoundWidth > 0 and regionExpressionRootTypeSymbol! != 23) -> if {
@@ -2050,25 +2315,29 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                 }
                                 regionExpressionRootTypeSymbol! == 1 -> if {
                                     "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_text_ptr = extractvalue %sollang.text " -> print
-                                    regionExpressionRoot.kind == 5 -> if {
+                                    (regionExpressionRoot.kind == 5 or regionExpressionRoot.kind == 6 or regionExpressionRoot.kind == 7 or regionExpressionRoot.kind == 8) -> if {
                                         "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)" -> print
                                     } else {
                                         (ownerIndex! >= 0 and (context -> writeParameterReference(ownerIndex!, regionExpressionRoot.symbol))) -> if { } else {
-                                            regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
-                                                "%v" -> print
-                                                context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
+                                            regionExpressionRootDirect! -> if { "%v$(regionExpressionRootBinding!)" -> print } else {
+                                                regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
+                                                    "%v" -> print
+                                                    context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
+                                                }
                                             }
                                         }
                                     }
                                     ", 0" -> println
                                     "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_text_len = extractvalue %sollang.text " -> print
-                                    regionExpressionRoot.kind == 5 -> if {
+                                    (regionExpressionRoot.kind == 5 or regionExpressionRoot.kind == 6 or regionExpressionRoot.kind == 7 or regionExpressionRoot.kind == 8) -> if {
                                         "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)" -> print
                                     } else {
                                         (ownerIndex! >= 0 and (context -> writeParameterReference(ownerIndex!, regionExpressionRoot.symbol))) -> if { } else {
-                                            regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
-                                                "%v" -> print
-                                                context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
+                                            regionExpressionRootDirect! -> if { "%v$(regionExpressionRootBinding!)" -> print } else {
+                                                regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
+                                                    "%v" -> print
+                                                    context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
+                                                }
                                             }
                                         }
                                     }
@@ -2093,23 +2362,29 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                             (context.sources[regionArgument.sourceModule] -> byte(regionExpressionRoot.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
                                         } else { context.sources[regionArgument.sourceModule] -> slice(regionExpressionRoot.payloadStart, regionExpressionRoot.payloadLength) -> print }
                                     } else {
-                                        regionExpressionRoot.kind == 5 -> if {
-                                            regionExpressionRootMember! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)" -> print }
+                                (regionExpressionRoot.kind == 5
+                                    and regionExpressionRoot.operand0 >= 0
+                                    and regionExpressionInterpolation![regionExpressionRoot.operand0].kind == 1) -> if {
+                                            "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)" -> print
                                         } else {
                                             regionExpressionRoot.kind == 1 -> if {
                                                 (ownerIndex! >= 0 and (context -> writeParameterReference(ownerIndex!, regionExpressionRoot.symbol))) -> if { } else {
                                                     regionExpressionRootBinding! >= 0 -> if {
-                                                        context.ir[context.ir[regionExpressionRootBinding!].operand0] => regionExpressionRootValue
-                                                        regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
-                                                        (regionExpressionRootValue.kind == 3 or regionExpressionRootValue.kind == 4) -> if {
-                                                            regionExpressionRootValue -> sourceToken(context, state) => regionExpressionRootToken
-                                                            regionExpressionRootValue.kind == 4 -> if {
-                                                                (context.sources[regionExpressionRootValue.sourceModule] -> byte(regionExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
-                                                            } else { context.sources[regionExpressionRootValue.sourceModule] -> slice(regionExpressionRootToken.span.start, regionExpressionRootToken.span.length) -> print }
+                                                        regionExpressionRootDirect! -> if {
+                                                            "%v$(regionExpressionRootBinding!)" -> print
                                                         } else {
-                                                            "%v" -> print
-                                                            context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
-                                                        }
+                                                            context.ir[context.ir[regionExpressionRootBinding!].operand0] => regionExpressionRootValue
+                                                            regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
+                                                                (regionExpressionRootValue.kind == 3 or regionExpressionRootValue.kind == 4) -> if {
+                                                                    regionExpressionRootValue -> sourceToken(context, state) => regionExpressionRootToken
+                                                                    regionExpressionRootValue.kind == 4 -> if {
+                                                                        (context.sources[regionExpressionRootValue.sourceModule] -> byte(regionExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                                                    } else { context.sources[regionExpressionRootValue.sourceModule] -> slice(regionExpressionRootToken.span.start, regionExpressionRootToken.span.length) -> print }
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2156,10 +2431,10 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                         (regionNode.symbol == -102 or regionNode.symbol == -116) -> if { "true)" -> println } else { "false)" -> println }
                     } else {
                     (regionArgument.typeOrigin == 1 and (regionArgument.typeSymbol == 23 or (regionArgument.typeSymbol -> integerWidth(context, state)) > 0)) -> if {
+                        regionArgument -> integerNodeWidth(context, state) => regionIntegerPrintWidth
                         regionArgument.typeSymbol == 23 -> if {
                             regionNode.symbol == -116 -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(i1 " -> print }
                         } else {
-                            regionArgument -> integerNodeWidth(context, state) => regionIntegerPrintWidth
                             (regionIntegerPrintWidth > 0 and regionIntegerPrintWidth < 32 and regionArgument.kind != 3) -> if {
                                 "  %v$(regionNodeIndex!)_runtime_integer = " -> print
                                 regionArgument -> integerNodeSigned(context, state) -> if { "sext" -> print } else { "zext" -> print }
@@ -2171,17 +2446,21 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                 regionNode.symbol == -116 -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(i32 " -> print }
                             }
                         }
-                        regionArgument.kind == 3 -> if {
+                        (regionArgument.kind == 3 or regionArgument.kind == 4) -> if {
                             regionArgument -> sourceToken(context, state) => regionIntegerPrintToken
-                            context.sources[regionArgument.sourceModule] -> slice(regionIntegerPrintToken.span.start, regionIntegerPrintToken.span.length) -> print
+                            regionArgument.kind == 4 -> if {
+                                (context.sources[regionArgument.sourceModule] -> byte(regionIntegerPrintToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                            } else {
+                                context.sources[regionArgument.sourceModule] -> slice(regionIntegerPrintToken.span.start, regionIntegerPrintToken.span.length) -> print
+                            }
                         } else {
-                            (regionArgument.typeSymbol != 23 and (regionArgument.typeSymbol -> integerWidth(context, state)) > 0 and (regionArgument.typeSymbol -> integerWidth(context, state)) < 32) -> if {
+                            (regionArgument.typeSymbol != 23 and regionIntegerPrintWidth > 0 and regionIntegerPrintWidth < 32) -> if {
                                 "%v$(regionNodeIndex!)_runtime_integer" -> print
                             } else {
                                 (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionArgument.kind == 5 and regionArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionArgumentIndex)" -> print }
                             }
                         }
-                        (regionArgument.typeSymbol != 23 and (regionArgument.typeSymbol -> integerWidth(context, state)) == 64) -> if {
+                        (regionArgument.typeSymbol != 23 and regionIntegerPrintWidth == 64) -> if {
                             ", i1 " -> print
                             regionArgument -> integerNodeSigned(context, state) -> if { "true" -> print } else { "false" -> print }
                         }
@@ -2274,12 +2553,6 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 nestedConditionChild! >= 0 -> if { nestedConditionChild! => nestedConditionIndex! } else { false => nestedConditionUnwrap! }
             }
             context.ir[nestedConditionIndex!] => nestedCondition
-            (nestedIfValueUsed and not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) and regionNode.nextOperand >= 0) -> if {
-                "  %if$(regionNodeIndex!)_result = alloca " -> print
-                regionNode -> writeIrType(context, state)
-                ", align " -> print
-                regionNode -> storageAlign(context, state) -> writeDecimalLine
-            }
             (nestedCondition.kind == 8 and (nestedCondition.opcode == -25 or nestedCondition.opcode == -24) or (nestedCondition.kind == 7 and nestedCondition.opcode == -26)) => nestedShortCircuit
             nestedShortCircuit -> if {
                 WhileBranchRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex! } -> emitWhileBranch(context, state)
@@ -2375,6 +2648,101 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
         regionOrderIndex! + 1 => regionOrderIndex!
     }
 }
+subjectWhenArmResultValueIndex armResultIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    armResultIndex => resolved!
+    context.ir[armResultIndex].kind == 19 -> if {
+        armResultIndex -> regionResultValueIndex(context, state) => resolved!
+    } else {
+        armResultIndex -> aggregateValueIndex(context, state) => resolved!
+    }
+    resolved!
+}
+emitSubjectWhen whenIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[whenIndex] => subjectWhen
+    context.ir[subjectWhen.operand0] => subject
+    whenIndex => whenOwner!
+    (whenOwner! >= 0 and context.ir[whenOwner!].kind != 0 and context.ir[whenOwner!].kind != 11) -> while {
+        context.ir[whenOwner!].parent => whenOwner!
+    }
+    whenIndex -> irValueUsed(whenOwner!, context, state) => whenValueUsed
+    subjectWhen.operand1 => armIndex!
+    0 => armOrdinal!
+    true => armOpen!
+    (armIndex! >= 0 and armOpen!) -> while {
+        context.ir[armIndex!] => arm
+        arm.parent != whenIndex -> if {
+            false => armOpen!
+        } else {
+            arm -> sourceNode(context, state) => armSource
+            (arm.kind == 19 and armSource.kind == 58) => conditionalArm
+            conditionalArm -> if {
+                context.ir[arm.operand0] => condition
+                condition.kind == 31 -> if {
+                    context.ir[condition.operand0] => lowerBound
+                    subject -> integerNodeSigned(context, state) => subjectSigned
+                    "  %v$(whenIndex)_range$(armOrdinal!)_lower = " -> print
+                    subjectSigned -> if { "icmp sge " -> print } else { "icmp uge " -> print }
+                    subject -> writeIrType(context, state)
+                    " " -> print
+                    subjectWhen.operand0 -> writeValue(whenOwner!, context, state)
+                    ", " -> print
+                    condition.operand0 -> writeValue(whenOwner!, context, state)
+                    "" -> println
+                    "  %v$(whenIndex)_range$(armOrdinal!)_upper = " -> print
+                    condition.opcode == grammar.tokenIdRangeUntil() -> if {
+                        subjectSigned -> if { "icmp slt " -> print } else { "icmp ult " -> print }
+                    } else {
+                        subjectSigned -> if { "icmp sle " -> print } else { "icmp ule " -> print }
+                    }
+                    subject -> writeIrType(context, state)
+                    " " -> print
+                    subjectWhen.operand0 -> writeValue(whenOwner!, context, state)
+                    ", " -> print
+                    condition.operand1 -> writeValue(whenOwner!, context, state)
+                    "" -> println
+                    "  %v$(whenIndex)_range$(armOrdinal!) = and i1 %v$(whenIndex)_range$(armOrdinal!)_lower, %v$(whenIndex)_range$(armOrdinal!)_upper" -> println
+                    "  br i1 %v$(whenIndex)_range$(armOrdinal!), label %while$(armIndex!)_body, label %while$(armIndex!)_exit" -> println
+                } else {
+                    WhileBranchRequest { whileIndex: armIndex!, ownerIndex: whenOwner!, conditionIndex: arm.operand0 } -> emitWhileBranch(context, state)
+                }
+                "while$(armIndex!)_body:" -> println
+                arm.operand1 => emittedArmRegion!
+                emittedArmRegion! -> regionReturns(context, state) => armReturns
+                emittedArmRegion! -> emitRegion(context, state)
+                not armReturns -> if {
+                    (whenValueUsed and not (subjectWhen.typeOrigin == 1 and subjectWhen.typeSymbol == 0)) -> if {
+                        emittedArmRegion! -> subjectWhenArmResultValueIndex(context, state) => armValueIndex
+                        subjectWhen -> emitIfResultStore(armValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
+                    }
+                    "  br label %when$(whenIndex)_end" -> println
+                }
+                "while$(armIndex!)_exit:" -> println
+                arm.nextOperand => armIndex!
+                armOrdinal! + 1 => armOrdinal!
+            } else {
+                armIndex! => emittedElseRegion!
+                emittedElseRegion! -> regionReturns(context, state) => elseReturns
+                emittedElseRegion! -> emitRegion(context, state)
+                not elseReturns -> if {
+                    (whenValueUsed and not (subjectWhen.typeOrigin == 1 and subjectWhen.typeSymbol == 0)) -> if {
+                        emittedElseRegion! -> subjectWhenArmResultValueIndex(context, state) => elseValueIndex
+                        subjectWhen -> emitIfResultStore(elseValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
+                    }
+                    "  br label %when$(whenIndex)_end" -> println
+                }
+                false => armOpen!
+            }
+        }
+    }
+    "when$(whenIndex)_end:" -> println
+    (whenValueUsed and not (subjectWhen.typeOrigin == 1 and subjectWhen.typeSymbol == 0)) -> if {
+        "  %v$(whenIndex) = load " -> print
+        subjectWhen -> writeIrType(context, state)
+        ", ptr %if$(whenIndex)_result, align " -> print
+        subjectWhen -> storageAlign(context, state) -> writeDecimalLine
+    }
+}
+
 emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[matchIndex] => match
     context.ir[match.operand0] => subject
@@ -2399,20 +2767,11 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
     " " -> print
     (subject.kind == 5 and subject.parent >= 0 and context.ir[subject.parent].kind == 1 and context.ir[subject.parent].parent >= 0 and context.ir[context.ir[subject.parent].parent].operand1 >= 0 and subject.symbol == context.ir[context.ir[context.ir[subject.parent].parent].operand1].symbol) -> if { "%arg" -> print } else { "%v$(match.operand0)" -> print }
     ", 0" -> println
-    "  %v$(matchIndex)_subject_slot = alloca " -> print
-    subject -> writeIrType(context, state)
-    ", align 8" -> println
     "  store " -> print
     subject -> writeIrType(context, state)
     " " -> print
     (subject.kind == 5 and subject.parent >= 0 and context.ir[subject.parent].kind == 1 and context.ir[subject.parent].parent >= 0 and context.ir[context.ir[subject.parent].parent].operand1 >= 0 and subject.symbol == context.ir[context.ir[context.ir[subject.parent].parent].operand1].symbol) -> if { "%arg" -> print } else { "%v$(match.operand0)" -> print }
     ", ptr %v$(matchIndex)_subject_slot, align 8" -> println
-    (matchValueUsed and not (match.typeOrigin == 1 and match.typeSymbol == 0)) -> if {
-        "  %v$(matchIndex)_result = alloca " -> print
-        match -> writeIrType(context, state)
-        ", align " -> print
-        match -> storageAlign(context, state) -> writeDecimalLine
-    }
     match.operand1 => armIndex!
     0 => armOrdinal!
     armIndex! >= 0 -> while {
@@ -2424,7 +2783,11 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
         false => armBindingTransferred!
         matchOwnerStart => armBindingSearch!
         armBindingSearch! < matchOwnerEnd -> while {
-            (context.ir[armBindingSearch!].kind == 29 and context.ir[armBindingSearch!].parent == armIndex!) -> if { armBindingSearch! => armBindingIndex! }
+            context.ir[armBindingSearch!].parent => armBindingParent!
+            (armBindingParent! >= 0 and context.ir[armBindingParent!].kind == 8 and context.ir[armBindingParent!].parent == armIndex!) -> if {
+                armIndex! => armBindingParent!
+            }
+            (context.ir[armBindingSearch!].kind == 29 and armBindingParent! == armIndex!) -> if { armBindingSearch! => armBindingIndex! }
             armBindingSearch! + 1 => armBindingSearch!
         }
         armBindingIndex! >= 0 -> if {
@@ -2441,15 +2804,11 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
         }
         armIndex! => emittedArmRegion!
         (arm.operand1 >= 0 and context.ir[arm.operand1].kind == 19) -> if {
-            false => nestedArmHasExplicitReturn!
-            matchOwnerStart => nestedArmReturnSearch!
-            nestedArmReturnSearch! < matchOwnerEnd -> while {
-                (context.ir[nestedArmReturnSearch!].parent == arm.operand1 and context.ir[nestedArmReturnSearch!].kind == 23) -> if { true => nestedArmHasExplicitReturn! }
-                nestedArmReturnSearch! + 1 => nestedArmReturnSearch!
-            }
-            not nestedArmHasExplicitReturn! -> if { arm.operand1 => emittedArmRegion! }
+            arm.operand1 => emittedArmRegion!
         }
+        emittedArmRegion! -> regionReturns(context, state) => armReturns
         emittedArmRegion! -> emitRegion(context, state)
+        not armReturns -> if {
         (matchValueUsed and not (match.typeOrigin == 1 and match.typeSymbol == 0)) -> if {
             armIndex! -> matchRegionResultValueIndex(context, state) => armValueIndex
             context.ir[armValueIndex] => armValue
@@ -2507,6 +2866,7 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
             " %v$(armBindingIndex!))" -> println
         }
         "  br label %match$(matchIndex)_merge" -> println
+        }
         "match$(matchIndex)_next$(armOrdinal!):" -> println
         arm.nextOperand => armIndex!
         armOrdinal! + 1 => armOrdinal!

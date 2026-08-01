@@ -161,6 +161,89 @@ struct PrepareRequest {
     expectedPathStyle: Int
 }
 
+# LLVM allocas execute each time control reaches them. Fixed-size result and
+# scratch slots therefore belong to the owning function entry, never to a loop
+# or branch body.
+emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    startIndex => nodeIndex!
+    nodeIndex! < endIndex -> while {
+        context.ir[nodeIndex!] => node
+        node.kind == 18 -> if {
+            nodeIndex! -> irValueUsed(ownerIndex, context, state) => valueUsed
+            (valueUsed and not (node.typeOrigin == 1 and node.typeSymbol == 0) and node.nextOperand >= 0) -> if {
+                "  %if$(nodeIndex!)_result = alloca " -> print
+                node -> writeIrType(context, state)
+                ", align " -> print
+                node -> storageAlign(context, state) -> writeDecimalLine
+            }
+        }
+        node.kind == 34 -> if {
+            nodeIndex! -> irValueUsed(ownerIndex, context, state) => whenValueUsed
+            (whenValueUsed and not (node.typeOrigin == 1 and node.typeSymbol == 0)) -> if {
+                "  %if$(nodeIndex!)_result = alloca " -> print
+                node -> writeIrType(context, state)
+                ", align " -> print
+                node -> storageAlign(context, state) -> writeDecimalLine
+            }
+        }
+        (node.kind == 27 and node.operand0 >= 0) -> if {
+            context.ir[node.operand0] => subject
+            "  %v$(nodeIndex!)_subject_slot = alloca " -> print
+            subject -> writeIrType(context, state)
+            ", align 8" -> println
+            nodeIndex! -> irValueUsed(ownerIndex, context, state) => matchValueUsed
+            (matchValueUsed and not (node.typeOrigin == 1 and node.typeSymbol == 0)) -> if {
+                "  %v$(nodeIndex!)_result = alloca " -> print
+                node -> writeIrType(context, state)
+                ", align " -> print
+                node -> storageAlign(context, state) -> writeDecimalLine
+            }
+        }
+        ((node.kind == 6 or node.kind == 9) and (node.opcode == -216 or node.opcode == -217)) -> if {
+            "  %v$(nodeIndex!)_file_result_slot = alloca " -> print
+            node -> writeIrType(context, state)
+            ", align 8" -> println
+        }
+        ((node.kind == 6 or node.kind == 9)
+            and node.opcode == -221
+            and node.operand0 >= 0
+            and context.ir[node.operand0].nextOperand >= 0) -> if {
+            node.operand0 => scalarArgumentIndex!
+            context.ir[scalarArgumentIndex!].nextOperand => offsetArgumentIndex!
+            context.ir[offsetArgumentIndex!].nextOperand >= 0 -> while {
+                offsetArgumentIndex! => scalarArgumentIndex!
+                context.ir[offsetArgumentIndex!].nextOperand => offsetArgumentIndex!
+            }
+            scalarArgumentIndex! -> aggregateValueIndex(context, state) => scalarIndex
+            context.ir[scalarIndex] => scalar
+            scalar.typeId => scalarTypeId!
+            scalarTypeId! < 0 -> if { scalar.typeSymbol => scalarTypeId! }
+            "  %v$(nodeIndex!)_file_write_slot = alloca " -> print
+            scalarTypeId! -> writeSemanticTypeId(context, state)
+            ", align " -> print
+            context.typeAligns[scalarTypeId!] -> writeDecimalLine
+            "  %v$(nodeIndex!)_file_result_slot = alloca " -> print
+            node -> writeIrType(context, state)
+            ", align 8" -> println
+        }
+        ((node.kind == 6 or node.kind == 9) and node.opcode == -220) -> if {
+            context.types[node.typeId].first => optionTypeId
+            context.types[optionTypeId].first => scalarTypeId
+            "  %v$(nodeIndex!)_file_read_slot = alloca " -> print
+            scalarTypeId == 23 -> if { "i8" -> print } else { scalarTypeId -> writeSemanticTypeId(context, state) }
+            ", align " -> print
+            context.typeAligns[scalarTypeId] -> writeDecimalLine
+            "  %v$(nodeIndex!)_file_result_slot = alloca " -> print
+            node -> writeIrType(context, state)
+            ", align 8" -> println
+            "  %v$(nodeIndex!)_file_option_slot = alloca " -> print
+            optionTypeId -> writeSemanticTypeId(context, state)
+            ", align 8" -> println
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+}
+
 # Stack-owned orchestration state shared by the responsibility fragments.
 # Every extracted helper receives `ref CoreEmitterState`, so the large context
 # and immutable lookup snapshots are never copied and no wrapper allocation is
@@ -216,6 +299,21 @@ parameterIndexForFunction context: ref emitterContext.EmitContext, functionIndex
     matchedIndex!
 }
 
+parameterIndexAtOrdinal context: ref emitterContext.EmitContext, functionIndex: Int, ordinal: Int -> Int {
+    context.ir[functionIndex] => function
+    function.operand1 => parameterIndex!
+    0 => parameterOrdinal!
+    (parameterIndex! >= 0 and parameterOrdinal! < ordinal) -> while {
+        parameterOrdinal! == 0 -> if {
+            function.nextOperand => parameterIndex!
+        } else {
+            context.ir[parameterIndex!].nextOperand => parameterIndex!
+        }
+        parameterOrdinal! + 1 => parameterOrdinal!
+    }
+    parameterOrdinal! == ordinal -> if { parameterIndex! } else { -1 }
+}
+
 writeParameterReference context: ref emitterContext.EmitContext, functionIndex: Int, symbol: Int -> Bool uses Console {
     context.ir[functionIndex] => function
     function.operand1 => parameterIndex!
@@ -240,6 +338,761 @@ writeParameterReference context: ref emitterContext.EmitContext, functionIndex: 
         }
     }
     matched!
+}
+
+interpolationBindingIndex node: interpolation.InterpolationNode, sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => parameterIndex!
+    ownerIndex >= 0 -> if {
+        context -> parameterIndexForFunction(ownerIndex, node.symbol) => parameterIndex!
+    }
+    parameterIndex! >= 0 -> if {
+        parameterIndex!
+    } else {
+        -1 => bindingIndex!
+        UIntSize(0) => bindingStart!
+        0 => bindingSearch!
+        context.ir -> len => bindingEnd!
+        (ownerIndex >= 0 and ownerIndex < (context.ir -> len)) -> if {
+            ownerIndex + 1 => bindingSearch!
+            ownerIndex -> functionEnd(context, state) => bindingEnd!
+        }
+        context.ranges[sourceModule] => bindingRange
+        context.nodes[bindingRange.astStart + context.ir[beforeIndex].astNode].start => interpolationStart
+        bindingSearch! < bindingEnd! -> while {
+            context.ir[bindingSearch!] => bindingCandidate
+            ((bindingCandidate.kind == 17 or bindingCandidate.kind == 29)
+                and bindingCandidate.sourceModule == sourceModule
+                and bindingCandidate.symbol == node.symbol
+                and bindingCandidate.astNode >= 0) -> if {
+                context.nodes[bindingRange.astStart + bindingCandidate.astNode].start => candidateStart
+                (candidateStart <= interpolationStart
+                    and (bindingIndex! < 0 or candidateStart > bindingStart!)) -> if {
+                    bindingSearch! => bindingIndex!
+                    candidateStart => bindingStart!
+                }
+            }
+            bindingSearch! + 1 => bindingSearch!
+        }
+        bindingIndex!
+    }
+}
+
+interpolationEmissionOrder nodes: ref [interpolation.InterpolationNode; ~], sourceToken: Int, segment: Int -> [Int; ~] {
+    [Bool; ~] => emitted!
+    0 => emittedInit!
+    emittedInit! < (nodes -> len) -> while {
+        emitted! -> push(false)
+        emittedInit! + 1 => emittedInit!
+    }
+    [Int; ~] => order!
+    true => progress!
+    progress! -> while {
+        false => progress!
+        Int(nodes -> len) - 1 => candidateIndex!
+        candidateIndex! >= 0 -> while {
+            nodes[candidateIndex!] => candidate
+            (candidate.sourceToken == sourceToken and candidate.segment == segment and not emitted![candidateIndex!]) -> if {
+                true => ready!
+                (candidate.operand0 >= 0 and nodes[candidate.operand0].sourceToken == sourceToken and nodes[candidate.operand0].segment == segment and not emitted![candidate.operand0]) -> if { false => ready! }
+                (candidate.operand1 >= 0 and nodes[candidate.operand1].sourceToken == sourceToken and nodes[candidate.operand1].segment == segment and not emitted![candidate.operand1]) -> if { false => ready! }
+                (candidate.operand2 >= 0 and nodes[candidate.operand2].sourceToken == sourceToken and nodes[candidate.operand2].segment == segment and not emitted![candidate.operand2]) -> if { false => ready! }
+                ready! -> if {
+                    order! -> push(candidateIndex!)
+                    true => emitted![candidateIndex!]
+                    true => progress!
+                }
+            }
+            candidateIndex! - 1 => candidateIndex!
+        }
+    }
+    order!
+}
+
+emitInterpolationLexicalLoad labelIndex: Int, nodeIndex: Int, node: interpolation.InterpolationNode, sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
+    bindingIndex >= 0 -> if {
+        context.ir[bindingIndex] => binding
+        binding.kind == 17 -> if {
+            bindingIndex -> mutableStorageRoot(context, state) => storageRoot
+            storageRoot >= 0 -> if {
+                "  %v$(labelIndex)_expression$(nodeIndex)_mutable = load " -> print
+                binding -> writeIrType(context, state)
+                ", ptr %slot$(storageRoot), align 8" -> println
+            }
+        }
+        (binding.kind == 10 and binding.flags / 2 % 2 == 1) -> if {
+            bindingIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => parameterOrdinal
+            parameterOrdinal >= 0 -> if {
+                binding -> mutableBorrowUsesStructPointer(context) -> if {
+                    "  %v$(labelIndex)_expression$(nodeIndex)_mutable = load " -> print
+                    binding -> writeIrType(context, state)
+                    ", ptr " -> print
+                    parameterOrdinal -> writeMutableStructParameterPointer
+                    ", align " -> print
+                    binding -> storageAlign(context, state) -> writeDecimalLine
+                } else {
+                    "  %v$(labelIndex)_expression$(nodeIndex)_mutable_ptr = load ptr, ptr " -> print
+                    parameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(parameterOrdinal)_mut_ptr_addr" -> print }
+                    ", align 8" -> println
+                    "  %v$(labelIndex)_expression$(nodeIndex)_mutable_len = load i64, ptr " -> print
+                    parameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(parameterOrdinal)_mut_len_addr" -> print }
+                    ", align 8" -> println
+                    "  %v$(labelIndex)_expression$(nodeIndex)_mutable_capacity = load i64, ptr " -> print
+                    parameterOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(parameterOrdinal)_mut_capacity_addr" -> print }
+                    ", align 8" -> println
+                    "  %v$(labelIndex)_expression$(nodeIndex)_mutable0 = insertvalue " -> print
+                    binding -> writeIrType(context, state)
+                    " poison, ptr %v$(labelIndex)_expression$(nodeIndex)_mutable_ptr, 0" -> println
+                    "  %v$(labelIndex)_expression$(nodeIndex)_mutable1 = insertvalue " -> print
+                    binding -> writeIrType(context, state)
+                    " %v$(labelIndex)_expression$(nodeIndex)_mutable0, i64 %v$(labelIndex)_expression$(nodeIndex)_mutable_len, 1" -> println
+                    "  %v$(labelIndex)_expression$(nodeIndex)_mutable = insertvalue " -> print
+                    binding -> writeIrType(context, state)
+                    " %v$(labelIndex)_expression$(nodeIndex)_mutable1, i64 %v$(labelIndex)_expression$(nodeIndex)_mutable_capacity, 2" -> println
+                }
+            }
+        }
+    }
+}
+
+writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    nodes[nodeIndex] => node
+    node.kind == 0 -> if {
+        context.sources[sourceModule] -> slice(node.payloadStart, node.payloadLength) -> print
+    } else {
+        node.kind == 4 -> if {
+            (context.sources[sourceModule] -> byte(node.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+        } else {
+            node.kind == 1 -> if {
+                node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
+                (bindingIndex >= 0 and context.ir[bindingIndex].kind == 10) -> if {
+                    context.ir[bindingIndex] => interpolationParameter
+                    interpolationParameter.flags / 2 % 2 == 1 -> if {
+                        "%v$(labelIndex)_expression$(nodeIndex)_mutable" -> print
+                    } else {
+                        context -> writeParameterReference(ownerIndex, node.symbol) => parameterWritten
+                    }
+                } else {
+                    bindingIndex >= 0 -> if {
+                        context.ir[bindingIndex] => interpolationBinding
+                        interpolationBinding.kind == 29 -> if {
+                            "%v$(bindingIndex)" -> print
+                        } else {
+                            bindingIndex -> mutableStorageRoot(context, state) => storageRoot
+                            storageRoot >= 0 -> if {
+                                "%v$(labelIndex)_expression$(nodeIndex)_mutable" -> print
+                            } else {
+                                context.ir[interpolationBinding.operand0] => interpolationBindingValue
+                                (interpolationBindingValue.kind == 3 or interpolationBindingValue.kind == 4) -> if {
+                                    interpolationBindingValue -> sourceToken(context, state) => interpolationBindingToken
+                                    interpolationBindingValue.kind == 4 -> if {
+                                        (context.sources[interpolationBindingValue.sourceModule] -> byte(interpolationBindingToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                    } else {
+                                        context.sources[interpolationBindingValue.sourceModule] -> slice(interpolationBindingToken.span.start, interpolationBindingToken.span.length) -> print
+                                    }
+                                } else {
+                                    "%v$(interpolationBinding.operand0)" -> print
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                "%v$(labelIndex)_expression$(nodeIndex)" -> print
+            }
+        }
+    }
+}
+
+interpolationNodeTypeId nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    nodes[nodeIndex] => node
+    -1 => typeId!
+    node.kind == 1 -> if {
+        node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
+        bindingIndex >= 0 -> if { context.ir[bindingIndex].typeId => typeId! }
+    }
+    (node.kind == 7 and node.operand0 >= 0) -> if {
+        node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => containerTypeId!
+        (containerTypeId! >= 0 and context.types[containerTypeId!].kind == 8) -> if { context.types[containerTypeId!].first => containerTypeId! }
+        containerTypeId! >= 0 -> if {
+            context.types[containerTypeId!] => containerType
+            (containerType.kind == 3 or containerType.kind == 4) -> if { containerType.first => typeId! }
+            containerType.kind == 5 -> if { containerType.second => typeId! }
+            (containerType.kind == 1 and containerType.origin == 1 and containerType.symbol == 1) -> if {
+                0 => byteTypeSearch!
+                byteTypeSearch! < (context.types -> len) -> while {
+                    context.types[byteTypeSearch!] => byteType
+                    (byteType.kind == 1 and byteType.origin == 1 and byteType.symbol == 8) -> if {
+                        byteTypeSearch! => typeId!
+                        context.types -> len => byteTypeSearch!
+                    }
+                    byteTypeSearch! + 1 => byteTypeSearch!
+                }
+            }
+        }
+    }
+    (node.kind == 5 and node.operand0 >= 0) -> if {
+        nodeIndex -> interpolationMemberFieldIndex(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => memberFieldIndex
+        memberFieldIndex >= 0 -> if { context.fields[memberFieldIndex].fieldType => typeId! }
+    }
+    (node.kind == 8 and node.symbol >= 0) -> if {
+        -1 => callTargetFunction!
+        0 => callTargetSearch!
+        callTargetSearch! < (context.ir -> len) -> while {
+            context.ir[callTargetSearch!] => callTargetCandidate
+            (callTargetCandidate.kind == 0
+                and callTargetCandidate.sourceModule == sourceModule
+                and callTargetCandidate.symbol == node.symbol) -> if {
+                callTargetSearch! => callTargetFunction!
+            }
+            callTargetSearch! + 1 => callTargetSearch!
+        }
+        callTargetFunction! >= 0 -> if { context.ir[callTargetFunction!].typeId => typeId! }
+    }
+    node.kind == 9 -> if {
+        0 => conversionTypeSearch!
+        conversionTypeSearch! < (context.types -> len) -> while {
+            context.types[conversionTypeSearch!] => conversionType
+            (conversionType.kind == 1 and conversionType.origin == 1 and conversionType.symbol == node.typeSymbol) -> if {
+                conversionTypeSearch! => typeId!
+            }
+            conversionTypeSearch! + 1 => conversionTypeSearch!
+        }
+    }
+    typeId!
+}
+
+interpolationMemberFieldIndex nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    nodes[nodeIndex] => node
+    -1 => fieldIndex!
+    (node.kind == 5 and node.operand0 >= 0) -> if {
+        node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => ownerTypeId!
+        nodes[node.operand0] => memberBase
+        memberBase.payloadStart + memberBase.payloadLength => memberCursor!
+        node.payloadStart + node.payloadLength => memberEnd
+        true => memberPathValid!
+        (memberPathValid! and memberCursor! < memberEnd) -> while {
+            (memberCursor! < memberEnd and (context.sources[sourceModule] -> byte(memberCursor!)) != UInt8(46)) -> while {
+                memberCursor! + UIntSize(1) => memberCursor!
+            }
+            memberCursor! + UIntSize(1) => memberNameStart
+            memberNameStart => memberNameEnd!
+            (memberNameEnd! < memberEnd and (context.sources[sourceModule] -> byte(memberNameEnd!)) != UInt8(46)) -> while {
+                memberNameEnd! + UIntSize(1) => memberNameEnd!
+            }
+            memberNameEnd! - memberNameStart => memberNameLength
+            (ownerTypeId! >= 0 and context.types[ownerTypeId!].kind == 8) -> if { context.types[ownerTypeId!].first => ownerTypeId! }
+            -1 => resolvedMemberField!
+            0 => fieldSearch!
+            fieldSearch! < (context.fields -> len) -> while {
+                context.fields[fieldSearch!] => field
+                (field.status == 0 and field.ownerType == ownerTypeId! and field.sourceModule >= 0 and field.fieldSymbol >= 0) -> if {
+                    context.ranges[field.sourceModule] => fieldRange
+                    context.symbols[fieldRange.symbolStart + field.fieldSymbol] => fieldSymbol
+                    context.tokens[fieldRange.tokenStart + fieldSymbol.nameToken] => fieldName
+                    fieldName.span.length == memberNameLength => fieldNameEqual!
+                    UIntSize(0) => fieldNameByte!
+                    (fieldNameEqual! and fieldNameByte! < memberNameLength) -> while {
+                        (context.sources[sourceModule] -> byte(memberNameStart + fieldNameByte!)) != (context.sources[field.sourceModule] -> byte(fieldName.span.start + fieldNameByte!)) -> if { false => fieldNameEqual! }
+                        fieldNameByte! + UIntSize(1) => fieldNameByte!
+                    }
+                    fieldNameEqual! -> if { fieldSearch! => resolvedMemberField! }
+                }
+                fieldSearch! + 1 => fieldSearch!
+            }
+            resolvedMemberField! >= 0 -> if {
+                resolvedMemberField! => fieldIndex!
+                context.fields[resolvedMemberField!].fieldType => ownerTypeId!
+                memberNameEnd! => memberCursor!
+            } else {
+                false => memberPathValid!
+                -1 => fieldIndex!
+            }
+        }
+    }
+    fieldIndex!
+}
+
+canonicalMemberFieldIndex ownerTypeId: Int, sourceModule: Int, memberTokenIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    context.ranges[sourceModule] => memberRange
+    context.tokens[memberRange.tokenStart + memberTokenIndex] => memberName
+    -1 => fieldIndex!
+    0 => fieldSearch!
+    fieldSearch! < (context.fields -> len) -> while {
+        context.fields[fieldSearch!] => field
+        (field.status == 0 and field.ownerType == ownerTypeId and field.sourceModule >= 0 and field.fieldSymbol >= 0) -> if {
+            context.ranges[field.sourceModule] => fieldRange
+            context.symbols[fieldRange.symbolStart + field.fieldSymbol] => fieldSymbol
+            context.tokens[fieldRange.tokenStart + fieldSymbol.nameToken] => fieldName
+            fieldName.span.length == memberName.span.length => equal!
+            UIntSize(0) => nameByte!
+            (equal! and nameByte! < memberName.span.length) -> while {
+                (context.sources[sourceModule] -> byte(memberName.span.start + nameByte!)) != (context.sources[field.sourceModule] -> byte(fieldName.span.start + nameByte!)) -> if {
+                    false => equal!
+                }
+                nameByte! + UIntSize(1) => nameByte!
+            }
+            equal! -> if { fieldSearch! => fieldIndex! }
+        }
+        fieldSearch! + 1 => fieldSearch!
+    }
+    fieldIndex!
+}
+
+canonicalMemberFieldOrdinalIndex ownerTypeId: Int, ordinal: Int, context: ref emitterContext.EmitContext -> Int {
+    -1 => fieldIndex!
+    0 => fieldSearch!
+    fieldSearch! < (context.fields -> len) -> while {
+        context.fields[fieldSearch!] => field
+        (field.status == 0 and field.ownerType == ownerTypeId and field.ordinal == ordinal) -> if {
+            fieldSearch! => fieldIndex!
+        }
+        fieldSearch! + 1 => fieldSearch!
+    }
+    fieldIndex!
+}
+
+canonicalMemberPathAvailable nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => available!
+    (nodeIndex >= 0 and nodeIndex < (context.ir -> len)) -> if {
+        context.ir[nodeIndex] => node
+        (node.kind == 13 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and context.ir[node.operand0].typeId >= 0) -> if {
+            context.ir[node.operand0] => memberBase
+            node -> sourceNode(context, state) => memberAst
+            memberBase -> sourceNode(context, state) => memberBaseAst
+            memberBaseAst.start + memberBaseAst.length => memberBaseEnd
+            memberAst.firstToken => memberTokenIndex!
+            true => beforeMemberBaseEnd!
+            (beforeMemberBaseEnd! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount) -> while {
+                context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].span.start < memberBaseEnd -> if {
+                    memberTokenIndex! + 1 => memberTokenIndex!
+                } else { false => beforeMemberBaseEnd! }
+            }
+            memberTokenIndex! => memberPathStart
+            0 => memberCount!
+            memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
+                context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+                    memberCount! + 1 => memberCount!
+                }
+                memberTokenIndex! + 1 => memberTokenIndex!
+            }
+            memberBase.typeId => ownerTypeId!
+            0 => memberOrdinal!
+            true => pathValid!
+            memberPathStart => memberTokenIndex!
+            (pathValid! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount) -> while {
+                context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+                    (ownerTypeId! >= 0 and ownerTypeId! < (context.types -> len) and context.types[ownerTypeId!].kind == 8) -> if {
+                        context.types[ownerTypeId!].first => ownerTypeId!
+                    }
+                    -1 => fieldIndex!
+                    memberOrdinal! == memberCount! - 1 -> if {
+                        ownerTypeId! -> canonicalMemberFieldOrdinalIndex(node.symbol, context) => fieldIndex!
+                    } else {
+                        ownerTypeId! -> canonicalMemberFieldIndex(node.sourceModule, memberTokenIndex!, context) => fieldIndex!
+                    }
+                    fieldIndex! >= 0 -> if {
+                        context.fields[fieldIndex!].fieldType => ownerTypeId!
+                    } else { false => pathValid! }
+                    memberOrdinal! + 1 => memberOrdinal!
+                }
+                memberTokenIndex! + 1 => memberTokenIndex!
+            }
+            (pathValid! and memberCount! > 0 and memberOrdinal! == memberCount!) => available!
+        }
+    }
+    available!
+}
+
+interpolationNodeIntegerWidth nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    nodes[nodeIndex] => node
+    node.typeSymbol -> integerWidth(context, state) => width!
+    (node.typeSymbol == 12 or node.typeSymbol == 13) -> if { context.pointerBitWidth => width! }
+    node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
+    (node.kind == 1 and bindingIndex >= 0) -> if {
+        context.ir[bindingIndex] -> integerNodeWidth(context, state) => bindingWidth
+        bindingWidth > 0 -> if { bindingWidth => width! }
+    }
+    (node.kind == 2 and node.operand0 >= 0) -> if {
+        node.operand0 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => width!
+    }
+    (node.kind == 3 and node.operand0 >= 0 and node.operand1 >= 0) -> if {
+        node.operand0 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => leftWidth
+        node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => rightWidth
+        leftWidth > rightWidth -> if { leftWidth => width! } else { rightWidth => width! }
+    }
+    (node.kind == 5 or node.kind == 7 or node.kind == 8) -> if {
+        nodeIndex -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => indexTypeId
+        indexTypeId >= 0 -> if {
+            context.types[indexTypeId] => indexType
+            indexType.symbol -> integerWidth(context, state) => indexWidth!
+            (indexType.symbol == 12 or indexType.symbol == 13) -> if { context.pointerBitWidth => indexWidth! }
+            indexWidth! > 0 -> if { indexWidth! => width! }
+        }
+    }
+    width!
+}
+
+interpolationNodeSigned nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    nodes[nodeIndex] => node
+    node.typeSymbol -> integerSigned(context, state) => signed!
+    node.kind == 1 -> if {
+        node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
+        bindingIndex >= 0 -> if { context.ir[bindingIndex] -> integerNodeSigned(context, state) => signed! }
+    }
+    ((node.kind == 2 or node.kind == 3) and node.operand0 >= 0) -> if {
+        node.operand0 -> interpolationNodeSigned(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => signed!
+    }
+    (node.kind == 5 or node.kind == 7 or node.kind == 8) -> if {
+        nodeIndex -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => typeId
+        typeId >= 0 -> if { context.types[typeId].symbol -> integerSigned(context, state) => signed! }
+    }
+    signed!
+}
+
+interpolationHasLogicalAncestor nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~] -> Bool {
+    nodes[nodeIndex].parent => ancestor!
+    false => found!
+    (ancestor! >= 0 and not found!) -> while {
+        nodes[ancestor!] => candidate
+        (candidate.kind == 3 and (candidate.opcode == -24 or candidate.opcode == -25)) -> if {
+            true => found!
+        } else {
+            candidate.parent => ancestor!
+        }
+    }
+    found!
+}
+
+emitInterpolationSubtree labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, lexicalLoads: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    nodes[nodeIndex] => node
+    (node.kind == 3 and (node.opcode == -24 or node.opcode == -25)) -> if {
+        labelIndex -> emitInterpolationSubtree(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state)
+        "  %v$(labelIndex)_expression$(nodeIndex)_logical_slot = alloca i1, align 1" -> println
+        "  store i1 " -> print
+        node.opcode == -25 -> if { "0" -> print } else { "1" -> print }
+        ", ptr %v$(labelIndex)_expression$(nodeIndex)_logical_slot, align 1" -> println
+        "  br i1 " -> print
+        labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+        ", label %interpolation$(labelIndex)_logical$(nodeIndex)_" -> print
+        node.opcode == -25 -> if { "rhs" -> print } else { "end" -> print }
+        ", label %interpolation$(labelIndex)_logical$(nodeIndex)_" -> print
+        node.opcode == -25 -> if { "end" -> print } else { "rhs" -> print }
+        "" -> println
+        "interpolation$(labelIndex)_logical$(nodeIndex)_rhs:" -> println
+        labelIndex -> emitInterpolationSubtree(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state)
+        "  store i1 " -> print
+        labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+        ", ptr %v$(labelIndex)_expression$(nodeIndex)_logical_slot, align 1" -> println
+        "  br label %interpolation$(labelIndex)_logical$(nodeIndex)_end" -> println
+        "interpolation$(labelIndex)_logical$(nodeIndex)_end:" -> println
+        "  %v$(labelIndex)_expression$(nodeIndex) = load i1, ptr %v$(labelIndex)_expression$(nodeIndex)_logical_slot, align 1" -> println
+    } else {
+        node.operand0 >= 0 -> if { labelIndex -> emitInterpolationSubtree(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state) }
+        node.operand1 >= 0 -> if { labelIndex -> emitInterpolationSubtree(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state) }
+        node.operand2 >= 0 -> if { labelIndex -> emitInterpolationSubtree(node.operand2, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state) }
+        labelIndex -> emitInterpolationIntrinsic(nodeIndex, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state)
+        labelIndex -> emitInterpolationOperation(nodeIndex, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+    }
+}
+
+emitInterpolationOperation labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    nodes[nodeIndex] => node
+    (node.kind == 2 or node.kind == 3) -> if {
+        "" => operation!
+        node.kind == 2 -> if { "sub" => operation! }
+        (node.kind == 2 and node.opcode == -26) -> if { "xor" => operation! }
+        node.opcode == grammar.tokenIdPlus() -> if { "add" => operation! }
+        node.opcode == grammar.tokenIdMinus() -> if { "sub" => operation! }
+        node.opcode == grammar.tokenIdStar() -> if { "mul" => operation! }
+        node.opcode == grammar.tokenIdSlash() -> if { "sdiv" => operation! }
+        node.opcode == grammar.tokenIdPercent() -> if { "srem" => operation! }
+        node.opcode == grammar.tokenIdEqualEqual() -> if { "icmp eq" => operation! }
+        node.opcode == grammar.tokenIdBangEqual() -> if { "icmp ne" => operation! }
+        node.opcode == grammar.tokenIdLess() -> if { "icmp slt" => operation! }
+        node.opcode == grammar.tokenIdLessEqual() -> if { "icmp sle" => operation! }
+        node.opcode == grammar.tokenIdGreater() -> if { "icmp sgt" => operation! }
+        node.opcode == grammar.tokenIdGreaterEqual() -> if { "icmp sge" => operation! }
+        node.opcode == -24 -> if { "or" => operation! }
+        node.opcode == -25 -> if { "and" => operation! }
+        (node.opcode == -24 or node.opcode == -25 or (node.kind == 2 and node.opcode == -26)) => boolOperands!
+        (node.opcode == grammar.tokenIdEqualEqual() or node.opcode == grammar.tokenIdBangEqual()) -> if {
+            node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => operandTypeId
+            (operandTypeId >= 0 and context.types[operandTypeId].symbol == 23) -> if { true => boolOperands! }
+        }
+        node.operand0 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => leftWidth
+        leftWidth => rightWidth!
+        node.kind == 3 -> if {
+            node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => rightWidth!
+        }
+        leftWidth > rightWidth! -> if { leftWidth } else { rightWidth! } => operationWidth!
+        operationWidth! <= 0 -> if { 32 => operationWidth! }
+        "  %v$(labelIndex)_expression$(nodeIndex) = $(operation!) " -> print
+        boolOperands! -> if { "i1 " -> print } else { "i$(operationWidth!) " -> print }
+        (node.kind == 2 and node.opcode != -26) -> if {
+            "0, " -> print
+            labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+            "" -> println
+        } else {
+            labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+            ", " -> print
+            node.kind == 2 -> if {
+                "true" -> println
+            } else {
+                labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                "" -> println
+            }
+        }
+    }
+}
+
+emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, lexicalLoads: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    nodes[nodeIndex] => node
+    (lexicalLoads and node.kind == 1) -> if {
+        labelIndex -> emitInterpolationLexicalLoad(nodeIndex, node, sourceModule, ownerIndex, beforeIndex, context, state)
+    }
+    (node.kind == 5 and node.operand0 >= 0) -> if {
+        node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => memberOwnerTypeId!
+        nodes[node.operand0] => memberBase
+        memberBase.payloadStart + memberBase.payloadLength => memberCursor!
+        node.payloadStart + node.payloadLength => memberEnd
+        0 => memberStep!
+        true => memberPathValid!
+        (memberPathValid! and memberCursor! < memberEnd) -> while {
+            (memberCursor! < memberEnd and (context.sources[sourceModule] -> byte(memberCursor!)) != UInt8(46)) -> while {
+                memberCursor! + UIntSize(1) => memberCursor!
+            }
+            memberCursor! + UIntSize(1) => memberNameStart
+            memberNameStart => memberNameEnd!
+            (memberNameEnd! < memberEnd and (context.sources[sourceModule] -> byte(memberNameEnd!)) != UInt8(46)) -> while {
+                memberNameEnd! + UIntSize(1) => memberNameEnd!
+            }
+            memberNameEnd! - memberNameStart => memberNameLength
+            false => memberOwnerReference!
+            (memberOwnerTypeId! >= 0 and context.types[memberOwnerTypeId!].kind == 8) -> if {
+                context.types[memberOwnerTypeId!].first => memberOwnerTypeId!
+                true => memberOwnerReference!
+            }
+            -1 => memberFieldIndex!
+            0 => memberFieldSearch!
+            memberFieldSearch! < (context.fields -> len) -> while {
+                context.fields[memberFieldSearch!] => memberFieldCandidate
+                (memberFieldCandidate.status == 0
+                    and memberFieldCandidate.ownerType == memberOwnerTypeId!
+                    and memberFieldCandidate.sourceModule >= 0
+                    and memberFieldCandidate.fieldSymbol >= 0) -> if {
+                    context.ranges[memberFieldCandidate.sourceModule] => memberFieldRange
+                    context.symbols[memberFieldRange.symbolStart + memberFieldCandidate.fieldSymbol] => memberFieldSymbol
+                    context.tokens[memberFieldRange.tokenStart + memberFieldSymbol.nameToken] => memberFieldName
+                    memberFieldName.span.length == memberNameLength => memberFieldNameEqual!
+                    UIntSize(0) => memberFieldNameByte!
+                    (memberFieldNameEqual! and memberFieldNameByte! < memberNameLength) -> while {
+                        (context.sources[sourceModule] -> byte(memberNameStart + memberFieldNameByte!)) != (context.sources[memberFieldCandidate.sourceModule] -> byte(memberFieldName.span.start + memberFieldNameByte!)) -> if {
+                            false => memberFieldNameEqual!
+                        }
+                        memberFieldNameByte! + UIntSize(1) => memberFieldNameByte!
+                    }
+                    memberFieldNameEqual! -> if { memberFieldSearch! => memberFieldIndex! }
+                }
+                memberFieldSearch! + 1 => memberFieldSearch!
+            }
+            memberFieldIndex! >= 0 -> if {
+                context.fields[memberFieldIndex!] => memberField
+                memberOwnerReference! -> if {
+                    "  " -> print
+                    memberNameEnd! == memberEnd -> if { "%v$(labelIndex)_expression$(nodeIndex)" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_m$(memberStep!)" -> print }
+                    "_address = getelementptr inbounds " -> print
+                    memberOwnerTypeId! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    memberStep! == 0 -> if {
+                        labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                    } else { "%v$(labelIndex)_expression$(nodeIndex)_m$(memberStep! - 1)" -> print }
+                    ", i32 0, i32 $(memberField.ordinal)" -> println
+                    "  " -> print
+                    memberNameEnd! == memberEnd -> if { "%v$(labelIndex)_expression$(nodeIndex)" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_m$(memberStep!)" -> print }
+                    " = load " -> print
+                    memberField.fieldType -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    memberNameEnd! == memberEnd -> if { "%v$(labelIndex)_expression$(nodeIndex)" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_m$(memberStep!)" -> print }
+                    "_address, align $(context.typeAligns[memberField.fieldType])" -> println
+                } else {
+                    "  " -> print
+                    memberNameEnd! == memberEnd -> if { "%v$(labelIndex)_expression$(nodeIndex)" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_m$(memberStep!)" -> print }
+                    " = extractvalue " -> print
+                    memberOwnerTypeId! -> writeSemanticTypeId(context, state)
+                    " " -> print
+                    memberStep! == 0 -> if {
+                        labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                    } else { "%v$(labelIndex)_expression$(nodeIndex)_m$(memberStep! - 1)" -> print }
+                    ", $(memberField.ordinal)" -> println
+                }
+                memberField.fieldType => memberOwnerTypeId!
+                memberNameEnd! => memberCursor!
+                memberStep! + 1 => memberStep!
+            } else { false => memberPathValid! }
+        }
+    }
+    (node.kind == 8 and node.symbol >= 0) -> if {
+        -1 => callTargetFunction!
+        0 => callTargetSearch!
+        callTargetSearch! < (context.ir -> len) -> while {
+            context.ir[callTargetSearch!] => callTargetCandidate
+            (callTargetCandidate.kind == 0
+                and callTargetCandidate.sourceModule == sourceModule
+                and callTargetCandidate.symbol == node.symbol) -> if {
+                callTargetSearch! => callTargetFunction!
+            }
+            callTargetSearch! + 1 => callTargetSearch!
+        }
+        callTargetFunction! >= 0 -> if {
+            context.ir[callTargetFunction!] => callTarget
+            "  %v$(labelIndex)_expression$(nodeIndex) = call " -> print
+            callTarget -> writeIrType(context, state)
+            " @sollang_m$(sourceModule)_s$(node.symbol)(" -> print
+            callTarget.operand1 => callParameterIndex!
+            0 => callArgumentOrdinal!
+            node.operand0 => callArgumentIndex!
+            (callParameterIndex! >= 0 and callArgumentIndex! >= 0 and callArgumentOrdinal! < 3) -> while {
+                callArgumentOrdinal! > 0 -> if { ", " -> print }
+                context.ir[callParameterIndex!] => callParameter
+                callParameter -> writeIrType(context, state)
+                " " -> print
+                nodes[callArgumentIndex!] => callArgument
+                (callArgument.kind == 0 or callArgument.kind == 4) -> if {
+                    callArgument.kind == 4 -> if {
+                        (context.sources[sourceModule] -> byte(callArgument.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                    } else { context.sources[sourceModule] -> slice(callArgument.payloadStart, callArgument.payloadLength) -> print }
+                } else {
+                    labelIndex -> writeInterpolationValue(callArgumentIndex!, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                }
+                callArgumentOrdinal! == 0 -> if { callTarget.nextOperand => callParameterIndex! } else { callParameter.nextOperand => callParameterIndex! }
+                callArgumentOrdinal! + 1 => callArgumentOrdinal!
+                callArgumentOrdinal! == 1 -> if { node.operand1 => callArgumentIndex! }
+                callArgumentOrdinal! == 2 -> if { node.operand2 => callArgumentIndex! }
+                callArgumentOrdinal! >= 3 -> if { -1 => callArgumentIndex! }
+            }
+            ")" -> println
+        }
+    }
+    (node.kind == 9 and node.operand0 >= 0) -> if {
+        node.operand0 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => conversionSourceWidth
+        node.typeSymbol -> integerWidth(context, state) => conversionTargetWidth!
+        (node.typeSymbol == 12 or node.typeSymbol == 13) -> if { context.pointerBitWidth => conversionTargetWidth! }
+        (conversionSourceWidth > 0 and conversionTargetWidth! > 0) -> if {
+            "  %v$(labelIndex)_expression$(nodeIndex) = " -> print
+            node.typeSymbol == 23 -> if {
+                "icmp ne i$(conversionSourceWidth) " -> print
+                labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                ", 0" -> println
+            } else {
+                conversionSourceWidth == conversionTargetWidth! -> if { "freeze i$(conversionTargetWidth!) " -> print }
+                conversionSourceWidth > conversionTargetWidth! -> if { "trunc i$(conversionSourceWidth) " -> print }
+                conversionSourceWidth < conversionTargetWidth! -> if {
+                    nodes[node.operand0].typeSymbol -> integerSigned(context, state) -> if { "sext" -> print } else { "zext" -> print }
+                    " i$(conversionSourceWidth) " -> print
+                }
+                labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                conversionSourceWidth != conversionTargetWidth! -> if { " to i$(conversionTargetWidth!)" -> print }
+                "" -> println
+            }
+        }
+    }
+    (node.kind == 6 and node.operand0 >= 0) -> if {
+        nodes[node.operand0] => base
+        node.opcode == -101 -> if {
+            base -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => baseBinding
+            baseBinding >= 0 -> if {
+                "  %v$(labelIndex)_expression$(nodeIndex) = extractvalue " -> print
+                context.ir[baseBinding] -> writeIrType(context, state)
+                " " -> print
+                labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                ", 1" -> println
+            }
+        }
+        (node.opcode == -202 and node.operand1 >= 0) -> if {
+            base -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => byteBaseBinding
+            byteBaseBinding >= 0 -> if {
+                "  %v$(labelIndex)_expression$(nodeIndex)_base = extractvalue " -> print
+                context.ir[byteBaseBinding] -> writeIrType(context, state)
+                " " -> print
+                labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                ", 0" -> println
+                "  %v$(labelIndex)_expression$(nodeIndex)_address = getelementptr i8, ptr %v$(labelIndex)_expression$(nodeIndex)_base, i64 " -> print
+                labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                "" -> println
+                "  %v$(labelIndex)_expression$(nodeIndex) = load i8, ptr %v$(labelIndex)_expression$(nodeIndex)_address, align 1" -> println
+            }
+        }
+        (node.opcode == -203 and node.operand1 >= 0 and node.operand2 >= 0) -> if {
+            base -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => sliceBaseBinding
+            sliceBaseBinding >= 0 -> if {
+                "  %v$(labelIndex)_expression$(nodeIndex)_base = extractvalue " -> print
+                context.ir[sliceBaseBinding] -> writeIrType(context, state)
+                " " -> print
+                labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                ", 0" -> println
+                "  %v$(labelIndex)_expression$(nodeIndex)_start = getelementptr i8, ptr %v$(labelIndex)_expression$(nodeIndex)_base, i64 " -> print
+                labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                "" -> println
+                "  %v$(labelIndex)_expression$(nodeIndex)_ptr = insertvalue %sollang.text poison, ptr %v$(labelIndex)_expression$(nodeIndex)_start, 0" -> println
+                "  %v$(labelIndex)_expression$(nodeIndex) = insertvalue %sollang.text %v$(labelIndex)_expression$(nodeIndex)_ptr, i64 " -> print
+                labelIndex -> writeInterpolationValue(node.operand2, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                ", 1" -> println
+            }
+        }
+    }
+    (node.kind == 7 and node.operand0 >= 0 and node.operand1 >= 0) -> if {
+        node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => indexedContainerTypeId!
+        false => indexedReference!
+        (indexedContainerTypeId! >= 0 and context.types[indexedContainerTypeId!].kind == 8) -> if {
+            context.types[indexedContainerTypeId!].first => indexedContainerTypeId!
+            true => indexedReference!
+        }
+        nodeIndex -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => indexedElementTypeId
+        (indexedContainerTypeId! >= 0 and indexedElementTypeId >= 0
+            and (context.types[indexedContainerTypeId!].kind == 3
+                or context.types[indexedContainerTypeId!].kind == 4
+                or (context.types[indexedContainerTypeId!].kind == 1 and context.types[indexedContainerTypeId!].origin == 1 and context.types[indexedContainerTypeId!].symbol == 1))) -> if {
+            context.types[indexedContainerTypeId!] => indexedContainerType
+            (indexedReference! and indexedContainerType.kind != 4) -> if {
+                "  %v$(labelIndex)_expression$(nodeIndex)_source = load " -> print
+                indexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                ", align 8" -> println
+            }
+            indexedContainerType.kind == 4 and indexedReference! -> if {
+                "  %v$(labelIndex)_expression$(nodeIndex)_data = getelementptr " -> print
+                indexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                ", i64 0, i64 0" -> println
+            } else {
+                "  %v$(labelIndex)_expression$(nodeIndex)_data = extractvalue " -> print
+                indexedReference! -> if {
+                    indexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                } else {
+                    indexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                }
+                " " -> print
+                indexedReference! -> if { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print } else {
+                    labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                }
+                ", 0" -> println
+            }
+            node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => indexedSubscriptWidth!
+            indexedSubscriptWidth! <= 0 -> if { 32 => indexedSubscriptWidth! }
+            "  %v$(labelIndex)_expression$(nodeIndex)_ptr = getelementptr " -> print
+            indexedElementTypeId -> writeSemanticTypeId(context, state)
+            ", ptr %v$(labelIndex)_expression$(nodeIndex)_data, i$(indexedSubscriptWidth!) " -> print
+            labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+            "" -> println
+            "  %v$(labelIndex)_expression$(nodeIndex) = load " -> print
+            indexedElementTypeId -> writeSemanticTypeId(context, state)
+            ", ptr %v$(labelIndex)_expression$(nodeIndex)_ptr, align " -> print
+            context.typeAligns[indexedElementTypeId] -> writeDecimalLine
+        }
+    }
 }
 
 # Computes target-aware storage facts from canonical recursive identity. Nominal
@@ -423,6 +1276,10 @@ public layoutOf request: TypeLayoutRequest -> TypeLayout {
 
 isDynamicArrayType node: typedIr.TypedIrNode -> Bool {
     node -> typeQueries.isDynamicArray
+}
+
+isFixedArrayType node: typedIr.TypedIrNode -> Bool {
+    node -> typeQueries.isFixedArray
 }
 
 isDictionaryType node: typedIr.TypedIrNode -> Bool {

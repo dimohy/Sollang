@@ -19,6 +19,14 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
     isHorizontalWhitespace value: UInt8 -> Bool {
         value == UInt8(32) or value == UInt8(9) or value == UInt8(13)
     }
+    tripleKind first: UInt8, second: UInt8, third: UInt8 -> Int {
+        -1 => kind!
+        first == UInt8(46) and second == UInt8(46) and third == UInt8(60) -> if {
+            grammar.tokenIdRangeUntil() => kind!
+        }
+        kind! => result
+        result
+    }
     pairKind value: UInt16 -> Int {
         -1 => kind!
         value == UInt16(11822) -> if { grammar.tokenIdRange() => kind! }
@@ -178,7 +186,16 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                             } else {
                                 Int(-1) => kind!
                                 UIntSize(1) => width!
-                                position! + UIntSize(1) < sourceLength -> if {
+                                position! + UIntSize(2) < sourceLength -> if {
+                                    source -> byte(position! + UIntSize(1)) => following
+                                    source -> byte(position! + UIntSize(2)) => third
+                                    current -> tripleKind(following, third) => triple
+                                    triple >= 0 -> if {
+                                        triple => kind!
+                                        UIntSize(3) => width!
+                                    }
+                                }
+                                kind! < 0 and position! + UIntSize(1) < sourceLength -> if {
                                     source -> byte(position! + UIntSize(1)) => following
                                     UInt16(current) * UInt16(256) + UInt16(following) -> pairKind => pair
                                     pair >= 0 -> if {

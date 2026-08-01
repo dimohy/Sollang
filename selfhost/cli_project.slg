@@ -14,6 +14,8 @@ public struct ProjectInput {
     status: Int
     source: Text
     sourceDirectory: Text
+    projectDirectory: Text
+    productName: Text
     multiProduct: Bool
     dependencyCount: Int
 }
@@ -252,6 +254,8 @@ emptyInput status: Int -> ProjectInput {
         status: status
         source: ""
         sourceDirectory: ""
+        projectDirectory: ""
+        productName: ""
         multiProduct: false
         dependencyCount: 0
     } => result!
@@ -424,7 +428,7 @@ public appendDependencySources option: Text, sources: mut [path.Path; ~], style:
 
 # Status: 0 valid, 1 invalid manifest, 2 requested product missing,
 # 3 product selection required.
-public load option: Text, requestedProduct: Text, manifestStorage: mut Arena, rootStorage: mut Arena -> ProjectInput uses File {
+public load option: Text, requestedProduct: Text, manifestStorage: mut Arena, rootStorage: mut Arena, productNameStorage: mut Arena -> ProjectInput uses File {
     option -> manifestPath(manifestStorage) => manifest
     manifest -> directoryOf => directory
     manifest -> path.fromText(path.nativeStyle()) => manifestFile!
@@ -460,12 +464,16 @@ public load option: Text, requestedProduct: Text, manifestStorage: mut Arena, ro
     }
 
     source! -> spanText(parsed!.products[selectedIndex!].root) => relativeRoot
+    source! -> spanText(parsed!.products[selectedIndex!].name) => productNameView
+    productNameView -> materialize(productNameStorage) => productName
     "$directory/$relativeRoot" -> materialize(rootStorage) => rootSource
     rootSource -> directoryOf => sourceDirectory
     ProjectInput {
         status: 0
         source: rootSource
         sourceDirectory: sourceDirectory
+        projectDirectory: directory
+        productName: productName
         multiProduct: (parsed!.products -> len) > 1
         dependencyCount: parsed!.dependencies -> len
     } => result!

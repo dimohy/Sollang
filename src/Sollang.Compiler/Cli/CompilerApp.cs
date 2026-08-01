@@ -22,6 +22,11 @@ internal static class CompilerApp
                 Console.WriteLine($"Sollang {CompilerVersion.Current}");
                 return 0;
             }
+            if (args is ["--help"] or ["-h"] or ["help"])
+            {
+                PrintHelp();
+                return 0;
+            }
             if (args.Length >= 2 && args[0] == "grammar" && args[1] == "build")
             {
                 GrammarCompiler.Build(args[2..]);
@@ -57,7 +62,10 @@ internal static class CompilerApp
         }
         catch (SollangException ex)
         {
-            Console.Error.WriteLine($"sollang: {ex.Message}");
+            Console.Error.WriteLine(
+                Environment.GetEnvironmentVariable("SOLLANG_DEBUG_STACK") == "1"
+                    ? $"sollang: {ex}"
+                    : $"sollang: {ex.Message}");
             return 1;
         }
         catch (Exception ex)
@@ -68,6 +76,26 @@ internal static class CompilerApp
                     : $"sollang: unexpected failure: {ex.Message}");
             return 1;
         }
+    }
+
+    private static void PrintHelp()
+    {
+        Console.WriteLine($"Sollang {CompilerVersion.Current}");
+        Console.WriteLine("usage: sollang <command> [options]");
+        Console.WriteLine();
+        Console.WriteLine("commands:");
+        Console.WriteLine("  build            compile source, project, or workspace products");
+        Console.WriteLine("  run              build and run a native program");
+        Console.WriteLine("  test             discover, build, and run Sollang tests");
+        Console.WriteLine("  format           format Sollang source");
+        Console.WriteLine("  resolve          resolve and lock package dependencies");
+        Console.WriteLine("  language-server  run the Language Server Protocol endpoint");
+        Console.WriteLine("  bind-cpp         generate a checked C++ binding package");
+        Console.WriteLine("  grammar build    regenerate the canonical parser table");
+        Console.WriteLine();
+        Console.WriteLine("global options:");
+        Console.WriteLine("  -h, --help       show this help");
+        Console.WriteLine("  -v, --version    show the compiler version");
     }
 
     private static int RunProgram(string[] args)

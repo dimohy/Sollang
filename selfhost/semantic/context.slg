@@ -35,20 +35,19 @@ public freeze snapshot: move SemanticSnapshot -> SemanticSnapshot {
     snapshot
 }
 
-public prepareSources sources: move [file.SourceText; ~] -> SemanticSnapshot {
-    sources -> analysis.analyzeSources => packageAnalysis!
-    packageAnalysis! -> typeIds.resolveAnalyzed => semanticSet!
-    packageAnalysis! -> nominalTypes.resolveAnalyzed => nominalTypes!
-    packageAnalysis! -> compositeTypes.resolveAnalyzed(semanticSet!) => compositeTypes!
-    packageAnalysis! -> modules.identitiesAnalyzed => moduleIdentities!
-    packageAnalysis! -> modules.importsAnalyzed => importEdges!
-    packageAnalysis! -> moduleResolve.resolveAnalyzed => resolvedImports!
-    packageAnalysis! -> qualified.resolveAnalyzed => qualifiedResults!
-    packageAnalysis! -> calls.resolveModulesAnalyzed => resolvedCalls!
+prepareAnalyzed packageAnalysis: move analysis.PackageAnalysis -> SemanticSnapshot {
+    packageAnalysis -> typeIds.resolveAnalyzed => semanticSet!
+    packageAnalysis -> nominalTypes.resolveAnalyzed => nominalTypes!
+    packageAnalysis -> compositeTypes.resolveAnalyzed(semanticSet!) => compositeTypes!
+    packageAnalysis -> modules.identitiesAnalyzed => moduleIdentities!
+    packageAnalysis -> modules.importsAnalyzed => importEdges!
+    packageAnalysis -> moduleResolve.resolveAnalyzed => resolvedImports!
+    packageAnalysis -> qualified.resolveAnalyzed => qualifiedResults!
+    packageAnalysis -> calls.resolveModulesAnalyzed => resolvedCalls!
 
     SemanticSnapshot {
         semantic: semanticSet!
-        package: packageAnalysis!
+        package: packageAnalysis
         nominal: nominalTypes!
         composite: compositeTypes!
         modules: moduleIdentities!
@@ -58,6 +57,16 @@ public prepareSources sources: move [file.SourceText; ~] -> SemanticSnapshot {
         calls: resolvedCalls!
     } => snapshot!
     snapshot! -> freeze
+}
+
+public prepareSources sources: move [file.SourceText; ~] -> SemanticSnapshot {
+    sources -> analysis.analyzeSources => packageAnalysis!
+    packageAnalysis! -> prepareAnalyzed
+}
+
+public prepareTestSources sources: move [file.SourceText; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~] -> SemanticSnapshot {
+    sources -> analysis.analyzeTestSources(sourceIndices, symbolIndices) => packageAnalysis!
+    packageAnalysis! -> prepareAnalyzed
 }
 
 public prepare sources: [Text; ~] -> SemanticSnapshot {
@@ -70,6 +79,17 @@ public prepare sources: [Text; ~] -> SemanticSnapshot {
         sourceIndex! + 1 => sourceIndex!
     }
     ownedSources! -> prepareSources
+}
+
+public prepareTests sources: [Text; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~] -> SemanticSnapshot {
+    [file.SourceText; ~] => ownedSources!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] -> file.borrowText => ownedSource
+        ownedSources! -> push(ownedSource)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    ownedSources! -> prepareTestSources(sourceIndices, symbolIndices)
 }
 
 public prepareFiles paths: [Text; ~] -> SemanticSnapshot uses File {

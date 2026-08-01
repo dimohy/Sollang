@@ -1,0 +1,33 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Composite generic enum qualifiers are compile-time type syntax. They must
+# become transparent Typed IR wrappers, never runtime member projections.
+main {
+    [
+        """
+        choose message: Text -> Result<[Int; ~], Text> {
+            Result<[Int; ~], Text>.Err(message)
+        }
+
+        main {
+            Result<[Int; 2], Text>.Err("entry") => selected
+            selected -> when {
+                Ok(value) => value[0] -> println
+                Err(message) => message -> println
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => constructors!
+    0 => runtimeMembers!
+    0 => invalidTypes!
+    ir! -> each node {
+        node.kind == 26 -> if {
+            constructors! + 1 => constructors!
+            node.typeId < 0 -> if { invalidTypes! + 1 => invalidTypes! }
+        }
+        node.kind == 13 -> if { runtimeMembers! + 1 => runtimeMembers! }
+    }
+    "constructors=$(constructors!),runtime-members=$(runtimeMembers!),invalid-types=$(invalidTypes!)" -> println
+}

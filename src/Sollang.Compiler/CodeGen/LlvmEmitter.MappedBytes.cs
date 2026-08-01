@@ -170,6 +170,33 @@ internal sealed partial class LlvmEmitter
         return new RuntimeSourceText(finalBuffer, finalLength, finalBuffer, "-1");
     }
 
+    private RuntimeSourceText EmitReadStandardInputChunk(RuntimeValue value)
+    {
+        var capacity = value as RuntimeInt
+            ?? throw new SollangException("readStandardInputChunk capacity must be UIntSize");
+        var capacityName = EmitRuntimeIntegerAsI64(capacity, "stdin_chunk_capacity");
+        var zeroCapacity = NextTemp("stdin_chunk_zero_capacity");
+        EmitCompare(zeroCapacity, "eq", "i64", capacityName, "0");
+        var allocationSize = NextTemp("stdin_chunk_allocation_size");
+        EmitAssign(allocationSize, $"select i1 {zeroCapacity}, i64 1, i64 {capacityName}");
+        var buffer = NextTemp("stdin_chunk_buffer");
+        EmitCall(buffer, "ptr", "sollang_alloc", $"i64 {allocationSize}");
+        var allocated = NextTemp("stdin_chunk_allocated");
+        EmitCompare(allocated, "ne", "ptr", buffer, "null");
+        EmitTrapUnless(allocated, "stdin_chunk_allocate");
+        var readOk = NextTemp("stdin_chunk_read_ok");
+        EmitCall(readOk, "i32", "sollang_read_stdin",
+            $"ptr %stdin, ptr {buffer}, i64 {capacityName}, ptr %read");
+        var succeeded = NextTemp("stdin_chunk_read_succeeded");
+        EmitCompare(succeeded, "ne", "i32", readOk, "0");
+        EmitTrapUnless(succeeded, "stdin_chunk_read");
+        var read32 = NextTemp("stdin_chunk_read32");
+        EmitLoad(read32, "i32", "%read", 4);
+        var read64 = NextTemp("stdin_chunk_read64");
+        EmitAssign(read64, $"zext i32 {read32} to i64");
+        return new RuntimeSourceText(buffer, read64, buffer, "-1");
+    }
+
     private RuntimeSourceText EmitMapSourcePath(RuntimeValue value)
     {
         if (value is not RuntimeStruct path

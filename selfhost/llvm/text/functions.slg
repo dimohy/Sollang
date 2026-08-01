@@ -107,7 +107,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
         function.operand1 >= 0 -> if {
             context.ir[function.operand1] => parameter
             parameter.flags / 2 % 2 == 1 -> if {
-                "%sollang.mutable_container %arg_borrow" -> print
+                parameter -> mutableBorrowUsesStructPointer(context) -> if { "ptr %arg_mut_struct" -> print } else { "%sollang.mutable_container %arg_borrow" -> print }
             } else {
                 parameter -> writeIrType(context, state)
                 " %arg" -> print
@@ -119,7 +119,11 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
         additionalSignatureParameterIndex! >= 0 -> while {
             context.ir[additionalSignatureParameterIndex!] => additionalSignatureParameter
             additionalSignatureParameter.flags / 2 % 2 == 1 -> if {
-                "%sollang.mutable_container %arg$(additionalSignatureParameterOrdinal!)_borrow" -> print
+                additionalSignatureParameter -> mutableBorrowUsesStructPointer(context) -> if {
+                    "ptr %arg$(additionalSignatureParameterOrdinal!)_mut_struct" -> print
+                } else {
+                    "%sollang.mutable_container %arg$(additionalSignatureParameterOrdinal!)_borrow" -> print
+                }
             } else {
                 additionalSignatureParameter -> writeIrType(context, state)
                 " %arg$(additionalSignatureParameterOrdinal!)" -> print
@@ -130,24 +134,32 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
         }
         ") {" -> println
         "entry:" -> println
+        functionIndex! -> emitHoistedControlAllocas(functionIndex! + 1, functionEnd!, context, state)
         function.operand1 >= 0 -> if {
             context.ir[function.operand1] => entryParameter
             entryParameter.flags / 2 % 2 == 1 -> if {
-                "  %arg_mut_ptr_addr = extractvalue %sollang.mutable_container %arg_borrow, 0" -> println
-                "  %arg_mut_len_addr = extractvalue %sollang.mutable_container %arg_borrow, 1" -> println
-                "  %arg_mut_capacity_addr = extractvalue %sollang.mutable_container %arg_borrow, 2" -> println
-                "  %arg_mut_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8" -> println
-                "  %arg_mut_len = load i64, ptr %arg_mut_len_addr, align 8" -> println
-                "  %arg_mut_capacity = load i64, ptr %arg_mut_capacity_addr, align 8" -> println
-                "  %arg_value0 = insertvalue " -> print
-                entryParameter -> writeIrType(context, state)
-                " poison, ptr %arg_mut_ptr, 0" -> println
-                "  %arg_value1 = insertvalue " -> print
-                entryParameter -> writeIrType(context, state)
-                " %arg_value0, i64 %arg_mut_len, 1" -> println
-                "  %arg = insertvalue " -> print
-                entryParameter -> writeIrType(context, state)
-                " %arg_value1, i64 %arg_mut_capacity, 2" -> println
+                entryParameter -> mutableBorrowUsesStructPointer(context) -> if {
+                    "  %arg = load " -> print
+                    entryParameter -> writeIrType(context, state)
+                    ", ptr %arg_mut_struct, align " -> print
+                    entryParameter -> storageAlign(context, state) -> writeDecimalLine
+                } else {
+                    "  %arg_mut_ptr_addr = extractvalue %sollang.mutable_container %arg_borrow, 0" -> println
+                    "  %arg_mut_len_addr = extractvalue %sollang.mutable_container %arg_borrow, 1" -> println
+                    "  %arg_mut_capacity_addr = extractvalue %sollang.mutable_container %arg_borrow, 2" -> println
+                    "  %arg_mut_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8" -> println
+                    "  %arg_mut_len = load i64, ptr %arg_mut_len_addr, align 8" -> println
+                    "  %arg_mut_capacity = load i64, ptr %arg_mut_capacity_addr, align 8" -> println
+                    "  %arg_value0 = insertvalue " -> print
+                    entryParameter -> writeIrType(context, state)
+                    " poison, ptr %arg_mut_ptr, 0" -> println
+                    "  %arg_value1 = insertvalue " -> print
+                    entryParameter -> writeIrType(context, state)
+                    " %arg_value0, i64 %arg_mut_len, 1" -> println
+                    "  %arg = insertvalue " -> print
+                    entryParameter -> writeIrType(context, state)
+                    " %arg_value1, i64 %arg_mut_capacity, 2" -> println
+                }
             }
         }
         function.nextOperand => entryAdditionalParameterIndex!
@@ -155,21 +167,28 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
         entryAdditionalParameterIndex! >= 0 -> while {
             context.ir[entryAdditionalParameterIndex!] => entryAdditionalParameter
             entryAdditionalParameter.flags / 2 % 2 == 1 -> if {
-                "  %arg$(entryAdditionalParameterOrdinal!)_mut_ptr_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 0" -> println
-                "  %arg$(entryAdditionalParameterOrdinal!)_mut_len_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 1" -> println
-                "  %arg$(entryAdditionalParameterOrdinal!)_mut_capacity_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 2" -> println
-                "  %arg$(entryAdditionalParameterOrdinal!)_mut_ptr = load ptr, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_ptr_addr, align 8" -> println
-                "  %arg$(entryAdditionalParameterOrdinal!)_mut_len = load i64, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_len_addr, align 8" -> println
-                "  %arg$(entryAdditionalParameterOrdinal!)_mut_capacity = load i64, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_capacity_addr, align 8" -> println
-                "  %arg$(entryAdditionalParameterOrdinal!)_value0 = insertvalue " -> print
-                entryAdditionalParameter -> writeIrType(context, state)
-                " poison, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_ptr, 0" -> println
-                "  %arg$(entryAdditionalParameterOrdinal!)_value1 = insertvalue " -> print
-                entryAdditionalParameter -> writeIrType(context, state)
-                " %arg$(entryAdditionalParameterOrdinal!)_value0, i64 %arg$(entryAdditionalParameterOrdinal!)_mut_len, 1" -> println
-                "  %arg$(entryAdditionalParameterOrdinal!) = insertvalue " -> print
-                entryAdditionalParameter -> writeIrType(context, state)
-                " %arg$(entryAdditionalParameterOrdinal!)_value1, i64 %arg$(entryAdditionalParameterOrdinal!)_mut_capacity, 2" -> println
+                entryAdditionalParameter -> mutableBorrowUsesStructPointer(context) -> if {
+                    "  %arg$(entryAdditionalParameterOrdinal!) = load " -> print
+                    entryAdditionalParameter -> writeIrType(context, state)
+                    ", ptr %arg$(entryAdditionalParameterOrdinal!)_mut_struct, align " -> print
+                    entryAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+                } else {
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_ptr_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 0" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_len_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 1" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_capacity_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 2" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_ptr = load ptr, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_ptr_addr, align 8" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_len = load i64, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_len_addr, align 8" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_capacity = load i64, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_capacity_addr, align 8" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_value0 = insertvalue " -> print
+                    entryAdditionalParameter -> writeIrType(context, state)
+                    " poison, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_ptr, 0" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_value1 = insertvalue " -> print
+                    entryAdditionalParameter -> writeIrType(context, state)
+                    " %arg$(entryAdditionalParameterOrdinal!)_value0, i64 %arg$(entryAdditionalParameterOrdinal!)_mut_len, 1" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!) = insertvalue " -> print
+                    entryAdditionalParameter -> writeIrType(context, state)
+                    " %arg$(entryAdditionalParameterOrdinal!)_value1, i64 %arg$(entryAdditionalParameterOrdinal!)_mut_capacity, 2" -> println
+                }
             }
             entryAdditionalParameter.nextOperand => entryAdditionalParameterIndex!
             entryAdditionalParameterOrdinal! + 1 => entryAdditionalParameterOrdinal!
@@ -311,6 +330,16 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                         ifConditionSearch! + 1 => ifConditionSearch!
                     }
                     insideIfCondition! -> if { true => insideControlRegion! }
+                    false => insideLogicalValue!
+                    scheduleNode.parent => logicalValueAncestor!
+                    (logicalValueAncestor! >= expressionStart and not insideLogicalValue!) -> while {
+                        context.ir[logicalValueAncestor!] => logicalValueAncestorNode
+                        (logicalValueAncestorNode.kind == 8 and (logicalValueAncestorNode.opcode == -24 or logicalValueAncestorNode.opcode == -25)) -> if {
+                            true => insideLogicalValue!
+                        } else {
+                            logicalValueAncestorNode.parent => logicalValueAncestor!
+                        }
+                    }
                     (scheduleNode.kind == 17 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and not insideControlRegion!) -> if {
                         context.ir[scheduleNode.operand0].parent => bindingScheduleAncestor!
                         (bindingScheduleAncestor! >= expressionStart and not insideControlRegion!) -> while {
@@ -347,7 +376,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                         # dependency on the store currently being scheduled.
                         (scheduleMutableReadRoot != scheduleNode.operand0 and scheduleMutableReadRoot >= expressionStart and scheduleMutableReadRoot < functionEnd! and not expressionScheduled![scheduleMutableReadRoot - expressionStart]) -> if { false => scheduleReady! }
                     }
-                    (scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.kind != 27 and scheduleNode.kind != 33 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1 - expressionStart]) -> if { false => scheduleReady! }
+                    (scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.kind != 27 and scheduleNode.kind != 33 and scheduleNode.kind != 34 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1 - expressionStart]) -> if { false => scheduleReady! }
                     (scheduleReady! and scheduleNode.kind == 6 and scheduleNode.opcode != -207 and scheduleNode.opcode != -208 and scheduleNode.opcode != -209 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd!) -> if {
                         scheduleNode.operand1 -> aggregateValueIndex(context, state) => scheduleAdditionalArgument
                         (scheduleAdditionalArgument >= expressionStart and scheduleAdditionalArgument < functionEnd! and not expressionScheduled![scheduleAdditionalArgument - expressionStart]) -> if { false => scheduleReady! }
@@ -396,7 +425,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             context.ir[scheduleSibling!].nextOperand => scheduleSibling!
                         }
                     }
-                    (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33)) -> if {
+                    (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33 or scheduleNode.kind == 34)) -> if {
                         expressionStart => controlDependencySearch!
                         controlDependencySearch! < functionEnd! -> while {
                             context.ir[controlDependencySearch!] => controlDependencyUse
@@ -444,7 +473,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             controlDependencySearch! + 1 => controlDependencySearch!
                         }
                     }
-                    (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33)) -> if {
+                    (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33 or scheduleNode.kind == 34)) -> if {
                         expressionStart => priorControlValueSearch!
                         priorControlValueSearch! < functionEnd! -> while {
                             context.ir[priorControlValueSearch!] => priorControlValue
@@ -465,21 +494,42 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             priorControlValueSearch! + 1 => priorControlValueSearch!
                         }
                     }
-                    (scheduleReady! and (scheduleNode.kind == 5 or scheduleNode.kind == 13 or scheduleNode.kind == 15)) -> if {
+                    (scheduleReady! and (scheduleNode.kind == 5 or scheduleNode.kind == 13 or scheduleNode.kind == 15 or (scheduleNode.kind == 9 and scheduleNode.opcode == -201 and scheduleNode.operand0 >= 0))) -> if {
                         false => mutableRead!
+                        -1 => mutableReadRoot!
                         scheduleCandidate! -> isMutablePlaceRead(expressionStart, functionEnd!, context, state) -> if { true => mutableRead! }
                         scheduleNode.kind == 5 -> if {
                             (scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and context.ir[scheduleNode.operand0].kind == 17 and context.ir[scheduleNode.operand0].flags == 1) -> if {
                                 true => mutableRead!
+                                scheduleNode.operand0 => mutableReadRoot!
                             }
                             expressionStart => mutableReadBindingSearch!
                             mutableReadBindingSearch! < functionEnd! -> while {
-                                (context.ir[mutableReadBindingSearch!].kind == 17 and context.ir[mutableReadBindingSearch!].symbol == scheduleNode.symbol and context.ir[mutableReadBindingSearch!].flags == 1) -> if { true => mutableRead! }
+                                (context.ir[mutableReadBindingSearch!].kind == 17 and context.ir[mutableReadBindingSearch!].symbol == scheduleNode.symbol and context.ir[mutableReadBindingSearch!].flags == 1) -> if {
+                                    true => mutableRead!
+                                    mutableReadBindingSearch! => mutableReadRoot!
+                                }
                                 mutableReadBindingSearch! + 1 => mutableReadBindingSearch!
                             }
+                            scheduleCandidate! -> mutableBorrowParameterOrdinal(functionIndex!, context, state) => mutableReadParameterOrdinal
+                            mutableReadParameterOrdinal >= 0 -> if { true => mutableRead! }
                         } else {
-                            scheduleCandidate! -> referencePlaceRootBinding(context, state) => mutableProjectionRoot
-                            (mutableProjectionRoot >= expressionStart and mutableProjectionRoot < functionEnd! and context.ir[mutableProjectionRoot].flags == 1) -> if { true => mutableRead! }
+                            scheduleNode.kind == 9 -> if {
+                                scheduleNode.operand0 -> mutableStorageRoot(context, state) => mutableReadRoot!
+                                mutableReadRoot! >= 0 -> if { true => mutableRead! }
+                                scheduleNode.operand0 -> mutableBorrowParameterOrdinal(functionIndex!, context, state) => mutableReadParameterOrdinal
+                                mutableReadParameterOrdinal >= 0 -> if { true => mutableRead! }
+                            } else {
+                                scheduleCandidate! -> referencePlaceRootBinding(context, state) => mutableProjectionRoot
+                                (mutableProjectionRoot >= expressionStart and mutableProjectionRoot < functionEnd! and context.ir[mutableProjectionRoot].flags == 1) -> if {
+                                    true => mutableRead!
+                                    mutableProjectionRoot => mutableReadRoot!
+                                }
+                                scheduleNode.kind == 15 -> if {
+                                    scheduleNode.operand0 -> mutableBorrowParameterOrdinal(functionIndex!, context, state) => mutableProjectionParameterOrdinal
+                                    mutableProjectionParameterOrdinal >= 0 -> if { true => mutableRead! }
+                                }
+                            }
                         }
                         mutableRead! -> if {
                             expressionStart => mutableReadBarrierSearch!
@@ -494,6 +544,10 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                 }
                                 false => readsCurrentRebindPreviousValue!
                                 mutableReadBarrier -> callHasDeclaredEffects(context, state) => mutableReadBarrierHasEffects
+                                false => mutableReadBarrierMutatesBinding!
+                                (mutableReadBarrier.kind == 6 and mutableReadRoot! >= 0) -> if {
+                                    mutableReadBarrierSearch! -> callMutatesBinding(mutableReadRoot!, functionIndex!, context, state) => mutableReadBarrierMutatesBinding!
+                                }
                                 (scheduleNode.kind == 5
                                     and scheduleNode.operand0 == mutableReadBarrierSearch!
                                     and mutableReadBarrier.kind == 17
@@ -512,9 +566,10 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                     and (mutableReadBarrier.kind == 18
                                         or mutableReadBarrier.kind == 20
                                         or mutableReadBarrier.kind == 27
+                                        or mutableReadBarrier.kind == 34
                                         or mutableReadBarrier.kind == 24
                                         or mutableReadBarrier.kind == 25
-                                        or (mutableReadBarrier.kind == 6 and mutableReadBarrierHasEffects)
+                                        or (mutableReadBarrier.kind == 6 and (mutableReadBarrierHasEffects or mutableReadBarrierMutatesBinding!))
                                         or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)
                                         or (mutableReadBarrier.kind == 9 and (mutableReadBarrier.opcode == -204 or mutableReadBarrier.opcode == -213 or mutableReadBarrier.opcode == -229)))
                                     and (mutableReadBarrier -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))) -> if {
@@ -524,11 +579,11 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             }
                         }
                     }
-                    (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 27 or scheduleNode.kind == 33 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205 or scheduleNode.opcode == -213 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221 or scheduleNode.opcode == -229)))) -> if {
+                    (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 27 or scheduleNode.kind == 33 or scheduleNode.kind == 34 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205 or scheduleNode.opcode == -213 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221 or scheduleNode.opcode == -229)))) -> if {
                         true => rootEffect!
                         scheduleNode.parent => effectAncestor!
                         (effectAncestor! >= expressionStart and rootEffect!) -> while {
-                            (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 27 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -204 or context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -213 or context.ir[effectAncestor!].opcode == -220 or context.ir[effectAncestor!].opcode == -221 or context.ir[effectAncestor!].opcode == -229))) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
+                            (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 27 or context.ir[effectAncestor!].kind == 34 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -204 or context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -213 or context.ir[effectAncestor!].opcode == -220 or context.ir[effectAncestor!].opcode == -221 or context.ir[effectAncestor!].opcode == -229))) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
                         }
                         false => mutableRebindEffect!
                         (scheduleNode.kind == 17 and scheduleNode.flags == 1) -> if {
@@ -539,13 +594,13 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             expressionStart => earlierEffectSearch!
                             earlierEffectSearch! < functionEnd! -> while {
                                 context.ir[earlierEffectSearch!] => earlierEffect
-                            (not expressionScheduled![earlierEffectSearch! - expressionStart] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 27 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -213 or earlierEffect.opcode == -229))) and (earlierEffect -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))) -> if {
+                            (not expressionScheduled![earlierEffectSearch! - expressionStart] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 27 or earlierEffect.kind == 34 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -213 or earlierEffect.opcode == -229))) and (earlierEffect -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))) -> if {
                                     earlierEffect.parent => earlierEffectAncestor!
                                     true => earlierRootEffect!
                                     false => earlierInsideRegion!
                                     (earlierEffectAncestor! >= expressionStart and earlierRootEffect! and not earlierInsideRegion!) -> while {
                                         (context.ir[earlierEffectAncestor!].kind == 19 or context.ir[earlierEffectAncestor!].kind == 20) -> if { true => earlierInsideRegion! } else {
-                                        (context.ir[earlierEffectAncestor!].kind == 6 or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 27 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -213 or context.ir[earlierEffectAncestor!].opcode == -220 or context.ir[earlierEffectAncestor!].opcode == -221 or context.ir[earlierEffectAncestor!].opcode == -229))) -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
+                                        (context.ir[earlierEffectAncestor!].kind == 6 or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 27 or context.ir[earlierEffectAncestor!].kind == 34 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -205 or context.ir[earlierEffectAncestor!].opcode == -213 or context.ir[earlierEffectAncestor!].opcode == -220 or context.ir[earlierEffectAncestor!].opcode == -221 or context.ir[earlierEffectAncestor!].opcode == -229))) -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
                                         }
                                     }
                                     (earlierRootEffect! and not earlierInsideRegion!) -> if { false => scheduleReady! }
@@ -555,7 +610,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                         }
                     }
                     scheduleReady! -> if {
-                        expressionOrder! -> push(scheduleCandidate!)
+                        not insideLogicalValue! -> if { expressionOrder! -> push(scheduleCandidate!) }
                         true => expressionScheduled![scheduleCandidate! - expressionStart]
                         (scheduleNode.kind == 6 and scheduleNode.opcode == -208) -> if { scheduleCandidate! => pendingEach! }
                         true => scheduleProgress!
@@ -571,7 +626,12 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             expressionOrder![expressionOrderIndex!] => expressionIndex!
             true => expressionEmitted![expressionIndex! - expressionStart]
             context.ir[expressionIndex!] => expression
-            (expression.kind == 5 and not (expression -> isArgumentsType) and not (function.operand1 >= 0 and expression.symbol == context.ir[function.operand1].symbol)) -> if {
+            (expression.kind == 5 and not (expression -> isArgumentsType)) -> if {
+                expressionIndex! -> mutableBorrowParameterOrdinal(functionIndex!, context, state) => expressionMutableParameterOrdinal
+                expressionMutableParameterOrdinal >= 0 -> if {
+                    expressionIndex! -> emitCurrentMutableParameterValue(expressionMutableParameterOrdinal, functionIndex!, context, state)
+                } else {
+                not (function.operand1 >= 0 and expression.symbol == context.ir[function.operand1].symbol) -> if {
                 expression.symbol => expressionParameterSymbol
                 functionIndex! -> additionalParameterOrdinal(expressionParameterSymbol, context, state) => expressionParameterOrdinal
                 expressionParameterOrdinal >= 0 -> if {
@@ -610,39 +670,34 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     }
                 }
                 }
+                }
+                }
             }
             ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -201 and expression.operand0 >= 0) -> if {
-                context.ir[expression.operand0] => lengthBase
-                expression -> integerNodeWidth(context, state) => lengthResultWidth
-                lengthBase -> isArgumentsType -> if {
-                    "  %v$(expressionIndex!)" -> print
-                    lengthResultWidth == 32 -> if { "_raw" -> print }
-                    " = call i64 @sollang_argument_count()" -> println
-                    lengthResultWidth == 32 -> if { "  %v$(expressionIndex!) = trunc i64 %v$(expressionIndex!)_raw to i32" -> println }
-                } else {
-                    -1 => lengthMutableRoot!
-                    lengthBase.typeOrigin == 15 -> if { expression.operand0 -> mutableStorageRoot(context, state) => lengthMutableRoot! }
-                    lengthMutableRoot! >= 0 -> if { "  %v$(expressionIndex!)_length_source = load %sollang.dict, ptr %slot$(lengthMutableRoot!), align 8" -> println }
-                    "  %v$(expressionIndex!)" -> print
-                    lengthResultWidth == 32 -> if { "_raw" -> print }
-                    " = extractvalue " -> print
-                    lengthBase -> writeIrType(context, state)
-                    " " -> print
-                    lengthMutableRoot! >= 0 -> if { "%v$(expressionIndex!)_length_source" -> print } else { (lengthBase.kind == 5 and function.operand1 >= 0 and lengthBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print } }
-                    ", " -> print
-                    lengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
-                    lengthResultWidth == 32 -> if { "  %v$(expressionIndex!) = trunc i64 %v$(expressionIndex!)_raw to i32" -> println }
-                }
+                expressionIndex! -> emitLengthIntrinsic(functionIndex!, context, state)
             }
             ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -202 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
                 context.ir[expression.operand0] => byteBase
                 expression.operand1 -> aggregateValueIndex(context, state) => byteIndexValue
                 context.ir[byteIndexValue] => byteIndex
                 byteIndex -> integerNodeWidth(context, state) => byteIndexWidth
+                byteBase.typeId => byteBaseTypeId!
+                false => byteBaseReference!
+                (byteBaseTypeId! >= 0 and context.types[byteBaseTypeId!].kind == 8) -> if {
+                    context.types[byteBaseTypeId!].first => byteBaseTypeId!
+                    true => byteBaseReference!
+                    "  %v$(expressionIndex!)_base_source = load " -> print
+                    byteBaseTypeId! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    expression.operand0 -> writeValue(functionIndex!, context, state)
+                    ", align 8" -> println
+                }
                 "  %v$(expressionIndex!)_base = extractvalue " -> print
-                byteBase -> writeTextLikeType
+                byteBaseReference! -> if { byteBaseTypeId! -> writeSemanticTypeId(context, state) } else { byteBase -> writeTextLikeType }
                 " " -> print
-                (byteBase.kind == 5 and function.operand1 >= 0 and byteBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                byteBaseReference! -> if { "%v$(expressionIndex!)_base_source" -> print } else {
+                    (byteBase.kind == 5 and function.operand1 >= 0 and byteBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                }
                 ", 0" -> println
                 (byteIndexWidth > 0 and byteIndexWidth < 64) -> if {
                     "  %v$(expressionIndex!)_index = " -> print
@@ -654,16 +709,29 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 "  %v$(expressionIndex!) = load i8, ptr %v$(expressionIndex!)_address, align 1" -> println
             }
             ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -203 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
-                context.ir[expression.operand1].nextOperand => sliceLength
+                context.ir[expression.operand1].nextOperand -> aggregateValueIndex(context, state) => sliceLength
                 context.ir[expression.operand0] => sliceBase
                 context.ir[expression.operand1] => sliceIndex
                 context.ir[sliceLength] => sliceLengthNode
                 sliceIndex -> integerNodeWidth(context, state) => sliceIndexWidth
                 sliceLengthNode -> integerNodeWidth(context, state) => sliceLengthWidth
+                sliceBase.typeId => sliceBaseTypeId!
+                false => sliceBaseReference!
+                (sliceBaseTypeId! >= 0 and context.types[sliceBaseTypeId!].kind == 8) -> if {
+                    context.types[sliceBaseTypeId!].first => sliceBaseTypeId!
+                    true => sliceBaseReference!
+                    "  %v$(expressionIndex!)_base_source = load " -> print
+                    sliceBaseTypeId! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    expression.operand0 -> writeValue(functionIndex!, context, state)
+                    ", align 8" -> println
+                }
                 "  %v$(expressionIndex!)_base = extractvalue " -> print
-                sliceBase -> writeTextLikeType
+                sliceBaseReference! -> if { sliceBaseTypeId! -> writeSemanticTypeId(context, state) } else { sliceBase -> writeTextLikeType }
                 " " -> print
-                (sliceBase.kind == 5 and function.operand1 >= 0 and sliceBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                sliceBaseReference! -> if { "%v$(expressionIndex!)_base_source" -> print } else {
+                    (sliceBase.kind == 5 and function.operand1 >= 0 and sliceBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                }
                 ", 0" -> println
                 (sliceIndexWidth > 0 and sliceIndexWidth < 64) -> if {
                     "  %v$(expressionIndex!)_index = " -> print
@@ -805,11 +873,28 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     "each$(expressionIndex!)_body:" -> println
                     "  %each$(expressionIndex!)_item = freeze i32 %each$(expressionIndex!)_index" -> println
                 } else {
+                    false => eachReadonlyReference!
+                    eachSource.typeId => eachContainerTypeId!
+                    (eachContainerTypeId! >= 0 and context.types[eachContainerTypeId!].kind == 8) -> if {
+                        context.types[eachContainerTypeId!].first => eachContainerTypeId!
+                        context.types[eachContainerTypeId!].kind == 3 -> if {
+                            true => eachReadonlyReference!
+                            "  %each$(expressionIndex!)_source = load " -> print
+                            eachContainerTypeId! -> writeSemanticTypeId(context, state)
+                            ", ptr " -> print
+                            expression.operand0 -> writeValue(functionIndex!, context, state)
+                            ", align 8" -> println
+                        }
+                    }
                     "  %each$(expressionIndex!)_data = extractvalue %sollang.array.i32 " -> print
-                    (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    eachReadonlyReference! -> if { "%each$(expressionIndex!)_source" -> print } else {
+                        (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    }
                     ", 0" -> println
                     "  %each$(expressionIndex!)_length = extractvalue %sollang.array.i32 " -> print
-                    (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    eachReadonlyReference! -> if { "%each$(expressionIndex!)_source" -> print } else {
+                        (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    }
                     ", 1" -> println
                     "  %each$(expressionIndex!)_index_slot = alloca i64, align 8" -> println
                     "  store i64 0, ptr %each$(expressionIndex!)_index_slot, align 8" -> println
@@ -948,7 +1033,9 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                         (mutableValue.kind == 5 and function.operand1 >= 0 and mutableValue.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     }
                 }
-                ", ptr %slot$(mutableRoot), align " -> print
+                ", ptr " -> print
+                mutableRoot -> writeMutableStoragePointer(functionIndex!, context, state)
+                ", align " -> print
                 mutableBinding -> storageAlign(context, state) -> writeDecimalLine
             }
             expression.kind == 24 -> if {
@@ -961,6 +1048,10 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: expressionIndex! } -> emitEnumConstructor(context, state)
             }
             expression.kind == 27 -> if { expressionIndex! -> emitEnumMatch(context, state) }
+            expression.kind == 34 -> if { expressionIndex! -> emitSubjectWhen(context, state) }
+            (expression.kind == 30 and context.nodes[context.ranges[expression.sourceModule].astStart + expression.astNode].kind == 71) -> if {
+                expressionIndex! -> emitResultPropagation(functionIndex!, context, state)
+            }
             expression.kind == 2 -> if {
                 expression -> sourceToken(context, state) => expressionToken
                 TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength(context, state) => expressionLength
@@ -1055,22 +1146,69 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 }
             }
             expression.kind == 13 -> if {
-                (expression.operand0 >= 0 and context.ir[expression.operand0].typeId >= 0 and context.types[context.ir[expression.operand0].typeId].kind == 8) -> if {
+                (expressionIndex! -> canonicalMemberPathAvailable(context, state)) -> if {
                     context.ir[expression.operand0] => referenceMemberBase
-                    context.types[referenceMemberBase.typeId].first => referenceMemberOwnerType
-                    "  %v$(expressionIndex!)_address = getelementptr inbounds " -> print
-                    referenceMemberOwnerType -> writeSemanticTypeId(context, state)
-                    ", ptr " -> print
-                    (referenceMemberBase.kind == 5 and function.operand1 >= 0 and referenceMemberBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                    ", i32 0, i32 $(expression.symbol)" -> println
-                    expression.typeId => referenceMemberValueType!
-                    (referenceMemberValueType! >= 0 and context.types[referenceMemberValueType!].kind == 8) -> if {
-                        context.types[referenceMemberValueType!].first => referenceMemberValueType!
+                    expression -> sourceNode(context, state) => canonicalMemberAst
+                    referenceMemberBase -> sourceNode(context, state) => canonicalMemberBaseAst
+                    canonicalMemberBaseAst.start + canonicalMemberBaseAst.length => canonicalMemberBaseEnd
+                    canonicalMemberAst.firstToken => canonicalMemberTokenIndex!
+                    true => canonicalBeforeMemberBaseEnd!
+                    (canonicalBeforeMemberBaseEnd! and canonicalMemberTokenIndex! < canonicalMemberAst.firstToken + canonicalMemberAst.tokenCount) -> while {
+                        context.tokens[context.ranges[expression.sourceModule].tokenStart + canonicalMemberTokenIndex!].span.start < canonicalMemberBaseEnd -> if {
+                            canonicalMemberTokenIndex! + 1 => canonicalMemberTokenIndex!
+                        } else { false => canonicalBeforeMemberBaseEnd! }
                     }
-                    "  %v$(expressionIndex!) = load " -> print
-                    referenceMemberValueType! >= 0 -> if { referenceMemberValueType! -> writeSemanticTypeId(context, state) } else { expression -> writeIrType(context, state) }
-                    ", ptr %v$(expressionIndex!)_address, align " -> print
-                    referenceMemberValueType! >= 0 -> if { context.typeAligns[referenceMemberValueType!] -> writeDecimalLine } else { expression -> storageAlign(context, state) -> writeDecimalLine }
+                    canonicalMemberTokenIndex! => canonicalMemberPathStart
+                    0 => canonicalMemberCount!
+                    canonicalMemberTokenIndex! < canonicalMemberAst.firstToken + canonicalMemberAst.tokenCount -> while {
+                        context.tokens[context.ranges[expression.sourceModule].tokenStart + canonicalMemberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+                            canonicalMemberCount! + 1 => canonicalMemberCount!
+                        }
+                        canonicalMemberTokenIndex! + 1 => canonicalMemberTokenIndex!
+                    }
+                    referenceMemberBase.typeId => canonicalMemberOwnerType!
+                    0 => canonicalMemberOrdinal!
+                    canonicalMemberPathStart => canonicalMemberTokenIndex!
+                    canonicalMemberTokenIndex! < canonicalMemberAst.firstToken + canonicalMemberAst.tokenCount -> while {
+                        context.tokens[context.ranges[expression.sourceModule].tokenStart + canonicalMemberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+                            false => canonicalMemberReference!
+                            context.types[canonicalMemberOwnerType!].kind == 8 -> if {
+                                context.types[canonicalMemberOwnerType!].first => canonicalMemberOwnerType!
+                                true => canonicalMemberReference!
+                            }
+                            canonicalMemberOrdinal! == canonicalMemberCount! - 1 -> if {
+                                canonicalMemberOwnerType! -> canonicalMemberFieldOrdinalIndex(expression.symbol, context)
+                            } else {
+                                canonicalMemberOwnerType! -> canonicalMemberFieldIndex(expression.sourceModule, canonicalMemberTokenIndex!, context)
+                            } => canonicalMemberResolvedField
+                            context.fields[canonicalMemberResolvedField] => canonicalMemberField
+                            "  " -> print
+                            canonicalMemberOrdinal! == canonicalMemberCount! - 1 -> if { "%v$(expressionIndex!)" -> print } else { "%v$(expressionIndex!)_m$(canonicalMemberOrdinal!)" -> print }
+                            canonicalMemberReference! -> if {
+                                "_address = getelementptr inbounds " -> print
+                                canonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
+                                ", ptr " -> print
+                                canonicalMemberOrdinal! == 0 -> if { expression.operand0 -> writeValue(functionIndex!, context, state) } else { "%v$(expressionIndex!)_m$(canonicalMemberOrdinal! - 1)" -> print }
+                                ", i32 0, i32 $(canonicalMemberField.ordinal)" -> println
+                                "  " -> print
+                                canonicalMemberOrdinal! == canonicalMemberCount! - 1 -> if { "%v$(expressionIndex!)" -> print } else { "%v$(expressionIndex!)_m$(canonicalMemberOrdinal!)" -> print }
+                                " = load " -> print
+                                canonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                                ", ptr " -> print
+                                canonicalMemberOrdinal! == canonicalMemberCount! - 1 -> if { "%v$(expressionIndex!)" -> print } else { "%v$(expressionIndex!)_m$(canonicalMemberOrdinal!)" -> print }
+                                "_address, align $(context.typeAligns[canonicalMemberField.fieldType])" -> println
+                            } else {
+                                " = extractvalue " -> print
+                                canonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
+                                " " -> print
+                                canonicalMemberOrdinal! == 0 -> if { expression.operand0 -> writeValue(functionIndex!, context, state) } else { "%v$(expressionIndex!)_m$(canonicalMemberOrdinal! - 1)" -> print }
+                                ", $(canonicalMemberField.ordinal)" -> println
+                            }
+                            canonicalMemberField.fieldType => canonicalMemberOwnerType!
+                            canonicalMemberOrdinal! + 1 => canonicalMemberOrdinal!
+                        }
+                        canonicalMemberTokenIndex! + 1 => canonicalMemberTokenIndex!
+                    }
                 } else {
                 expression -> isArgumentsType -> if {
                 } else {
@@ -1180,7 +1318,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 }
                 }
             }
-            (expression.kind == 14 and (expression.typeOrigin == 13 or expression.typeOrigin == 14 or expression.typeKind == 3)) -> if {
+            (expression.kind == 14 and ((expression -> isDynamicArrayType) or (expression -> isFixedArrayType))) -> if {
                 0 => arrayLength!
                 expression.operand0 => arrayCountIndex!
                 arrayCountIndex! >= 0 -> while {
@@ -1188,7 +1326,11 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     context.ir[arrayCountIndex!].nextOperand => arrayCountIndex!
                 }
                 arrayLength! * (expression -> arrayElementSize(context, state)) => arrayByteLength
-                "  %v$(expressionIndex!)_data = call ptr @malloc(i64 $arrayByteLength)" -> println
+                arrayByteLength == 0 -> if {
+                    "  %v$(expressionIndex!)_data = inttoptr i64 0 to ptr" -> println
+                } else {
+                    "  %v$(expressionIndex!)_data = call ptr @malloc(i64 $arrayByteLength)" -> println
+                }
                 expression.operand0 => arrayElementIndex!
                 0 => arrayElementPosition!
                 arrayElementIndex! >= 0 -> while {
@@ -1210,9 +1352,14 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     arrayElement.nextOperand => arrayElementIndex!
                     arrayElementPosition! + 1 => arrayElementPosition!
                 }
-                "  %v$(expressionIndex!)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(expressionIndex!)_data, 0" -> println
-                "  %v$(expressionIndex!)_1 = insertvalue %sollang.array.i32 %v$(expressionIndex!)_0, i64 $(arrayLength!), 1" -> println
-                "  %v$(expressionIndex!) = insertvalue %sollang.array.i32 %v$(expressionIndex!)_1, i64 $(arrayLength!), 2" -> println
+                expression -> isFixedArrayType -> if {
+                    "  %v$(expressionIndex!)_0 = insertvalue { ptr, i64 } poison, ptr %v$(expressionIndex!)_data, 0" -> println
+                    "  %v$(expressionIndex!) = insertvalue { ptr, i64 } %v$(expressionIndex!)_0, i64 $(arrayLength!), 1" -> println
+                } else {
+                    "  %v$(expressionIndex!)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(expressionIndex!)_data, 0" -> println
+                    "  %v$(expressionIndex!)_1 = insertvalue %sollang.array.i32 %v$(expressionIndex!)_0, i64 $(arrayLength!), 1" -> println
+                    "  %v$(expressionIndex!) = insertvalue %sollang.array.i32 %v$(expressionIndex!)_1, i64 $(arrayLength!), 2" -> println
+                }
             }
             (expression.kind == 16 and expression.typeOrigin == 15) -> if {
                 0 => dictionaryItemCount!
@@ -1365,6 +1512,19 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             expression.kind == 15 -> if {
                 context.ir[expression.operand0] => indexedArray
                 context.ir[expression.operand1] => arrayIndex
+                indexedArray.typeId => indexedContainerTypeId!
+                false => indexedReadonlyReference!
+                (indexedContainerTypeId! >= 0 and context.types[indexedContainerTypeId!].kind == 8) -> if {
+                    context.types[indexedContainerTypeId!].first => indexedContainerTypeId!
+                    true => indexedReadonlyReference!
+                    "  %v$(expressionIndex!)_indexed_source = load " -> print
+                    indexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    expression.operand0 -> writeValue(functionIndex!, context, state)
+                    ", align 8" -> println
+                }
+                expression.operand0 -> mutableBorrowParameterOrdinal(functionIndex!, context, state) => indexedMutableParameterOrdinal
+                (indexedArray.typeOrigin == 15 or (indexedReadonlyReference! and context.types[indexedContainerTypeId!].kind == 5)) => indexedIsDictionary
                 indexedArray -> isArgumentsType -> if {
                     arrayIndex -> integerNodeWidth(context, state) => argumentIndexWidth
                     (arrayIndex.kind != 3 and argumentIndexWidth > 0 and argumentIndexWidth < 64) -> if {
@@ -1386,29 +1546,29 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     }
                     ")" -> println
                 } else {
-                indexedArray.typeOrigin == 15 -> if {
+                indexedIsDictionary -> if {
                     expression.operand0 -> mutableStorageRoot(context, state) => indexedMutableRoot
                     indexedMutableRoot >= 0 -> if { "  %v$(expressionIndex!)_dictionary = load %sollang.dict, ptr %slot$(indexedMutableRoot), align 8" -> println }
                     -1 => indexedDictionaryKeyTypeId!
                     -1 => indexedDictionaryValueTypeId!
-                    indexedArray.typeId >= 0 -> if {
-                        context.types[indexedArray.typeId] => indexedDictionaryType
+                    indexedContainerTypeId! >= 0 -> if {
+                        context.types[indexedContainerTypeId!] => indexedDictionaryType
                         indexedDictionaryType.kind == 5 -> if {
                             indexedDictionaryType.first => indexedDictionaryKeyTypeId!
                             indexedDictionaryType.second => indexedDictionaryValueTypeId!
                         }
                     }
                     "  %v$(expressionIndex!)_keys = extractvalue %sollang.dict " -> print
-                    indexedMutableRoot >= 0 -> if { "%v$(expressionIndex!)_dictionary" -> print } else { (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print } }
+                    indexedMutableRoot >= 0 -> if { "%v$(expressionIndex!)_dictionary" -> print } else { indexedReadonlyReference! -> if { "%v$(expressionIndex!)_indexed_source" -> print } else { expression.operand0 -> writeValue(functionIndex!, context, state) } }
                     ", 0" -> println
                     "  %v$(expressionIndex!)_values = extractvalue %sollang.dict " -> print
-                    indexedMutableRoot >= 0 -> if { "%v$(expressionIndex!)_dictionary" -> print } else { (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print } }
+                    indexedMutableRoot >= 0 -> if { "%v$(expressionIndex!)_dictionary" -> print } else { indexedReadonlyReference! -> if { "%v$(expressionIndex!)_indexed_source" -> print } else { expression.operand0 -> writeValue(functionIndex!, context, state) } }
                     ", 1" -> println
                     "  %v$(expressionIndex!)_length = extractvalue %sollang.dict " -> print
-                    indexedMutableRoot >= 0 -> if { "%v$(expressionIndex!)_dictionary" -> print } else { (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print } }
+                    indexedMutableRoot >= 0 -> if { "%v$(expressionIndex!)_dictionary" -> print } else { indexedReadonlyReference! -> if { "%v$(expressionIndex!)_indexed_source" -> print } else { expression.operand0 -> writeValue(functionIndex!, context, state) } }
                      ", 2" -> println
                      "  %v$(expressionIndex!)_capacity = extractvalue %sollang.dict " -> print
-                     indexedMutableRoot >= 0 -> if { "%v$(expressionIndex!)_dictionary" -> print } else { (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print } }
+                     indexedMutableRoot >= 0 -> if { "%v$(expressionIndex!)_dictionary" -> print } else { indexedReadonlyReference! -> if { "%v$(expressionIndex!)_indexed_source" -> print } else { expression.operand0 -> writeValue(functionIndex!, context, state) } }
                      ", 3" -> println
                      -1 => indexedDictionaryKeyStorageSize!
                      indexedDictionaryKeyTypeId! >= 0 -> if { context.typeSizes[indexedDictionaryKeyTypeId!] => indexedDictionaryKeyStorageSize! }
@@ -1616,9 +1776,21 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     ", ptr %v$(expressionIndex!)_value_ptr, align " -> print
                     indexedDictionaryValueTypeId! >= 0 -> if { context.typeAligns[indexedDictionaryValueTypeId!] -> writeDecimalLine } else { indexedArray.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
                 } else {
-                "  %v$(expressionIndex!)_data = extractvalue %sollang.array.i32 " -> print
-                (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                ", 0" -> println
+                indexedMutableParameterOrdinal >= 0 -> if {
+                    "  %v$(expressionIndex!)_data = load ptr, ptr " -> print
+                    indexedMutableParameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(indexedMutableParameterOrdinal)_mut_ptr_addr" -> print }
+                    ", align 8" -> println
+                } else {
+                    "  %v$(expressionIndex!)_data = extractvalue " -> print
+                    indexedReadonlyReference! -> if {
+                        indexedContainerTypeId! -> writeSemanticTypeId(context, state)
+                    } else {
+                        indexedArray -> writeIrType(context, state)
+                    }
+                    " " -> print
+                    indexedReadonlyReference! -> if { "%v$(expressionIndex!)_indexed_source" -> print } else { expression.operand0 -> writeValue(functionIndex!, context, state) }
+                    ", 0" -> println
+                }
                 arrayIndex -> integerNodeWidth(context, state) => arrayIndexWidth
                 (arrayIndex.kind != 3 and arrayIndexWidth > 0 and arrayIndexWidth < 64) -> if {
                     "  %v$(expressionIndex!)_index = " -> print
@@ -1646,6 +1818,9 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 }
             }
             ((expression.kind == 7 and expression.operand0 >= 0) or (expression.kind == 8 and expression.operand0 >= 0 and expression.operand1 >= 0)) -> if {
+                (expression.kind == 8 and (expression.opcode == -24 or expression.opcode == -25)) -> if {
+                    expressionIndex! -> emitLogicalValue(functionIndex!, context, state)
+                } else {
                 context.ir[expression.operand0] => leftOperand
                 0 => binaryWidth!
                 false => leftPromoted!
@@ -1672,8 +1847,8 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     expression.opcode == grammar.tokenIdPlus() -> if { "add" => operation! }
                     expression.opcode == grammar.tokenIdMinus() -> if { "sub" => operation! }
                     expression.opcode == grammar.tokenIdStar() -> if { "mul" => operation! }
-                    expression.opcode == grammar.tokenIdSlash() -> if { "sdiv" => operation! }
-                    expression.opcode == grammar.tokenIdPercent() -> if { "srem" => operation! }
+                    expression.opcode == grammar.tokenIdSlash() -> if { expression -> integerQuotientOperation(context, state) => operation! }
+                    expression.opcode == grammar.tokenIdPercent() -> if { expression -> integerRemainderOperation(context, state) => operation! }
                     expression.opcode == grammar.tokenIdEqualEqual() -> if { "icmp eq" => operation! }
                     expression.opcode == grammar.tokenIdBangEqual() -> if { "icmp ne" => operation! }
                     (expression.opcode == grammar.tokenIdLess() or expression.opcode == grammar.tokenIdLessEqual() or expression.opcode == grammar.tokenIdGreater() or expression.opcode == grammar.tokenIdGreaterEqual()) -> if {
@@ -1723,6 +1898,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             (rightOperand.kind == 5 and function.operand1 >= 0 and rightOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
                         }
                     }
+                }
                 }
             }
             (expression.kind == 6 and expression.opcode == -209 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
@@ -1950,10 +2126,21 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                     } else {
                                         "  call void @sollang_runtime_print(ptr %v$(expressionIndex!)_expression_literal$(functionExpressionSegment!), i64 $(functionExpressionRoot.literalLength), i1 false)" -> println
                                     }
-                                    Int(functionExpressionInterpolation! -> len) - 1 => functionExpressionNodeIndex!
-                                    functionExpressionNodeIndex! >= 0 -> while {
+                                    functionExpressionInterpolation! -> interpolationEmissionOrder(runtimeArgument.payloadToken, functionExpressionRoot.segment) => functionExpressionOrder!
+                                    0 => functionExpressionOrderIndex!
+                                    functionExpressionOrderIndex! < (functionExpressionOrder! -> len) -> while {
+                                        functionExpressionOrder![functionExpressionOrderIndex!] => functionExpressionNodeIndex!
                                         functionExpressionInterpolation![functionExpressionNodeIndex!] => functionExpressionNode
-                                        (functionExpressionNode.sourceToken == runtimeArgument.payloadToken and functionExpressionNode.segment == functionExpressionRoot.segment and (functionExpressionNode.kind == 2 or functionExpressionNode.kind == 3)) -> if {
+                                        functionExpressionNodeIndex! -> interpolationHasLogicalAncestor(functionExpressionInterpolation!) => functionExpressionInsideLogical
+                                        (functionExpressionNode.sourceToken == runtimeArgument.payloadToken
+                                            and functionExpressionNode.segment == functionExpressionRoot.segment
+                                            and not functionExpressionInsideLogical) -> if {
+                                            expressionIndex! -> emitInterpolationIntrinsic(functionExpressionNodeIndex!, functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, true, context, state)
+                                        }
+                                        (functionExpressionNode.sourceToken == runtimeArgument.payloadToken and functionExpressionNode.segment == functionExpressionRoot.segment and not functionExpressionInsideLogical and (functionExpressionNode.kind == 2 or functionExpressionNode.kind == 3)) -> if {
+                                            (functionExpressionNode.kind == 3 and (functionExpressionNode.opcode == -24 or functionExpressionNode.opcode == -25)) -> if {
+                                                expressionIndex! -> emitInterpolationSubtree(functionExpressionNodeIndex!, functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, true, context, state)
+                                            } else {
                                             "" => functionExpressionOperation!
                                             functionExpressionNode.kind == 2 -> if { "sub" => functionExpressionOperation! }
                                             (functionExpressionNode.kind == 2 and functionExpressionNode.opcode == -26) -> if { "xor" => functionExpressionOperation! }
@@ -1984,8 +2171,17 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                                     }
                                                 }
                                             }
-                                            functionExpressionBoolOperands! -> if { "i1" } else { "i32" } => functionExpressionOperandType
-                                            "  %v$(expressionIndex!)_expression$(functionExpressionNodeIndex!) = $(functionExpressionOperation!) $functionExpressionOperandType " -> print
+                                            "  %v$(expressionIndex!)_expression$(functionExpressionNodeIndex!) = $(functionExpressionOperation!) " -> print
+                                            functionExpressionBoolOperands! -> if { "i1 " -> print } else {
+                                                functionExpressionNode.operand0 -> interpolationNodeIntegerWidth(functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state) => functionExpressionLeftWidth
+                                                functionExpressionLeftWidth => functionExpressionRightWidth!
+                                                functionExpressionNode.kind == 3 -> if {
+                                                    functionExpressionNode.operand1 -> interpolationNodeIntegerWidth(functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state) => functionExpressionRightWidth!
+                                                }
+                                                functionExpressionLeftWidth > functionExpressionRightWidth! -> if { functionExpressionLeftWidth } else { functionExpressionRightWidth! } => functionExpressionWidth!
+                                                functionExpressionWidth! <= 0 -> if { 32 => functionExpressionWidth! }
+                                                "i$(functionExpressionWidth!) " -> print
+                                            }
                                             (functionExpressionNode.kind == 2 and functionExpressionNode.opcode != -26) -> if { "0" -> print } else {
                                                 functionExpressionInterpolation![functionExpressionNode.operand0] => functionExpressionLeft
                                                 (functionExpressionLeft.kind == 0 or functionExpressionLeft.kind == 4) -> if {
@@ -1995,20 +2191,19 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                                 } else {
                                                 functionExpressionLeft.kind == 1 -> if {
                                                     context -> writeParameterReference(functionIndex!, functionExpressionLeft.symbol) -> if { } else {
-                                                        -1 => functionExpressionLeftBinding!
-                                                        expressionStart => functionExpressionLeftBindingSearch!
-                                                        functionExpressionLeftBindingSearch! < functionEnd! -> while {
-                                                            (context.ir[functionExpressionLeftBindingSearch!].kind == 17 and context.ir[functionExpressionLeftBindingSearch!].symbol == functionExpressionLeft.symbol) -> if { functionExpressionLeftBindingSearch! => functionExpressionLeftBinding! }
-                                                            functionExpressionLeftBindingSearch! + 1 => functionExpressionLeftBindingSearch!
-                                                        }
+                                                        functionExpressionLeft -> interpolationBindingIndex(runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state) => functionExpressionLeftBinding!
                                                         functionExpressionLeftBinding! >= 0 -> if {
-                                                            context.ir[context.ir[functionExpressionLeftBinding!].operand0] => functionExpressionLeftValue
-                                                            functionExpressionLeftValue.kind == 3 -> if {
-                                                                functionExpressionLeftValue -> sourceToken(context, state) => functionExpressionLeftToken
-                                                                context.sources[functionExpressionLeftValue.sourceModule] -> slice(functionExpressionLeftToken.span.start, functionExpressionLeftToken.span.length) -> print
+                                                            context.ir[functionExpressionLeftBinding!].flags == 1 -> if {
+                                                                "%v$(expressionIndex!)_expression$(functionExpressionNode.operand0)_mutable" -> print
                                                             } else {
-                                                                "%v" -> print
-                                                                context.ir[functionExpressionLeftBinding!].operand0 -> writeDecimal
+                                                                context.ir[context.ir[functionExpressionLeftBinding!].operand0] => functionExpressionLeftValue
+                                                                functionExpressionLeftValue.kind == 3 -> if {
+                                                                    functionExpressionLeftValue -> sourceToken(context, state) => functionExpressionLeftToken
+                                                                    context.sources[functionExpressionLeftValue.sourceModule] -> slice(functionExpressionLeftToken.span.start, functionExpressionLeftToken.span.length) -> print
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[functionExpressionLeftBinding!].operand0 -> writeDecimal
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -2026,20 +2221,19 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                                 } else {
                                                 functionExpressionUnary.kind == 1 -> if {
                                                     context -> writeParameterReference(functionIndex!, functionExpressionUnary.symbol) -> if { "" -> println } else {
-                                                        -1 => functionExpressionUnaryBinding!
-                                                        expressionStart => functionExpressionUnaryBindingSearch!
-                                                        functionExpressionUnaryBindingSearch! < functionEnd! -> while {
-                                                            (context.ir[functionExpressionUnaryBindingSearch!].kind == 17 and context.ir[functionExpressionUnaryBindingSearch!].symbol == functionExpressionUnary.symbol) -> if { functionExpressionUnaryBindingSearch! => functionExpressionUnaryBinding! }
-                                                            functionExpressionUnaryBindingSearch! + 1 => functionExpressionUnaryBindingSearch!
-                                                        }
+                                                        functionExpressionUnary -> interpolationBindingIndex(runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state) => functionExpressionUnaryBinding!
                                                         functionExpressionUnaryBinding! >= 0 -> if {
-                                                            context.ir[context.ir[functionExpressionUnaryBinding!].operand0] => functionExpressionUnaryValue
-                                                            functionExpressionUnaryValue.kind == 3 -> if {
-                                                                functionExpressionUnaryValue -> sourceToken(context, state) => functionExpressionUnaryToken
-                                                                context.sources[functionExpressionUnaryValue.sourceModule] -> slice(functionExpressionUnaryToken.span.start, functionExpressionUnaryToken.span.length) -> println
+                                                            context.ir[functionExpressionUnaryBinding!].flags == 1 -> if {
+                                                                "%v$(expressionIndex!)_expression$(functionExpressionNode.operand0)_mutable" -> println
                                                             } else {
-                                                                "%v" -> print
-                                                                context.ir[functionExpressionUnaryBinding!].operand0 -> writeDecimalLine
+                                                                context.ir[context.ir[functionExpressionUnaryBinding!].operand0] => functionExpressionUnaryValue
+                                                                functionExpressionUnaryValue.kind == 3 -> if {
+                                                                    functionExpressionUnaryValue -> sourceToken(context, state) => functionExpressionUnaryToken
+                                                                    context.sources[functionExpressionUnaryValue.sourceModule] -> slice(functionExpressionUnaryToken.span.start, functionExpressionUnaryToken.span.length) -> println
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[functionExpressionUnaryBinding!].operand0 -> writeDecimalLine
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -2055,30 +2249,34 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                                 } else {
                                                 functionExpressionRight.kind == 1 -> if {
                                                     context -> writeParameterReference(functionIndex!, functionExpressionRight.symbol) -> if { "" -> println } else {
-                                                        -1 => functionExpressionRightBinding!
-                                                        expressionStart => functionExpressionRightBindingSearch!
-                                                        functionExpressionRightBindingSearch! < functionEnd! -> while {
-                                                            (context.ir[functionExpressionRightBindingSearch!].kind == 17 and context.ir[functionExpressionRightBindingSearch!].symbol == functionExpressionRight.symbol) -> if { functionExpressionRightBindingSearch! => functionExpressionRightBinding! }
-                                                            functionExpressionRightBindingSearch! + 1 => functionExpressionRightBindingSearch!
-                                                        }
+                                                        functionExpressionRight -> interpolationBindingIndex(runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state) => functionExpressionRightBinding!
                                                         functionExpressionRightBinding! >= 0 -> if {
-                                                            context.ir[context.ir[functionExpressionRightBinding!].operand0] => functionExpressionRightValue
-                                                            functionExpressionRightValue.kind == 3 -> if {
-                                                                functionExpressionRightValue -> sourceToken(context, state) => functionExpressionRightToken
-                                                                context.sources[functionExpressionRightValue.sourceModule] -> slice(functionExpressionRightToken.span.start, functionExpressionRightToken.span.length) -> println
+                                                            context.ir[functionExpressionRightBinding!].flags == 1 -> if {
+                                                                "%v$(expressionIndex!)_expression$(functionExpressionNode.operand1)_mutable" -> println
                                                             } else {
-                                                                "%v" -> print
-                                                                context.ir[functionExpressionRightBinding!].operand0 -> writeDecimalLine
+                                                                context.ir[context.ir[functionExpressionRightBinding!].operand0] => functionExpressionRightValue
+                                                                functionExpressionRightValue.kind == 3 -> if {
+                                                                    functionExpressionRightValue -> sourceToken(context, state) => functionExpressionRightToken
+                                                                    context.sources[functionExpressionRightValue.sourceModule] -> slice(functionExpressionRightToken.span.start, functionExpressionRightToken.span.length) -> println
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[functionExpressionRightBinding!].operand0 -> writeDecimalLine
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 } else { "%v$(expressionIndex!)_expression$(functionExpressionNode.operand1)" -> println }
                                                 }
                                             }
+                                            }
                                         }
-                                        functionExpressionNodeIndex! - 1 => functionExpressionNodeIndex!
+                                        functionExpressionOrderIndex! + 1 => functionExpressionOrderIndex!
                                     }
                                     functionExpressionRoot.typeSymbol => functionExpressionRootTypeSymbol!
+                                    (functionExpressionRoot.kind == 5 or functionExpressionRoot.kind == 7 or functionExpressionRoot.kind == 8) -> if {
+                                        functionExpressionRootSearch! -> interpolationNodeTypeId(functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state) => functionExpressionRootTypeId
+                                        functionExpressionRootTypeId >= 0 -> if { context.types[functionExpressionRootTypeId].symbol => functionExpressionRootTypeSymbol! }
+                                    }
                                     -1 => functionExpressionRootBinding!
                                     -1 => functionExpressionRootParameterIndex!
                                     functionExpressionRoot.kind == 1 -> if {
@@ -2086,11 +2284,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                         functionExpressionRootParameterIndex! >= 0 -> if {
                                             context.ir[functionExpressionRootParameterIndex!].typeSymbol => functionExpressionRootTypeSymbol!
                                         } else {
-                                            expressionStart => functionExpressionRootBindingSearch!
-                                            functionExpressionRootBindingSearch! < functionEnd! -> while {
-                                                (context.ir[functionExpressionRootBindingSearch!].kind == 17 and context.ir[functionExpressionRootBindingSearch!].symbol == functionExpressionRoot.symbol) -> if { functionExpressionRootBindingSearch! => functionExpressionRootBinding! }
-                                                functionExpressionRootBindingSearch! + 1 => functionExpressionRootBindingSearch!
-                                            }
+                                            functionExpressionRoot -> interpolationBindingIndex(runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state) => functionExpressionRootBinding!
                                             functionExpressionRootBinding! >= 0 -> if {
                                                 context.ir[functionExpressionRootBinding!].typeSymbol => functionExpressionRootTypeSymbol!
                                                 context.ir[functionExpressionRootBinding!].operand0 >= 0 -> if {
@@ -2100,7 +2294,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                         }
                                     }
                                     false => functionExpressionRootMember!
-                                    functionExpressionRoot.kind == 5 -> if {
+                                    (functionExpressionRoot.kind == 5 and (functionExpressionRootSearch! -> interpolationMemberFieldIndex(functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state)) < 0) -> if {
                                         functionExpressionInterpolation![functionExpressionRoot.operand0] => functionExpressionMemberBase
                                         -1 => functionExpressionMemberBaseIr!
                                         false => functionExpressionMemberBaseParameter!
@@ -2179,6 +2373,8 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                     }
                                     functionExpressionRootTypeSymbol! -> integerWidth(context, state) => functionExpressionRootWidth!
                                     (functionExpressionRootTypeSymbol! == 12 or functionExpressionRootTypeSymbol! == 13) -> if { context.pointerBitWidth => functionExpressionRootWidth! }
+                                    functionExpressionRootSearch! -> interpolationNodeIntegerWidth(functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state) => functionExpressionInferredWidth
+                                    (functionExpressionInferredWidth > 0 and functionExpressionRootTypeSymbol! != 23) -> if { functionExpressionInferredWidth => functionExpressionRootWidth! }
                                     (functionExpressionRootBinding! >= 0 and context.ir[functionExpressionRootBinding!].operand0 >= 0) -> if {
                                         context.ir[context.ir[functionExpressionRootBinding!].operand0] -> integerNodeWidth(context, state) => functionExpressionBoundWidth
                                         (functionExpressionBoundWidth > 0 and functionExpressionRootTypeSymbol! != 23) -> if {
@@ -2189,23 +2385,17 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                     }
                                     functionExpressionRootTypeSymbol! == 1 -> if {
                                         "  %v$(expressionIndex!)_expression$(functionExpressionRootSearch!)_text_ptr = extractvalue %sollang.text " -> print
-                                        functionExpressionRoot.kind == 5 -> if {
+                                        (functionExpressionRoot.kind == 5 or functionExpressionRoot.kind == 6 or functionExpressionRoot.kind == 7 or functionExpressionRoot.kind == 8) -> if {
                                             "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print
                                         } else {
-                                            context -> writeParameterReference(functionIndex!, functionExpressionRoot.symbol) -> if { } else {
-                                                "%v" -> print
-                                                context.ir[functionExpressionRootBinding!].operand0 -> writeDecimal
-                                            }
+                                            expressionIndex! -> writeInterpolationValue(functionExpressionRootSearch!, functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state)
                                         }
                                         ", 0" -> println
                                         "  %v$(expressionIndex!)_expression$(functionExpressionRootSearch!)_text_len = extractvalue %sollang.text " -> print
-                                        functionExpressionRoot.kind == 5 -> if {
+                                        (functionExpressionRoot.kind == 5 or functionExpressionRoot.kind == 6 or functionExpressionRoot.kind == 7 or functionExpressionRoot.kind == 8) -> if {
                                             "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print
                                         } else {
-                                            context -> writeParameterReference(functionIndex!, functionExpressionRoot.symbol) -> if { } else {
-                                                "%v" -> print
-                                                context.ir[functionExpressionRootBinding!].operand0 -> writeDecimal
-                                            }
+                                            expressionIndex! -> writeInterpolationValue(functionExpressionRootSearch!, functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state)
                                         }
                                         ", 1" -> println
                                         expression.symbol == -116 -> if {
@@ -2228,24 +2418,13 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                             (context.sources[runtimeArgument.sourceModule] -> byte(functionExpressionRoot.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
                                         } else { context.sources[runtimeArgument.sourceModule] -> slice(functionExpressionRoot.payloadStart, functionExpressionRoot.payloadLength) -> print }
                                     } else {
-                                    functionExpressionRoot.kind == 5 -> if {
-                                        functionExpressionRootMember! -> if { "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print }
+                                    (functionExpressionRoot.kind == 5
+                                        and functionExpressionRoot.operand0 >= 0
+                                        and functionExpressionInterpolation![functionExpressionRoot.operand0].kind == 1) -> if {
+                                        "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print
                                     } else {
                                     functionExpressionRoot.kind == 1 -> if {
-                                        context -> writeParameterReference(functionIndex!, functionExpressionRoot.symbol) -> if { } else {
-                                            functionExpressionRootBinding! >= 0 -> if {
-                                                context.ir[context.ir[functionExpressionRootBinding!].operand0] => functionExpressionRootValue
-                                                (functionExpressionRootValue.kind == 3 or functionExpressionRootValue.kind == 4) -> if {
-                                                    functionExpressionRootValue -> sourceToken(context, state) => functionExpressionRootToken
-                                                    functionExpressionRootValue.kind == 4 -> if {
-                                                        (context.sources[functionExpressionRootValue.sourceModule] -> byte(functionExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
-                                                    } else { context.sources[functionExpressionRootValue.sourceModule] -> slice(functionExpressionRootToken.span.start, functionExpressionRootToken.span.length) -> print }
-                                                } else {
-                                                    "%v" -> print
-                                                    context.ir[functionExpressionRootBinding!].operand0 -> writeDecimal
-                                                }
-                                            }
-                                        }
+                                        expressionIndex! -> writeInterpolationValue(functionExpressionRootSearch!, functionExpressionInterpolation!, runtimeArgument.sourceModule, functionIndex!, expressionIndex!, context, state)
                                     } else { "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print }
                                     }
                                     }
@@ -2404,10 +2583,10 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                 "  call void @sollang_runtime_print(ptr %v$(expressionIndex!)_runtime_ptr, i64 %v$(expressionIndex!)_runtime_len, i1 " -> print
                             }
                         } else {
+                            runtimeArgument -> integerNodeWidth(context, state) => runtimeArgumentWidth
                             runtimeArgument.typeSymbol == 23 -> if {
                                 expression.symbol == -116 -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(i1 " -> print }
                             } else {
-                                runtimeArgument -> integerNodeWidth(context, state) => runtimeArgumentWidth
                                 (runtimeArgumentWidth > 0 and runtimeArgumentWidth < 32 and runtimeArgument.kind != 3) -> if {
                                     "  %v$(expressionIndex!)_runtime_integer = " -> print
                                     runtimeArgument -> integerNodeSigned(context, state) -> if { "sext" -> print } else { "zext" -> print }
@@ -2423,13 +2602,13 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                 runtimeArgument -> sourceToken(context, state) => runtimeIntegerArgumentToken
                                 context.sources[runtimeArgument.sourceModule] -> slice(runtimeIntegerArgumentToken.span.start, runtimeIntegerArgumentToken.span.length) -> print
                             } else {
-                                (runtimeArgument.typeSymbol != 23 and (runtimeArgument.typeSymbol -> integerWidth(context, state)) > 0 and (runtimeArgument.typeSymbol -> integerWidth(context, state)) < 32) -> if {
+                                (runtimeArgument.typeSymbol != 23 and runtimeArgumentWidth > 0 and runtimeArgumentWidth < 32) -> if {
                                     "%v$(expressionIndex!)_runtime_integer" -> print
                                 } else {
                                     (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
                                 }
                             }
-                            (runtimeArgument.typeSymbol != 23 and (runtimeArgument.typeSymbol -> integerWidth(context, state)) == 64) -> if {
+                            (runtimeArgument.typeSymbol != 23 and runtimeArgumentWidth == 64) -> if {
                                 ", i1 " -> print
                                 runtimeArgument -> integerNodeSigned(context, state) -> if { "true" -> print } else { "false" -> print }
                             }
@@ -2499,12 +2678,6 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             expression.kind == 18 -> if {
                 context.ir[expression.operand0] => ifCondition
                 expressionIndex! -> irValueUsed(functionIndex!, context, state) => ifValueUsed
-                (ifValueUsed and not (expression.typeOrigin == 1 and expression.typeSymbol == 0) and expression.nextOperand >= 0) -> if {
-                    "  %if$(expressionIndex!)_result = alloca " -> print
-                    expression -> writeIrType(context, state)
-                    ", align " -> print
-                    expression -> storageAlign(context, state) -> writeDecimalLine
-                }
                 (ifCondition.kind == 8 and (ifCondition.opcode == -25 or ifCondition.opcode == -24) or (ifCondition.kind == 7 and ifCondition.opcode == -26)) => ifShortCircuit
                 ifShortCircuit -> if {
                     WhileBranchRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, conditionIndex: expression.operand0 } -> emitWhileBranch(context, state)
@@ -2700,6 +2873,34 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
         }
         returnValueIndex! => returnValueIndex
         context.ir[returnValueIndex] => returnOperand
+        # Returning an owning binding through one or more enum constructors
+        # transfers the binding into the returned value.  Resolve that
+        # transparent ownership path before emitting local cleanup; otherwise
+        # the returned payload and the local slot retain the same allocation.
+        returnValueIndex => returnedOwnedValueIndex!
+        -1 => returnedOwnedBindingRoot!
+        true => resolvingReturnedOwnedValue!
+        resolvingReturnedOwnedValue! -> while {
+            false => resolvingReturnedOwnedValue!
+            returnedOwnedValueIndex! -> aggregateValueIndex(context, state) => returnedOwnedAggregateIndex
+            returnedOwnedAggregateIndex != returnedOwnedValueIndex! -> if {
+                returnedOwnedAggregateIndex => returnedOwnedValueIndex!
+                true => resolvingReturnedOwnedValue!
+            } else {
+                context.ir[returnedOwnedValueIndex!] => returnedOwnedValue
+                (returnedOwnedValue.kind == 26 and returnedOwnedValue.operand0 >= 0) -> if {
+                    returnedOwnedValue.operand0 => returnedOwnedValueIndex!
+                    true => resolvingReturnedOwnedValue!
+                } else {
+                    (returnedOwnedValue.kind == 5 and returnedOwnedValue.operand0 >= 0 and context.ir[returnedOwnedValue.operand0].kind == 17) -> if {
+                        returnedOwnedValue.operand0 -> mutableBindingRoot(context, state) => returnedOwnedBindingRoot!
+                    }
+                    returnedOwnedValue.kind == 17 -> if {
+                        returnedOwnedValueIndex! -> mutableBindingRoot(context, state) => returnedOwnedBindingRoot!
+                    }
+                }
+            }
+        }
         expressionStart => dropIndex!
         dropIndex! < functionEnd! -> while {
             context.ir[dropIndex!] => dropCandidate
@@ -2713,6 +2914,9 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 dropCandidateRoot! != dropIndex! -> if { false => dropCandidateIsRoot! }
             }
             false => dropCandidateReturned!
+            (dropCandidate.kind == 17 and dropCandidateIsRoot! and returnedOwnedBindingRoot! >= 0 and returnedOwnedBindingRoot! == dropCandidateRoot!) -> if {
+                true => dropCandidateReturned!
+            }
             (dropCandidate.kind == 17 and dropCandidateIsRoot! and returnOperand.kind == 5 and returnOperand.operand0 >= 0) -> if {
                 context.ir[returnOperand.operand0] => returnedBindingCandidate
                 returnedBindingCandidate.kind == 17 -> if {
@@ -2730,6 +2934,11 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                         (dropMoveCall -> sourceStart(context, state)) > (dropCandidate -> sourceStart(context, state)) -> if { true => dropCandidateMoved! }
                     }
                     dropMoveIndex! + 1 => dropMoveIndex!
+                }
+                not dropCandidateMoved! -> if {
+                    function.operand0 -> regionFullyMovesBinding(dropCandidate.sourceModule, dropCandidate.symbol, dropCandidate -> sourceStart(context, state), context, state) -> if {
+                        true => dropCandidateMoved!
+                    }
                 }
                 # Dictionary put transfers its value argument into the
                 # resident table. Detect that call locally for final
@@ -2890,6 +3099,11 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 (ownedParameterMove.memberIr >= 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol and (ownedParameterMoveIndex! -> partialMoveActiveBefore(function.operand0, -1, context, state))) -> if { true => ownedParameterHasPartialMoves! }
                 (ownedParameterMove.memberIr < 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol and ownedParameterMove.regionIr == function.operand0) -> if { true => ownedParameterMoved! }
                 ownedParameterMoveIndex! + 1 => ownedParameterMoveIndex!
+            }
+            not ownedParameterMoved! -> if {
+                function.operand0 -> regionFullyMovesBinding(ownedParameter.sourceModule, ownedParameter.symbol, ownedParameter -> sourceStart(context, state), context, state) -> if {
+                    true => ownedParameterMoved!
+                }
             }
             (ownedParameter.typeId >= 0 and (ownedParameter.typeId -> semanticTypeOwns(context, state)) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved! and not ownedParameterHasPartialMoves!) -> if {
                 not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {

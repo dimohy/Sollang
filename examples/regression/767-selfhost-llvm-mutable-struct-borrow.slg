@@ -1,0 +1,29 @@
+import sollang.compiler.llvm.text as llvm
+
+# Mutable struct parameters use a pointer-to-struct ABI. Calls must forward the
+# original slot and member assignments must write through that pointer.
+main {
+    [
+        """
+        struct Options {
+            status: Int
+            message: Text
+        }
+
+        fail options: mut Options, message: Text -> Unit {
+            options.status == 0 -> if {
+                1 => options.status
+                message => options.message
+            }
+        }
+
+        main {
+            Options { status: 0, message: "" } => options!
+            options! -> fail("failed")
+            options!.status -> println
+            options!.message -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

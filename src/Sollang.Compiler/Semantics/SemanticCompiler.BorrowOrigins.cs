@@ -384,6 +384,7 @@ internal sealed partial class SemanticCompiler
             && ((inputType == BoundType.SourceText
                     && function.InputOwnership == BoundFunctionInputOwnership.Default)
                 || inputType == BoundType.Arena
+                || IsBorrowedTextByteStorage(inputType)
                 || TypeContains(inputType, BoundType.Text)))
         {
             yield return function.InputName ?? "it";
@@ -393,11 +394,22 @@ internal sealed partial class SemanticCompiler
             if ((parameter.Type == BoundType.SourceText
                     && parameter.Ownership == BoundFunctionInputOwnership.Default)
                 || parameter.Type == BoundType.Arena
+                || IsBorrowedTextByteStorage(parameter.Type)
                 || TypeContains(parameter.Type, BoundType.Text))
             {
                 yield return parameter.Name;
             }
         }
+    }
+
+    private bool IsBorrowedTextByteStorage(BoundType type)
+    {
+        if (_types.IsReference(type))
+        {
+            return _types.GetReference(type).ElementType == TypeId.DynamicUInt8Array;
+        }
+        return _types.IsDynamicArray(type)
+            && _types.GetDynamicArray(type).ElementType == BoundType.UInt8;
     }
 
     private bool TryInferFunctionBorrowedTextOrigins(
@@ -569,16 +581,29 @@ internal sealed partial class SemanticCompiler
         }
 
         if (expression is CallExpression call
-            && TryGetFunction(call.Path, functions, out var called)
-            && _borrowedTextReturnOrigins.TryGetValue(called, out var returnOrigins))
+            && TryGetFunction(call.Path, functions, out var called))
         {
-            return TryMapBorrowedReturnOrigins(
-                called,
-                returnOrigins,
-                call.Arguments,
-                functions,
-                locals,
-                out origins);
+            if (called.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
+                or BoundFunctionKind.RuntimeBorrowSourceText)
+            {
+                if (call.Arguments.Count > 0)
+                {
+                    return TryInferBorrowedTextOrigins(
+                        call.Arguments[0], functions, locals, out origins);
+                }
+                origins = EmptyBorrowOrigins();
+                return false;
+            }
+            if (_borrowedTextReturnOrigins.TryGetValue(called, out var returnOrigins))
+            {
+                return TryMapBorrowedReturnOrigins(
+                    called,
+                    returnOrigins,
+                    call.Arguments,
+                    functions,
+                    locals,
+                    out origins);
+            }
         }
 
         if (expression is FlowExpression flow)
@@ -604,15 +629,29 @@ internal sealed partial class SemanticCompiler
                 }
                 if (path == "slice")
                 {
-                    if (targetIndex != flow.Targets.Count - 1)
+                    // Slicing preserves the receiver's storage origin.  Keep
+                    // walking when another flow target follows so an owning
+                    // operation such as materialize can replace that origin.
+                    if (targetIndex == flow.Targets.Count - 1)
                     {
+                        if (TryInferBorrowedTextOrigins(current, functions, locals, out origins))
+                        {
+                            return true;
+                        }
                         origins = EmptyBorrowOrigins();
                         return false;
                     }
-                    if (!TryInferBorrowedTextOrigins(current, functions, locals, out origins))
+                    origins = EmptyBorrowOrigins();
+                    continue;
+                }
+                if (TryGetFunction(target.Path, functions, out var borrowedSourceFunction)
+                    && borrowedSourceFunction.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
+                        or BoundFunctionKind.RuntimeBorrowSourceText)
+                {
+                    if (targetIndex == flow.Targets.Count - 1)
                     {
-                        origins = EmptyBorrowOrigins();
-                        return false;
+                        return TryInferBorrowedTextOrigins(
+                            current, functions, locals, out origins);
                     }
                     continue;
                 }
@@ -817,11 +856,24 @@ internal sealed partial class SemanticCompiler
         }
 
         if (expression is CallExpression call
-            && TryGetFunction(call.Path, functions, out var called)
-            && _borrowedTextReturnOrigins.TryGetValue(called, out var returnOrigins))
+            && TryGetFunction(call.Path, functions, out var called))
         {
-            return TryMapCallSiteBorrowedOrigins(
-                called, returnOrigins, call.Arguments, functions, bindings, out origins);
+            if (called.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
+                or BoundFunctionKind.RuntimeBorrowSourceText)
+            {
+                if (call.Arguments.Count > 0)
+                {
+                    return TryGetBorrowedTextCallOrigins(
+                        call.Arguments[0], functions, bindings, out origins);
+                }
+                origins = EmptyBorrowOrigins();
+                return false;
+            }
+            if (_borrowedTextReturnOrigins.TryGetValue(called, out var returnOrigins))
+            {
+                return TryMapCallSiteBorrowedOrigins(
+                    called, returnOrigins, call.Arguments, functions, bindings, out origins);
+            }
         }
 
         if (expression is FlowExpression flow)
@@ -850,6 +902,17 @@ internal sealed partial class SemanticCompiler
                         && TryGetConcreteBorrowOrigins(current, bindings, out origins))
                     {
                         return true;
+                    }
+                    continue;
+                }
+                if (TryGetFunction(target.Path, functions, out var borrowedSourceFunction)
+                    && borrowedSourceFunction.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
+                        or BoundFunctionKind.RuntimeBorrowSourceText)
+                {
+                    if (targetIndex == flow.Targets.Count - 1)
+                    {
+                        return TryGetBorrowedTextCallOrigins(
+                            current, functions, bindings, out origins);
                     }
                     continue;
                 }

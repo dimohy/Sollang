@@ -1,0 +1,29 @@
+import sollang.compiler.ir.typed as typedIr
+
+# An indexed struct member consumed by a comparison must keep the member node as
+# the scalar operand instead of reconnecting the comparison to the struct index.
+main {
+    [
+        """
+        struct Item {
+            sourceToken: Int
+            operand0: Int
+        }
+
+        matches items: ref [Item; ~], sourceToken: Int -> Bool {
+            items[0].sourceToken == sourceToken
+        }
+
+        main {
+            [Item { sourceToken: 7, operand0: 0 }; ~] => items!
+            items! -> matches(7) -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    ir! -> each node {
+        "$(index!):$(node.kind),$(node.parent),$(node.opcode),$(node.operand0),$(node.operand1),$(node.typeOrigin),$(node.typeSymbol)" -> println
+        index! + 1 => index!
+    }
+}

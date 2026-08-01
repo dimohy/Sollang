@@ -1,0 +1,79 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.syntax as syntax
+import sys.file as file
+
+# LLVM preparation lowers interpolation one source at a time from a flat
+# multi-source package. Source-local symbol identities must remain resolvable.
+main {
+    """
+    namespace sample.tests
+    test_failure: -> Bool => false
+    """ => testSource
+    """
+    import sys.process as process
+    import sample.tests as test_module_0
+
+    main {
+        0 => failures!
+        test_module_0.test_failure -> if {
+        } else {
+            failures! + 1 => failures!
+        }
+        "test result: $(1 - failures!) passed; $(failures!) failed" -> println
+        failures! == 0 -> if { 0 -> process.exit } else { 1 -> process.exit }
+    }
+    """ => harnessSource
+    [UInt8; ~] => harnessBytes!
+    UIntSize(0) => harnessByteIndex!
+    harnessByteIndex! < (harnessSource -> len) -> while {
+        harnessBytes! -> push(harnessSource -> byte(harnessByteIndex!))
+        harnessByteIndex! + UIntSize(1) => harnessByteIndex!
+    }
+    [file.SourceText; ~] => sourceOwners!
+    sourceOwners! -> push(testSource -> file.borrowText)
+    sourceOwners! -> push(harnessBytes! -> file.borrowBytes)
+    harnessBytes! -> file.borrowBytes => harnessOwnerForText
+    harnessOwnerForText -> len => borrowedHarnessLength
+    harnessOwnerForText -> slice(UIntSize(0), borrowedHarnessLength) => borrowedHarness
+    [0; ~] => selectedSources!
+    [0; ~] => selectedSymbols!
+    sourceOwners! -> semanticContext.prepareTestSources(selectedSources!, selectedSymbols!) => prepared!
+    prepared!.package.ranges[1] => range
+    [ast.AstNode; ~] => nodes!
+    0 => astIndex!
+    astIndex! < range.astCount -> while {
+        nodes! -> push(prepared!.package.nodes[range.astStart + astIndex!])
+        astIndex! + 1 => astIndex!
+    }
+    [syntax.SyntaxToken; ~] => tokens!
+    0 => tokenIndex!
+    tokenIndex! < range.tokenCount -> while {
+        tokens! -> push(prepared!.package.tokens[range.tokenStart + tokenIndex!])
+        tokenIndex! + 1 => tokenIndex!
+    }
+    [symbols.Symbol; ~] => symbolTable!
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        symbolTable! -> push(prepared!.package.symbols[range.symbolStart + symbolIndex!])
+        symbolIndex! + 1 => symbolIndex!
+    }
+    interpolation.PreparedInterpolationRequest {
+        source: borrowedHarness
+        nodes: nodes!
+        tokens: tokens!
+        symbols: symbolTable!
+    } => request!
+    request! -> interpolation.lowerPrepared => interpolations!
+    0 => names!
+    0 => resolved!
+    interpolations! -> each node {
+        node.kind == 1 -> if {
+            names! + 1 => names!
+            node.symbol >= 0 -> if { resolved! + 1 => resolved! }
+        }
+    }
+    "multi-source mutable interpolation = $(names!),$(resolved!)" -> println
+}

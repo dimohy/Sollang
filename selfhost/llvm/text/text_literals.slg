@@ -95,6 +95,23 @@ literalIndent context: ref emitterContext.EmitContext, sourceModule: Int, token:
     indentation!
 }
 
+# Returns the decoded byte for a supported quoted-string escape, or -1 when
+# the current source byte must be emitted literally. Raw strings never decode
+# escapes. This mirrors the reference parser's exact escape set.
+literalDecodedEscape context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken, byteIndex: UIntSize, byteEnd: UIntSize -> Int {
+    -1 => decoded!
+    (not (context -> literalIsRaw(sourceModule, token))
+        and byteIndex + UIntSize(1) < byteEnd
+        and (context.sources[sourceModule] -> byte(byteIndex)) == UInt8(92)) -> if {
+        context.sources[sourceModule] -> byte(byteIndex + UIntSize(1)) => escaped
+        escaped == UInt8(110) -> if { 10 => decoded! }
+        escaped == UInt8(114) -> if { 13 => decoded! }
+        escaped == UInt8(116) -> if { 9 => decoded! }
+        escaped == UInt8(92) -> if { 92 => decoded! }
+    }
+    decoded!
+}
+
 literalLength context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> UIntSize {
     context -> literalStart(sourceModule, token) => byteIndex!
     context -> literalEnd(sourceModule, token) => byteEnd
@@ -117,15 +134,22 @@ literalLength context: ref emitterContext.EmitContext, sourceModule: Int, token:
         }
         byteIndex! < byteEnd -> if {
             context.sources[sourceModule] -> byte(byteIndex!) => currentByte
-            (currentByte == UInt8(13)
-                and byteIndex! + UIntSize(1) < byteEnd
-                and (context.sources[sourceModule] -> byte(byteIndex! + UIntSize(1))) == UInt8(10)) -> if {
+            context -> literalDecodedEscape(sourceModule, token, byteIndex!, byteEnd) => decodedEscape
+            decodedEscape >= 0 -> if {
                 length! + UIntSize(1) => length!
-                true => lineStart!
+                decodedEscape == 10 -> if { true => lineStart! }
                 byteIndex! + UIntSize(1) => byteIndex!
             } else {
-                length! + UIntSize(1) => length!
-                currentByte == UInt8(10) -> if { true => lineStart! }
+                (currentByte == UInt8(13)
+                    and byteIndex! + UIntSize(1) < byteEnd
+                    and (context.sources[sourceModule] -> byte(byteIndex! + UIntSize(1))) == UInt8(10)) -> if {
+                    length! + UIntSize(1) => length!
+                    true => lineStart!
+                    byteIndex! + UIntSize(1) => byteIndex!
+                } else {
+                    length! + UIntSize(1) => length!
+                    currentByte == UInt8(10) -> if { true => lineStart! }
+                }
             }
             byteIndex! + UIntSize(1) => byteIndex!
         }
@@ -182,11 +206,17 @@ literalEmitConstant context: ref emitterContext.EmitContext, sourceModule: Int, 
         }
         byteIndex! < byteEnd -> if {
             context.sources[sourceModule] -> byte(byteIndex!) => textByte!
-            (textByte! == UInt8(13)
-                and byteIndex! + UIntSize(1) < byteEnd
-                and (context.sources[sourceModule] -> byte(byteIndex! + UIntSize(1))) == UInt8(10)) -> if {
-                UInt8(10) => textByte!
+            context -> literalDecodedEscape(sourceModule, token, byteIndex!, byteEnd) => decodedEscape
+            decodedEscape >= 0 -> if {
+                UInt8(decodedEscape) => textByte!
                 byteIndex! + UIntSize(1) => byteIndex!
+            } else {
+                (textByte! == UInt8(13)
+                    and byteIndex! + UIntSize(1) < byteEnd
+                    and (context.sources[sourceModule] -> byte(byteIndex! + UIntSize(1))) == UInt8(10)) -> if {
+                    UInt8(10) => textByte!
+                    byteIndex! + UIntSize(1) => byteIndex!
+                }
             }
             (textByte! >= UInt8(32)
                 and textByte! <= UInt8(126)

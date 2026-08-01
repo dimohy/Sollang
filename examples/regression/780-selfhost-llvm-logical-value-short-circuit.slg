@@ -1,0 +1,80 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        probeTrue label: Text -> Bool uses Console {
+            label -> println
+            true
+        }
+
+        probeFalse label: Text -> Bool uses Console {
+            label -> println
+            false
+        }
+
+        safeAt index: Int -> Bool {
+            [11; ~] => values!
+            index >= 0 and values![index] == 11
+        }
+
+        identity value: Bool -> Bool => value
+
+        boolText value: Bool -> Text {
+            value -> if { "true" } else { "false" }
+        }
+
+        reportFunction zero: Int -> Unit uses Console {
+            "function=$((false and (1 / zero == 0)) -> boolText)" -> println
+        }
+
+        renderMaterialized zero: Int, storage: mut Arena -> Text {
+            "materialized=$((false and (1 / zero == 0)) -> boolText)" -> materialize(storage)
+        }
+
+        main {
+            # Value-context logical operators preserve left-to-right evaluation.
+            false and ("skip-and" -> probeTrue) => skippedAnd
+            true or ("skip-or" -> probeFalse) => skippedOr
+            true and ("run-and" -> probeTrue) => ranAnd
+            false or ("run-or" -> probeTrue) => ranOr
+
+            # A skipped right operand must not perform an invalid indexed load.
+            [7; ~] => values!
+            -1 => missing!
+            (missing! >= 0 and values![missing!] == 7) => safeMissing
+
+            # Interpolation expressions obey the same evaluation contract.
+            0 => zero!
+            "entry=$((false and (1 / zero! == 0)) -> boolText)" -> println
+            0 -> reportFunction
+            Arena(0) => storage!
+            0 -> renderMaterialized(storage!) -> println
+
+            # A logical value nested in a call argument still short-circuits.
+            (((missing! >= 0 and values![missing!] == 7) -> identity) or true) => nestedCall
+            nestedCall -> if { "nested-safe" -> println }
+
+            # The same value contract applies in regular functions.
+            -1 -> safeAt => safeFunction
+            not safeFunction -> if { "function-safe" -> println }
+
+            # Region-local scheduling must defer the right operand as well.
+            true -> if {
+                [13; ~] => regionValues!
+                -1 => regionMissing!
+                (regionMissing! >= 0 and regionValues![regionMissing!] == 13) => safeRegion
+                0 => regionZero!
+                "region=$((false and (1 / regionZero! == 0)) -> boolText)" -> println
+                not safeRegion -> if { "region-safe" -> println }
+            }
+
+            # Nested logical values keep the same short-circuit contract.
+            (skippedAnd or (skippedOr and ranAnd) or ranOr) -> if {
+                "ok" -> println
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

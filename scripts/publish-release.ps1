@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "0.4.0",
+    [string]$Version,
     [string]$OutputRoot,
     [string]$WindowsStage3Path,
     [string]$LinuxStage3Path
@@ -10,6 +10,17 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.csproj"
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $versionSource = [IO.File]::ReadAllText(
+        (Join-Path $repoRoot "selfhost\compiler_version.slg"))
+    $versionMatch = [regex]::Match(
+        $versionSource,
+        'public\s+current\s*:\s*->\s*Text\s*=>\s*"(?<version>\d+\.\d+\.\d+)"')
+    if (-not $versionMatch.Success) {
+        throw "canonical compiler version is missing from selfhost/compiler_version.slg"
+    }
+    $Version = $versionMatch.Groups["version"].Value
+}
 $packageVersion = $Version
 $versionParts = $Version.Split('.')
 $nativeOnly = [int]$versionParts[0] -gt 0 -or [int]$versionParts[1] -ge 4
@@ -48,7 +59,7 @@ function New-ReleasePackage {
     $stage3Source = if ($Runtime -eq "win-x64") { $WindowsStage3Path } else { $LinuxStage3Path }
 
     if ($nativeOnly) {
-        Write-Host "[release $PlatformName 1/4] Stage fixed-point native compiler."
+        Write-Host "[release $PlatformName 1/5] Stage fixed-point native compiler."
         if (-not (Test-Path -LiteralPath $stage3Source -PathType Leaf)) {
             throw "verified native compiler is missing: $stage3Source"
         }
@@ -82,7 +93,7 @@ function New-ReleasePackage {
         Copy-Item -LiteralPath $stage3Source -Destination (Join-Path $packageRoot $stage3Name)
     }
 
-    $verifyStep = if ($nativeOnly) { "2/4" } else { "2/3" }
+    $verifyStep = if ($nativeOnly) { "2/5" } else { "2/3" }
     Write-Host "[release $PlatformName $verifyStep] Verify package contents."
     $required = @(
         (Join-Path $packageRoot $executableName),
@@ -124,7 +135,7 @@ function New-ReleasePackage {
             throw "native CLI parity proof targets '$parityVersion', expected 'Sollang $Version'"
         }
 
-        Write-Host "[release $PlatformName 3/4] Verify native CLI version contract."
+        Write-Host "[release $PlatformName 3/5] Verify native CLI version contract."
         if ($Runtime -eq "win-x64") {
             $versionOutput = & (Join-Path $packageRoot $executableName) --version
         } else {
@@ -136,7 +147,36 @@ function New-ReleasePackage {
         }
     }
 
-    $archiveStep = if ($nativeOnly) { "4/4" } else { "3/3" }
+    if ($nativeOnly) {
+        Write-Host "[release $PlatformName 4/5] Build and run with the packaged compiler and standard library."
+        $smokeRoot = Join-Path $OutputRoot "smoke-$PlatformName"
+        New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+        $smokeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
+        if ($Runtime -eq "win-x64") {
+            $smokeExecutable = Join-Path $smokeRoot "smoke.exe"
+            & (Join-Path $packageRoot $executableName) build $smokeSource -o $smokeExecutable --target windows-x64 --stdlib (Join-Path $packageRoot "stdlib") --llvm (Join-Path $repoRoot ".tools\llvm-22.1.8") -O1 | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw "packaged Windows compiler failed the build smoke test"
+            }
+            $smokeOutput = & $smokeExecutable
+        } else {
+            $wslCompiler = Convert-ToWslPath (Join-Path $packageRoot $executableName)
+            $wslSource = Convert-ToWslPath $smokeSource
+            $wslExecutable = Convert-ToWslPath (Join-Path $smokeRoot "smoke")
+            $wslStdlib = Convert-ToWslPath (Join-Path $packageRoot "stdlib")
+            $wslLlvm = Convert-ToWslPath (Join-Path $repoRoot "scripts\linux-cross-llvm")
+            & wsl.exe -- $wslCompiler build $wslSource -o $wslExecutable --target linux-x64 --stdlib $wslStdlib --llvm $wslLlvm -O1 | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw "packaged Linux compiler failed the build smoke test"
+            }
+            $smokeOutput = & wsl.exe -- $wslExecutable
+        }
+        if ($LASTEXITCODE -ne 0 -or ($smokeOutput -join "`n").Trim() -ne "stage2-single-ok") {
+            throw "packaged compiler build/run smoke output mismatch"
+        }
+    }
+
+    $archiveStep = if ($nativeOnly) { "5/5" } else { "3/3" }
     Write-Host "[release $PlatformName $archiveStep] Archive package."
     if ($Runtime -eq "win-x64") {
         $archive = Join-Path $OutputRoot "$packageName.zip"

@@ -1,0 +1,24 @@
+import sollang.compiler.llvm.text as llvm
+
+# Arena materialization must lower complete interpolation expressions, including
+# member access and arithmetic roots, before copying the resulting Text.
+main {
+    [
+        """
+        struct Item {
+            name: Text
+        }
+
+        render item: Item, index: Int, storage: mut Arena -> Text {
+            "create$(item.name)$(index + 1)" -> materialize(storage)
+        }
+
+        main {
+            Item { name: "Widget" } => item
+            Arena(0) => storage!
+            item -> render(2, storage!) -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

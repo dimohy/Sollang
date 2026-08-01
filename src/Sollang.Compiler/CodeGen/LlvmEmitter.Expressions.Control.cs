@@ -246,7 +246,7 @@ internal sealed partial class LlvmEmitter
     {
         var condition = EmitBoolExpression(expression.Condition);
         var conditionLabel = _currentBlockLabel;
-        var asyncEntryScope = _activeAsyncCfg is null ? null : CaptureLocals();
+        var entryScope = CaptureLocals();
         var thenLabel = NextLabel("if_then");
         var elseLabel = expression.Else is null ? null : NextLabel("if_else");
         var endLabel = NextLabel("if_end");
@@ -255,10 +255,7 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(thenLabel);
         _currentBlockLabel = thenLabel;
-        if (asyncEntryScope is not null)
-        {
-            RestoreLocals(asyncEntryScope);
-        }
+        RestoreLocals(entryScope);
         var thenResult = EmitScopedBlockBody(expression.Then);
         var thenEndLabel = _currentBlockLabel;
         var thenTerminated = _currentBlockTerminated;
@@ -274,10 +271,7 @@ internal sealed partial class LlvmEmitter
             var activeElseLabel = elseLabel!;
             EmitLabel(activeElseLabel);
             _currentBlockLabel = activeElseLabel;
-            if (asyncEntryScope is not null)
-            {
-                RestoreLocals(asyncEntryScope);
-            }
+            RestoreLocals(entryScope);
             elseResult = EmitScopedBlockBody(expression.Else);
             elseTerminated = _currentBlockTerminated;
             if (!elseTerminated)
@@ -294,22 +288,26 @@ internal sealed partial class LlvmEmitter
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
 
-        if (asyncEntryScope is not null)
+        var incomingScopes = new List<(LocalScope Scope, string Label)>();
+        if (!thenTerminated)
         {
-            var incomingScopes = new List<(LocalScope Scope, string Label)>();
-            if (!thenTerminated)
-            {
-                incomingScopes.Add((thenResult.ExitScope, thenEndLabel));
-            }
-            if (expression.Else is null)
-            {
-                incomingScopes.Add((asyncEntryScope, conditionLabel));
-            }
-            else if (!elseTerminated)
-            {
-                incomingScopes.Add((elseResult!.ExitScope, elseResult.EndLabel));
-            }
-            MergeAsyncOuterScope(asyncEntryScope, incomingScopes);
+            incomingScopes.Add((thenResult.ExitScope, thenEndLabel));
+        }
+        if (expression.Else is null)
+        {
+            incomingScopes.Add((entryScope, conditionLabel));
+        }
+        else if (!elseTerminated)
+        {
+            incomingScopes.Add((elseResult!.ExitScope, elseResult.EndLabel));
+        }
+        if (_activeAsyncCfg is not null)
+        {
+            MergeAsyncOuterScope(entryScope, incomingScopes);
+        }
+        else
+        {
+            MergeSynchronousOuterScope(entryScope, incomingScopes);
         }
 
         if (expression.Else is null || thenResult.Value is null || elseResult?.Value is null)
@@ -322,7 +320,6 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitWhenExpression(WhenExpression expression)
     {
-        var asyncEntryScope = _activeAsyncCfg is null ? null : CaptureLocals();
         var endLabel = NextLabel("when_end");
         var valueResults = new List<(RuntimeValue Value, string Label)>();
         var scopeResults = new List<(LocalScope Scope, string Label)>();
@@ -334,14 +331,12 @@ internal sealed partial class LlvmEmitter
                 ? ResolveLocal("it") as RuntimeInt
                     ?? throw new SollangException("subject-style when without an explicit subject requires runtime integer binding 'it'")
                 : null;
+        var entryScope = CaptureLocals();
         var nextConditionLabel = _currentBlockLabel;
 
         foreach (var arm in expression.Arms)
         {
-            if (asyncEntryScope is not null)
-            {
-                RestoreLocals(asyncEntryScope);
-            }
+            RestoreLocals(entryScope);
             _currentBlockLabel = nextConditionLabel;
             var armLabel = NextLabel("when_arm");
             var nextLabel = NextLabel("when_next");
@@ -357,7 +352,7 @@ internal sealed partial class LlvmEmitter
             {
                 valueResults.Add((armResult.Value, armResult.EndLabel));
             }
-            if (!_currentBlockTerminated && asyncEntryScope is not null)
+            if (!_currentBlockTerminated)
             {
                 scopeResults.Add((armResult.ExitScope, armResult.EndLabel));
             }
@@ -372,16 +367,13 @@ internal sealed partial class LlvmEmitter
         }
 
         _currentBlockLabel = nextConditionLabel;
-        if (asyncEntryScope is not null)
-        {
-            RestoreLocals(asyncEntryScope);
-        }
+        RestoreLocals(entryScope);
         var elseResult = EmitScopedBlockBody(expression.Else);
         if (!_currentBlockTerminated && elseResult.Value is not null)
         {
             valueResults.Add((elseResult.Value, elseResult.EndLabel));
         }
-        if (!_currentBlockTerminated && asyncEntryScope is not null)
+        if (!_currentBlockTerminated)
         {
             scopeResults.Add((elseResult.ExitScope, elseResult.EndLabel));
         }
@@ -398,9 +390,13 @@ internal sealed partial class LlvmEmitter
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
 
-        if (asyncEntryScope is not null)
+        if (_activeAsyncCfg is not null)
         {
-            MergeAsyncOuterScope(asyncEntryScope, scopeResults);
+            MergeAsyncOuterScope(entryScope, scopeResults);
+        }
+        else
+        {
+            MergeSynchronousOuterScope(entryScope, scopeResults);
         }
 
         if (valueResults.Count == 0)
@@ -586,6 +582,10 @@ internal sealed partial class LlvmEmitter
                 ? null
                 : GetBlockResultTransferredOwnerName(body.Value);
             var value = body.Value is null ? null : EmitExpression(body.Value);
+            if (_currentBlockTerminated)
+            {
+                return new BlockResult(null, _currentBlockLabel, CaptureLocals());
+            }
             DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName);
             return new BlockResult(value, _currentBlockLabel, CaptureLocals());
         }
@@ -632,6 +632,43 @@ internal sealed partial class LlvmEmitter
                 .Select(item => (Value: item.Scope.Locals[name], item.Label))
                 .ToArray();
             _locals[name] = EmitAsyncScopePhi($"async_{name}", entryValue.Type, values);
+        }
+    }
+
+    private void MergeSynchronousOuterScope(
+        LocalScope entryScope,
+        IReadOnlyList<(LocalScope Scope, string Label)> incoming)
+    {
+        RestoreLocals(entryScope);
+        if (incoming.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var (name, entryValue) in entryScope.Locals)
+        {
+            if (!_program.Types.ContainsOwnedStorage(entryValue.Type))
+            {
+                continue;
+            }
+            var presentCount = incoming.Count(item => item.Scope.Locals.ContainsKey(name));
+            if (presentCount == 0)
+            {
+                RemoveLocal(name);
+                continue;
+            }
+            if (presentCount != incoming.Count)
+            {
+                var presentLabels = string.Join(
+                    ",",
+                    incoming.Where(item => item.Scope.Locals.ContainsKey(name)).Select(item => item.Label));
+                var missingLabels = string.Join(
+                    ",",
+                    incoming.Where(item => !item.Scope.Locals.ContainsKey(name)).Select(item => item.Label));
+                throw new SollangException(
+                    $"function '{_currentFunction?.Name ?? "main"}' binding '{name}' has inconsistent ownership across branch paths "
+                    + $"(present: {presentLabels}; moved: {missingLabels})");
+            }
         }
     }
 

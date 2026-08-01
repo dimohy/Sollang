@@ -1,0 +1,31 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A generic stream-role Bool is canonicalized after the first control-linking
+# pass. The final recovery pass must still connect it to the following if.
+main {
+    [
+        """
+        public filter<T> value: T -> stream T block item: T -> Bool {
+            value -> yield => accepted
+            accepted -> if {
+                value -> emit
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> semanticContext.prepare => prepared!
+    prepared! -> typedIr.lowerContext => ir!
+    0 => controls!
+    0 => missing!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        node.kind == 18 -> if {
+            controls! + 1 => controls!
+            node.operand0 < 0 -> if { missing! + 1 => missing! }
+        }
+        index! + 1 => index!
+    }
+    "controls=$(controls!),missing=$(missing!)" -> println
+}

@@ -467,7 +467,9 @@ internal sealed partial class LlvmEmitter
             RuntimeInlineDictionary dictionary => (
                 "%sollang.int_dictionary",
                 BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
-            _ => throw new SollangException($"type {value.Type} is not supported in an inline struct field")
+            _ => throw new SollangException(
+                $"runtime value {value.GetType().Name} with type {value.Type} is not supported in an inline struct field "
+                + $"while emitting '{_currentFunction?.ModuleName}.{_currentFunction?.Name ?? "main"}'")
         };
     }
 
@@ -593,7 +595,9 @@ internal sealed partial class LlvmEmitter
         {
             BoundType.Bool => new RuntimeBool(valueName),
             BoundType.Text => ExtractTextAggregate(valueName),
-            _ => throw new SollangException($"type {type} is not supported in an inline struct field")
+            _ => throw new SollangException(
+                $"type {type} is not supported in an inline struct field "
+                + $"while emitting '{_currentFunction?.ModuleName}.{_currentFunction?.Name ?? "main"}'")
         };
     }
 

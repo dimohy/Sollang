@@ -1,0 +1,28 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Passing an affine owner through ref T borrows the owner and must not create a
+# move event. The caller remains responsible for the final SourceText drop.
+main {
+    [
+        """
+        import sys.file as file
+
+        inspect source: ref file.SourceText -> UIntSize {
+            source -> len
+        }
+
+        main {
+            "syntax/sollang.lexer" -> file.mapText => source!
+            source! -> inspect
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> typedIr.movesFrom => moves!
+    "readonly-reference move events=$(moves! -> len)" -> println
+    ir! -> each node {
+        node.kind == 17 -> if {
+            "binding type=$(node.typeId), kind=$(node.typeKind), origin=$(node.typeOrigin), symbol=$(node.typeSymbol), traits=$(node.typeFlags), flags=$(node.flags)" -> println
+        }
+    }
+}

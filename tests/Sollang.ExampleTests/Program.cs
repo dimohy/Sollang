@@ -500,6 +500,7 @@ Parallel.ForEach(
     var selfHostRootPath = Path.Combine(expectedDir, name + ".root.txt");
     var stdoutLlvmValidationPath = Path.Combine(expectedDir, name + ".stdout.llvm.validate.txt");
     var stdoutLlvmExecutionPath = Path.Combine(expectedDir, name + ".stdout.llvm.execute.txt");
+    var stdoutLlvmLinkArgumentsPath = Path.Combine(expectedDir, name + ".stdout.llvm.link-args.txt");
     var compileOnlyPath = Path.Combine(expectedDir, name + ".compile-only.txt");
     var verifyLlvm = File.Exists(llvmContainsPath) || File.Exists(llvmNotContainsPath);
 
@@ -738,16 +739,28 @@ Parallel.ForEach(
             return;
         }
 
-        var linuxExecutionPath = Path.Combine(expectedDir, name + ".stdout.llvm.linux.execute.txt");
-        var executionPath = testTarget == TestTarget.LinuxX64 && File.Exists(linuxExecutionPath)
-            ? linuxExecutionPath
+        var targetExecutionPath = Path.Combine(
+            expectedDir,
+            name + ".stdout.llvm." + TestTargetName(testTarget) + ".execute.txt");
+        var executionPath = File.Exists(targetExecutionPath)
+            ? targetExecutionPath
             : stdoutLlvmExecutionPath;
         if (File.Exists(executionPath))
         {
             var linkedPath = Path.Combine(artifactsDir, name + ".stdout" + TestExecutableSuffix(testTarget));
+            var linkArguments = File.Exists(stdoutLlvmLinkArgumentsPath)
+                ? File.ReadLines(stdoutLlvmLinkArgumentsPath)
+                    .Where(static line => !string.IsNullOrWhiteSpace(line))
+                    .Select(static line => line.Trim())
+                    .ToArray()
+                : [];
             var link = testTarget == TestTarget.LinuxX64
                 ? LinkLinuxLlvm(clangPath, stdoutLlvmPath, linkedPath, repoRoot, wslDistribution)
-                : Run(clangPath, ["-Wno-override-module", stdoutLlvmPath, "-o", linkedPath], input: null, repoRoot);
+                : Run(
+                    clangPath,
+                    ["-Wno-override-module", stdoutLlvmPath, "-o", linkedPath, .. linkArguments],
+                    input: null,
+                    repoRoot);
             if (link.ExitCode != 0)
             {
                 Console.Error.WriteLine($"FAIL {name}: stdout LLVM could not be linked");

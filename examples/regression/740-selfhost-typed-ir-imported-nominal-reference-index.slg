@@ -1,0 +1,53 @@
+import sollang.compiler.ir.typed as typedIr
+
+# A readonly reference to an array of imported nominal values retains its
+# canonical reference type on every indexed container read, including loops.
+main {
+    [
+        """
+        namespace fixture.data
+
+        public struct Item {
+            value: Int
+        }
+        """,
+        """
+        namespace fixture.main
+        import fixture.data as data
+
+        contains items: ref [data.Item; ~], expected: Int -> Bool {
+            0 => index!
+            false => found!
+            index! < (items -> len) -> while {
+                items[index!].value == expected -> if { true => found! }
+                index! + 1 => index!
+            }
+            found!
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => indexes!
+    0 => referenceContainers!
+    0 => canonicalTypeIds!
+    0 => members!
+    0 => binaryMemberOperands!
+    0 => binaryIndexOperands!
+    ir! -> each node {
+        node.kind == 15 -> if {
+            indexes! + 1 => indexes!
+            ir![node.operand0].typeKind == 8 -> if { referenceContainers! + 1 => referenceContainers! }
+            ir![node.operand0].typeId >= 0 -> if { canonicalTypeIds! + 1 => canonicalTypeIds! }
+        }
+        node.kind == 13 -> if { members! + 1 => members! }
+        (node.kind == 8 and node.operand0 >= 0 and node.operand1 >= 0) -> if {
+            ir![node.operand0].kind == 13 -> if { binaryMemberOperands! + 1 => binaryMemberOperands! }
+            ir![node.operand1].kind == 13 -> if { binaryMemberOperands! + 1 => binaryMemberOperands! }
+            ir![node.operand0].kind == 15 -> if { binaryIndexOperands! + 1 => binaryIndexOperands! }
+            ir![node.operand1].kind == 15 -> if { binaryIndexOperands! + 1 => binaryIndexOperands! }
+        }
+    }
+    "indexes=$(indexes!),referenceContainers=$(referenceContainers!),canonicalTypeIds=$(canonicalTypeIds!),members=$(members!),binaryMemberOperands=$(binaryMemberOperands!),binaryIndexOperands=$(binaryIndexOperands!)" -> println
+}

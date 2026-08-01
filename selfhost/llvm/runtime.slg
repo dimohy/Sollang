@@ -17,6 +17,7 @@ public struct RuntimeFunctionSymbols {
     closeIntReaderSymbol: Int
     nowMillisSymbol: Int
     eprintlnSymbol: Int
+    flushStandardOutputSymbol: Int
 }
 
 public emitDictionaryTextHelpers: -> Unit uses Console {
@@ -378,6 +379,13 @@ public emitWindows runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit
       ret void
     }
     """ -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.flushStandardOutputSymbol)() {" -> println
+    """
+    entry:
+      call void @sollang_runtime_flush_stdout()
+      ret void
+    }
+    """ -> println
 }
 
 public emitLinux runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit uses Console {
@@ -504,6 +512,13 @@ public emitLinux runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit u
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
       call void @sollang_runtime_eprintln(ptr %data, i64 %length)
+      ret void
+    }
+    """ -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.flushStandardOutputSymbol)() {" -> println
+    """
+    entry:
+      call void @sollang_runtime_flush_stdout()
       ret void
     }
     """ -> println
@@ -860,6 +875,32 @@ emitStandardInputSourceTextBody: -> Unit uses Console {
     release_failure:
       %failed_buffer = load ptr, ptr %buffer_slot, align 8
       call void @free(ptr %failed_buffer)
+      br label %failure
+    failure:
+      call void @llvm.trap()
+      unreachable
+    }
+    """ -> println
+    """
+    define %sollang.source_text @sollang_runtime_read_standard_input_chunk_once(i64 %capacity) {
+    entry:
+      %zero_capacity = icmp eq i64 %capacity, 0
+      %allocation_size = select i1 %zero_capacity, i64 1, i64 %capacity
+      %buffer = call ptr @malloc(i64 %allocation_size)
+      %allocated = icmp ne ptr %buffer, null
+      br i1 %allocated, label %read, label %failure
+    read:
+      %count = call i64 @sollang_runtime_read_standard_input_chunk(ptr %buffer, i64 %capacity)
+      %read_failed = icmp slt i64 %count, 0
+      br i1 %read_failed, label %release_failure, label %success
+    success:
+      %result0 = insertvalue %sollang.source_text poison, ptr %buffer, 0
+      %result1 = insertvalue %sollang.source_text %result0, i64 %count, 1
+      %result2 = insertvalue %sollang.source_text %result1, ptr %buffer, 2
+      %result3 = insertvalue %sollang.source_text %result2, i64 -1, 3
+      ret %sollang.source_text %result3
+    release_failure:
+      call void @free(ptr %buffer)
       br label %failure
     failure:
       call void @llvm.trap()

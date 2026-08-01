@@ -7,6 +7,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "selfhost-verification-lock.ps1")
+$selfHostVerificationLock = Enter-SelfHostVerificationLock
+try {
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
 $runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
@@ -19,7 +23,6 @@ $stage2Path = Join-Path $artifactsDir "selfhost-stage2-linux"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAsPath = Join-Path $llvmDir "bin\llvm-as.exe"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
-$linuxStackLinkerOption = "-Wl,-z,stack-size=67108864"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -28,6 +31,7 @@ $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhos
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $directoryCreateSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-directory-create.slg"
+$pathNormalizeResultSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-path-normalize-result.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
 $borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-union-conflict.slg"
 $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-alias-conflict.slg"
@@ -166,6 +170,17 @@ if (-not (Test-Path -LiteralPath $directoryCreateTarget -PathType Container)) {
 }
 Write-Host "[linux-stage2 1/6] PASS directory creation and existing-directory idempotence."
 
+$pathNormalizeResultLlvm = Join-Path $artifactsDir "linux-stage2-check-path-normalize-result.ll"
+$pathNormalizeResultError = Join-Path $artifactsDir "linux-stage2-check-path-normalize-result.err"
+$pathNormalizeResultProcess = Invoke-ProcessToFile `
+    $stage1Path `
+    (@("linux", $pathNormalizeResultSource) + $compilerRuntimeSources) `
+    $pathNormalizeResultLlvm `
+    $pathNormalizeResultError
+Assert-ProcessSucceeded $pathNormalizeResultProcess $pathNormalizeResultError "Linux stage-1 owned Result path normalization emission"
+Build-And-ExecuteLinuxLlvm $pathNormalizeResultLlvm "linux-stage2-check-path-normalize-result" "artifacts/native-grammar-build/probe/generated.slg`ntrue"
+Write-Host "[linux-stage2 1/6] PASS owned Result nested-return path normalization."
+
 Write-Host "[linux-stage2 2/6] Build or reuse the complete Linux stage-2 compiler."
 if (Test-Stage2IsCurrent) {
     Write-Host "[linux-stage2 2/6] REUSE current Linux stage 2."
@@ -205,7 +220,7 @@ if (Test-Stage2IsCurrent) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & $clangPath --target=x86_64-unknown-linux-gnu -c $stage2LlvmPath -O1 -o $stage2ObjectPath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage2ObjectPath) -pthread $linuxStackLinkerOption -o (Convert-ToWslPath $stage2Path)
+    & wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage2ObjectPath) -pthread -o (Convert-ToWslPath $stage2Path)
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 Write-Host "[linux-stage2 2/6] PASS $((Get-Item $stage2LlvmPath).Length) LLVM bytes."
@@ -470,3 +485,7 @@ foreach ($referenceEscape in @(
     }
 }
 Write-Host "[linux-stage2 6/6] PASS E17-E23 ownership violations block LLVM emission in stage-1 and stage-2."
+}
+finally {
+    Release-SelfHostVerificationLock $selfHostVerificationLock
+}

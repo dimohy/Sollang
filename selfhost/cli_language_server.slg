@@ -1,0 +1,940 @@
+namespace sollang.compiler.cli_language_server
+
+import sollang.compiler.cli_format as formatter
+import sollang.compiler.compiler_version as compilerVersion
+import sollang.compiler.diagnostics as diagnostics
+import sys.file as file
+import sys.process as process
+import sys.runtime as runtime
+import syntax.generated.slg as grammar
+
+struct JsonValue {
+    kind: Int
+    start: UIntSize
+    end: UIntSize
+    contentStart: UIntSize
+    contentEnd: UIntSize
+}
+
+struct JsonMember {
+    found: Bool
+    value: JsonValue
+}
+
+struct Document {
+    uri: [UInt8; ~]
+    text: [UInt8; ~]
+}
+
+struct Position {
+    line: Int
+    character: Int
+}
+
+struct DispatchResult {
+    status: Int
+    shutdown: Bool
+    exitRequested: Bool
+    exitCode: Int
+}
+
+struct FrameResult {
+    kind: Int
+    next: UIntSize
+    payloadStart: UIntSize
+    payloadLength: UIntSize
+}
+
+appendText bytes: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes -> push(value -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+}
+
+appendBytes destination: mut [UInt8; ~], source: file.SourceText, start: UIntSize, length: UIntSize -> Unit {
+    UIntSize(0) => index!
+    index! < length -> while {
+        destination -> push(source -> byte(start + index!))
+        index! + UIntSize(1) => index!
+    }
+}
+
+copyBytes source: file.SourceText, start: UIntSize, length: UIntSize -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    bytes! -> appendBytes(source, start, length)
+    bytes!
+}
+
+appendPositiveInt bytes: mut [UInt8; ~], value: Int -> Unit {
+    [UInt8; ~] => reversed!
+    value => remaining!
+    remaining! == 0 -> if {
+        bytes -> push(UInt8(48))
+    } else {
+        remaining! > 0 -> while {
+            reversed! -> push(UInt8(remaining! % 10 + 48))
+            remaining! / 10 => remaining!
+        }
+        (reversed! -> len) - 1 => index!
+        index! >= 0 -> while {
+            bytes -> push(reversed![index!])
+            index! - 1 => index!
+        }
+    }
+}
+
+appendSignedInt bytes: mut [UInt8; ~], value: Int -> Unit {
+    value < 0 -> if {
+        bytes -> push(UInt8(45))
+        bytes -> appendPositiveInt(0 - value)
+    } else {
+        bytes -> appendPositiveInt(value)
+    }
+}
+
+asciiLower value: UInt8 -> UInt8 {
+    (value >= UInt8(65) and value <= UInt8(90)) -> if { value + UInt8(32) } else { value }
+}
+
+isWhitespace value: UInt8 -> Bool {
+    value == UInt8(32) or value == UInt8(9) or value == UInt8(10) or value == UInt8(13)
+}
+
+skipWhitespace source: file.SourceText, start: UIntSize, end: UIntSize -> UIntSize {
+    start => index!
+    (index! < end and ((source -> byte(index!)) -> isWhitespace)) -> while {
+        index! + UIntSize(1) => index!
+    }
+    index!
+}
+
+hexValue value: UInt8 -> Int {
+    -1 => result!
+    (value >= UInt8(48) and value <= UInt8(57)) -> if { Int(value - UInt8(48)) => result! }
+    (value >= UInt8(65) and value <= UInt8(70)) -> if { Int(value - UInt8(65)) + 10 => result! }
+    (value >= UInt8(97) and value <= UInt8(102)) -> if { Int(value - UInt8(97)) + 10 => result! }
+    result!
+}
+
+parseHex4 source: file.SourceText, start: UIntSize, end: UIntSize -> Int {
+    -1 => result!
+    start + UIntSize(4) <= end -> if {
+        0 => value!
+        true => valid!
+        UIntSize(0) => index!
+        (valid! and index! < UIntSize(4)) -> while {
+            source -> byte(start + index!) -> hexValue => digit
+            digit < 0 -> if { false => valid! } else { value! * 16 + digit => value! }
+            index! + UIntSize(1) => index!
+        }
+        valid! -> if { value! => result! }
+    }
+    result!
+}
+
+appendCodePoint bytes: mut [UInt8; ~], codePoint: Int -> Unit {
+    codePoint <= 127 -> if {
+        bytes -> push(UInt8(codePoint))
+    } else {
+        codePoint <= 2047 -> if {
+            bytes -> push(UInt8(192 + codePoint / 64))
+            bytes -> push(UInt8(128 + codePoint % 64))
+        } else {
+            codePoint <= 65535 -> if {
+                bytes -> push(UInt8(224 + codePoint / 4096))
+                bytes -> push(UInt8(128 + (codePoint / 64) % 64))
+                bytes -> push(UInt8(128 + codePoint % 64))
+            } else {
+                bytes -> push(UInt8(240 + codePoint / 262144))
+                bytes -> push(UInt8(128 + (codePoint / 4096) % 64))
+                bytes -> push(UInt8(128 + (codePoint / 64) % 64))
+                bytes -> push(UInt8(128 + codePoint % 64))
+            }
+        }
+    }
+}
+
+scanStringEnd source: file.SourceText, quote: UIntSize, end: UIntSize -> UIntSize {
+    quote + UIntSize(1) => index!
+    false => escaped!
+    true => scanning!
+    scanning! -> while {
+        index! >= end -> if {
+            end + UIntSize(1) => index!
+            false => scanning!
+        } else {
+            source -> byte(index!) => value
+            escaped! -> if {
+                false => escaped!
+                index! + UIntSize(1) => index!
+            } else {
+                value == UInt8(92) -> if {
+                    true => escaped!
+                    index! + UIntSize(1) => index!
+                } else {
+                    value == UInt8(34) -> if {
+                        index! + UIntSize(1) => index!
+                        false => scanning!
+                    } else {
+                        value < UInt8(32) -> if {
+                            end + UIntSize(1) => index!
+                            false => scanning!
+                        } else { index! + UIntSize(1) => index! }
+                    }
+                }
+            }
+        }
+    }
+    index!
+}
+
+parseValue source: file.SourceText, start: UIntSize, end: UIntSize -> JsonValue {
+    source -> skipWhitespace(start, end) => valueStart
+    JsonValue { kind: -1, start: valueStart, end: valueStart, contentStart: valueStart, contentEnd: valueStart } => result!
+    valueStart < end -> if {
+        source -> byte(valueStart) => first
+        first == UInt8(34) -> if {
+            source -> scanStringEnd(valueStart, end) => after
+            after <= end -> if {
+                3 => result!.kind
+                after => result!.end
+                valueStart + UIntSize(1) => result!.contentStart
+                after - UIntSize(1) => result!.contentEnd
+            }
+        } else {
+            (first == UInt8(123) or first == UInt8(91)) -> if {
+                first == UInt8(123) -> if { UInt8(125) } else { UInt8(93) } => closing
+                valueStart + UIntSize(1) => index!
+                1 => depth!
+                false => inString!
+                false => escaped!
+                (index! < end and depth! > 0) -> while {
+                    source -> byte(index!) => value
+                    inString! -> if {
+                        escaped! -> if { false => escaped! } else {
+                            value == UInt8(92) -> if { true => escaped! }
+                            value == UInt8(34) -> if { false => inString! }
+                        }
+                    } else {
+                        value == UInt8(34) -> if { true => inString! } else {
+                            (value == UInt8(123) or value == UInt8(91)) -> if { depth! + 1 => depth! }
+                            (value == UInt8(125) or value == UInt8(93)) -> if {
+                                depth! - 1 => depth!
+                                (depth! == 0 and value != closing) -> if { -1 => depth! }
+                            }
+                        }
+                    }
+                    index! + UIntSize(1) => index!
+                }
+                depth! == 0 -> if {
+                    first == UInt8(123) -> if { 5 } else { 4 } => result!.kind
+                    index! => result!.end
+                    valueStart + UIntSize(1) => result!.contentStart
+                    index! - UIntSize(1) => result!.contentEnd
+                }
+            } else {
+                valueStart => index!
+                (index! < end
+                    and not ((source -> byte(index!)) -> isWhitespace)
+                    and (source -> byte(index!)) != UInt8(44)
+                    and (source -> byte(index!)) != UInt8(93)
+                    and (source -> byte(index!)) != UInt8(125)) -> while {
+                    index! + UIntSize(1) => index!
+                }
+                index! > valueStart -> if {
+                    2 => result!.kind
+                    index! => result!.end
+                    valueStart => result!.contentStart
+                    index! => result!.contentEnd
+                    (first == UInt8(116) or first == UInt8(102)) -> if { 1 => result!.kind }
+                    first == UInt8(110) -> if { 0 => result!.kind }
+                }
+            }
+        }
+    }
+    result!
+}
+
+decodeJsonString source: file.SourceText, value: JsonValue -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    value.contentStart => index!
+    true => valid!
+    (valid! and index! < value.contentEnd) -> while {
+        source -> byte(index!) => current
+        current != UInt8(92) -> if {
+            bytes! -> push(current)
+            index! + UIntSize(1) => index!
+        } else {
+            index! + UIntSize(1) >= value.contentEnd -> if {
+                false => valid!
+            } else {
+                source -> byte(index! + UIntSize(1)) => escaped
+                escaped == UInt8(34) -> if { bytes! -> push(UInt8(34)) }
+                escaped == UInt8(92) -> if { bytes! -> push(UInt8(92)) }
+                escaped == UInt8(47) -> if { bytes! -> push(UInt8(47)) }
+                escaped == UInt8(98) -> if { bytes! -> push(UInt8(8)) }
+                escaped == UInt8(102) -> if { bytes! -> push(UInt8(12)) }
+                escaped == UInt8(110) -> if { bytes! -> push(UInt8(10)) }
+                escaped == UInt8(114) -> if { bytes! -> push(UInt8(13)) }
+                escaped == UInt8(116) -> if { bytes! -> push(UInt8(9)) }
+                escaped == UInt8(117) -> if {
+                    source -> parseHex4(index! + UIntSize(2), value.contentEnd) => firstCode
+                    firstCode < 0 -> if { false => valid! } else {
+                        firstCode => codePoint!
+                        index! + UIntSize(6) => next!
+                        (firstCode >= 55296 and firstCode <= 56319) -> if {
+                            (next! + UIntSize(6) <= value.contentEnd
+                                and (source -> byte(next!)) == UInt8(92)
+                                and (source -> byte(next! + UIntSize(1))) == UInt8(117)) -> if {
+                                source -> parseHex4(next! + UIntSize(2), value.contentEnd) => secondCode
+                                (secondCode >= 56320 and secondCode <= 57343) -> if {
+                                    65536 + (firstCode - 55296) * 1024 + secondCode - 56320 => codePoint!
+                                    next! + UIntSize(6) => next!
+                                } else { false => valid! }
+                            } else { false => valid! }
+                        }
+                        valid! -> if { bytes! -> appendCodePoint(codePoint!) }
+                        next! => index!
+                    }
+                } else {
+                    (escaped != UInt8(34)
+                        and escaped != UInt8(92)
+                        and escaped != UInt8(47)
+                        and escaped != UInt8(98)
+                        and escaped != UInt8(102)
+                        and escaped != UInt8(110)
+                        and escaped != UInt8(114)
+                        and escaped != UInt8(116)) -> if {
+                        false => valid!
+                    }
+                    escaped != UInt8(117) -> if { index! + UIntSize(2) => index! }
+                }
+            }
+        }
+    }
+    valid! -> if { } else {
+        (bytes! -> len) > 0 -> while { bytes! -> take((bytes! -> len) - 1) => discarded }
+    }
+    bytes!
+}
+
+bytesEqualText bytes: ref [UInt8; ~], value: Text -> Bool {
+    UIntSize(bytes -> len) == (value -> len) => equal!
+    UIntSize(0) => index!
+    (equal! and index! < (value -> len)) -> while {
+        bytes[Int(index!)] != (value -> byte(index!)) -> if { false => equal! }
+        index! + UIntSize(1) => index!
+    }
+    equal!
+}
+
+bytesEqual left: ref [UInt8; ~], right: ref [UInt8; ~] -> Bool {
+    (left -> len) == (right -> len) => equal!
+    0 => index!
+    (equal! and index! < (left -> len)) -> while {
+        left[index!] != right[index!] -> if { false => equal! }
+        index! + 1 => index!
+    }
+    equal!
+}
+
+findMember source: file.SourceText, object: JsonValue, name: Text -> JsonMember {
+    JsonValue { kind: -1, start: object.start, end: object.start, contentStart: object.start, contentEnd: object.start } => missing
+    JsonMember { found: false, value: missing } => result!
+    object.kind == 5 -> if {
+        object.contentStart => index!
+        true => scanning!
+        scanning! -> while {
+            source -> skipWhitespace(index!, object.contentEnd) => index!
+            index! >= object.contentEnd -> if {
+                false => scanning!
+            } else {
+                source -> parseValue(index!, object.contentEnd) => key
+                key.kind != 3 -> if {
+                    false => scanning!
+                } else {
+                    source -> skipWhitespace(key.end, object.contentEnd) => colon
+                    (colon >= object.contentEnd or (source -> byte(colon)) != UInt8(58)) -> if {
+                        false => scanning!
+                    } else {
+                        source -> parseValue(colon + UIntSize(1), object.contentEnd) => memberValue
+                        memberValue.kind < 0 -> if {
+                            false => scanning!
+                        } else {
+                            source -> decodeJsonString(key) => keyBytes!
+                            keyBytes! -> bytesEqualText(name) -> if {
+                                JsonMember { found: true, value: memberValue } => result!
+                                false => scanning!
+                            } else {
+                                source -> skipWhitespace(memberValue.end, object.contentEnd) => next
+                                (next < object.contentEnd and (source -> byte(next)) == UInt8(44)) -> if {
+                                    next + UIntSize(1) => index!
+                                } else {
+                                    object.contentEnd => index!
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result!
+}
+
+appendJsonString output: mut [UInt8; ~], bytes: ref [UInt8; ~] -> Unit {
+    output -> push(UInt8(34))
+    0 => index!
+    index! < (bytes -> len) -> while {
+        bytes[index!] => value
+        value == UInt8(34) -> if {
+            output -> push(UInt8(92))
+            output -> push(UInt8(34))
+        } else {
+            value == UInt8(92) -> if {
+                output -> push(UInt8(92))
+                output -> push(UInt8(92))
+            } else {
+                value == UInt8(8) -> if {
+                    output -> push(UInt8(92))
+                    output -> push(UInt8(98))
+                } else {
+                    value == UInt8(12) -> if {
+                        output -> push(UInt8(92))
+                        output -> push(UInt8(102))
+                    } else {
+                        value == UInt8(10) -> if {
+                            output -> push(UInt8(92))
+                            output -> push(UInt8(110))
+                        } else {
+                            value == UInt8(13) -> if {
+                                output -> push(UInt8(92))
+                                output -> push(UInt8(114))
+                            } else {
+                                value == UInt8(9) -> if {
+                                    output -> push(UInt8(92))
+                                    output -> push(UInt8(116))
+                                } else {
+                                    value < UInt8(32) -> if {
+                                        output -> push(UInt8(92))
+                                        output -> appendText("u00")
+                                        "0123456789abcdef" => digits
+                                        output -> push(digits -> byte(UIntSize(Int(value) / 16)))
+                                        output -> push(digits -> byte(UIntSize(Int(value) % 16)))
+                                    } else { output -> push(value) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        index! + 1 => index!
+    }
+    output -> push(UInt8(34))
+}
+
+writeBody body: ref [UInt8; ~] -> Unit uses Console {
+    [UInt8; ~] => header!
+    header! -> appendText("Content-Length: ")
+    header! -> appendPositiveInt(body -> len)
+    header! -> push(UInt8(13))
+    header! -> push(UInt8(10))
+    header! -> push(UInt8(13))
+    header! -> push(UInt8(10))
+    header! -> file.borrowBytes => headerSource!
+    headerSource! -> slice(UIntSize(0), headerSource! -> len) -> print
+    body -> file.borrowBytes => bodySource!
+    bodySource! -> slice(UIntSize(0), bodySource! -> len) -> print
+    runtime.flushStandardOutput()
+}
+
+appendId output: mut [UInt8; ~], source: file.SourceText, id: JsonMember -> Unit {
+    id.found -> if {
+        output -> appendBytes(source, id.value.start, id.value.end - id.value.start)
+    } else { output -> appendText("null") }
+}
+
+writeResultPrefix body: mut [UInt8; ~], source: file.SourceText, id: JsonMember -> Unit {
+    body -> appendText("""{"jsonrpc":"2.0","id":""")
+    body -> appendId(source, id)
+    body -> appendText(""","result":""")
+}
+
+writeNullResult source: file.SourceText, id: JsonMember -> Unit uses Console {
+    [UInt8; ~] => body!
+    body! -> writeResultPrefix(source, id)
+    body! -> appendText("null}")
+    body! -> writeBody
+}
+
+writeInitialize source: file.SourceText, id: JsonMember -> Unit uses Console {
+    [UInt8; ~] => body!
+    body! -> writeResultPrefix(source, id)
+    body! -> appendText("""{"capabilities":{"textDocumentSync":1,"documentFormattingProvider":true},"serverInfo":{"name":"sollang","version":""")
+    body! -> push(UInt8(34))
+    body! -> appendText(compilerVersion.current())
+    body! -> push(UInt8(34))
+    body! -> appendText("}}}")
+    body! -> writeBody
+}
+
+writeEmptyArrayResult source: file.SourceText, id: JsonMember -> Unit uses Console {
+    [UInt8; ~] => body!
+    body! -> writeResultPrefix(source, id)
+    body! -> appendText("[]}")
+    body! -> writeBody
+}
+
+writeMethodNotFound source: file.SourceText, id: JsonMember, method: ref [UInt8; ~] -> Unit uses Console {
+    [UInt8; ~] => message!
+    message! -> appendText("method not found: ")
+    0 => methodIndex!
+    methodIndex! < (method -> len) -> while {
+        message! -> push(method[methodIndex!])
+        methodIndex! + 1 => methodIndex!
+    }
+    [UInt8; ~] => body!
+    body! -> appendText("""{"jsonrpc":"2.0","id":""")
+    body! -> appendId(source, id)
+    body! -> appendText(""","error":{"code":-32601,"message":""")
+    body! -> appendJsonString(message!)
+    body! -> appendText("}}")
+    body! -> writeBody
+}
+
+documentMatches document: ref Document, uri: ref [UInt8; ~] -> Bool {
+    document.uri -> bytesEqual(uri)
+}
+
+documentIndex documents: ref [Document; ~], uri: ref [UInt8; ~] -> Int {
+    -1 => found!
+    0 => index!
+    (index! < (documents -> len) and found! < 0) -> while {
+        documents[index!] -> documentMatches(uri) -> if { index! => found! }
+        index! + 1 => index!
+    }
+    found!
+}
+
+upsertDocument documents: mut [Document; ~], uri: move [UInt8; ~], text: move [UInt8; ~] -> Int {
+    documents -> documentIndex(uri) => index!
+    index! >= 0 -> if {
+        documents -> take(index!) => replaced
+        documents -> len => index!
+        documents -> push(Document { uri: uri, text: text })
+    } else {
+        documents -> len => index!
+        documents -> push(Document { uri: uri, text: text })
+    }
+    index!
+}
+
+removeDocument documents: mut [Document; ~], index: Int -> Unit {
+    documents -> take(index) => removed
+}
+
+utf8Width first: UInt8 -> Int {
+    first < UInt8(128) -> if { 1 } else {
+        first < UInt8(224) -> if { 2 } else {
+            first < UInt8(240) -> if { 3 } else { 4 }
+        }
+    }
+}
+
+sourcePosition source: file.SourceText, offset: UIntSize -> Position {
+    0 => line!
+    0 => character!
+    UIntSize(0) => index!
+    index! < offset -> while {
+        source -> byte(index!) => value
+        value == UInt8(10) -> if {
+            line! + 1 => line!
+            0 => character!
+            index! + UIntSize(1) => index!
+        } else {
+            value == UInt8(13) -> if {
+                index! + UIntSize(1) => index!
+            } else {
+                value -> utf8Width => width
+                width == 4 -> if { character! + 2 => character! } else { character! + 1 => character! }
+                index! + UIntSize(width) => index!
+            }
+        }
+    }
+    Position { line: line!, character: character! }
+}
+
+appendDiagnosticMessage output: mut [UInt8; ~], source: file.SourceText, diagnostic: diagnostics.SyntaxDiagnostic, position: Position -> Unit {
+    diagnostic.code == 1 -> if {
+        output -> appendText("lex error at ")
+        output -> appendPositiveInt(position.line + 1)
+        output -> appendText(":")
+        output -> appendPositiveInt(position.character + 1)
+        output -> appendText(": unexpected character '")
+        output -> appendBytes(source, diagnostic.span.start, diagnostic.span.length)
+        output -> appendText("'")
+    } else {
+        diagnostic.code == 3 -> if {
+            output -> appendText("lex error at ")
+            output -> appendPositiveInt(position.line + 1)
+            output -> appendText(":")
+            output -> appendPositiveInt(position.character + 1)
+            output -> appendText(": unterminated string literal")
+        } else {
+            source -> slice(UIntSize(0), source -> len) => sourceView
+            sourceView -> diagnostics.expectedCodes => expected!
+            expected![(expected! -> len) - 1] => expectedCode
+            output -> appendText("parse error at ")
+            output -> appendPositiveInt(position.line + 1)
+            output -> appendText(":")
+            output -> appendPositiveInt(position.character + 1)
+            output -> appendText(": expected ")
+            expectedCode >= 0 -> if {
+                grammar.tokenNames() => tokenNames!
+                output -> appendText(tokenNames![expectedCode])
+            } else {
+                grammar.keywordTexts() => keywordTexts!
+                output -> appendText("'")
+                output -> appendText(keywordTexts![0 - expectedCode - 1])
+                output -> appendText("'")
+            }
+        }
+    }
+}
+
+publishDiagnostics document: ref Document, hasDocument: Bool -> Unit uses Console {
+    [UInt8; ~] => body!
+    body! -> appendText("""{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":""")
+    body! -> appendJsonString(document.uri)
+    body! -> appendText(""","diagnostics":[""")
+    hasDocument -> if {
+        document.text -> file.borrowBytes => source!
+        source! -> slice(UIntSize(0), source! -> len) => sourceView
+        sourceView -> diagnostics.analyze => syntaxDiagnostics!
+        (syntaxDiagnostics! -> len) > 0 -> if {
+            syntaxDiagnostics![0] => diagnostic
+            source! -> sourcePosition(diagnostic.span.start) => position
+            [UInt8; ~] => message!
+            message! -> appendDiagnosticMessage(source!, diagnostic, position)
+            body! -> appendText("""{"range":{"start":{"line":""")
+            body! -> appendPositiveInt(position.line)
+            body! -> appendText(""","character":""")
+            body! -> appendPositiveInt(position.character)
+            body! -> appendText("""},"end":{"line":""")
+            body! -> appendPositiveInt(position.line)
+            body! -> appendText(""","character":""")
+            body! -> appendPositiveInt(position.character + 1)
+            body! -> appendText("""}},"severity":1,"source":"sollang","message":""")
+            body! -> appendJsonString(message!)
+            body! -> appendText("}")
+        }
+    }
+    body! -> appendText("]}}")
+    body! -> writeBody
+}
+
+writeFormattingResult source: file.SourceText, id: JsonMember, document: ref Document -> Unit uses Console {
+    document.text -> file.borrowBytes => original!
+    original! -> formatter.format => formatted!
+    formatted!.status != 0 -> if {
+        source -> writeEmptyArrayResult(id)
+    } else {
+        UIntSize(original! -> len) => originalLength
+        UIntSize(formatted!.bytes -> len) => formattedLength
+        UIntSize(0) => prefix!
+        (prefix! < originalLength
+            and prefix! < formattedLength
+            and (original! -> byte(prefix!)) == formatted!.bytes[Int(prefix!)]) -> while {
+            prefix! + UIntSize(1) => prefix!
+        }
+        (prefix! < originalLength and prefix! > UIntSize(0) and ((original! -> byte(prefix!)) / UInt8(64)) == UInt8(2)) -> while {
+            prefix! - UIntSize(1) => prefix!
+        }
+        UIntSize(0) => suffix!
+        (suffix! < originalLength - prefix!
+            and suffix! < formattedLength - prefix!
+            and (original! -> byte(originalLength - suffix! - UIntSize(1))) == formatted!.bytes[Int(formattedLength - suffix! - UIntSize(1))]) -> while {
+            suffix! + UIntSize(1) => suffix!
+        }
+        (prefix! == originalLength and prefix! == formattedLength) -> if {
+            source -> writeEmptyArrayResult(id)
+        } else {
+            original! -> sourcePosition(prefix!) => start
+            original! -> sourcePosition(originalLength - suffix!) => end
+            [UInt8; ~] => replacement!
+            0 => replacementIndex!
+            replacementIndex! < Int(formattedLength - prefix! - suffix!) -> while {
+                replacement! -> push(formatted!.bytes[Int(prefix!) + replacementIndex!])
+                replacementIndex! + 1 => replacementIndex!
+            }
+            [UInt8; ~] => body!
+            body! -> writeResultPrefix(source, id)
+            body! -> appendText("""[{"range":{"start":{"line":""")
+            body! -> appendPositiveInt(start.line)
+            body! -> appendText(""","character":""")
+            body! -> appendPositiveInt(start.character)
+            body! -> appendText("""},"end":{"line":""")
+            body! -> appendPositiveInt(end.line)
+            body! -> appendText(""","character":""")
+            body! -> appendPositiveInt(end.character)
+            body! -> appendText("""}},"newText":""")
+            body! -> appendJsonString(replacement!)
+            body! -> appendText("}]}")
+            body! -> writeBody
+        }
+    }
+}
+
+nestedMember source: file.SourceText, object: JsonValue, first: Text, second: Text -> JsonMember {
+    source -> findMember(object, first) => parent
+    parent.found -> if { source -> findMember(parent.value, second) } else { parent }
+}
+
+dispatchMessage source: file.SourceText, documents: mut [Document; ~], shutdown: Bool -> DispatchResult uses Console {
+    source -> parseValue(UIntSize(0), source -> len) => root
+    DispatchResult { status: 1, shutdown: shutdown, exitRequested: false, exitCode: 1 } => result!
+    root.kind == 5 -> if {
+        source -> findMember(root, "method") => methodMember
+        methodMember.found -> if {
+            source -> decodeJsonString(methodMember.value) => method!
+            source -> findMember(root, "id") => id
+            0 => result!.status
+            method! -> bytesEqualText("initialize") -> if {
+                source -> writeInitialize(id)
+            } else {
+                method! -> bytesEqualText("shutdown") -> if {
+                    true => result!.shutdown
+                    source -> writeNullResult(id)
+                } else {
+                    method! -> bytesEqualText("exit") -> if {
+                        true => result!.exitRequested
+                        result!.shutdown -> if { 0 } else { 1 } => result!.exitCode
+                    } else {
+                        method! -> bytesEqualText("textDocument/didOpen") -> if {
+                            source -> nestedMember(root, "params", "textDocument") => textDocument
+                            source -> findMember(textDocument.value, "uri") => uriMember
+                            source -> findMember(textDocument.value, "text") => textMember
+                            (uriMember.found and textMember.found) -> if {
+                                source -> decodeJsonString(uriMember.value) => uri!
+                                source -> decodeJsonString(textMember.value) => text!
+                                documents -> upsertDocument(uri!, text!) => documentIndex
+                                documents[documentIndex] -> publishDiagnostics(true)
+                            } else { 1 => result!.status }
+                        } else {
+                            method! -> bytesEqualText("textDocument/didChange") -> if {
+                                source -> findMember(root, "params") => parameters
+                                source -> nestedMember(parameters.value, "textDocument", "uri") => uriMember
+                                source -> findMember(parameters.value, "contentChanges") => changes
+                                (uriMember.found and changes.found and changes.value.kind == 4) -> if {
+                                    source -> parseValue(changes.value.contentStart, changes.value.contentEnd) => firstChange
+                                    source -> findMember(firstChange, "text") => textMember
+                                    textMember.found -> if {
+                                        source -> decodeJsonString(uriMember.value) => uri!
+                                        source -> decodeJsonString(textMember.value) => text!
+                                        documents -> upsertDocument(uri!, text!) => documentIndex
+                                        documents[documentIndex] -> publishDiagnostics(true)
+                                    }
+                                } else { 1 => result!.status }
+                            } else {
+                                method! -> bytesEqualText("textDocument/didClose") -> if {
+                                    source -> nestedMember(root, "params", "textDocument") => textDocument
+                                    source -> findMember(textDocument.value, "uri") => uriMember
+                                    uriMember.found -> if {
+                                        source -> decodeJsonString(uriMember.value) => uri!
+                                        documents -> documentIndex(uri!) => index
+                                        Document { uri: uri!, text: [UInt8; ~] } => closed!
+                                        index >= 0 -> if { documents -> removeDocument(index) }
+                                        closed! -> publishDiagnostics(false)
+                                    } else { 1 => result!.status }
+                                } else {
+                                    method! -> bytesEqualText("textDocument/formatting") -> if {
+                                        source -> nestedMember(root, "params", "textDocument") => textDocument
+                                        source -> findMember(textDocument.value, "uri") => uriMember
+                                        uriMember.found -> if {
+                                            source -> decodeJsonString(uriMember.value) => uri!
+                                            documents -> documentIndex(uri!) => index
+                                            index >= 0 -> if {
+                                                source -> writeFormattingResult(id, documents[index])
+                                            } else { source -> writeEmptyArrayResult(id) }
+                                        } else { 1 => result!.status }
+                                    } else {
+                                        id.found -> if { source -> writeMethodNotFound(id, method!) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else { 0 => result!.status }
+    }
+    result!
+}
+
+parseContentLength source: file.SourceText, start: UIntSize, end: UIntSize -> Int {
+    -1 => length!
+    start => lineStart!
+    lineStart! < end -> while {
+        lineStart! => lineEnd!
+        (lineEnd! < end and (source -> byte(lineEnd!)) != UInt8(10)) -> while {
+            lineEnd! + UIntSize(1) => lineEnd!
+        }
+        lineEnd! => trimmedEnd!
+        (trimmedEnd! > lineStart! and (source -> byte(trimmedEnd! - UIntSize(1))) == UInt8(13)) -> if {
+            trimmedEnd! - UIntSize(1) => trimmedEnd!
+        }
+        "Content-Length:" => headerName
+        trimmedEnd! - lineStart! >= (headerName -> len) => matches!
+        UIntSize(0) => nameIndex!
+        (matches! and nameIndex! < (headerName -> len)) -> while {
+            ((source -> byte(lineStart! + nameIndex!)) -> asciiLower) != ((headerName -> byte(nameIndex!)) -> asciiLower) -> if { false => matches! }
+            nameIndex! + UIntSize(1) => nameIndex!
+        }
+        matches! -> if {
+            lineStart! + (headerName -> len) => digitIndex!
+            (digitIndex! < trimmedEnd! and ((source -> byte(digitIndex!)) -> isWhitespace)) -> while {
+                digitIndex! + UIntSize(1) => digitIndex!
+            }
+            0 => parsed!
+            digitIndex! < trimmedEnd! => valid!
+            (valid! and digitIndex! < trimmedEnd!) -> while {
+                source -> byte(digitIndex!) => digit
+                (digit < UInt8(48) or digit > UInt8(57)) -> if {
+                    false => valid!
+                } else {
+                    parsed! * 10 + Int(digit - UInt8(48)) => parsed!
+                }
+                digitIndex! + UIntSize(1) => digitIndex!
+            }
+            valid! -> if { parsed! => length! }
+        }
+        lineEnd! < end -> if { lineEnd! + UIntSize(1) => lineStart! } else { end => lineStart! }
+    }
+    length!
+}
+
+nextFrame buffer: ref [UInt8; ~], start: UIntSize -> FrameResult {
+    buffer -> file.borrowBytes => source!
+    UIntSize(buffer -> len) => end
+    start => index!
+    -1 => headerEnd!
+    UIntSize(0) => separatorLength!
+    (index! < end and headerEnd! < 0) -> while {
+        (index! + UIntSize(3) < end
+            and (source! -> byte(index!)) == UInt8(13)
+            and (source! -> byte(index! + UIntSize(1))) == UInt8(10)
+            and (source! -> byte(index! + UIntSize(2))) == UInt8(13)
+            and (source! -> byte(index! + UIntSize(3))) == UInt8(10)) -> if {
+            Int(index!) => headerEnd!
+            UIntSize(4) => separatorLength!
+        } else {
+            (index! + UIntSize(1) < end
+                and (source! -> byte(index!)) == UInt8(10)
+                and (source! -> byte(index! + UIntSize(1))) == UInt8(10)) -> if {
+                Int(index!) => headerEnd!
+                UIntSize(2) => separatorLength!
+            } else { index! + UIntSize(1) => index! }
+        }
+    }
+    FrameResult { kind: 0, next: start, payloadStart: start, payloadLength: UIntSize(0) } => result!
+    headerEnd! >= 0 -> if {
+        source! -> parseContentLength(start, UIntSize(headerEnd!)) => contentLength
+        contentLength < 0 -> if {
+            2 => result!.kind
+        } else {
+            UIntSize(headerEnd!) + separatorLength! => payloadStart
+            payloadStart + UIntSize(contentLength) <= end -> if {
+                1 => result!.kind
+                payloadStart + UIntSize(contentLength) => result!.next
+                payloadStart => result!.payloadStart
+                UIntSize(contentLength) => result!.payloadLength
+            }
+        }
+    }
+    result!
+}
+
+compactBuffer buffer: mut [UInt8; ~], start: UIntSize -> UIntSize {
+    start == UIntSize(buffer -> len) -> if {
+        (buffer -> len) > 0 -> while { buffer -> take((buffer -> len) - 1) => discarded }
+        UIntSize(0)
+    } else {
+        start > UIntSize(65536) -> if {
+            [UInt8; ~] => remaining!
+            Int(start) => index!
+            index! < (buffer -> len) -> while {
+                remaining! -> push(buffer[index!])
+                index! + 1 => index!
+            }
+            (buffer -> len) > 0 -> while { buffer -> take((buffer -> len) - 1) => discarded }
+            0 => remainingIndex!
+            remainingIndex! < (remaining! -> len) -> while {
+                buffer -> push(remaining![remainingIndex!])
+                remainingIndex! + 1 => remainingIndex!
+            }
+            UIntSize(0)
+        } else { start }
+    }
+}
+
+public run: -> Unit uses Console, File, Process {
+    [UInt8; ~] => input!
+    [Document; ~] => documents!
+    UIntSize(0) => consumed!
+    false => shutdown!
+    false => finished!
+    0 => exitCode!
+    finished! -> if { } else {
+        (not finished!) -> while {
+            UIntSize(4096) -> file.readStandardInputChunk => chunk!
+            chunk! -> len => chunkLength
+            chunkLength == UIntSize(0) -> if {
+                consumed! != UIntSize(input! -> len) -> if {
+                    "sollang: incomplete LSP message" -> runtime.eprintln
+                    1 => exitCode!
+                }
+                true => finished!
+            } else {
+                input! -> appendBytes(chunk!, UIntSize(0), chunkLength)
+                true => framesRemain!
+                framesRemain! -> while {
+                    input! -> nextFrame(consumed!) => frame
+                    frame.kind == 0 -> if {
+                        false => framesRemain!
+                    } else {
+                        frame.kind == 2 -> if {
+                            "sollang: invalid LSP header" -> runtime.eprintln
+                            1 => exitCode!
+                            true => finished!
+                            false => framesRemain!
+                        } else {
+                            input! -> file.borrowBytes => inputSource!
+                            inputSource! -> slice(frame.payloadStart, frame.payloadLength) => payloadView
+                            payloadView -> file.borrowText => payload!
+                            payload! -> dispatchMessage(documents!, shutdown!) => dispatched
+                            dispatched.shutdown => shutdown!
+                            dispatched.status != 0 -> if {
+                                "sollang: invalid LSP message" -> runtime.eprintln
+                                1 => exitCode!
+                                true => finished!
+                                false => framesRemain!
+                            } else {
+                                frame.next => consumed!
+                                dispatched.exitRequested -> if {
+                                    dispatched.exitCode => exitCode!
+                                    true => finished!
+                                    false => framesRemain!
+                                }
+                            }
+                        }
+                    }
+                }
+                input! -> compactBuffer(consumed!) => consumed!
+            }
+        }
+    }
+    exitCode! != 0 -> if { process.exit(exitCode!) }
+}

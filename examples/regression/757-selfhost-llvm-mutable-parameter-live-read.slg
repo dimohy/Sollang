@@ -1,0 +1,30 @@
+import sollang.compiler.llvm.text as llvm
+
+# A mutable parameter read after mutation must observe the live ABI storage.
+# Both len and indexed access previously reused the function-entry snapshot.
+main {
+    [
+        """
+        readLastRef values: ref [Int; ~] -> Int {
+            values[(values -> len) - 1]
+        }
+
+        appendAndRead values: mut [Int; ~] -> Unit {
+            values -> push(42)
+            values -> len -> println
+            values[(values -> len) - 1] -> println
+            "last=$(values[(values -> len) - 1])" -> println
+            values -> readLastRef -> println
+            (true and (values -> readLastRef) == 42) -> if {
+                "ref-condition" -> println
+            }
+        }
+
+        main {
+            [Int; ~] => values!
+            values! -> appendAndRead
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

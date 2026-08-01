@@ -11193,3 +11193,95 @@ Stage 3 fixed points are 20,011,835 LLVM bytes with SHA-256
 on Windows and 19,994,874 bytes with SHA-256
 `7D42508B04E6DA0EA3FDEED819ED974E5D1FD61A00CEADEB146C96DC0B4D3B05`
 on Linux.
+
+## D292 — Owned Container Insertion Transfers the Canonical Storage Owner
+
+Status: implemented and retained cross-platform
+Date: 2026-07-31
+
+Pushing a directly named owned value into an owned array transfers that value
+into the array. Typed IR records one move event against the canonical storage
+symbol, not the transient symbol created for a later name-use node. Indexed
+reads remain borrows and aggregate literals continue to use their aggregate
+move rule. This distinction prevents both missing moves and false moves.
+
+The defect was exposed by native `sollang test`: project discovery takes owned
+`Path` values from temporary arrays and pushes them into the complete source
+list. Without the move event, the loop cleanup dropped the same path that the
+destination array later dropped. Regression 705 uses three distinct lexical
+scopes with the same owned binding name and requires three move events mapped
+to three regions but one canonical storage identity. Regression 318's LLVM
+snapshot now also proves that a moved `SourceText` element is not dropped after
+array insertion.
+
+Mutable interpolation has the same storage-identity requirement. An
+interpolation name resolves to the earliest visible mutable declaration in its
+lexical ancestry, while later rebindings update that storage. A Text value
+bound after interpolation retains its producer identity through
+`materialize`. Integer materialization uses a dedicated formatting runtime
+emitted only when a materialize operation actually references integer
+interpolation; ordinary integer printing does not acquire an unrelated runtime
+dependency. Regressions 695 and 696 plus the Stage 2 interpolation-length
+fixture retain direct, rebound, nested, multi-source, and bound-producer cases.
+
+The public native test runner now verifies project discovery order, filtering,
+failure exit status, signature rejection, no-test and unmatched-filter
+diagnostics, option errors, duplicate qualified names, and output naming on
+both fixed-point compilers. The complete suites pass 919/919 on Windows and
+918/918 on Linux. Windows Stage 3 reproduces 20,489,925 LLVM bytes with
+SHA-256
+`E494E6CC32B5EC026FFE5FA48CA6700F135506B532BB882B8E70A625A7901595`;
+Linux Stage 3 reproduces 20,472,943 LLVM bytes with SHA-256
+`FA9ACF1CB07064FC26A917FB2E5AF4E465FF3831C247A799155344827391D041`.
+
+## D293 — Sollang 0.4 Publishes Only the Hash-Bound Native Compiler
+
+Status: implemented, packaged, installed, and cross-platform verified
+Date: 2026-08-02
+
+Sollang 0.4 ends the transitional two-compiler distribution. The public
+`sollang` executable is the Stage 3 fixed-point native compiler built from the
+complete ordered `.slg` source manifest. The C# bootstrap remains available
+inside the development repository as a bootstrap and differential oracle, but
+the release packages contain no C# compiler, Stage driver, `.dll`,
+`.deps.json`, `.runtimeconfig.json`, or `.pdb` artifact.
+
+Closing the fixed point required two owning-layer corrections. A qualified
+call with explicit parentheses is owned by its call-expression node, while a
+parentheses-free qualified flow call is owned by the outer flow node; semantic
+call registration now follows that syntax ownership and never registers both.
+A value-producing wrapper around a concrete enum producer is not the match
+subject when the producer's `nextOperand` points directly to the match. Typed
+IR now records opcode-bearing wrapped producers and redirects the match to the
+concrete canonical producer. Regression 787 retains the late `file.writeAt`
+`Result` case that exposed this invariant.
+
+Platform execution expectations are explicit fixture metadata, not branches in
+the compiler. Regression 613 supplies the Windows COM link library and exact
+Windows runtime expectation, while Linux validates the generated LLVM without
+executing the Windows ABI. This keeps one language rule and makes platform test
+applicability visible.
+
+The release packager also owns its PowerShell output contract. Native smoke
+build diagnostics are written to the host stream, so `New-ReleasePackage`
+returns exactly one archive path. Compiler stdout can no longer be captured as
+an accidental path during checksum generation.
+
+The logical catalog is user 10, regression 770, and diagnostics 231. Windows
+passes 1001/1001 selected cases and Linux passes 1000/1000 applicable cases.
+Windows Stage 2 passes 7/7 and Stage 3 reproduces 24,934,632 LLVM bytes at
+normalized SHA-256
+`BDECDDCCAA23A3C8DBEE135FF525550EAD47C77D4A6CB5ED909EEE1290290434`.
+Linux Stage 2 passes 6/6 and Stage 3 reproduces 24,917,845 LLVM bytes at
+`417AC4E06F2D99C0419DF8EA386C672426D0EB0339FA9F1C8B6518E5A31E1CEC`.
+
+The immutable native executables have SHA-256
+`5E81D0ECBFD65687A42FB17668D5DB4818967D7D0534FC13F3D4C3056AF44617`
+on Windows and
+`0F63C12FF0E3422EEC7D543888102B1AE186E28356E7597631E30FCE01764098`
+on Linux. Each passes 16 exact top-level command contracts plus native
+build/run, grammar build 4/4, test 10/10, format 11/11, language server 4/4,
+and bind-cpp 6/6. The packaged executable hashes equal those Stage 3 hashes,
+both staged packages build and run a smoke source, and the installed Windows
+`P:\Utils\sollang\sollang.exe` has the same Windows hash and matching 12-file
+standard library.

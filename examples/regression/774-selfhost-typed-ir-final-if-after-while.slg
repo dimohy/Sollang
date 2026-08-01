@@ -1,0 +1,55 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A final value-producing if after a while is the function result. The earlier
+# while control must never remain as the synthetic return operand.
+main {
+    [
+        """
+        struct Pair {
+            start: Int
+            length: Int
+        }
+
+        enum Outcome {
+            Ok(Int)
+            Err(Text)
+        }
+
+        select limit: Int -> Pair {
+            0 => index!
+            false => found!
+            (not found! and index! < limit) -> while {
+                index! == 2 -> if { true => found! } else { index! + 1 => index! }
+            }
+            found! -> if { Pair { start: 1, length: index! } } else { Pair { start: 0, length: 0 } }
+        }
+
+        preserve result: Outcome -> Int {
+            -1 => code!
+            result -> when {
+                Ok(value) { value => code! }
+                Err(error) { }
+            }
+            code!
+        }
+        """; ~
+    ] => sources!
+    sources! -> semanticContext.prepare => prepared!
+    prepared! -> typedIr.lowerContext => ir!
+    0 => functions!
+    0 => controlReturns!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        (node.kind == 0 and node.operand0 >= 0) -> if {
+            functions! + 1 => functions!
+            ir![node.operand0] => returnNode
+            (returnNode.operand0 >= 0 and ir![returnNode.operand0].kind == 18) -> if {
+                controlReturns! + 1 => controlReturns!
+            }
+        }
+        index! + 1 => index!
+    }
+    "functions=$(functions!),control-returns=$(controlReturns!)" -> println
+}

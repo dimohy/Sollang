@@ -1,0 +1,1114 @@
+namespace sollang.compiler.cpp_binding
+
+import sollang.compiler.cli_grammar as grammar
+import sollang.compiler.json as json
+import sys.file as file
+
+# Canonical in-memory model shared by native bind-cpp AST discovery and output.
+struct StringRef {
+    start: Int
+    length: Int
+}
+
+struct RawCppType {
+    sollangName: StringRef
+    cppName: StringRef
+}
+
+struct RawParameter {
+    name: StringRef
+    type: RawCppType
+}
+
+struct RawFunction {
+    memberName: StringRef
+    qualifiedName: StringRef
+    symbol: StringRef
+    signature: StringRef
+    result: RawCppType
+    parameters: [RawParameter; ~]
+    isNoexcept: Bool
+}
+
+struct RawConstructor {
+    parameters: [RawParameter; ~]
+    symbol: StringRef
+}
+
+struct RawMethod {
+    name: StringRef
+    cppName: StringRef
+    symbol: StringRef
+    result: RawCppType
+    parameters: [RawParameter; ~]
+    isConst: Bool
+    isNoexcept: Bool
+}
+
+struct RawClass {
+    name: StringRef
+    qualifiedName: StringRef
+    dropSymbol: StringRef
+    constructors: [RawConstructor; ~]
+    methods: [RawMethod; ~]
+}
+
+struct RawStatus {
+    code: Int
+    message: StringRef
+}
+
+public struct CppType {
+    sollangName: Text
+    cppName: Text
+}
+
+public struct Parameter {
+    name: Text
+    type: CppType
+}
+
+public struct Function {
+    memberName: Text
+    qualifiedName: Text
+    symbol: Text
+    signature: Text
+    result: CppType
+    parameters: [Parameter; ~]
+    isNoexcept: Bool
+}
+
+public struct Constructor {
+    parameters: [Parameter; ~]
+    symbol: Text
+}
+
+public struct Method {
+    name: Text
+    cppName: Text
+    symbol: Text
+    result: CppType
+    parameters: [Parameter; ~]
+    isConst: Bool
+    isNoexcept: Bool
+}
+
+public struct Class {
+    name: Text
+    qualifiedName: Text
+    dropSymbol: Text
+    constructors: [Constructor; ~]
+    methods: [Method; ~]
+}
+
+public struct Discovery {
+    status: Int
+    message: Text
+    functions: [Function; ~]
+    classes: [Class; ~]
+}
+
+public struct Status {
+    code: Int
+    message: Text
+}
+
+storeText output: mut [UInt8; ~], value: Text -> StringRef {
+    output -> len => start
+    output -> appendText(value)
+    StringRef { start: start, length: (output -> len) - start }
+}
+
+storeBytes output: mut [UInt8; ~], value: move [UInt8; ~] -> StringRef {
+    output -> len => start
+    Int(0) => index!
+    index! < (value -> len) -> while {
+        output -> push(value[index!])
+        index! + Int(1) => index!
+    }
+    StringRef { start: start, length: (output -> len) - start }
+}
+
+spanText source: ref [UInt8; ~], value: StringRef -> Text uses File {
+    source -> file.borrowBytes => owner!
+    owner! -> slice(UIntSize(value.start), UIntSize(value.length))
+}
+
+public appendText output: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        output -> push(value -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+}
+
+public bytesText bytes: ref [UInt8; ~], storage: mut Arena -> Text uses File {
+    bytes -> file.borrowBytes => source!
+    source! -> slice(UIntSize(0), source! -> len) -> materialize(storage)
+}
+
+owned value: Text, storage: mut Arena -> Text {
+    value -> materialize(storage)
+}
+
+public textEquals left: Text, right: Text -> Bool {
+    (left -> len) == (right -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < (left -> len)) -> while {
+        (left -> byte(index!)) != (right -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+asciiLower value: UInt8 -> UInt8 {
+    (value >= UInt8(65) and value <= UInt8(90)) -> if { value + UInt8(32) } else { value }
+}
+
+public textEqualsPath left: Text, right: Text, caseInsensitive: Bool -> Bool {
+    (left -> len) == (right -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < (left -> len)) -> while {
+        left -> byte(index!) => leftByte!
+        right -> byte(index!) => rightByte!
+        caseInsensitive -> if {
+            leftByte! -> asciiLower => leftByte!
+            rightByte! -> asciiLower => rightByte!
+        }
+        leftByte! != rightByte! -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+public textStartsWith value: Text, prefix: Text -> Bool {
+    (prefix -> len) <= (value -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < (prefix -> len)) -> while {
+        (value -> byte(index!)) != (prefix -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+public textContains value: Text, needle: Text -> Bool {
+    (needle -> len) == UIntSize(0) -> if { true -> return }
+    false => found!
+    UIntSize(0) => start!
+    (not found! and start! + (needle -> len) <= (value -> len)) -> while {
+        true => matches!
+        UIntSize(0) => index!
+        (matches! and index! < (needle -> len)) -> while {
+            (value -> byte(start! + index!)) != (needle -> byte(index!)) -> if { false => matches! }
+            index! + UIntSize(1) => index!
+        }
+        matches! -> if { true => found! }
+        start! + UIntSize(1) => start!
+    }
+    found!
+}
+
+textCompare left: Text, right: Text -> Int {
+    (left -> len) < (right -> len) -> if { left -> len } else { right -> len } => length
+    0 => result!
+    UIntSize(0) => index!
+    (result! == 0 and index! < length) -> while {
+        left -> byte(index!) => leftByte
+        right -> byte(index!) => rightByte
+        leftByte < rightByte -> if { -1 => result! }
+        leftByte > rightByte -> if { 1 => result! }
+        index! + UIntSize(1) => index!
+    }
+    result! == 0 -> if {
+        (left -> len) < (right -> len) -> if { -1 => result! }
+        (left -> len) > (right -> len) -> if { 1 => result! }
+    }
+    result!
+}
+
+copyText value: Text -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes! -> push(value -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+    bytes!
+}
+
+appendDecimalInt output: mut [UInt8; ~], value: Int -> Unit {
+    value == 0 -> if {
+        output -> push(UInt8(48))
+        return
+    }
+    value => remaining!
+    remaining! < 0 -> if {
+        output -> push(UInt8(45))
+        0 - remaining! => remaining!
+    }
+    [UInt8; ~] => digits!
+    remaining! > 0 -> while {
+        digits! -> push(UInt8(48 + remaining! % 10))
+        remaining! / 10 => remaining!
+    }
+    (digits! -> len) - 1 => index!
+    index! >= 0 -> while {
+        output -> push(digits![index!])
+        index! - 1 => index!
+    }
+}
+
+appendSpan output: mut [UInt8; ~], source: ref [UInt8; ~], value: StringRef -> Unit {
+    0 => index!
+    index! < value.length -> while {
+        output -> push(source[value.start + index!])
+        index! + 1 => index!
+    }
+}
+
+spanEqualsText source: ref [UInt8; ~], value: StringRef, expected: Text -> Bool {
+    value.length == Int(expected -> len) => matches!
+    0 => index!
+    (matches! and index! < value.length) -> while {
+        source[value.start + index!] != (expected -> byte(UIntSize(index!))) -> if { false => matches! }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+spanContainsText source: ref [UInt8; ~], value: StringRef, needle: Text -> Bool {
+    (needle -> len) == UIntSize(0) -> if { true -> return }
+    false => found!
+    0 => start!
+    (not found! and start! + Int(needle -> len) <= value.length) -> while {
+        true => matches!
+        0 => index!
+        (matches! and index! < Int(needle -> len)) -> while {
+            source[value.start + start! + index!] != (needle -> byte(UIntSize(index!))) -> if { false => matches! }
+            index! + 1 => index!
+        }
+        matches! -> if { true => found! } else { start! + 1 => start! }
+    }
+    found!
+}
+
+spanCompare source: ref [UInt8; ~], left: StringRef, right: StringRef -> Int {
+    left.length < right.length -> if { left.length } else { right.length } => count
+    0 => index!
+    0 => result!
+    (result! == 0 and index! < count) -> while {
+        source[left.start + index!] < source[right.start + index!] -> if { -1 => result! } else {
+            source[left.start + index!] > source[right.start + index!] -> if { 1 => result! }
+        }
+        index! + 1 => index!
+    }
+    result! == 0 -> if {
+        left.length < right.length -> if { -1 => result! }
+        left.length > right.length -> if { 1 => result! }
+    }
+    result!
+}
+
+sanitizeBytes value: Text, emptyDefault: Text -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => current
+        ((current >= UInt8(48) and current <= UInt8(57))
+            or (current >= UInt8(65) and current <= UInt8(90))
+            or (current >= UInt8(97) and current <= UInt8(122))
+            or current == UInt8(95)) -> if {
+            bytes! -> push(current)
+        } else { bytes! -> push(UInt8(95)) }
+        index! + UIntSize(1) => index!
+    }
+    (bytes! -> len) == 0 -> if {
+        emptyDefault -> copyText => defaultBytes!
+        defaultBytes! -> return
+    }
+    (bytes![0] >= UInt8(48) and bytes![0] <= UInt8(57)) -> if {
+        [UInt8; ~] => prefixed!
+        prefixed! -> push(UInt8(95))
+        0 => copyIndex!
+        copyIndex! < (bytes! -> len) -> while {
+            prefixed! -> push(bytes![copyIndex!])
+            copyIndex! + 1 => copyIndex!
+        }
+        prefixed! -> return
+    }
+    bytes!
+}
+
+public identifier value: Text, storage: mut Arena -> Text uses File {
+    value -> sanitizeBytes("value") => bytes!
+    bytes! -> bytesText(storage)
+}
+
+sanitizeSpanBytes source: ref [UInt8; ~], value: StringRef, emptyDefault: Text -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < value.length -> while {
+        source[value.start + index!] => current
+        ((current >= UInt8(48) and current <= UInt8(57))
+            or (current >= UInt8(65) and current <= UInt8(90))
+            or (current >= UInt8(97) and current <= UInt8(122))
+            or current == UInt8(95)) -> if {
+            bytes! -> push(current)
+        } else { bytes! -> push(UInt8(95)) }
+        index! + 1 => index!
+    }
+    (bytes! -> len) == 0 -> if {
+        emptyDefault -> copyText => defaultBytes!
+        defaultBytes! -> return
+    }
+    (bytes![0] >= UInt8(48) and bytes![0] <= UInt8(57)) -> if {
+        [UInt8; ~] => prefixed!
+        prefixed! -> push(UInt8(95))
+        0 => copyIndex!
+        copyIndex! < (bytes! -> len) -> while {
+            prefixed! -> push(bytes![copyIndex!])
+            copyIndex! + 1 => copyIndex!
+        }
+        prefixed! -> return
+    }
+    bytes!
+}
+
+joinQualifiedBytes source: ref [UInt8; ~], namespaces: ref [StringRef; ~], name: StringRef -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < (namespaces -> len) -> while {
+        index! > 0 -> if { bytes! -> appendText("::") }
+        bytes! -> appendSpan(source, namespaces[index!])
+        index! + 1 => index!
+    }
+    (namespaces -> len) > 0 -> if { bytes! -> appendText("::") }
+    bytes! -> appendSpan(source, name)
+    bytes!
+}
+
+joinSymbolNameBytes source: ref [UInt8; ~], namespaces: ref [StringRef; ~], name: StringRef -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < (namespaces -> len) -> while {
+        index! > 0 -> if { bytes! -> push(UInt8(95)) }
+        bytes! -> appendSpan(source, namespaces[index!])
+        index! + 1 => index!
+    }
+    (namespaces -> len) > 0 -> if { bytes! -> push(UInt8(95)) }
+    bytes! -> appendSpan(source, name)
+    bytes! -> file.borrowBytes => owner!
+    owner! -> slice(UIntSize(0), owner! -> len) -> sanitizeBytes("value")
+}
+
+functionSignatureBytes source: ref [UInt8; ~], result: RawCppType, parameters: ref [RawParameter; ~] -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    bytes! -> appendSpan(source, result.sollangName)
+    bytes! -> push(UInt8(40))
+    0 => index!
+    index! < (parameters -> len) -> while {
+        index! > 0 -> if { bytes! -> push(UInt8(44)) }
+        bytes! -> appendSpan(source, parameters[index!].type.sollangName)
+        index! + 1 => index!
+    }
+    bytes! -> push(UInt8(41))
+    bytes!
+}
+
+public functionSignature result: CppType, parameters: ref [Parameter; ~], storage: mut Arena -> Text uses File {
+    [UInt8; ~] => bytes!
+    bytes! -> appendText(result.sollangName)
+    bytes! -> push(UInt8(40))
+    Int(0) => index!
+    index! < (parameters -> len) -> while {
+        index! > 0 -> if { bytes! -> push(UInt8(44)) }
+        bytes! -> appendText(parameters[index!].type.sollangName)
+        index! + Int(1) => index!
+    }
+    bytes! -> push(UInt8(41))
+    bytes! -> bytesText(storage)
+}
+
+symbolForFunctionBytes source: ref [UInt8; ~], qualifiedName: StringRef, signature: StringRef, symbolName: StringRef -> [UInt8; ~] uses File {
+    [UInt8; ~] => hashInput!
+    hashInput! -> appendSpan(source, qualifiedName)
+    hashInput! -> push(UInt8(58))
+    hashInput! -> appendSpan(source, signature)
+    hashInput! -> file.borrowBytes => hashSource!
+    hashSource! -> slice(UIntSize(0), hashSource! -> len) -> grammar.sha256Hex => hash!
+    [UInt8; ~] => result!
+    result! -> appendText("sollang_cpp_")
+    result! -> appendSpan(source, symbolName)
+    result! -> push(UInt8(95))
+    Int(0) => hashIndex!
+    hashIndex! < Int(12) -> while {
+        result! -> push(hash![hashIndex!])
+        hashIndex! + Int(1) => hashIndex!
+    }
+    result!
+}
+
+symbolForMemberBytes source: ref [UInt8; ~], owner: StringRef, operation: StringRef, signature: StringRef -> [UInt8; ~] uses File {
+    [UInt8; ~] => hashInput!
+    hashInput! -> appendSpan(source, owner)
+    hashInput! -> push(UInt8(58))
+    hashInput! -> appendSpan(source, operation)
+    hashInput! -> push(UInt8(58))
+    hashInput! -> appendSpan(source, signature)
+    hashInput! -> file.borrowBytes => hashSource!
+    hashSource! -> slice(UIntSize(0), hashSource! -> len) -> grammar.sha256Hex => hash!
+    [UInt8; ~] => ownerRaw!
+    Int(0) => ownerIndex!
+    ownerIndex! < owner.length -> while {
+        source[owner.start + ownerIndex!] => current
+        current == UInt8(58) -> if {
+            ownerRaw! -> push(UInt8(95))
+            ownerIndex! + Int(2) => ownerIndex!
+        } else {
+            ownerRaw! -> push(current)
+            ownerIndex! + Int(1) => ownerIndex!
+        }
+    }
+    ownerRaw! -> file.borrowBytes => ownerSource!
+    ownerSource! -> slice(UIntSize(0), ownerSource! -> len) -> sanitizeBytes("value") => ownerName!
+    source -> sanitizeSpanBytes(operation, "value") => operationName!
+    [UInt8; ~] => result!
+    result! -> appendText("sollang_cpp_")
+    Int(0) => copyIndex!
+    copyIndex! < (ownerName! -> len) -> while {
+        result! -> push(ownerName![copyIndex!])
+        copyIndex! + Int(1) => copyIndex!
+    }
+    result! -> push(UInt8(95))
+    Int(0) => operationIndex!
+    operationIndex! < (operationName! -> len) -> while {
+        result! -> push(operationName![operationIndex!])
+        operationIndex! + Int(1) => operationIndex!
+    }
+    result! -> push(UInt8(95))
+    Int(0) => hashIndex!
+    hashIndex! < Int(12) -> while {
+        result! -> push(hash![hashIndex!])
+        hashIndex! + Int(1) => hashIndex!
+    }
+    result!
+}
+
+decodeRef source: ref file.SourceText, value: json.Value, pool: mut [UInt8; ~] -> StringRef {
+    source -> json.decodeString(value) => bytes!
+    pool -> storeBytes(bytes!)
+}
+
+memberRef source: ref file.SourceText, object: json.Value, name: Text, pool: mut [UInt8; ~] -> StringRef {
+    source -> json.findMember(object, name) => member
+    member.found -> if { source -> decodeRef(member.value, pool) } else { StringRef { start: 0, length: 0 } }
+}
+
+memberBool source: ref file.SourceText, object: json.Value, name: Text -> Bool {
+    source -> json.findMember(object, name) => member
+    false => value!
+    (member.found and member.value.kind == 1) -> if {
+        source -> slice(member.value.contentStart, member.value.contentEnd - member.value.contentStart) => text
+        text -> textEquals("true") => value!
+    }
+    value!
+}
+
+nodeTypeRef source: ref file.SourceText, node: json.Value, pool: mut [UInt8; ~] -> StringRef {
+    source -> json.findMember(node, "type") => typeMember
+    StringRef { start: 0, length: 0 } => result!
+    typeMember.found -> if {
+        source -> memberRef(typeMember.value, "desugaredQualType", pool) => desugared
+        desugared.length > 0 -> if { desugared => result! } else {
+            source -> memberRef(typeMember.value, "qualType", pool) => result!
+        }
+    }
+    result!
+}
+
+spanStartsWithText source: ref [UInt8; ~], value: StringRef, prefix: Text -> Bool {
+    value.length >= Int(prefix -> len) => matches!
+    0 => index!
+    (matches! and index! < Int(prefix -> len)) -> while {
+        source[value.start + index!] != (prefix -> byte(UIntSize(index!))) -> if { false => matches! }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+stripTypeQualifiers source: ref [UInt8; ~], value: StringRef -> StringRef {
+    source -> spanStartsWithText(value, "const ") -> if {
+        source -> stripTypeQualifiers(StringRef { start: value.start + 6, length: value.length - 6 })
+    } else {
+        source -> spanStartsWithText(value, "volatile ") -> if {
+            source -> stripTypeQualifiers(StringRef { start: value.start + 9, length: value.length - 9 })
+        } else { value }
+    }
+}
+
+rawType pool: mut [UInt8; ~], sollangName: Text, cppName: Text -> RawCppType {
+    pool -> storeText(sollangName) => sollang
+    pool -> storeText(cppName) => cpp
+    RawCppType { sollangName: sollang, cppName: cpp }
+}
+
+mapType pool: mut [UInt8; ~], spelling: StringRef, windowsTarget: Bool -> RawCppType {
+    pool -> stripTypeQualifiers(spelling) => value
+    StringRef { start: 0, length: 0 } => empty
+    RawCppType { sollangName: empty, cppName: empty } => result!
+    pool -> spanEqualsText(value, "void") -> if { pool -> rawType("Unit", "void") => result! }
+    ((pool -> spanEqualsText(value, "unsigned char")) or (pool -> spanEqualsText(value, "char unsigned"))) -> if { pool -> rawType("UInt8", "unsigned char") => result! }
+    ((pool -> spanEqualsText(value, "signed char")) or (pool -> spanEqualsText(value, "char signed"))) -> if { pool -> rawType("Int8", "signed char") => result! }
+    pool -> spanEqualsText(value, "unsigned short") -> if { pool -> rawType("UInt16", "unsigned short") => result! }
+    ((pool -> spanEqualsText(value, "unsigned int")) or (pool -> spanEqualsText(value, "unsigned"))) -> if { pool -> rawType("UInt32", "unsigned int") => result! }
+    pool -> spanEqualsText(value, "unsigned long") -> if {
+        windowsTarget -> if { pool -> rawType("UInt32", "unsigned long") } else { pool -> rawType("UInt64", "unsigned long") } => result!
+    }
+    pool -> spanEqualsText(value, "unsigned long long") -> if { pool -> rawType("UInt64", "unsigned long long") => result! }
+    ((pool -> spanEqualsText(value, "short")) or (pool -> spanEqualsText(value, "short int")) or (pool -> spanEqualsText(value, "signed short"))) -> if { pool -> rawType("Int16", "short") => result! }
+    ((pool -> spanEqualsText(value, "int")) or (pool -> spanEqualsText(value, "signed int")) or (pool -> spanEqualsText(value, "signed"))) -> if { pool -> rawType("Int32", "int") => result! }
+    ((pool -> spanEqualsText(value, "long")) or (pool -> spanEqualsText(value, "long int")) or (pool -> spanEqualsText(value, "signed long"))) -> if {
+        windowsTarget -> if { pool -> rawType("Int32", "long") } else { pool -> rawType("Int64", "long") } => result!
+    }
+    ((pool -> spanEqualsText(value, "long long")) or (pool -> spanEqualsText(value, "long long int")) or (pool -> spanEqualsText(value, "signed long long"))) -> if { pool -> rawType("Int64", "long long") => result! }
+    pool -> spanEqualsText(value, "float") -> if { pool -> rawType("Float32", "float") => result! }
+    pool -> spanEqualsText(value, "double") -> if { pool -> rawType("Float64", "double") => result! }
+    result!
+}
+
+resultTypeRef source: ref [UInt8; ~], functionType: StringRef -> StringRef {
+    0 => index!
+    false => found!
+    (not found! and index! + 1 < functionType.length) -> while {
+        (source[functionType.start + index!] == UInt8(32) and source[functionType.start + index! + 1] == UInt8(40)) -> if {
+            true => found!
+        } else { index! + 1 => index! }
+    }
+    found! -> if { StringRef { start: functionType.start, length: index! } } else { StringRef { start: 0, length: 0 } }
+}
+
+parameterErrorBytes pool: ref [UInt8; ~], owner: StringRef, ordinal: Int, spelling: StringRef -> [UInt8; ~] uses File {
+    [UInt8; ~] => bytes!
+    bytes! -> appendText("cannot bind C++ function '")
+    bytes! -> appendSpan(pool, owner)
+    bytes! -> appendText("': parameter ")
+    bytes! -> appendDecimalInt(ordinal)
+    bytes! -> appendText(" type '")
+    bytes! -> appendSpan(pool, spelling)
+    bytes! -> appendText("' is outside the scalar ABI slice")
+    bytes!
+}
+
+resultErrorBytes pool: ref [UInt8; ~], owner: StringRef, spelling: StringRef, classMember: Bool -> [UInt8; ~] uses File {
+    [UInt8; ~] => bytes!
+    classMember -> if {
+        bytes! -> appendText("cannot bind C++ class member '")
+    } else {
+        bytes! -> appendText("cannot bind C++ function '")
+    }
+    bytes! -> appendSpan(pool, owner)
+    bytes! -> appendText("': result type '")
+    bytes! -> appendSpan(pool, spelling)
+    classMember -> if {
+        bytes! -> appendText("' is outside the scalar class-binding slice")
+    } else {
+        bytes! -> appendText("' is outside the scalar ABI slice")
+    }
+    bytes!
+}
+
+qualifiedMethodBytes pool: ref [UInt8; ~], owner: StringRef, method: StringRef -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    bytes! -> appendSpan(pool, owner)
+    bytes! -> appendText("::")
+    bytes! -> appendSpan(pool, method)
+    bytes!
+}
+
+readParameters source: ref file.SourceText, node: json.Value, windowsTarget: Bool, owner: StringRef, pool: mut [UInt8; ~], status: mut RawStatus -> [RawParameter; ~] uses File {
+    [RawParameter; ~] => parameters!
+    source -> json.findMember(node, "inner") => inner
+    inner.found -> if {
+        source -> json.firstArrayValue(inner.value) => cursor!
+        1 => ordinal!
+        cursor!.found -> while {
+            source -> memberRef(cursor!.value, "kind", pool) => kind
+            pool -> spanEqualsText(kind, "ParmVarDecl") -> if {
+                source -> memberRef(cursor!.value, "name", pool) => rawName!
+                rawName!.length == 0 -> if {
+                    Arena(0) => nameStorage!
+                    "value$(ordinal!)" -> materialize(nameStorage!) => generatedName
+                    pool -> storeText(generatedName) => rawName!
+                }
+                pool -> sanitizeSpanBytes(rawName!, "value") => parameterNameBytes!
+                pool -> storeBytes(parameterNameBytes!) => parameterName
+                source -> nodeTypeRef(cursor!.value, pool) => spelling
+                pool -> mapType(spelling, windowsTarget) => mapped
+                mapped.sollangName.length == 0 -> if {
+                    1 => status.code
+                    pool -> parameterErrorBytes(owner, ordinal!, spelling) => messageBytes!
+                    pool -> storeBytes(messageBytes!) => status.message
+                } else {
+                    RawParameter { name: parameterName, type: mapped } => parameter!
+                    parameters! -> push(parameter!)
+                }
+                ordinal! + 1 => ordinal!
+            }
+            source -> json.nextArrayValue(inner.value, cursor!.next) => cursor!
+        }
+    }
+    parameters!
+}
+
+readFunction source: ref file.SourceText, node: json.Value, namespaces: ref [StringRef; ~], windowsTarget: Bool, pool: mut [UInt8; ~], status: mut RawStatus -> RawFunction uses File {
+    source -> memberRef(node, "name", pool) => name
+    pool -> joinQualifiedBytes(namespaces, name) => qualifiedNameBytes!
+    pool -> storeBytes(qualifiedNameBytes!) => qualifiedName
+    source -> nodeTypeRef(node, pool) => fullType
+    pool -> spanContainsText(fullType, "...") -> if {
+        1 => status.code
+        Arena(0) => messageStorage!
+        pool -> spanText(qualifiedName) => qualifiedNameText
+        "cannot bind C++ function '$qualifiedNameText': variadic functions are not ABI-safe" -> materialize(messageStorage!) => message
+        message -> copyText => messageBytes!
+        pool -> storeBytes(messageBytes!) => status.message
+    }
+    pool -> resultTypeRef(fullType) => resultSpelling
+    pool -> mapType(resultSpelling, windowsTarget) => result
+    result.sollangName.length == 0 -> if {
+        1 => status.code
+        pool -> resultErrorBytes(qualifiedName, resultSpelling, false) => messageBytes!
+        pool -> storeBytes(messageBytes!) => status.message
+    }
+    source -> readParameters(node, windowsTarget, qualifiedName, pool, status) => parameters!
+    pool -> functionSignatureBytes(result, parameters!) => signatureBytes!
+    pool -> storeBytes(signatureBytes!) => signature
+    pool -> joinSymbolNameBytes(namespaces, name) => symbolNameBytes!
+    pool -> storeBytes(symbolNameBytes!) => symbolName
+    pool -> symbolForFunctionBytes(qualifiedName, signature, symbolName) => symbolBytes!
+    pool -> storeBytes(symbolBytes!) => symbol
+    pool -> sanitizeSpanBytes(name, "value") => memberNameBytes!
+    pool -> storeBytes(memberNameBytes!) => memberName
+    RawFunction {
+        memberName: memberName
+        qualifiedName: qualifiedName
+        symbol: symbol
+        signature: signature
+        result: result
+        parameters: parameters!
+        isNoexcept: pool -> spanContainsText(fullType, " noexcept")
+    } => function!
+    function!
+}
+
+memberSignatureBytes pool: ref [UInt8; ~], resultName: Text, parameters: ref [RawParameter; ~] -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    bytes! -> appendText(resultName)
+    bytes! -> push(UInt8(40))
+    0 => index!
+    index! < (parameters -> len) -> while {
+        index! > 0 -> if { bytes! -> push(UInt8(44)) }
+        bytes! -> appendSpan(pool, parameters[index!].type.sollangName)
+        index! + 1 => index!
+    }
+    bytes! -> push(UInt8(41))
+    bytes!
+}
+
+readClass source: ref file.SourceText, node: json.Value, namespaces: ref [StringRef; ~], windowsTarget: Bool, pool: mut [UInt8; ~], status: mut RawStatus -> RawClass uses File {
+    source -> memberRef(node, "name", pool) => rawName
+    pool -> sanitizeSpanBytes(rawName, "value") => nameBytes!
+    pool -> storeBytes(nameBytes!) => name
+    pool -> joinQualifiedBytes(namespaces, rawName) => qualifiedNameBytes!
+    pool -> storeBytes(qualifiedNameBytes!) => qualifiedName
+    pool -> storeText("owner") => dropSignature
+    pool -> storeText("drop") => dropOperation
+    pool -> symbolForMemberBytes(qualifiedName, dropOperation, dropSignature) => dropSymbolBytes!
+    pool -> storeBytes(dropSymbolBytes!) => dropSymbol
+    [RawConstructor; ~] => constructors!
+    [RawMethod; ~] => methods!
+    source -> memberRef(node, "tagUsed", pool) => tag
+    pool -> spanEqualsText(tag, "struct") => publicAccess!
+    source -> json.findMember(node, "inner") => inner
+    inner.found -> if {
+        source -> json.firstArrayValue(inner.value) => cursor!
+        cursor!.found -> while {
+            source -> memberRef(cursor!.value, "kind", pool) => kind
+            pool -> spanEqualsText(kind, "AccessSpecDecl") -> if {
+                source -> memberRef(cursor!.value, "access", pool) => access
+                pool -> spanEqualsText(access, "public") => publicAccess!
+            } else {
+                (publicAccess! and (pool -> spanEqualsText(kind, "CXXConstructorDecl"))) -> if {
+                    source -> readParameters(cursor!.value, windowsTarget, qualifiedName, pool, status) => parameters!
+                    pool -> memberSignatureBytes("owner", parameters!) => signatureBytes!
+                    pool -> storeBytes(signatureBytes!) => signature
+                    pool -> storeText("create") => createOperation
+                    pool -> symbolForMemberBytes(qualifiedName, createOperation, signature) => symbolBytes!
+                    pool -> storeBytes(symbolBytes!) => symbol
+                    RawConstructor { parameters: parameters!, symbol: symbol } => constructor!
+                    constructors! -> push(constructor!)
+                }
+                (publicAccess! and (pool -> spanEqualsText(kind, "CXXMethodDecl"))) -> if {
+                    source -> memberRef(cursor!.value, "storageClass", pool) => storageClass
+                    not (pool -> spanEqualsText(storageClass, "static")) -> if {
+                        source -> memberRef(cursor!.value, "name", pool) => cppName
+                        pool -> qualifiedMethodBytes(qualifiedName, cppName) => methodQualifiedNameBytes!
+                        pool -> storeBytes(methodQualifiedNameBytes!) => methodQualifiedName
+                        source -> nodeTypeRef(cursor!.value, pool) => fullType
+                        pool -> resultTypeRef(fullType) => resultSpelling
+                        pool -> mapType(resultSpelling, windowsTarget) => result
+                        result.sollangName.length == 0 -> if {
+                            1 => status.code
+                            pool -> resultErrorBytes(methodQualifiedName, resultSpelling, true) => messageBytes!
+                            pool -> storeBytes(messageBytes!) => status.message
+                        }
+                        source -> readParameters(cursor!.value, windowsTarget, methodQualifiedName, pool, status) => parameters!
+                        pool -> functionSignatureBytes(result, parameters!) => signatureBytes!
+                        pool -> storeBytes(signatureBytes!) => signature
+                        pool -> symbolForMemberBytes(qualifiedName, cppName, signature) => symbolBytes!
+                        pool -> storeBytes(symbolBytes!) => symbol
+                        pool -> sanitizeSpanBytes(cppName, "value") => methodNameBytes!
+                        pool -> storeBytes(methodNameBytes!) => methodName
+                        RawMethod {
+                            name: methodName
+                            cppName: cppName
+                            symbol: symbol
+                            result: result
+                            parameters: parameters!
+                            isConst: pool -> spanContainsText(fullType, ") const")
+                            isNoexcept: pool -> spanContainsText(fullType, " noexcept")
+                        } => method!
+                        methods! -> push(method!)
+                    }
+                }
+            }
+            source -> json.nextArrayValue(inner.value, cursor!.next) => cursor!
+        }
+    }
+    (constructors! -> len) == 0 -> if {
+        1 => status.code
+        Arena(0) => messageStorage!
+        pool -> spanText(qualifiedName) => qualifiedNameText
+        "cannot bind C++ class member '$qualifiedNameText': classes require at least one explicit public constructor" -> materialize(messageStorage!) => message
+        message -> copyText => messageBytes!
+        pool -> storeBytes(messageBytes!) => status.message
+    }
+    RawClass {
+        name: name
+        qualifiedName: qualifiedName
+        dropSymbol: dropSymbol
+        constructors: constructors!
+        methods: methods!
+    } => class!
+    class!
+}
+
+pathByteEquals left: UInt8, right: UInt8, caseInsensitive: Bool -> Bool {
+    left == UInt8(92) -> if { UInt8(47) } else { left } => normalizedLeft!
+    right == UInt8(92) -> if { UInt8(47) } else { right } => normalizedRight!
+    caseInsensitive -> if {
+        normalizedLeft! -> asciiLower => normalizedLeft!
+        normalizedRight! -> asciiLower => normalizedRight!
+    }
+    normalizedLeft! == normalizedRight!
+}
+
+spanEqualsPath source: ref [UInt8; ~], value: StringRef, path: Text, caseInsensitive: Bool -> Bool {
+    Int(path -> len) => pathLength
+    (value.length >= 3
+        and source[value.start + 1] == UInt8(58)
+        and (source[value.start + 2] == UInt8(47) or source[value.start + 2] == UInt8(92))) => valueDrive!
+    (value.length >= 7
+        and source[value.start] == UInt8(47)
+        and (source[value.start + 1] -> asciiLower) == UInt8(109)
+        and (source[value.start + 2] -> asciiLower) == UInt8(110)
+        and (source[value.start + 3] -> asciiLower) == UInt8(116)
+        and source[value.start + 4] == UInt8(47)
+        and source[value.start + 6] == UInt8(47)) => valueMount!
+    (pathLength >= 3
+        and (path -> byte(UIntSize(1))) == UInt8(58)
+        and ((path -> byte(UIntSize(2))) == UInt8(47) or (path -> byte(UIntSize(2))) == UInt8(92))) => pathDrive!
+    (pathLength >= 7
+        and (path -> byte(UIntSize(0))) == UInt8(47)
+        and ((path -> byte(UIntSize(1))) -> asciiLower) == UInt8(109)
+        and ((path -> byte(UIntSize(2))) -> asciiLower) == UInt8(110)
+        and ((path -> byte(UIntSize(3))) -> asciiLower) == UInt8(116)
+        and (path -> byte(UIntSize(4))) == UInt8(47)
+        and (path -> byte(UIntSize(6))) == UInt8(47)) => pathMount!
+    (valueDrive! and pathMount!) -> if {
+        (value.length - 3 == pathLength - 7
+            and ((source[value.start] -> asciiLower) == ((path -> byte(UIntSize(5))) -> asciiLower))) => matches!
+        0 => index!
+        (matches! and index! < value.length - 3) -> while {
+            source[value.start + 3 + index!] -> pathByteEquals(path -> byte(UIntSize(7 + index!)), true) -> if {} else { false => matches! }
+            index! + 1 => index!
+        }
+        matches! -> return
+    }
+    (valueMount! and pathDrive!) -> if {
+        (value.length - 7 == pathLength - 3
+            and ((source[value.start + 5] -> asciiLower) == ((path -> byte(UIntSize(0))) -> asciiLower))) => matches!
+        0 => index!
+        (matches! and index! < value.length - 7) -> while {
+            source[value.start + 7 + index!] -> pathByteEquals(path -> byte(UIntSize(3 + index!)), true) -> if {} else { false => matches! }
+            index! + 1 => index!
+        }
+        matches! -> return
+    }
+    value.length == pathLength => matches!
+    0 => index!
+    (matches! and index! < value.length) -> while {
+        source[value.start + index!] => left!
+        path -> byte(UIntSize(index!)) => right!
+        left! -> pathByteEquals(right!, caseInsensitive) -> if {} else { false => matches! }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+nodeFromMainFile source: ref file.SourceText, node: json.Value, headerPath: Text, inherited: Bool, windowsTarget: Bool, pool: mut [UInt8; ~] -> Bool uses File {
+    source -> json.findMember(node, "loc") => location
+    inherited => result!
+    location.found -> if {
+        source -> memberRef(location.value, "file", pool) => fileName
+        fileName.length > 0 -> if {
+            pool -> spanEqualsPath(fileName, headerPath, windowsTarget) => result!
+        }
+    }
+    result!
+}
+
+collect source: ref file.SourceText, node: json.Value, headerPath: Text, namespaces: mut [StringRef; ~], inheritedMain: Bool, windowsTarget: Bool, pool: mut [UInt8; ~], functions: mut [RawFunction; ~], classes: mut [RawClass; ~], status: mut RawStatus -> Unit uses File {
+    status.code != 0 -> if { return }
+    source -> memberRef(node, "kind", pool) => kind
+    source -> nodeFromMainFile(node, headerPath, inheritedMain, windowsTarget, pool) => fromMain
+    (fromMain and (pool -> spanEqualsText(kind, "FunctionDecl"))) -> if {
+        source -> readFunction(node, namespaces, windowsTarget, pool, status) => function!
+        functions -> push(function!)
+        return
+    }
+    (fromMain and (pool -> spanEqualsText(kind, "CXXRecordDecl")) and (source -> memberBool(node, "completeDefinition")) and not (source -> memberBool(node, "isImplicit"))) -> if {
+        source -> readClass(node, namespaces, windowsTarget, pool, status) => class!
+        classes -> push(class!)
+        return
+    }
+    false => pushedNamespace!
+    (fromMain and (pool -> spanEqualsText(kind, "NamespaceDecl"))) -> if {
+        source -> memberRef(node, "name", pool) => namespaceName
+        namespaces -> push(namespaceName)
+        true => pushedNamespace!
+    }
+    source -> json.findMember(node, "inner") => inner
+    inner.found -> if {
+        source -> json.firstArrayValue(inner.value) => cursor!
+        cursor!.found -> while {
+            source -> collect(cursor!.value, headerPath, namespaces, fromMain, windowsTarget, pool, functions, classes, status)
+            source -> json.nextArrayValue(inner.value, cursor!.next) => cursor!
+        }
+    }
+    pushedNamespace! -> if {
+        namespaces -> take((namespaces -> len) - 1) => discarded
+    }
+}
+
+functionLess pool: ref [UInt8; ~], left: ref RawFunction, right: ref RawFunction -> Bool {
+    pool -> spanCompare(left.qualifiedName, right.qualifiedName) => qualified
+    qualified < 0 or (qualified == 0 and (pool -> spanCompare(left.signature, right.signature)) < 0)
+}
+
+orderedFunctionIndexes pool: ref [UInt8; ~], functions: ref [RawFunction; ~] -> [Int; ~] {
+    [Int; ~] => order!
+    0 => functionIndex!
+    functionIndex! < (functions -> len) -> while {
+        order! -> push(functionIndex!)
+        (order! -> len) - 1 => position!
+        (position! > 0 and (pool -> functionLess(functions[order![position!]], functions[order![position! - 1]]))) -> while {
+            order![position! - 1] => previous
+            order![position!] => current
+            current => order![position! - 1]
+            previous => order![position!]
+            position! - 1 => position!
+        }
+        functionIndex! + 1 => functionIndex!
+    }
+    order!
+}
+
+orderedClassIndexes pool: ref [UInt8; ~], classes: ref [RawClass; ~] -> [Int; ~] {
+    [Int; ~] => order!
+    0 => classIndex!
+    classIndex! < (classes -> len) -> while {
+        order! -> push(classIndex!)
+        (order! -> len) - 1 => position!
+        (position! > 0 and (pool -> spanCompare(classes[order![position!]].qualifiedName, classes[order![position! - 1]].qualifiedName)) < 0) -> while {
+            order![position! - 1] => previous
+            order![position!] => current
+            current => order![position! - 1]
+            previous => order![position!]
+            position! - 1 => position!
+        }
+        classIndex! + 1 => classIndex!
+    }
+    order!
+}
+
+resolveOverloads pool: mut [UInt8; ~], functions: ref [RawFunction; ~], status: mut RawStatus -> [StringRef; ~] {
+    [StringRef; ~] => resolvedNames!
+    0 => index!
+    index! < (functions -> len) -> while {
+        0 => count!
+        0 => search!
+        search! < (functions -> len) -> while {
+            (pool -> spanCompare(functions[search!].memberName, functions[index!].memberName)) == 0 -> if { count! + 1 => count! }
+            search! + 1 => search!
+        }
+        count! > 1 -> if {
+            [UInt8; ~] => bytes!
+            bytes! -> appendSpan(pool, functions[index!].memberName)
+            0 => parameterIndex!
+            parameterIndex! < (functions[index!].parameters -> len) -> while {
+                bytes! -> appendSpan(pool, functions[index!].parameters[parameterIndex!].type.sollangName)
+                parameterIndex! + 1 => parameterIndex!
+            }
+            pool -> storeBytes(bytes!) => resolvedName
+            resolvedNames! -> push(resolvedName)
+        } else {
+            resolvedNames! -> push(functions[index!].memberName)
+        }
+        index! + 1 => index!
+    }
+    0 => left!
+    left! < (functions -> len) -> while {
+        left! + 1 => right!
+        right! < (resolvedNames! -> len) -> while {
+            (pool -> spanCompare(resolvedNames![left!], resolvedNames![right!])) == 0 -> if {
+                1 => status.code
+                pool -> storeText("overloaded C++ functions still collide after type-based Sollang naming") => status.message
+            }
+            right! + 1 => right!
+        }
+        left! + 1 => left!
+    }
+    resolvedNames!
+}
+
+freezeType pool: ref [UInt8; ~], raw: RawCppType -> CppType uses File {
+    CppType { sollangName: pool -> spanText(raw.sollangName), cppName: pool -> spanText(raw.cppName) }
+}
+
+freezeParameters pool: ref [UInt8; ~], raw: ref [RawParameter; ~] -> [Parameter; ~] uses File {
+    [Parameter; ~] => parameters!
+    0 => index!
+    index! < (raw -> len) -> while {
+        Parameter { name: pool -> spanText(raw[index!].name), type: pool -> freezeType(raw[index!].type) } => parameter!
+        parameters! -> push(parameter!)
+        index! + 1 => index!
+    }
+    parameters!
+}
+
+freezeFunctionValue memberName: Text, qualifiedName: Text, symbol: Text, signature: Text, resultType: CppType, parameters: move [Parameter; ~], isNoexcept: Bool -> Function {
+    Function {
+        memberName: memberName
+        qualifiedName: qualifiedName
+        symbol: symbol
+        signature: signature
+        result: resultType
+        parameters: parameters
+        isNoexcept: isNoexcept
+    } => result
+    result
+}
+
+freezeFunction pool: ref [UInt8; ~], raw: ref RawFunction, resolvedMemberName: StringRef -> Function uses File {
+    pool -> freezeParameters(raw.parameters) => parameters!
+    pool -> spanText(resolvedMemberName) => memberName
+    pool -> spanText(raw.qualifiedName) => qualifiedName
+    pool -> spanText(raw.symbol) => symbol
+    pool -> spanText(raw.signature) => signature
+    pool -> freezeType(raw.result) => resultType
+    memberName -> freezeFunctionValue(qualifiedName, symbol, signature, resultType, parameters!, raw.isNoexcept) => function!
+    function!
+}
+
+freezeClassValue name: Text, qualifiedName: Text, dropSymbol: Text, constructors: move [Constructor; ~], methods: move [Method; ~] -> Class {
+    Class {
+        name: name
+        qualifiedName: qualifiedName
+        dropSymbol: dropSymbol
+        constructors: constructors
+        methods: methods
+    } => result
+    result
+}
+
+freezeClass pool: ref [UInt8; ~], raw: ref RawClass -> Class uses File {
+    [Constructor; ~] => constructors!
+    0 => constructorIndex!
+    constructorIndex! < (raw.constructors -> len) -> while {
+        pool -> freezeParameters(raw.constructors[constructorIndex!].parameters) => parameters!
+        Constructor { parameters: parameters!, symbol: pool -> spanText(raw.constructors[constructorIndex!].symbol) } => constructor!
+        constructors! -> push(constructor!)
+        constructorIndex! + 1 => constructorIndex!
+    }
+    [Method; ~] => methods!
+    0 => methodIndex!
+    methodIndex! < (raw.methods -> len) -> while {
+        pool -> freezeParameters(raw.methods[methodIndex!].parameters) => parameters!
+        Method {
+            name: pool -> spanText(raw.methods[methodIndex!].name)
+            cppName: pool -> spanText(raw.methods[methodIndex!].cppName)
+            symbol: pool -> spanText(raw.methods[methodIndex!].symbol)
+            result: pool -> freezeType(raw.methods[methodIndex!].result)
+            parameters: parameters!
+            isConst: raw.methods[methodIndex!].isConst
+            isNoexcept: raw.methods[methodIndex!].isNoexcept
+        } => method!
+        methods! -> push(method!)
+        methodIndex! + 1 => methodIndex!
+    }
+    pool -> spanText(raw.name) => name
+    pool -> spanText(raw.qualifiedName) => qualifiedName
+    pool -> spanText(raw.dropSymbol) => dropSymbol
+    name -> freezeClassValue(qualifiedName, dropSymbol, constructors!, methods!) => class!
+    class!
+}
+
+public discover astPath: Text, headerPath: Text, windowsTarget: Bool, pool: mut [UInt8; ~] -> Discovery uses File {
+    [RawFunction; ~] => rawFunctions!
+    [RawClass; ~] => rawClasses!
+    RawStatus { code: 0, message: StringRef { start: 0, length: 0 } } => status!
+    astPath -> file.mapText => source!
+    source! -> json.parse(UIntSize(0), source! -> len) => root
+    root.kind != 5 -> if {
+        1 => status!.code
+        pool -> storeText("Clang produced an invalid C++ AST") => status!.message
+    } else {
+        [StringRef; ~] => namespaces!
+        source! -> collect(root, headerPath, namespaces!, false, windowsTarget, pool, rawFunctions!, rawClasses!, status!)
+    }
+    pool -> resolveOverloads(rawFunctions!, status!) => resolvedFunctionNames!
+    (status!.code == 0 and (rawFunctions! -> len) == 0 and (rawClasses! -> len) == 0) -> if {
+        1 => status!.code
+        pool -> storeText("the C++ header contains no supported public noexcept scalar functions or classes") => status!.message
+    }
+    [Function; ~] => functions!
+    pool -> orderedFunctionIndexes(rawFunctions!) => functionOrder!
+    0 => functionIndex!
+    functionIndex! < (functionOrder! -> len) -> while {
+        functionOrder![functionIndex!] => rawFunctionIndex
+        pool -> freezeFunction(rawFunctions![rawFunctionIndex], resolvedFunctionNames![rawFunctionIndex]) => function!
+        functions! -> push(function!)
+        functionIndex! + 1 => functionIndex!
+    }
+    [Class; ~] => classes!
+    pool -> orderedClassIndexes(rawClasses!) => classOrder!
+    0 => classIndex!
+    classIndex! < (classOrder! -> len) -> while {
+        pool -> freezeClass(rawClasses![classOrder![classIndex!]]) => class!
+        classes! -> push(class!)
+        classIndex! + 1 => classIndex!
+    }
+    Discovery { status: status!.code, message: pool -> spanText(status!.message), functions: functions!, classes: classes! } => result!
+    result!
+}

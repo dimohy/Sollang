@@ -1,0 +1,37 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        enum Attempt {
+            Ok(Int)
+            Err(Text)
+        }
+
+        report result: Attempt -> Int uses Console {
+            # The post-loop interpolation must use the mutable slot load.
+            0 => value!
+            0 => index!
+            index! < 3 -> while {
+                value! + 1 => value!
+                index! + 1 => index!
+            }
+            "count=$(value!)" -> println
+
+            # The arm interpolation must use the direct pattern payload SSA.
+            result -> when {
+                Ok(code) {
+                    code != 0 -> if { "code=$code" -> println }
+                    code
+                }
+                Err(error) { -1 }
+            }
+        }
+
+        main {
+            Attempt.Ok(7) -> report
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

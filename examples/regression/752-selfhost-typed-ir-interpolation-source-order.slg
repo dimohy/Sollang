@@ -1,0 +1,31 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.typed as typedIr
+
+# Expose the source positions carried by binding and interpolation-call IR so
+# source-order resolution remains independently auditable.
+main {
+    [
+        """
+        main {
+            0 => ordinal!
+            ordinal! < 1 -> while {
+                true -> if {
+                    "value=$(ordinal! - 1)" -> println
+                }
+                ordinal! + 1 => ordinal!
+            }
+        }
+        """; ~
+    ] => sources!
+    sources![0] -> ast.lower => nodes!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        (node.kind == 17 or (node.kind == 6 and node.symbol == -102)) -> if {
+            nodes![node.astNode] => sourceNode
+            "ir=$(index!),kind=$(node.kind),parent=$(node.parent),ast=$(node.astNode),start=$(sourceNode.start),length=$(sourceNode.length),symbol=$(node.symbol),op0=$(node.operand0),flags=$(node.flags)" -> println
+        }
+        index! + 1 => index!
+    }
+}

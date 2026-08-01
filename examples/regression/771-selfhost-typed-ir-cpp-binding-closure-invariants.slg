@@ -1,0 +1,38 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.library_imports as libraryImports
+import sys.path as path
+
+# The complete C++ binding CLI source closure must preserve every structured
+# if condition while independently lowered modules are relocated into one IR.
+main {
+    [
+        "examples/regression/762-selfhost-cpp-binding-module.slg",
+        "selfhost/cli_cpp_binding.slg",
+        "selfhost/cli_grammar.slg",
+        "selfhost/cpp_binding.slg",
+        "selfhost/json.slg",
+        "stdlib/sys/process.slg",
+        "stdlib/sys/runtime.slg",
+        "stdlib/sys/path.slg",
+        "selfhost/runtime/file.slg",
+        "stdlib/sys/directory.slg",
+        "stdlib/sys/directory/kind.slg"; ~
+    ] => sourcePaths!
+    sourcePaths! -> semanticContext.prepareFiles => prepared!
+    prepared!.package -> libraryImports.load(sourcePaths!, "windows-x64", path.nativeStyle()) => catalog!
+    prepared!.package -> libraryImports.resolveQualified(catalog!) => libraryCalls!
+    prepared! -> typedIr.lowerContext => ir!
+    ir! -> typedLibraryImports.projectLibraries(prepared!, catalog!, libraryCalls!) => projectionDiagnostics!
+    0 => invalid!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        (node.kind == 18 and (node.operand0 < 0 or node.operand0 >= (ir! -> len))) -> if {
+            invalid! + 1 => invalid!
+        }
+        index! + 1 => index!
+    }
+    "invalid=$(invalid!),library-diagnostics=$(projectionDiagnostics! -> len)" -> println
+}

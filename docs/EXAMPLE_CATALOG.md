@@ -26,18 +26,26 @@ Each user example has a byte-identical regression counterpart.
 | Kind | Location | Count |
 | --- | --- | ---: |
 | User examples | `examples/user/` | 10 |
-| Expected-output regression cases | `examples/regression/expected/*.stdout.txt` | 664 |
-| Diagnostic input cases | `examples/regression/diagnostics/` | 231 |
-| Cataloged regression cases | test runner | 895 |
-| Fast executable regression suite | test runner | 733 |
-| Browser playground catalog | `app/samples.ts` | 31 |
+| Regression cases | `examples/regression/expected/*.stdout.txt` | 770 |
+| Diagnostic cases | test runner | 231 |
+| Complete logical catalog | test runner | 1,001 |
+| Windows x64 selected suite | test runner | 1,001 |
+| Linux x64 applicable suite | test runner | 1,000 |
+| Browser playground catalog | `app/samples.ts` | 34 |
 
 The catalog counts logical test cases, not every supporting file. Source lists,
 LLVM assertions, expected diagnostics, module fragments, projects, and other
-supporting files may belong to one logical case. The catalog is intentionally
-larger than the fast suite because the fast selector omits expensive or
-platform-specific groups.
+supporting files may belong to one logical case. Linux excludes the one
+Windows-only COM execution case while still structurally validating its LLVM;
+therefore the Linux-applicable selected suite has 1,000 cases.
 
 The test runner also checks that every file under `examples/user/` is backed by
 an identical regression fixture, preventing documentation examples from
 drifting away from tested syntax.
+
+The exhaustive catalog additionally keeps compiler-internal combinations out
+of the user tutorial set. For example,
+`711-selfhost-llvm-subject-when.slg` verifies all six subject comparison arms,
+inclusive and half-open ranges, `else`, value-producing function returns,
+LLVM assembly, native linking, and exact runtime output in one retained
+self-host regression.

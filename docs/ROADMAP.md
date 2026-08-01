@@ -1,7 +1,7 @@
 # Sollang Implementation Roadmap
 
-Status: core implementation complete; 0.4 native distribution in progress
-Updated: 2026-07-28
+Status: core implementation and 0.4 native distribution verified
+Updated: 2026-08-02
 
 Every completed slice must add cumulative `.slg` examples, keep safe-code leak
 freedom statically provable, build with zero warnings, and pass the complete
@@ -98,23 +98,23 @@ follow-on product work rather than incomplete self-hosting gates. See
 Sollang 0.4 completes the bootstrap transition without changing how users invoke
 the compiler.
 
-- [ ] Enforce the root-cause-only completion gate for every change: permanent
+- [x] Enforce the root-cause-only completion gate for every change: permanent
   minimal reproduction, owning-layer diagnosis, shared-invariant correction,
   retained regression, focused verification, complete cross-platform suite, and
   Stage 2/Stage 3 fixed point. Any temporary workaround, symptom patch,
   defensive success path, swallowed error, hard-coded command/test branch, or
   feature reduction blocks release.
-- [ ] Implement the complete supported `sollang` CLI contract in `.slg`.
-- [ ] Verify `--version`, help, `build`, `run`, `test`, `format`, `resolve`,
+- [x] Implement the complete supported `sollang` CLI contract in `.slg`.
+- [x] Verify `--version`, help, `build`, `run`, `test`, `format`, `resolve`,
   `language-server`, and `bind-cpp` argument, diagnostic, output, and exit-code
   compatibility on Windows x64 and Linux x64.
-- [ ] Build the release compiler from `.slg` sources with the C# bootstrap
+- [x] Build the release compiler from `.slg` sources with the C# bootstrap
   compiler, then prove the Stage 2/Stage 3 fixed point.
-- [ ] Package that native result as the only `sollang` compiler executable.
-- [ ] Reject `.NET` bootstrap artifacts such as `.dll`, `.deps.json`,
+- [x] Package that native result as the only `sollang` compiler executable.
+- [x] Reject `.NET` bootstrap artifacts such as `.dll`, `.deps.json`,
   `.runtimeconfig.json`, and the C#-published `sollang` executable from every
   0.4 archive.
-- [ ] Verify the packaged executable hash equals the fixed-point native
+- [x] Verify the packaged executable hash equals the fixed-point native
   compiler hash and run package-level build/run smoke tests.
 
 Current verified implementation slices:
@@ -128,20 +128,36 @@ Current verified implementation slices:
 - [x] Literal program-argument forwarding after `run ... --`.
 - [x] Deterministic transitive path-dependency resolution, canonical lock-file
   generation, and `--locked` stale-lock rejection.
-- [ ] Complete project/workspace dependency, lock, default-output, diagnostic,
+- [x] Native `test` and `format` command matrices on Windows and Linux.
+- [x] Native streaming `language-server` parity on Windows, including fragmented
+  framing, diagnostics, formatting, UTF-16 positions, shutdown, and failures.
+- [x] Implement native `grammar build` with byte-identical generated modules,
+  SHA-256 provenance, recursive output-directory creation, and managed diagnostic
+  and exit-code parity on Windows (4/4 retained command matrix).
+- [x] Verify native `grammar build` on Linux and implement native `bind-cpp`; a
+  help entry is not parity evidence until the command executes the managed CLI
+  contract on both release platforms.
+- [x] Complete project/workspace dependency, lock, default-output, diagnostic,
   library, and Wasm parity plus the remaining public commands listed above.
 
-The current Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
-gates and reproduce at Stage 3. The source/project/local-dependency/workspace
-CLI matrix passes 10/10 and the formatter matrix passes 11/11 on both
-fixed-point compilers. The full platform suites now pass 906/906 Windows cases
-and 905/905 Linux-applicable cases. The fixed-point LLVM hashes are
-`9DC3E4DC3D3F78A3B2A9401916EBBF1B871C0A04E84DCE63F616B1044A599884`
+The final Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
+gates and reproduce at Stage 3. Windows reproduces 24,934,632 LLVM bytes at
+normalized SHA-256
+`BDECDDCCAA23A3C8DBEE135FF525550EAD47C77D4A6CB5ED909EEE1290290434`;
+Linux reproduces 24,917,845 bytes at
+`417AC4E06F2D99C0419DF8EA386C672426D0EB0339FA9F1C8B6518E5A31E1CEC`.
+The complete platform suites pass 1001/1001 Windows cases and 1000/1000
+Linux-applicable cases.
+
+Both fixed-point executables pass 16 exact top-level CLI contracts plus native
+build/run, grammar build 4/4, test 10/10, format 11/11, streaming language
+server 4/4, and bind-cpp 6/6. The immutable executable hashes are
+`5E81D0ECBFD65687A42FB17668D5DB4818967D7D0534FC13F3D4C3056AF44617`
 for Windows and
-`7D42508B04E6DA0EA3FDEED819ED974E5D1FD61A00CEADEB146C96DC0B4D3B05`
-for Linux. These partial CLI results deliberately do not create the
-`native-cli-full-parity` proof required by `publish-release.ps1`, so a 0.4
-archive cannot be produced prematurely.
+`0F63C12FF0E3422EEC7D543888102B1AE186E28356E7597631E30FCE01764098`
+for Linux. `publish-release.ps1` requires those hash-bound parity proofs,
+copies only the matching native compiler, rejects managed/bootstrap artifacts,
+and builds and runs a source file from each staged package.
 
 The C# compiler remains a development bootstrap and reference oracle. It is not
 a 0.4 release asset. An internal Stage driver cannot satisfy this milestone by
