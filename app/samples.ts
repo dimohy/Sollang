@@ -1,6 +1,6 @@
 import type { Locale } from "./i18n";
 
-type Category = "basics" | "flow" | "control" | "containers" | "types" | "advanced" | "streams";
+type Category = "basics" | "flow" | "control" | "containers" | "types" | "advanced" | "streams" | "junctions";
 
 export type Sample = {
   id: string;
@@ -655,9 +655,34 @@ main {
 }`
   },
   {
+    id: "flow-junction-tour",
+    title: "Flow junction tour",
+    category: "junctions",
+    input: "",
+    code: `double value: Int -> Int => value * 2
+shift value: Int -> Int => value + 1
+combine parts: (doubled: Int, shifted: Int) -> Int => parts.doubled + parts.shifted
+audit value: Int -> Unit uses Console => "audit=$value" -> println
+
+main {
+    6
+        -> branch {
+            doubled: -> double
+            shifted: -> shift
+        }
+        -> combine
+        -> tap {
+            -> audit
+        }
+        => result
+
+    "result=$result" -> println
+}`
+  },
+  {
     id: "flow-branch",
     title: "Sequential named branch",
-    category: "flow",
+    category: "junctions",
     input: "",
     code: `double value: Int -> Int => value * 2
 increment value: Int -> Int => value + 1
@@ -677,7 +702,7 @@ main {
   {
     id: "flow-branch-order",
     title: "Ordered multistage branch",
-    category: "flow",
+    category: "junctions",
     input: "",
     code: `first value: Int -> Int uses Console {
     "first" -> println
@@ -706,7 +731,7 @@ main {
   {
     id: "flow-tap",
     title: "Value-preserving tap",
-    category: "flow",
+    category: "junctions",
     input: "",
     code: `double value: Int -> Int => value * 2
 writeAudit value: Int -> Unit uses Console => "side=$value" -> println
@@ -724,9 +749,27 @@ main {
 }`
   },
   {
+    id: "flow-parallel-branch",
+    title: "Native-only parallel branch diagnostic",
+    category: "junctions",
+    input: "",
+    code: `double value: Int -> Int => value * 2
+square value: Int -> Int => value * value
+
+main {
+    7 -> parallel branch {
+        doubled: ref -> double
+        squared: ref -> square
+    } => results
+
+    "doubled=$(results.doubled)" -> println
+    "squared=$(results.squared)" -> println
+}`
+  },
+  {
     id: "labeled-product",
     title: "Labeled product",
-    category: "types",
+    category: "junctions",
     input: "",
     code: `weighted pair: (left: Int, right: Int) -> Int => pair.left * 10 + pair.right
 
@@ -741,7 +784,7 @@ main {
   {
     id: "ordinary-product",
     title: "Ordinary product",
-    category: "types",
+    category: "junctions",
     input: "",
     code: `sum values: (Int, Int, Int) -> Int => values._0 + values._1 + values._2
 
@@ -753,7 +796,7 @@ main {
   {
     id: "stream-partition",
     title: "First-match partition",
-    category: "streams",
+    category: "junctions",
     input: "",
     code: `import std.sequence
 
@@ -777,7 +820,7 @@ main {
   {
     id: "stream-zip",
     title: "Shortest-input zip",
-    category: "streams",
+    category: "junctions",
     input: "",
     code: `import std.sequence
 
@@ -797,7 +840,7 @@ main {
   {
     id: "stream-merge",
     title: "Availability-ordered merge",
-    category: "streams",
+    category: "junctions",
     input: "",
     code: `import std.sequence
 
@@ -815,7 +858,7 @@ main {
   {
     id: "stream-concat-latest",
     title: "Concat and latest policies",
-    category: "streams",
+    category: "junctions",
     input: "",
     code: `import std.sequence
 
@@ -847,7 +890,8 @@ const categoryLabels: Record<Locale, Record<Category, string>> = {
     containers: "Containers",
     types: "Types and methods",
     advanced: "Advanced types",
-    streams: "Deferred streams"
+    streams: "Deferred streams",
+    junctions: "New in 0.4 · Flow junctions"
   },
   ko: {
     basics: "기초",
@@ -856,7 +900,8 @@ const categoryLabels: Record<Locale, Record<Category, string>> = {
     containers: "컨테이너",
     types: "타입과 메서드",
     advanced: "고급 타입",
-    streams: "지연 스트림"
+    streams: "지연 스트림",
+    junctions: "0.4 새 기능 · 흐름 분기와 합류"
   },
   ja: {
     basics: "基本",
@@ -865,7 +910,8 @@ const categoryLabels: Record<Locale, Record<Category, string>> = {
     containers: "コンテナ",
     types: "型とメソッド",
     advanced: "高度な型",
-    streams: "遅延ストリーム"
+    streams: "遅延ストリーム",
+    junctions: "0.4 新機能 · フローの分岐と合流"
   },
   zh: {
     basics: "基础",
@@ -874,7 +920,8 @@ const categoryLabels: Record<Locale, Record<Category, string>> = {
     containers: "容器",
     types: "类型与方法",
     advanced: "高级类型",
-    streams: "延迟流"
+    streams: "延迟流",
+    junctions: "0.4 新功能 · 流的分支与合并"
   }
 };
 
@@ -911,9 +958,11 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "sensor-stream": "Fuse map, tap, filter, take, and each; only 54 of one billion values are pulled.",
     "nested-stream": "Cancel nested flatMap sources as soon as the downstream take limit is met.",
     "risk-stream": "Carry state through scan without materializing intermediate collections.",
+    "flow-junction-tour": "Split one value, rejoin labeled results, observe it with tap, and keep flowing.",
     "flow-branch": "Fan one value into ordered named arms and rejoin their labeled results.",
     "flow-branch-order": "Run multistage branch arms in source order before rejoining.",
     "flow-tap": "Run side stages left to right while preserving the outer value.",
+    "flow-parallel-branch": "Inspect the explicit native parallel form and the browser target's worker-pool capability diagnostic.",
     "labeled-product": "Bind named structural fields and pass them across a function boundary.",
     "ordinary-product": "Join positional values and access them through canonical _N fields.",
     "stream-partition": "Route each item to exactly one first-matching labeled stream.",
@@ -953,9 +1002,11 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "sensor-stream": "map·tap·filter·take·each를 융합해 10억 개 중 54개만 당겨옵니다.",
     "nested-stream": "downstream take 한도에 도달하면 중첩 flatMap upstream 전체를 취소합니다.",
     "risk-stream": "중간 컬렉션을 만들지 않고 scan으로 상태를 전달합니다.",
+    "flow-junction-tour": "한 값을 나누고 라벨 결과를 합친 뒤 tap으로 관찰하며 계속 흘려보냅니다.",
     "flow-branch": "한 값을 순서 있는 이름 분기로 나누고 라벨 결과를 다시 합칩니다.",
     "flow-branch-order": "다단계 분기를 소스 순서대로 실행한 뒤 다시 합칩니다.",
     "flow-tap": "바깥 값을 유지하며 부수 단계를 왼쪽에서 오른쪽으로 실행합니다.",
+    "flow-parallel-branch": "명시적 네이티브 병렬 형식과 브라우저 대상의 worker pool capability 진단을 확인합니다.",
     "labeled-product": "이름 있는 구조 필드를 바인딩하고 함수 경계를 넘겨 전달합니다.",
     "ordinary-product": "위치 기반 값을 합치고 표준 _N 필드로 접근합니다.",
     "stream-partition": "각 항목을 처음 일치하는 하나의 라벨 스트림으로 보냅니다.",
@@ -995,9 +1046,11 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "sensor-stream": "10億件を生成せず必要な54件だけを上流から取得します。",
     "nested-stream": "take の上限で入れ子の flatMap 全体を停止します。",
     "risk-stream": "中間コレクションなしで scan に状態を渡します。",
+    "flow-junction-tour": "1つの値を分け、ラベル付き結果を再結合し、tap で観察して流し続けます。",
     "flow-branch": "1つの値を順序付き名前分岐へ流し、ラベル付き結果を再結合します。",
     "flow-branch-order": "多段分岐をソース順に実行して再結合します。",
     "flow-tap": "外側の値を保ちながら副作用段を左から右へ実行します。",
+    "flow-parallel-branch": "明示的なネイティブ並列形式とブラウザー対象の worker pool capability 診断を確認します。",
     "labeled-product": "名前付き構造フィールドを関数境界越しに渡します。",
     "ordinary-product": "位置値を結合し、標準 _N フィールドで参照します。",
     "stream-partition": "各項目を最初に一致した1つのラベル付きストリームへ送ります。",
@@ -1037,9 +1090,11 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "sensor-stream": "融合多个操作，只从十亿个值中拉取所需的54个。",
     "nested-stream": "达到 take 上限后立即取消整个嵌套 flatMap。",
     "risk-stream": "通过 scan 传递状态，不生成中间集合。",
+    "flow-junction-tour": "拆分一个值、合并带标签的结果，并通过 tap 观察后继续流动。",
     "flow-branch": "将一个值送入有序命名分支，再合并带标签的结果。",
     "flow-branch-order": "按源码顺序运行多阶段分支后再合并。",
     "flow-tap": "保留外层值，同时从左到右执行旁路阶段。",
+    "flow-parallel-branch": "查看显式原生并行形式以及浏览器目标的 worker pool capability 诊断。",
     "labeled-product": "绑定命名结构字段并跨函数边界传递。",
     "ordinary-product": "合并位置值并通过标准 _N 字段访问。",
     "stream-partition": "把每个项目送入第一个匹配的唯一标签流。",
@@ -1082,9 +1137,11 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "sensor-stream": "지연 센서 스트림",
     "nested-stream": "flatMap, skip, take",
     "risk-stream": "상태 기반 scan 스트림",
+    "flow-junction-tour": "흐름 분기·합류 둘러보기",
     "flow-branch": "순차 이름 분기",
     "flow-branch-order": "순서 보장 다단계 분기",
     "flow-tap": "값 보존 tap",
+    "flow-parallel-branch": "네이티브 전용 parallel branch 진단",
     "labeled-product": "라벨 product",
     "ordinary-product": "일반 product",
     "stream-partition": "첫 일치 partition",
@@ -1124,9 +1181,11 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "sensor-stream": "遅延センサーストリーム",
     "nested-stream": "flatMap、skip、take",
     "risk-stream": "状態付き scan ストリーム",
+    "flow-junction-tour": "フロー分岐・合流ツアー",
     "flow-branch": "順次名前付き分岐",
     "flow-branch-order": "順序付き多段分岐",
     "flow-tap": "値を保つ tap",
+    "flow-parallel-branch": "ネイティブ専用 parallel branch 診断",
     "labeled-product": "ラベル付き product",
     "ordinary-product": "通常の product",
     "stream-partition": "最初一致 partition",
@@ -1166,9 +1225,11 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "sensor-stream": "延迟传感器流",
     "nested-stream": "flatMap、skip 与 take",
     "risk-stream": "有状态 scan 流",
+    "flow-junction-tour": "流分支与合并导览",
     "flow-branch": "顺序命名分支",
     "flow-branch-order": "有序多阶段分支",
     "flow-tap": "保值 tap",
+    "flow-parallel-branch": "仅限原生的 parallel branch 诊断",
     "labeled-product": "标签 product",
     "ordinary-product": "普通 product",
     "stream-partition": "首个匹配 partition",

@@ -326,13 +326,14 @@ diagnostic fixtures. Those 83 physical fixtures cover the following
 The 114 logical cases run on Windows x64 and every applicable case runs on
 Linux x64. The browser gate runs 20 exact-output runtime cases and 4 exact
 diagnostic cases, including 9 Flow Junctions runtime cases and the explicit
-parallel-branch target diagnostic. The browser catalog exposes 40 samples.
+parallel-branch target diagnostic. The browser catalog exposes 41 runnable
+samples plus that explicit target-diagnostic sample.
 The complete cumulative suite, Stage 2 differential gate, and Stage 3 fixed
 point remain mandatory. Test counts are updated only from measured runner
 inventory after the fixtures exist.
 
 The repository-wide runner inventory after adding this track is 20 user
-examples, 827 regression cases, and 257 diagnostic cases: 1,084 logical
+examples, 828 regression cases, and 257 diagnostic cases: 1,085 logical
 fixtures in total. Supporting `.sources.txt`, LLVM validation, execution, and
 contains files do not add to that count.
 

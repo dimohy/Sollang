@@ -141,20 +141,20 @@ Current verified implementation slices:
   library, and Wasm parity plus the remaining public commands listed above.
 
 The final Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
-gates and reproduce at Stage 3. Windows reproduces 26,828,567 LLVM bytes at
+gates and reproduce at Stage 3. Windows reproduces 26,830,874 LLVM bytes at
 normalized SHA-256
-`F81E10AF1EE1B9723B226FCE10F89956CF4067D350A1152AE9F310291225FAB6`;
-Linux reproduces 26,811,780 bytes at
-`07B6619F6E9E261145FA7DEE605DD1A6BE1E329177AF82A81E27FC47C2226733`.
-The complete platform suites pass 1084/1084 Windows cases and 1083/1083
+`D2CD4F2BB7358C30C880829CCC7749DAB1A7F8411F6DA62FD3312608FD0A6FDE`;
+Linux reproduces 26,814,087 bytes at
+`18C03D58475D8F64FEEC72153E45D7B10245829783510770CC65C93D1E67EE52`.
+The complete platform suites pass 1085/1085 Windows cases and 1084/1084
 Linux-applicable cases.
 
 Both fixed-point executables pass 16 exact top-level CLI contracts plus native
 build/run, grammar build 4/4, test 10/10, format 11/11, streaming language
 server 4/4, and bind-cpp 6/6. The immutable executable hashes are
-`2223E3878D99639363D8179C3D38757FC3F5AAE2DED6E8BF8A84C27B9C6A078B`
+`68FA1105625CC9D46C8396A8A48E92E2ECB12F160A61EDE7269F49902C648B49`
 for Windows and
-`238121E022E34C8D4BE0BF1160BAE99B36B5F16A6332C41C7A23D7D0068EFC69`
+`140D36C12C84F2145C7593AEFA64D69318B19139C11DBF58383773937C51A8AF`
 for Linux. `publish-release.ps1` requires those hash-bound parity proofs,
 copies only the matching native compiler, rejects managed/bootstrap artifacts,
 and builds and runs a source file from each staged package.

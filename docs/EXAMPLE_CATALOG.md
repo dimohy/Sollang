@@ -29,14 +29,14 @@ regression counterpart.
 | Kind | Location | Count |
 | --- | --- | ---: |
 | User examples | `examples/user/` | 20 |
-| Regression cases | `examples/regression/expected/*.stdout.txt` | 827 |
+| Regression cases | `examples/regression/expected/*.stdout.txt` | 828 |
 | Diagnostic cases | test runner | 257 |
-| Complete logical catalog | test runner | 1,084 |
+| Complete logical catalog | test runner | 1,085 |
 | Flow Junctions positive fixtures | `examples/regression/788-844*.slg` | 57 |
 | Flow Junctions diagnostic fixtures | `examples/regression/diagnostics/` | 26 |
 | Flow Junctions physical fixtures | positive + diagnostic | 83 |
 | Flow Junctions independently counted logical cases | coverage matrix | 114 |
-| Browser playground catalog | `app/samples.ts` | 40 |
+| Browser playground catalog | `app/samples.ts` | 42 (41 runnable + 1 target diagnostic) |
 
 The catalog counts logical test cases, not every supporting file. Source lists,
 LLVM assertions, expected diagnostics, module fragments, projects, and other

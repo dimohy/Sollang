@@ -11284,3 +11284,36 @@ and bind-cpp 6/6. The packaged executable hashes equal those Stage 3 hashes,
 both staged packages build and run a smoke source, and the installed Windows
 `P:\Utils\sollang\sollang.exe` has the same Windows hash and matching 12-file
 standard library.
+
+## D294 — Resolved Calls Emit Only Declared ABI Parameters
+
+Status: implemented and cross-platform verified
+Date: 2026-08-02
+
+A block body result may share the call expression's syntax parent and generic
+operand chain, but it is not thereby a runtime call argument. For a resolved
+function target, self-host LLVM emission now consults the target's declared
+parameter metadata and emits only ordinals that resolve to parameters.
+Unresolved intrinsic calls retain their explicit operands because they do not
+have a function-body parameter table.
+
+Regression 845 retains the browser unit-block case that previously produced a
+spurious `void` argument. The correction is in the shared call ABI invariant,
+not in the sample or browser. The 1,085-case Windows suite, 1,084 applicable
+Linux cases, both Stage 2 gates, and both Stage 3 fixed points pass.
+
+## D295 — The AI Agent Guide Is a Maintained Language Surface
+
+Status: implemented and published with the playground
+Date: 2026-08-02
+
+`docs/AI_AGENT_GUIDE.md` is the canonical coding guide for AI agents. Root
+`AGENTS.md`, `CLAUDE.md`, and GitHub Copilot instructions point to that one
+source instead of duplicating language rules. The web build validates every
+required guide link, publishes the referenced specification and grammar files
+under `/ai/`, and generates `/llms.txt` for discovery.
+
+Any change to grammar, semantics, operators, ownership, effects, standard
+library, CLI, target support, examples, diagnostics, or verification must
+review and update the guide in the same change. A language change is not
+complete while the canonical guide is stale.

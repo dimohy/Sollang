@@ -45,9 +45,12 @@ compiler runs in WebAssembly, emits LLVM for the edited program, and lowers it
 to an executable WebAssembly module entirely inside the browser. The standard
 library and source code never travel to a compilation server. The interface
 follows the browser language for Korean, English, Japanese, and Chinese while
-the 31-entry browser-runnable sample catalog stays in English so programs are
-portable between visitors. The stdin panel feeds one line to each `readInt`
-call.
+the catalog includes 41 browser-runnable samples and one explicit target
+diagnostic. Its dedicated 0.4 Flow Junctions section exposes every new feature;
+the native-only `parallel branch` sample reports the browser worker-pool
+capability boundary instead of silently changing semantics. Source code stays
+in English so programs are portable between visitors. The stdin panel feeds one
+line to each `readInt` call.
 
 ## Quick Look
 
@@ -388,6 +391,7 @@ returns a nonzero native process status when any test fails.
 
 ## Documentation
 
+- [AI Agent coding guide and maintenance contract](docs/AI_AGENT_GUIDE.md)
 - [Getting started and implementation guide](docs/GETTING_STARTED.md)
 - [Language specification](docs/SPEC.md)
 - [Decision log](docs/DECISIONS.md)

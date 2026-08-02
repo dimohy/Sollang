@@ -17,7 +17,7 @@ $compilerError = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.err"
 $compilerBitcode = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.bc"
 $compilerObject = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.o"
 $compilerArtifact = Join-Path $repoRoot "artifacts\sollangc-browser.wasm"
-$publicCompiler = Join-Path $repoRoot "public\sollangc-stage2-0.3.260727.wasm"
+$publicCompiler = Join-Path $repoRoot "public\sollangc-stage2-0.4.260801.wasm"
 
 $browserSources = Get-Content -LiteralPath $manifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -87,6 +87,7 @@ foreach ($case in @(
     @("examples\regression\798-zip-shortest-stream.slg", "browser-stage2-flow-zip.ll", "examples\regression\expected\798-zip-shortest-stream.stdout.txt"),
     @("examples\regression\800-merge-cold-stream-availability.slg", "browser-stage2-flow-merge.ll", "examples\regression\expected\800-merge-cold-stream-availability.stdout.txt"),
     @("examples\regression\801-concat-and-latest-policies.slg", "browser-stage2-flow-latest.ll", "examples\regression\expected\801-concat-and-latest-policies.stdout.txt"),
+    @("examples\regression\845-browser-unit-block-yield.slg", "browser-stage2-unit-block-yield.ll", "examples\regression\expected\845-browser-unit-block-yield.stdout.txt"),
     @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.slg",
         "browser-stage2-read-int.ll",

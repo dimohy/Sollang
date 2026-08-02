@@ -39,7 +39,10 @@ try {
     "mutable-method", "enum", "traits-generics", "numeric-widths",
     "associated-types", "value-generics", "result-propagation", "async-await",
     "dynamic-trait", "effects", "readonly-references", "ownership",
-    "raw-strings", "sensor-stream", "nested-stream", "risk-stream"
+    "raw-strings", "sensor-stream", "nested-stream", "risk-stream",
+    "flow-junction-tour", "flow-branch", "flow-branch-order", "flow-tap",
+    "flow-parallel-branch", "labeled-product", "ordinary-product",
+    "stream-partition", "stream-zip", "stream-merge", "stream-concat-latest"
   ];
   const expectedSampleOutputs = {
     hello: "Hello from Sollang!\nValues flow from left to right.",
@@ -72,7 +75,20 @@ try {
     "raw-strings": "first \"quoted\" line\nC:\\raw\\path\ninline \"quotes\" and C:\\raw",
     "sensor-stream": "Alert 1: sensor 7 = 59 C\nAlert 2: sensor 14 = 58 C\nAlert 3: sensor 21 = 57 C\nAlert 4: sensor 47 = 59 C\nAlert 5: sensor 54 = 58 C\nStopped after scanning 54 of 1 billion values",
     "nested-stream": "14\n15\n16\n17\nScanned = 7",
-    "risk-stream": "Warning: transaction 5, total 1250\nWarning: transaction 6, total 1650\nWarning: transaction 7, total 1750\nWarning: transaction 8, total 1900\nWarning: transaction 9, total 2100\nScanned = 9"
+    "risk-stream": "Warning: transaction 5, total 1250\nWarning: transaction 6, total 1650\nWarning: transaction 7, total 1750\nWarning: transaction 8, total 1900\nWarning: transaction 9, total 2100\nScanned = 9",
+    "flow-junction-tour": "audit=19\nresult=19",
+    "flow-branch": "16",
+    "flow-branch-order": "first\nsecond\n22",
+    "flow-tap": "side=18\n10",
+    "labeled-product": "left=4, right=2, total=42",
+    "ordinary-product": "60",
+    "stream-partition": "other=1\neven=2\nlarge=3\neven=4\nlarge=5\neven=6",
+    "stream-zip": "1+10\n2+11\n3+12",
+    "stream-merge": "1\n10\n2\n11\n3\n12",
+    "stream-concat-latest": "concat=1\nconcat=2\nconcat=4\nconcat=5\nlatest=1+10\nlatest=2+10\nlatest=2+11\nlatest=2+12"
+  };
+  const expectedSampleDiagnostics = {
+    "flow-parallel-branch": "parallel execution is unavailable on wasm32-browser because the target does not provide a compute worker pool"
   };
   if (JSON.stringify(sampleIds) !== JSON.stringify(expectedSampleIds)) {
     throw new Error(
@@ -172,14 +188,18 @@ try {
 
     await page.getByRole("button", { name: /^Run/ }).click();
     await page.locator(".result-ok, .result-error").waitFor({ timeout: 120_000 });
+    const expectedDiagnostic = expectedSampleDiagnostics[sampleId];
     if (await page.locator(".result-error").isVisible()) {
-      sampleFailures.push(
-        `${sampleId}: ${(await page.locator(".terminal").innerText()).replace(/\s+/g, " ").trim()}`
-      );
+      const diagnostic = (await page.locator(".terminal").innerText()).replace(/\s+/g, " ").trim();
+      if (!expectedDiagnostic || !diagnostic.toLowerCase().includes(expectedDiagnostic)) {
+        sampleFailures.push(`${sampleId}: ${diagnostic}`);
+      }
     } else {
       const output = (await page.locator(".terminal pre").innerText()).replace(/\r\n?/g, "\n").trimEnd();
       sampleOutputs[sampleId] = output;
-      if (!output.trim()) {
+      if (expectedDiagnostic) {
+        sampleFailures.push(`${sampleId}: expected target capability diagnostic but execution succeeded`);
+      } else if (!output.trim()) {
         sampleFailures.push(`${sampleId}: execution succeeded without observable output`);
       } else if (output !== expectedSampleOutputs[sampleId]) {
         sampleFailures.push(

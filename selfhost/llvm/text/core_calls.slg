@@ -606,6 +606,17 @@ callTargetParameter callIndex: Int, ordinal: Int, context: ref emitterContext.Em
     }
     parameter!
 }
+callHasResolvedFunctionTarget callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[callIndex] => call
+    CallEnvironmentRequest {
+        callerIndex: -1
+        callIndex: callIndex
+        targetModule: call.targetModule
+        targetSymbol: call.symbol
+        hasArgument: call.operand0 >= 0
+    } => request
+    (request -> targetFunctionIndex(context, state)) >= 0
+}
 callMutatesBinding callIndex: Int, bindingIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => mutates!
     (callIndex >= 0 and callIndex < (context.ir -> len) and bindingIndex >= 0 and bindingIndex < (context.ir -> len)) -> if {
@@ -2225,10 +2236,16 @@ emitCallArgumentChain argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordin
     callIndex => chainCallIndex
     ownerIndex => chainOwnerIndex
     separator => chainSeparator
-    (argumentIndex >= 0 and (context.ir[argumentIndex].parent == chainCallIndex or argumentIndex == context.ir[chainCallIndex].operand0)) -> if {
-        # Explicit call operands remain ABI arguments even when an intrinsic has
-        # no function-body IR from which parameter metadata can be recovered.
-        # writeCallArgument deliberately falls back to the operand's own type.
+    # A block call's body shares the call AST parent and therefore participates
+    # in the generic sibling chain, but it is not a runtime ABI argument. Once
+    # a concrete function target is known, parameter metadata is authoritative
+    # and terminates the chain before that body result. Unresolved intrinsics
+    # retain their explicit operands because they intentionally have no
+    # function-body parameter IR.
+    (argumentIndex >= 0
+        and (context.ir[argumentIndex].parent == chainCallIndex or argumentIndex == context.ir[chainCallIndex].operand0)
+        and ((chainCallIndex -> callTargetParameter(ordinal, context, state)) >= 0
+            or not (chainCallIndex -> callHasResolvedFunctionTarget(context, state)))) -> if {
         chainSeparator -> if { ", " -> print }
         argumentIndex -> writeCallArgument(chainCallIndex, chainOwnerIndex, ordinal, context, state)
         context.ir[argumentIndex].nextOperand -> emitCallArgumentChain(chainCallIndex, chainOwnerIndex, ordinal + 1, true, context, state)
