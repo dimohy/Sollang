@@ -68,8 +68,8 @@ standard library to build and run a smoke program before archiving.
 The `0.4.260801` packages contain only the native compiler, `stdlib`, `README`,
 and `LICENSE`. Their archive SHA-256 values are:
 
-- Windows x64 ZIP: `dbff5b715d235032cd5886fa17dd4f9952ebdf4df6692e4a847ff2bf45594058`
-- Linux x64 tar.gz: `b45de855f01d73f81d23c7c2aadb6bbb472994946a4e2c9a76325b82a8c95146`
+- Windows x64 ZIP: `a905628394959bf4ae0d70aed8f3c526eba276198235e48a1f0047a02a2887af`
+- Linux x64 tar.gz: `8a445e4c577e3174043d18282e0202991339dfa4ecf92283933e36c8d3e631ed`
 
 ## Root-cause-only gate
 
