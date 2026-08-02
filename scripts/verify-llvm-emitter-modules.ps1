@@ -9,6 +9,7 @@ $modulePaths = @(
     "selfhost/llvm/emitter/compute_runtime.slg"
     "selfhost/llvm/emitter/text_output_runtime.slg"
     "selfhost/llvm/emitter/process_runtime.slg"
+    "selfhost/llvm/emitter/environment_runtime.slg"
     "selfhost/llvm/emitter/mouse_event_runtime.slg"
     "selfhost/llvm/emitter/stream_join_runtime.slg"
     "selfhost/llvm/emitter/com_runtime.slg"

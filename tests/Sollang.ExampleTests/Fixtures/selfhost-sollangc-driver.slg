@@ -18,6 +18,7 @@ import sollang.compiler.cli_grammar as cliGrammar
 import sollang.compiler.cli_cpp_binding as cliCppBinding
 import sollang.compiler.cli_test as cliTest
 import sollang.compiler.compiler_version as compilerVersion
+import sollang.compiler.toolchain as toolchain
 import sollang.compiler.source_root as sourceRoot
 import sys.file as file
 import sys.path as path
@@ -765,7 +766,7 @@ testOutputName projectName: Text, explicitSources: [Text; ~] -> Text {
     source -> slice(nameStart!, nameEnd! - nameStart!)
 }
 
-runNativeTest hostTarget: Int -> Int uses Console, File, Process {
+runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     process.arguments() => arguments
     [Text; ~] => explicitSources!
     "" => projectOption!
@@ -825,6 +826,7 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process {
         }
         1 -> return
     }
+    llvmHome! -> toolchain.llvmHome => llvmHome!
     target! == 2 -> if {
         "sollang: sollang test requires a native windows-x64 or linux-x64 target" -> println
         1 -> return
@@ -930,7 +932,7 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process {
     output -> executeNativeProgram(programArguments!)
 }
 
-runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Process {
+runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Process, Environment {
     process.arguments() => arguments
     arguments -> len => argumentCount
     [Text; ~] => sources!
@@ -1068,6 +1070,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         }
         1 -> return
     }
+    llvmHome! -> toolchain.llvmHome => llvmHome!
     ((projectOption! -> len) > UIntSize(0) and (workspaceOption! -> len) > UIntSize(0)) -> if {
         "sollang: --project cannot be combined with --workspace" -> println
         1 -> return
@@ -1155,7 +1158,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
     }
 }
 
-dispatchArguments: -> Unit uses Console, File, Process {
+dispatchArguments: -> Unit uses Console, File, Process, Environment {
     sys.process.arguments() => arguments
     (arguments -> len) == UIntSize(2) -> if {
         ((arguments[1] -> textEquals("--version")) or (arguments[1] -> textEquals("-v"))) -> if {

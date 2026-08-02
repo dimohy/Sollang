@@ -11,6 +11,7 @@ import sollang.compiler.llvm.emitter.number_format as numberFormat
 import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
 import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
 import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.environment_runtime as environmentRuntime
 import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
 import sollang.compiler.llvm.emitter.com_runtime as comRuntime
 import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
@@ -476,6 +477,7 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesTextRuntime => usesTextOutput
     context -> diagnostics.usesStandardError => usesStandardError
     context -> diagnostics.usesProcessRuntime => needsProcessRuntime
+    context -> diagnostics.usesEnvironmentRuntime => needsEnvironmentRuntime
     context -> diagnostics.usesArgumentsRuntime => needsArgumentsRuntime
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
@@ -534,6 +536,16 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
             "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
         }
     }
+    needsEnvironmentRuntime -> if {
+        "declare ptr @_wgetenv(ptr)" -> println
+        (not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime) -> if {
+            "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
+        }
+        (not needsDirectoryRuntime and not needsArgumentsRuntime) -> if {
+            "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+        }
+        environmentRuntime.emitTypeRuntime()
+    }
     (needsOwnedFileRuntime and runtimeModule! < 0) -> if {
         (not usesTextOutput and not capturesParallelOutput) -> if {
             "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
@@ -542,6 +554,7 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
     comInteropCount > 0 -> if { nativeInteropCount == 0 -> comRuntime.emitWindowsComRuntime }
     context -> emitCore
+    needsEnvironmentRuntime -> if { environmentRuntime.emitWindowsRuntime() }
     needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime() }
     needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime() }
     needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory() }
@@ -567,6 +580,7 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesTextRuntime => usesTextOutput
     context -> diagnostics.usesStandardError => usesStandardError
     context -> diagnostics.usesProcessRuntime => needsProcessRuntime
+    context -> diagnostics.usesEnvironmentRuntime => needsEnvironmentRuntime
     context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
     context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
@@ -593,7 +607,9 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     (usesStandardError and (context -> diagnostics.usesIntInterpolation)) -> if { numberFormat.emitIntStandardErrorRuntime() }
     (usesStandardError and (context -> diagnostics.usesBoolInterpolation)) -> if { numberFormat.emitBoolStandardErrorRuntime() }
     needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
+    needsEnvironmentRuntime -> if { environmentRuntime.emitTypeRuntime() }
     context -> emitCore
+    needsEnvironmentRuntime -> if { environmentRuntime.emitLinuxRuntime() }
     needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
     needsProcessRuntime -> if { capturesParallelOutput -> processRuntime.emitLinuxProcessRuntime }
     needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }

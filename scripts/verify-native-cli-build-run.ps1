@@ -68,8 +68,15 @@ if ($emptyProcess.ExitCode -ne 1) {
 
 Write-Host "[native CLI 3/11] Named-input source build."
 $namedOutput = Join-Path $artifacts "named.exe"
-& $Compiler build (Join-Path $repoRoot "examples\regression\02-function-named-input.slg") `
-    -o $namedOutput --target windows-x64 --llvm $LlvmHome --stdlib $StdlibRoot -O1
+$savedLlvmHome = $env:SOLLANG_LLVM_HOME
+try {
+    $env:SOLLANG_LLVM_HOME = $LlvmHome
+    & $Compiler build (Join-Path $repoRoot "examples\regression\02-function-named-input.slg") `
+        -o $namedOutput --target windows-x64 --stdlib $StdlibRoot -O1
+}
+finally {
+    $env:SOLLANG_LLVM_HOME = $savedLlvmHome
+}
 Assert-ExitCode 0 "named build"
 $namedRun = (& $namedOutput | Out-String)
 Assert-ExitCode 0 "named executable"

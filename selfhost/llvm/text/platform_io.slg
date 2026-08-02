@@ -194,6 +194,51 @@ emitProcessCall request: ProcessCallRequest, context: ref emitterContext.EmitCon
     call -> writeIrType(context, state)
     ", ptr %v$(request.callIndex)_process_result_slot, align 8" -> println
 }
+emitEnvironmentCall request: ProcessCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[request.callIndex] => call
+    request.callIndex -> callArgumentIndex(context, state) => argumentIndex!
+    argumentIndex! -> aggregateValueIndex(context, state) => argumentIndex!
+    context.ir[argumentIndex!] => argument
+    "  %v$(request.callIndex)_environment_name_ptr = extractvalue %sollang.text " -> print
+    argumentIndex! -> writeValue(request.ownerIndex, context, state)
+    ", 0" -> println
+    "  %v$(request.callIndex)_environment_name_len = extractvalue %sollang.text " -> print
+    argumentIndex! -> writeValue(request.ownerIndex, context, state)
+    ", 1" -> println
+    "  %v$(request.callIndex)_environment_raw = call %sollang.environment_result @sollang_environment(ptr %v$(request.callIndex)_environment_name_ptr, i64 %v$(request.callIndex)_environment_name_len)" -> println
+    "  %v$(request.callIndex)_environment_ptr = extractvalue %sollang.environment_result %v$(request.callIndex)_environment_raw, 0" -> println
+    "  %v$(request.callIndex)_environment_len = extractvalue %sollang.environment_result %v$(request.callIndex)_environment_raw, 1" -> println
+    "  %v$(request.callIndex)_environment_found = extractvalue %sollang.environment_result %v$(request.callIndex)_environment_raw, 2" -> println
+    "  %v$(request.callIndex)_environment_ok = extractvalue %sollang.environment_result %v$(request.callIndex)_environment_raw, 3" -> println
+    "  br i1 %v$(request.callIndex)_environment_ok, label %environment$(request.callIndex)_prepare, label %environment$(request.callIndex)_trap" -> println
+    "environment$(request.callIndex)_trap:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "environment$(request.callIndex)_prepare:" -> println
+    "  %v$(request.callIndex)_environment_slot = alloca " -> print
+    call -> writeIrType(context, state)
+    ", align 8" -> println
+    "  store " -> print
+    call -> writeIrType(context, state)
+    " zeroinitializer, ptr %v$(request.callIndex)_environment_slot, align 8" -> println
+    "  br i1 %v$(request.callIndex)_environment_found, label %environment$(request.callIndex)_some, label %environment$(request.callIndex)_merge" -> println
+    "environment$(request.callIndex)_some:" -> println
+    "  %v$(request.callIndex)_environment_some_tag = getelementptr inbounds " -> print
+    call -> writeIrType(context, state)
+    ", ptr %v$(request.callIndex)_environment_slot, i32 0, i32 0" -> println
+    "  store i32 1, ptr %v$(request.callIndex)_environment_some_tag, align 4" -> println
+    "  %v$(request.callIndex)_environment_text0 = insertvalue %sollang.text poison, ptr %v$(request.callIndex)_environment_ptr, 0" -> println
+    "  %v$(request.callIndex)_environment_text = insertvalue %sollang.text %v$(request.callIndex)_environment_text0, i64 %v$(request.callIndex)_environment_len, 1" -> println
+    "  %v$(request.callIndex)_environment_some_payload = getelementptr inbounds " -> print
+    call -> writeIrType(context, state)
+    ", ptr %v$(request.callIndex)_environment_slot, i32 0, i32 1" -> println
+    "  store %sollang.text %v$(request.callIndex)_environment_text, ptr %v$(request.callIndex)_environment_some_payload, align 8" -> println
+    "  br label %environment$(request.callIndex)_merge" -> println
+    "environment$(request.callIndex)_merge:" -> println
+    "  %v$(request.callIndex) = load " -> print
+    call -> writeIrType(context, state)
+    ", ptr %v$(request.callIndex)_environment_slot, align 8" -> println
+}
 emitExitCall callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     callIndex -> callArgumentIndex(context, state) => argumentIndex
     context.ir[argumentIndex] => argument

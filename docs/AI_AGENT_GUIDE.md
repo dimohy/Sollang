@@ -239,6 +239,11 @@ sollang test path/to/project --target windows-x64
 sollang format path/to/program.slg
 ```
 
+`--llvm <directory>` takes precedence when supplied. Otherwise native CLI
+commands read `SOLLANG_LLVM_HOME`; if neither is set, they resolve LLVM tools
+from `PATH`. Release and global-install verification must exercise the
+environment-variable path as well as the explicit option.
+
 ## 6. How an Agent changes Sollang safely
 
 1. Read the philosophy, specification, decisions, grammar, and nearest retained

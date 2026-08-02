@@ -81,8 +81,8 @@ Write-Host "[linux native CLI 3/10] Named-input source build."
 $namedSource = Convert-ToWslPath (Join-Path $repoRoot "examples\regression\02-function-named-input.slg")
 $namedOutput = Join-Path $artifacts "named"
 $namedOutputWsl = Convert-ToWslPath $namedOutput
-& wsl.exe -d $Distribution -- $compilerWsl build $namedSource `
-    -o $namedOutputWsl --target linux-x64 --stdlib $stdlibWsl --llvm $llvmHomeWsl -O1
+& wsl.exe -d $Distribution -- env "SOLLANG_LLVM_HOME=$llvmHomeWsl" $compilerWsl build $namedSource `
+    -o $namedOutputWsl --target linux-x64 --stdlib $stdlibWsl -O1
 Assert-ExitCode 0 "named build"
 $namedRun = (& wsl.exe -d $Distribution -- $namedOutputWsl | Out-String)
 Assert-ExitCode 0 "named executable"

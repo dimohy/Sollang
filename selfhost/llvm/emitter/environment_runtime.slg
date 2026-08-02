@@ -1,0 +1,195 @@
+namespace sollang.compiler.llvm.emitter.environment_runtime
+
+public emitTypeRuntime: -> Unit uses Console {
+    "%sollang.environment_result = type { ptr, i64, i1, i1 }" -> println
+}
+
+public emitWindowsRuntime: -> Unit uses Console {
+    """
+    @sollang_environment_allocations = internal global ptr null
+    @sollang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1
+    define internal i1 @sollang_track_environment_allocation(ptr %allocation) {
+    entry:
+      %node = call ptr @malloc(i64 16)
+      %ok = icmp ne ptr %node, null
+      br i1 %ok, label %store, label %fail
+    store:
+      store ptr %allocation, ptr %node, align 8
+      %next_slot = getelementptr i8, ptr %node, i64 8
+      %head = load ptr, ptr @sollang_environment_allocations, align 8
+      store ptr %head, ptr %next_slot, align 8
+      store ptr %node, ptr @sollang_environment_allocations, align 8
+      ret i1 true
+    fail:
+      ret i1 false
+    }
+    define internal %sollang.environment_result @sollang_environment(ptr %name, i64 %name_len) {
+    entry:
+      %length_valid = icmp ule i64 %name_len, 2147483647
+      br i1 %length_valid, label %validate, label %error
+    validate:
+      %vi = phi i64 [ 0, %entry ], [ %vnext, %valid_byte ]
+      %validated = icmp eq i64 %vi, %name_len
+      br i1 %validated, label %key_size, label %check_byte
+    check_byte:
+      %name_byte_ptr = getelementptr i8, ptr %name, i64 %vi
+      %name_byte = load i8, ptr %name_byte_ptr, align 1
+      %name_byte_valid = icmp ne i8 %name_byte, 0
+      br i1 %name_byte_valid, label %valid_byte, label %error
+    valid_byte:
+      %vnext = add i64 %vi, 1
+      br label %validate
+    key_size:
+      %name_len32 = trunc i64 %name_len to i32
+      %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %name, i32 %name_len32, ptr null, i32 0)
+      %empty_name = icmp eq i32 %name_len32, 0
+      %wide_nonempty = icmp sgt i32 %wide_chars, 0
+      %wide_valid = or i1 %empty_name, %wide_nonempty
+      br i1 %wide_valid, label %key_alloc, label %error
+    key_alloc:
+      %wide_chars_plus_null = add i32 %wide_chars, 1
+      %wide_chars64 = zext i32 %wide_chars_plus_null to i64
+      %key_bytes = mul i64 %wide_chars64, 2
+      %wide_key = call ptr @malloc(i64 %key_bytes)
+      %key_ok = icmp ne ptr %wide_key, null
+      br i1 %key_ok, label %key_convert, label %error
+    key_convert:
+      %key_written = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %name, i32 %name_len32, ptr %wide_key, i32 %wide_chars)
+      %key_converted = icmp eq i32 %key_written, %wide_chars
+      br i1 %key_converted, label %key_terminate, label %free_key_error
+    key_terminate:
+      %key_end = getelementptr i16, ptr %wide_key, i32 %wide_chars
+      store i16 0, ptr %key_end, align 2
+      %wide_value = call ptr @_wgetenv(ptr %wide_key)
+      call void @free(ptr %wide_key)
+      %found = icmp ne ptr %wide_value, null
+      br i1 %found, label %value_length, label %missing
+    value_length:
+      %value_chars = phi i32 [ 0, %key_terminate ], [ %value_next, %value_more ]
+      %value_ptr = getelementptr i16, ptr %wide_value, i32 %value_chars
+      %value_char = load i16, ptr %value_ptr, align 2
+      %value_done = icmp eq i16 %value_char, 0
+      br i1 %value_done, label %value_ready, label %value_more
+    value_more:
+      %value_next = add i32 %value_chars, 1
+      br label %value_length
+    value_ready:
+      %value_empty = icmp eq i32 %value_chars, 0
+      br i1 %value_empty, label %empty_present, label %utf8_size
+    empty_present:
+      %empty_ptr = getelementptr inbounds [1 x i8], ptr @sollang_environment_empty, i64 0, i64 0
+      %e0 = insertvalue %sollang.environment_result zeroinitializer, ptr %empty_ptr, 0
+      %e1 = insertvalue %sollang.environment_result %e0, i1 true, 2
+      %e2 = insertvalue %sollang.environment_result %e1, i1 true, 3
+      ret %sollang.environment_result %e2
+    utf8_size:
+      %utf8_bytes32 = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide_value, i32 %value_chars, ptr null, i32 0, ptr null, ptr null)
+      %utf8_size_ok = icmp sgt i32 %utf8_bytes32, 0
+      br i1 %utf8_size_ok, label %utf8_alloc, label %error
+    utf8_alloc:
+      %utf8_bytes = zext i32 %utf8_bytes32 to i64
+      %utf8 = call ptr @malloc(i64 %utf8_bytes)
+      %utf8_ok = icmp ne ptr %utf8, null
+      br i1 %utf8_ok, label %utf8_convert, label %error
+    utf8_convert:
+      %utf8_written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide_value, i32 %value_chars, ptr %utf8, i32 %utf8_bytes32, ptr null, ptr null)
+      %utf8_converted = icmp eq i32 %utf8_written, %utf8_bytes32
+      br i1 %utf8_converted, label %track, label %free_utf8_error
+    track:
+      %tracked = call i1 @sollang_track_environment_allocation(ptr %utf8)
+      br i1 %tracked, label %present, label %free_utf8_error
+    present:
+      %p0 = insertvalue %sollang.environment_result poison, ptr %utf8, 0
+      %p1 = insertvalue %sollang.environment_result %p0, i64 %utf8_bytes, 1
+      %p2 = insertvalue %sollang.environment_result %p1, i1 true, 2
+      %p3 = insertvalue %sollang.environment_result %p2, i1 true, 3
+      ret %sollang.environment_result %p3
+    free_utf8_error:
+      call void @free(ptr %utf8)
+      br label %error
+    free_key_error:
+      call void @free(ptr %wide_key)
+      br label %error
+    missing:
+      %m0 = insertvalue %sollang.environment_result zeroinitializer, i1 true, 3
+      ret %sollang.environment_result %m0
+    error:
+      ret %sollang.environment_result zeroinitializer
+    }
+    define internal void @sollang_dispose_environment() {
+    entry:
+      %head = load ptr, ptr @sollang_environment_allocations, align 8
+      br label %loop
+    loop:
+      %node = phi ptr [ %head, %entry ], [ %next, %free_node ]
+      %done = icmp eq ptr %node, null
+      br i1 %done, label %finish, label %free_node
+    free_node:
+      %allocation = load ptr, ptr %node, align 8
+      %next_slot = getelementptr i8, ptr %node, i64 8
+      %next = load ptr, ptr %next_slot, align 8
+      call void @free(ptr %allocation)
+      call void @free(ptr %node)
+      br label %loop
+    finish:
+      ret void
+    }
+    """ -> println
+}
+
+public emitLinuxRuntime: -> Unit uses Console {
+    """
+    declare ptr @getenv(ptr)
+    define internal %sollang.environment_result @sollang_environment(ptr %name, i64 %name_len) {
+    entry:
+      %bytes = add i64 %name_len, 1
+      %key = call ptr @malloc(i64 %bytes)
+      %allocated = icmp ne ptr %key, null
+      br i1 %allocated, label %copy, label %error
+    copy:
+      %i = phi i64 [ 0, %entry ], [ %next, %store_byte ]
+      %done = icmp eq i64 %i, %name_len
+      br i1 %done, label %terminate, label %copy_byte
+    copy_byte:
+      %source = getelementptr i8, ptr %name, i64 %i
+      %byte = load i8, ptr %source, align 1
+      %valid = icmp ne i8 %byte, 0
+      br i1 %valid, label %store_byte, label %invalid_key
+    store_byte:
+      %destination = getelementptr i8, ptr %key, i64 %i
+      store i8 %byte, ptr %destination, align 1
+      %next = add i64 %i, 1
+      br label %copy
+    terminate:
+      %end = getelementptr i8, ptr %key, i64 %name_len
+      store i8 0, ptr %end, align 1
+      %value = call ptr @getenv(ptr %key)
+      call void @free(ptr %key)
+      %found = icmp ne ptr %value, null
+      br i1 %found, label %length, label %missing
+    length:
+      %j = phi i64 [ 0, %terminate ], [ %j_next, %length_more ]
+      %value_byte_ptr = getelementptr i8, ptr %value, i64 %j
+      %value_byte = load i8, ptr %value_byte_ptr, align 1
+      %length_done = icmp eq i8 %value_byte, 0
+      br i1 %length_done, label %present, label %length_more
+    length_more:
+      %j_next = add i64 %j, 1
+      br label %length
+    present:
+      %p0 = insertvalue %sollang.environment_result poison, ptr %value, 0
+      %p1 = insertvalue %sollang.environment_result %p0, i64 %j, 1
+      %p2 = insertvalue %sollang.environment_result %p1, i1 true, 2
+      %p3 = insertvalue %sollang.environment_result %p2, i1 true, 3
+      ret %sollang.environment_result %p3
+    missing:
+      %m0 = insertvalue %sollang.environment_result zeroinitializer, i1 true, 3
+      ret %sollang.environment_result %m0
+    invalid_key:
+      call void @free(ptr %key)
+      br label %error
+    error:
+      ret %sollang.environment_result zeroinitializer
+    }
+    """ -> println
+}

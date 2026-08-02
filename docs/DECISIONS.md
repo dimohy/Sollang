@@ -11268,16 +11268,16 @@ an accidental path during checksum generation.
 
 The logical catalog is user 20, regression 828, and diagnostics 257. Windows
 passes 1085/1085 selected cases and Linux passes 1084/1084 applicable cases.
-Windows Stage 2 passes 7/7 and Stage 3 reproduces 26,830,874 LLVM bytes at
+Windows Stage 2 passes 7/7 and Stage 3 reproduces 26,901,597 LLVM bytes at
 normalized SHA-256
-`D2CD4F2BB7358C30C880829CCC7749DAB1A7F8411F6DA62FD3312608FD0A6FDE`.
-Linux Stage 2 passes 6/6 and Stage 3 reproduces 26,814,087 LLVM bytes at
-`18C03D58475D8F64FEEC72153E45D7B10245829783510770CC65C93D1E67EE52`.
+`BADD8C5B6DEEA29EE8B616A11E8C1FA91908281683F1651273924ED5E7F0BDAF`.
+Linux Stage 2 passes 6/6 and Stage 3 reproduces 26,881,227 LLVM bytes at
+`A46EFFE67E2C6E0E3A1C31DE291314857FEDA5611486F8BD16E1DC2E972017D4`.
 
 The immutable native executables have SHA-256
-`68FA1105625CC9D46C8396A8A48E92E2ECB12F160A61EDE7269F49902C648B49`
+`BD79F71A12FBDFFD912CD1D5FE1AFBEB649FDCB1158A1E6E4C49FBA2B0BADF5F`
 on Windows and
-`140D36C12C84F2145C7593AEFA64D69318B19139C11DBF58383773937C51A8AF`
+`405A468D41890C733B1D34BEBB6A98C763DACFC14AD2A70A15C60C5981ED01AA`
 on Linux. Each passes 16 exact top-level command contracts plus native
 build/run, grammar build 4/4, test 10/10, format 11/11, language server 4/4,
 and bind-cpp 6/6. The packaged executable hashes equal those Stage 3 hashes,
@@ -11317,3 +11317,21 @@ Any change to grammar, semantics, operators, ownership, effects, standard
 library, CLI, target support, examples, diagnostics, or verification must
 review and update the guide in the same change. A language change is not
 complete while the canonical guide is stale.
+
+## D296 — Native Toolchain Discovery Matches the Public CLI Contract
+
+Status: implemented and retained cross-platform
+Date: 2026-08-02
+
+The native self-host CLI resolves LLVM in one ordered contract: an explicit
+`--llvm <directory>` option wins, otherwise `SOLLANG_LLVM_HOME` is read from
+the current process, and only an absent or empty value leaves normal `PATH`
+resolution. Build, run, test, and bind-cpp share this resolver.
+
+The prior native CLI initialized its LLVM home only from parsed arguments even
+though the public installation guide required `SOLLANG_LLVM_HOME`. As a result,
+the compiler attempted to start bare `clang`, reduced the process-start error
+to exit code `-1`, and reported only a linker failure. Windows and Linux native
+CLI matrices now make their first build with the environment variable and no
+`--llvm`, retaining the actual external contract instead of a command-specific
+workaround.
