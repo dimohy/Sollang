@@ -11268,16 +11268,16 @@ an accidental path during checksum generation.
 
 The logical catalog is user 20, regression 828, and diagnostics 257. Windows
 passes 1085/1085 selected cases and Linux passes 1084/1084 applicable cases.
-Windows Stage 2 passes 7/7 and Stage 3 reproduces 26,901,597 LLVM bytes at
+Windows Stage 2 passes 7/7 and Stage 3 reproduces 26,909,214 LLVM bytes at
 normalized SHA-256
-`BADD8C5B6DEEA29EE8B616A11E8C1FA91908281683F1651273924ED5E7F0BDAF`.
-Linux Stage 2 passes 6/6 and Stage 3 reproduces 26,881,227 LLVM bytes at
-`A46EFFE67E2C6E0E3A1C31DE291314857FEDA5611486F8BD16E1DC2E972017D4`.
+`6C763A697DB9A93FDBD9F579515F85AE46F27820CD3F848C2DE6F3CCB774B1C1`.
+Linux Stage 2 passes 6/6 and Stage 3 reproduces 26,888,844 LLVM bytes at
+`CC6F3E0341EDA15AF93606D17477B3B2FD8FDB45EE812EF82ECB5216B4BE853C`.
 
 The immutable native executables have SHA-256
-`BD79F71A12FBDFFD912CD1D5FE1AFBEB649FDCB1158A1E6E4C49FBA2B0BADF5F`
+`D938A20239DE2F4D450275400567810D70DCF6E80198DB439E5F053A650E8E7A`
 on Windows and
-`405A468D41890C733B1D34BEBB6A98C763DACFC14AD2A70A15C60C5981ED01AA`
+`EEE597698168E3A5628E5939DFD4AF26966AEC5CF460B4A3CFBD8FBB28173FE8`
 on Linux. Each passes 16 exact top-level command contracts plus native
 build/run, grammar build 4/4, test 10/10, format 11/11, language server 4/4,
 and bind-cpp 6/6. The packaged executable hashes equal those Stage 3 hashes,
@@ -11335,3 +11335,21 @@ to exit code `-1`, and reported only a linker failure. Windows and Linux native
 CLI matrices now make their first build with the environment variable and no
 `--llvm`, retaining the actual external contract instead of a command-specific
 workaround.
+
+## D297 — Browser Execution Preserves Implicit Main and Editor Commands
+
+Status: implemented and browser-verified
+Date: 2026-08-02
+
+The browser compiler accepts the same implicit-entry syntax as every other
+Sollang target. A source consisting only of `"test" -> println` lowers the
+source root to a typed entry and exports `sollang_start`; the playground does
+not wrap or preprocess the source. Declaration-only modules remain libraries,
+and an explicit `main { ... }` continues to own entry selection when present.
+
+Monaco owns editor keyboard commands before DOM bubbling reaches `window`.
+The playground therefore registers `Ctrl+Enter` (`Cmd+Enter` on macOS) through
+Monaco's command service and executes the editor model's current source. The
+window shortcut remains available outside the editor. Browser regression now
+executes the one-line implicit main and then runs edited source from the editor
+shortcut, comparing exact stdout for both paths.

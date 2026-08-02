@@ -92,14 +92,21 @@ export default function PlaygroundPage() {
       });
   }, [locale]);
 
-  const run = useCallback(async () => {
+  const runSource = useCallback(async (source: string) => {
     if (compilerState !== "ready" || isRunning) return;
     setIsRunning(true);
     setResult(null);
-    const compiled = await compileAndRun(code, locale, input);
+    const compiled = await compileAndRun(source, locale, input);
     setResult(compiled);
     setIsRunning(false);
-  }, [code, compilerState, input, isRunning, locale]);
+  }, [compilerState, input, isRunning, locale]);
+
+  const run = useCallback(() => runSource(code), [code, runSource]);
+  const runSourceRef = useRef(runSource);
+
+  useEffect(() => {
+    runSourceRef.current = runSource;
+  }, [runSource]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -216,9 +223,14 @@ export default function PlaygroundPage() {
     });
   };
 
-  const onEditorMount: OnMount = editor => {
+  const onEditorMount: OnMount = (editor, monaco) => {
     const node = editor.getDomNode();
     if (!node) return;
+
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
+      () => { void runSourceRef.current(editor.getValue()); }
+    );
 
     let lastX = 0;
     let lastY = 0;

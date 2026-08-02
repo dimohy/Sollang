@@ -3905,10 +3905,36 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
             functionRequestIndex! + 1 => functionRequestIndex!
         }
+        false => explicitEntryPresent!
+        false => implicitEntryPresent!
+        0 => entryShapeSearch!
+        entryShapeSearch! < sourceRange.astCount -> while {
+            prepared.package.nodes[sourceRange.astStart + entryShapeSearch!] => entryShapeNode
+            entryShapeNode.kind == 8 -> if { true => explicitEntryPresent! }
+            (entryShapeNode.parent == 0
+                and entryShapeNode.kind != 1
+                and entryShapeNode.kind != 2
+                and entryShapeNode.kind != 3
+                and entryShapeNode.kind != 4
+                and entryShapeNode.kind != 5
+                and entryShapeNode.kind != 6
+                and entryShapeNode.kind != 7
+                and entryShapeNode.kind != 8
+                and entryShapeNode.kind != 50
+                and entryShapeNode.kind != 65
+                and entryShapeNode.kind != 66
+                and entryShapeNode.kind != 67
+                and entryShapeNode.kind != 68
+                and entryShapeNode.kind != 69) -> if {
+                true => implicitEntryPresent!
+            }
+            entryShapeSearch! + 1 => entryShapeSearch!
+        }
         0 => entryAstIndex!
         entryAstIndex! < sourceRange.astCount -> while {
             prepared.package.nodes[sourceRange.astStart + entryAstIndex!] => entryAst
-            (entryAst.kind == 8 and (prepared.package.entrySourceModule < 0 or prepared.package.entrySourceModule == sourceIndex!)) -> if {
+            ((entryAst.kind == 8 or (entryAst.kind == 0 and not explicitEntryPresent! and implicitEntryPresent!))
+                and (prepared.package.entrySourceModule < 0 or prepared.package.entrySourceModule == sourceIndex!)) -> if {
                 -1 => entryResultTypeIndex!
                 1000000 => entryResultDistance!
                 0 => entryTypeSearch!

@@ -231,6 +231,22 @@ try {
 
   await page.locator(".monaco-editor .view-lines").click();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.insertText('"test" -> println');
+  await page.getByRole("button", { name: /^Run/ }).click();
+  await page.waitForFunction(() =>
+    document.querySelector(".terminal pre")?.textContent === "test\n"
+  , undefined, { timeout: 120_000 });
+
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.insertText('main {\n    "shortcut" -> println\n}');
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter");
+  await page.waitForFunction(() =>
+    document.querySelector(".terminal pre")?.textContent === "shortcut\n"
+  , undefined, { timeout: 120_000 });
+
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await page.keyboard.insertText(
     'main {\n'
     + '    "dimohy" => dimohy\n'
