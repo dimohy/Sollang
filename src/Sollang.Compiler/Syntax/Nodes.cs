@@ -349,6 +349,65 @@ internal sealed record FlowTarget(
     int Line,
     int Column);
 
+internal enum BranchInputMode
+{
+    Default,
+    ReadonlyBorrow,
+    MutableBorrow,
+    Move
+}
+
+internal sealed record BranchExpression(
+    Expression Source,
+    IReadOnlyList<BranchArm> Arms,
+    bool IsParallel,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
+internal sealed record BranchArm(
+    string Label,
+    BranchInputMode InputMode,
+    IReadOnlyList<FlowTarget> Targets,
+    int Line,
+    int Column);
+
+internal sealed record TapExpression(
+    Expression Source,
+    IReadOnlyList<FlowTarget> Targets,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
+internal sealed record PartitionExpression(
+    Expression Source,
+    string ItemName,
+    IReadOnlyList<PartitionArm> Arms,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
+internal sealed record PartitionArm(
+    string Label,
+    Expression? Condition,
+    int Line,
+    int Column);
+
+internal enum StreamJoinPolicy
+{
+    Zip,
+    Merge,
+    Concat,
+    Latest
+}
+
+internal sealed record StreamJoinExpression(
+    Expression Source,
+    StreamJoinPolicy Policy,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
 internal sealed record CallExpression(
     IReadOnlyList<string> Path,
     IReadOnlyList<Expression> Arguments,
@@ -396,6 +455,14 @@ internal sealed record TypedEmptyDictionaryExpression(string KeyType, string Val
     : Expression(Line, Column);
 
 internal sealed record DictionaryEntryExpression(Expression Key, Expression Value);
+
+internal sealed record ProductExpression(
+    IReadOnlyList<ProductElement> Elements,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
+internal sealed record ProductElement(string? Label, Expression Value, int Line, int Column);
 
 internal sealed record IndexExpression(Expression Source, Expression Index, int Line, int Column)
     : Expression(Line, Column);

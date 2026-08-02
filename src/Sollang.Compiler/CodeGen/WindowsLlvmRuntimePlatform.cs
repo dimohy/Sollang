@@ -12,6 +12,8 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsComputePool => true;
 
+    public override bool SupportsConcurrentStreamJoins => true;
+
     public override void EmitGlobals(StringBuilder globals)
     {
         globals.AppendLine("@sollang_file_writer = internal global ptr null");
@@ -86,7 +88,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare dllimport i32 @CreateProcessW(ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr)");
             functions.AppendLine("declare dllimport i32 @GetExitCodeProcess(ptr, ptr)");
         }
-        if (UsesProcessRuntime || UsesAsyncFile || UsesComputePool || UsesMouseEvents)
+        if (UsesProcessRuntime || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
         }
@@ -104,7 +106,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)");
             functions.AppendLine("declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)");
         }
-        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents)
+        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
             functions.AppendLine("declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)");
@@ -120,6 +122,85 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare dllimport i32 @ResetEvent(ptr)");
             functions.AppendLine("declare dllimport i32 @GetActiveProcessorCount(i16)");
         }
+        if (UsesConcurrentStreamJoins)
+        {
+            functions.AppendLine("declare dllimport void @AcquireSRWLockExclusive(ptr)");
+            functions.AppendLine("declare dllimport void @ReleaseSRWLockExclusive(ptr)");
+            functions.AppendLine("declare dllimport void @InitializeConditionVariable(ptr)");
+            functions.AppendLine("declare dllimport i32 @SleepConditionVariableSRW(ptr, ptr, i32, i32)");
+            functions.AppendLine("declare dllimport void @WakeAllConditionVariable(ptr)");
+        }
+    }
+
+    protected override void EmitConcurrentStreamJoinPlatformPrimitives(StringBuilder functions)
+    {
+        functions.AppendLine("""
+            define internal i32 @sollang_windows_stream_join_worker(ptr %argument) #0 {
+            entry:
+              call void @sollang_stream_join_worker_run(ptr %argument)
+              ret i32 0
+            }
+
+            define internal i1 @sollang_stream_join_sync_init(ptr %runtime) #0 {
+            entry:
+              %sync = getelementptr i8, ptr %runtime, i64 112
+              store ptr null, ptr %sync, align 8
+              %condition = getelementptr i8, ptr %runtime, i64 120
+              call void @InitializeConditionVariable(ptr %condition)
+              ret i1 true
+            }
+
+            define internal void @sollang_stream_join_lock(ptr %runtime) #0 {
+            entry:
+              %sync = getelementptr i8, ptr %runtime, i64 112
+              call void @AcquireSRWLockExclusive(ptr %sync)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_unlock(ptr %runtime) #0 {
+            entry:
+              %sync = getelementptr i8, ptr %runtime, i64 112
+              call void @ReleaseSRWLockExclusive(ptr %sync)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_wait(ptr %runtime) #0 {
+            entry:
+              %sync = getelementptr i8, ptr %runtime, i64 112
+              %condition = getelementptr i8, ptr %runtime, i64 120
+              %waited = call i32 @SleepConditionVariableSRW(ptr %condition, ptr %sync, i32 -1, i32 0)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_wake_all(ptr %runtime) #0 {
+            entry:
+              %condition = getelementptr i8, ptr %runtime, i64 120
+              call void @WakeAllConditionVariable(ptr %condition)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_sync_destroy(ptr %runtime) #0 {
+            entry:
+              ret void
+            }
+
+            define internal i1 @sollang_stream_join_thread_start(ptr %thread_slot, ptr %argument) #0 {
+            entry:
+              %thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_stream_join_worker, ptr %argument, i32 0, ptr null)
+              store ptr %thread, ptr %thread_slot, align 8
+              %ok = icmp ne ptr %thread, null
+              ret i1 %ok
+            }
+
+            define internal void @sollang_stream_join_thread_join(ptr %thread_slot) #0 {
+            entry:
+              %thread = load ptr, ptr %thread_slot, align 8
+              %waited = call i32 @WaitForSingleObject(ptr %thread, i32 -1)
+              %closed = call i32 @CloseHandle(ptr %thread)
+              ret void
+            }
+
+            """);
     }
 
     public override void EmitMemoryDeclarations(StringBuilder functions)
@@ -327,7 +408,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br i1 %mode_ok, label %allocate_context, label %fail
 
             allocate_context:
-              %context = call ptr @sollang_alloc(i64 72)
+              %context = call ptr @sollang_alloc(i64 80)
               %allocated = icmp ne ptr %context, null
               br i1 %allocated, label %allocate_buffer, label %fail
 
@@ -375,6 +456,8 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               store i32 0, ptr %buttons_slot, align 4
               %lock_slot = getelementptr i8, ptr %context, i64 68
               store atomic i32 0, ptr %lock_slot release, align 4
+              %active_next_slot = getelementptr i8, ptr %context, i64 72
+              store atomic i32 0, ptr %active_next_slot release, align 4
               %thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_mouse_event_worker, ptr %context, i32 0, ptr null)
               %thread_ok = icmp ne ptr %thread, null
               br i1 %thread_ok, label %ready, label %restore
@@ -406,6 +489,8 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal i1 @sollang_mouse_event_next_raw(ptr %context, ptr %x, ptr %y, ptr %delta, ptr %button, ptr %kind) #0 {
             entry:
+              %active_next_address = getelementptr i8, ptr %context, i64 72
+              %previous_active_next = atomicrmw add ptr %active_next_address, i32 1 acq_rel, align 4
               br label %queue_lock
 
             queue_lock:
@@ -466,9 +551,17 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %next_count = sub i32 %count, 1
               store i32 %next_count, ptr %count_address, align 4
               store atomic i32 0, ptr %lock_address release, align 4
+              %active_before_value_return = atomicrmw sub ptr %active_next_address, i32 1 acq_rel, align 4
+              %value_event_address = getelementptr i8, ptr %context, i64 48
+              %value_event = load ptr, ptr %value_event_address, align 8
+              %value_signalled = call i32 @SetEvent(ptr %value_event)
               ret i1 true
 
             closed:
+              %active_before_closed_return = atomicrmw sub ptr %active_next_address, i32 1 acq_rel, align 4
+              %closed_event_address = getelementptr i8, ptr %context, i64 48
+              %closed_event = load ptr, ptr %closed_event_address, align 8
+              %closed_signalled = call i32 @SetEvent(ptr %closed_event)
               ret i1 false
             }
 
@@ -484,6 +577,19 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %signalled = call i32 @SetEvent(ptr %event)
               %joined = call i32 @WaitForSingleObject(ptr %thread, i32 -1)
               %thread_closed = call i32 @CloseHandle(ptr %thread)
+              br label %wait_active_next
+
+            wait_active_next:
+              %active_next_address = getelementptr i8, ptr %context, i64 72
+              %active_next = load atomic i32, ptr %active_next_address acquire, align 4
+              %next_idle = icmp eq i32 %active_next, 0
+              br i1 %next_idle, label %cleanup, label %wait_next_exit
+
+            wait_next_exit:
+              %next_waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+              br label %wait_active_next
+
+            cleanup:
               %event_closed = call i32 @CloseHandle(ptr %event)
               %input = load ptr, ptr %context, align 8
               %mode_slot = getelementptr i8, ptr %context, i64 8

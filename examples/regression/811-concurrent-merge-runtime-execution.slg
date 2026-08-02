@@ -1,0 +1,29 @@
+# Nested cold merges provide finite EventStreams that execute the bounded concurrent merge runtime.
+import std.sequence
+
+makeValues values: Range -> Stream<Int> {
+    values -> defer
+}
+
+asEvents left: move Stream<Int>, right: move Stream<Int> -> EventStream<Int> {
+    (left, right) -> merge
+}
+
+main {
+    1..2 -> makeValues => firstLeft
+    10..11 -> makeValues => firstRight
+    firstLeft -> asEvents(firstRight) => first
+
+    20..21 -> makeValues => secondLeft
+    30..31 -> makeValues => secondRight
+    secondLeft -> asEvents(secondRight) => second
+
+    0 => count!
+    0 => sum!
+    (first, second) -> merge => all
+    all -> each value {
+        count! + 1 => count!
+        sum! + value => sum!
+    }
+    "count=$(count!),sum=$(sum!)" -> println
+}

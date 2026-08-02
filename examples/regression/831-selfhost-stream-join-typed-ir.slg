@@ -1,0 +1,66 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+# Every policy is explicit in IR. Zip/latest produce a labeled structural
+# product element; merge/concat preserve their homogeneous stream type.
+main {
+    """
+    makeInts values: Range -> Stream<Int> { values -> defer }
+    makeFlags values: [Bool; ~] -> Stream<Bool> { values -> defer }
+
+    main {
+        1..3 -> makeInts => zipInts
+        [true, false; ~] -> makeFlags => zipFlags
+        (numbers: zipInts, flags: zipFlags) -> zip => zipped
+
+        4..6 -> makeInts => mergeLeft
+        7..9 -> makeInts => mergeRight
+        (left: mergeLeft, right: mergeRight) -> merge => merged
+
+        10..12 -> makeInts => concatLeft
+        13..15 -> makeInts => concatRight
+        (left: concatLeft, right: concatRight) -> concat => concatenated
+
+        16..18 -> makeInts => latestInts
+        [false, true; ~] -> makeFlags => latestFlags
+        (numbers: latestInts, flags: latestFlags) -> latest => combined
+    }
+    """ => source
+    [source; ~] => sources!
+    sources! -> semanticContext.prepare => snapshot!
+    snapshot! -> expressionTypeIds.resolveContext => typed!
+
+    0 => expressionIndex!
+    expressionIndex! < (typed!.expressions -> len) -> while {
+        typed!.expressions[expressionIndex!] => expression
+        snapshot!.package.nodes[snapshot!.package.ranges[expression.sourceModule].astStart + expression.astNode] => node
+        node.kind == 81 -> if {
+            source -> slice(node.start, node.length) => policy
+            typed!.types[expression.typeId] => wrapper
+            typed!.types[wrapper.first] => element
+            "join type = $policy, wrapper $(wrapper.symbol), element kind $(element.kind), fields $(element.length)" -> println
+        }
+        expressionIndex! + 1 => expressionIndex!
+    }
+
+    snapshot! -> typedIr.lowerContext => ir!
+    0 => irIndex!
+    irIndex! < (ir! -> len) -> while {
+        ir![irIndex!] => node
+        node.kind == 43 -> if {
+            typed!.types[node.typeId] => wrapper
+            typed!.types[wrapper.first] => element
+            "join IR = policy $(node.opcode), wrapper $(wrapper.symbol), element kind $(element.kind), fields $(element.length), source $(node.operand0)" -> println
+        }
+        irIndex! + 1 => irIndex!
+    }
+    snapshot! -> streamIr.build(ir!, typed!) => plan!
+    0 => junctionIndex!
+    junctionIndex! < (plan!.junctions -> len) -> while {
+        plan!.junctions[junctionIndex!] => junction
+        "join plan = policy $(junction.policy), inputs $(junction.inputCount), status $(junction.status)" -> println
+        junctionIndex! + 1 => junctionIndex!
+    }
+}

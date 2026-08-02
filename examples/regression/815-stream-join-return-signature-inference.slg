@@ -1,0 +1,50 @@
+# Private function inference preserves join policy, labels, element type, and Stream/EventStream kind.
+import std.sequence
+
+makeValues values: Range -> Stream<Int> => values -> defer
+
+zipValues left: move Stream<Int>, right: move Stream<Int> -> {
+    (left: left, right: right) -> zip
+}
+
+concatValues left: move Stream<Int>, right: move Stream<Int> -> {
+    (left, right) -> concat
+}
+
+mergeValues left: move Stream<Int>, right: move Stream<Int> -> {
+    (left, right) -> merge
+}
+
+latestValues left: move Stream<Int>, right: move Stream<Int> -> {
+    (left: left, right: right) -> latest
+}
+
+main {
+    1..2 -> makeValues => zipLeft
+    10..11 -> makeValues => zipRight
+    zipLeft -> zipValues(zipRight) => zipped
+    zipped -> each pair {
+        "$(pair.left):$(pair.right)" -> println
+    }
+
+    3..4 -> makeValues => concatLeft
+    5..6 -> makeValues => concatRight
+    concatLeft -> concatValues(concatRight) => concatenated
+    concatenated -> each value {
+        "$value" -> println
+    }
+
+    7..8 -> makeValues => mergeLeft
+    9..10 -> makeValues => mergeRight
+    mergeLeft -> mergeValues(mergeRight) => merged
+    merged -> each value {
+        "m$value" -> println
+    }
+
+    11..12 -> makeValues => latestLeft
+    13..14 -> makeValues => latestRight
+    latestLeft -> latestValues(latestRight) => latest
+    latest -> each pair {
+        "l$(pair.left):$(pair.right)" -> println
+    }
+}

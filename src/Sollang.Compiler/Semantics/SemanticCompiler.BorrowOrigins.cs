@@ -194,6 +194,38 @@ internal sealed partial class SemanticCompiler
                 locals,
                 out origins);
         }
+        if (expression is ProductExpression product)
+        {
+            return TryUnionInferredReadonlyReferenceOrigins(
+                product.Elements.Select(static element => element.Value),
+                functions,
+                locals,
+                out origins);
+        }
+        if (expression is BranchExpression branch)
+        {
+            return TryUnionInferredReadonlyReferenceOrigins(
+                branch.Arms.Select(arm => (Expression)new FlowExpression(
+                    branch.Source,
+                    arm.Targets,
+                    arm.Line,
+                    arm.Column)),
+                functions,
+                locals,
+                out origins);
+        }
+        if (expression is TapExpression tap)
+        {
+            return TryInferReadonlyReferenceOrigins(tap.Source, functions, locals, out origins);
+        }
+        if (expression is PartitionExpression partition)
+        {
+            return TryInferReadonlyReferenceOrigins(partition.Source, functions, locals, out origins);
+        }
+        if (expression is StreamJoinExpression join)
+        {
+            return TryInferReadonlyReferenceOrigins(join.Source, functions, locals, out origins);
+        }
         if (expression is ArrayLiteralExpression array)
         {
             return TryUnionInferredReadonlyReferenceOrigins(
@@ -540,6 +572,38 @@ internal sealed partial class SemanticCompiler
                 locals,
                 out origins);
         }
+        if (expression is ProductExpression product)
+        {
+            return TryUnionBorrowedTextOrigins(
+                product.Elements.Select(static element => element.Value),
+                functions,
+                locals,
+                out origins);
+        }
+        if (expression is BranchExpression branch)
+        {
+            return TryUnionBorrowedTextOrigins(
+                branch.Arms.Select(arm => (Expression)new FlowExpression(
+                    branch.Source,
+                    arm.Targets,
+                    arm.Line,
+                    arm.Column)),
+                functions,
+                locals,
+                out origins);
+        }
+        if (expression is TapExpression tap)
+        {
+            return TryInferBorrowedTextOrigins(tap.Source, functions, locals, out origins);
+        }
+        if (expression is PartitionExpression partition)
+        {
+            return TryInferBorrowedTextOrigins(partition.Source, functions, locals, out origins);
+        }
+        if (expression is StreamJoinExpression join)
+        {
+            return TryInferBorrowedTextOrigins(join.Source, functions, locals, out origins);
+        }
 
         if (expression is ArrayLiteralExpression array)
         {
@@ -815,6 +879,38 @@ internal sealed partial class SemanticCompiler
                 bindings,
                 out origins);
         }
+        if (expression is ProductExpression product)
+        {
+            return TryUnionCallSiteBorrowedOrigins(
+                product.Elements.Select(static element => element.Value),
+                functions,
+                bindings,
+                out origins);
+        }
+        if (expression is BranchExpression branch)
+        {
+            return TryUnionCallSiteBorrowedOrigins(
+                branch.Arms.Select(arm => (Expression)new FlowExpression(
+                    branch.Source,
+                    arm.Targets,
+                    arm.Line,
+                    arm.Column)),
+                functions,
+                bindings,
+                out origins);
+        }
+        if (expression is TapExpression tap)
+        {
+            return TryGetBorrowedTextCallOrigins(tap.Source, functions, bindings, out origins);
+        }
+        if (expression is PartitionExpression partition)
+        {
+            return TryGetBorrowedTextCallOrigins(partition.Source, functions, bindings, out origins);
+        }
+        if (expression is StreamJoinExpression join)
+        {
+            return TryGetBorrowedTextCallOrigins(join.Source, functions, bindings, out origins);
+        }
 
         if (expression is ArrayLiteralExpression array)
         {
@@ -954,6 +1050,38 @@ internal sealed partial class SemanticCompiler
                 bindings,
                 out origins);
         }
+        if (expression is ProductExpression product)
+        {
+            return TryUnionReadonlyReferenceCallOrigins(
+                product.Elements.Select(static element => element.Value),
+                functions,
+                bindings,
+                out origins);
+        }
+        if (expression is BranchExpression branch)
+        {
+            return TryUnionReadonlyReferenceCallOrigins(
+                branch.Arms.Select(arm => (Expression)new FlowExpression(
+                    branch.Source,
+                    arm.Targets,
+                    arm.Line,
+                    arm.Column)),
+                functions,
+                bindings,
+                out origins);
+        }
+        if (expression is TapExpression tap)
+        {
+            return TryGetReadonlyReferenceCallOrigins(tap.Source, functions, bindings, out origins);
+        }
+        if (expression is PartitionExpression partition)
+        {
+            return TryGetReadonlyReferenceCallOrigins(partition.Source, functions, bindings, out origins);
+        }
+        if (expression is StreamJoinExpression join)
+        {
+            return TryGetReadonlyReferenceCallOrigins(join.Source, functions, bindings, out origins);
+        }
 
         if (expression is ArrayLiteralExpression array)
         {
@@ -1070,18 +1198,32 @@ internal sealed partial class SemanticCompiler
                 return;
             }
 
-            if (_types.IsStruct(valueType)
-                && value is StructLiteralExpression structure)
+            if (_types.IsStruct(valueType))
             {
-                var initializers = structure.Fields.ToDictionary(
-                    static field => field.Name,
-                    StringComparer.Ordinal);
+                IReadOnlyDictionary<string, Expression>? initializers = value switch
+                {
+                    StructLiteralExpression structure => structure.Fields.ToDictionary(
+                        static field => field.Name,
+                        static field => field.Value,
+                        StringComparer.Ordinal),
+                    ProductExpression product => product.Elements
+                        .Select((element, index) => (Name: element.Label ?? $"_{index}", element.Value))
+                        .ToDictionary(
+                            static element => element.Name,
+                            static element => element.Value,
+                            StringComparer.Ordinal),
+                    _ => null
+                };
+                if (initializers is null)
+                {
+                    return;
+                }
                 foreach (var field in _types.GetStruct(valueType).Fields)
                 {
                     if (TypeContainsReadonlyReference(field.Type)
                         && initializers.TryGetValue(field.Name, out var initializer))
                     {
-                        Collect(initializer.Value, field.Type, path + "." + field.Name);
+                        Collect(initializer, field.Type, path + "." + field.Name);
                     }
                 }
                 return;
@@ -1779,6 +1921,16 @@ internal sealed partial class SemanticCompiler
             FlowExpression flow => ReferencesBorrowCarrier(flow.Source, carrier)
                 || flow.Targets.Any(target => target.Arguments.Any(argument =>
                     ReferencesBorrowCarrier(argument, carrier))),
+            BranchExpression branch => ReferencesBorrowCarrier(branch.Source, carrier)
+                || branch.Arms.SelectMany(static arm => arm.Targets).Any(target =>
+                    target.Arguments.Any(argument => ReferencesBorrowCarrier(argument, carrier))),
+            TapExpression tap => ReferencesBorrowCarrier(tap.Source, carrier)
+                || tap.Targets.Any(target => target.Arguments.Any(argument =>
+                    ReferencesBorrowCarrier(argument, carrier))),
+            PartitionExpression partition => ReferencesBorrowCarrier(partition.Source, carrier)
+                || partition.Arms.Any(arm => arm.Condition is not null
+                    && ReferencesBorrowCarrier(arm.Condition, carrier)),
+            StreamJoinExpression join => ReferencesBorrowCarrier(join.Source, carrier),
             CallExpression call => call.Arguments.Any(argument =>
                 ReferencesBorrowCarrier(argument, carrier)),
             ArrayLiteralExpression array => array.Elements.Any(element =>
@@ -1786,6 +1938,8 @@ internal sealed partial class SemanticCompiler
             ArrayRepeatExpression repeat => ReferencesBorrowCarrier(repeat.Value, carrier),
             StructLiteralExpression structure => structure.Fields.Any(field =>
                 ReferencesBorrowCarrier(field.Value, carrier)),
+            ProductExpression product => product.Elements.Any(element =>
+                ReferencesBorrowCarrier(element.Value, carrier)),
             BoxExpression box => ReferencesBorrowCarrier(box.Value, carrier),
             DictionaryLiteralExpression dictionary => dictionary.Entries.Any(entry =>
                 ReferencesBorrowCarrier(entry.Key, carrier)

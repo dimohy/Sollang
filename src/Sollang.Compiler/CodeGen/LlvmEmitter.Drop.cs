@@ -98,12 +98,18 @@ internal sealed partial class LlvmEmitter
         NotExpression value => UsesBox(value.Value),
         RangeExpression value => UsesBox(value.Start) || UsesBox(value.End),
         FlowExpression value => UsesBox(value.Source) || value.Targets.SelectMany(x => x.Arguments).Any(UsesBox),
+        BranchExpression value => UsesBox(value.Source)
+            || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesBox),
+        TapExpression value => UsesBox(value.Source)
+            || value.Targets.SelectMany(target => target.Arguments).Any(UsesBox),
+        StreamJoinExpression value => UsesBox(value.Source),
         CallExpression value => value.Arguments.Any(UsesBox),
         ArrayLiteralExpression value => value.Elements.Any(UsesBox),
         ArrayRepeatExpression value => UsesBox(value.Value),
         DictionaryLiteralExpression value => value.Entries.Any(x => UsesBox(x.Key) || UsesBox(x.Value)),
         IndexExpression value => UsesBox(value.Source) || UsesBox(value.Index),
         StructLiteralExpression value => value.Fields.Any(x => UsesBox(x.Value)),
+        ProductExpression value => value.Elements.Any(x => UsesBox(x.Value)),
         FieldAccessExpression value => UsesBox(value.Source),
         TryExpression value => UsesBox(value.Value),
         MapExpression value => UsesBox(value.Path)

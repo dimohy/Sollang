@@ -1,0 +1,62 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+# Partition is one typed product of route streams and one direct-dispatch IR
+# junction whose predicate and else routes retain source order.
+main {
+    """
+    makeValues values: Range -> Stream<Int> { values -> defer }
+
+    main {
+        1..8 -> makeValues
+            -> partition value {
+                even: when value % 2 == 0
+                other: else
+            } => routed
+    }
+    """ => source
+    [source; ~] => sources!
+    sources! -> semanticContext.prepare => snapshot!
+    snapshot! -> expressionTypeIds.resolveContext => typed!
+
+    0 => expressionIndex!
+    expressionIndex! < (typed!.expressions -> len) -> while {
+        typed!.expressions[expressionIndex!] => expression
+        snapshot!.package.nodes[snapshot!.package.ranges[expression.sourceModule].astStart + expression.astNode] => node
+        node.kind == 78 -> if {
+            typed!.types[expression.typeId] => partitionType
+            "partition type = kind $(partitionType.kind), routes $(partitionType.length)" -> println
+            0 => fieldIndex!
+            fieldIndex! < (typed!.fields -> len) -> while {
+                typed!.fields[fieldIndex!] => field
+                field.ownerType == expression.typeId -> if {
+                    typed!.types[field.fieldType] => routeType
+                    "partition route = ordinal $(field.ordinal), wrapper $(routeType.symbol), element $(routeType.first)" -> println
+                }
+                fieldIndex! + 1 => fieldIndex!
+            }
+        }
+        expressionIndex! + 1 => expressionIndex!
+    }
+
+    snapshot! -> typedIr.lowerContext => ir!
+    0 => irIndex!
+    irIndex! < (ir! -> len) -> while {
+        ir![irIndex!] => node
+        (node.kind == 40 or node.kind == 41 or node.kind == 42) -> if {
+            "partition IR = kind $(node.kind), ordinal $(node.opcode), source $(node.operand0), first $(node.operand1), next $(node.nextOperand)" -> println
+        }
+        irIndex! + 1 => irIndex!
+    }
+    snapshot! -> streamIr.build(ir!, typed!) => plan!
+    plan!.junctions[0] => junction
+    "partition plan = kind $(junction.kind), routes $(junction.routeCount), status $(junction.status), source $(junction.source0)" -> println
+    junction.routeStart => routeIndex!
+    routeIndex! < junction.routeStart + junction.routeCount -> while {
+        plan!.partitionRoutes[routeIndex!] => route
+        "partition plan route = ordinal $(route.ordinal), predicate $(route.predicateIr)" -> println
+        routeIndex! + 1 => routeIndex!
+    }
+}

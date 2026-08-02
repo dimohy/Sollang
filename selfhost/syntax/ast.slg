@@ -249,7 +249,11 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 61 stream state binding, 62 stream stop statement, 63 range expression,
 # 64 fold flow target, 65 native library declaration, 66 COM class declaration,
 # 67 COM interface declaration, 68 native affine handle declaration,
-# 69 Sollang library interface import, 70 subject when condition.
+# 69 Sollang library interface import, 70 subject when condition,
+# 71 product expression, 72 product element, 73 sequential branch target,
+# 74 parallel branch target, 75 branch arm, 76 tap target, 77 junction target,
+# 78 partition target, 79 partition predicate arm, 80 partition else arm,
+# 81 stream join policy target, 82 postfix result propagation.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream,
 # 128 native ABI declaration, 512 COM declaration, 32768 status/out native
 # Result declaration. Struct flag 256 marks an
@@ -310,6 +314,8 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdArrayExpression() -> if { 37 => kind! }
     rule == grammar.ruleIdDictionaryExpression() -> if { 38 => kind! }
     rule == grammar.ruleIdStructLiteralExpression() -> if { 39 => kind! }
+    rule == grammar.ruleIdProductExpression() -> if { 71 => kind! }
+    rule == grammar.ruleIdProductElement() -> if { 72 => kind! }
     rule == grammar.ruleIdStructFieldInitializer() -> if { 40 => kind! }
     rule == grammar.ruleIdIfFlowTarget() -> if { 42 => kind! }
     rule == grammar.ruleIdBlockBody() -> if { 43 => kind! }
@@ -336,6 +342,17 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdRangeExpression() -> if { 63 => kind! }
     rule == grammar.ruleIdFoldFlowTarget() -> if { 64 => kind! }
     rule == grammar.ruleIdSubjectWhenCondition() -> if { 70 => kind! }
+    rule == grammar.ruleIdBranchFlowTarget() -> if { 73 => kind! }
+    rule == grammar.ruleIdParallelBranchFlowTarget() -> if { 74 => kind! }
+    rule == grammar.ruleIdBranchArm() -> if { 75 => kind! }
+    rule == grammar.ruleIdTapFlowTarget() -> if { 76 => kind! }
+    rule == grammar.ruleIdJunctionTarget() -> if { 77 => kind! }
+    rule == grammar.ruleIdPartitionFlowTarget() -> if { 78 => kind! }
+    rule == grammar.ruleIdPartitionWhenArm() -> if { 79 => kind! }
+    rule == grammar.ruleIdPartitionElseArm() -> if { 80 => kind! }
+    rule == grammar.ruleIdStreamJoinFlowTarget() -> if { 81 => kind! }
+    rule == grammar.ruleIdProductType() -> if { 12 => kind! }
+    rule == grammar.ruleIdProductTypeField() -> if { 12 => kind! }
     kind! => selected
     selected
 }
@@ -429,10 +446,10 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 operatorTokenIndex! => operatorPayloadToken!
             }
             (operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdQuestion()) -> if {
-                postfixKinds! -> push(71)
+                postfixKinds! -> push(82)
                 postfixOperatorTokens! -> push(operatorTokenIndex!)
                 postfixBoundaryTokens! -> push(operatorTokenIndex!)
-                71 => astKind!
+                82 => astKind!
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }

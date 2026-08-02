@@ -23,13 +23,57 @@ internal sealed record BoundProgram(
     bool ReusedMainSemantics,
     IReadOnlySet<Statement> DeferredStreamDeclarations,
     IReadOnlyDictionary<Statement, BlockFunctionPipelineStatement> DeferredStreamConsumers,
-    IReadOnlyDictionary<Statement, BoundEventStreamPipeline> EventStreamConsumers);
+    IReadOnlyDictionary<Statement, BoundEventStreamPipeline> EventStreamConsumers,
+    IReadOnlyDictionary<Statement, BoundPartitionPipeline> PartitionConsumers,
+    IReadOnlyDictionary<Statement, BoundStreamJoinPipeline> StreamJoinConsumers,
+    IReadOnlyDictionary<StreamJoinExpression, BoundStreamJoin> StreamJoins,
+    IReadOnlyDictionary<BranchExpression, BoundParallelBranch> ParallelBranches);
+
+internal sealed record BoundParallelBranch(
+    TypeId SourceType,
+    TypeId ResultType,
+    IReadOnlyList<IReadOnlyList<BoundFunction>> ArmTargets,
+    IReadOnlyDictionary<string, TypeId> Captures);
+
+internal sealed record BoundStreamJoinPipeline(
+    StreamJoinExpression Expression,
+    BoundStreamJoin Join,
+    BlockFunctionPipelineStatement Consumer);
+
+internal sealed record BoundStreamJoin(
+    StreamJoinPolicy Policy,
+    TypeId InputProductType,
+    IReadOnlyList<BoundStreamJoinInput> Inputs,
+    TypeId OutputElementType,
+    TypeId ResultType,
+    bool IsEvent,
+    int BufferCapacityPerInput);
+
+internal sealed record BoundStreamJoinInput(
+    string FieldName,
+    TypeId StreamType,
+    TypeId ElementType,
+    bool IsEvent);
 
 internal sealed record BoundEventStreamPipeline(
     Expression Source,
     IReadOnlyList<BlockFunctionCallStatement> Calls,
     TypeId SourceElementType,
     bool IsEvent);
+
+internal sealed record BoundPartitionPipeline(
+    Expression Source,
+    string ItemName,
+    IReadOnlyList<BoundPartitionRoute> Routes,
+    TypeId SourceElementType,
+    bool IsEvent);
+
+internal sealed record BoundPartitionRoute(
+    string Label,
+    Expression? Condition,
+    BlockFunctionPipelineStatement Consumer,
+    int Line,
+    int Column);
 
 internal sealed record BoundDynTraitConversion(
     BoundType DynType,
@@ -253,7 +297,8 @@ internal sealed record BoundStructDefinition(
     string? DeclaringTypeName = null,
     bool IsAbi = false,
     ComInterfaceMetadata? ComInterface = null,
-    NativeHandleMetadata? NativeHandle = null)
+    NativeHandleMetadata? NativeHandle = null,
+    bool IsProduct = false)
 {
     public BoundStructField GetField(string name)
     {
@@ -329,6 +374,7 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<TypeId, TypeId> _streamValues = [];
     private readonly Dictionary<TypeId, TypeId> _eventStreamsByValue = [];
     private readonly Dictionary<TypeId, TypeId> _eventStreamValues = [];
+    private readonly Dictionary<string, TypeId> _productsByShape = new(StringComparer.Ordinal);
     private int _nextParametricTypeId;
     private readonly int _pointerSize;
 
@@ -388,6 +434,42 @@ internal sealed class TypeDefinitionTable
     public void AddAlias(string name, TypeId type) => _names.TryAdd(name, type);
 
     public bool IsStruct(TypeId type) => _structs.ContainsKey(type);
+
+    public bool IsProduct(TypeId type) =>
+        _structs.TryGetValue(type, out var definition) && definition.IsProduct;
+
+    public TypeId GetOrAddProduct(
+        IReadOnlyList<(string? Label, TypeId Type)> fields,
+        string displayName,
+        int line,
+        int column)
+    {
+        if (fields.Count < 2)
+        {
+            throw new ArgumentException("product types require at least two fields", nameof(fields));
+        }
+
+        var shape = string.Join('|', fields.Select(static field =>
+        {
+            var label = field.Label ?? string.Empty;
+            return $"{label.Length}:{label}:{(int)field.Type}";
+        }));
+        if (_productsByShape.TryGetValue(shape, out var existing))
+        {
+            _names.TryAdd(displayName, existing);
+            return existing;
+        }
+
+        var id = (TypeId)_nextParametricTypeId++;
+        var boundFields = fields.Select((field, index) => new BoundStructField(
+            field.Label ?? $"_{index}", field.Type, index, line, column)).ToArray();
+        _structs.Add(id, new BoundStructDefinition(
+            id, displayName, boundFields, line, column,
+            ModuleName: string.Empty, IsPublic: true, IsProduct: true));
+        _productsByShape.Add(shape, id);
+        _names.TryAdd(displayName, id);
+        return id;
+    }
 
     public bool IsEnum(TypeId type) => _enums.ContainsKey(type);
 

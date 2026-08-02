@@ -1141,7 +1141,8 @@ emitManifest options: Options, clangArguments: ref [Text; ~], discovered: ref bi
             } else {
                 "create$(current.name)" -> materialize(constructorNameStorage!)
             } => constructorName
-            "$(current.qualifiedName)::$(current.name)" => cppName
+            Arena(0) => constructorCppNameStorage!
+            "$(current.qualifiedName)::$(current.name)" -> materialize(constructorCppNameStorage!) => cppName
             [UInt8; ~] => signatureBytes!
             signatureBytes! -> appendText("owner(")
             0 => parameterIndex!
@@ -1161,15 +1162,19 @@ emitManifest options: Options, clangArguments: ref [Text; ~], discovered: ref bi
             current.methods[methodIndex!] -> borrowMethod => method
             current.name -> lowerFirst(storage) => className
             method.name -> upperFirst(storage) => methodName
-            "$className$methodName" => name
-            "$(current.qualifiedName)::$(method.cppName)" => cppName
+            Arena(0) => methodOutputNameStorage!
+            "$className$methodName" -> materialize(methodOutputNameStorage!) => name
+            Arena(0) => methodCppNameStorage!
+            "$(current.qualifiedName)::$(method.cppName)" -> materialize(methodCppNameStorage!) => cppName
             false => last
             method.result -> binding.functionSignature(method.parameters, storage) => signature
             output! -> appendManifestFunction(name, cppName, method.symbol, signature, not method.isNoexcept, last)
             methodIndex! + 1 => methodIndex!
         }
-        "__drop$(current.name)" => dropName
-        "$(current.qualifiedName)::~$(current.name)" => dropCppName
+        Arena(0) => dropNameStorage!
+        "__drop$(current.name)" -> materialize(dropNameStorage!) => dropName
+        Arena(0) => dropCppNameStorage!
+        "$(current.qualifiedName)::~$(current.name)" -> materialize(dropCppNameStorage!) => dropCppName
         classIndex! + 1 == (discovered.classes -> len) => last
         output! -> appendManifestFunction(dropName, dropCppName, current.dropSymbol, "drop(owner)", false, last)
         classIndex! + 1 => classIndex!

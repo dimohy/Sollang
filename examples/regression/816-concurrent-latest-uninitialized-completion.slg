@@ -1,0 +1,25 @@
+# Latest completes without output when one EventStream ends before producing its initial value.
+import std.sequence
+
+makeValues values: Range -> Stream<Int> => values -> defer
+
+asEvents left: move Stream<Int>, right: move Stream<Int> -> EventStream<Int> {
+    (left, right) -> merge
+}
+
+main {
+    1..0 -> makeValues => emptyLeft
+    1..0 -> makeValues => emptyRight
+    emptyLeft -> asEvents(emptyRight) => empty
+
+    1..2 -> makeValues => valuesLeft
+    10..11 -> makeValues => valuesRight
+    valuesLeft -> asEvents(valuesRight) => values
+
+    0 => received!
+    (empty: empty, values: values) -> latest => snapshots
+    snapshots -> each snapshot {
+        received! + 1 => received!
+    }
+    "received=$(received!)" -> println
+}

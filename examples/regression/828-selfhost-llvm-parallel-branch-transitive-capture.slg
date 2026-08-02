@@ -1,0 +1,25 @@
+import sollang.compiler.llvm.text as llvm
+
+# Capture analysis follows local helper calls transitively so each worker gets
+# the readonly environment required by the full arm call graph.
+main {
+    [
+        """
+        run value: Int, offset: Int -> (adjusted: Int, scaled: Int) {
+            addOffset input: Int -> Int => input + offset
+            adjust input: Int -> Int => input -> addOffset
+            scale input: Int -> Int => input * offset
+            value -> parallel branch {
+                adjusted: ref -> adjust
+                scaled: ref -> scale
+            }
+        }
+        main {
+            5 -> run(3) => result
+            result.adjusted -> println
+            result.scaled -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

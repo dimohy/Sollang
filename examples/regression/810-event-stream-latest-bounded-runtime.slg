@@ -1,0 +1,16 @@
+# EventStream latest initializes every input once, then emits a snapshot for each arrived update.
+import sys.event
+
+latestEvents left: move EventStream<MouseEvent>, right: move EventStream<MouseEvent> -> EventStream<(left: MouseEvent, right: MouseEvent)> {
+    (left: left, right: right) -> latest
+}
+
+main {
+    2 -> event.mouseEvents(event.EventOverflowPolicy.CoalesceMotion) => left
+    2 -> event.mouseEvents(event.EventOverflowPolicy.CoalesceMotion) => right
+    left -> latestEvents(right) => latest
+    latest -> each events {
+        "$(events.left.x):$(events.right.x)" -> println
+        stop
+    }
+}

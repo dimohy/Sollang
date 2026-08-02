@@ -444,6 +444,33 @@ internal static class StoragePlacementAnalyzer
                     IndexNestedScopes(argument, positions, ref next);
                 }
                 break;
+            case BranchExpression branch:
+                IndexNestedScopes(branch.Source, positions, ref next);
+                foreach (var argument in branch.Arms.SelectMany(static arm => arm.Targets).SelectMany(static target => target.Arguments))
+                {
+                    IndexNestedScopes(argument, positions, ref next);
+                }
+                break;
+            case TapExpression tap:
+                IndexNestedScopes(tap.Source, positions, ref next);
+                foreach (var argument in tap.Targets.SelectMany(static target => target.Arguments))
+                {
+                    IndexNestedScopes(argument, positions, ref next);
+                }
+                break;
+            case PartitionExpression partition:
+                IndexNestedScopes(partition.Source, positions, ref next);
+                foreach (var arm in partition.Arms)
+                {
+                    if (arm.Condition is not null)
+                    {
+                        IndexNestedScopes(arm.Condition, positions, ref next);
+                    }
+                }
+                break;
+            case StreamJoinExpression join:
+                IndexNestedScopes(join.Source, positions, ref next);
+                break;
             case CallExpression call:
                 foreach (var argument in call.Arguments)
                 {
@@ -474,6 +501,12 @@ internal static class StoragePlacementAnalyzer
                 foreach (var field in structure.Fields)
                 {
                     IndexNestedScopes(field.Value, positions, ref next);
+                }
+                break;
+            case ProductExpression product:
+                foreach (var element in product.Elements)
+                {
+                    IndexNestedScopes(element.Value, positions, ref next);
                 }
                 break;
             case BoxExpression box:
@@ -641,6 +674,33 @@ internal static class StoragePlacementAnalyzer
                     CollectNestedScopeCandidates(argument, functions, positions, candidates);
                 }
                 break;
+            case BranchExpression branch:
+                CollectNestedScopeCandidates(branch.Source, functions, positions, candidates);
+                foreach (var argument in branch.Arms.SelectMany(static arm => arm.Targets).SelectMany(static target => target.Arguments))
+                {
+                    CollectNestedScopeCandidates(argument, functions, positions, candidates);
+                }
+                break;
+            case TapExpression tap:
+                CollectNestedScopeCandidates(tap.Source, functions, positions, candidates);
+                foreach (var argument in tap.Targets.SelectMany(static target => target.Arguments))
+                {
+                    CollectNestedScopeCandidates(argument, functions, positions, candidates);
+                }
+                break;
+            case PartitionExpression partition:
+                CollectNestedScopeCandidates(partition.Source, functions, positions, candidates);
+                foreach (var arm in partition.Arms)
+                {
+                    if (arm.Condition is not null)
+                    {
+                        CollectNestedScopeCandidates(arm.Condition, functions, positions, candidates);
+                    }
+                }
+                break;
+            case StreamJoinExpression join:
+                CollectNestedScopeCandidates(join.Source, functions, positions, candidates);
+                break;
             case CallExpression call:
                 foreach (var argument in call.Arguments)
                 {
@@ -671,6 +731,12 @@ internal static class StoragePlacementAnalyzer
                 foreach (var field in structure.Fields)
                 {
                     CollectNestedScopeCandidates(field.Value, functions, positions, candidates);
+                }
+                break;
+            case ProductExpression product:
+                foreach (var element in product.Elements)
+                {
+                    CollectNestedScopeCandidates(element.Value, functions, positions, candidates);
                 }
                 break;
             case BoxExpression box:
@@ -1010,6 +1076,16 @@ internal static class StoragePlacementAnalyzer
             SubjectRangeExpression subjectRange => UsesOwnerReadOnly(subjectRange.Start, ownerName, kind, functions)
                 && UsesOwnerReadOnly(subjectRange.End, ownerName, kind, functions),
             FlowExpression flow => UsesFlowOwnerReadOnly(flow, ownerName, kind, functions),
+            BranchExpression branch => UsesOwnerReadOnly(branch.Source, ownerName, kind, functions)
+                && branch.Arms.SelectMany(static arm => arm.Targets).SelectMany(static target => target.Arguments)
+                    .All(argument => UsesOwnerReadOnly(argument, ownerName, kind, functions)),
+            TapExpression tap => UsesOwnerReadOnly(tap.Source, ownerName, kind, functions)
+                && tap.Targets.SelectMany(static target => target.Arguments)
+                    .All(argument => UsesOwnerReadOnly(argument, ownerName, kind, functions)),
+            PartitionExpression partition => UsesOwnerReadOnly(partition.Source, ownerName, kind, functions)
+                && partition.Arms.All(arm => arm.Condition is null
+                    || UsesOwnerReadOnly(arm.Condition, ownerName, kind, functions)),
+            StreamJoinExpression join => UsesOwnerReadOnly(join.Source, ownerName, kind, functions),
             CallExpression call => UsesCallOwnerReadOnly(call, ownerName, kind, functions),
             ArrayLiteralExpression array => array.Elements.All(element =>
                 UsesOwnerReadOnly(element, ownerName, kind, functions)),
@@ -1022,6 +1098,8 @@ internal static class StoragePlacementAnalyzer
                 && UsesOwnerReadOnly(index.Index, ownerName, kind, functions),
             StructLiteralExpression structure => structure.Fields.All(field =>
                 UsesOwnerReadOnly(field.Value, ownerName, kind, functions)),
+            ProductExpression product => product.Elements.All(element =>
+                UsesOwnerReadOnly(element.Value, ownerName, kind, functions)),
             BoxExpression box => UsesOwnerReadOnly(box.Value, ownerName, kind, functions),
             TryExpression attempt => UsesOwnerReadOnly(attempt.Value, ownerName, kind, functions),
             MapExpression map => UsesOwnerReadOnly(map.Path, ownerName, kind, functions)
@@ -1178,10 +1256,19 @@ internal static class StoragePlacementAnalyzer
                 || ContainsOwner(subjectRange.End, ownerName),
             FlowExpression flow => ContainsOwner(flow.Source, ownerName)
                 || flow.Targets.Any(target => target.Arguments.Any(argument => ContainsOwner(argument, ownerName))),
+            BranchExpression branch => ContainsOwner(branch.Source, ownerName)
+                || branch.Arms.SelectMany(static arm => arm.Targets)
+                    .Any(target => target.Arguments.Any(argument => ContainsOwner(argument, ownerName))),
+            TapExpression tap => ContainsOwner(tap.Source, ownerName)
+                || tap.Targets.Any(target => target.Arguments.Any(argument => ContainsOwner(argument, ownerName))),
+            PartitionExpression partition => ContainsOwner(partition.Source, ownerName)
+                || partition.Arms.Any(arm => arm.Condition is not null && ContainsOwner(arm.Condition, ownerName)),
+            StreamJoinExpression join => ContainsOwner(join.Source, ownerName),
             CallExpression call => call.Arguments.Any(argument => ContainsOwner(argument, ownerName)),
             ArrayLiteralExpression array => array.Elements.Any(element => ContainsOwner(element, ownerName)),
             ArrayRepeatExpression repeat => ContainsOwner(repeat.Value, ownerName),
             StructLiteralExpression structure => structure.Fields.Any(field => ContainsOwner(field.Value, ownerName)),
+            ProductExpression product => product.Elements.Any(element => ContainsOwner(element.Value, ownerName)),
             BoxExpression box => ContainsOwner(box.Value, ownerName),
             FieldAccessExpression field => ContainsOwner(field.Source, ownerName),
             DictionaryLiteralExpression dictionary => dictionary.Entries.Any(entry =>

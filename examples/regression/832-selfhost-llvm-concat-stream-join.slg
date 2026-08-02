@@ -1,0 +1,28 @@
+import sollang.compiler.llvm.text as llvm
+
+# Concat remains lazy in the self-hosted LLVM path, drains each producer in
+# product order, and transfers producer drop responsibility to the junction.
+main {
+    [
+        """
+        import std.sequence
+
+        makeValues values: Range -> Stream<Int> { values -> defer }
+
+        main {
+            1..2 -> makeValues => first
+            4..5 -> makeValues => second
+            (first, second) -> concat => joined
+            joined -> each value {
+                value -> println
+            }
+        }
+        """,
+        """
+        namespace std.sequence
+
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

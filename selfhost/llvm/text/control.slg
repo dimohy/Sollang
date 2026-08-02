@@ -283,6 +283,15 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                         (localAdditionalBelongs! and not localScheduled![localAdditionalArgument - regionLocalStart]) -> if { false => localReady! }
                                     }
                                 }
+                                (localCandidate.kind == 6 and localCandidate.parent >= regionLocalStart and localCandidate.parent < regionLocalEnd and context.ir[localCandidate.parent].kind == 37) -> if {
+                                    context.ir[localCandidate.parent].operand0 => localBranchArm!
+                                    -1 => localPreviousBranchArm!
+                                    (localBranchArm! >= regionLocalStart and localBranchArm! < regionLocalEnd and localBranchArm! != localCandidateIndex!) -> while {
+                                        localBranchArm! => localPreviousBranchArm!
+                                        context.ir[localBranchArm!].nextOperand => localBranchArm!
+                                    }
+                                    (localBranchArm! == localCandidateIndex! and localPreviousBranchArm! >= regionLocalStart and not localScheduled![localPreviousBranchArm! - regionLocalStart]) -> if { false => localReady! }
+                                }
                                 ((localCandidate.kind == 9 or (localCandidate.kind == 6 and localCandidate.opcode == -1)) and localCandidate.operand0 >= 0) -> if {
                                     localCandidate.operand0 => localCallArgument!
                                     (localCallArgument! >= regionLocalStart and localCallArgument! < regionLocalEnd and context.ir[localCallArgument!].parent == localCandidateIndex!) -> while {
@@ -318,12 +327,19 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                                     localCandidate.operand0 -> aggregateValueIndex(context, state) => localEnumPayloadValue
                                     (localEnumPayloadValue >= regionLocalStart and localEnumPayloadValue < regionLocalEnd and not localScheduled![localEnumPayloadValue - regionLocalStart]) -> if { false => localReady! }
                                 }
-                                (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16) -> if {
+                                (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16 or localCandidate.kind == 35) -> if {
                                     localCandidate.operand0 => localAggregateOperand!
                                     localAggregateOperand! >= 0 -> while {
                                         localAggregateOperand! -> aggregateValueIndex(context, state) => localAggregateValue
                                         not localScheduled![localAggregateValue - regionLocalStart] -> if { false => localReady! }
                                         context.ir[localAggregateOperand!].nextOperand => localAggregateOperand!
+                                    }
+                                }
+                                localCandidate.kind == 37 -> if {
+                                    localCandidate.operand0 => localBranchArmDependency!
+                                    localBranchArmDependency! >= 0 -> while {
+                                        (localBranchArmDependency! >= regionLocalStart and localBranchArmDependency! < regionLocalEnd and not localScheduled![localBranchArmDependency! - regionLocalStart]) -> if { false => localReady! }
+                                        context.ir[localBranchArmDependency!].nextOperand => localBranchArmDependency!
                                     }
                                 }
                                 localReady! -> if {
@@ -655,10 +671,40 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
         }
         regionNode.kind == 27 -> if { regionNodeIndex! -> emitEnumMatch(context, state) }
         regionNode.kind == 34 -> if { regionNodeIndex! -> emitSubjectWhen(context, state) }
-        (regionNode.kind == 30 and context.nodes[context.ranges[regionNode.sourceModule].astStart + regionNode.astNode].kind == 71) -> if {
+        (regionNode.kind == 30 and context.nodes[context.ranges[regionNode.sourceModule].astStart + regionNode.astNode].kind == 82) -> if {
             regionNodeIndex! -> emitResultPropagation(ownerIndex!, context, state)
         }
-        regionNode.kind == 12 -> if {
+        regionNode.kind == 36 -> if {
+            "  %v$(regionNodeIndex!) = freeze " -> print
+            regionNode -> writeIrType(context, state)
+            " " -> print
+            regionNode.operand0 -> writeValue(ownerIndex!, context, state)
+            "" -> println
+        }
+        regionNode.kind == 37 -> if {
+            regionNode.operand0 => regionBranchArmValueIndex!
+            0 => regionBranchArmPosition!
+            regionBranchArmValueIndex! >= 0 -> while {
+                context.ir[regionBranchArmValueIndex!] => regionBranchArmValue
+                "  " -> print
+                regionBranchArmValue.nextOperand < 0 -> if { "%v$(regionNodeIndex!)" -> print } else { "%v$(regionNodeIndex!)_f$(regionBranchArmPosition!)" -> print }
+                " = insertvalue " -> print
+                regionNode -> writeIrType(context, state)
+                " " -> print
+                regionBranchArmPosition! == 0 -> if { "poison" -> print } else {
+                    "%v$(regionNodeIndex!)_f" -> print
+                    regionBranchArmPosition! - 1 -> writeDecimal
+                }
+                ", " -> print
+                regionBranchArmValue -> writeIrType(context, state)
+                " " -> print
+                regionBranchArmValueIndex! -> writeValue(ownerIndex!, context, state)
+                ", $(regionBranchArmPosition!)" -> println
+                regionBranchArmValue.nextOperand => regionBranchArmValueIndex!
+                regionBranchArmPosition! + 1 => regionBranchArmPosition!
+            }
+        }
+        (regionNode.kind == 12 or regionNode.kind == 35) -> if {
             regionNode.operand0 < 0 -> if {
                 "  %v$(regionNodeIndex!) = freeze " -> print
                 regionNode -> writeIrType(context, state)

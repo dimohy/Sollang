@@ -63,12 +63,15 @@ internal abstract class LlvmRuntimePlatform
 
     public virtual bool SupportsEventStreams => true;
 
+    public virtual bool SupportsConcurrentStreamJoins => false;
+
     public bool UsesAsyncFile { get; set; }
     public bool UsesProcessRuntime { get; set; }
     public bool UsesProcessExit { get; set; }
     public bool UsesComputePool { get; set; }
     public bool UsesDirectoryTraversal { get; set; }
     public bool UsesMouseEvents { get; set; }
+    public bool UsesConcurrentStreamJoins { get; set; }
     public bool UsesStandardError { get; set; }
 
     public virtual void EmitComputePrimitives(StringBuilder functions)
@@ -77,6 +80,448 @@ internal abstract class LlvmRuntimePlatform
 
     public virtual void EmitEventPrimitives(StringBuilder functions)
     {
+    }
+
+    public void EmitConcurrentStreamJoinPrimitives(StringBuilder functions)
+    {
+        EmitConcurrentStreamJoinPlatformPrimitives(functions);
+        EmitConcurrentStreamJoinCommonPrimitives(functions);
+    }
+
+    protected virtual void EmitConcurrentStreamJoinPlatformPrimitives(StringBuilder functions) =>
+        throw new SollangException("bounded concurrent stream joins are unavailable on the current target");
+
+    private static void EmitConcurrentStreamJoinCommonPrimitives(StringBuilder functions)
+    {
+        functions.AppendLine("""
+            define internal void @sollang_stream_join_enqueue_locked(ptr %runtime, i32 %event) #0 {
+            entry:
+              %count = load i32, ptr %runtime, align 4
+              %tail_address = getelementptr i8, ptr %runtime, i64 12
+              %tail = load i32, ptr %tail_address, align 4
+              %queue_address = getelementptr i8, ptr %runtime, i64 72
+              %queue = load ptr, ptr %queue_address, align 8
+              %event_address = getelementptr i32, ptr %queue, i32 %tail
+              store i32 %event, ptr %event_address, align 4
+              %next_tail_unwrapped = add i32 %tail, 1
+              %next_tail = urem i32 %next_tail_unwrapped, %count
+              store i32 %next_tail, ptr %tail_address, align 4
+              %queued_address = getelementptr i8, ptr %runtime, i64 16
+              %queued = load i32, ptr %queued_address, align 4
+              %queue_full = icmp eq i32 %queued, %count
+              br i1 %queue_full, label %invalid, label %append
+
+            append:
+              %next_queued = add i32 %queued, 1
+              store i32 %next_queued, ptr %queued_address, align 4
+              ret void
+
+            invalid:
+              call void @llvm.trap()
+              unreachable
+            }
+
+            define internal void @sollang_stream_join_worker_exit_locked(ptr %runtime) #0 {
+            entry:
+              %exited_address = getelementptr i8, ptr %runtime, i64 104
+              %exited = load i32, ptr %exited_address, align 4
+              %next_exited = add i32 %exited, 1
+              store i32 %next_exited, ptr %exited_address, align 4
+              call void @sollang_stream_join_wake_all(ptr %runtime)
+              call void @sollang_stream_join_unlock(ptr %runtime)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_worker_exit(ptr %runtime) #0 {
+            entry:
+              call void @sollang_stream_join_lock(ptr %runtime)
+              call void @sollang_stream_join_worker_exit_locked(ptr %runtime)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_worker_run(ptr %argument) #0 {
+            entry:
+              %runtime = load ptr, ptr %argument, align 8
+              %index_address = getelementptr i8, ptr %argument, i64 8
+              %index = load i32, ptr %index_address, align 4
+              %item_size_address = getelementptr i8, ptr %runtime, i64 24
+              %item_size = load i64, ptr %item_size_address, align 8
+              %slots_address = getelementptr i8, ptr %runtime, i64 56
+              %slots = load ptr, ptr %slots_address, align 8
+              %index64 = zext i32 %index to i64
+              %slot_offset = mul i64 %index64, %item_size
+              %slot = getelementptr i8, ptr %slots, i64 %slot_offset
+              %pull_address = getelementptr i8, ptr %runtime, i64 32
+              %pull = load ptr, ptr %pull_address, align 8
+              %drop_address = getelementptr i8, ptr %runtime, i64 40
+              %drop = load ptr, ptr %drop_address, align 8
+              %owner_address = getelementptr i8, ptr %runtime, i64 48
+              %owner = load ptr, ptr %owner_address, align 8
+              %full_array_address = getelementptr i8, ptr %runtime, i64 64
+              %full_array = load ptr, ptr %full_array_address, align 8
+              %full_address = getelementptr i8, ptr %full_array, i32 %index
+              br label %check
+
+            check:
+              call void @sollang_stream_join_lock(ptr %runtime)
+              %cancel_address = getelementptr i8, ptr %runtime, i64 20
+              %cancelled = load i32, ptr %cancel_address, align 4
+              %active = icmp eq i32 %cancelled, 0
+              br i1 %active, label %register_pull, label %cancelled_before_pull
+
+            register_pull:
+              %pulling_address = getelementptr i8, ptr %runtime, i64 100
+              %pulling = load i32, ptr %pulling_address, align 4
+              %next_pulling = add i32 %pulling, 1
+              store i32 %next_pulling, ptr %pulling_address, align 4
+              call void @sollang_stream_join_unlock(ptr %runtime)
+              br label %pull_value
+
+            cancelled_before_pull:
+              call void @sollang_stream_join_worker_exit_locked(ptr %runtime)
+              ret void
+
+            pull_value:
+              %has_value = call i1 %pull(ptr %owner, i32 %index, ptr %slot)
+              call void @sollang_stream_join_lock(ptr %runtime)
+              %pulling_after = load i32, ptr %pulling_address, align 4
+              %next_pulling_after = sub i32 %pulling_after, 1
+              store i32 %next_pulling_after, ptr %pulling_address, align 4
+              call void @sollang_stream_join_wake_all(ptr %runtime)
+              %cancelled_after_pull = load i32, ptr %cancel_address, align 4
+              %cancelled_now = icmp ne i32 %cancelled_after_pull, 0
+              br i1 %has_value, label %publish_or_drop, label %complete_or_cancel
+
+            publish_or_drop:
+              br i1 %cancelled_now, label %drop_unpublished, label %publish
+
+            drop_unpublished:
+              call void @sollang_stream_join_unlock(ptr %runtime)
+              call void %drop(ptr %owner, i32 %index, ptr %slot)
+              call void @sollang_stream_join_worker_exit(ptr %runtime)
+              ret void
+
+            publish:
+              store i8 1, ptr %full_address, align 1
+              call void @sollang_stream_join_enqueue_locked(ptr %runtime, i32 %index)
+              call void @sollang_stream_join_wake_all(ptr %runtime)
+              br label %backpressure
+
+            backpressure:
+              %full = load i8, ptr %full_address, align 1
+              %still_full = icmp ne i8 %full, 0
+              %cancelled_while_full = load i32, ptr %cancel_address, align 4
+              %not_cancelled = icmp eq i32 %cancelled_while_full, 0
+              %must_wait = and i1 %still_full, %not_cancelled
+              br i1 %must_wait, label %wait_release, label %released
+
+            wait_release:
+              call void @sollang_stream_join_wait(ptr %runtime)
+              br label %backpressure
+
+            released:
+              call void @sollang_stream_join_unlock(ptr %runtime)
+              br i1 %not_cancelled, label %check, label %cancelled_after_release
+
+            cancelled_after_release:
+              call void @sollang_stream_join_worker_exit(ptr %runtime)
+              ret void
+
+            complete_or_cancel:
+              br i1 %cancelled_now, label %unlock_done, label %complete
+
+            complete:
+              %active_address = getelementptr i8, ptr %runtime, i64 4
+              %active_count = load i32, ptr %active_address, align 4
+              %next_active = sub i32 %active_count, 1
+              store i32 %next_active, ptr %active_address, align 4
+              %completion_event = or i32 %index, -2147483648
+              call void @sollang_stream_join_enqueue_locked(ptr %runtime, i32 %completion_event)
+              call void @sollang_stream_join_wake_all(ptr %runtime)
+              call void @sollang_stream_join_worker_exit_locked(ptr %runtime)
+              ret void
+
+            unlock_done:
+              call void @sollang_stream_join_worker_exit_locked(ptr %runtime)
+              ret void
+            }
+
+            define internal ptr @sollang_stream_join_runtime_create(i32 %count, i64 %item_size, ptr %pull, ptr %drop, ptr %owner) #0 {
+            entry:
+              %valid_count = icmp sgt i32 %count, 0
+              %valid_size = icmp ugt i64 %item_size, 0
+              %valid = and i1 %valid_count, %valid_size
+              br i1 %valid, label %allocate, label %invalid
+
+            allocate:
+              %runtime = call ptr @sollang_alloc(i64 208)
+              %runtime_ok = icmp ne ptr %runtime, null
+              br i1 %runtime_ok, label %allocate_arrays, label %invalid
+
+            allocate_arrays:
+              call void @llvm.memset.p0.i64(ptr %runtime, i8 0, i64 208, i1 false)
+              %count64 = zext i32 %count to i64
+              %slots_size = mul i64 %count64, %item_size
+              %slots = call ptr @sollang_alloc(i64 %slots_size)
+              %full = call ptr @sollang_alloc(i64 %count64)
+              %queue_size = mul i64 %count64, 4
+              %queue = call ptr @sollang_alloc(i64 %queue_size)
+              %thread_size = mul i64 %count64, 8
+              %threads = call ptr @sollang_alloc(i64 %thread_size)
+              %argument_size = mul i64 %count64, 16
+              %arguments = call ptr @sollang_alloc(i64 %argument_size)
+              %slots_ok = icmp ne ptr %slots, null
+              %full_ok = icmp ne ptr %full, null
+              %queue_ok = icmp ne ptr %queue, null
+              %threads_ok = icmp ne ptr %threads, null
+              %arguments_ok = icmp ne ptr %arguments, null
+              %arrays_ok0 = and i1 %slots_ok, %full_ok
+              %arrays_ok1 = and i1 %queue_ok, %threads_ok
+              %arrays_ok2 = and i1 %arrays_ok0, %arrays_ok1
+              %arrays_ok = and i1 %arrays_ok2, %arguments_ok
+              br i1 %arrays_ok, label %initialize, label %free_arrays
+
+            initialize:
+              call void @llvm.memset.p0.i64(ptr %full, i8 0, i64 %count64, i1 false)
+              store i32 %count, ptr %runtime, align 4
+              %active_address = getelementptr i8, ptr %runtime, i64 4
+              store i32 %count, ptr %active_address, align 4
+              %item_size_address = getelementptr i8, ptr %runtime, i64 24
+              store i64 %item_size, ptr %item_size_address, align 8
+              %pull_address = getelementptr i8, ptr %runtime, i64 32
+              store ptr %pull, ptr %pull_address, align 8
+              %drop_address = getelementptr i8, ptr %runtime, i64 40
+              store ptr %drop, ptr %drop_address, align 8
+              %owner_address = getelementptr i8, ptr %runtime, i64 48
+              store ptr %owner, ptr %owner_address, align 8
+              %slots_address = getelementptr i8, ptr %runtime, i64 56
+              store ptr %slots, ptr %slots_address, align 8
+              %full_address = getelementptr i8, ptr %runtime, i64 64
+              store ptr %full, ptr %full_address, align 8
+              %queue_address = getelementptr i8, ptr %runtime, i64 72
+              store ptr %queue, ptr %queue_address, align 8
+              %threads_address = getelementptr i8, ptr %runtime, i64 80
+              store ptr %threads, ptr %threads_address, align 8
+              %arguments_address = getelementptr i8, ptr %runtime, i64 88
+              store ptr %arguments, ptr %arguments_address, align 8
+              %sync_ok = call i1 @sollang_stream_join_sync_init(ptr %runtime)
+              br i1 %sync_ok, label %start_loop, label %free_arrays
+
+            start_loop:
+              br label %start
+
+            start:
+              %index = phi i32 [ 0, %start_loop ], [ %next_index, %started ]
+              %all_started = icmp eq i32 %index, %count
+              br i1 %all_started, label %ready, label %start_one
+
+            start_one:
+              %index64_start = zext i32 %index to i64
+              %argument_offset = mul i64 %index64_start, 16
+              %argument = getelementptr i8, ptr %arguments, i64 %argument_offset
+              store ptr %runtime, ptr %argument, align 8
+              %argument_index = getelementptr i8, ptr %argument, i64 8
+              store i32 %index, ptr %argument_index, align 4
+              %thread = getelementptr i64, ptr %threads, i32 %index
+              %thread_ok = call i1 @sollang_stream_join_thread_start(ptr %thread, ptr %argument)
+              br i1 %thread_ok, label %started, label %start_failed
+
+            started:
+              %next_index = add i32 %index, 1
+              %created_address = getelementptr i8, ptr %runtime, i64 96
+              store i32 %next_index, ptr %created_address, align 4
+              br label %start
+
+            ready:
+              ret ptr %runtime
+
+            start_failed:
+              call void @sollang_stream_join_runtime_cancel(ptr %runtime)
+              call void @sollang_stream_join_runtime_join_destroy(ptr %runtime)
+              ret ptr null
+
+            free_arrays:
+              call void @sollang_free(ptr %arguments)
+              call void @sollang_free(ptr %threads)
+              call void @sollang_free(ptr %queue)
+              call void @sollang_free(ptr %full)
+              call void @sollang_free(ptr %slots)
+              call void @sollang_free(ptr %runtime)
+              ret ptr null
+
+            invalid:
+              ret ptr null
+            }
+
+            define internal i1 @sollang_stream_join_runtime_next_event(ptr %runtime, ptr %index_output, ptr %kind_output, ptr %slot_output) #0 {
+            entry:
+              call void @sollang_stream_join_lock(ptr %runtime)
+              br label %inspect
+
+            inspect:
+              %queued_address = getelementptr i8, ptr %runtime, i64 16
+              %queued = load i32, ptr %queued_address, align 4
+              %has_event = icmp sgt i32 %queued, 0
+              br i1 %has_event, label %pop, label %empty
+
+            empty:
+              %cancel_address = getelementptr i8, ptr %runtime, i64 20
+              %cancelled = load i32, ptr %cancel_address, align 4
+              %is_cancelled = icmp ne i32 %cancelled, 0
+              %active_address = getelementptr i8, ptr %runtime, i64 4
+              %active = load i32, ptr %active_address, align 4
+              %complete = icmp eq i32 %active, 0
+              %finished = or i1 %is_cancelled, %complete
+              br i1 %finished, label %done, label %wait
+
+            wait:
+              call void @sollang_stream_join_wait(ptr %runtime)
+              br label %inspect
+
+            pop:
+              %head_address = getelementptr i8, ptr %runtime, i64 8
+              %head = load i32, ptr %head_address, align 4
+              %queue_address = getelementptr i8, ptr %runtime, i64 72
+              %queue = load ptr, ptr %queue_address, align 8
+              %event_address = getelementptr i32, ptr %queue, i32 %head
+              %event = load i32, ptr %event_address, align 4
+              %count = load i32, ptr %runtime, align 4
+              %next_head_unwrapped = add i32 %head, 1
+              %next_head = urem i32 %next_head_unwrapped, %count
+              store i32 %next_head, ptr %head_address, align 4
+              %next_queued = sub i32 %queued, 1
+              store i32 %next_queued, ptr %queued_address, align 4
+              %kind = lshr i32 %event, 31
+              %index = and i32 %event, 2147483647
+              store i32 %index, ptr %index_output, align 4
+              store i32 %kind, ptr %kind_output, align 4
+              %item_size_address = getelementptr i8, ptr %runtime, i64 24
+              %item_size = load i64, ptr %item_size_address, align 8
+              %index64 = zext i32 %index to i64
+              %slot_offset = mul i64 %index64, %item_size
+              %slots_address = getelementptr i8, ptr %runtime, i64 56
+              %slots = load ptr, ptr %slots_address, align 8
+              %slot = getelementptr i8, ptr %slots, i64 %slot_offset
+              store ptr %slot, ptr %slot_output, align 8
+              call void @sollang_stream_join_unlock(ptr %runtime)
+              ret i1 true
+
+            done:
+              call void @sollang_stream_join_unlock(ptr %runtime)
+              ret i1 false
+            }
+
+            define internal void @sollang_stream_join_runtime_release(ptr %runtime, i32 %index) #0 {
+            entry:
+              call void @sollang_stream_join_lock(ptr %runtime)
+              %full_array_address = getelementptr i8, ptr %runtime, i64 64
+              %full_array = load ptr, ptr %full_array_address, align 8
+              %full_address = getelementptr i8, ptr %full_array, i32 %index
+              store i8 0, ptr %full_address, align 1
+              call void @sollang_stream_join_wake_all(ptr %runtime)
+              call void @sollang_stream_join_unlock(ptr %runtime)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_runtime_cancel(ptr %runtime) #0 {
+            entry:
+              call void @sollang_stream_join_lock(ptr %runtime)
+              %cancel_address = getelementptr i8, ptr %runtime, i64 20
+              store atomic i32 1, ptr %cancel_address release, align 4
+              call void @sollang_stream_join_wake_all(ptr %runtime)
+              br label %settle
+
+            settle:
+              %created_address = getelementptr i8, ptr %runtime, i64 96
+              %created = load i32, ptr %created_address, align 4
+              %pulling_address = getelementptr i8, ptr %runtime, i64 100
+              %pulling = load i32, ptr %pulling_address, align 4
+              %exited_address = getelementptr i8, ptr %runtime, i64 104
+              %exited = load i32, ptr %exited_address, align 4
+              %settled = add i32 %pulling, %exited
+              %all_settled = icmp eq i32 %settled, %created
+              br i1 %all_settled, label %done, label %wait
+
+            wait:
+              call void @sollang_stream_join_wait(ptr %runtime)
+              br label %settle
+
+            done:
+              call void @sollang_stream_join_unlock(ptr %runtime)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_runtime_join_destroy(ptr %runtime) #0 {
+            entry:
+              %created_address = getelementptr i8, ptr %runtime, i64 96
+              %created = load i32, ptr %created_address, align 4
+              %threads_address = getelementptr i8, ptr %runtime, i64 80
+              %threads = load ptr, ptr %threads_address, align 8
+              br label %join
+
+            join:
+              %join_index = phi i32 [ 0, %entry ], [ %next_join, %join_one ]
+              %all_joined = icmp eq i32 %join_index, %created
+              br i1 %all_joined, label %drop_pending, label %join_one
+
+            join_one:
+              %thread = getelementptr i64, ptr %threads, i32 %join_index
+              call void @sollang_stream_join_thread_join(ptr %thread)
+              %next_join = add i32 %join_index, 1
+              br label %join
+
+            drop_pending:
+              %count = load i32, ptr %runtime, align 4
+              %full_array_address = getelementptr i8, ptr %runtime, i64 64
+              %full_array = load ptr, ptr %full_array_address, align 8
+              %item_size_address = getelementptr i8, ptr %runtime, i64 24
+              %item_size = load i64, ptr %item_size_address, align 8
+              %slots_address = getelementptr i8, ptr %runtime, i64 56
+              %slots = load ptr, ptr %slots_address, align 8
+              %drop_address = getelementptr i8, ptr %runtime, i64 40
+              %drop = load ptr, ptr %drop_address, align 8
+              %owner_address = getelementptr i8, ptr %runtime, i64 48
+              %owner = load ptr, ptr %owner_address, align 8
+              br label %drop_loop
+
+            drop_loop:
+              %drop_index = phi i32 [ 0, %drop_pending ], [ %next_drop, %drop_continue ]
+              %all_dropped = icmp eq i32 %drop_index, %count
+              br i1 %all_dropped, label %destroy, label %inspect_pending
+
+            inspect_pending:
+              %full_address = getelementptr i8, ptr %full_array, i32 %drop_index
+              %full = load i8, ptr %full_address, align 1
+              %has_pending = icmp ne i8 %full, 0
+              br i1 %has_pending, label %drop_one, label %drop_continue
+
+            drop_one:
+              %drop_index64 = zext i32 %drop_index to i64
+              %slot_offset = mul i64 %drop_index64, %item_size
+              %slot = getelementptr i8, ptr %slots, i64 %slot_offset
+              call void %drop(ptr %owner, i32 %drop_index, ptr %slot)
+              br label %drop_continue
+
+            drop_continue:
+              %next_drop = add i32 %drop_index, 1
+              br label %drop_loop
+
+            destroy:
+              call void @sollang_stream_join_sync_destroy(ptr %runtime)
+              %arguments_address = getelementptr i8, ptr %runtime, i64 88
+              %arguments = load ptr, ptr %arguments_address, align 8
+              %queue_address = getelementptr i8, ptr %runtime, i64 72
+              %queue = load ptr, ptr %queue_address, align 8
+              call void @sollang_free(ptr %arguments)
+              call void @sollang_free(ptr %threads)
+              call void @sollang_free(ptr %queue)
+              call void @sollang_free(ptr %full_array)
+              call void @sollang_free(ptr %slots)
+              call void @sollang_free(ptr %runtime)
+              ret void
+            }
+
+            """);
     }
 
     protected static void EmitDirectoryNodePrimitives(StringBuilder functions)

@@ -1,0 +1,23 @@
+import sollang.compiler.llvm.text as llvm
+
+# An owned immutable capture is shared by readonly address while workers run;
+# the enclosing function keeps the storage alive until the structured join.
+main {
+    [
+        """
+        measure value: Int, prefix: Text -> (left: Int, right: Int) {
+            addLength input: Int -> Int => input + Int(prefix -> len)
+            value -> parallel branch {
+                left: ref -> addLength
+                right: ref -> addLength
+            }
+        }
+        main {
+            7 -> measure("item") => result
+            result.left -> println
+            result.right -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

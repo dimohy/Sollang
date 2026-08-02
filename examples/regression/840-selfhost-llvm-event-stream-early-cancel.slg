@@ -1,0 +1,32 @@
+import sollang.compiler.llvm.text as llvm
+
+# take(1) must cancel the fan-in, wake blocked producers, join every worker,
+# and drop every still-pending value.
+main {
+    [
+        """
+        import std.sequence
+        makeValues values: Range -> Stream<Int> => values -> defer
+        asEvents left: move Stream<Int>, right: move Stream<Int> -> EventStream<Int> {
+            (left, right) -> merge
+        }
+        main {
+            1..100 -> makeValues => firstLeft
+            1001..1100 -> makeValues => firstRight
+            firstLeft -> asEvents(firstRight) => first
+            2001..2100 -> makeValues => secondLeft
+            3001..3100 -> makeValues => secondRight
+            secondLeft -> asEvents(secondRight) => second
+            0 => received!
+            (first, second) -> merge => all
+            all -> take(1) -> each value { received! + 1 => received! }
+            "received=$(received!)" -> println
+        }
+        """,
+        """
+        namespace std.sequence
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

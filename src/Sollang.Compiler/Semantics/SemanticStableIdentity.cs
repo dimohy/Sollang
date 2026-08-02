@@ -480,6 +480,35 @@ internal static class SemanticStableIdentity
                         VisitExpression(argument, owner, result, ref ordinal);
                 }
                 break;
+            case BranchExpression branch:
+                VisitExpression(branch.Source, owner, result, ref ordinal);
+                foreach (var target in branch.Arms.SelectMany(static arm => arm.Targets))
+                {
+                    RegisterSyntaxCall(target, owner, result, ref ordinal);
+                    foreach (var argument in target.Arguments)
+                        VisitExpression(argument, owner, result, ref ordinal);
+                }
+                break;
+            case TapExpression tap:
+                VisitExpression(tap.Source, owner, result, ref ordinal);
+                foreach (var target in tap.Targets)
+                {
+                    RegisterSyntaxCall(target, owner, result, ref ordinal);
+                    foreach (var argument in target.Arguments)
+                        VisitExpression(argument, owner, result, ref ordinal);
+                }
+                break;
+            case PartitionExpression partition:
+                VisitExpression(partition.Source, owner, result, ref ordinal);
+                foreach (var arm in partition.Arms)
+                {
+                    if (arm.Condition is not null)
+                        VisitExpression(arm.Condition, owner, result, ref ordinal);
+                }
+                break;
+            case StreamJoinExpression join:
+                VisitExpression(join.Source, owner, result, ref ordinal);
+                break;
             case CallExpression call:
                 foreach (var argument in call.Arguments)
                     VisitExpression(argument, owner, result, ref ordinal);
@@ -504,6 +533,10 @@ internal static class SemanticStableIdentity
             case StructLiteralExpression structure:
                 foreach (var field in structure.Fields)
                     VisitExpression(field.Value, owner, result, ref ordinal);
+                break;
+            case ProductExpression product:
+                foreach (var element in product.Elements)
+                    VisitExpression(element.Value, owner, result, ref ordinal);
                 break;
             case FieldAccessExpression field:
                 VisitExpression(field.Source, owner, result, ref ordinal);

@@ -1,0 +1,16 @@
+# EventStream merge uses one bounded slot per input and cancels every worker on early stop.
+import sys.event
+
+mergeEvents left: move EventStream<MouseEvent>, right: move EventStream<MouseEvent> -> EventStream<MouseEvent> {
+    (left, right) -> merge
+}
+
+main {
+    2 -> event.mouseEvents(event.EventOverflowPolicy.DropOldest) => left
+    2 -> event.mouseEvents(event.EventOverflowPolicy.DropOldest) => right
+    left -> mergeEvents(right) => merged
+    merged -> each event {
+        "mouse $(event.x),$(event.y)" -> println
+        stop
+    }
+}

@@ -1,0 +1,1119 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @GetConsoleMode(ptr, ptr)
+declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @GetProcessHeap()
+declare ptr @HeapAlloc(ptr, i32, i64)
+declare i32 @HeapFree(ptr, i32, ptr)
+define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+entry:
+  %mode = alloca i32, align 4
+  %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+  %is_console = icmp ne i32 %console_status, 0
+  br i1 %is_console, label %console_prepare, label %redirected
+redirected:
+  %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
+  ret i32 %redirected_ok
+console_prepare:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @GetProcessHeap()
+  %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+convert:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+console_write:
+  %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
+  %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  ret i32 %console_ok
+conversion_free:
+  %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+conversion_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+}
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)
+declare dllimport i32 @WaitForSingleObject(ptr, i32)
+declare dllimport i32 @CloseHandle(ptr)
+%sollang.stream = type { ptr, ptr, ptr }
+%sollang.event_stream = type { ptr, ptr, ptr }
+define internal i1 @sollang_range_stream_next(ptr %context, ptr %output) {
+entry:
+  %done_address = getelementptr i8, ptr %context, i64 8
+  %done = load i1, ptr %done_address, align 1
+  br i1 %done, label %finished, label %active
+active:
+  %current = load i32, ptr %context, align 4
+  %end_address = getelementptr i8, ptr %context, i64 4
+  %end = load i32, ptr %end_address, align 4
+  %past_end = icmp sgt i32 %current, %end
+  br i1 %past_end, label %mark_finished, label %yield
+yield:
+  store i32 %current, ptr %output, align 4
+  %is_last = icmp eq i32 %current, %end
+  br i1 %is_last, label %mark_finished_after_yield, label %advance
+advance:
+  %next = add i32 %current, 1
+  store i32 %next, ptr %context, align 4
+  ret i1 true
+mark_finished_after_yield:
+  store i1 true, ptr %done_address, align 1
+  ret i1 true
+mark_finished:
+  store i1 true, ptr %done_address, align 1
+  ret i1 false
+finished:
+  ret i1 false
+}
+define internal void @sollang_stream_heap_drop(ptr %context) {
+entry:
+  call void @free(ptr %context)
+  ret void
+}
+define internal %sollang.stream @sollang_range_stream_create({ i32, i32 } %range) {
+entry:
+  %context = call ptr @malloc(i64 12)
+  %start = extractvalue { i32, i32 } %range, 0
+  %end = extractvalue { i32, i32 } %range, 1
+  store i32 %start, ptr %context, align 4
+  %end_address = getelementptr i8, ptr %context, i64 4
+  store i32 %end, ptr %end_address, align 4
+  %done_address = getelementptr i8, ptr %context, i64 8
+  store i1 false, ptr %done_address, align 1
+  %with_context = insertvalue %sollang.stream poison, ptr %context, 0
+  %with_next = insertvalue %sollang.stream %with_context, ptr @sollang_range_stream_next, 1
+  %result = insertvalue %sollang.stream %with_next, ptr @sollang_stream_heap_drop, 2
+  ret %sollang.stream %result
+}
+%sollang.product.t28 = type { %sollang.stream, %sollang.stream }
+%sollang.product.t29 = type { %sollang.event_stream, %sollang.event_stream }
+%sollang.product.t30 = type { i32, i32 }
+%sollang.join.12 = type { %sollang.stream, %sollang.stream, i32, i1, i1 }
+define internal i1 @sollang_join_12_next(ptr %context, ptr %output) {
+entry:
+  %checked_slot = alloca i32, align 4
+  store i32 0, ptr %checked_slot, align 4
+  br label %loop
+loop:
+  %checked = load i32, ptr %checked_slot, align 4
+  %all_checked = icmp sge i32 %checked, 2
+  br i1 %all_checked, label %done, label %dispatch
+dispatch:
+  %cursor_address = getelementptr %sollang.join.12, ptr %context, i32 0, i32 2
+  %cursor = load i32, ptr %cursor_address, align 4
+  switch i32 %cursor, label %done [
+    i32 0, label %input0
+    i32 1, label %input1
+  ]
+input0:
+  %active_address0 = getelementptr %sollang.join.12, ptr %context, i32 0, i32 3
+  %active0 = load i1, ptr %active_address0, align 1
+  br i1 %active0, label %pull0, label %advance0
+pull0:
+  %stream_address0 = getelementptr %sollang.join.12, ptr %context, i32 0, i32 0
+  %stream0 = load %sollang.stream, ptr %stream_address0, align 8
+  %stream_context0 = extractvalue %sollang.stream %stream0, 0
+  %stream_next0 = extractvalue %sollang.stream %stream0, 1
+  %has_value0 = call i1 %stream_next0(ptr %stream_context0, ptr %output)
+  br i1 %has_value0, label %value0, label %exhausted0
+value0:
+  store i32 1, ptr %cursor_address, align 4
+  ret i1 true
+exhausted0:
+  store i1 false, ptr %active_address0, align 1
+  br label %advance0
+advance0:
+  store i32 1, ptr %cursor_address, align 4
+  %checked_before0 = load i32, ptr %checked_slot, align 4
+  %checked_next0 = add i32 %checked_before0, 1
+  store i32 %checked_next0, ptr %checked_slot, align 4
+  br label %loop
+input1:
+  %active_address1 = getelementptr %sollang.join.12, ptr %context, i32 0, i32 4
+  %active1 = load i1, ptr %active_address1, align 1
+  br i1 %active1, label %pull1, label %advance1
+pull1:
+  %stream_address1 = getelementptr %sollang.join.12, ptr %context, i32 0, i32 1
+  %stream1 = load %sollang.stream, ptr %stream_address1, align 8
+  %stream_context1 = extractvalue %sollang.stream %stream1, 0
+  %stream_next1 = extractvalue %sollang.stream %stream1, 1
+  %has_value1 = call i1 %stream_next1(ptr %stream_context1, ptr %output)
+  br i1 %has_value1, label %value1, label %exhausted1
+value1:
+  store i32 0, ptr %cursor_address, align 4
+  ret i1 true
+exhausted1:
+  store i1 false, ptr %active_address1, align 1
+  br label %advance1
+advance1:
+  store i32 0, ptr %cursor_address, align 4
+  %checked_before1 = load i32, ptr %checked_slot, align 4
+  %checked_next1 = add i32 %checked_before1, 1
+  store i32 %checked_next1, ptr %checked_slot, align 4
+  br label %loop
+done:
+  ret i1 false
+}
+define internal void @sollang_join_12_drop(ptr %context) {
+entry:
+  br label %check0
+check0:
+  %drop_stream_address0 = getelementptr %sollang.join.12, ptr %context, i32 0, i32 0
+  %drop_stream0 = load %sollang.stream, ptr %drop_stream_address0, align 8
+  %drop_context0 = extractvalue %sollang.stream %drop_stream0, 0
+  %drop_callback0 = extractvalue %sollang.stream %drop_stream0, 2
+  %has_drop0 = icmp ne ptr %drop_callback0, null
+  br i1 %has_drop0, label %drop0, label %after0
+drop0:
+  call void %drop_callback0(ptr %drop_context0)
+  br label %after0
+after0:
+  br label %check1
+check1:
+  %drop_stream_address1 = getelementptr %sollang.join.12, ptr %context, i32 0, i32 1
+  %drop_stream1 = load %sollang.stream, ptr %drop_stream_address1, align 8
+  %drop_context1 = extractvalue %sollang.stream %drop_stream1, 0
+  %drop_callback1 = extractvalue %sollang.stream %drop_stream1, 2
+  %has_drop1 = icmp ne ptr %drop_callback1, null
+  br i1 %has_drop1, label %drop1, label %after1
+drop1:
+  call void %drop_callback1(ptr %drop_context1)
+  br label %after1
+after1:
+  br label %done
+done:
+  call void @free(ptr %context)
+  ret void
+}
+declare dllimport void @AcquireSRWLockExclusive(ptr)
+declare dllimport void @ReleaseSRWLockExclusive(ptr)
+declare dllimport void @InitializeConditionVariable(ptr)
+declare dllimport i32 @SleepConditionVariableSRW(ptr, ptr, i32, i32)
+declare dllimport void @WakeAllConditionVariable(ptr)
+define internal i32 @sollang_windows_stream_join_worker(ptr %argument) {
+entry:
+  call void @sollang_stream_join_worker_run(ptr %argument)
+  ret i32 0
+}
+define internal i1 @sollang_stream_join_sync_init(ptr %runtime) {
+entry:
+  %sync = getelementptr i8, ptr %runtime, i64 112
+  store ptr null, ptr %sync, align 8
+  %condition = getelementptr i8, ptr %runtime, i64 120
+  call void @InitializeConditionVariable(ptr %condition)
+  ret i1 true
+}
+define internal void @sollang_stream_join_lock(ptr %runtime) {
+entry:
+  %sync = getelementptr i8, ptr %runtime, i64 112
+  call void @AcquireSRWLockExclusive(ptr %sync)
+  ret void
+}
+define internal void @sollang_stream_join_unlock(ptr %runtime) {
+entry:
+  %sync = getelementptr i8, ptr %runtime, i64 112
+  call void @ReleaseSRWLockExclusive(ptr %sync)
+  ret void
+}
+define internal void @sollang_stream_join_wait(ptr %runtime) {
+entry:
+  %sync = getelementptr i8, ptr %runtime, i64 112
+  %condition = getelementptr i8, ptr %runtime, i64 120
+  %waited = call i32 @SleepConditionVariableSRW(ptr %condition, ptr %sync, i32 -1, i32 0)
+  ret void
+}
+define internal void @sollang_stream_join_wake_all(ptr %runtime) {
+entry:
+  %condition = getelementptr i8, ptr %runtime, i64 120
+  call void @WakeAllConditionVariable(ptr %condition)
+  ret void
+}
+define internal void @sollang_stream_join_sync_destroy(ptr %runtime) {
+entry:
+  ret void
+}
+define internal i1 @sollang_stream_join_thread_start(ptr %thread_slot, ptr %argument) {
+entry:
+  %thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_stream_join_worker, ptr %argument, i32 0, ptr null)
+  store ptr %thread, ptr %thread_slot, align 8
+  %ok = icmp ne ptr %thread, null
+  ret i1 %ok
+}
+define internal void @sollang_stream_join_thread_join(ptr %thread_slot) {
+entry:
+  %thread = load ptr, ptr %thread_slot, align 8
+  %waited = call i32 @WaitForSingleObject(ptr %thread, i32 -1)
+  %closed = call i32 @CloseHandle(ptr %thread)
+  ret void
+}
+define internal void @sollang_stream_join_enqueue_locked(ptr %runtime, i32 %event) {
+entry:
+  %count = load i32, ptr %runtime, align 4
+  %tail_address = getelementptr i8, ptr %runtime, i64 12
+  %tail = load i32, ptr %tail_address, align 4
+  %queue_address = getelementptr i8, ptr %runtime, i64 72
+  %queue = load ptr, ptr %queue_address, align 8
+  %event_address = getelementptr i32, ptr %queue, i32 %tail
+  store i32 %event, ptr %event_address, align 4
+  %next_tail_unwrapped = add i32 %tail, 1
+  %next_tail = urem i32 %next_tail_unwrapped, %count
+  store i32 %next_tail, ptr %tail_address, align 4
+  %queued_address = getelementptr i8, ptr %runtime, i64 16
+  %queued = load i32, ptr %queued_address, align 4
+  %queue_full = icmp eq i32 %queued, %count
+  br i1 %queue_full, label %invalid, label %append
+append:
+  %next_queued = add i32 %queued, 1
+  store i32 %next_queued, ptr %queued_address, align 4
+  ret void
+invalid:
+  call void @llvm.trap()
+  unreachable
+}
+define internal void @sollang_stream_join_worker_exit_locked(ptr %runtime) {
+entry:
+  %exited_address = getelementptr i8, ptr %runtime, i64 104
+  %exited = load i32, ptr %exited_address, align 4
+  %next_exited = add i32 %exited, 1
+  store i32 %next_exited, ptr %exited_address, align 4
+  call void @sollang_stream_join_wake_all(ptr %runtime)
+  call void @sollang_stream_join_unlock(ptr %runtime)
+  ret void
+}
+define internal void @sollang_stream_join_worker_exit(ptr %runtime) {
+entry:
+  call void @sollang_stream_join_lock(ptr %runtime)
+  call void @sollang_stream_join_worker_exit_locked(ptr %runtime)
+  ret void
+}
+define internal void @sollang_stream_join_worker_run(ptr %argument) {
+entry:
+  %runtime = load ptr, ptr %argument, align 8
+  %index_address = getelementptr i8, ptr %argument, i64 8
+  %index = load i32, ptr %index_address, align 4
+  %item_size_address = getelementptr i8, ptr %runtime, i64 24
+  %item_size = load i64, ptr %item_size_address, align 8
+  %slots_address = getelementptr i8, ptr %runtime, i64 56
+  %slots = load ptr, ptr %slots_address, align 8
+  %index64 = zext i32 %index to i64
+  %slot_offset = mul i64 %index64, %item_size
+  %slot = getelementptr i8, ptr %slots, i64 %slot_offset
+  %pull_address = getelementptr i8, ptr %runtime, i64 32
+  %pull = load ptr, ptr %pull_address, align 8
+  %drop_address = getelementptr i8, ptr %runtime, i64 40
+  %drop = load ptr, ptr %drop_address, align 8
+  %owner_address = getelementptr i8, ptr %runtime, i64 48
+  %owner = load ptr, ptr %owner_address, align 8
+  %full_array_address = getelementptr i8, ptr %runtime, i64 64
+  %full_array = load ptr, ptr %full_array_address, align 8
+  %full_address = getelementptr i8, ptr %full_array, i32 %index
+  br label %check
+check:
+  call void @sollang_stream_join_lock(ptr %runtime)
+  %cancel_address = getelementptr i8, ptr %runtime, i64 20
+  %cancelled = load i32, ptr %cancel_address, align 4
+  %active = icmp eq i32 %cancelled, 0
+  br i1 %active, label %register_pull, label %cancelled_before_pull
+register_pull:
+  %pulling_address = getelementptr i8, ptr %runtime, i64 100
+  %pulling = load i32, ptr %pulling_address, align 4
+  %next_pulling = add i32 %pulling, 1
+  store i32 %next_pulling, ptr %pulling_address, align 4
+  call void @sollang_stream_join_unlock(ptr %runtime)
+  br label %pull_value
+cancelled_before_pull:
+  call void @sollang_stream_join_worker_exit_locked(ptr %runtime)
+  ret void
+pull_value:
+  %has_value = call i1 %pull(ptr %owner, i32 %index, ptr %slot)
+  call void @sollang_stream_join_lock(ptr %runtime)
+  %pulling_after = load i32, ptr %pulling_address, align 4
+  %next_pulling_after = sub i32 %pulling_after, 1
+  store i32 %next_pulling_after, ptr %pulling_address, align 4
+  call void @sollang_stream_join_wake_all(ptr %runtime)
+  %cancelled_after_pull = load i32, ptr %cancel_address, align 4
+  %cancelled_now = icmp ne i32 %cancelled_after_pull, 0
+  br i1 %has_value, label %publish_or_drop, label %complete_or_cancel
+publish_or_drop:
+  br i1 %cancelled_now, label %drop_unpublished, label %publish
+drop_unpublished:
+  call void @sollang_stream_join_unlock(ptr %runtime)
+  call void %drop(ptr %owner, i32 %index, ptr %slot)
+  call void @sollang_stream_join_worker_exit(ptr %runtime)
+  ret void
+publish:
+  store i8 1, ptr %full_address, align 1
+  call void @sollang_stream_join_enqueue_locked(ptr %runtime, i32 %index)
+  call void @sollang_stream_join_wake_all(ptr %runtime)
+  br label %backpressure
+backpressure:
+  %full = load i8, ptr %full_address, align 1
+  %still_full = icmp ne i8 %full, 0
+  %cancelled_while_full = load i32, ptr %cancel_address, align 4
+  %not_cancelled = icmp eq i32 %cancelled_while_full, 0
+  %must_wait = and i1 %still_full, %not_cancelled
+  br i1 %must_wait, label %wait_release, label %released
+wait_release:
+  call void @sollang_stream_join_wait(ptr %runtime)
+  br label %backpressure
+released:
+  call void @sollang_stream_join_unlock(ptr %runtime)
+  br i1 %not_cancelled, label %check, label %cancelled_after_release
+cancelled_after_release:
+  call void @sollang_stream_join_worker_exit(ptr %runtime)
+  ret void
+complete_or_cancel:
+  br i1 %cancelled_now, label %unlock_done, label %complete
+complete:
+  %active_address = getelementptr i8, ptr %runtime, i64 4
+  %active_count = load i32, ptr %active_address, align 4
+  %next_active = sub i32 %active_count, 1
+  store i32 %next_active, ptr %active_address, align 4
+  %completion_event = or i32 %index, -2147483648
+  call void @sollang_stream_join_enqueue_locked(ptr %runtime, i32 %completion_event)
+  call void @sollang_stream_join_wake_all(ptr %runtime)
+  call void @sollang_stream_join_worker_exit_locked(ptr %runtime)
+  ret void
+unlock_done:
+  call void @sollang_stream_join_worker_exit_locked(ptr %runtime)
+  ret void
+}
+define internal ptr @sollang_stream_join_runtime_create(i32 %count, i64 %item_size, ptr %pull, ptr %drop, ptr %owner) {
+entry:
+  %valid_count = icmp sgt i32 %count, 0
+  %valid_size = icmp ugt i64 %item_size, 0
+  %valid = and i1 %valid_count, %valid_size
+  br i1 %valid, label %allocate, label %invalid
+allocate:
+  %runtime = call ptr @malloc(i64 208)
+  %runtime_ok = icmp ne ptr %runtime, null
+  br i1 %runtime_ok, label %allocate_arrays, label %invalid
+allocate_arrays:
+  call void @llvm.memset.p0.i64(ptr %runtime, i8 0, i64 208, i1 false)
+  %count64 = zext i32 %count to i64
+  %slots_size = mul i64 %count64, %item_size
+  %slots = call ptr @malloc(i64 %slots_size)
+  %full = call ptr @malloc(i64 %count64)
+  %queue_size = mul i64 %count64, 4
+  %queue = call ptr @malloc(i64 %queue_size)
+  %thread_size = mul i64 %count64, 8
+  %threads = call ptr @malloc(i64 %thread_size)
+  %argument_size = mul i64 %count64, 16
+  %arguments = call ptr @malloc(i64 %argument_size)
+  %slots_ok = icmp ne ptr %slots, null
+  %full_ok = icmp ne ptr %full, null
+  %queue_ok = icmp ne ptr %queue, null
+  %threads_ok = icmp ne ptr %threads, null
+  %arguments_ok = icmp ne ptr %arguments, null
+  %arrays_ok0 = and i1 %slots_ok, %full_ok
+  %arrays_ok1 = and i1 %queue_ok, %threads_ok
+  %arrays_ok2 = and i1 %arrays_ok0, %arrays_ok1
+  %arrays_ok = and i1 %arrays_ok2, %arguments_ok
+  br i1 %arrays_ok, label %initialize, label %free_arrays
+initialize:
+  call void @llvm.memset.p0.i64(ptr %full, i8 0, i64 %count64, i1 false)
+  store i32 %count, ptr %runtime, align 4
+  %active_address = getelementptr i8, ptr %runtime, i64 4
+  store i32 %count, ptr %active_address, align 4
+  %item_size_address = getelementptr i8, ptr %runtime, i64 24
+  store i64 %item_size, ptr %item_size_address, align 8
+  %pull_address = getelementptr i8, ptr %runtime, i64 32
+  store ptr %pull, ptr %pull_address, align 8
+  %drop_address = getelementptr i8, ptr %runtime, i64 40
+  store ptr %drop, ptr %drop_address, align 8
+  %owner_address = getelementptr i8, ptr %runtime, i64 48
+  store ptr %owner, ptr %owner_address, align 8
+  %slots_address = getelementptr i8, ptr %runtime, i64 56
+  store ptr %slots, ptr %slots_address, align 8
+  %full_address = getelementptr i8, ptr %runtime, i64 64
+  store ptr %full, ptr %full_address, align 8
+  %queue_address = getelementptr i8, ptr %runtime, i64 72
+  store ptr %queue, ptr %queue_address, align 8
+  %threads_address = getelementptr i8, ptr %runtime, i64 80
+  store ptr %threads, ptr %threads_address, align 8
+  %arguments_address = getelementptr i8, ptr %runtime, i64 88
+  store ptr %arguments, ptr %arguments_address, align 8
+  %sync_ok = call i1 @sollang_stream_join_sync_init(ptr %runtime)
+  br i1 %sync_ok, label %start_loop, label %free_arrays
+start_loop:
+  br label %start
+start:
+  %index = phi i32 [ 0, %start_loop ], [ %next_index, %started ]
+  %all_started = icmp eq i32 %index, %count
+  br i1 %all_started, label %ready, label %start_one
+start_one:
+  %index64_start = zext i32 %index to i64
+  %argument_offset = mul i64 %index64_start, 16
+  %argument = getelementptr i8, ptr %arguments, i64 %argument_offset
+  store ptr %runtime, ptr %argument, align 8
+  %argument_index = getelementptr i8, ptr %argument, i64 8
+  store i32 %index, ptr %argument_index, align 4
+  %thread = getelementptr i64, ptr %threads, i32 %index
+  %thread_ok = call i1 @sollang_stream_join_thread_start(ptr %thread, ptr %argument)
+  br i1 %thread_ok, label %started, label %start_failed
+started:
+  %next_index = add i32 %index, 1
+  %created_address = getelementptr i8, ptr %runtime, i64 96
+  store i32 %next_index, ptr %created_address, align 4
+  br label %start
+ready:
+  ret ptr %runtime
+start_failed:
+  call void @sollang_stream_join_runtime_cancel(ptr %runtime)
+  call void @sollang_stream_join_runtime_join_destroy(ptr %runtime)
+  ret ptr null
+free_arrays:
+  call void @free(ptr %arguments)
+  call void @free(ptr %threads)
+  call void @free(ptr %queue)
+  call void @free(ptr %full)
+  call void @free(ptr %slots)
+  call void @free(ptr %runtime)
+  ret ptr null
+invalid:
+  ret ptr null
+}
+define internal i1 @sollang_stream_join_runtime_next_event(ptr %runtime, ptr %index_output, ptr %kind_output, ptr %slot_output) {
+entry:
+  call void @sollang_stream_join_lock(ptr %runtime)
+  br label %inspect
+inspect:
+  %queued_address = getelementptr i8, ptr %runtime, i64 16
+  %queued = load i32, ptr %queued_address, align 4
+  %has_event = icmp sgt i32 %queued, 0
+  br i1 %has_event, label %pop, label %empty
+empty:
+  %cancel_address = getelementptr i8, ptr %runtime, i64 20
+  %cancelled = load i32, ptr %cancel_address, align 4
+  %is_cancelled = icmp ne i32 %cancelled, 0
+  %active_address = getelementptr i8, ptr %runtime, i64 4
+  %active = load i32, ptr %active_address, align 4
+  %complete = icmp eq i32 %active, 0
+  %finished = or i1 %is_cancelled, %complete
+  br i1 %finished, label %done, label %wait
+wait:
+  call void @sollang_stream_join_wait(ptr %runtime)
+  br label %inspect
+pop:
+  %head_address = getelementptr i8, ptr %runtime, i64 8
+  %head = load i32, ptr %head_address, align 4
+  %queue_address = getelementptr i8, ptr %runtime, i64 72
+  %queue = load ptr, ptr %queue_address, align 8
+  %event_address = getelementptr i32, ptr %queue, i32 %head
+  %event = load i32, ptr %event_address, align 4
+  %count = load i32, ptr %runtime, align 4
+  %next_head_unwrapped = add i32 %head, 1
+  %next_head = urem i32 %next_head_unwrapped, %count
+  store i32 %next_head, ptr %head_address, align 4
+  %next_queued = sub i32 %queued, 1
+  store i32 %next_queued, ptr %queued_address, align 4
+  %kind = lshr i32 %event, 31
+  %index = and i32 %event, 2147483647
+  store i32 %index, ptr %index_output, align 4
+  store i32 %kind, ptr %kind_output, align 4
+  %item_size_address = getelementptr i8, ptr %runtime, i64 24
+  %item_size = load i64, ptr %item_size_address, align 8
+  %index64 = zext i32 %index to i64
+  %slot_offset = mul i64 %index64, %item_size
+  %slots_address = getelementptr i8, ptr %runtime, i64 56
+  %slots = load ptr, ptr %slots_address, align 8
+  %slot = getelementptr i8, ptr %slots, i64 %slot_offset
+  store ptr %slot, ptr %slot_output, align 8
+  call void @sollang_stream_join_unlock(ptr %runtime)
+  ret i1 true
+done:
+  call void @sollang_stream_join_unlock(ptr %runtime)
+  ret i1 false
+}
+define internal void @sollang_stream_join_runtime_release(ptr %runtime, i32 %index) {
+entry:
+  call void @sollang_stream_join_lock(ptr %runtime)
+  %full_array_address = getelementptr i8, ptr %runtime, i64 64
+  %full_array = load ptr, ptr %full_array_address, align 8
+  %full_address = getelementptr i8, ptr %full_array, i32 %index
+  store i8 0, ptr %full_address, align 1
+  call void @sollang_stream_join_wake_all(ptr %runtime)
+  call void @sollang_stream_join_unlock(ptr %runtime)
+  ret void
+}
+define internal void @sollang_stream_join_runtime_cancel(ptr %runtime) {
+entry:
+  call void @sollang_stream_join_lock(ptr %runtime)
+  %cancel_address = getelementptr i8, ptr %runtime, i64 20
+  store atomic i32 1, ptr %cancel_address release, align 4
+  call void @sollang_stream_join_wake_all(ptr %runtime)
+  br label %settle
+settle:
+  %created_address = getelementptr i8, ptr %runtime, i64 96
+  %created = load i32, ptr %created_address, align 4
+  %pulling_address = getelementptr i8, ptr %runtime, i64 100
+  %pulling = load i32, ptr %pulling_address, align 4
+  %exited_address = getelementptr i8, ptr %runtime, i64 104
+  %exited = load i32, ptr %exited_address, align 4
+  %settled = add i32 %pulling, %exited
+  %all_settled = icmp eq i32 %settled, %created
+  br i1 %all_settled, label %done, label %wait
+wait:
+  call void @sollang_stream_join_wait(ptr %runtime)
+  br label %settle
+done:
+  call void @sollang_stream_join_unlock(ptr %runtime)
+  ret void
+}
+define internal void @sollang_stream_join_runtime_join_destroy(ptr %runtime) {
+entry:
+  %created_address = getelementptr i8, ptr %runtime, i64 96
+  %created = load i32, ptr %created_address, align 4
+  %threads_address = getelementptr i8, ptr %runtime, i64 80
+  %threads = load ptr, ptr %threads_address, align 8
+  br label %join
+join:
+  %join_index = phi i32 [ 0, %entry ], [ %next_join, %join_one ]
+  %all_joined = icmp eq i32 %join_index, %created
+  br i1 %all_joined, label %drop_pending, label %join_one
+join_one:
+  %thread = getelementptr i64, ptr %threads, i32 %join_index
+  call void @sollang_stream_join_thread_join(ptr %thread)
+  %next_join = add i32 %join_index, 1
+  br label %join
+drop_pending:
+  %count = load i32, ptr %runtime, align 4
+  %full_array_address = getelementptr i8, ptr %runtime, i64 64
+  %full_array = load ptr, ptr %full_array_address, align 8
+  %item_size_address = getelementptr i8, ptr %runtime, i64 24
+  %item_size = load i64, ptr %item_size_address, align 8
+  %slots_address = getelementptr i8, ptr %runtime, i64 56
+  %slots = load ptr, ptr %slots_address, align 8
+  %drop_address = getelementptr i8, ptr %runtime, i64 40
+  %drop = load ptr, ptr %drop_address, align 8
+  %owner_address = getelementptr i8, ptr %runtime, i64 48
+  %owner = load ptr, ptr %owner_address, align 8
+  br label %drop_loop
+drop_loop:
+  %drop_index = phi i32 [ 0, %drop_pending ], [ %next_drop, %drop_continue ]
+  %all_dropped = icmp eq i32 %drop_index, %count
+  br i1 %all_dropped, label %destroy, label %inspect_pending
+inspect_pending:
+  %full_address = getelementptr i8, ptr %full_array, i32 %drop_index
+  %full = load i8, ptr %full_address, align 1
+  %has_pending = icmp ne i8 %full, 0
+  br i1 %has_pending, label %drop_one, label %drop_continue
+drop_one:
+  %drop_index64 = zext i32 %drop_index to i64
+  %slot_offset = mul i64 %drop_index64, %item_size
+  %slot = getelementptr i8, ptr %slots, i64 %slot_offset
+  call void %drop(ptr %owner, i32 %drop_index, ptr %slot)
+  br label %drop_continue
+drop_continue:
+  %next_drop = add i32 %drop_index, 1
+  br label %drop_loop
+destroy:
+  call void @sollang_stream_join_sync_destroy(ptr %runtime)
+  %arguments_address = getelementptr i8, ptr %runtime, i64 88
+  %arguments = load ptr, ptr %arguments_address, align 8
+  %queue_address = getelementptr i8, ptr %runtime, i64 72
+  %queue = load ptr, ptr %queue_address, align 8
+  call void @free(ptr %arguments)
+  call void @free(ptr %threads)
+  call void @free(ptr %queue)
+  call void @free(ptr %full_array)
+  call void @free(ptr %slots)
+  call void @free(ptr %runtime)
+  ret void
+}
+%sollang.join.52 = type { %sollang.event_stream, %sollang.event_stream, ptr, i32, [2 x i1], i32, i32 }
+define internal i1 @sollang_join_52_pull(ptr %context, i32 %index, ptr %slot) {
+entry:
+  switch i32 %index, label %invalid [
+    i32 0, label %input0
+    i32 1, label %input1
+  ]
+input0:
+  %stream_address0 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 0
+  %stream0 = load %sollang.event_stream, ptr %stream_address0, align 8
+  %stream_context0 = extractvalue %sollang.event_stream %stream0, 0
+  %stream_next0 = extractvalue %sollang.event_stream %stream0, 1
+  %has_value0 = call i1 %stream_next0(ptr %stream_context0, ptr %slot)
+  ret i1 %has_value0
+input1:
+  %stream_address1 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 1
+  %stream1 = load %sollang.event_stream, ptr %stream_address1, align 8
+  %stream_context1 = extractvalue %sollang.event_stream %stream1, 0
+  %stream_next1 = extractvalue %sollang.event_stream %stream1, 1
+  %has_value1 = call i1 %stream_next1(ptr %stream_context1, ptr %slot)
+  ret i1 %has_value1
+invalid:
+  call void @llvm.trap()
+  unreachable
+}
+define internal void @sollang_join_52_drop_item(ptr %context, i32 %index, ptr %slot) {
+entry:
+  ret void
+}
+define internal i1 @sollang_join_52_next(ptr %context, ptr %output) {
+entry:
+  %runtime_address = getelementptr %sollang.join.52, ptr %context, i32 0, i32 2
+  %runtime = load ptr, ptr %runtime_address, align 8
+  %index_address = alloca i32, align 4
+  %kind_address = alloca i32, align 4
+  %slot_address = alloca ptr, align 8
+  br label %wait
+wait:
+  %available = call i1 @sollang_stream_join_runtime_next_event(ptr %runtime, ptr %index_address, ptr %kind_address, ptr %slot_address)
+  br i1 %available, label %received, label %done
+received:
+  %index = load i32, ptr %index_address, align 4
+  switch i32 %index, label %done [
+    i32 0, label %input0
+    i32 1, label %input1
+  ]
+input0:
+  %kind0 = load i32, ptr %kind_address, align 4
+  %is_value0 = icmp eq i32 %kind0, 0
+  %initialized_address0 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 4, i32 0
+  br i1 %is_value0, label %value0, label %completion0
+completion0:
+  %was_initialized0 = load i1, ptr %initialized_address0, align 1
+  br i1 %was_initialized0, label %wait, label %impossible0
+impossible0:
+  call void @sollang_stream_join_runtime_cancel(ptr %runtime)
+  ret i1 false
+value0:
+  %slot0 = load ptr, ptr %slot_address, align 8
+  %item0 = load i32, ptr %slot0, align 4
+  %cache0 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 5
+  store i32 %item0, ptr %cache0, align 4
+  call void @sollang_stream_join_runtime_release(ptr %runtime, i32 0)
+  %already_initialized0 = load i1, ptr %initialized_address0, align 1
+  br i1 %already_initialized0, label %ready_check0, label %initialize0
+initialize0:
+  store i1 true, ptr %initialized_address0, align 1
+  %initialized_count_address0 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 3
+  %initialized_count0 = load i32, ptr %initialized_count_address0, align 4
+  %next_initialized_count0 = add i32 %initialized_count0, 1
+  store i32 %next_initialized_count0, ptr %initialized_count_address0, align 4
+  br label %ready_check0
+ready_check0:
+  %current_count_address0 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 3
+  %current_count0 = load i32, ptr %current_count_address0, align 4
+  %ready0 = icmp eq i32 %current_count0, 2
+  br i1 %ready0, label %snapshot0, label %wait
+snapshot0:
+  %snapshot0_cache0 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 5
+  %snapshot0_value0 = load i32, ptr %snapshot0_cache0, align 4
+  %snapshot0_output0 = getelementptr %sollang.product.t30, ptr %output, i32 0, i32 0
+  store i32 %snapshot0_value0, ptr %snapshot0_output0, align 4
+  %snapshot0_cache1 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 6
+  %snapshot0_value1 = load i32, ptr %snapshot0_cache1, align 4
+  %snapshot0_output1 = getelementptr %sollang.product.t30, ptr %output, i32 0, i32 1
+  store i32 %snapshot0_value1, ptr %snapshot0_output1, align 4
+  ret i1 true
+input1:
+  %kind1 = load i32, ptr %kind_address, align 4
+  %is_value1 = icmp eq i32 %kind1, 0
+  %initialized_address1 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 4, i32 1
+  br i1 %is_value1, label %value1, label %completion1
+completion1:
+  %was_initialized1 = load i1, ptr %initialized_address1, align 1
+  br i1 %was_initialized1, label %wait, label %impossible1
+impossible1:
+  call void @sollang_stream_join_runtime_cancel(ptr %runtime)
+  ret i1 false
+value1:
+  %slot1 = load ptr, ptr %slot_address, align 8
+  %item1 = load i32, ptr %slot1, align 4
+  %cache1 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 6
+  store i32 %item1, ptr %cache1, align 4
+  call void @sollang_stream_join_runtime_release(ptr %runtime, i32 1)
+  %already_initialized1 = load i1, ptr %initialized_address1, align 1
+  br i1 %already_initialized1, label %ready_check1, label %initialize1
+initialize1:
+  store i1 true, ptr %initialized_address1, align 1
+  %initialized_count_address1 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 3
+  %initialized_count1 = load i32, ptr %initialized_count_address1, align 4
+  %next_initialized_count1 = add i32 %initialized_count1, 1
+  store i32 %next_initialized_count1, ptr %initialized_count_address1, align 4
+  br label %ready_check1
+ready_check1:
+  %current_count_address1 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 3
+  %current_count1 = load i32, ptr %current_count_address1, align 4
+  %ready1 = icmp eq i32 %current_count1, 2
+  br i1 %ready1, label %snapshot1, label %wait
+snapshot1:
+  %snapshot1_cache0 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 5
+  %snapshot1_value0 = load i32, ptr %snapshot1_cache0, align 4
+  %snapshot1_output0 = getelementptr %sollang.product.t30, ptr %output, i32 0, i32 0
+  store i32 %snapshot1_value0, ptr %snapshot1_output0, align 4
+  %snapshot1_cache1 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 6
+  %snapshot1_value1 = load i32, ptr %snapshot1_cache1, align 4
+  %snapshot1_output1 = getelementptr %sollang.product.t30, ptr %output, i32 0, i32 1
+  store i32 %snapshot1_value1, ptr %snapshot1_output1, align 4
+  ret i1 true
+done:
+  ret i1 false
+}
+define internal void @sollang_join_52_drop(ptr %context) {
+entry:
+  %runtime_address = getelementptr %sollang.join.52, ptr %context, i32 0, i32 2
+  %runtime = load ptr, ptr %runtime_address, align 8
+  call void @sollang_stream_join_runtime_cancel(ptr %runtime)
+  br label %check0
+check0:
+  %stream_address0 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 0
+  %stream0 = load %sollang.event_stream, ptr %stream_address0, align 8
+  %stream_context0 = extractvalue %sollang.event_stream %stream0, 0
+  %stream_drop0 = extractvalue %sollang.event_stream %stream0, 2
+  %has_drop0 = icmp ne ptr %stream_drop0, null
+  br i1 %has_drop0, label %drop0, label %after0
+drop0:
+  call void %stream_drop0(ptr %stream_context0)
+  br label %after0
+after0:
+  br label %check1
+check1:
+  %stream_address1 = getelementptr %sollang.join.52, ptr %context, i32 0, i32 1
+  %stream1 = load %sollang.event_stream, ptr %stream_address1, align 8
+  %stream_context1 = extractvalue %sollang.event_stream %stream1, 0
+  %stream_drop1 = extractvalue %sollang.event_stream %stream1, 2
+  %has_drop1 = icmp ne ptr %stream_drop1, null
+  br i1 %has_drop1, label %drop1, label %after1
+drop1:
+  call void %stream_drop1(ptr %stream_context1)
+  br label %after1
+after1:
+  br label %destroy
+destroy:
+  call void @sollang_stream_join_runtime_join_destroy(ptr %runtime)
+  call void @free(ptr %context)
+  ret void
+}
+declare ptr @malloc(i64)
+declare void @free(ptr)
+define internal void @sollang_drop_t26(%sollang.stream %value) {
+entry:
+  %context = extractvalue %sollang.stream %value, 0
+  %drop = extractvalue %sollang.stream %value, 2
+  %has_drop = icmp ne ptr %drop, null
+  br i1 %has_drop, label %drop_state, label %done
+drop_state:
+  call void %drop(ptr %context)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_drop_t27(%sollang.event_stream %value) {
+entry:
+  %context = extractvalue %sollang.event_stream %value, 0
+  %drop = extractvalue %sollang.event_stream %value, 2
+  %has_drop = icmp ne ptr %drop, null
+  br i1 %has_drop, label %drop_state, label %done
+drop_state:
+  call void %drop(ptr %context)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_drop_t28(%sollang.product.t28 %value) {
+entry:
+  %field0 = extractvalue %sollang.product.t28 %value, 0
+  call void @sollang_drop_t26(%sollang.stream %field0)
+  %field1 = extractvalue %sollang.product.t28 %value, 1
+  call void @sollang_drop_t26(%sollang.stream %field1)
+  ret void
+}
+define internal void @sollang_drop_t29(%sollang.product.t29 %value) {
+entry:
+  %field0 = extractvalue %sollang.product.t29 %value, 0
+  call void @sollang_drop_t27(%sollang.event_stream %field0)
+  %field1 = extractvalue %sollang.product.t29 %value, 1
+  call void @sollang_drop_t27(%sollang.event_stream %field1)
+  ret void
+}
+define internal void @sollang_drop_t31(%sollang.event_stream %value) {
+entry:
+  %context = extractvalue %sollang.event_stream %value, 0
+  %drop = extractvalue %sollang.event_stream %value, 2
+  %has_drop = icmp ne ptr %drop, null
+  br i1 %has_drop, label %drop_state, label %done
+drop_state:
+  call void %drop(ptr %context)
+  br label %done
+done:
+  ret void
+}
+%sollang.text = type { ptr, i64 }
+@sollang_str_60 = private unnamed_addr constant [38 x i8] c"final=$(latestFirst!):$(latestSecond!)"
+define %sollang.stream @sollang_m0_s0({ i32, i32 } %arg) {
+entry:
+  %v3 = call %sollang.stream @sollang_range_stream_create({ i32, i32 } %arg)
+  ret %sollang.stream %v3
+}
+define %sollang.event_stream @sollang_m0_s1(%sollang.stream %arg, %sollang.stream %arg1) {
+entry:
+  %v11 = freeze %sollang.stream %arg1
+  %v9_f0 = insertvalue %sollang.product.t28 poison, %sollang.stream %arg, 0
+  %v9 = insertvalue %sollang.product.t28 %v9_f0, %sollang.stream %v11, 1
+  %join12_size_pointer = getelementptr %sollang.join.12, ptr null, i32 1
+  %join12_size = ptrtoint ptr %join12_size_pointer to i64
+  %join12_context = call ptr @malloc(i64 %join12_size)
+  %join12_input0 = getelementptr %sollang.join.12, ptr %join12_context, i32 0, i32 0
+  store %sollang.stream %arg, ptr %join12_input0, align 8
+  %join12_input1 = getelementptr %sollang.join.12, ptr %join12_context, i32 0, i32 1
+  store %sollang.stream %arg1, ptr %join12_input1, align 8
+  %join12_cursor = getelementptr %sollang.join.12, ptr %join12_context, i32 0, i32 2
+  store i32 0, ptr %join12_cursor, align 4
+  %join12_active0 = getelementptr %sollang.join.12, ptr %join12_context, i32 0, i32 3
+  store i1 true, ptr %join12_active0, align 1
+  %join12_active1 = getelementptr %sollang.join.12, ptr %join12_context, i32 0, i32 4
+  store i1 true, ptr %join12_active1, align 1
+  %join12_with_context = insertvalue %sollang.stream poison, ptr %join12_context, 0
+  %join12_with_next = insertvalue %sollang.stream %join12_with_context, ptr @sollang_join_12_next, 1
+  %v12 = insertvalue %sollang.stream %join12_with_next, ptr @sollang_join_12_drop, 2
+  %return_stream_context = extractvalue %sollang.stream %v12, 0
+  %return_stream_next = extractvalue %sollang.stream %v12, 1
+  %return_stream_drop = extractvalue %sollang.stream %v12, 2
+  %return_event0 = insertvalue %sollang.event_stream poison, ptr %return_stream_context, 0
+  %return_event1 = insertvalue %sollang.event_stream %return_event0, ptr %return_stream_next, 1
+  %return_event = insertvalue %sollang.event_stream %return_event1, ptr %return_stream_drop, 2
+  ret %sollang.event_stream %return_event
+}
+define i32 @main() {
+entry:
+  %slot20 = alloca i32, align 4
+  %slot21 = alloca i32, align 4
+  %v60_ptr = insertvalue %sollang.text poison, ptr @sollang_str_60, 0
+  %v60 = insertvalue %sollang.text %v60_ptr, i64 38, 1
+  %v26_start = insertvalue { i32, i32 } poison, i32 1, 0
+  %v26 = insertvalue { i32, i32 } %v26_start, i32 2, 1
+  %v30_start = insertvalue { i32, i32 } poison, i32 10, 0
+  %v30 = insertvalue { i32, i32 } %v30_start, i32 11, 1
+  %v37_start = insertvalue { i32, i32 } poison, i32 20, 0
+  %v37 = insertvalue { i32, i32 } %v37_start, i32 21, 1
+  %v41_start = insertvalue { i32, i32 } poison, i32 30, 0
+  %v41 = insertvalue { i32, i32 } %v41_start, i32 31, 1
+  %v25 = call %sollang.stream @sollang_m0_s0({ i32, i32 } %v26)
+  %v29 = call %sollang.stream @sollang_m0_s0({ i32, i32 } %v30)
+  %v34 = freeze %sollang.stream %v25
+  %v35 = freeze %sollang.stream %v29
+  %v33 = call %sollang.event_stream @sollang_m0_s1(%sollang.stream %v34, %sollang.stream %v35)
+  %v36 = call %sollang.stream @sollang_m0_s0({ i32, i32 } %v37)
+  %v40 = call %sollang.stream @sollang_m0_s0({ i32, i32 } %v41)
+  %v45 = freeze %sollang.stream %v36
+  %v46 = freeze %sollang.stream %v40
+  %v50 = freeze %sollang.event_stream %v33
+  %v44 = call %sollang.event_stream @sollang_m0_s1(%sollang.stream %v45, %sollang.stream %v46)
+  store i32 0, ptr %slot20, align 4
+  store i32 0, ptr %slot21, align 4
+  %v51 = freeze %sollang.event_stream %v44
+  %v49_f0 = insertvalue %sollang.product.t29 poison, %sollang.event_stream %v50, 0
+  %v49 = insertvalue %sollang.product.t29 %v49_f0, %sollang.event_stream %v51, 1
+  %join52_size_pointer = getelementptr %sollang.join.52, ptr null, i32 1
+  %join52_size = ptrtoint ptr %join52_size_pointer to i64
+  %join52_context = call ptr @malloc(i64 %join52_size)
+  %join52_allocated = icmp ne ptr %join52_context, null
+  br i1 %join52_allocated, label %join52_initialize, label %join52_allocation_failed
+join52_allocation_failed:
+  call void @llvm.trap()
+  unreachable
+join52_initialize:
+  %join52_input0 = getelementptr %sollang.join.52, ptr %join52_context, i32 0, i32 0
+  store %sollang.event_stream %v33, ptr %join52_input0, align 8
+  %join52_input1 = getelementptr %sollang.join.52, ptr %join52_context, i32 0, i32 1
+  store %sollang.event_stream %v44, ptr %join52_input1, align 8
+  %join52_initialized_count = getelementptr %sollang.join.52, ptr %join52_context, i32 0, i32 3
+  store i32 0, ptr %join52_initialized_count, align 4
+  %join52_initialized0 = getelementptr %sollang.join.52, ptr %join52_context, i32 0, i32 4, i32 0
+  store i1 false, ptr %join52_initialized0, align 1
+  %join52_initialized1 = getelementptr %sollang.join.52, ptr %join52_context, i32 0, i32 4, i32 1
+  store i1 false, ptr %join52_initialized1, align 1
+  %join52_item0_size_pointer = getelementptr i32, ptr null, i32 1
+  %join52_item0_size = ptrtoint ptr %join52_item0_size_pointer to i64
+  %join52_item_max0 = add i64 %join52_item0_size, 0
+  %join52_item1_size_pointer = getelementptr i32, ptr null, i32 1
+  %join52_item1_size = ptrtoint ptr %join52_item1_size_pointer to i64
+  %join52_item1_larger = icmp ugt i64 %join52_item1_size, %join52_item_max0
+  %join52_item_max1 = select i1 %join52_item1_larger, i64 %join52_item1_size, i64 %join52_item_max0
+  %join52_runtime = call ptr @sollang_stream_join_runtime_create(i32 2, i64 %join52_item_max1, ptr @sollang_join_52_pull, ptr @sollang_join_52_drop_item, ptr %join52_context)
+  %join52_runtime_created = icmp ne ptr %join52_runtime, null
+  br i1 %join52_runtime_created, label %join52_runtime_ready, label %join52_runtime_failed
+join52_runtime_failed:
+  call void @llvm.trap()
+  unreachable
+join52_runtime_ready:
+  %join52_runtime_address = getelementptr %sollang.join.52, ptr %join52_context, i32 0, i32 2
+  store ptr %join52_runtime, ptr %join52_runtime_address, align 8
+  %join52_with_context = insertvalue %sollang.event_stream poison, ptr %join52_context, 0
+  %join52_with_next = insertvalue %sollang.event_stream %join52_with_context, ptr @sollang_join_52_next, 1
+  %v52 = insertvalue %sollang.event_stream %join52_with_next, ptr @sollang_join_52_drop, 2
+  %stream53_producer_item_slot = alloca %sollang.product.t30, align 4
+  %stream53_producer_context = extractvalue %sollang.event_stream %v52, 0
+  %stream53_producer_next = extractvalue %sollang.event_stream %v52, 1
+  %stream53_producer_drop = extractvalue %sollang.event_stream %v52, 2
+  br label %stream53_header
+stream53_header:
+  %stream53_has_item = call i1 %stream53_producer_next(ptr %stream53_producer_context, ptr %stream53_producer_item_slot)
+  br i1 %stream53_has_item, label %stream53_body, label %stream53_exit
+stream53_body:
+  %stream53_item = load %sollang.product.t30, ptr %stream53_producer_item_slot, align 4
+  %v56 = freeze %sollang.product.t30 %stream53_item
+  %v58 = freeze %sollang.product.t30 %stream53_item
+  %v55 = extractvalue %sollang.product.t30 %v56, 0
+  %v57 = extractvalue %sollang.product.t30 %v58, 1
+  store i32 %v55, ptr %slot20, align 4
+  store i32 %v57, ptr %slot21, align 4
+  br label %stream53_continue
+stream53_continue:
+  br label %stream53_header
+stream53_exit:
+  %stream53_has_drop = icmp ne ptr %stream53_producer_drop, null
+  br i1 %stream53_has_drop, label %stream53_drop, label %stream53_drop_done
+stream53_drop:
+  call void %stream53_producer_drop(ptr %stream53_producer_context)
+  br label %stream53_drop_done
+stream53_drop_done:
+  %v59_expression_literal0 = getelementptr i8, ptr @sollang_str_60, i64 0
+  call void @sollang_runtime_print(ptr %v59_expression_literal0, i64 6, i1 false)
+  %v59_expression0_mutable = load i32, ptr %slot20, align 4
+  call void @sollang_runtime_print_i32(i32 %v59_expression0_mutable, i1 false)
+  %v59_expression_literal1 = getelementptr i8, ptr @sollang_str_60, i64 21
+  call void @sollang_runtime_print(ptr %v59_expression_literal1, i64 1, i1 false)
+  %v59_expression1_mutable = load i32, ptr %slot21, align 4
+  call void @sollang_runtime_print_i32(i32 %v59_expression1_mutable, i1 false)
+  %v59_expression_suffix = getelementptr i8, ptr @sollang_str_60, i64 38
+  call void @sollang_runtime_print(ptr %v59_expression_suffix, i64 0, i1 true)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

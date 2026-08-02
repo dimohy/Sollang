@@ -39,6 +39,9 @@ public struct NominalField {
     sourceModule: Int
     ownerSymbol: Int
     fieldSymbol: Int
+    # Structural product fields use fieldSymbol = -1. A labeled field keeps
+    # its exact source token here; an unlabeled tuple field uses -1.
+    labelToken: Int
     ordinal: Int
     fieldType: Int
     status: Int
@@ -311,6 +314,18 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                     (term.firstArgument < 0 or mapped![term.firstArgument] >= 0) => firstReady
                     (term.secondArgument < 0 or mapped![term.secondArgument] >= 0) => secondReady
                     (firstReady and secondReady) -> if {
+                        term.kind == 0 -> if {
+                            mapped![term.firstArgument] => transparentType
+                            transparentType => mapped![termIndex!]
+                            references! -> push(TypeReference {
+                                sourceModule: sourceIndex!
+                                typeAst: term.astNode
+                                typeId: transparentType
+                                status: semanticTypes![transparentType].status
+                            })
+                            completed! + 1 => completed!
+                            true => changed!
+                        } else {
                         -1 => origin!
                         -1 => targetModule!
                         -1 => targetSymbol!
@@ -567,6 +582,28 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 lengthByte! + UIntSize(1) => lengthByte!
                             }
                         }
+                        term.kind == 11 -> if {
+                            -1 => lengthValue!
+                            term.nameToken >= 0 -> if {
+                                UInt64(1469598103934665603) => lengthHash!
+                                package.tokens[sourceRange.tokenStart + term.nameToken] => productFieldName
+                                Int(productFieldName.span.length) => lengthValue!
+                                UIntSize(0) => productFieldNameByte!
+                                productFieldNameByte! < productFieldName.span.length -> while {
+                                    source -> byte(productFieldName.span.start + productFieldNameByte!) => productFieldNameValue
+                                    lengthHash! * UInt64(1099511628211) + UInt64(productFieldNameValue) => lengthHash!
+                                    productFieldNameByte! + UIntSize(1) => productFieldNameByte!
+                                }
+                            }
+                        }
+                        term.kind == 10 -> if {
+                            0 => lengthValue!
+                            term.firstArgument => productCountField!
+                            productCountField! >= 0 -> while {
+                                lengthValue! + 1 => lengthValue!
+                                package.terms[sourceRange.termStart + productCountField!].secondArgument => productCountField!
+                            }
+                        }
                         term.kind => resolvedKind!
                         (term.kind == 1 and targetModule! >= 0 and targetSymbol! >= 0 and status! == 0) -> if {
                             package.ranges[targetModule!] => resolvedNominalRange
@@ -581,13 +618,66 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                             semanticTypes![semanticIndex!] => known
                             known.origin == origin! => sameOrigin!
                             (term.kind == 1 and ((known.origin == 0 and origin! == 2) or (known.origin == 2 and origin! == 0))) -> if { true => sameOrigin! }
-                            (known.kind == resolvedKind! and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType! and known.second == secondType! and known.lengthHash == lengthHash! and known.status == status!) -> if {
+                            (term.kind != 10 and known.kind == resolvedKind! and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType! and known.second == secondType! and known.lengthHash == lengthHash! and known.status == status!) -> if {
                                 semanticIndex! => existing!
                             }
                             semanticIndex! + 1 => semanticIndex!
                         }
+                        term.kind == 10 -> if {
+                            0 => productCandidateSearch!
+                            (productCandidateSearch! < (semanticTypes! -> len) and existing! < 0) -> while {
+                                semanticTypes![productCandidateSearch!] => productCandidate
+                                (productCandidate.kind == 10 and productCandidate.length == lengthValue! and productCandidate.status == status!) -> if {
+                                    true => productCandidateEqual!
+                                    term.firstArgument => currentProductFieldTerm!
+                                    0 => currentProductOrdinal!
+                                    (currentProductFieldTerm! >= 0 and productCandidateEqual!) -> while {
+                                        -1 => candidateProductFieldIndex!
+                                        0 => candidateProductFieldSearch!
+                                        candidateProductFieldSearch! < (fields! -> len) -> while {
+                                            fields![candidateProductFieldSearch!] => candidateProductField
+                                            (candidateProductField.ownerType == productCandidateSearch! and candidateProductField.ordinal == currentProductOrdinal!) -> if {
+                                                candidateProductFieldSearch! => candidateProductFieldIndex!
+                                            }
+                                            candidateProductFieldSearch! + 1 => candidateProductFieldSearch!
+                                        }
+                                        package.terms[sourceRange.termStart + currentProductFieldTerm!] => currentProductField
+                                        (candidateProductFieldIndex! < 0 or semanticTypes![mapped![currentProductFieldTerm!]].first != fields![candidateProductFieldIndex!].fieldType) -> if {
+                                            false => productCandidateEqual!
+                                        } else {
+                                            fields![candidateProductFieldIndex!] => candidateProductField
+                                            (((currentProductField.nameToken < 0) and not (candidateProductField.labelToken < 0)) or ((candidateProductField.labelToken < 0) and not (currentProductField.nameToken < 0))) -> if {
+                                                false => productCandidateEqual!
+                                            }
+                                            (productCandidateEqual! and currentProductField.nameToken >= 0) -> if {
+                                                package.tokens[sourceRange.tokenStart + currentProductField.nameToken] => currentProductLabel
+                                                package.ranges[candidateProductField.sourceModule] => candidateProductFieldRange
+                                                package.sources[candidateProductField.sourceModule] -> len => candidateProductSourceLength
+                                                package.sources[candidateProductField.sourceModule] -> slice(UIntSize(0), candidateProductSourceLength) => candidateProductSource
+                                                package.tokens[candidateProductFieldRange.tokenStart + candidateProductField.labelToken] => candidateProductLabel
+                                                currentProductLabel.span.length == candidateProductLabel.span.length => productLabelEqual!
+                                                UIntSize(0) => productLabelByte!
+                                                (productLabelEqual! and productLabelByte! < currentProductLabel.span.length) -> while {
+                                                    (source -> byte(currentProductLabel.span.start + productLabelByte!)) != (candidateProductSource -> byte(candidateProductLabel.span.start + productLabelByte!)) -> if {
+                                                        false => productLabelEqual!
+                                                    }
+                                                    productLabelByte! + UIntSize(1) => productLabelByte!
+                                                }
+                                                not productLabelEqual! -> if { false => productCandidateEqual! }
+                                            }
+                                        }
+                                        currentProductField.secondArgument => currentProductFieldTerm!
+                                        currentProductOrdinal! + 1 => currentProductOrdinal!
+                                    }
+                                    productCandidateEqual! -> if { productCandidateSearch! => existing! }
+                                }
+                                productCandidateSearch! + 1 => productCandidateSearch!
+                            }
+                        }
+                        false => createdType!
                         existing! < 0 -> if {
                             semanticTypes! -> len => existing!
+                            true => createdType!
                             semanticTypes! -> push(SemanticType {
                                 kind: resolvedKind!
                                 origin: origin!
@@ -601,6 +691,25 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 status: status!
                             })
                         }
+                        (term.kind == 10 and createdType!) -> if {
+                            term.firstArgument => structuralFieldTerm!
+                            0 => structuralFieldOrdinal!
+                            structuralFieldTerm! >= 0 -> while {
+                                package.terms[sourceRange.termStart + structuralFieldTerm!] => structuralField
+                                fields! -> push(NominalField {
+                                    ownerType: existing!
+                                    sourceModule: sourceIndex!
+                                    ownerSymbol: -1
+                                    fieldSymbol: -1
+                                    labelToken: structuralField.nameToken
+                                    ordinal: structuralFieldOrdinal!
+                                    fieldType: semanticTypes![mapped![structuralFieldTerm!]].first
+                                    status: semanticTypes![mapped![structuralFieldTerm!]].status
+                                })
+                                structuralField.secondArgument => structuralFieldTerm!
+                                structuralFieldOrdinal! + 1 => structuralFieldOrdinal!
+                            }
+                        }
                         existing! => mapped![termIndex!]
                         references! -> push(TypeReference {
                             sourceModule: sourceIndex!
@@ -610,6 +719,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                         })
                         completed! + 1 => completed!
                         true => changed!
+                        }
                     }
                 }
                 termIndex! + 1 => termIndex!
@@ -664,6 +774,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                         sourceModule: sourceIndex!
                         ownerSymbol: fieldSymbol.parent
                         fieldSymbol: fieldSymbolIndex!
+                        labelToken: -1
                         ordinal: fieldOrdinal!
                         fieldType: fieldType!
                         status: semanticTypes![fieldType!].status

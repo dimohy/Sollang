@@ -141,20 +141,20 @@ Current verified implementation slices:
   library, and Wasm parity plus the remaining public commands listed above.
 
 The final Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
-gates and reproduce at Stage 3. Windows reproduces 24,934,632 LLVM bytes at
+gates and reproduce at Stage 3. Windows reproduces 26,828,567 LLVM bytes at
 normalized SHA-256
-`BDECDDCCAA23A3C8DBEE135FF525550EAD47C77D4A6CB5ED909EEE1290290434`;
-Linux reproduces 24,917,845 bytes at
-`417AC4E06F2D99C0419DF8EA386C672426D0EB0339FA9F1C8B6518E5A31E1CEC`.
-The complete platform suites pass 1001/1001 Windows cases and 1000/1000
+`F81E10AF1EE1B9723B226FCE10F89956CF4067D350A1152AE9F310291225FAB6`;
+Linux reproduces 26,811,780 bytes at
+`07B6619F6E9E261145FA7DEE605DD1A6BE1E329177AF82A81E27FC47C2226733`.
+The complete platform suites pass 1084/1084 Windows cases and 1083/1083
 Linux-applicable cases.
 
 Both fixed-point executables pass 16 exact top-level CLI contracts plus native
 build/run, grammar build 4/4, test 10/10, format 11/11, streaming language
 server 4/4, and bind-cpp 6/6. The immutable executable hashes are
-`5E81D0ECBFD65687A42FB17668D5DB4818967D7D0534FC13F3D4C3056AF44617`
+`2223E3878D99639363D8179C3D38757FC3F5AAE2DED6E8BF8A84C27B9C6A078B`
 for Windows and
-`0F63C12FF0E3422EEC7D543888102B1AE186E28356E7597631E30FCE01764098`
+`238121E022E34C8D4BE0BF1160BAE99B36B5F16A6332C41C7A23D7D0068EFC69`
 for Linux. `publish-release.ps1` requires those hash-bound parity proofs,
 copies only the matching native compiler, rejects managed/bootstrap artifacts,
 and builds and runs a source file from each staged package.
@@ -169,26 +169,26 @@ exposed failures do not relax it. A reported issue is fixed only after the
 owning layer's invariant and its permanent regression both pass the complete
 verification ladder.
 
-## Next Goal: Flow Junctions
+## Completed Goal: Flow Junctions
 
-After every 0.4 native-distribution requirement above is complete, the next
-implementation goal is the accepted branching and joining design in
-[`FLOW_JUNCTIONS.md`](FLOW_JUNCTIONS.md).
+With every 0.4 native-distribution requirement above complete, the accepted
+branching and joining design in [`FLOW_JUNCTIONS.md`](FLOW_JUNCTIONS.md) is now
+implemented and verified.
 
-- [ ] Add ordinary and labeled product values without implicit argument
+- [x] Add ordinary and labeled product values without implicit argument
   expansion.
-- [ ] Add sequential named `branch`, exclusive `partition`, and value-preserving
+- [x] Add sequential named `branch`, exclusive `partition`, and value-preserving
   `tap`.
-- [ ] Add policy-specific lazy stream joins: `zip`, `merge`, `concat`, and
+- [x] Add policy-specific lazy stream joins: `zip`, `merge`, `concat`, and
   `latest`.
-- [ ] Add explicit `parallel branch` through the existing structured parallel
+- [x] Add explicit `parallel branch` through the existing structured parallel
   ownership and cancellation model.
-- [ ] Keep ownership, effects, evaluation order, buffering, backpressure, and
+- [x] Keep ownership, effects, evaluation order, buffering, backpressure, and
   nondeterminism visible and statically checked.
-- [ ] Add 10 separate user examples and at least 114 logical regression cases,
+- [x] Add 10 separate user examples and at least 114 logical regression cases,
   then run the complete Windows/Linux, browser-applicable, Stage 2, and Stage 3
   verification gates.
-- [ ] Reject provisional aliases, temporary fallback parsing, implicit cloning,
+- [x] Reject provisional aliases, temporary fallback parsing, implicit cloning,
   implicit materialization, and implicit parallelism.
 
 ## Design Direction

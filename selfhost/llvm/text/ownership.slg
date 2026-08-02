@@ -494,7 +494,7 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
         (dropType.kind == 3 or dropType.kind == 4 or dropType.kind == 5 or dropType.kind == 6) -> if { true => supported! }
         dropType.kind == 9 -> if { true => supported! }
         (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24) -> if { true => supported! }
-        (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) -> if { true => supported! }
+        ((dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) or dropType.kind == 10) -> if { true => supported! }
         (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1)) -> if { true => supported! }
         (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 3 or dropType.symbol == 4)) -> if { true => supported! }
         (active[dropTypeIndex!] == 1 and context.typeTraits[dropTypeIndex!] % 2 == 1 and supported!) -> if {
@@ -648,8 +648,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  call void @sollang_runtime_unmap_text(%sollang.source_text %value)" -> println
                 "  ret void" -> println
             }
-            (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2) and not (dropTypeIndex! -> isNominalEnumType(context, state))) -> if {
-                dropTypeIndex! -> isOwnedFileType(context, state) -> if {
+            ((dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2) and not (dropTypeIndex! -> isNominalEnumType(context, state))) or dropType.kind == 10) -> if {
+                (dropType.kind == 1 and (dropTypeIndex! -> isOwnedFileType(context, state))) -> if {
                     "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
                     "  call void @sollang_platform_close_owned_file(i64 %handle)" -> println
                 } else {
@@ -657,7 +657,9 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                     dropFieldIndex! < (context.fields -> len) -> while {
                         context.fields[dropFieldIndex!] => dropField
                         (dropField.status == 0 and dropField.ownerType == dropTypeIndex! and dropField.fieldType >= 0 and context.typeTraits[dropField.fieldType] % 2 == 1) -> if {
-                            "  %field$(dropField.ordinal) = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, $(dropField.ordinal)" -> println
+                            "  %field$(dropField.ordinal) = extractvalue " -> print
+                            dropTypeIndex! -> writeSemanticTypeId(context, state)
+                            " %value, $(dropField.ordinal)" -> println
                             "  call void @sollang_drop_t$(dropField.fieldType)(" -> print
                             dropField.fieldType -> writeSemanticTypeId(context, state)
                             " %field$(dropField.ordinal))" -> println
@@ -957,6 +959,7 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
             current.kind == 6 -> if { "ptr" -> print }
             current.kind == 8 -> if { "ptr" -> print }
             current.kind == 9 -> if { "ptr" -> print }
+            current.kind == 10 -> if { "%sollang.product.t$(typeTask)" -> print }
             current.kind == 7 -> if {
                 (current.origin == 4 and (current.symbol == 0 or current.symbol == 1)) -> if { "%sollang.enum.t$(typeTask)" -> print }
                 (current.origin == 4 and current.symbol == 2) -> if { "%sollang.task" -> print }

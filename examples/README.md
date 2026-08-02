@@ -1,6 +1,7 @@
 # Sollang examples
 
-- `user/`: ten concise, readable examples for learning the current language.
+- `user/`: twenty concise examples: ten general syntax examples and ten Flow
+  Junctions examples.
 - `regression/`: executable compiler fixtures, expected output, diagnostics,
   platform variants, and self-host coverage.
 

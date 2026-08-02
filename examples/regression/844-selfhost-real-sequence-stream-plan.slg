@@ -1,0 +1,74 @@
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.library_imports as libraryImports
+import sys.file as file
+import sys.path as path
+
+main {
+    # The real standard-library source must produce the same continuation plan
+    # as the compact semantic fixture. Keep each mapped owner alive while its
+    # borrowed source text is consumed by semantic preparation.
+    "examples/regression/576-linq-multiplication-table.slg" -> file.mapText => programOwner!
+    programOwner! -> len => programLength
+    programOwner! -> slice(UIntSize(0), programLength) => program
+    "stdlib/std/sequence.slg" -> file.mapText => sequenceOwner!
+    sequenceOwner! -> len => sequenceLength
+    sequenceOwner! -> slice(UIntSize(0), sequenceLength) => sequence
+    [program, sequence; ~] => sources!
+    [
+        "examples/regression/576-linq-multiplication-table.slg",
+        "stdlib/std/sequence.slg"; ~
+    ] => paths!
+    sources! -> semanticContext.prepare => prepared
+    prepared.package -> libraryImports.load(paths!, "windows-x64", path.nativeStyle()) => libraries!
+    prepared.package -> libraryImports.resolveQualified(libraries!) => libraryCalls!
+    prepared -> typedIr.lowerContext => ir!
+    ir! -> typedLibraryImports.projectLibraries(prepared, libraries!, libraryCalls!) => libraryDiagnostics!
+    prepared -> expressionTypeIds.resolveContext => resolved
+    prepared -> streamIr.build(ir!, resolved) => plan!
+
+    (plan!.pipelines -> len) == 1 -> if {
+        "pipeline=one" -> println
+    } else {
+        "pipeline=not-one" -> println
+    }
+    (plan!.stages -> len) == 2 -> if {
+        "stages=two" -> println
+    } else {
+        "stages=not-two" -> println
+    }
+    (libraryDiagnostics! -> len) == 0 -> if {
+        "library-diagnostics=zero" -> println
+    } else {
+        "library-diagnostics=nonzero" -> println
+    }
+
+    "examples/regression/582-billion-sensor-alerts.slg" -> file.mapText => sensorOwner!
+    sensorOwner! -> len => sensorLength
+    sensorOwner! -> slice(UIntSize(0), sensorLength) => sensor
+    [sensor, sequence; ~] => sensorSources!
+    [
+        "examples/regression/582-billion-sensor-alerts.slg",
+        "stdlib/std/sequence.slg"; ~
+    ] => sensorPaths!
+    sensorSources! -> semanticContext.prepare => sensorPrepared
+    sensorPrepared.package -> libraryImports.load(sensorPaths!, "windows-x64", path.nativeStyle()) => sensorLibraries!
+    sensorPrepared.package -> libraryImports.resolveQualified(sensorLibraries!) => sensorLibraryCalls!
+    sensorPrepared -> typedIr.lowerContext => sensorIr!
+    sensorIr! -> typedLibraryImports.projectLibraries(sensorPrepared, sensorLibraries!, sensorLibraryCalls!) => sensorLibraryDiagnostics!
+    sensorPrepared -> expressionTypeIds.resolveContext => sensorResolved
+    sensorPrepared -> streamIr.build(sensorIr!, sensorResolved) => sensorPlan!
+    ((sensorPlan!.pipelines -> len) == 1 and (sensorPlan!.stages -> len) == 4) -> if {
+        "sensor-plan=one-pipeline-four-stages" -> println
+    } else {
+        "sensor-plan=unexpected" -> println
+    }
+    (sensorLibraryDiagnostics! -> len) == 0 -> if {
+        "sensor-library-diagnostics=zero" -> println
+    } else {
+        "sensor-library-diagnostics=nonzero" -> println
+    }
+}

@@ -1222,6 +1222,187 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         }
     }
 
+    # Structural products preserve every field type, exact label token, and
+    # declaration order. They are canonicalized against the shared field table
+    # instead of being collapsed to a homogeneous array or a nominal stand-in.
+    true => productChanged!
+    productChanged! -> while {
+        false => productChanged!
+        0 => productSourceIndex!
+        productSourceIndex! < (prepared.package.sources -> len) -> while {
+            prepared.package.sources[productSourceIndex!] -> len => productSourceLength
+            prepared.package.sources[productSourceIndex!] -> slice(UIntSize(0), productSourceLength) => productSource
+            prepared.package.ranges[productSourceIndex!] => productRange
+            0 => productAstIndex!
+            productAstIndex! < productRange.astCount -> while {
+                prepared.package.nodes[productRange.astStart + productAstIndex!] => productNode
+                productRange.astStart + productAstIndex! => productGlobalAst
+                (productNode.kind == 71 and expressionIndexByAst![productGlobalAst] < 0) -> if {
+                    [Int; ~] => productFieldTypes!
+                    [Int; ~] => productFieldLabels!
+                    -1 => previousProductElement!
+                    UIntSize(0) => previousProductElementStart!
+                    true => findingProductElement!
+                    true => productFieldsReady!
+                    findingProductElement! -> while {
+                        false => findingProductElement!
+                        -1 => nextProductElement!
+                        UIntSize(0) => nextProductElementStart!
+                        0 => productElementSearch!
+                        productElementSearch! < productRange.astCount -> while {
+                            prepared.package.nodes[productRange.astStart + productElementSearch!] => productElementCandidate
+                            (productElementCandidate.kind == 72 and productElementCandidate.parent == productAstIndex!) -> if {
+                                (previousProductElement! < 0 or productElementCandidate.start > previousProductElementStart!) -> if {
+                                    (nextProductElement! < 0 or productElementCandidate.start < nextProductElementStart!) -> if {
+                                        productElementSearch! => nextProductElement!
+                                        productElementCandidate.start => nextProductElementStart!
+                                    }
+                                }
+                            }
+                            productElementSearch! + 1 => productElementSearch!
+                        }
+                        nextProductElement! >= 0 -> if {
+                            prepared.package.nodes[productRange.astStart + nextProductElement!] => productElement
+                            -1 => productElementType!
+                            1000000 => productElementDistance!
+                            0 => productExpressionSearch!
+                            productExpressionSearch! < (expressions! -> len) -> while {
+                                expressions![productExpressionSearch!] => productExpressionCandidate
+                                productExpressionCandidate.sourceModule == productSourceIndex! -> if {
+                                    productExpressionCandidate.astNode => productExpressionAst!
+                                    prepared.package.nodes[productRange.astStart + productExpressionAst!].parent => productExpressionAncestor!
+                                    1 => productExpressionDistance!
+                                    false => productExpressionBelongs!
+                                    productExpressionAst! == nextProductElement! -> if { true => productExpressionBelongs! }
+                                    (productExpressionAncestor! >= 0 and not productExpressionBelongs!) -> while {
+                                        productExpressionAncestor! == nextProductElement! -> if { true => productExpressionBelongs! } else {
+                                            prepared.package.nodes[productRange.astStart + productExpressionAncestor!].parent => productExpressionAncestor!
+                                            productExpressionDistance! + 1 => productExpressionDistance!
+                                        }
+                                    }
+                                    (productExpressionBelongs! and productExpressionDistance! < productElementDistance!) -> if {
+                                        productExpressionCandidate.typeId => productElementType!
+                                        productExpressionDistance! => productElementDistance!
+                                    }
+                                }
+                                productExpressionSearch! + 1 => productExpressionSearch!
+                            }
+                            -1 => productElementLabel!
+                            false => productElementColon!
+                            productElement.firstToken => productElementToken!
+                            productElementToken! < productElement.firstToken + productElement.tokenCount -> while {
+                                prepared.package.tokens[productRange.tokenStart + productElementToken!].kind == grammar.tokenIdColon() -> if {
+                                    true => productElementColon!
+                                }
+                                (not productElementColon! and productElementLabel! < 0 and prepared.package.tokens[productRange.tokenStart + productElementToken!].kind == grammar.tokenIdIdentifier()) -> if {
+                                    productElementToken! => productElementLabel!
+                                }
+                                productElementToken! + 1 => productElementToken!
+                            }
+                            not productElementColon! -> if { -1 => productElementLabel! }
+                            productElementType! < 0 -> if { false => productFieldsReady! }
+                            productFieldTypes! -> push(productElementType!)
+                            productFieldLabels! -> push(productElementLabel!)
+                            nextProductElement! => previousProductElement!
+                            nextProductElementStart! => previousProductElementStart!
+                            true => findingProductElement!
+                        }
+                    }
+                    ((productFieldTypes! -> len) >= 2 and productFieldsReady!) -> if {
+                        -1 => productType!
+                        0 => productTypeSearch!
+                        (productTypeSearch! < (types! -> len) and productType! < 0) -> while {
+                            types![productTypeSearch!] => productTypeCandidate
+                            (productTypeCandidate.kind == 10 and productTypeCandidate.length == Int(productFieldTypes! -> len) and productTypeCandidate.status == 0) -> if {
+                                true => productTypeEqual!
+                                0 => productFieldOrdinal!
+                                (productFieldOrdinal! < Int(productFieldTypes! -> len) and productTypeEqual!) -> while {
+                                    -1 => productCandidateFieldIndex!
+                                    0 => productCandidateFieldSearch!
+                                    productCandidateFieldSearch! < (fields! -> len) -> while {
+                                        fields![productCandidateFieldSearch!] => productCandidateField
+                                        (productCandidateField.ownerType == productTypeSearch! and productCandidateField.ordinal == productFieldOrdinal!) -> if {
+                                            productCandidateFieldSearch! => productCandidateFieldIndex!
+                                        }
+                                        productCandidateFieldSearch! + 1 => productCandidateFieldSearch!
+                                    }
+                                    productCandidateFieldIndex! < 0 -> if { false => productTypeEqual! } else {
+                                        fields![productCandidateFieldIndex!] => productCandidateField
+                                        productCandidateField.fieldType != productFieldTypes![productFieldOrdinal!] -> if { false => productTypeEqual! }
+                                        (((productCandidateField.labelToken < 0) and not (productFieldLabels![productFieldOrdinal!] < 0)) or ((productFieldLabels![productFieldOrdinal!] < 0) and not (productCandidateField.labelToken < 0))) -> if { false => productTypeEqual! }
+                                        (productTypeEqual! and productCandidateField.labelToken >= 0) -> if {
+                                            prepared.package.tokens[productRange.tokenStart + productFieldLabels![productFieldOrdinal!]] => productCurrentLabel
+                                            prepared.package.ranges[productCandidateField.sourceModule] => productCandidateSourceRange
+                                            prepared.package.sources[productCandidateField.sourceModule] -> len => productCandidateSourceLength
+                                            prepared.package.sources[productCandidateField.sourceModule] -> slice(UIntSize(0), productCandidateSourceLength) => productCandidateSource
+                                            prepared.package.tokens[productCandidateSourceRange.tokenStart + productCandidateField.labelToken] => productCandidateLabel
+                                            productCurrentLabel.span.length == productCandidateLabel.span.length => productLabelEqual!
+                                            UIntSize(0) => productLabelByte!
+                                            (productLabelEqual! and productLabelByte! < productCurrentLabel.span.length) -> while {
+                                                (productSource -> byte(productCurrentLabel.span.start + productLabelByte!)) != (productCandidateSource -> byte(productCandidateLabel.span.start + productLabelByte!)) -> if { false => productLabelEqual! }
+                                                productLabelByte! + UIntSize(1) => productLabelByte!
+                                            }
+                                            not productLabelEqual! -> if { false => productTypeEqual! }
+                                        }
+                                    }
+                                    productFieldOrdinal! + 1 => productFieldOrdinal!
+                                }
+                                productTypeEqual! -> if { productTypeSearch! => productType! }
+                            }
+                            productTypeSearch! + 1 => productTypeSearch!
+                        }
+                        productType! < 0 -> if {
+                            types! -> len => productType!
+                            false => productContainsParameter!
+                            0 => productParameterField!
+                            productParameterField! < Int(productFieldTypes! -> len) -> while {
+                                types![productFieldTypes![productParameterField!]].containsParameter -> if { true => productContainsParameter! }
+                                productParameterField! + 1 => productParameterField!
+                            }
+                            types! -> push(typeIds.SemanticType {
+                                kind: 10
+                                origin: -1
+                                module: -1
+                                symbol: -1
+                                first: -1
+                                second: -1
+                                length: Int(productFieldTypes! -> len)
+                                lengthHash: UInt64(0)
+                                containsParameter: productContainsParameter!
+                                status: 0
+                            })
+                            0 => productNewFieldOrdinal!
+                            productNewFieldOrdinal! < Int(productFieldTypes! -> len) -> while {
+                                fields! -> push(typeIds.NominalField {
+                                    ownerType: productType!
+                                    sourceModule: productSourceIndex!
+                                    ownerSymbol: -1
+                                    fieldSymbol: -1
+                                    labelToken: productFieldLabels![productNewFieldOrdinal!]
+                                    ordinal: productNewFieldOrdinal!
+                                    fieldType: productFieldTypes![productNewFieldOrdinal!]
+                                    status: 0
+                                })
+                                productNewFieldOrdinal! + 1 => productNewFieldOrdinal!
+                            }
+                        }
+                        expressions! -> len => productExpressionIndex
+                        expressions! -> push(ExpressionTypeId {
+                            sourceModule: productSourceIndex!
+                            astNode: productAstIndex!
+                            typeId: productType!
+                            status: 0
+                        })
+                        productExpressionIndex => expressionIndexByAst![productGlobalAst]
+                        true => productChanged!
+                    }
+                }
+                productAstIndex! + 1 => productAstIndex!
+            }
+            productSourceIndex! + 1 => productSourceIndex!
+        }
+    }
+
     # Resolve each flow call's target token once. Generic result inference used
     # to rescan the complete source AST for every call, which became quadratic
     # for the compiler's own large modules.
@@ -2383,12 +2564,518 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             }
             eachReferenceSource! + 1 => eachReferenceSource!
         }
+    # Sequential and explicit parallel branches have the same structural
+    # product result. Their execution policies differ after typed lowering;
+    # labels and field types share ordinary product identity here.
+    0 => branchSourceIndex!
+    branchSourceIndex! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[branchSourceIndex!] => branchRange
+        prepared.package.sources[branchSourceIndex!] -> len => branchSourceLength
+        prepared.package.sources[branchSourceIndex!] -> slice(UIntSize(0), branchSourceLength) => branchSource
+        0 => branchAstIndex!
+        branchAstIndex! < branchRange.astCount -> while {
+            prepared.package.nodes[branchRange.astStart + branchAstIndex!] => branchNode
+            ((branchNode.kind == 73 or branchNode.kind == 74 or branchNode.kind == 78) and expressionIndexByAst![branchRange.astStart + branchAstIndex!] < 0) -> if {
+                [Int; ~] => branchFieldTypes!
+                [Int; ~] => branchFieldLabels!
+                -1 => partitionStreamType!
+                branchNode.kind == 78 -> if {
+                    -1 => partitionSourceExpression!
+                    UIntSize(0) => partitionSourceStart!
+                    0 => partitionSourceSearch!
+                    partitionSourceSearch! < (expressions! -> len) -> while {
+                        expressions![partitionSourceSearch!] => partitionSourceCandidate
+                        partitionSourceCandidate.sourceModule == branchSourceIndex! -> if {
+                            prepared.package.nodes[branchRange.astStart + partitionSourceCandidate.astNode] => partitionSourceNode
+                            (partitionSourceNode.parent == branchNode.parent and partitionSourceNode.start < branchNode.start and (partitionSourceExpression! < 0 or partitionSourceNode.start > partitionSourceStart!)) -> if {
+                                partitionSourceSearch! => partitionSourceExpression!
+                                partitionSourceNode.start => partitionSourceStart!
+                            }
+                        }
+                        partitionSourceSearch! + 1 => partitionSourceSearch!
+                    }
+                    partitionSourceExpression! >= 0 -> if {
+                        expressions![partitionSourceExpression!].typeId => partitionStreamType!
+                        (partitionStreamType! >= 0 and partitionStreamType! < (types! -> len)) -> if {
+                            types![partitionStreamType!] => partitionStream
+                            -1 => partitionElementType!
+                            (partitionStream.kind == 7 and partitionStream.origin == 4 and (partitionStream.symbol == 3 or partitionStream.symbol == 4)) -> if { partitionStream.first => partitionElementType! }
+                            partitionElementType! >= 0 -> if {
+                                0 => partitionItemSearch!
+                                partitionItemSearch! < branchRange.astCount -> while {
+                                    prepared.package.nodes[branchRange.astStart + partitionItemSearch!] => partitionItemNode
+                                    partitionItemNode.kind == 15 -> if {
+                                        partitionItemNode.parent => partitionItemAncestor!
+                                        false => partitionItemBelongs!
+                                        (partitionItemAncestor! >= 0 and not partitionItemBelongs!) -> while {
+                                            partitionItemAncestor! == branchAstIndex! -> if { true => partitionItemBelongs! } else { prepared.package.nodes[branchRange.astStart + partitionItemAncestor!].parent => partitionItemAncestor! }
+                                        }
+                                        partitionItemBelongs! -> if {
+                                            branchNode.start + UIntSize(10) => partitionBinderStart
+                                            UIntSize(0) => partitionBinderLength!
+                                            (partitionBinderStart + partitionBinderLength! < branchNode.start + branchNode.length and (branchSource -> byte(partitionBinderStart + partitionBinderLength!)) != UInt8(32) and (branchSource -> byte(partitionBinderStart + partitionBinderLength!)) != UInt8(9) and (branchSource -> byte(partitionBinderStart + partitionBinderLength!)) != UInt8(10) and (branchSource -> byte(partitionBinderStart + partitionBinderLength!)) != UInt8(13) and (branchSource -> byte(partitionBinderStart + partitionBinderLength!)) != UInt8(123)) -> while { partitionBinderLength! + UIntSize(1) => partitionBinderLength! }
+                                            partitionItemNode.length == partitionBinderLength! => partitionItemMatches!
+                                            UIntSize(0) => partitionItemByte!
+                                            (partitionItemMatches! and partitionItemByte! < partitionItemNode.length) -> while {
+                                                (branchSource -> byte(partitionItemNode.start + partitionItemByte!)) != (branchSource -> byte(partitionBinderStart + partitionItemByte!)) -> if { false => partitionItemMatches! }
+                                                partitionItemByte! + UIntSize(1) => partitionItemByte!
+                                            }
+                                            (partitionItemMatches! and expressionIndexByAst![branchRange.astStart + partitionItemSearch!] < 0) -> if {
+                                                expressions! -> len => partitionItemExpression
+                                                expressions! -> push(ExpressionTypeId { sourceModule: branchSourceIndex!, astNode: partitionItemSearch!, typeId: partitionElementType!, status: 0 })
+                                                partitionItemExpression => expressionIndexByAst![branchRange.astStart + partitionItemSearch!]
+                                                true => pathChanged!
+                                            }
+                                        }
+                                    }
+                                    partitionItemSearch! + 1 => partitionItemSearch!
+                                }
+                                -1 => partitionBoolType!
+                                0 => partitionBoolTypeSearch!
+                                partitionBoolTypeSearch! < (types! -> len) -> while {
+                                    types![partitionBoolTypeSearch!] => partitionBoolCandidate
+                                    (partitionBoolCandidate.kind == 1 and partitionBoolCandidate.origin == 1 and partitionBoolCandidate.symbol == 23 and partitionBoolCandidate.status == 0) -> if { partitionBoolTypeSearch! => partitionBoolType! }
+                                    partitionBoolTypeSearch! + 1 => partitionBoolTypeSearch!
+                                }
+                                0 => partitionPredicateTypeSearch!
+                                partitionPredicateTypeSearch! < branchRange.astCount -> while {
+                                    prepared.package.nodes[branchRange.astStart + partitionPredicateTypeSearch!] => partitionPredicateNode
+                                    partitionPredicateNode.parent => partitionPredicateAncestor!
+                                    false => partitionPredicateBelongs!
+                                    (partitionPredicateAncestor! >= 0 and not partitionPredicateBelongs!) -> while {
+                                        partitionPredicateAncestor! == branchAstIndex! -> if { true => partitionPredicateBelongs! } else { prepared.package.nodes[branchRange.astStart + partitionPredicateAncestor!].parent => partitionPredicateAncestor! }
+                                    }
+                                    partitionPredicateBelongs! -> if {
+                                        -1 => partitionPredicateType!
+                                        (partitionPredicateNode.kind == 18 or partitionPredicateNode.kind == 19 or partitionPredicateNode.kind == 24 or partitionPredicateNode.kind == 25) -> if { partitionBoolType! => partitionPredicateType! }
+                                        (partitionPredicateNode.kind == 20 or partitionPredicateNode.kind == 21) -> if { partitionElementType! => partitionPredicateType! }
+                                        (partitionPredicateType! >= 0 and expressionIndexByAst![branchRange.astStart + partitionPredicateTypeSearch!] < 0) -> if {
+                                            expressions! -> len => partitionPredicateExpression
+                                            expressions! -> push(ExpressionTypeId { sourceModule: branchSourceIndex!, astNode: partitionPredicateTypeSearch!, typeId: partitionPredicateType!, status: 0 })
+                                            partitionPredicateExpression => expressionIndexByAst![branchRange.astStart + partitionPredicateTypeSearch!]
+                                            true => pathChanged!
+                                        }
+                                    }
+                                    partitionPredicateTypeSearch! + 1 => partitionPredicateTypeSearch!
+                                }
+                            }
+                        }
+                    }
+                }
+                -1 => previousBranchArm!
+                UIntSize(0) => previousBranchArmStart!
+                true => findingBranchArm!
+                true => branchFieldsReady!
+                findingBranchArm! -> while {
+                    false => findingBranchArm!
+                    -1 => nextBranchArm!
+                    UIntSize(0) => nextBranchArmStart!
+                    0 => branchArmSearch!
+                    branchArmSearch! < branchRange.astCount -> while {
+                        prepared.package.nodes[branchRange.astStart + branchArmSearch!] => branchArmCandidate
+                        ((branchNode.kind != 78 and branchArmCandidate.kind == 75 and branchArmCandidate.parent == branchAstIndex!) or (branchNode.kind == 78 and (branchArmCandidate.kind == 79 or branchArmCandidate.kind == 80) and branchArmCandidate.parent == branchAstIndex!)) -> if {
+                            (previousBranchArm! < 0 or branchArmCandidate.start > previousBranchArmStart!) -> if {
+                                (nextBranchArm! < 0 or branchArmCandidate.start < nextBranchArmStart!) -> if {
+                                    branchArmSearch! => nextBranchArm!
+                                    branchArmCandidate.start => nextBranchArmStart!
+                                }
+                            }
+                        }
+                        branchArmSearch! + 1 => branchArmSearch!
+                    }
+                    nextBranchArm! >= 0 -> if {
+                        prepared.package.nodes[branchRange.astStart + nextBranchArm!] => branchArm
+                        -1 => branchArmResultAst!
+                        UIntSize(0) => branchArmResultStart!
+                        0 => branchTargetSearch!
+                        branchTargetSearch! < branchRange.astCount -> while {
+                            prepared.package.nodes[branchRange.astStart + branchTargetSearch!] => branchTargetCandidate
+                            branchTargetCandidate.kind == 77 -> if {
+                                branchTargetCandidate.parent => branchTargetAncestor!
+                                false => branchTargetBelongs!
+                                (branchTargetAncestor! >= 0 and not branchTargetBelongs!) -> while {
+                                    branchTargetAncestor! == nextBranchArm! -> if { true => branchTargetBelongs! } else {
+                                        prepared.package.nodes[branchRange.astStart + branchTargetAncestor!].parent => branchTargetAncestor!
+                                    }
+                                }
+                                (branchTargetBelongs! and (branchArmResultAst! < 0 or branchTargetCandidate.start > branchArmResultStart!)) -> if {
+                                    branchTargetSearch! => branchArmResultAst!
+                                    branchTargetCandidate.start => branchArmResultStart!
+                                }
+                            }
+                            branchTargetSearch! + 1 => branchTargetSearch!
+                        }
+                        -1 => branchArmType!
+                        branchNode.kind == 78 -> if { partitionStreamType! => branchArmType! } else {
+                            branchArmResultAst! >= 0 -> if {
+                                expressionIndexByAst![branchRange.astStart + branchArmResultAst!] => branchArmExpression
+                                branchArmExpression >= 0 -> if { expressions![branchArmExpression].typeId => branchArmType! }
+                            }
+                        }
+                        branchArmType! < 0 -> if { false => branchFieldsReady! }
+                        branchFieldTypes! -> push(branchArmType!)
+                        branchFieldLabels! -> push(branchArm.payloadToken)
+                        nextBranchArm! => previousBranchArm!
+                        nextBranchArmStart! => previousBranchArmStart!
+                        true => findingBranchArm!
+                    }
+                }
+                ((branchFieldTypes! -> len) >= 2 and branchFieldsReady!) -> if {
+                    -1 => branchProductType!
+                    0 => branchProductSearch!
+                    (branchProductSearch! < (types! -> len) and branchProductType! < 0) -> while {
+                        types![branchProductSearch!] => branchProductCandidate
+                        (branchProductCandidate.kind == 10 and branchProductCandidate.length == Int(branchFieldTypes! -> len) and branchProductCandidate.status == 0) -> if {
+                            true => branchProductEqual!
+                            0 => branchFieldOrdinal!
+                            (branchFieldOrdinal! < Int(branchFieldTypes! -> len) and branchProductEqual!) -> while {
+                                -1 => branchCandidateFieldIndex!
+                                0 => branchCandidateFieldSearch!
+                                branchCandidateFieldSearch! < (fields! -> len) -> while {
+                                    fields![branchCandidateFieldSearch!] => branchCandidateField
+                                    (branchCandidateField.ownerType == branchProductSearch! and branchCandidateField.ordinal == branchFieldOrdinal!) -> if {
+                                        branchCandidateFieldSearch! => branchCandidateFieldIndex!
+                                    }
+                                    branchCandidateFieldSearch! + 1 => branchCandidateFieldSearch!
+                                }
+                                branchCandidateFieldIndex! < 0 -> if { false => branchProductEqual! } else {
+                                    fields![branchCandidateFieldIndex!] => branchCandidateField
+                                    branchCandidateField.fieldType != branchFieldTypes![branchFieldOrdinal!] -> if { false => branchProductEqual! }
+                                    (branchCandidateField.labelToken < 0 or branchFieldLabels![branchFieldOrdinal!] < 0) -> if {
+                                        false => branchProductEqual!
+                                    } else {
+                                        prepared.package.tokens[branchRange.tokenStart + branchFieldLabels![branchFieldOrdinal!]] => branchCurrentLabel
+                                        prepared.package.ranges[branchCandidateField.sourceModule] => branchCandidateSourceRange
+                                        prepared.package.sources[branchCandidateField.sourceModule] -> len => branchCandidateSourceLength
+                                        prepared.package.sources[branchCandidateField.sourceModule] -> slice(UIntSize(0), branchCandidateSourceLength) => branchCandidateSource
+                                        prepared.package.tokens[branchCandidateSourceRange.tokenStart + branchCandidateField.labelToken] => branchCandidateLabel
+                                        branchCurrentLabel.span.length == branchCandidateLabel.span.length => branchLabelEqual!
+                                        UIntSize(0) => branchLabelByte!
+                                        (branchLabelEqual! and branchLabelByte! < branchCurrentLabel.span.length) -> while {
+                                            (branchSource -> byte(branchCurrentLabel.span.start + branchLabelByte!)) != (branchCandidateSource -> byte(branchCandidateLabel.span.start + branchLabelByte!)) -> if { false => branchLabelEqual! }
+                                            branchLabelByte! + UIntSize(1) => branchLabelByte!
+                                        }
+                                        not branchLabelEqual! -> if { false => branchProductEqual! }
+                                    }
+                                }
+                                branchFieldOrdinal! + 1 => branchFieldOrdinal!
+                            }
+                            branchProductEqual! -> if { branchProductSearch! => branchProductType! }
+                        }
+                        branchProductSearch! + 1 => branchProductSearch!
+                    }
+                    branchProductType! < 0 -> if {
+                        types! -> len => branchProductType!
+                        false => branchContainsParameter!
+                        0 => branchParameterField!
+                        branchParameterField! < Int(branchFieldTypes! -> len) -> while {
+                            types![branchFieldTypes![branchParameterField!]].containsParameter -> if { true => branchContainsParameter! }
+                            branchParameterField! + 1 => branchParameterField!
+                        }
+                        types! -> push(typeIds.SemanticType {
+                            kind: 10
+                            origin: -1
+                            module: -1
+                            symbol: -1
+                            first: -1
+                            second: -1
+                            length: Int(branchFieldTypes! -> len)
+                            lengthHash: UInt64(0)
+                            containsParameter: branchContainsParameter!
+                            status: 0
+                        })
+                        firstFieldByOwnerType! -> push(-1)
+                        lastFieldByOwnerType! -> push(-1)
+                        0 => branchNewFieldOrdinal!
+                        branchNewFieldOrdinal! < Int(branchFieldTypes! -> len) -> while {
+                            fields! -> len => branchNewFieldIndex
+                            fields! -> push(typeIds.NominalField {
+                                ownerType: branchProductType!
+                                sourceModule: branchSourceIndex!
+                                ownerSymbol: -1
+                                fieldSymbol: -1
+                                labelToken: branchFieldLabels![branchNewFieldOrdinal!]
+                                ordinal: branchNewFieldOrdinal!
+                                fieldType: branchFieldTypes![branchNewFieldOrdinal!]
+                                status: 0
+                            })
+                            nextFieldByField! -> push(-1)
+                            lastFieldByOwnerType![branchProductType!] >= 0 -> if {
+                                branchNewFieldIndex => nextFieldByField![lastFieldByOwnerType![branchProductType!]]
+                            } else {
+                                branchNewFieldIndex => firstFieldByOwnerType![branchProductType!]
+                            }
+                            branchNewFieldIndex => lastFieldByOwnerType![branchProductType!]
+                            branchNewFieldOrdinal! + 1 => branchNewFieldOrdinal!
+                        }
+                    }
+                    expressions! -> len => branchExpressionIndex
+                    expressions! -> push(ExpressionTypeId { sourceModule: branchSourceIndex!, astNode: branchAstIndex!, typeId: branchProductType!, status: 0 })
+                    branchExpressionIndex => expressionIndexByAst![branchRange.astStart + branchAstIndex!]
+                    true => pathChanged!
+                }
+            }
+            branchAstIndex! + 1 => branchAstIndex!
+        }
+        branchSourceIndex! + 1 => branchSourceIndex!
+    }
+    # Merge/concat preserve the homogeneous producer wrapper type. Zip/latest
+    # preserve field order and labels in a structural product element, then
+    # intern the matching Stream/EventStream wrapper around that product.
+    0 => homogeneousJoinSource!
+    homogeneousJoinSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[homogeneousJoinSource!] => homogeneousJoinRange
+        prepared.package.sources[homogeneousJoinSource!] -> len => homogeneousJoinSourceLength
+        prepared.package.sources[homogeneousJoinSource!] -> slice(UIntSize(0), homogeneousJoinSourceLength) => homogeneousJoinText
+        0 => homogeneousJoinAst!
+        homogeneousJoinAst! < homogeneousJoinRange.astCount -> while {
+            prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinAst!] => homogeneousJoinNode
+            (homogeneousJoinNode.kind == 81 and expressionIndexByAst![homogeneousJoinRange.astStart + homogeneousJoinAst!] < 0) -> if {
+                TextMatchRequest { source: homogeneousJoinText, start: homogeneousJoinNode.start, length: homogeneousJoinNode.length, expected: "merge" } -> textMatches => homogeneousJoinIsMerge
+                TextMatchRequest { source: homogeneousJoinText, start: homogeneousJoinNode.start, length: homogeneousJoinNode.length, expected: "concat" } -> textMatches => homogeneousJoinIsConcat
+                TextMatchRequest { source: homogeneousJoinText, start: homogeneousJoinNode.start, length: homogeneousJoinNode.length, expected: "zip" } -> textMatches => homogeneousJoinIsZip
+                TextMatchRequest { source: homogeneousJoinText, start: homogeneousJoinNode.start, length: homogeneousJoinNode.length, expected: "latest" } -> textMatches => homogeneousJoinIsLatest
+                (homogeneousJoinIsMerge or homogeneousJoinIsConcat or homogeneousJoinIsZip or homogeneousJoinIsLatest) -> if {
+                    -1 => homogeneousJoinProductType!
+                    -1 => homogeneousJoinProductAst!
+                    UIntSize(0) => homogeneousJoinProductStart!
+                    0 => homogeneousJoinExpressionSearch!
+                    homogeneousJoinExpressionSearch! < (expressions! -> len) -> while {
+                        expressions![homogeneousJoinExpressionSearch!] => homogeneousJoinExpressionCandidate
+                        homogeneousJoinExpressionCandidate.sourceModule == homogeneousJoinSource! -> if {
+                            prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinExpressionCandidate.astNode] => homogeneousJoinExpressionNode
+                            (homogeneousJoinExpressionNode.parent == homogeneousJoinNode.parent and homogeneousJoinExpressionNode.start < homogeneousJoinNode.start and (homogeneousJoinProductType! < 0 or homogeneousJoinExpressionNode.start > homogeneousJoinProductStart!)) -> if {
+                                homogeneousJoinExpressionCandidate.typeId => homogeneousJoinProductType!
+                                homogeneousJoinExpressionCandidate.astNode => homogeneousJoinProductAst!
+                                homogeneousJoinExpressionNode.start => homogeneousJoinProductStart!
+                            }
+                        }
+                        homogeneousJoinExpressionSearch! + 1 => homogeneousJoinExpressionSearch!
+                    }
+                    homogeneousJoinProductType! < 0 -> if {
+                        0 => homogeneousJoinProductAstSearch!
+                        homogeneousJoinProductAstSearch! < homogeneousJoinRange.astCount -> while {
+                            prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinProductAstSearch!] => homogeneousJoinProductCandidate
+                            (homogeneousJoinProductCandidate.kind == 71 and homogeneousJoinProductCandidate.parent == homogeneousJoinNode.parent and homogeneousJoinProductCandidate.start < homogeneousJoinNode.start and (homogeneousJoinProductAst! < 0 or homogeneousJoinProductCandidate.start > homogeneousJoinProductStart!)) -> if {
+                                homogeneousJoinProductAstSearch! => homogeneousJoinProductAst!
+                                homogeneousJoinProductCandidate.start => homogeneousJoinProductStart!
+                            }
+                            homogeneousJoinProductAstSearch! + 1 => homogeneousJoinProductAstSearch!
+                        }
+                    }
+                    (homogeneousJoinProductType! < 0 and homogeneousJoinProductAst! >= 0) -> if {
+                        [Int; ~] => homogeneousJoinInputTypes!
+                        [Int; ~] => homogeneousJoinInputLabels!
+                        -1 => homogeneousJoinPreviousElement!
+                        UIntSize(0) => homogeneousJoinPreviousElementStart!
+                        true => homogeneousJoinFindingElement!
+                        true => homogeneousJoinInputsReady!
+                        homogeneousJoinFindingElement! -> while {
+                            false => homogeneousJoinFindingElement!
+                            -1 => homogeneousJoinNextElement!
+                            UIntSize(0) => homogeneousJoinNextElementStart!
+                            0 => homogeneousJoinElementSearch!
+                            homogeneousJoinElementSearch! < homogeneousJoinRange.astCount -> while {
+                                prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinElementSearch!] => homogeneousJoinElementCandidate
+                                (homogeneousJoinElementCandidate.kind == 72 and homogeneousJoinElementCandidate.parent == homogeneousJoinProductAst!) -> if {
+                                    (homogeneousJoinPreviousElement! < 0 or homogeneousJoinElementCandidate.start > homogeneousJoinPreviousElementStart!) -> if {
+                                        (homogeneousJoinNextElement! < 0 or homogeneousJoinElementCandidate.start < homogeneousJoinNextElementStart!) -> if {
+                                            homogeneousJoinElementSearch! => homogeneousJoinNextElement!
+                                            homogeneousJoinElementCandidate.start => homogeneousJoinNextElementStart!
+                                        }
+                                    }
+                                }
+                                homogeneousJoinElementSearch! + 1 => homogeneousJoinElementSearch!
+                            }
+                            homogeneousJoinNextElement! >= 0 -> if {
+                                prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinNextElement!] => homogeneousJoinElement
+                                -1 => homogeneousJoinElementType!
+                                UIntSize(0) => homogeneousJoinElementValueStart!
+                                0 => homogeneousJoinElementValueSearch!
+                                homogeneousJoinElementValueSearch! < (expressions! -> len) -> while {
+                                    expressions![homogeneousJoinElementValueSearch!] => homogeneousJoinElementValue
+                                    homogeneousJoinElementValue.sourceModule == homogeneousJoinSource! -> if {
+                                        prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinElementValue.astNode] => homogeneousJoinElementValueNode
+                                        homogeneousJoinElementValueNode.parent => homogeneousJoinElementAncestor!
+                                        false => homogeneousJoinElementBelongs!
+                                        (homogeneousJoinElementAncestor! >= 0 and not homogeneousJoinElementBelongs!) -> while {
+                                            homogeneousJoinElementAncestor! == homogeneousJoinNextElement! -> if { true => homogeneousJoinElementBelongs! } else { prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinElementAncestor!].parent => homogeneousJoinElementAncestor! }
+                                        }
+                                        (homogeneousJoinElementBelongs! and (homogeneousJoinElementType! < 0 or homogeneousJoinElementValueNode.start > homogeneousJoinElementValueStart!)) -> if {
+                                            homogeneousJoinElementValue.typeId => homogeneousJoinElementType!
+                                            homogeneousJoinElementValueNode.start => homogeneousJoinElementValueStart!
+                                        }
+                                    }
+                                    homogeneousJoinElementValueSearch! + 1 => homogeneousJoinElementValueSearch!
+                                }
+                                homogeneousJoinElementType! < 0 -> if { false => homogeneousJoinInputsReady! }
+                                homogeneousJoinInputTypes! -> push(homogeneousJoinElementType!)
+                                -1 => homogeneousJoinElementLabel!
+                                homogeneousJoinElement.start => homogeneousJoinElementByte!
+                                homogeneousJoinElement.start + homogeneousJoinElement.length => homogeneousJoinElementEnd
+                                homogeneousJoinElementByte! < homogeneousJoinElementEnd -> while {
+                                    (homogeneousJoinText -> byte(homogeneousJoinElementByte!)) == UInt8(58) -> if { homogeneousJoinElement.payloadToken => homogeneousJoinElementLabel! }
+                                    homogeneousJoinElementByte! + UIntSize(1) => homogeneousJoinElementByte!
+                                }
+                                homogeneousJoinInputLabels! -> push(homogeneousJoinElementLabel!)
+                                homogeneousJoinNextElement! => homogeneousJoinPreviousElement!
+                                homogeneousJoinNextElementStart! => homogeneousJoinPreviousElementStart!
+                                true => homogeneousJoinFindingElement!
+                            }
+                        }
+                        ((homogeneousJoinInputTypes! -> len) >= 2 and homogeneousJoinInputsReady!) -> if {
+                            types! -> len => homogeneousJoinProductType!
+                            types! -> push(typeIds.SemanticType { kind: 10, origin: -1, module: -1, symbol: -1, first: -1, second: -1, length: Int(homogeneousJoinInputTypes! -> len), lengthHash: UInt64(0), containsParameter: false, status: 0 })
+                            firstFieldByOwnerType! -> push(-1)
+                            lastFieldByOwnerType! -> push(-1)
+                            0 => homogeneousJoinNewFieldOrdinal!
+                            homogeneousJoinNewFieldOrdinal! < Int(homogeneousJoinInputTypes! -> len) -> while {
+                                fields! -> len => homogeneousJoinNewFieldIndex
+                                fields! -> push(typeIds.NominalField { ownerType: homogeneousJoinProductType!, sourceModule: homogeneousJoinSource!, ownerSymbol: -1, fieldSymbol: -1, labelToken: homogeneousJoinInputLabels![homogeneousJoinNewFieldOrdinal!], ordinal: homogeneousJoinNewFieldOrdinal!, fieldType: homogeneousJoinInputTypes![homogeneousJoinNewFieldOrdinal!], status: 0 })
+                                nextFieldByField! -> push(-1)
+                                lastFieldByOwnerType![homogeneousJoinProductType!] >= 0 -> if { homogeneousJoinNewFieldIndex => nextFieldByField![lastFieldByOwnerType![homogeneousJoinProductType!]] } else { homogeneousJoinNewFieldIndex => firstFieldByOwnerType![homogeneousJoinProductType!] }
+                                homogeneousJoinNewFieldIndex => lastFieldByOwnerType![homogeneousJoinProductType!]
+                                homogeneousJoinNewFieldOrdinal! + 1 => homogeneousJoinNewFieldOrdinal!
+                            }
+                            expressions! -> len => homogeneousJoinProductExpression
+                            expressions! -> push(ExpressionTypeId { sourceModule: homogeneousJoinSource!, astNode: homogeneousJoinProductAst!, typeId: homogeneousJoinProductType!, status: 0 })
+                            homogeneousJoinProductExpression => expressionIndexByAst![homogeneousJoinRange.astStart + homogeneousJoinProductAst!]
+                            true => pathChanged!
+                        }
+                    }
+                    -1 => homogeneousJoinResultType!
+                    -1 => homogeneousJoinElementType!
+                    -1 => homogeneousJoinWrapperType!
+                    [Int; ~] => homogeneousJoinElementTypes!
+                    [Int; ~] => homogeneousJoinElementLabels!
+                    [Int; ~] => homogeneousJoinElementSources!
+                    true => homogeneousJoinFieldsMatch!
+                    0 => homogeneousJoinFieldCount!
+                    (homogeneousJoinProductType! >= 0 and homogeneousJoinProductType! < (types! -> len) and types![homogeneousJoinProductType!].kind == 10) -> if {
+                        firstFieldByOwnerType![homogeneousJoinProductType!] => homogeneousJoinFieldIndex!
+                        homogeneousJoinFieldIndex! >= 0 -> while {
+                            fields![homogeneousJoinFieldIndex!] => homogeneousJoinField
+                            homogeneousJoinField.fieldType >= 0 -> if {
+                                types![homogeneousJoinField.fieldType] => homogeneousJoinStreamType
+                                (homogeneousJoinStreamType.kind == 7 and homogeneousJoinStreamType.origin == 4 and (homogeneousJoinStreamType.symbol == 3 or homogeneousJoinStreamType.symbol == 4)) -> if {
+                                    homogeneousJoinWrapperType! < 0 -> if {
+                                        homogeneousJoinField.fieldType => homogeneousJoinWrapperType!
+                                        homogeneousJoinField.fieldType => homogeneousJoinResultType!
+                                        homogeneousJoinStreamType.first => homogeneousJoinElementType!
+                                    } else {
+                                        homogeneousJoinStreamType.symbol != types![homogeneousJoinWrapperType!].symbol -> if { false => homogeneousJoinFieldsMatch! }
+                                        ((homogeneousJoinIsMerge or homogeneousJoinIsConcat) and homogeneousJoinStreamType.first != homogeneousJoinElementType!) -> if { false => homogeneousJoinFieldsMatch! }
+                                    }
+                                    homogeneousJoinElementTypes! -> push(homogeneousJoinStreamType.first)
+                                    homogeneousJoinElementLabels! -> push(homogeneousJoinField.labelToken)
+                                    homogeneousJoinElementSources! -> push(homogeneousJoinField.sourceModule)
+                                    homogeneousJoinFieldCount! + 1 => homogeneousJoinFieldCount!
+                                } else { false => homogeneousJoinFieldsMatch! }
+                            } else { false => homogeneousJoinFieldsMatch! }
+                            nextFieldByField![homogeneousJoinFieldIndex!] => homogeneousJoinFieldIndex!
+                        }
+                    }
+                    (homogeneousJoinFieldsMatch! and homogeneousJoinFieldCount! >= 2 and homogeneousJoinWrapperType! >= 0 and (homogeneousJoinIsZip or homogeneousJoinIsLatest)) -> if {
+                        -1 => homogeneousJoinOutputProduct!
+                        0 => homogeneousJoinOutputProductSearch!
+                        (homogeneousJoinOutputProductSearch! < (types! -> len) and homogeneousJoinOutputProduct! < 0) -> while {
+                            types![homogeneousJoinOutputProductSearch!] => homogeneousJoinOutputCandidate
+                            (homogeneousJoinOutputCandidate.kind == 10 and homogeneousJoinOutputCandidate.length == homogeneousJoinFieldCount! and homogeneousJoinOutputCandidate.status == 0) -> if {
+                                true => homogeneousJoinOutputEqual!
+                                0 => homogeneousJoinOutputOrdinal!
+                                (homogeneousJoinOutputOrdinal! < homogeneousJoinFieldCount! and homogeneousJoinOutputEqual!) -> while {
+                                    -1 => homogeneousJoinOutputFieldIndex!
+                                    0 => homogeneousJoinOutputFieldSearch!
+                                    homogeneousJoinOutputFieldSearch! < (fields! -> len) -> while {
+                                        fields![homogeneousJoinOutputFieldSearch!] => homogeneousJoinOutputFieldCandidate
+                                        (homogeneousJoinOutputFieldCandidate.ownerType == homogeneousJoinOutputProductSearch! and homogeneousJoinOutputFieldCandidate.ordinal == homogeneousJoinOutputOrdinal!) -> if { homogeneousJoinOutputFieldSearch! => homogeneousJoinOutputFieldIndex! }
+                                        homogeneousJoinOutputFieldSearch! + 1 => homogeneousJoinOutputFieldSearch!
+                                    }
+                                    homogeneousJoinOutputFieldIndex! < 0 -> if { false => homogeneousJoinOutputEqual! } else {
+                                        fields![homogeneousJoinOutputFieldIndex!] => homogeneousJoinOutputField
+                                        homogeneousJoinOutputField.fieldType != homogeneousJoinElementTypes![homogeneousJoinOutputOrdinal!] -> if { false => homogeneousJoinOutputEqual! }
+                                        (((homogeneousJoinOutputField.labelToken < 0) and not (homogeneousJoinElementLabels![homogeneousJoinOutputOrdinal!] < 0)) or ((homogeneousJoinElementLabels![homogeneousJoinOutputOrdinal!] < 0) and not (homogeneousJoinOutputField.labelToken < 0))) -> if { false => homogeneousJoinOutputEqual! }
+                                        (homogeneousJoinOutputEqual! and homogeneousJoinOutputField.labelToken >= 0) -> if {
+                                            prepared.package.ranges[homogeneousJoinElementSources![homogeneousJoinOutputOrdinal!]] => homogeneousJoinCurrentLabelRange
+                                            prepared.package.tokens[homogeneousJoinCurrentLabelRange.tokenStart + homogeneousJoinElementLabels![homogeneousJoinOutputOrdinal!]] => homogeneousJoinCurrentLabel
+                                            prepared.package.sources[homogeneousJoinElementSources![homogeneousJoinOutputOrdinal!]] -> len => homogeneousJoinCurrentLabelSourceLength
+                                            prepared.package.sources[homogeneousJoinElementSources![homogeneousJoinOutputOrdinal!]] -> slice(UIntSize(0), homogeneousJoinCurrentLabelSourceLength) => homogeneousJoinCurrentLabelSource
+                                            prepared.package.ranges[homogeneousJoinOutputField.sourceModule] => homogeneousJoinCandidateLabelRange
+                                            prepared.package.tokens[homogeneousJoinCandidateLabelRange.tokenStart + homogeneousJoinOutputField.labelToken] => homogeneousJoinCandidateLabel
+                                            prepared.package.sources[homogeneousJoinOutputField.sourceModule] -> len => homogeneousJoinCandidateLabelSourceLength
+                                            prepared.package.sources[homogeneousJoinOutputField.sourceModule] -> slice(UIntSize(0), homogeneousJoinCandidateLabelSourceLength) => homogeneousJoinCandidateLabelSource
+                                            homogeneousJoinCurrentLabel.span.length == homogeneousJoinCandidateLabel.span.length => homogeneousJoinOutputLabelEqual!
+                                            UIntSize(0) => homogeneousJoinOutputLabelByte!
+                                            (homogeneousJoinOutputLabelEqual! and homogeneousJoinOutputLabelByte! < homogeneousJoinCurrentLabel.span.length) -> while {
+                                                (homogeneousJoinCurrentLabelSource -> byte(homogeneousJoinCurrentLabel.span.start + homogeneousJoinOutputLabelByte!)) != (homogeneousJoinCandidateLabelSource -> byte(homogeneousJoinCandidateLabel.span.start + homogeneousJoinOutputLabelByte!)) -> if { false => homogeneousJoinOutputLabelEqual! }
+                                                homogeneousJoinOutputLabelByte! + UIntSize(1) => homogeneousJoinOutputLabelByte!
+                                            }
+                                            not homogeneousJoinOutputLabelEqual! -> if { false => homogeneousJoinOutputEqual! }
+                                        }
+                                    }
+                                    homogeneousJoinOutputOrdinal! + 1 => homogeneousJoinOutputOrdinal!
+                                }
+                                homogeneousJoinOutputEqual! -> if { homogeneousJoinOutputProductSearch! => homogeneousJoinOutputProduct! }
+                            }
+                            homogeneousJoinOutputProductSearch! + 1 => homogeneousJoinOutputProductSearch!
+                        }
+                        homogeneousJoinOutputProduct! < 0 -> if {
+                            types! -> len => homogeneousJoinOutputProduct!
+                            false => homogeneousJoinOutputContainsParameter!
+                            0 => homogeneousJoinOutputParameterField!
+                            homogeneousJoinOutputParameterField! < homogeneousJoinFieldCount! -> while {
+                                types![homogeneousJoinElementTypes![homogeneousJoinOutputParameterField!]].containsParameter -> if { true => homogeneousJoinOutputContainsParameter! }
+                                homogeneousJoinOutputParameterField! + 1 => homogeneousJoinOutputParameterField!
+                            }
+                            types! -> push(typeIds.SemanticType { kind: 10, origin: -1, module: -1, symbol: -1, first: -1, second: -1, length: homogeneousJoinFieldCount!, lengthHash: UInt64(0), containsParameter: homogeneousJoinOutputContainsParameter!, status: 0 })
+                            firstFieldByOwnerType! -> push(-1)
+                            lastFieldByOwnerType! -> push(-1)
+                            0 => homogeneousJoinOutputNewOrdinal!
+                            homogeneousJoinOutputNewOrdinal! < homogeneousJoinFieldCount! -> while {
+                                fields! -> len => homogeneousJoinOutputNewField
+                                fields! -> push(typeIds.NominalField { ownerType: homogeneousJoinOutputProduct!, sourceModule: homogeneousJoinElementSources![homogeneousJoinOutputNewOrdinal!], ownerSymbol: -1, fieldSymbol: -1, labelToken: homogeneousJoinElementLabels![homogeneousJoinOutputNewOrdinal!], ordinal: homogeneousJoinOutputNewOrdinal!, fieldType: homogeneousJoinElementTypes![homogeneousJoinOutputNewOrdinal!], status: 0 })
+                                nextFieldByField! -> push(-1)
+                                lastFieldByOwnerType![homogeneousJoinOutputProduct!] >= 0 -> if { homogeneousJoinOutputNewField => nextFieldByField![lastFieldByOwnerType![homogeneousJoinOutputProduct!]] } else { homogeneousJoinOutputNewField => firstFieldByOwnerType![homogeneousJoinOutputProduct!] }
+                                homogeneousJoinOutputNewField => lastFieldByOwnerType![homogeneousJoinOutputProduct!]
+                                homogeneousJoinOutputNewOrdinal! + 1 => homogeneousJoinOutputNewOrdinal!
+                            }
+                        }
+                        types![homogeneousJoinWrapperType!] => homogeneousJoinWrapper
+                        -1 => homogeneousJoinOutputWrapper!
+                        0 => homogeneousJoinOutputWrapperSearch!
+                        homogeneousJoinOutputWrapperSearch! < (types! -> len) -> while {
+                            types![homogeneousJoinOutputWrapperSearch!] => homogeneousJoinOutputWrapperCandidate
+                            (homogeneousJoinOutputWrapperCandidate.kind == 7 and homogeneousJoinOutputWrapperCandidate.origin == homogeneousJoinWrapper.origin and homogeneousJoinOutputWrapperCandidate.module == homogeneousJoinWrapper.module and homogeneousJoinOutputWrapperCandidate.symbol == homogeneousJoinWrapper.symbol and homogeneousJoinOutputWrapperCandidate.first == homogeneousJoinOutputProduct! and homogeneousJoinOutputWrapperCandidate.second == homogeneousJoinWrapper.second and homogeneousJoinOutputWrapperCandidate.status == 0) -> if { homogeneousJoinOutputWrapperSearch! => homogeneousJoinOutputWrapper! }
+                            homogeneousJoinOutputWrapperSearch! + 1 => homogeneousJoinOutputWrapperSearch!
+                        }
+                        homogeneousJoinOutputWrapper! < 0 -> if {
+                            types! -> len => homogeneousJoinOutputWrapper!
+                            types! -> push(typeIds.SemanticType { kind: 7, origin: homogeneousJoinWrapper.origin, module: homogeneousJoinWrapper.module, symbol: homogeneousJoinWrapper.symbol, first: homogeneousJoinOutputProduct!, second: homogeneousJoinWrapper.second, length: -1, lengthHash: UInt64(0), containsParameter: types![homogeneousJoinOutputProduct!].containsParameter, status: 0 })
+                            firstFieldByOwnerType! -> push(-1)
+                            lastFieldByOwnerType! -> push(-1)
+                        }
+                        homogeneousJoinOutputWrapper! => homogeneousJoinResultType!
+                    }
+                    (homogeneousJoinFieldsMatch! and homogeneousJoinFieldCount! >= 2 and homogeneousJoinResultType! >= 0) -> if {
+                        expressions! -> len => homogeneousJoinExpressionIndex
+                        expressions! -> push(ExpressionTypeId { sourceModule: homogeneousJoinSource!, astNode: homogeneousJoinAst!, typeId: homogeneousJoinResultType!, status: 0 })
+                        homogeneousJoinExpressionIndex => expressionIndexByAst![homogeneousJoinRange.astStart + homogeneousJoinAst!]
+                        true => pathChanged!
+                    }
+                }
+            }
+            homogeneousJoinAst! + 1 => homogeneousJoinAst!
+        }
+        homogeneousJoinSource! + 1 => homogeneousJoinSource!
+    }
         [Int; ~] => bindingValueType!
         [Int; ~] => bindingValueDistance!
+        [UIntSize; ~] => bindingValueStart!
         0 => bindingValueSeed!
         bindingValueSeed! < (prepared.package.symbols -> len) -> while {
             bindingValueType! -> push(-1)
             bindingValueDistance! -> push(1000000)
+            bindingValueStart! -> push(UIntSize(0))
             bindingValueSeed! + 1 => bindingValueSeed!
         }
         0 => bindingCandidateIndex!
@@ -2397,18 +3084,21 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             (bindingCandidate.status == 0 and bindingCandidate.typeId >= 0) -> if {
                 prepared.package.ranges[bindingCandidate.sourceModule] => bindingCandidateRange
                 bindingCandidateRange.astStart + bindingCandidate.astNode => bindingCandidateGlobalAst
+                prepared.package.nodes[bindingCandidateGlobalAst] => bindingCandidateNode
                 bindingSymbolByAst![bindingCandidateGlobalAst] => directBindingGlobalSymbol
                 directBindingGlobalSymbol >= 0 -> if {
                     bindingCandidate.typeId => bindingValueType![directBindingGlobalSymbol]
                     0 => bindingValueDistance![directBindingGlobalSymbol]
+                    bindingCandidateNode.start => bindingValueStart![directBindingGlobalSymbol]
                 }
                 nearestBindingAncestorByAst![bindingCandidateGlobalAst] => bindingAncestorGlobal!
                 nearestBindingDistanceByAst![bindingCandidateGlobalAst] => bindingDistance!
                 bindingAncestorGlobal! >= 0 -> while {
                     bindingSymbolByAst![bindingAncestorGlobal!] => bindingGlobalSymbol
-                    (bindingGlobalSymbol >= 0 and bindingDistance! < bindingValueDistance![bindingGlobalSymbol]) -> if {
+                    (bindingGlobalSymbol >= 0 and (bindingDistance! < bindingValueDistance![bindingGlobalSymbol] or (bindingDistance! == bindingValueDistance![bindingGlobalSymbol] and bindingCandidateNode.start > bindingValueStart![bindingGlobalSymbol]))) -> if {
                         bindingCandidate.typeId => bindingValueType![bindingGlobalSymbol]
                         bindingDistance! => bindingValueDistance![bindingGlobalSymbol]
+                        bindingCandidateNode.start => bindingValueStart![bindingGlobalSymbol]
                     }
                     nearestBindingDistanceByAst![bindingAncestorGlobal!] + bindingDistance! => bindingDistance!
                     nearestBindingAncestorByAst![bindingAncestorGlobal!] => bindingAncestorGlobal!
@@ -2585,17 +3275,27 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     prepared.package.ranges[memberField.sourceModule] => memberFieldRange
                                     prepared.package.sources[memberField.sourceModule] -> len => memberFieldSourceLength
                                     prepared.package.sources[memberField.sourceModule] -> slice(UIntSize(0), memberFieldSourceLength) => memberFieldSource
-                                    prepared.package.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
-                                    prepared.package.tokens[memberFieldRange.tokenStart + memberFieldSymbol.nameToken] => memberFieldName
-                                    memberToken.span.length == memberFieldName.span.length => memberNameEqual!
-                                    UIntSize(0) => memberNameByte!
-                                    (memberNameEqual! and memberNameByte! < memberToken.span.length) -> while {
-                                        pathSource -> byte(memberToken.span.start + memberNameByte!) => memberLeftByte
-                                        memberFieldSource -> byte(memberFieldName.span.start + memberNameByte!) => memberRightByte
-                                        memberLeftByte != memberRightByte -> if { false => memberNameEqual! }
-                                        memberNameByte! + UIntSize(1) => memberNameByte!
+                                    -1 => memberFieldNameToken!
+                                    memberField.labelToken >= 0 -> if {
+                                        memberField.labelToken => memberFieldNameToken!
+                                    } else {
+                                        memberField.fieldSymbol >= 0 -> if {
+                                            prepared.package.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
+                                            memberFieldSymbol.nameToken => memberFieldNameToken!
+                                        }
                                     }
-                                    memberNameEqual! -> if { memberField.fieldType => matchedFieldType! }
+                                    memberFieldNameToken! >= 0 -> if {
+                                        prepared.package.tokens[memberFieldRange.tokenStart + memberFieldNameToken!] => memberFieldName
+                                        memberToken.span.length == memberFieldName.span.length => memberNameEqual!
+                                        UIntSize(0) => memberNameByte!
+                                        (memberNameEqual! and memberNameByte! < memberToken.span.length) -> while {
+                                            pathSource -> byte(memberToken.span.start + memberNameByte!) => memberLeftByte
+                                            memberFieldSource -> byte(memberFieldName.span.start + memberNameByte!) => memberRightByte
+                                            memberLeftByte != memberRightByte -> if { false => memberNameEqual! }
+                                            memberNameByte! + UIntSize(1) => memberNameByte!
+                                        }
+                                        memberNameEqual! -> if { memberField.fieldType => matchedFieldType! }
+                                    }
                                     nextFieldByField![memberFieldIndex!] => memberFieldIndex!
                                 }
                                 matchedFieldType! >= 0 -> if {
@@ -2700,7 +3400,6 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             pathSourceIndex! + 1 => pathSourceIndex!
         }
         }
-    }
 
     # Revisit untyped dictionary literals after binding and indexed-path
     # inference. A value such as `payload` may only acquire its enum type in
@@ -2776,19 +3475,30 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     }
                 }
                 (lateDictionaryFirstType! >= 0 and lateDictionarySecondType! >= 0) -> if {
-                    types! -> len => lateDictionaryType!
-                    types! -> push(typeIds.SemanticType {
-                        kind: 5
-                        origin: -1
-                        module: -1
-                        symbol: -1
-                        first: lateDictionaryFirstType!
-                        second: lateDictionarySecondType!
-                        length: -1
-                        lengthHash: UInt64(0)
-                        containsParameter: types![lateDictionaryFirstType!].containsParameter or types![lateDictionarySecondType!].containsParameter
-                        status: 0
-                    })
+                    -1 => lateDictionaryType!
+                    0 => lateDictionaryTypeSearch!
+                    lateDictionaryTypeSearch! < (types! -> len) -> while {
+                        types![lateDictionaryTypeSearch!] => lateDictionaryCandidateType
+                        (lateDictionaryCandidateType.kind == 5 and lateDictionaryCandidateType.first == lateDictionaryFirstType! and lateDictionaryCandidateType.second == lateDictionarySecondType! and lateDictionaryCandidateType.status == 0) -> if {
+                            lateDictionaryTypeSearch! => lateDictionaryType!
+                        }
+                        lateDictionaryTypeSearch! + 1 => lateDictionaryTypeSearch!
+                    }
+                    lateDictionaryType! < 0 -> if {
+                        types! -> len => lateDictionaryType!
+                        types! -> push(typeIds.SemanticType {
+                            kind: 5
+                            origin: -1
+                            module: -1
+                            symbol: -1
+                            first: lateDictionaryFirstType!
+                            second: lateDictionarySecondType!
+                            length: -1
+                            lengthHash: UInt64(0)
+                            containsParameter: types![lateDictionaryFirstType!].containsParameter or types![lateDictionarySecondType!].containsParameter
+                            status: 0
+                        })
+                    }
                     expressionIndexByAst![lateDictionaryGlobalAst] >= 0 -> if {
                         expressions![expressionIndexByAst![lateDictionaryGlobalAst]] => lateDictionaryExisting!
                         lateDictionaryType! => lateDictionaryExisting!.typeId
@@ -2843,6 +3553,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             lateDictionaryIndexAst! + 1 => lateDictionaryIndexAst!
         }
         lateDictionaryIndexSource! + 1 => lateDictionaryIndexSource!
+    }
     }
 
     # Generic specialization and literal inference can append semantic types

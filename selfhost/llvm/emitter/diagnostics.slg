@@ -92,10 +92,20 @@ public usesParallelRuntime context: ref emitterContext.EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
-        (context.ir[nodeIndex!].opcode == -207 or context.ir[nodeIndex!].opcode == -209 or context.ir[nodeIndex!].symbol == -115) -> if { true => usesRuntime! }
+        (context.ir[nodeIndex!].opcode == -207 or context.ir[nodeIndex!].opcode == -209 or context.ir[nodeIndex!].symbol == -115 or context.ir[nodeIndex!].kind == 38) -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
+}
+
+public usesParallelBranches context: ref emitterContext.EmitContext -> Bool {
+    false => usesParallelBranch!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!].kind == 38 -> if { true => usesParallelBranch! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesParallelBranch!
 }
 
 public usesProcessRuntime context: ref emitterContext.EmitContext -> Bool {
@@ -896,6 +906,14 @@ public comInteropFunctionCount context: ref emitterContext.EmitContext -> Int {
 
 public emitWasmNativeInteropDiagnostic: -> Unit uses Console {
     "; sollang semantic error: native libraries are unavailable on wasm32-browser" -> println
+}
+
+public emitWasmConcurrentStreamJoinDiagnostic: -> Unit uses Console {
+    "; sollang semantic error: merge/latest of EventStream<T> inputs are unavailable on the current target because bounded concurrent fan-in requires native worker wakeup and join support" -> println
+}
+
+public emitWasmParallelDiagnostic: -> Unit uses Console {
+    "; sollang semantic error: parallel execution is unavailable on wasm32-browser because the target does not provide a compute worker pool" -> println
 }
 
 public emitComTargetDiagnostic target: Text -> Unit uses Console {

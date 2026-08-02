@@ -1,0 +1,40 @@
+import sollang.compiler.llvm.text as llvm
+
+# Concurrent latest waits for one value from every input, then emits snapshots
+# for arrived updates. The final snapshot must contain both final values.
+main {
+    [
+        """
+        import std.sequence
+
+        makeValues values: Range -> Stream<Int> { values -> defer }
+        asEvents left: move Stream<Int>, right: move Stream<Int> -> EventStream<Int> {
+            (left, right) -> merge
+        }
+
+        main {
+            1..2 -> makeValues => firstLeft
+            10..11 -> makeValues => firstRight
+            firstLeft -> asEvents(firstRight) => first
+
+            20..21 -> makeValues => secondLeft
+            30..31 -> makeValues => secondRight
+            secondLeft -> asEvents(secondRight) => second
+
+            0 => latestFirst!
+            0 => latestSecond!
+            (first: first, second: second) -> latest => snapshots
+            snapshots -> each snapshot {
+                snapshot.first => latestFirst!
+                snapshot.second => latestSecond!
+            }
+            "final=$(latestFirst!):$(latestSecond!)" -> println
+        }
+        """,
+        """
+        namespace std.sequence
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

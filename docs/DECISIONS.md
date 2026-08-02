@@ -11022,7 +11022,7 @@ so it cannot be confused with grouping.
 
 ## D286 — Flow Topology Uses Named Operations, Not New Arrows
 
-Status: accepted; implementation queued after 0.4 native distribution
+Status: implemented and verified
 Date: 2026-07-30
 
 Sollang keeps `->` as its only value-flow arrow and `=>` as its
@@ -11039,12 +11039,11 @@ ownership/effect rules. Stream operators remain lazy, use bounded buffering,
 and expose ordering, completion, backpressure, and nondeterminism rather than
 hiding them behind a generic `join`.
 
-The complete proposed grammar, type and ownership rules, diagnostics, examples,
-114-case minimum verification matrix, research basis, and delivery order are
-recorded in [`FLOW_JUNCTIONS.md`](FLOW_JUNCTIONS.md). This decision is accepted
-for implementation after 0.4, but it does not make the syntax part of the
-implemented language specification before the compiler and full regression
-evidence exist.
+The complete grammar, type and ownership rules, diagnostics, examples,
+114-case verification matrix, research basis, and delivery order are recorded
+in [`FLOW_JUNCTIONS.md`](FLOW_JUNCTIONS.md). The implemented surface passes the
+complete Windows and Linux suites, the browser-applicable runtime and exact
+diagnostic gates, both Stage 2 verifiers, and both Stage 3 fixed points.
 
 ## D287 — Every Fix Must Repair the Owning Invariant
 
@@ -11064,8 +11063,8 @@ case, complete Windows/Linux suites, and applicable Stage 2/Stage 3 fixed-point
 gates must then pass. If the root cause is not yet known, work stops at
 diagnosis; no bypass may be merged or used to satisfy a release gate.
 
-This decision is a standing start and completion gate for every remaining 0.4
-item and for the queued Flow Junctions work. The frequency of edits never
+This decision is a standing start and completion gate for every 0.4 item,
+including the implemented Flow Junctions work. The frequency of edits never
 weakens it.
 
 ## D288 — Mutable Owners Expose Their Current State to Readonly Borrows
@@ -11267,18 +11266,18 @@ build diagnostics are written to the host stream, so `New-ReleasePackage`
 returns exactly one archive path. Compiler stdout can no longer be captured as
 an accidental path during checksum generation.
 
-The logical catalog is user 10, regression 770, and diagnostics 231. Windows
-passes 1001/1001 selected cases and Linux passes 1000/1000 applicable cases.
-Windows Stage 2 passes 7/7 and Stage 3 reproduces 24,934,632 LLVM bytes at
+The logical catalog is user 20, regression 827, and diagnostics 257. Windows
+passes 1084/1084 selected cases and Linux passes 1083/1083 applicable cases.
+Windows Stage 2 passes 7/7 and Stage 3 reproduces 26,828,567 LLVM bytes at
 normalized SHA-256
-`BDECDDCCAA23A3C8DBEE135FF525550EAD47C77D4A6CB5ED909EEE1290290434`.
-Linux Stage 2 passes 6/6 and Stage 3 reproduces 24,917,845 LLVM bytes at
-`417AC4E06F2D99C0419DF8EA386C672426D0EB0339FA9F1C8B6518E5A31E1CEC`.
+`F81E10AF1EE1B9723B226FCE10F89956CF4067D350A1152AE9F310291225FAB6`.
+Linux Stage 2 passes 6/6 and Stage 3 reproduces 26,811,780 LLVM bytes at
+`07B6619F6E9E261145FA7DEE605DD1A6BE1E329177AF82A81E27FC47C2226733`.
 
 The immutable native executables have SHA-256
-`5E81D0ECBFD65687A42FB17668D5DB4818967D7D0534FC13F3D4C3056AF44617`
+`2223E3878D99639363D8179C3D38757FC3F5AAE2DED6E8BF8A84C27B9C6A078B`
 on Windows and
-`0F63C12FF0E3422EEC7D543888102B1AE186E28356E7597631E30FCE01764098`
+`238121E022E34C8D4BE0BF1160BAE99B36B5F16A6332C41C7A23D7D0068EFC69`
 on Linux. Each passes 16 exact top-level command contracts plus native
 build/run, grammar build 4/4, test 10/10, format 11/11, language server 4/4,
 and bind-cpp 6/6. The packaged executable hashes equal those Stage 3 hashes,

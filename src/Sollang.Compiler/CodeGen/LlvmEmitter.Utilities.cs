@@ -1070,7 +1070,10 @@ internal sealed partial class LlvmEmitter
 
     private string NextLabel(string prefix)
     {
-        var name = prefix + _labelId.ToString(CultureInfo.InvariantCulture);
+        // LLVM local values and basic block labels share one function-local
+        // namespace. Keep generated block names structurally disjoint from
+        // every SSA temporary, even when both use the same semantic prefix.
+        var name = "bb_" + prefix + _labelId.ToString(CultureInfo.InvariantCulture);
         _labelId++;
         return name;
     }

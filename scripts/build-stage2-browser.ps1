@@ -78,6 +78,15 @@ foreach ($case in @(
     @("examples\regression\582-billion-sensor-alerts.slg", "browser-stage2-sensor.ll", "examples\regression\expected\582-billion-sensor-alerts.stdout.txt"),
     @("examples\regression\583-stream-state-take-skip.slg", "browser-stage2-state.ll", "examples\regression\expected\583-stream-state-take-skip.stdout.txt"),
     @("examples\regression\585-stream-transaction-risk-scan.slg", "browser-stage2-risk.ll", "examples\regression\expected\585-stream-transaction-risk-scan.stdout.txt"),
+    @("examples\regression\790-sequential-named-branch.slg", "browser-stage2-flow-branch.ll", "examples\regression\expected\790-sequential-named-branch.stdout.txt"),
+    @("examples\regression\792-branch-source-order-and-multistage.slg", "browser-stage2-flow-branch-order.ll", "examples\regression\expected\792-branch-source-order-and-multistage.stdout.txt"),
+    @("examples\regression\793-tap-block-flow.slg", "browser-stage2-flow-tap.ll", "examples\regression\expected\793-tap-block-flow.stdout.txt"),
+    @("examples\regression\795-labeled-product-user-counterpart.slg", "browser-stage2-flow-labeled-product.ll", "examples\regression\expected\795-labeled-product-user-counterpart.stdout.txt"),
+    @("examples\regression\796-ordinary-product-user-counterpart.slg", "browser-stage2-flow-product.ll", "examples\regression\expected\796-ordinary-product-user-counterpart.stdout.txt"),
+    @("examples\regression\797-partition-first-match-direct-dispatch.slg", "browser-stage2-flow-partition.ll", "examples\regression\expected\797-partition-first-match-direct-dispatch.stdout.txt"),
+    @("examples\regression\798-zip-shortest-stream.slg", "browser-stage2-flow-zip.ll", "examples\regression\expected\798-zip-shortest-stream.stdout.txt"),
+    @("examples\regression\800-merge-cold-stream-availability.slg", "browser-stage2-flow-merge.ll", "examples\regression\expected\800-merge-cold-stream-availability.stdout.txt"),
+    @("examples\regression\801-concat-and-latest-policies.slg", "browser-stage2-flow-latest.ll", "examples\regression\expected\801-concat-and-latest-policies.stdout.txt"),
     @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.slg",
         "browser-stage2-read-int.ll",
@@ -138,6 +147,13 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     (Join-Path $repoRoot "examples\regression\588-mouse-event-stream.slg") `
     (Join-Path $repoRoot "artifacts\browser-stage2-mouse-event-diagnostic.txt") `
     "mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
+    $compilerArtifact `
+    (Join-Path $repoRoot "examples\regression\802-readonly-parallel-branch.slg") `
+    (Join-Path $repoRoot "artifacts\browser-stage2-parallel-branch-diagnostic.txt") `
+    "parallel execution is unavailable on wasm32-browser because the target does not provide a compute worker pool"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[browser 4/4] Publish only the verified compiler artifact."

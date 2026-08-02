@@ -514,9 +514,9 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
         nodeIndex! + 1 => nodeIndex!
     }
     # The parser keeps repeated postfix suffixes as siblings of the outer
-    # member node. Fold every suffix-only index into the value chain so the
-    # interpolation IR preserves the same left-to-right postfix semantics as
-    # ordinary Typed IR: base -> index -> index -> member.
+    # member node. Fold every suffix-only member or index into the value chain
+    # so interpolation IR preserves the same left-to-right postfix semantics
+    # as ordinary Typed IR: base -> member -> index -> member.
     0 => postfixParentIndex!
     postfixParentIndex! < (wiredNodes! -> len) -> while {
         wiredNodes![postfixParentIndex!] => postfixParent!
@@ -530,6 +530,11 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                         postfixChildIndex! => postfixValue!
                     } else {
                         wiredNodes![postfixChildIndex!] => postfixSuffix!
+                        (postfixSuffix!.kind == 5 and postfixSuffix!.operand0 < 0) -> if {
+                            postfixValue! => postfixSuffix!.operand0
+                            postfixSuffix! => wiredNodes![postfixChildIndex!]
+                            postfixChildIndex! => postfixValue!
+                        } else {
                         (postfixSuffix!.kind == 7 and postfixSuffix!.operand0 >= 0 and postfixSuffix!.operand1 < 0) -> if {
                             postfixSuffix!.operand0 => postfixSubscript
                             postfixValue! => postfixSuffix!.operand0
@@ -538,6 +543,7 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                             postfixChildIndex! => postfixValue!
                         } else {
                             false => postfixChainValid!
+                        }
                         }
                     }
                 }
@@ -551,6 +557,78 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
             }
         }
         postfixParentIndex! + 1 => postfixParentIndex!
+    }
+
+    # A repeated infix chain is represented as flat value children plus
+    # childless prefix-operator shells below the outer operator. Rebuild those
+    # shells from shortest prefix to longest, then attach the remaining value
+    # to the outer operator. This preserves precedence already encoded by the
+    # AST while preventing a third direct child from replacing a real operand.
+    0 => infixParentIndex!
+    infixParentIndex! < (wiredNodes! -> len) -> while {
+        wiredNodes![infixParentIndex!] => infixParent!
+        infixParent!.kind == 3 -> if {
+            [Int; ~] => infixValues!
+            [Int; ~] => infixShells!
+            0 => infixChildIndex!
+            infixChildIndex! < (nodes! -> len) -> while {
+                nodes![infixChildIndex!].parent == infixParentIndex! -> if {
+                    wiredNodes![infixChildIndex!] => infixChild
+                    (infixChild.kind == 3 and infixChild.operand0 < 0 and infixChild.operand1 < 0) -> if {
+                        infixShells! -> push(infixChildIndex!)
+                    } else {
+                        infixValues! -> push(infixChildIndex!)
+                    }
+                }
+                infixChildIndex! + 1 => infixChildIndex!
+            }
+            ((infixShells! -> len) > 0 and (infixValues! -> len) == (infixShells! -> len) + 2) -> if {
+                [Bool; ~] => infixSelected!
+                0 => infixSelectedSeed!
+                infixSelectedSeed! < (wiredNodes! -> len) -> while {
+                    infixSelected! -> push(false)
+                    infixSelectedSeed! + 1 => infixSelectedSeed!
+                }
+                -1 => infixPrevious!
+                0 => infixValueOrdinal!
+                0 => infixShellOrdinal!
+                infixShellOrdinal! < (infixShells! -> len) -> while {
+                    -1 => infixNextShell!
+                    UIntSize(0) => infixNextLength!
+                    0 => infixShellSearch!
+                    infixShellSearch! < (infixShells! -> len) -> while {
+                        infixShells![infixShellSearch!] => infixShellCandidateIndex
+                        wiredNodes![infixShellCandidateIndex] => infixShellCandidate
+                        (infixShellCandidate.parent == infixParentIndex! and not infixSelected![infixShellCandidateIndex] and (infixNextShell! < 0 or infixShellCandidate.payloadLength < infixNextLength!)) -> if {
+                            infixShellCandidateIndex => infixNextShell!
+                            infixShellCandidate.payloadLength => infixNextLength!
+                        }
+                        infixShellSearch! + 1 => infixShellSearch!
+                    }
+                    infixNextShell! >= 0 -> if {
+                        wiredNodes![infixNextShell!] => infixShell!
+                        infixPrevious! >= 0 -> if {
+                            infixPrevious! => infixShell!.operand0
+                        } else {
+                            infixValues![infixValueOrdinal!] => infixShell!.operand0
+                            infixValueOrdinal! + 1 => infixValueOrdinal!
+                        }
+                        infixValues![infixValueOrdinal!] => infixShell!.operand1
+                        infixValueOrdinal! + 1 => infixValueOrdinal!
+                        -1 => infixShell!.operand2
+                        infixShell! => wiredNodes![infixNextShell!]
+                        true => infixSelected![infixNextShell!]
+                        infixNextShell! => infixPrevious!
+                    }
+                    infixShellOrdinal! + 1 => infixShellOrdinal!
+                }
+                infixPrevious! => infixParent!.operand0
+                infixValues![infixValueOrdinal!] => infixParent!.operand1
+                -1 => infixParent!.operand2
+                infixParent! => wiredNodes![infixParentIndex!]
+            }
+        }
+        infixParentIndex! + 1 => infixParentIndex!
     }
     wiredNodes!
 }

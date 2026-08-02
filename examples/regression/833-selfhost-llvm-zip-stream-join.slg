@@ -1,0 +1,29 @@
+import sollang.compiler.llvm.text as llvm
+
+# Zip pulls one item per producer, preserves labeled product order, and stops
+# as soon as a producer cannot complete the next output product.
+main {
+    [
+        """
+        import std.sequence
+
+        makeValues values: Range -> Stream<Int> { values -> defer }
+
+        main {
+            1..3 -> makeValues => left
+            10..11 -> makeValues => right
+            (left: left, right: right) -> zip => paired
+            paired -> each pair {
+                pair.left -> println
+                pair.right -> println
+            }
+        }
+        """,
+        """
+        namespace std.sequence
+
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

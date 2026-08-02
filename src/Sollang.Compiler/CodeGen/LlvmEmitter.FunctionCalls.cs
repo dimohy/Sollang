@@ -2182,6 +2182,31 @@ internal sealed partial class LlvmEmitter
                     }
                 }
                 return;
+            case BranchExpression branch:
+                ScanExpressionForStandaloneStandardLibraryFunctions(branch.Source, scope, caller, visited);
+                foreach (var target in branch.Arms.SelectMany(static arm => arm.Targets))
+                {
+                    RecordTarget(target, target.Path);
+                    foreach (var argument in target.Arguments)
+                    {
+                        ScanExpressionForStandaloneStandardLibraryFunctions(argument, scope, caller, visited);
+                    }
+                }
+                return;
+            case TapExpression tap:
+                ScanExpressionForStandaloneStandardLibraryFunctions(tap.Source, scope, caller, visited);
+                foreach (var target in tap.Targets)
+                {
+                    RecordTarget(target, target.Path);
+                    foreach (var argument in target.Arguments)
+                    {
+                        ScanExpressionForStandaloneStandardLibraryFunctions(argument, scope, caller, visited);
+                    }
+                }
+                return;
+            case StreamJoinExpression join:
+                ScanExpressionForStandaloneStandardLibraryFunctions(join.Source, scope, caller, visited);
+                return;
             case FieldAccessExpression field:
                 if (TryBuildQualifiedPath(field, out var fieldPath))
                 {
@@ -2292,6 +2317,7 @@ internal sealed partial class LlvmEmitter
         DictionaryLiteralExpression dictionary => dictionary.Entries.SelectMany(entry => new[] { entry.Key, entry.Value }),
         IndexExpression index => [index.Source, index.Index],
         StructLiteralExpression structure => structure.Fields.Select(field => field.Value),
+        ProductExpression product => product.Elements.Select(element => element.Value),
         TryExpression attempt => [attempt.Value],
         BoxExpression box => [box.Value],
         MapExpression map => new[] { map.Path, map.Offset, map.Length, map.FileSize }.OfType<Expression>(),

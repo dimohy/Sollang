@@ -84,9 +84,26 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
     request.expectedPathStyle => expectedPathStyle
     prepared -> typedIr.lowerContext => ir!
     ir! -> typedLibraryImports.projectLibraries(prepared, libraries, libraryCalls) => libraryCallDiagnostics!
-    prepared -> streamIr.build(ir!) => streamPlan!
-    prepared -> ownershipCheck.analyzeLoweredContext(ir!) => ownershipDiagnostics!
     prepared -> expressionTypeIds.resolveContext => recursiveTypes
+    prepared -> streamIr.build(ir!, recursiveTypes) => streamPlan!
+    false => usesConcurrentStreamJoins!
+    0 => concurrentStreamJoinSearch!
+    concurrentStreamJoinSearch! < (streamPlan!.junctions -> len) -> while {
+        streamPlan!.junctions[concurrentStreamJoinSearch!] => concurrentStreamJoin
+        (concurrentStreamJoin.kind == 2 and (concurrentStreamJoin.policy == 1 or concurrentStreamJoin.policy == 3)) -> if {
+            concurrentStreamJoin.inputStart => concurrentStreamInputSearch!
+            concurrentStreamInputSearch! < concurrentStreamJoin.inputStart + concurrentStreamJoin.inputCount -> while {
+                streamPlan!.junctionInputs[concurrentStreamInputSearch!].typeId => concurrentStreamInputTypeId
+                (concurrentStreamInputTypeId >= 0 and concurrentStreamInputTypeId < (recursiveTypes.types -> len)) -> if {
+                    recursiveTypes.types[concurrentStreamInputTypeId] => concurrentStreamInputType
+                    (concurrentStreamInputType.kind == 7 and concurrentStreamInputType.symbol == 4) -> if { true => usesConcurrentStreamJoins! }
+                }
+                concurrentStreamInputSearch! + 1 => concurrentStreamInputSearch!
+            }
+        }
+        concurrentStreamJoinSearch! + 1 => concurrentStreamJoinSearch!
+    }
+    prepared -> ownershipCheck.analyzeLoweredContext(ir!) => ownershipDiagnostics!
     [typeIds.SemanticType; ~] => semanticTypes!
     0 => semanticTypeCopyIndex351!
     semanticTypeCopyIndex351! < (recursiveTypes.types -> len) -> while {
@@ -358,9 +375,10 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         0 => nominalDependentLayoutIndex!
         nominalDependentLayoutIndex! < (semanticTypes! -> len) -> while {
             semanticTypes![nominalDependentLayoutIndex!] => nominalDependentType
-            (nominalDependentType.kind == 1
+            ((nominalDependentType.kind == 1
                 and (nominalDependentType.origin == 0 or nominalDependentType.origin == 2)
-                and not nominalEnumFlags![nominalDependentLayoutIndex!]) -> if {
+                and not nominalEnumFlags![nominalDependentLayoutIndex!])
+                or nominalDependentType.kind == 10) -> if {
                 0 => nominalDependentSize!
                 1 => nominalDependentAlign!
                 true => nominalDependentReady!
@@ -442,6 +460,7 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         pointerBitWidth: pointerBitWidth
         supportsComputePool: supportsComputePool
         expectedPathStyle: expectedPathStyle
+        usesConcurrentStreamJoins: usesConcurrentStreamJoins!
         ownershipDiagnostics: ownershipDiagnostics!
     } => context!
     context!
@@ -461,6 +480,7 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
     context -> diagnostics.comInteropFunctionCount => comInteropCount
     context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
     capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
@@ -483,7 +503,11 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     (needsOwnedFileRuntime or needsSourceTextRuntime or runtimeModule! >= 0) -> if {
         "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
     }
-    (needsOwnedFileRuntime or needsDirectoryRuntime or needsSourceTextRuntime or runtimeModule! >= 0) -> if {
+    (capturesParallelOutput or needsMouseEventsRuntime or needsConcurrentStreamJoins) -> if {
+        "declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)" -> println
+        "declare dllimport i32 @WaitForSingleObject(ptr, i32)" -> println
+    }
+    (needsOwnedFileRuntime or needsDirectoryRuntime or needsSourceTextRuntime or runtimeModule! >= 0 or capturesParallelOutput or needsMouseEventsRuntime or needsConcurrentStreamJoins) -> if {
         "declare dllimport i32 @CloseHandle(ptr)" -> println
     }
     needsDirectoryRuntime -> if {
@@ -548,12 +572,17 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
     -1 => runtimeModule!
     0 => runtimeModuleSearch!
     runtimeModuleSearch! < (context.modules -> len) -> while {
         context.modules[runtimeModuleSearch!] => moduleIdentity
         moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
         runtimeModuleSearch! + 1 => runtimeModuleSearch!
+    }
+    (capturesParallelOutput or needsMouseEventsRuntime or needsConcurrentStreamJoins) -> if {
+        "declare i32 @pthread_create(ptr, ptr, ptr, ptr)" -> println
+        "declare i32 @pthread_join(i64, ptr)" -> println
     }
     capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime(usesStandardError) }
@@ -618,13 +647,17 @@ public emitWasm sources: move [Text; ~] -> Unit uses Console {
     prepareRequest! -> prepare => context!
     context! -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
     context! -> diagnostics.comInteropFunctionCount => comInteropCount
-    (nativeInteropCount == 0 and comInteropCount == 0) -> if {
+    context!.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins
+    context! -> diagnostics.usesParallelBranches => usesUnsupportedParallel
+    (nativeInteropCount == 0 and comInteropCount == 0 and not usesUnsupportedConcurrentStreamJoins and not usesUnsupportedParallel) -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitWasmContext
     } else {
         nativeInteropCount > 0 -> if { diagnostics.emitWasmNativeInteropDiagnostic() }
         comInteropCount > 0 -> if { "wasm32-browser" -> diagnostics.emitComTargetDiagnostic }
+        usesUnsupportedConcurrentStreamJoins -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
+        usesUnsupportedParallel -> if { diagnostics.emitWasmParallelDiagnostic() }
     }
 }
 
@@ -767,6 +800,10 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
     diagnosticCount! + irDiagnosticCount => diagnosticCount!
     context! -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents
     usesUnsupportedMouseEvents -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context!.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins
+    usesUnsupportedConcurrentStreamJoins -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context! -> diagnostics.usesParallelBranches => usesUnsupportedParallel
+    usesUnsupportedParallel -> if { diagnosticCount! + 1 => diagnosticCount! }
     context! -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount
     unsupportedNativeInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     context! -> diagnostics.comInteropFunctionCount => unsupportedComInteropCount
@@ -781,6 +818,8 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
         usesUnsupportedMouseEvents -> if {
             "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
         }
+        usesUnsupportedConcurrentStreamJoins -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
+        usesUnsupportedParallel -> if { diagnostics.emitWasmParallelDiagnostic() }
         unsupportedNativeInteropCount > 0 -> if {
             diagnostics.emitWasmNativeInteropDiagnostic()
         }

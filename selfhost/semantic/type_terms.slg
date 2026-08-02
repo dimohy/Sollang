@@ -8,7 +8,8 @@ import syntax.generated.slg as grammar
 # A semantic type is a canonical, index-addressed tree. Argument fields point
 # back into the same arena, so nested types do not require recursive objects.
 # Kinds: 1 nominal, 2 slice, 3 dynamic array, 4 fixed array,
-# 5 dictionary, 6 box, 7 nominal application, 8 readonly reference.
+# 5 dictionary, 6 box, 7 nominal application, 8 readonly reference,
+# 10 structural product, 11 structural product field.
 public struct TypeTerm {
     astNode: Int
     canonical: Int
@@ -73,7 +74,23 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
             1 => kind!
             -1 => nameToken!
             -1 => lengthToken!
-            request.tokens[firstToken!].kind == grammar.tokenIdLeftBracket() -> if {
+            node.cstRuleId == grammar.ruleIdProductType() -> if {
+                10 => kind!
+            }
+            node.cstRuleId == grammar.ruleIdProductTypeField() -> if {
+                11 => kind!
+                node.firstToken => productFieldToken!
+                false => productFieldColon!
+                productFieldToken! < node.firstToken + node.tokenCount -> while {
+                    request.tokens[productFieldToken!].kind == grammar.tokenIdColon() -> if { true => productFieldColon! }
+                    (not productFieldColon! and nameToken! < 0 and request.tokens[productFieldToken!].kind == grammar.tokenIdIdentifier()) -> if {
+                        productFieldToken! => nameToken!
+                    }
+                    productFieldToken! + 1 => productFieldToken!
+                }
+                not productFieldColon! -> if { -1 => nameToken! }
+            }
+            (kind! == 1 and request.tokens[firstToken!].kind == grammar.tokenIdLeftBracket()) -> if {
                 2 => kind!
                 0 => depth!
                 false => outerSemicolon!
@@ -93,10 +110,10 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
                     outerTilde! -> if { 3 => kind! } else { 4 => kind! }
                 }
             } else {
-                request.tokens[firstToken!].kind == grammar.tokenIdLeftBrace() -> if {
+                (kind! == 1 and request.tokens[firstToken!].kind == grammar.tokenIdLeftBrace()) -> if {
                     5 => kind!
                 } else {
-                    request.tokens[firstToken!].kind == grammar.tokenIdIdentifier() -> if {
+                    (kind! == 1 and request.tokens[firstToken!].kind == grammar.tokenIdIdentifier()) -> if {
                         firstToken! => nameToken!
                         request.tokens[firstToken!] => firstName
                         firstName.span.length == UIntSize(3) -> if {
@@ -165,7 +182,15 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
         }
         firstChild! => term!.firstArgument
         secondChild! => term!.secondArgument
-        (term!.kind == 1 and firstChild! >= 0) -> if { 7 => term!.kind }
+        (term!.kind == 1 and firstChild! >= 0) -> if {
+            term!.nameToken >= 0 -> if {
+                7 => term!.kind
+            } else {
+                # Grammar-only type annotations are transparent. Their child
+                # owns the semantic identity (including structural products).
+                0 => term!.kind
+            }
+        }
 
         term!.nameToken >= 0 -> if {
             termIndex! => term!.nameId
@@ -209,6 +234,53 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
         }
         term! => terms![termIndex!]
         termIndex! + 1 => termIndex!
+    }
+
+    # Product fields form an arbitrary-length linked list through
+    # secondArgument. Each field's firstArgument is its annotated value type.
+    0 => productRootIndex!
+    productRootIndex! < (terms! -> len) -> while {
+        terms![productRootIndex!] => productRoot!
+        productRoot!.kind == 10 -> if {
+            -1 => firstProductField!
+            -1 => previousProductField!
+            UIntSize(0) => previousProductStart!
+            true => productFieldChanged!
+            productFieldChanged! -> while {
+                false => productFieldChanged!
+                -1 => nextProductField!
+                UIntSize(0) => nextProductStart!
+                0 => productFieldSearch!
+                productFieldSearch! < (terms! -> len) -> while {
+                    terms![productFieldSearch!] => productFieldCandidate
+                    (productFieldCandidate.kind == 11 and request.nodes[productFieldCandidate.astNode].parent == productRoot!.astNode) -> if {
+                        request.nodes[productFieldCandidate.astNode].start => productFieldStart
+                        (previousProductField! < 0 or productFieldStart > previousProductStart!) -> if {
+                            (nextProductField! < 0 or productFieldStart < nextProductStart!) -> if {
+                                productFieldSearch! => nextProductField!
+                                productFieldStart => nextProductStart!
+                            }
+                        }
+                    }
+                    productFieldSearch! + 1 => productFieldSearch!
+                }
+                nextProductField! >= 0 -> if {
+                    firstProductField! < 0 -> if { nextProductField! => firstProductField! }
+                    previousProductField! >= 0 -> if {
+                        terms![previousProductField!] => previousField!
+                        nextProductField! => previousField!.secondArgument
+                        previousField! => terms![previousProductField!]
+                    }
+                    nextProductField! => previousProductField!
+                    nextProductStart! => previousProductStart!
+                    true => productFieldChanged!
+                }
+            }
+            firstProductField! => productRoot!.firstArgument
+            -1 => productRoot!.secondArgument
+            productRoot! => terms![productRootIndex!]
+        }
+        productRootIndex! + 1 => productRootIndex!
     }
 
     # Canonicalize bottom-up. A parent becomes ready after its child terms have

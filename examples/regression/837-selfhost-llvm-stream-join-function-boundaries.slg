@@ -1,0 +1,58 @@
+import sollang.compiler.llvm.text as llvm
+
+# Every cold join policy may construct an affine producer inside an ordinary
+# function and transfer that producer to a caller without double-dropping inputs.
+main {
+    [
+        """
+        import std.sequence
+
+        makeValues values: Range -> Stream<Int> { values -> defer }
+        concatValues left: move Stream<Int>, right: move Stream<Int> -> Stream<Int> {
+            (left, right) -> concat
+        }
+        mergeValues left: move Stream<Int>, right: move Stream<Int> -> Stream<Int> {
+            (left, right) -> merge
+        }
+        zipValues left: move Stream<Int>, right: move Stream<Int> -> Stream<(left: Int, right: Int)> {
+            (left: left, right: right) -> zip
+        }
+        latestValues left: move Stream<Int>, right: move Stream<Int> -> Stream<(left: Int, right: Int)> {
+            (left: left, right: right) -> latest
+        }
+
+        main {
+            1..2 -> makeValues => concatLeft
+            4..5 -> makeValues => concatRight
+            concatLeft -> concatValues(concatRight) => concatenated
+            concatenated -> each value { value -> println }
+
+            10..11 -> makeValues => mergeLeft
+            20..21 -> makeValues => mergeRight
+            mergeLeft -> mergeValues(mergeRight) => merged
+            merged -> each value { value -> println }
+
+            30..31 -> makeValues => zipLeft
+            40..42 -> makeValues => zipRight
+            zipLeft -> zipValues(zipRight) => zipped
+            zipped -> each pair {
+                pair.left -> println
+                pair.right -> println
+            }
+
+            50..51 -> makeValues => latestLeft
+            60..60 -> makeValues => latestRight
+            latestLeft -> latestValues(latestRight) => latestValuesResult
+            latestValuesResult -> each pair {
+                pair.left -> println
+                pair.right -> println
+            }
+        }
+        """,
+        """
+        namespace std.sequence
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

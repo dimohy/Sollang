@@ -653,6 +653,189 @@ main {
 
     "Scanned = $(scanned!)" -> println
 }`
+  },
+  {
+    id: "flow-branch",
+    title: "Sequential named branch",
+    category: "flow",
+    input: "",
+    code: `double value: Int -> Int => value * 2
+increment value: Int -> Int => value + 1
+combine parts: (doubled: Int, incremented: Int) -> Int => parts.doubled + parts.incremented
+
+main {
+    5
+        -> branch {
+            doubled: -> double
+            incremented: -> increment
+        }
+        -> combine
+        => total
+    "$total" -> println
+}`
+  },
+  {
+    id: "flow-branch-order",
+    title: "Ordered multistage branch",
+    category: "flow",
+    input: "",
+    code: `first value: Int -> Int uses Console {
+    "first" -> println
+    value + 1
+}
+
+second value: Int -> Int uses Console {
+    "second" -> println
+    value * 2
+}
+
+square value: Int -> Int => value * value
+sum values: (left: Int, right: Int) -> Int => values.left + values.right
+
+main {
+    3
+        -> branch {
+            left: -> first -> square
+            right: -> second
+        }
+        -> sum
+        => total
+    "$total" -> println
+}`
+  },
+  {
+    id: "flow-tap",
+    title: "Value-preserving tap",
+    category: "flow",
+    input: "",
+    code: `double value: Int -> Int => value * 2
+writeAudit value: Int -> Unit uses Console => "side=$value" -> println
+increment value: Int -> Int => value + 1
+
+main {
+    9
+        -> tap {
+            -> double
+            -> writeAudit
+        }
+        -> increment
+        => result
+    "$result" -> println
+}`
+  },
+  {
+    id: "labeled-product",
+    title: "Labeled product",
+    category: "types",
+    input: "",
+    code: `weighted pair: (left: Int, right: Int) -> Int => pair.left * 10 + pair.right
+
+main {
+    (left: 4, right: 2) => pair
+    pair.left => left
+    pair.right => right
+    pair -> weighted => total
+    "left=$left, right=$right, total=$total" -> println
+}`
+  },
+  {
+    id: "ordinary-product",
+    title: "Ordinary product",
+    category: "types",
+    input: "",
+    code: `sum values: (Int, Int, Int) -> Int => values._0 + values._1 + values._2
+
+main {
+    (10, 20, 30) -> sum => total
+    "$total" -> println
+}`
+  },
+  {
+    id: "stream-partition",
+    title: "First-match partition",
+    category: "streams",
+    input: "",
+    code: `import std.sequence
+
+makeValues values: Range -> Stream<Int> {
+    values -> defer
+}
+
+main {
+    1..6 -> makeValues => values
+    values -> partition value {
+        even: when value % 2 == 0
+        large: when value >= 3
+        other: else
+    } => routed
+
+    routed.even -> each value { "even=$value" -> println }
+    routed.large -> each value { "large=$value" -> println }
+    routed.other -> each value { "other=$value" -> println }
+}`
+  },
+  {
+    id: "stream-zip",
+    title: "Shortest-input zip",
+    category: "streams",
+    input: "",
+    code: `import std.sequence
+
+makeValues values: Range -> Stream<Int> {
+    values -> defer
+}
+
+main {
+    1..3 -> makeValues => left
+    10..14 -> makeValues => right
+    (left: left, right: right) -> zip => paired
+    paired -> each pair {
+        "$(pair.left)+$(pair.right)" -> println
+    }
+}`
+  },
+  {
+    id: "stream-merge",
+    title: "Availability-ordered merge",
+    category: "streams",
+    input: "",
+    code: `import std.sequence
+
+makeValues values: Range -> Stream<Int> {
+    values -> defer
+}
+
+main {
+    1..3 -> makeValues => first
+    10..12 -> makeValues => second
+    (first, second) -> merge => merged
+    merged -> each value { "$value" -> println }
+}`
+  },
+  {
+    id: "stream-concat-latest",
+    title: "Concat and latest policies",
+    category: "streams",
+    input: "",
+    code: `import std.sequence
+
+makeValues values: Range -> Stream<Int> {
+    values -> defer
+}
+
+main {
+    1..2 -> makeValues => firstConcat
+    4..5 -> makeValues => secondConcat
+    (firstConcat, secondConcat) -> concat => concatenated
+    concatenated -> each value { "concat=$value" -> println }
+
+    1..2 -> makeValues => left
+    10..12 -> makeValues => right
+    (left: left, right: right) -> latest => current
+    current -> each pair {
+        "latest=$(pair.left)+$(pair.right)" -> println
+    }
+}`
   }
 ];
 
@@ -727,7 +910,16 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "raw-strings": "Triple-quoted strings preserve quotes, backslashes, and interpolation markers.",
     "sensor-stream": "Fuse map, tap, filter, take, and each; only 54 of one billion values are pulled.",
     "nested-stream": "Cancel nested flatMap sources as soon as the downstream take limit is met.",
-    "risk-stream": "Carry state through scan without materializing intermediate collections."
+    "risk-stream": "Carry state through scan without materializing intermediate collections.",
+    "flow-branch": "Fan one value into ordered named arms and rejoin their labeled results.",
+    "flow-branch-order": "Run multistage branch arms in source order before rejoining.",
+    "flow-tap": "Run side stages left to right while preserving the outer value.",
+    "labeled-product": "Bind named structural fields and pass them across a function boundary.",
+    "ordinary-product": "Join positional values and access them through canonical _N fields.",
+    "stream-partition": "Route each item to exactly one first-matching labeled stream.",
+    "stream-zip": "Combine labeled stream items and stop at the shortest input.",
+    "stream-merge": "Interleave cold streams by fair availability order.",
+    "stream-concat-latest": "Compare ordered concat with update-driven latest products."
   },
   ko: {
     hello: "주석, 불변 바인딩, 문자열 보간, 출력을 함께 보여줍니다.",
@@ -760,7 +952,16 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "raw-strings": "삼중 따옴표 문자열은 따옴표, 역슬래시, 보간 표식을 그대로 보존합니다.",
     "sensor-stream": "map·tap·filter·take·each를 융합해 10억 개 중 54개만 당겨옵니다.",
     "nested-stream": "downstream take 한도에 도달하면 중첩 flatMap upstream 전체를 취소합니다.",
-    "risk-stream": "중간 컬렉션을 만들지 않고 scan으로 상태를 전달합니다."
+    "risk-stream": "중간 컬렉션을 만들지 않고 scan으로 상태를 전달합니다.",
+    "flow-branch": "한 값을 순서 있는 이름 분기로 나누고 라벨 결과를 다시 합칩니다.",
+    "flow-branch-order": "다단계 분기를 소스 순서대로 실행한 뒤 다시 합칩니다.",
+    "flow-tap": "바깥 값을 유지하며 부수 단계를 왼쪽에서 오른쪽으로 실행합니다.",
+    "labeled-product": "이름 있는 구조 필드를 바인딩하고 함수 경계를 넘겨 전달합니다.",
+    "ordinary-product": "위치 기반 값을 합치고 표준 _N 필드로 접근합니다.",
+    "stream-partition": "각 항목을 처음 일치하는 하나의 라벨 스트림으로 보냅니다.",
+    "stream-zip": "라벨 스트림 항목을 합치고 가장 짧은 입력에서 멈춥니다.",
+    "stream-merge": "cold 스트림을 공정한 가용 순서로 교차합니다.",
+    "stream-concat-latest": "입력 순서 concat과 갱신 기반 latest를 비교합니다."
   },
   ja: {
     hello: "コメント、不変バインド、文字列補間、出力を示します。",
@@ -793,7 +994,16 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "raw-strings": "三重引用符は引用符、バックスラッシュ、補間記号を保持します。",
     "sensor-stream": "10億件を生成せず必要な54件だけを上流から取得します。",
     "nested-stream": "take の上限で入れ子の flatMap 全体を停止します。",
-    "risk-stream": "中間コレクションなしで scan に状態を渡します。"
+    "risk-stream": "中間コレクションなしで scan に状態を渡します。",
+    "flow-branch": "1つの値を順序付き名前分岐へ流し、ラベル付き結果を再結合します。",
+    "flow-branch-order": "多段分岐をソース順に実行して再結合します。",
+    "flow-tap": "外側の値を保ちながら副作用段を左から右へ実行します。",
+    "labeled-product": "名前付き構造フィールドを関数境界越しに渡します。",
+    "ordinary-product": "位置値を結合し、標準 _N フィールドで参照します。",
+    "stream-partition": "各項目を最初に一致した1つのラベル付きストリームへ送ります。",
+    "stream-zip": "ラベル付き入力を結合し、最短入力で停止します。",
+    "stream-merge": "cold ストリームを公平な利用可能順で交互に流します。",
+    "stream-concat-latest": "入力順 concat と更新駆動 latest を比較します。"
   },
   zh: {
     hello: "展示注释、不可变绑定、字符串插值和输出。",
@@ -826,7 +1036,16 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "raw-strings": "三引号字符串保留引号、反斜杠和插值标记。",
     "sensor-stream": "融合多个操作，只从十亿个值中拉取所需的54个。",
     "nested-stream": "达到 take 上限后立即取消整个嵌套 flatMap。",
-    "risk-stream": "通过 scan 传递状态，不生成中间集合。"
+    "risk-stream": "通过 scan 传递状态，不生成中间集合。",
+    "flow-branch": "将一个值送入有序命名分支，再合并带标签的结果。",
+    "flow-branch-order": "按源码顺序运行多阶段分支后再合并。",
+    "flow-tap": "保留外层值，同时从左到右执行旁路阶段。",
+    "labeled-product": "绑定命名结构字段并跨函数边界传递。",
+    "ordinary-product": "合并位置值并通过标准 _N 字段访问。",
+    "stream-partition": "把每个项目送入第一个匹配的唯一标签流。",
+    "stream-zip": "合并带标签的流项目，并在最短输入结束。",
+    "stream-merge": "按公平的可用顺序交错 cold 流。",
+    "stream-concat-latest": "比较按输入排序的 concat 与更新驱动的 latest。"
   }
 };
 
@@ -862,7 +1081,16 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "raw-strings": "원시 여러 줄 문자열",
     "sensor-stream": "지연 센서 스트림",
     "nested-stream": "flatMap, skip, take",
-    "risk-stream": "상태 기반 scan 스트림"
+    "risk-stream": "상태 기반 scan 스트림",
+    "flow-branch": "순차 이름 분기",
+    "flow-branch-order": "순서 보장 다단계 분기",
+    "flow-tap": "값 보존 tap",
+    "labeled-product": "라벨 product",
+    "ordinary-product": "일반 product",
+    "stream-partition": "첫 일치 partition",
+    "stream-zip": "최단 입력 zip",
+    "stream-merge": "가용 순서 merge",
+    "stream-concat-latest": "concat과 latest 정책"
   },
   ja: {
     hello: "挨拶と文字列補間",
@@ -895,7 +1123,16 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "raw-strings": "生の複数行文字列",
     "sensor-stream": "遅延センサーストリーム",
     "nested-stream": "flatMap、skip、take",
-    "risk-stream": "状態付き scan ストリーム"
+    "risk-stream": "状態付き scan ストリーム",
+    "flow-branch": "順次名前付き分岐",
+    "flow-branch-order": "順序付き多段分岐",
+    "flow-tap": "値を保つ tap",
+    "labeled-product": "ラベル付き product",
+    "ordinary-product": "通常の product",
+    "stream-partition": "最初一致 partition",
+    "stream-zip": "最短入力 zip",
+    "stream-merge": "利用可能順 merge",
+    "stream-concat-latest": "concat と latest"
   },
   zh: {
     hello: "问候与字符串插值",
@@ -928,7 +1165,16 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "raw-strings": "原始多行字符串",
     "sensor-stream": "延迟传感器流",
     "nested-stream": "flatMap、skip 与 take",
-    "risk-stream": "有状态 scan 流"
+    "risk-stream": "有状态 scan 流",
+    "flow-branch": "顺序命名分支",
+    "flow-branch-order": "有序多阶段分支",
+    "flow-tap": "保值 tap",
+    "labeled-product": "标签 product",
+    "ordinary-product": "普通 product",
+    "stream-partition": "首个匹配 partition",
+    "stream-zip": "最短输入 zip",
+    "stream-merge": "可用顺序 merge",
+    "stream-concat-latest": "concat 与 latest"
   }
 };
 

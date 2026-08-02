@@ -278,6 +278,27 @@ internal sealed partial class SemanticCompiler
                     AnalyzeExpression(field.Value, environment, caller, locals, topLevel, ref changed);
                 }
                 return structure.TypeName;
+            case ProductExpression product:
+                var productElements = new List<string>(product.Elements.Count);
+                foreach (var element in product.Elements)
+                {
+                    var elementType = AnalyzeExpression(
+                        element.Value,
+                        environment,
+                        caller,
+                        locals,
+                        topLevel,
+                        ref changed);
+                    if (elementType is null)
+                    {
+                        return null;
+                    }
+
+                    productElements.Add(element.Label is null
+                        ? elementType
+                        : $"{element.Label}: {elementType}");
+                }
+                return $"({string.Join(", ", productElements)})";
             case BoxExpression box:
                 var boxed = AnalyzeExpression(box.Value, environment, caller, locals, topLevel, ref changed);
                 return boxed is null ? null : $"box {boxed}";
@@ -337,6 +358,56 @@ internal sealed partial class SemanticCompiler
                     currentType = AnalyzeCall(target.Path, flowArguments, caller, locals, topLevel, ref changed);
                 }
                 return currentType;
+            case BranchExpression branch:
+                var branchInputType = AnalyzeExpression(branch.Source, environment, caller, locals, topLevel, ref changed);
+                var branchFields = new List<string>(branch.Arms.Count);
+                foreach (var arm in branch.Arms)
+                {
+                    var armType = branchInputType;
+                    foreach (var target in arm.Targets)
+                    {
+                        var armArguments = new List<string?> { armType };
+                        foreach (var argument in target.Arguments)
+                        {
+                            armArguments.Add(AnalyzeExpression(argument, environment, caller, locals, topLevel, ref changed));
+                        }
+                        armType = AnalyzeCall(target.Path, armArguments, caller, locals, topLevel, ref changed);
+                    }
+                    if (armType is null) return null;
+                    branchFields.Add($"{arm.Label}: {armType}");
+                }
+                return $"({string.Join(", ", branchFields)})";
+            case TapExpression tap:
+                var tapInputType = AnalyzeExpression(tap.Source, environment, caller, locals, topLevel, ref changed);
+                var tapSideType = tapInputType;
+                foreach (var target in tap.Targets)
+                {
+                    var tapArguments = new List<string?> { tapSideType };
+                    foreach (var argument in target.Arguments)
+                    {
+                        tapArguments.Add(AnalyzeExpression(argument, environment, caller, locals, topLevel, ref changed));
+                    }
+                    tapSideType = AnalyzeCall(target.Path, tapArguments, caller, locals, topLevel, ref changed);
+                }
+                return tapInputType;
+            case PartitionExpression partition:
+                var partitionInputType = AnalyzeExpression(partition.Source, environment, caller, locals, topLevel, ref changed);
+                var partitionElementType = StreamElementTypeOf(partitionInputType);
+                var partitionEnvironment = new Dictionary<string, string>(environment, StringComparer.Ordinal);
+                AddBindingType(partitionEnvironment, partition.ItemName, partitionElementType);
+                foreach (var arm in partition.Arms)
+                {
+                    if (arm.Condition is not null)
+                    {
+                        AnalyzeExpression(arm.Condition, partitionEnvironment, caller, locals, topLevel, ref changed);
+                    }
+                }
+                return partitionInputType is null
+                    ? null
+                    : $"({string.Join(", ", partition.Arms.Select(arm => arm.Label + ": " + partitionInputType))})";
+            case StreamJoinExpression join:
+                var joinSourceType = AnalyzeExpression(join.Source, environment, caller, locals, topLevel, ref changed);
+                return InferStreamJoinType(join.Policy, joinSourceType);
             case IfExpression conditional:
                 AnalyzeExpression(conditional.Condition, environment, caller, locals, topLevel, ref changed);
                 var thenType = AnalyzeBlock(conditional.Then, environment, caller, locals, topLevel, ref changed);
@@ -427,6 +498,128 @@ internal sealed partial class SemanticCompiler
         }
         var end = type.IndexOfAny([';', ']']);
         return end > 1 ? type[1..end].Trim() : null;
+    }
+
+    private static string? StreamElementTypeOf(string? type)
+    {
+        if (type is null) return null;
+        var prefixLength = type.StartsWith("Stream<", StringComparison.Ordinal)
+            ? 7
+            : type.StartsWith("EventStream<", StringComparison.Ordinal)
+                ? 12
+                : 0;
+        return prefixLength > 0 && type.EndsWith('>')
+            ? type[prefixLength..^1].Trim()
+            : null;
+    }
+
+    private static string? InferStreamJoinType(StreamJoinPolicy policy, string? sourceType)
+    {
+        if (sourceType is null
+            || sourceType.Length < 5
+            || sourceType[0] != '('
+            || sourceType[^1] != ')')
+        {
+            return null;
+        }
+
+        var fields = SplitTopLevelTypeFields(sourceType[1..^1]);
+        if (fields.Count < 2)
+        {
+            return null;
+        }
+
+        var inputs = new List<(string? Label, string ElementType, bool IsEvent)>(fields.Count);
+        foreach (var field in fields)
+        {
+            var colon = FindTopLevelTypeSeparator(field, ':');
+            var label = colon < 0 ? null : field[..colon].Trim();
+            var streamType = (colon < 0 ? field : field[(colon + 1)..]).Trim();
+            var elementType = StreamElementTypeOf(streamType);
+            if (elementType is null)
+            {
+                return null;
+            }
+            inputs.Add((label, elementType, streamType.StartsWith("EventStream<", StringComparison.Ordinal)));
+        }
+
+        var isEvent = inputs.Any(static input => input.IsEvent)
+            || policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Latest;
+        string element;
+        if (policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Concat)
+        {
+            element = inputs[0].ElementType;
+            if (inputs.Any(input => !string.Equals(input.ElementType, element, StringComparison.Ordinal)))
+            {
+                return null;
+            }
+        }
+        else
+        {
+            element = "(" + string.Join(", ", inputs.Select(input =>
+                input.Label is null ? input.ElementType : input.Label + ": " + input.ElementType)) + ")";
+        }
+        return (isEvent ? "EventStream<" : "Stream<") + element + ">";
+    }
+
+    private static IReadOnlyList<string> SplitTopLevelTypeFields(string text)
+    {
+        var fields = new List<string>();
+        var start = 0;
+        var angle = 0;
+        var paren = 0;
+        var bracket = 0;
+        var brace = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            switch (text[index])
+            {
+                case '<': angle++; break;
+                case '>': angle--; break;
+                case '(': paren++; break;
+                case ')': paren--; break;
+                case '[': bracket++; break;
+                case ']': bracket--; break;
+                case '{': brace++; break;
+                case '}': brace--; break;
+                case ',' when angle == 0 && paren == 0 && bracket == 0 && brace == 0:
+                    fields.Add(text[start..index].Trim());
+                    start = index + 1;
+                    break;
+            }
+        }
+        fields.Add(text[start..].Trim());
+        return fields;
+    }
+
+    private static int FindTopLevelTypeSeparator(string text, char separator)
+    {
+        var angle = 0;
+        var paren = 0;
+        var bracket = 0;
+        var brace = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            switch (text[index])
+            {
+                case '<': angle++; break;
+                case '>': angle--; break;
+                case '(': paren++; break;
+                case ')': paren--; break;
+                case '[': bracket++; break;
+                case ']': bracket--; break;
+                case '{': brace++; break;
+                case '}': brace--; break;
+                default:
+                    if (text[index] == separator
+                        && angle == 0 && paren == 0 && bracket == 0 && brace == 0)
+                    {
+                        return index;
+                    }
+                    break;
+            }
+        }
+        return -1;
     }
 
     private static void AddBindingType(Dictionary<string, string> environment, string name, string? type)

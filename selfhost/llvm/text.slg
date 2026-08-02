@@ -587,692 +587,30 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
         }
         structTypeIndex! + 1 => structTypeIndex!
     }
-    0 => comGuidModule!
-    comGuidModule! < (context.ranges -> len) -> while {
-        context.ranges[comGuidModule!] => comGuidRange
-        0 => comGuidSymbol!
-        comGuidSymbol! < comGuidRange.symbolCount -> while {
-            context.symbols[comGuidRange.symbolStart + comGuidSymbol!] => comGuidInterface
-            (comGuidInterface.kind == 3 and comGuidInterface.flags / 512 % 2 == 1) -> if {
-                context.nodes[comGuidRange.astStart + comGuidInterface.astNode] => comGuidInterfaceAst
-                comGuidModule! -> emitGuidConstant(comGuidInterfaceAst.secondaryToken, true, comGuidSymbol!, context, state)
-            }
-            comGuidSymbol! + 1 => comGuidSymbol!
-        }
-        comGuidModule! + 1 => comGuidModule!
-    }
-    0 => comActivationIndex!
-    comActivationIndex! < (context.ir -> len) -> while {
-        context.ir[comActivationIndex!] => comActivation
-        (comActivation.kind == 0
-            and comActivation.flags / 512 % 2 == 1
-            and comActivation.flags / 4096 % 2 == 1
-            and comActivation.sourceModule >= 0
-            and comActivation.symbol >= 0) -> if {
-            context.ranges[comActivation.sourceModule] => comRange
-            context.symbols[comRange.symbolStart + comActivation.symbol] => comActivationSymbol
-            context.symbols[comRange.symbolStart + comActivationSymbol.parent] => comInterfaceSymbol
-            context.nodes[comRange.astStart + comInterfaceSymbol.astNode] => comInterfaceAst
-            context.nodes[comRange.astStart + comInterfaceAst.parent] => comClassAst
-            comClassAst.tertiaryToken >= 0 -> if {
-                comActivation.sourceModule -> emitComServerGlobals(comInterfaceAst.parent, context, state)
-            }
-            comActivation.sourceModule -> emitGuidConstant(comClassAst.secondaryToken, false, comInterfaceAst.parent, context, state)
-            "define internal " -> print
-            comActivation -> writeIrType(context, state)
-            " @sollang_m$(comActivation.sourceModule)_s$(comActivation.symbol)() {" -> println
-            "entry:" -> println
-            comClassAst.tertiaryToken < 0 -> if {
-                "  %raw = call { ptr, i32 } @sollang_com_activate_registered(ptr @sollang_com_clsid_m$(comActivation.sourceModule)_a$(comInterfaceAst.parent), ptr @sollang_com_iid_m$(comActivation.sourceModule)_s$(comActivationSymbol.parent))" -> println
-            } else {
-                "  %factory = load ptr, ptr @sollang_com_factory_m$(comActivation.sourceModule)_a$(comInterfaceAst.parent), align 8" -> println
-                "  %raw = call { ptr, i32 } @sollang_com_activate_factory(ptr %factory, ptr @sollang_com_iid_m$(comActivation.sourceModule)_s$(comActivationSymbol.parent))" -> println
-            }
-            "  %instance = extractvalue { ptr, i32 } %raw, 0" -> println
-            "  %status = extractvalue { ptr, i32 } %raw, 1" -> println
-            "  %status_ok = icmp sge i32 %status, 0" -> println
-            "  %pointer_ok = icmp ne ptr %instance, null" -> println
-            "  %ok = and i1 %status_ok, %pointer_ok" -> println
-            "  %result_slot = alloca " -> print
-            comActivation -> writeIrType(context, state)
-            ", align 8" -> println
-            "  store " -> print
-            comActivation -> writeIrType(context, state)
-            " zeroinitializer, ptr %result_slot, align 8" -> println
-            "  br i1 %ok, label %success, label %failure" -> println
-            "success:" -> println
-            "  %success_tag = getelementptr " -> print
-            comActivation -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 0" -> println
-            "  store i32 0, ptr %success_tag, align 4" -> println
-            "  %success_payload = getelementptr " -> print
-            comActivation -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 1" -> println
-            "  store ptr %instance, ptr %success_payload, align 8" -> println
-            "  br label %done" -> println
-            "failure:" -> println
-            "  %failure_tag = getelementptr " -> print
-            comActivation -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 0" -> println
-            "  store i32 1, ptr %failure_tag, align 4" -> println
-            "  %failure_payload = getelementptr " -> print
-            comActivation -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 1" -> println
-            "  store i32 %status, ptr %failure_payload, align 4" -> println
-            "  br label %done" -> println
-            "done:" -> println
-            "  %result = load " -> print
-            comActivation -> writeIrType(context, state)
-            ", ptr %result_slot, align 8" -> println
-            "  ret " -> print
-            comActivation -> writeIrType(context, state)
-            " %result" -> println
-            "}" -> println
-        }
-        comActivationIndex! + 1 => comActivationIndex!
-    }
-    0 => comCloneIndex!
-    comCloneIndex! < (context.ir -> len) -> while {
-        context.ir[comCloneIndex!] => comClone
-        (comClone.kind == 0
-            and comClone.flags / 512 % 2 == 1
-            and comClone.flags / 8192 % 2 == 1) -> if {
-            "define internal ptr @sollang_m$(comClone.sourceModule)_s$(comClone.symbol)(ptr %arg) {" -> println
-            "entry:" -> println
-            "  %result = call ptr @sollang_com_clone(ptr %arg)" -> println
-            "  ret ptr %result" -> println
-            "}" -> println
-        }
-        comCloneIndex! + 1 => comCloneIndex!
-    }
-    0 => comQueryIndex!
-    comQueryIndex! < (context.ir -> len) -> while {
-        context.ir[comQueryIndex!] => comQuery
-        (comQuery.kind == 0
-            and comQuery.flags / 512 % 2 == 1
-            and comQuery.flags / 131072 % 2 == 1
-            and comQuery.sourceModule >= 0
-            and comQuery.symbol >= 0) -> if {
-            context.ranges[comQuery.sourceModule] => comQueryRange
-            context.symbols[comQueryRange.symbolStart + comQuery.symbol] => comQuerySymbol
-            "define internal " -> print
-            comQuery -> writeIrType(context, state)
-            " @sollang_m$(comQuery.sourceModule)_s$(comQuery.symbol)(ptr %arg) {" -> println
-            "entry:" -> println
-            "  %raw = call { ptr, i32 } @sollang_com_query(ptr %arg, ptr @sollang_com_iid_m$(comQuery.sourceModule)_s$(comQuerySymbol.secondaryTypeNode))" -> println
-            "  %instance = extractvalue { ptr, i32 } %raw, 0" -> println
-            "  %status = extractvalue { ptr, i32 } %raw, 1" -> println
-            "  %status_ok = icmp sge i32 %status, 0" -> println
-            "  %pointer_ok = icmp ne ptr %instance, null" -> println
-            "  %ok = and i1 %status_ok, %pointer_ok" -> println
-            "  %result_slot = alloca " -> print
-            comQuery -> writeIrType(context, state)
-            ", align 8" -> println
-            "  store " -> print
-            comQuery -> writeIrType(context, state)
-            " zeroinitializer, ptr %result_slot, align 8" -> println
-            "  br i1 %ok, label %success, label %failure" -> println
-            "success:" -> println
-            "  %success_tag = getelementptr " -> print
-            comQuery -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 0" -> println
-            "  store i32 0, ptr %success_tag, align 4" -> println
-            "  %success_payload = getelementptr " -> print
-            comQuery -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 1" -> println
-            "  store ptr %instance, ptr %success_payload, align 8" -> println
-            "  br label %done" -> println
-            "failure:" -> println
-            "  %failure_tag = getelementptr " -> print
-            comQuery -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 0" -> println
-            "  store i32 1, ptr %failure_tag, align 4" -> println
-            "  %failure_payload = getelementptr " -> print
-            comQuery -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 1" -> println
-            "  store i32 %status, ptr %failure_payload, align 4" -> println
-            "  br label %done" -> println
-            "done:" -> println
-            "  %result = load " -> print
-            comQuery -> writeIrType(context, state)
-            ", ptr %result_slot, align 8" -> println
-            "  ret " -> print
-            comQuery -> writeIrType(context, state)
-            " %result" -> println
-            "}" -> println
-        }
-        comQueryIndex! + 1 => comQueryIndex!
-    }
-    0 => comMethodIndex!
-    comMethodIndex! < (context.ir -> len) -> while {
-        context.ir[comMethodIndex!] => comMethod
-        (comMethod.kind == 0
-            and comMethod.flags / 512 % 2 == 1
-            and comMethod.flags / 4096 % 2 == 0
-            and comMethod.flags / 8192 % 2 == 0
-            and comMethod.flags / 131072 % 2 == 0
-            and comMethod.typeId >= 0
-            and context.types[comMethod.typeId].kind == 7) -> if {
-            context.ranges[comMethod.sourceModule] => comMethodRange
-            context.symbols[comMethodRange.symbolStart + comMethod.symbol] => comMethodSymbol
-            comMethod.sourceModule -> decimalTokenValue(comMethodSymbol.blockNameToken, context, state) => comMethodSlot
-            context.types[comMethod.typeId].first => comMethodSuccessType
-            "define internal " -> print
-            comMethod -> writeIrType(context, state)
-            " @sollang_m$(comMethod.sourceModule)_s$(comMethod.symbol)(ptr %arg" -> print
-            comMethod.nextOperand => comMethodParameter!
-            1 => comMethodParameterOrdinal!
-            comMethodParameter! >= 0 -> while {
-                ", " -> print
-                context.ir[comMethodParameter!] -> writeIrType(context, state)
-                " %arg$(comMethodParameterOrdinal!)" -> print
-                context.ir[comMethodParameter!].nextOperand => comMethodParameter!
-                comMethodParameterOrdinal! + 1 => comMethodParameterOrdinal!
-            }
-            ") {" -> println
-            "entry:" -> println
-            "  %target = call ptr @sollang_com_vtable_target(ptr %arg, i64 $comMethodSlot)" -> println
-            context.types[comMethodSuccessType].symbol != 0 -> if {
-                "  %output = alloca " -> print
-                comMethodSuccessType -> writeSemanticTypeId(context, state)
-                ", align " -> print
-                context.typeAligns[comMethodSuccessType] -> writeDecimalLine
-                "  store " -> print
-                comMethodSuccessType -> writeSemanticTypeId(context, state)
-                " zeroinitializer, ptr %output, align " -> print
-                context.typeAligns[comMethodSuccessType] -> writeDecimalLine
-            }
-            "  %status = call i32 %target(ptr %arg" -> print
-            comMethod.nextOperand => comMethodArgumentParameter!
-            1 => comMethodArgumentOrdinal!
-            comMethodArgumentParameter! >= 0 -> while {
-                ", " -> print
-                context.ir[comMethodArgumentParameter!] -> writeIrType(context, state)
-                " %arg$(comMethodArgumentOrdinal!)" -> print
-                context.ir[comMethodArgumentParameter!].nextOperand => comMethodArgumentParameter!
-                comMethodArgumentOrdinal! + 1 => comMethodArgumentOrdinal!
-            }
-            context.types[comMethodSuccessType].symbol != 0 -> if { ", ptr %output" -> print }
-            ")" -> println
-            "  %ok = icmp sge i32 %status, 0" -> println
-            "  %result_slot = alloca " -> print
-            comMethod -> writeIrType(context, state)
-            ", align 8" -> println
-            "  store " -> print
-            comMethod -> writeIrType(context, state)
-            " zeroinitializer, ptr %result_slot, align 8" -> println
-            "  br i1 %ok, label %success, label %failure" -> println
-            "success:" -> println
-            "  %success_tag = getelementptr " -> print
-            comMethod -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 0" -> println
-            "  store i32 0, ptr %success_tag, align 4" -> println
-            context.types[comMethodSuccessType].symbol != 0 -> if {
-                "  %value = load " -> print
-                comMethodSuccessType -> writeSemanticTypeId(context, state)
-                ", ptr %output, align " -> print
-                context.typeAligns[comMethodSuccessType] -> writeDecimalLine
-                "  %success_payload = getelementptr " -> print
-                comMethod -> writeIrType(context, state)
-                ", ptr %result_slot, i32 0, i32 1" -> println
-                "  store " -> print
-                comMethodSuccessType -> writeSemanticTypeId(context, state)
-                " %value, ptr %success_payload, align " -> print
-                context.typeAligns[comMethodSuccessType] -> writeDecimalLine
-            }
-            "  br label %done" -> println
-            "failure:" -> println
-            "  %failure_tag = getelementptr " -> print
-            comMethod -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 0" -> println
-            "  store i32 1, ptr %failure_tag, align 4" -> println
-            "  %failure_payload = getelementptr " -> print
-            comMethod -> writeIrType(context, state)
-            ", ptr %result_slot, i32 0, i32 1" -> println
-            "  store i32 %status, ptr %failure_payload, align 4" -> println
-            "  br label %done" -> println
-            "done:" -> println
-            "  %result = load " -> print
-            comMethod -> writeIrType(context, state)
-            ", ptr %result_slot, align 8" -> println
-            "  ret " -> print
-            comMethod -> writeIrType(context, state)
-            " %result" -> println
-            "}" -> println
-        }
-        comMethodIndex! + 1 => comMethodIndex!
-    }
-    -1 => comApartmentMode!
-    0 => comApartmentSearch!
-    comApartmentSearch! < (context.ir -> len) -> while {
-        context.ir[comApartmentSearch!] => comApartmentFunction
-        (comApartmentFunction.kind == 0
-            and comApartmentFunction.flags / 512 % 2 == 1
-            and comApartmentFunction.flags / 4096 % 2 == 1
-            and comApartmentFunction.sourceModule >= 0
-            and comApartmentFunction.symbol >= 0) -> if {
-            context.ranges[comApartmentFunction.sourceModule] => comApartmentRange
-            context.symbols[comApartmentRange.symbolStart + comApartmentFunction.symbol] => comApartmentSymbol
-            context.symbols[comApartmentRange.symbolStart + comApartmentSymbol.parent] => comApartmentInterface
-            context.nodes[comApartmentRange.astStart + comApartmentInterface.astNode] => comApartmentInterfaceAst
-            context.nodes[comApartmentRange.astStart + comApartmentInterfaceAst.parent] => comApartmentClassAst
-            comApartmentClassAst.flags / 1024 % 2 == 1 -> if { 2 => comApartmentMode! }
-            comApartmentClassAst.flags / 2048 % 2 == 1 -> if { 4 => comApartmentMode! }
-        }
-        comApartmentSearch! + 1 => comApartmentSearch!
-    }
-    comApartmentMode! >= 0 -> if {
-        "define internal void @sollang_com_init() {" -> println
-        "entry:" -> println
-        "  %apartment_status = call i32 @CoInitializeEx(ptr null, i32 $(comApartmentMode!))" -> println
-        "  call void @sollang_com_require_status(i32 %apartment_status)" -> println
-        0 => comBindIndex!
-        comBindIndex! < (context.ir -> len) -> while {
-            context.ir[comBindIndex!] => comBindFunction
-            (comBindFunction.kind == 0
-                and comBindFunction.flags / 512 % 2 == 1
-                and comBindFunction.flags / 4096 % 2 == 1
-                and comBindFunction.sourceModule >= 0
-                and comBindFunction.symbol >= 0) -> if {
-                context.ranges[comBindFunction.sourceModule] => comBindRange
-                context.symbols[comBindRange.symbolStart + comBindFunction.symbol] => comBindSymbol
-                context.symbols[comBindRange.symbolStart + comBindSymbol.parent] => comBindInterface
-                context.nodes[comBindRange.astStart + comBindInterface.astNode] => comBindInterfaceAst
-                context.nodes[comBindRange.astStart + comBindInterfaceAst.parent] => comBindClassAst
-                comBindClassAst.tertiaryToken >= 0 -> if {
-                    "  %binding$(comBindIndex!) = call { ptr, ptr, i32 } @sollang_com_bind_factory(ptr @sollang_com_server_name_m$(comBindFunction.sourceModule)_a$(comBindInterfaceAst.parent), ptr @sollang_com_clsid_m$(comBindFunction.sourceModule)_a$(comBindInterfaceAst.parent))" -> println
-                    "  %server$(comBindIndex!) = extractvalue { ptr, ptr, i32 } %binding$(comBindIndex!), 0" -> println
-                    "  %factory$(comBindIndex!) = extractvalue { ptr, ptr, i32 } %binding$(comBindIndex!), 1" -> println
-                    "  %status$(comBindIndex!) = extractvalue { ptr, ptr, i32 } %binding$(comBindIndex!), 2" -> println
-                    "  call void @sollang_com_require_status(i32 %status$(comBindIndex!))" -> println
-                    "  call void @sollang_com_require_pointer(ptr %server$(comBindIndex!))" -> println
-                    "  call void @sollang_com_require_pointer(ptr %factory$(comBindIndex!))" -> println
-                    "  store ptr %server$(comBindIndex!), ptr @sollang_com_server_m$(comBindFunction.sourceModule)_a$(comBindInterfaceAst.parent), align 8" -> println
-                    "  store ptr %factory$(comBindIndex!), ptr @sollang_com_factory_m$(comBindFunction.sourceModule)_a$(comBindInterfaceAst.parent), align 8" -> println
+    0 => productTypeIndex!
+    productTypeIndex! < (context.types -> len) -> while {
+        context.types[productTypeIndex!] => productType
+        (productType.status == 0 and productType.kind == 10) -> if {
+            "%sollang.product.t$(productTypeIndex!) = type { " -> print
+            true => firstProductField!
+            0 => productFieldIndex!
+            productFieldIndex! < (context.fields -> len) -> while {
+                context.fields[productFieldIndex!] => productField
+                (productField.status == 0 and productField.ownerType == productTypeIndex!) -> if {
+                    not firstProductField! -> if { ", " -> print }
+                    productField.fieldType -> writeSemanticTypeId(context, state)
+                    false => firstProductField!
                 }
+                productFieldIndex! + 1 => productFieldIndex!
             }
-            comBindIndex! + 1 => comBindIndex!
+            " }" -> println
         }
-        "  ret void" -> println
-        "}" -> println
-        "define internal void @sollang_com_cleanup() {" -> println
-        "entry:" -> println
-        0 => comCleanupIndex!
-        comCleanupIndex! < (context.ir -> len) -> while {
-            context.ir[comCleanupIndex!] => comCleanupFunction
-            (comCleanupFunction.kind == 0
-                and comCleanupFunction.flags / 512 % 2 == 1
-                and comCleanupFunction.flags / 4096 % 2 == 1
-                and comCleanupFunction.sourceModule >= 0
-                and comCleanupFunction.symbol >= 0) -> if {
-                context.ranges[comCleanupFunction.sourceModule] => comCleanupRange
-                context.symbols[comCleanupRange.symbolStart + comCleanupFunction.symbol] => comCleanupSymbol
-                context.symbols[comCleanupRange.symbolStart + comCleanupSymbol.parent] => comCleanupInterface
-                context.nodes[comCleanupRange.astStart + comCleanupInterface.astNode] => comCleanupInterfaceAst
-                context.nodes[comCleanupRange.astStart + comCleanupInterfaceAst.parent] => comCleanupClassAst
-                comCleanupClassAst.tertiaryToken >= 0 -> if {
-                    "  %factory$(comCleanupIndex!) = load ptr, ptr @sollang_com_factory_m$(comCleanupFunction.sourceModule)_a$(comCleanupInterfaceAst.parent), align 8" -> println
-                    "  call void @sollang_com_release(ptr %factory$(comCleanupIndex!))" -> println
-                    "  %server$(comCleanupIndex!) = load ptr, ptr @sollang_com_server_m$(comCleanupFunction.sourceModule)_a$(comCleanupInterfaceAst.parent), align 8" -> println
-                    "  %closed$(comCleanupIndex!) = call i32 @FreeLibrary(ptr %server$(comCleanupIndex!))" -> println
-                }
-            }
-            comCleanupIndex! + 1 => comCleanupIndex!
-        }
-        "  call void @CoUninitialize()" -> println
-        "  ret void" -> println
-        "}" -> println
+        productTypeIndex! + 1 => productTypeIndex!
     }
-    false => usesDynTrait!
-    0 => dynTypeSearch!
-    dynTypeSearch! < (context.ir -> len) -> while {
-        context.ir[dynTypeSearch!] => dynTypeNode
-        (dynTypeNode.typeOrigin == 16 or dynTypeNode.opcode == -224 or dynTypeNode.opcode == -225) -> if { true => usesDynTrait! }
-        dynTypeSearch! + 1 => dynTypeSearch!
-    }
-    usesDynTrait! -> if {
-        "%sollang.dyn = type { ptr, ptr }" -> println
-        0 => dynTableIndex!
-        dynTableIndex! < (context.ir -> len) -> while {
-            context.ir[dynTableIndex!] => dynConversion
-            (dynConversion.kind == 9 and dynConversion.opcode == -224 and dynConversion.operand0 >= 0 and dynConversion.typeOrigin == 16) -> if {
-                context.ir[dynConversion.operand0] => dynConcrete
-                context.ranges[dynConversion.sourceModule] => dynSourceRange
-                context.symbols[dynSourceRange.symbolStart + dynConversion.typeSymbol] => dynTraitSymbol
-                context.sources[dynConversion.sourceModule] -> slice(context.tokens[dynSourceRange.tokenStart + dynTraitSymbol.nameToken].span.start, context.tokens[dynSourceRange.tokenStart + dynTraitSymbol.nameToken].span.length) => dynTraitName
-                -1 => dynTraitMethodSymbol!
-                0 => dynTraitMemberSearch!
-                dynTraitMemberSearch! < dynSourceRange.symbolCount -> while {
-                    context.symbols[dynSourceRange.symbolStart + dynTraitMemberSearch!] => dynTraitMember
-                    (dynTraitMember.kind == 29 and dynTraitMember.parent == dynConversion.typeSymbol and dynTraitMethodSymbol! < 0) -> if { dynTraitMemberSearch! => dynTraitMethodSymbol! }
-                    dynTraitMemberSearch! + 1 => dynTraitMemberSearch!
-                }
-                dynTraitMethodSymbol! >= 0 -> if {
-                    context.symbols[dynSourceRange.symbolStart + dynTraitMethodSymbol!] => dynTraitMethod
-                    context.sources[dynConversion.sourceModule] -> slice(context.tokens[dynSourceRange.tokenStart + dynTraitMethod.nameToken].span.start, context.tokens[dynSourceRange.tokenStart + dynTraitMethod.nameToken].span.length) => dynMethodName
-                    dynConcrete.typeId -> traitMethodSymbol(dynTraitName, dynMethodName, context, state) => dynImplementationSymbol
-                    dynImplementationSymbol >= 0 -> if {
-                        "@sollang_dyn_vtable_$(dynTableIndex!) = private constant [2 x ptr] [ptr @sollang_dyn_drop_$(dynTableIndex!), ptr @sollang_dyn_method_$(dynTableIndex!)]" -> println
-                        "define internal void @sollang_dyn_drop_$(dynTableIndex!)(ptr %data) {" -> println
-                        "entry:" -> println
-                        "  call void @free(ptr %data)" -> println
-                        "  ret void" -> println
-                        "}" -> println
-                        "define internal i32 @sollang_dyn_method_$(dynTableIndex!)(ptr %data) {" -> println
-                        "entry:" -> println
-                        "  %receiver = load " -> print
-                        dynConcrete -> writeIrType(context, state)
-                        ", ptr %data, align " -> print
-                        dynConcrete -> storageAlign(context, state) -> writeDecimalLine
-                        "  %result = call i32 @sollang_m$(dynConcrete.typeModule)_s$(dynImplementationSymbol)(" -> print
-                        dynConcrete -> writeIrType(context, state)
-                        " %receiver)" -> println
-                        "  ret i32 %result" -> println
-                        "}" -> println
-                    }
-                }
-            }
-            dynTableIndex! + 1 => dynTableIndex!
-        }
-    }
-    false => usesDynamicArray!
-    false => usesArrayAllocation!
-    false => usesArrayPush!
-    false => usesArenaAllocation!
-    false => usesTextMaterialize!
-    0 => arrayTypeSearch!
-    arrayTypeSearch! < (context.ir -> len) -> while {
-        context.ir[arrayTypeSearch!] => allocationNode
-        allocationNode -> isDynamicArrayType -> if {
-            true => usesDynamicArray!
-            true => usesArrayAllocation!
-        }
-        (allocationNode.kind == 14 and (allocationNode -> isFixedArrayType)) -> if { true => usesArrayAllocation! }
-        allocationNode.opcode == -204 -> if { true => usesArrayPush! }
-        (allocationNode.typeOrigin == 1 and allocationNode.typeSymbol == 15) -> if { true => usesDynamicArray! }
-        allocationNode.opcode == -229 -> if {
-            true => usesArrayPush!
-            true => usesTextMaterialize!
-        }
-        (allocationNode.kind == 6
-            and allocationNode.symbol < 0
-            and allocationNode.opcode == -1
-            and allocationNode.typeOrigin == 1
-            and allocationNode.typeSymbol == 15
-            and allocationNode.operand0 >= 0) -> if { true => usesArenaAllocation! }
-        arrayTypeSearch! + 1 => arrayTypeSearch!
-    }
-    # The canonical type arena is the dependency closure for emitted helper
-    # signatures. A container may be reachable only through an enum payload
-    # and its drop function even when no runtime IR node has that type.
-    0 => arraySemanticTypeSearch!
-    arraySemanticTypeSearch! < (context.types -> len) -> while {
-        context.types[arraySemanticTypeSearch!].kind == 3 -> if { true => usesDynamicArray! }
-        arraySemanticTypeSearch! + 1 => arraySemanticTypeSearch!
-    }
-    0 => arrayCompositeSearch!
-    arrayCompositeSearch! < (context.composite -> len) -> while {
-        context.composite[arrayCompositeSearch!].kind == 3 -> if { true => usesDynamicArray! }
-        arrayCompositeSearch! + 1 => arrayCompositeSearch!
-    }
-    usesDynamicArray! -> if {
-        "%sollang.array.i32 = type { ptr, i64, i64 }" -> println
-        "%sollang.mutable_container = type { ptr, ptr, ptr }" -> println
-    }
-    (usesArrayAllocation! or usesArenaAllocation! or usesTextMaterialize! or usesSourceText! or usesComputePool or intrinsicRuntimeModule! >= 0 or usesOwnedDropRuntime! or usesDirectoryTraversal or usesDynTrait!) -> if {
-        context.pointerBitWidth == 32 -> if {
-            """
-            declare i32 @sollang_browser_alloc(i64)
-            declare i32 @sollang_browser_realloc(i32, i64)
-            define ptr @malloc(i64 %bytes) {
-            entry:
-              %value32 = call i32 @sollang_browser_alloc(i64 %bytes)
-              %value = inttoptr i32 %value32 to ptr
-              ret ptr %value
-            }
-            define ptr @realloc(ptr %old, i64 %bytes) {
-            entry:
-              %old32 = ptrtoint ptr %old to i32
-              %new32 = call i32 @sollang_browser_realloc(i32 %old32, i64 %bytes)
-              %new = inttoptr i32 %new32 to ptr
-              ret ptr %new
-            }
-            define void @free(ptr %value) {
-            entry:
-              ret void
-            }
-            define ptr @sollang_alloc(i64 %bytes) {
-            entry:
-              %value = call ptr @malloc(i64 %bytes)
-              ret ptr %value
-            }
-            """ -> println
-        } else {
-            "declare ptr @malloc(i64)" -> println
-            (usesArrayPush! or usesTextMaterialize! or usesStandardInputSourceText!) -> if { "declare ptr @realloc(ptr, i64)" -> println }
-            "declare void @free(ptr)" -> println
-        }
-    }
-    false => usesDictionary!
-    0 => dictionaryTypeSearch!
-    dictionaryTypeSearch! < (context.ir -> len) -> while {
-        context.ir[dictionaryTypeSearch!] -> isDictionaryType -> if { true => usesDictionary! }
-        dictionaryTypeSearch! + 1 => dictionaryTypeSearch!
-    }
-    0 => dictionaryCompositeSearch!
-    dictionaryCompositeSearch! < (context.composite -> len) -> while {
-        context.composite[dictionaryCompositeSearch!].kind == 5 -> if { true => usesDictionary! }
-        dictionaryCompositeSearch! + 1 => dictionaryCompositeSearch!
-    }
-    false => usesTextDictionaryKeys!
-    0 => textDictionaryIrSearch!
-    textDictionaryIrSearch! < (context.ir -> len) -> while {
-        context.ir[textDictionaryIrSearch!] => textDictionaryNode
-        textDictionaryNode -> isDictionaryType => textDictionaryNodeIsDictionary
-        textDictionaryNodeIsDictionary -> if {
-            (textDictionaryNode.typeId >= 0 and textDictionaryNode.typeId < (context.types -> len)) -> if {
-                context.types[textDictionaryNode.typeId] => textDictionaryType
-                (textDictionaryType.kind == 5 and textDictionaryType.first >= 0 and textDictionaryType.first < (context.types -> len)) -> if {
-                    context.types[textDictionaryType.first] => textDictionaryKeyType
-                    (textDictionaryKeyType.kind == 1 and textDictionaryKeyType.origin == 1 and textDictionaryKeyType.symbol == 1) -> if { true => usesTextDictionaryKeys! }
-                }
-            }
-        }
-        textDictionaryIrSearch! + 1 => textDictionaryIrSearch!
-    }
-    false => usesEnumMatch!
-    0 => enumMatchSearch!
-    enumMatchSearch! < (context.ir -> len) -> while {
-        context.ir[enumMatchSearch!].kind == 27 -> if { true => usesEnumMatch! }
-        enumMatchSearch! + 1 => enumMatchSearch!
-    }
-    usesDictionary! -> if {
-        "%sollang.dict = type { ptr, ptr, i64, i64 }" -> println
-        (not usesDynamicArray! and not usesSourceText! and not usesComputePool and intrinsicRuntimeModule! < 0 and not usesOwnedDropRuntime!) -> if {
-            "declare ptr @malloc(i64)" -> println
-            "declare void @free(ptr)" -> println
-        }
-    }
-    dropTypeActive! -> emitSemanticDropHelpers(context, state)
-    false => usesNativeInterop!
-    false => usesComInterop!
-    0 => nativeInteropSearch!
-    nativeInteropSearch! < (context.ir -> len) -> while {
-        context.ir[nativeInteropSearch!] -> isNativeFunction(context, state) -> if { true => usesNativeInterop! }
-        context.ir[nativeInteropSearch!] -> isComFunction(context, state) -> if { true => usesComInterop! }
-        nativeInteropSearch! + 1 => nativeInteropSearch!
-    }
-    (usesDictionary! or usesEnumMatch! or usesSourceText! or usesNativeInterop! or usesComInterop!) -> if { "declare void @llvm.trap()" -> println }
-    usesNativeInterop! -> if {
-        context.expectedPathStyle == 1 -> if {
-            "declare dllimport ptr @LoadLibraryA(ptr)" -> println
-            "declare dllimport ptr @GetProcAddress(ptr, ptr)" -> println
-            "declare dllimport i32 @FreeLibrary(ptr)" -> println
-        } else {
-            "declare ptr @dlopen(ptr, i32)" -> println
-            "declare ptr @dlsym(ptr, ptr)" -> println
-            "declare i32 @dlclose(ptr)" -> println
-        }
-        emitNativeRuntime(context, state)
-    }
-    context -> diagnostics.usesProcessExit => needsProcessExit
-    needsProcessExit -> if {
-        context.expectedPathStyle == 1 -> if { "declare dllimport void @ExitProcess(i32)" -> println } else { "declare void @exit(i32)" -> println }
-    }
-    (usesText! and not requiresEarlyTextType!) -> if { "%sollang.text = type { ptr, i64 }" -> println }
-    (context.pointerBitWidth == 32 and usesSourceText!) -> if {
-        """
-        define %sollang.source_text @sollang_runtime_map_text(%sollang.text %path) {
-        entry:
-          ret %sollang.source_text zeroinitializer
-        }
-        define void @sollang_runtime_unmap_text(%sollang.source_text %value) {
-        entry:
-          ret void
-        }
-        """ -> println
-    }
-    usesTextDictionaryKeys! -> if { llvmRuntime.emitDictionaryTextHelpers() }
-    usesText! -> if {
-        0 => textGlobalIndex!
-        textGlobalIndex! < (context.ir -> len) -> while {
-            context.ir[textGlobalIndex!] => textConstant
-            textConstant.kind == 2 -> if {
-                textConstant -> sourceToken(context, state) => textToken
-                TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
-                textLiteralRequest -> textLiteralLength(context, state) => textLength
-                "@sollang_str_$(textGlobalIndex!) = private unnamed_addr constant [$textLength x i8] " -> print
-                textLiteralRequest -> emitTextLiteralConstant(context, state)
-            }
-            textGlobalIndex! + 1 => textGlobalIndex!
-        }
-    }
-    false => usesArguments!
-    0 => argumentsTypeSearch!
-    argumentsTypeSearch! < (context.ir -> len) -> while {
-        context.ir[argumentsTypeSearch!] -> isArgumentsType -> if { true => usesArguments! }
-        argumentsTypeSearch! + 1 => argumentsTypeSearch!
-    }
-    usesArguments! -> if {
-        context.pointerBitWidth == 32 -> if {
-            """
-            @sollang_browser_program_name = private constant [8 x i8] c"sollangc"
-            declare i32 @sollang_browser_source_count()
-            declare i32 @sollang_browser_source_pointer(i32)
-            declare i32 @sollang_browser_source_length(i32)
-            define i64 @sollang_argument_count() {
-            entry:
-              %source_count32 = call i32 @sollang_browser_source_count()
-              %source_count = zext i32 %source_count32 to i64
-              %argument_count = add i64 %source_count, 1
-              ret i64 %argument_count
-            }
-            define %sollang.text @sollang_argument(i64 %index) {
-            entry:
-              %source_count32 = call i32 @sollang_browser_source_count()
-              %source_count = zext i32 %source_count32 to i64
-              %source_index64 = sub i64 %index, 1
-              %has_source_index = icmp ugt i64 %index, 0
-              %source_index_in_bounds = icmp ult i64 %source_index64, %source_count
-              %is_source = and i1 %has_source_index, %source_index_in_bounds
-              br i1 %is_source, label %source, label %program
-            source:
-              %source_index = trunc i64 %source_index64 to i32
-              %source_ptr32 = call i32 @sollang_browser_source_pointer(i32 %source_index)
-              %source_ptr = inttoptr i32 %source_ptr32 to ptr
-              %source_len32 = call i32 @sollang_browser_source_length(i32 %source_index)
-              %source_len = zext i32 %source_len32 to i64
-              %source0 = insertvalue %sollang.text poison, ptr %source_ptr, 0
-              %source1 = insertvalue %sollang.text %source0, i64 %source_len, 1
-              ret %sollang.text %source1
-            program:
-              %program0 = insertvalue %sollang.text poison, ptr @sollang_browser_program_name, 0
-              %program1 = insertvalue %sollang.text %program0, i64 8, 1
-              ret %sollang.text %program1
-            }
-            """ -> println
-        } else {
-            "@sollang_argc = internal global i64 0" -> println
-            "@sollang_argv = internal global ptr null" -> println
-            "define i64 @sollang_argument_count() {" -> println
-            "entry:" -> println
-            "  %count = load i64, ptr @sollang_argc, align 8" -> println
-            "  ret i64 %count" -> println
-            "}" -> println
-            "define %sollang.text @sollang_argument(i64 %index) {" -> println
-            "entry:" -> println
-            "  %argv = load ptr, ptr @sollang_argv, align 8" -> println
-            "  %slot = getelementptr ptr, ptr %argv, i64 %index" -> println
-            "  %value = load ptr, ptr %slot, align 8" -> println
-            "  br label %length_loop" -> println
-            "length_loop:" -> println
-            "  %length = phi i64 [ 0, %entry ], [ %next, %length_body ]" -> println
-            "  %byte_ptr = getelementptr i8, ptr %value, i64 %length" -> println
-            "  %byte = load i8, ptr %byte_ptr, align 1" -> println
-            "  %done = icmp eq i8 %byte, 0" -> println
-            "  br i1 %done, label %length_done, label %length_body" -> println
-            "length_body:" -> println
-            "  %next = add i64 %length, 1" -> println
-            "  br label %length_loop" -> println
-            "length_done:" -> println
-            "  %text_ptr = insertvalue %sollang.text poison, ptr %value, 0" -> println
-            "  %text = insertvalue %sollang.text %text_ptr, i64 %length, 1" -> println
-            "  ret %sollang.text %text" -> println
-            "}" -> println
-            context.expectedPathStyle == 1 -> if {
-                """
-                define internal void @sollang_init_utf8_arguments() {
-                entry:
-                  %argc_slot = alloca i32, align 4
-                  %command = call ptr @GetCommandLineW()
-                  %wide_argv = call ptr @CommandLineToArgvW(ptr %command, ptr %argc_slot)
-                  %wide_ok = icmp ne ptr %wide_argv, null
-                  br i1 %wide_ok, label %allocate, label %done
-                allocate:
-                  %argc32 = load i32, ptr %argc_slot, align 4
-                  %argc = zext i32 %argc32 to i64
-                  %argv_bytes = mul i64 %argc, 8
-                  %utf8_argv = call ptr @malloc(i64 %argv_bytes)
-                  %argv_ok = icmp ne ptr %utf8_argv, null
-                  br i1 %argv_ok, label %loop, label %free_wide
-                loop:
-                  %index = phi i64 [ 0, %allocate ], [ %next, %stored ]
-                  %complete = icmp eq i64 %index, %argc
-                  br i1 %complete, label %success, label %size
-                size:
-                  %wide_slot = getelementptr ptr, ptr %wide_argv, i64 %index
-                  %wide = load ptr, ptr %wide_slot, align 8
-                  %byte_count32 = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr null, i32 0, ptr null, ptr null)
-                  %byte_count_valid = icmp sgt i32 %byte_count32, 0
-                  br i1 %byte_count_valid, label %allocate_text, label %free_wide
-                allocate_text:
-                  %byte_count = zext i32 %byte_count32 to i64
-                  %utf8 = call ptr @malloc(i64 %byte_count)
-                  %utf8_ok = icmp ne ptr %utf8, null
-                  br i1 %utf8_ok, label %convert, label %free_wide
-                convert:
-                  %written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr %utf8, i32 %byte_count32, ptr null, ptr null)
-                  %converted = icmp eq i32 %written, %byte_count32
-                  br i1 %converted, label %stored, label %free_wide
-                stored:
-                  %utf8_slot = getelementptr ptr, ptr %utf8_argv, i64 %index
-                  store ptr %utf8, ptr %utf8_slot, align 8
-                  %next = add i64 %index, 1
-                  br label %loop
-                success:
-                  store i64 %argc, ptr @sollang_argc, align 8
-                  store ptr %utf8_argv, ptr @sollang_argv, align 8
-                  br label %free_wide
-                free_wide:
-                  %ignored = call ptr @LocalFree(ptr %wide_argv)
-                  br label %done
-                done:
-                  ret void
-                }
-                """ -> println
-            }
-        }
-    }
+    dropTypeActive! -> emitCoreRuntimePreamble(intrinsicRuntimeModule!, requiresEarlyTextType!, usesComputePool, usesDirectoryTraversal, usesOwnedDropRuntime!, usesSourceText!, usesStandardInputSourceText!, usesText!, context, state) => runtimePreamble
+    runtimePreamble.usesArguments => usesArguments!
+    runtimePreamble.usesNativeInterop => usesNativeInterop!
+    runtimePreamble.usesComInterop => usesComInterop!
     [Int; ~] => declaredExternalModules!
     [Int; ~] => declaredExternalSymbols!
     0 => externalCallIndex!
@@ -1418,6 +756,140 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
         }
         parallelCallbackIndex! + 1 => parallelCallbackIndex!
     }
+    0 => parallelBranchCallbackIndex!
+    parallelBranchCallbackIndex! < (context.ir -> len) -> while {
+        context.ir[parallelBranchCallbackIndex!] => parallelBranchExpression
+        (parallelBranchExpression.kind == 38 and context.supportsComputePool) -> if {
+            context.ir[parallelBranchExpression.operand1] => parallelBranchSource
+            parallelBranchCallbackIndex! -> parallelBranchCaptures(context, state) => parallelBranchCaptures!
+            parallelBranchCallbackIndex! -> parallelBranchArguments(context) => parallelBranchArguments!
+            "define internal void @sollang_parallel_branch_$(parallelBranchCallbackIndex!)(ptr %group, i64 %index) {" -> println
+            "entry:" -> println
+            "  %environment_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 4" -> println
+            "  %environment = load ptr, ptr %environment_slot, align 8" -> println
+            "  %output_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 2" -> println
+            "  %output = load ptr, ptr %output_slot, align 8" -> println
+            "  switch i64 %index, label %parallel_branch_$(parallelBranchCallbackIndex!)_invalid [" -> println
+            parallelBranchExpression.operand0 => parallelBranchArmLabelIndex!
+            0 => parallelBranchArmLabelOrdinal!
+            parallelBranchArmLabelIndex! >= 0 -> while {
+                "    i64 $(parallelBranchArmLabelOrdinal!), label %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmLabelOrdinal!)" -> println
+                context.ir[parallelBranchArmLabelIndex!].nextOperand => parallelBranchArmLabelIndex!
+                parallelBranchArmLabelOrdinal! + 1 => parallelBranchArmLabelOrdinal!
+            }
+            "  ]" -> println
+            parallelBranchExpression.operand0 => parallelBranchArmIndex!
+            0 => parallelBranchArmOrdinal!
+            parallelBranchArmIndex! >= 0 -> while {
+                context.ir[parallelBranchArmIndex!] => parallelBranchArm
+                "parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!):" -> println
+                "  %parallel_branch_$(parallelBranchCallbackIndex!)_source_address$(parallelBranchArmOrdinal!) = getelementptr " -> print
+                parallelBranchCallbackIndex! -> writeParallelBranchEnvironmentType(parallelBranchCaptures!, context, state)
+                ", ptr %environment, i32 0, i32 0" -> println
+                "  %parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!) = load " -> print
+                parallelBranchSource -> writeIrType(context, state)
+                ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_source_address$(parallelBranchArmOrdinal!), align " -> print
+                parallelBranchSource -> storageAlign(context, state) -> writeDecimalLine
+                0 => parallelBranchCaptureLoadIndex!
+                parallelBranchCaptureLoadIndex! < (parallelBranchCaptures! -> len) -> while {
+                    "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture_address$(parallelBranchCaptureLoadIndex!) = getelementptr " -> print
+                    parallelBranchCallbackIndex! -> writeParallelBranchEnvironmentType(parallelBranchCaptures!, context, state)
+                    ", ptr %environment, i32 0, i32 " -> print
+                    parallelBranchCaptureLoadIndex! + 1 -> writeDecimalLine
+                    context.ir[parallelBranchCaptures![parallelBranchCaptureLoadIndex!]] => parallelBranchCaptureLoad
+                    "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture$(parallelBranchCaptureLoadIndex!) = load " -> print
+                    parallelBranchCaptureLoad -> ownsType -> if { "ptr" -> print } else { parallelBranchCaptureLoad -> writeIrType(context, state) }
+                    ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture_address$(parallelBranchCaptureLoadIndex!), align " -> print
+                    parallelBranchCaptureLoad -> ownsType -> if { "8" -> println } else { parallelBranchCaptureLoad -> storageAlign(context, state) -> writeDecimalLine }
+                    parallelBranchCaptureLoadIndex! + 1 => parallelBranchCaptureLoadIndex!
+                }
+                0 => parallelBranchArgumentLoadIndex!
+                parallelBranchArgumentLoadIndex! < (parallelBranchArguments! -> len) -> while {
+                    parallelBranchArguments![parallelBranchArgumentLoadIndex!] => parallelBranchArgumentLoad
+                    context.ir[parallelBranchArgumentLoad].parent => parallelBranchArgumentLoadCall
+                    parallelBranchArgumentLoad -> parallelBranchArgumentOrdinal(context) => parallelBranchArgumentLoadOrdinal
+                    parallelBranchArgumentLoadCall -> callTargetParameter(parallelBranchArgumentLoadOrdinal, context, state) => parallelBranchArgumentLoadParameter
+                    "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_argument_address$(parallelBranchArgumentLoadIndex!) = getelementptr " -> print
+                    parallelBranchCallbackIndex! -> writeParallelBranchEnvironmentType(parallelBranchCaptures!, context, state)
+                    ", ptr %environment, i32 0, i32 " -> print
+                    1 + (parallelBranchCaptures! -> len) + parallelBranchArgumentLoadIndex! -> writeDecimalLine
+                    "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_argument$(parallelBranchArgumentLoadIndex!) = load " -> print
+                    parallelBranchArgumentLoad -> writeParallelBranchArgumentType(context, state)
+                    ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_argument_address$(parallelBranchArgumentLoadIndex!), align " -> print
+                    parallelBranchArgumentLoadParameter >= 0 -> if { context.ir[parallelBranchArgumentLoadParameter] -> storageAlign(context, state) -> writeDecimalLine } else { context.ir[parallelBranchArgumentLoad] -> storageAlign(context, state) -> writeDecimalLine }
+                    parallelBranchArgumentLoadIndex! + 1 => parallelBranchArgumentLoadIndex!
+                }
+                parallelBranchArm.operand0 => parallelBranchStageIndex!
+                0 => parallelBranchStageOrdinal!
+                parallelBranchExpression.operand1 => parallelBranchStageFlowIndex!
+                parallelBranchStageIndex! >= 0 -> while {
+                    context.ir[parallelBranchStageIndex!] => parallelBranchStage
+                    "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage$(parallelBranchStageOrdinal!) = call " -> print
+                    parallelBranchStage -> writeIrType(context, state)
+                    " @sollang_m$(parallelBranchStage.targetModule)_s$(parallelBranchStage.symbol)(" -> print
+                    CallEnvironmentRequest { callerIndex: -1, callIndex: parallelBranchStageIndex!, targetModule: parallelBranchStage.targetModule, targetSymbol: parallelBranchStage.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => parallelBranchStageTarget
+                    parallelBranchStageTarget >= 0 -> if {
+                        parallelBranchStageTarget -> functionCaptures(context, state) => parallelBranchStageCaptures!
+                        0 => parallelBranchStageCaptureIndex!
+                        parallelBranchStageCaptureIndex! < (parallelBranchStageCaptures! -> len) -> while {
+                            -1 => parallelBranchStageCapturePosition!
+                            0 => parallelBranchCapturePositionSearch!
+                            parallelBranchCapturePositionSearch! < (parallelBranchCaptures! -> len) -> while {
+                                context.ir[parallelBranchCaptures![parallelBranchCapturePositionSearch!]].symbol == context.ir[parallelBranchStageCaptures![parallelBranchStageCaptureIndex!]].symbol -> if { parallelBranchCapturePositionSearch! => parallelBranchStageCapturePosition! }
+                                parallelBranchCapturePositionSearch! + 1 => parallelBranchCapturePositionSearch!
+                            }
+                            context.ir[parallelBranchStageCaptures![parallelBranchStageCaptureIndex!]] => parallelBranchStageCapture
+                            parallelBranchStageCapture -> ownsType -> if { "ptr" -> print } else { parallelBranchStageCapture -> writeIrType(context, state) }
+                            " %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture$(parallelBranchStageCapturePosition!), " -> print
+                            parallelBranchStageCaptureIndex! + 1 => parallelBranchStageCaptureIndex!
+                        }
+                    }
+                    context.ir[parallelBranchStageFlowIndex!] -> writeIrType(context, state)
+                    " " -> print
+                    parallelBranchStageOrdinal! == 0 -> if {
+                        "%parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!)" -> print
+                    } else {
+                        "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
+                        parallelBranchStageOrdinal! - 1 -> writeDecimal
+                    }
+                    parallelBranchStage.operand0 => parallelBranchStageArgumentIndex!
+                    (parallelBranchStageArgumentIndex! >= 0 and context.ir[parallelBranchStageArgumentIndex!].parent == parallelBranchStageIndex!) -> while {
+                        -1 => parallelBranchStageArgumentPosition!
+                        0 => parallelBranchStageArgumentSearch!
+                        parallelBranchStageArgumentSearch! < (parallelBranchArguments! -> len) -> while {
+                            parallelBranchArguments![parallelBranchStageArgumentSearch!] == parallelBranchStageArgumentIndex! -> if { parallelBranchStageArgumentSearch! => parallelBranchStageArgumentPosition! }
+                            parallelBranchStageArgumentSearch! + 1 => parallelBranchStageArgumentSearch!
+                        }
+                        ", " -> print
+                        parallelBranchStageArgumentIndex! -> writeParallelBranchArgumentType(context, state)
+                        " %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_argument$(parallelBranchStageArgumentPosition!)" -> print
+                        context.ir[parallelBranchStageArgumentIndex!].nextOperand => parallelBranchStageArgumentIndex!
+                    }
+                    ")" -> println
+                    parallelBranchStageIndex! => parallelBranchStageFlowIndex!
+                    parallelBranchStage.nextOperand => parallelBranchStageIndex!
+                    parallelBranchStageOrdinal! + 1 => parallelBranchStageOrdinal!
+                }
+                "  %parallel_branch_$(parallelBranchCallbackIndex!)_output$(parallelBranchArmOrdinal!) = getelementptr " -> print
+                parallelBranchExpression -> writeIrType(context, state)
+                ", ptr %output, i32 0, i32 $(parallelBranchArmOrdinal!)" -> println
+                "  store " -> print
+                parallelBranchArm -> writeIrType(context, state)
+                " %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
+                parallelBranchStageOrdinal! - 1 -> writeDecimal
+                ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_output$(parallelBranchArmOrdinal!), align " -> print
+                parallelBranchArm -> storageAlign(context, state) -> writeDecimalLine
+                "  ret void" -> println
+                parallelBranchArm.nextOperand => parallelBranchArmIndex!
+                parallelBranchArmOrdinal! + 1 => parallelBranchArmOrdinal!
+            }
+            "parallel_branch_$(parallelBranchCallbackIndex!)_invalid:" -> println
+            "  call void @llvm.trap()" -> println
+            "  unreachable" -> println
+            "}" -> println
+        }
+        parallelBranchCallbackIndex! + 1 => parallelBranchCallbackIndex!
+    }
     context.pointerBitWidth / 8 => entryPointerAlignment
     [Int; ~] => functionIndicesBeforeEntry!
     [Int; ~] => functionIndicesAfterEntry!
@@ -1480,6 +952,9 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                 [Int; ~] => entryOrder!
                 [Int; ~] => entryActiveEach!
                 0 => entryActiveEachSize!
+                true => entryCombinedScheduleProgress!
+                entryCombinedScheduleProgress! -> while {
+                false => entryCombinedScheduleProgress!
                 true => entryScheduleProgress!
                 entryScheduleProgress! -> while {
                     false => entryScheduleProgress!
@@ -1494,6 +969,11 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             (entryOrderedEachBodySearch! < entryEnd! and not entryOrderedEachHasPendingBody!) -> while {
                                 NodeAncestorRequest { nodeIndex: entryOrderedEachBodySearch!, ownerIndex: entryOrderedEachCandidate } => entryOrderedEachAncestorRequest
                                 entryOrderedEachAncestorRequest -> irDescendsFrom(context, state) => entryOrderedEachInside
+                                entryOrderedEachCandidate -> plannedStreamPipeline(context, state) => entryOrderedEachPipeline
+                                (entryOrderedEachInside and entryOrderedEachPipeline >= 0 and entryOrderedEachNode.operand0 >= 0) -> if {
+                                    NodeAncestorRequest { nodeIndex: entryOrderedEachBodySearch!, ownerIndex: entryOrderedEachNode.operand0 } -> irDescendsFrom(context, state) => entryOrderedEachInsideSource
+                                    (entryOrderedEachBodySearch! == entryOrderedEachNode.operand0 or entryOrderedEachInsideSource) -> if { false => entryOrderedEachInside! }
+                                }
                                 (not entryScheduled![entryOrderedEachBodySearch! - functionIndex! - 1] and entryOrderedEachInside) -> if { true => entryOrderedEachHasPendingBody! }
                                 entryOrderedEachBodySearch! + 1 => entryOrderedEachBodySearch!
                             }
@@ -1578,10 +1058,51 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                     entrySequentialPipelineIndex! + 1 => entrySequentialPipelineIndex!
                                 }
                             }
+                            # A runtime stream callback is emitted in the body block opened by
+                            # its terminal.  Scheduling any callback node before that terminal
+                            # would place uses outside the defining loop and violate SSA
+                            # dominance.  Keep the complete callback region behind its owner.
+                            entryScheduleReady! -> if {
+                                0 => entryCallbackOwnerPipelineIndex!
+                                entryCallbackOwnerPipelineIndex! < (context.streamPlan.pipelines -> len) -> while {
+                                    context.streamPlan.pipelines[entryCallbackOwnerPipelineIndex!] => entryCallbackOwnerPipeline
+                                    false => entryInsideOwnedCallback!
+                                    (entryCallbackOwnerPipeline.status > 0 and entryCallbackOwnerPipeline.callbackStart >= functionIndex! + 1 and entryCallbackOwnerPipeline.callbackEnd < entryEnd! and entryScheduleCandidate! >= entryCallbackOwnerPipeline.callbackStart and entryScheduleCandidate! <= entryCallbackOwnerPipeline.callbackEnd) -> if {
+                                        NodeAncestorRequest { nodeIndex: entryScheduleCandidate!, ownerIndex: entryCallbackOwnerPipeline.terminalIr } -> irDescendsFrom(context, state) => entryInsideOwnedCallback!
+                                        (entryInsideOwnedCallback! and entryCallbackOwnerPipeline.source0 >= 0) -> if {
+                                            NodeAncestorRequest { nodeIndex: entryScheduleCandidate!, ownerIndex: entryCallbackOwnerPipeline.source0 } -> irDescendsFrom(context, state) => entryInsideCallbackSource
+                                            (entryScheduleCandidate! == entryCallbackOwnerPipeline.source0 or entryInsideCallbackSource) -> if { false => entryInsideOwnedCallback! }
+                                        }
+                                    }
+                                    entryCallbackOwnerPipeline.stageStart => entryCallbackOwnerStageIndex!
+                                    (entryCallbackOwnerStageIndex! < entryCallbackOwnerPipeline.stageStart + entryCallbackOwnerPipeline.stageCount and not entryInsideOwnedCallback!) -> while {
+                                        context.streamPlan.stages[entryCallbackOwnerStageIndex!] => entryCallbackOwnerStage
+                                        (entryCallbackOwnerStage.callbackStart >= functionIndex! + 1 and entryCallbackOwnerStage.callbackEnd < entryEnd! and entryScheduleCandidate! >= entryCallbackOwnerStage.callbackStart and entryScheduleCandidate! <= entryCallbackOwnerStage.callbackEnd) -> if {
+                                            NodeAncestorRequest { nodeIndex: entryScheduleCandidate!, ownerIndex: entryCallbackOwnerStage.callIr } -> irDescendsFrom(context, state) => entryInsideOwnedCallback!
+                                            (entryInsideOwnedCallback! and entryCallbackOwnerStage.source0 >= 0) -> if {
+                                                NodeAncestorRequest { nodeIndex: entryScheduleCandidate!, ownerIndex: entryCallbackOwnerStage.source0 } -> irDescendsFrom(context, state) => entryInsideStageCallbackSource
+                                                (entryScheduleCandidate! == entryCallbackOwnerStage.source0 or entryInsideStageCallbackSource) -> if { false => entryInsideOwnedCallback! }
+                                            }
+                                        }
+                                        entryCallbackOwnerStageIndex! + 1 => entryCallbackOwnerStageIndex!
+                                    }
+                                    (entryInsideOwnedCallback! and entryCallbackOwnerPipeline.terminalIr > functionIndex! and entryCallbackOwnerPipeline.terminalIr < entryEnd! and not entryScheduled![entryCallbackOwnerPipeline.terminalIr - functionIndex! - 1]) -> if {
+                                        false => entryScheduleReady!
+                                    }
+                                    entryCallbackOwnerPipelineIndex! + 1 => entryCallbackOwnerPipelineIndex!
+                                }
+                            }
                             false => entryScheduleInsidePendingEach!
                             entryPendingEach! >= 0 -> if {
                                 NodeAncestorRequest { nodeIndex: entryScheduleCandidate!, ownerIndex: entryPendingEach! } => entryPendingEachAncestorRequest
                                 entryPendingEachAncestorRequest -> irDescendsFrom(context, state) => entryScheduleInsidePendingEach!
+                                (not entryScheduleInsidePendingEach!) -> if {
+                                    entryScheduleCandidate! -> plannedPartitionPredicateRoute(context, state) => entryPendingPartitionPredicateRoute
+                                    entryPendingPartitionPredicateRoute >= 0 -> if {
+                                        entryPendingPartitionPredicateRoute -> plannedPartitionJunction(context, state) => entryPendingPartitionJunction
+                                        (entryPendingPartitionJunction >= 0 and (entryPendingPartitionJunction -> partitionFirstTerminal(context, state)) == entryPendingEach!) -> if { true => entryScheduleInsidePendingEach! }
+                                    }
+                                }
                             }
                             (entryScheduleReady! and entryPendingEach! >= 0 and not entryScheduleInsidePendingEach!) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.parent > functionIndex!) -> if {
@@ -1590,14 +1111,49 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                 (entryEachScheduleAncestor! > functionIndex! and entryScheduleReady!) -> while {
                                     context.ir[entryEachScheduleAncestor!] => entryEachScheduleOwner
                                     (entryEachScheduleOwner.kind == 6 and entryEachScheduleOwner.opcode == -208 and not entryScheduled![entryEachScheduleAncestor! - functionIndex! - 1]) -> if {
-                                        entryEachScheduleAncestor! -> plannedStreamPipeline(context, state) => entryAncestorStreamPipeline
-                                        (entryAncestorStreamPipeline >= 0 or entryEachBranchChild! != entryEachScheduleOwner.operand0) -> if { false => entryScheduleReady! }
+                                        entryEachBranchChild! != entryEachScheduleOwner.operand0 -> if { false => entryScheduleReady! }
                                     }
                                     entryEachScheduleAncestor! => entryEachBranchChild!
                                     context.ir[entryEachScheduleAncestor!].parent => entryEachScheduleAncestor!
                                 }
                             }
-                            (entryScheduleReady! and (entryScheduleCandidate! -> plannedStreamStage(context, state)) < 0 and (entryScheduleCandidate! -> plannedStreamPipeline(context, state)) < 0 and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and (entryScheduleNode.kind != 5 or context.ir[entryScheduleNode.operand0].flags % 2 == 0) and not entryScheduled![entryScheduleNode.operand0 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            entryScheduleCandidate! -> plannedStreamPipeline(context, state) => entrySchedulePipelineIndex
+                            entryScheduleCandidate! -> plannedPartitionPredicateRoute(context, state) => entrySchedulePartitionPredicateRoute
+                            (entryScheduleReady! and entrySchedulePartitionPredicateRoute >= 0) -> if {
+                                entrySchedulePartitionPredicateRoute -> plannedPartitionJunction(context, state) => entrySchedulePartitionPredicateJunction
+                                entrySchedulePartitionPredicateJunction -> partitionFirstTerminal(context, state) => entrySchedulePartitionFirstTerminal
+                                (entrySchedulePartitionFirstTerminal > functionIndex! and entrySchedulePartitionFirstTerminal < entryEnd! and not entryScheduled![entrySchedulePartitionFirstTerminal - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                                context.streamPlan.junctions[entrySchedulePartitionPredicateJunction] => entrySchedulePredicateJunction
+                                entrySchedulePredicateJunction.routeStart => entrySchedulePriorPredicateRoute!
+                                entrySchedulePriorPredicateRoute! < entrySchedulePartitionPredicateRoute -> while {
+                                    context.streamPlan.partitionRoutes[entrySchedulePriorPredicateRoute!] => entrySchedulePriorPredicate
+                                    (entrySchedulePriorPredicate.predicateIr > functionIndex! and entrySchedulePriorPredicate.predicateIr < entryEnd! and not entryScheduled![entrySchedulePriorPredicate.predicateIr - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                                    entrySchedulePriorPredicateRoute! + 1 => entrySchedulePriorPredicateRoute!
+                                }
+                            }
+                            entryScheduleCandidate! -> plannedPartitionCallbackRoute(context, state) => entrySchedulePartitionCallbackRoute
+                            (entryScheduleReady! and entrySchedulePartitionCallbackRoute >= 0) -> if {
+                                entrySchedulePartitionCallbackRoute -> plannedPartitionJunction(context, state) => entrySchedulePartitionCallbackJunction
+                                context.streamPlan.junctions[entrySchedulePartitionCallbackJunction] => entryScheduleCallbackJunction
+                                entryScheduleCallbackJunction.routeStart => entryScheduleRequiredPredicateRoute!
+                                entryScheduleRequiredPredicateRoute! < entryScheduleCallbackJunction.routeStart + entryScheduleCallbackJunction.routeCount -> while {
+                                    context.streamPlan.partitionRoutes[entryScheduleRequiredPredicateRoute!] => entryScheduleRequiredPredicate
+                                    (entryScheduleRequiredPredicate.predicateIr > functionIndex! and entryScheduleRequiredPredicate.predicateIr < entryEnd! and not entryScheduled![entryScheduleRequiredPredicate.predicateIr - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                                    entryScheduleRequiredPredicateRoute! + 1 => entryScheduleRequiredPredicateRoute!
+                                }
+                            }
+                            (entryScheduleReady! and entrySchedulePipelineIndex >= 0) -> if {
+                                context.streamPlan.pipelines[entrySchedulePipelineIndex] => entrySchedulePipeline
+                                entrySchedulePipeline.source0 => entryScheduleProducerSource!
+                                entryScheduleCandidate! -> plannedPartitionRoute(context, state) => entrySchedulePartitionRoute
+                                entrySchedulePartitionRoute >= 0 -> if {
+                                    entrySchedulePartitionRoute -> plannedPartitionJunction(context, state) => entrySchedulePartitionJunction
+                                    context.streamPlan.junctions[entrySchedulePartitionJunction].source0 => entryScheduleProducerSource!
+                                }
+                                entryScheduleProducerSource! -> producerValueIndex(context, state) => entryScheduleProducerValue
+                                (entryScheduleProducerValue > functionIndex! and entryScheduleProducerValue < entryEnd! and not entryScheduled![entryScheduleProducerValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            }
+                            (entryScheduleReady! and entryScheduleNode.kind != 38 and (entryScheduleCandidate! -> plannedStreamStage(context, state)) < 0 and (entryScheduleCandidate! -> plannedStreamPipeline(context, state)) < 0 and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and (entryScheduleNode.kind != 5 or context.ir[entryScheduleNode.operand0].flags % 2 == 0) and not entryScheduled![entryScheduleNode.operand0 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.kind != 6 and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.kind != 27 and entryScheduleNode.kind != 33 and entryScheduleNode.kind != 34 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and (entryScheduleCandidate! -> plannedStreamStage(context, state)) < 0 and entryScheduleNode.kind == 6 and entryScheduleNode.opcode != -207 and entryScheduleNode.opcode != -208 and entryScheduleNode.opcode != -209 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd!) -> if {
                                 entryScheduleNode.operand1 -> aggregateValueIndex(context, state) => entryScheduleAdditionalArgument
@@ -1614,6 +1170,18 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                     context.ir[entryScheduleCallArgument!].nextOperand => entryScheduleCallArgument!
                                 }
                             }
+                            (entryScheduleReady! and entryScheduleNode.kind == 6 and entryScheduleNode.parent > functionIndex! and entryScheduleNode.parent < entryEnd! and context.ir[entryScheduleNode.parent].kind == 39 and context.ir[entryScheduleNode.parent].parent > functionIndex! and context.ir[context.ir[entryScheduleNode.parent].parent].kind == 37) -> if {
+                                context.ir[context.ir[entryScheduleNode.parent].parent].operand0 => entryScheduleBranchArm!
+                                -1 => entrySchedulePreviousBranchArm!
+                                (entryScheduleBranchArm! > functionIndex! and entryScheduleBranchArm! < entryEnd! and entryScheduleBranchArm! != entryScheduleNode.parent) -> while {
+                                    entryScheduleBranchArm! => entrySchedulePreviousBranchArm!
+                                    context.ir[entryScheduleBranchArm!].nextOperand => entryScheduleBranchArm!
+                                }
+                                (entryScheduleBranchArm! == entryScheduleNode.parent and entrySchedulePreviousBranchArm! > functionIndex! and not entryScheduled![entrySchedulePreviousBranchArm! - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                                entryScheduleCandidate! -> branchStageFlowIndex(context, state) => entryScheduleBranchStageFlow
+                                (entryScheduleBranchStageFlow > functionIndex! and entryScheduleBranchStageFlow < entryEnd! and context.ir[entryScheduleBranchStageFlow].kind == 6 and not entryScheduled![entryScheduleBranchStageFlow - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            }
+                            (entryScheduleNode.parent > functionIndex! and entryScheduleNode.parent < entryEnd! and (context.ir[entryScheduleNode.parent].kind == 38 or (context.ir[entryScheduleNode.parent].kind == 39 and context.ir[entryScheduleNode.parent].parent > functionIndex! and context.ir[context.ir[entryScheduleNode.parent].parent].kind == 38))) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.kind == 6 and (entryScheduleNode.symbol == -101 or entryScheduleNode.symbol == -102 or entryScheduleNode.symbol == -116)) -> if {
                                 functionIndex! + 1 => entrySchedulePrintBindingSearch!
                                 entrySchedulePrintBindingSearch! < entryEnd! -> while {
@@ -1631,12 +1199,29 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                 entryScheduleNode.operand0 -> aggregateValueIndex(context, state) => entryScheduleEnumPayloadValue
                                 (entryScheduleEnumPayloadValue > functionIndex! and entryScheduleEnumPayloadValue < entryEnd! and not entryScheduled![entryScheduleEnumPayloadValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16)) -> if {
+                            (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16 or entryScheduleNode.kind == 35)) -> if {
                                 entryScheduleNode.operand0 => entryScheduleSibling!
                                 entryScheduleSibling! >= 0 -> while {
                                     entryScheduleSibling! -> aggregateValueIndex(context, state) => entryScheduleAggregateValue
                                     not entryScheduled![entryScheduleAggregateValue - functionIndex! - 1] -> if { false => entryScheduleReady! }
                                     context.ir[entryScheduleSibling!].nextOperand => entryScheduleSibling!
+                                }
+                            }
+                            (entryScheduleReady! and entryScheduleNode.kind == 37) -> if {
+                                entryScheduleNode.operand0 => entryScheduleBranchArmDependency!
+                                entryScheduleBranchArmDependency! >= 0 -> while {
+                                    (entryScheduleBranchArmDependency! > functionIndex! and entryScheduleBranchArmDependency! < entryEnd! and not entryScheduled![entryScheduleBranchArmDependency! - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                                    context.ir[entryScheduleBranchArmDependency!].nextOperand => entryScheduleBranchArmDependency!
+                                }
+                            }
+                            (entryScheduleReady! and entryScheduleNode.kind == 39 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and entryScheduleNode.kind == 38) -> if {
+                                entryScheduleCandidate! -> parallelBranchArguments(context) => entryScheduleParallelBranchArguments!
+                                0 => entryScheduleParallelBranchArgumentIndex!
+                                entryScheduleParallelBranchArgumentIndex! < (entryScheduleParallelBranchArguments! -> len) -> while {
+                                    entryScheduleParallelBranchArguments![entryScheduleParallelBranchArgumentIndex!] -> aggregateValueIndex(context, state) => entryScheduleParallelBranchArgumentValue
+                                    (entryScheduleParallelBranchArgumentValue > functionIndex! and entryScheduleParallelBranchArgumentValue < entryEnd! and not entryScheduled![entryScheduleParallelBranchArgumentValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                                    entryScheduleParallelBranchArgumentIndex! + 1 => entryScheduleParallelBranchArgumentIndex!
                                 }
                             }
                             (entryScheduleReady! and (entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 33 or entryScheduleNode.kind == 34)) -> if {
@@ -1706,7 +1291,12 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                     functionIndex! + 1 => entryEarlierEffectSearch!
                                     entryEarlierEffectSearch! < entryEnd! -> while {
                                         context.ir[entryEarlierEffectSearch!] => entryEarlierEffect
-                                        (not entryScheduled![entryEarlierEffectSearch! - functionIndex! - 1] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -213 or entryEarlierEffect.opcode == -229))) and (entryEarlierEffect -> sourceStart(context, state)) < (entryScheduleNode -> sourceStart(context, state))) -> if {
+                                        entryEarlierEffect.parent => entryEarlierParallelAncestor!
+                                        false => entryEarlierInsideParallelBranch!
+                                        (entryEarlierParallelAncestor! > functionIndex! and not entryEarlierInsideParallelBranch!) -> while {
+                                            context.ir[entryEarlierParallelAncestor!].kind == 38 -> if { true => entryEarlierInsideParallelBranch! } else { context.ir[entryEarlierParallelAncestor!].parent => entryEarlierParallelAncestor! }
+                                        }
+                                        (not entryEarlierInsideParallelBranch! and not entryScheduled![entryEarlierEffectSearch! - functionIndex! - 1] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -213 or entryEarlierEffect.opcode == -229))) and (entryEarlierEffect -> sourceStart(context, state)) < (entryScheduleNode -> sourceStart(context, state))) -> if {
                                             entryEarlierEffect.parent => entryEarlierEffectAncestor!
                                             true => entryEarlierRootEffect!
                                             false => entryEarlierInsideRegion!
@@ -1724,7 +1314,13 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             entryScheduleReady! -> if {
                                 not entryInsideLogicalValue! -> if { entryOrder! -> push(entryScheduleCandidate!) }
                                 true => entryScheduled![entryScheduleCandidate! - functionIndex! - 1]
-                                (entryScheduleNode.kind == 6 and entryScheduleNode.opcode == -208) -> if { entryScheduleCandidate! => entryPendingEach! }
+                                (entryScheduleNode.kind == 6 and entryScheduleNode.opcode == -208) -> if {
+                                    entryScheduleCandidate! => entryPendingEach!
+                                    entryScheduleCandidate! -> plannedStreamPipeline(context, state) => entryScheduledStreamPipeline
+                                    (entryScheduledStreamPipeline >= 0 and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd!) -> if {
+                                        true => entryScheduled![entryScheduleNode.operand0 - functionIndex! - 1]
+                                    }
+                                }
                                 true => entryScheduleProgress!
                             }
                         }
@@ -1740,7 +1336,41 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                     0 => entryProducerPipelineIndex!
                     entryProducerPipelineIndex! < (context.streamPlan.pipelines -> len) -> while {
                         context.streamPlan.pipelines[entryProducerPipelineIndex!] => entryProducerPipeline
-                        (entryProducerPipeline.status > 0 and entryProducerPipeline.terminalIr > functionIndex! and entryProducerPipeline.terminalIr < entryEnd! and entryProducerPipeline.callbackStart >= functionIndex! + 1 and entryProducerPipeline.callbackEnd < entryEnd!) -> if {
+                        entryProducerPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryProducerPartitionRoute
+                        true => entryProducerPartitionPriorComplete!
+                        entryProducerPartitionRoute >= 0 -> if {
+                            entryProducerPartitionRoute -> plannedPartitionJunction(context, state) => entryProducerPartitionJunction
+                            context.streamPlan.junctions[entryProducerPartitionJunction].routeStart => entryProducerPriorRoute!
+                            entryProducerPriorRoute! < entryProducerPartitionRoute -> while {
+                                context.streamPlan.partitionRoutes[entryProducerPriorRoute!] => entryProducerPriorPartitionRoute
+                                entryProducerPriorPartitionRoute.pipelineIndex >= 0 -> if {
+                                    context.streamPlan.pipelines[entryProducerPriorPartitionRoute.pipelineIndex] => entryProducerPriorPipeline
+                                    entryProducerPriorPipeline.callbackStart => entryProducerPriorCallback!
+                                    entryProducerPriorCallback! <= entryProducerPriorPipeline.callbackEnd -> while {
+                                        (entryProducerPriorCallback! > functionIndex! and entryProducerPriorCallback! < entryEnd! and not entryScheduled![entryProducerPriorCallback! - functionIndex! - 1]) -> if { false => entryProducerPartitionPriorComplete! }
+                                        entryProducerPriorCallback! + 1 => entryProducerPriorCallback!
+                                    }
+                                    entryProducerPriorPipeline.stageStart => entryProducerPriorStage!
+                                    entryProducerPriorStage! < entryProducerPriorPipeline.stageStart + entryProducerPriorPipeline.stageCount -> while {
+                                        context.streamPlan.stages[entryProducerPriorStage!] => entryProducerPriorStagePlan
+                                        entryProducerPriorStagePlan.callbackStart => entryProducerPriorStageCallback!
+                                        entryProducerPriorStageCallback! <= entryProducerPriorStagePlan.callbackEnd -> while {
+                                            (entryProducerPriorStageCallback! > functionIndex! and entryProducerPriorStageCallback! < entryEnd! and not entryScheduled![entryProducerPriorStageCallback! - functionIndex! - 1]) -> if { false => entryProducerPartitionPriorComplete! }
+                                            entryProducerPriorStageCallback! + 1 => entryProducerPriorStageCallback!
+                                        }
+                                        entryProducerPriorStage! + 1 => entryProducerPriorStage!
+                                    }
+                                }
+                                entryProducerPriorRoute! + 1 => entryProducerPriorRoute!
+                            }
+                        }
+                        (entryProducerPartitionRoute >= 0 and entryProducerPartitionPriorComplete! and entryProducerPipeline.terminalIr > functionIndex! and entryProducerPipeline.terminalIr < entryEnd! and not entryScheduled![entryProducerPipeline.terminalIr - functionIndex! - 1]) -> if {
+                            entryOrder! -> push(entryProducerPipeline.terminalIr)
+                            true => entryScheduled![entryProducerPipeline.terminalIr - functionIndex! - 1]
+                            true => entryProducerCallbackProgress!
+                            true => entryCombinedScheduleProgress!
+                        }
+                        (entryProducerPipeline.status > 0 and entryProducerPipeline.terminalIr > functionIndex! and entryProducerPipeline.terminalIr < entryEnd! and entryScheduled![entryProducerPipeline.terminalIr - functionIndex! - 1] and entryProducerPipeline.callbackStart >= functionIndex! + 1 and entryProducerPipeline.callbackEnd < entryEnd!) -> if {
                             entryProducerPipeline.stageStart => entryProducerStageIndex!
                             entryProducerStageIndex! < entryProducerPipeline.stageStart + entryProducerPipeline.stageCount -> while {
                                 context.streamPlan.stages[entryProducerStageIndex!] => entryProducerStage
@@ -1750,12 +1380,19 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                         not entryScheduled![entryProducerStageCallbackIndex! - functionIndex! - 1] -> if {
                                             context.ir[entryProducerStageCallbackIndex!] => entryProducerStageCallback
                                             true => entryProducerStageCallbackReady!
+                                            NodeAncestorRequest { nodeIndex: entryProducerStageCallbackIndex!, ownerIndex: entryProducerStage.callIr } -> irDescendsFrom(context, state) => entryProducerStageCallbackInside
+                                            not entryProducerStageCallbackInside -> if { false => entryProducerStageCallbackReady! }
+                                            (entryProducerStageCallbackReady! and entryProducerStage.source0 >= 0) -> if {
+                                                NodeAncestorRequest { nodeIndex: entryProducerStageCallbackIndex!, ownerIndex: entryProducerStage.source0 } -> irDescendsFrom(context, state) => entryProducerStageCallbackInsideSource
+                                                (entryProducerStageCallbackIndex! == entryProducerStage.source0 or entryProducerStageCallbackInsideSource) -> if { false => entryProducerStageCallbackReady! }
+                                            }
                                             (entryProducerStageCallback.operand0 > functionIndex! and entryProducerStageCallback.operand0 < entryEnd! and not entryScheduled![entryProducerStageCallback.operand0 - functionIndex! - 1]) -> if { false => entryProducerStageCallbackReady! }
                                             (entryProducerStageCallback.operand1 > functionIndex! and entryProducerStageCallback.operand1 < entryEnd! and not entryScheduled![entryProducerStageCallback.operand1 - functionIndex! - 1]) -> if { false => entryProducerStageCallbackReady! }
                                             entryProducerStageCallbackReady! -> if {
                                                 entryOrder! -> push(entryProducerStageCallbackIndex!)
                                                 true => entryScheduled![entryProducerStageCallbackIndex! - functionIndex! - 1]
                                                 true => entryProducerCallbackProgress!
+                                                true => entryCombinedScheduleProgress!
                                             }
                                         }
                                         entryProducerStageCallbackIndex! + 1 => entryProducerStageCallbackIndex!
@@ -1768,12 +1405,19 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                 not entryScheduled![entryProducerCallbackIndex! - functionIndex! - 1] -> if {
                                     context.ir[entryProducerCallbackIndex!] => entryProducerCallback
                                     true => entryProducerCallbackReady!
+                                    NodeAncestorRequest { nodeIndex: entryProducerCallbackIndex!, ownerIndex: entryProducerPipeline.terminalIr } -> irDescendsFrom(context, state) => entryProducerCallbackInside
+                                    not entryProducerCallbackInside -> if { false => entryProducerCallbackReady! }
+                                    (entryProducerCallbackReady! and entryProducerPipeline.source0 >= 0) -> if {
+                                        NodeAncestorRequest { nodeIndex: entryProducerCallbackIndex!, ownerIndex: entryProducerPipeline.source0 } -> irDescendsFrom(context, state) => entryProducerCallbackInsideSource
+                                        (entryProducerCallbackIndex! == entryProducerPipeline.source0 or entryProducerCallbackInsideSource) -> if { false => entryProducerCallbackReady! }
+                                    }
                                     (entryProducerCallback.operand0 > functionIndex! and entryProducerCallback.operand0 < entryEnd! and not entryScheduled![entryProducerCallback.operand0 - functionIndex! - 1]) -> if { false => entryProducerCallbackReady! }
                                     (entryProducerCallback.operand1 > functionIndex! and entryProducerCallback.operand1 < entryEnd! and not entryScheduled![entryProducerCallback.operand1 - functionIndex! - 1]) -> if { false => entryProducerCallbackReady! }
                                     entryProducerCallbackReady! -> if {
                                         entryOrder! -> push(entryProducerCallbackIndex!)
                                         true => entryScheduled![entryProducerCallbackIndex! - functionIndex! - 1]
                                         true => entryProducerCallbackProgress!
+                                        true => entryCombinedScheduleProgress!
                                     }
                                 }
                                 entryProducerCallbackIndex! + 1 => entryProducerCallbackIndex!
@@ -1781,6 +1425,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         }
                         entryProducerPipelineIndex! + 1 => entryProducerPipelineIndex!
                     }
+                }
                 }
                 [Int; ~] => entryActiveStreams!
                 [Int; ~] => entryStreamCurrentValues!
@@ -1793,10 +1438,30 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                     entryExpressionIndex! -> plannedStreamPipeline(context, state) => entryOpeningStreamPipeline
                     entryOpeningStreamPipeline >= 0 -> if {
                         context.streamPlan.pipelines[entryOpeningStreamPipeline] => entryOpeningPipeline
-                        entryOpeningPipeline.status == 0 -> if {
+                        entryExpressionIndex! -> plannedPartitionRoute(context, state) => entryOpeningPartitionRoute
+                        -1 => entryOpeningPartitionJunction!
+                        entryExpressionIndex! => entryOpeningSharedTerminal!
+                        entryOpeningPipeline.source0 => entryOpeningSource!
+                        entryOpeningPipeline.status => entryOpeningStatus!
+                        entryOpeningPartitionRoute >= 0 -> if {
+                            entryOpeningPartitionRoute -> plannedPartitionJunction(context, state) => entryOpeningPartitionJunction!
+                            context.streamPlan.junctions[entryOpeningPartitionJunction!] => entryOpeningJunction
+                            entryOpeningJunction.source0 => entryOpeningSource!
+                            entryOpeningJunction.status => entryOpeningStatus!
+                            entryOpeningPartitionJunction! -> partitionFirstTerminal(context, state) => entryOpeningSharedTerminal!
+                        }
+                        (entryOpeningPartitionRoute >= 0 and entryExpressionIndex! != entryOpeningSharedTerminal!) -> if {
+                            "partition$(context.streamPlan.junctions[entryOpeningPartitionJunction!].junctionIr)_route$(context.streamPlan.partitionRoutes[entryOpeningPartitionRoute].ordinal):" -> println
+                            context.types[context.ir[entryOpeningSource!].typeId] => entryOpeningPartitionSourceType
+                            "  %stream$(entryExpressionIndex!)_item = freeze " -> print
+                            entryOpeningPartitionSourceType.first -> writeSemanticTypeId(context, state)
+                            " %stream$(entryOpeningSharedTerminal!)_item" -> println
+                        }
+                        (entryOpeningPartitionRoute < 0 or entryExpressionIndex! == entryOpeningSharedTerminal!) -> if {
+                        entryOpeningStatus! == 0 -> if {
                             "  %stream$(entryExpressionIndex!)_index_slot = alloca i32, align 4" -> println
                         } else {
-                            entryOpeningPipeline.source0 -> producerValueIndex(context, state) => entryOpeningProducerValue
+                            entryOpeningSource! -> producerValueIndex(context, state) => entryOpeningProducerValue
                             context.ir[entryOpeningProducerValue] => entryOpeningProducer
                             context.types[entryOpeningProducer.typeId] => entryOpeningProducerType
                             "%sollang.stream" => entryOpeningProducerLlvmType!
@@ -1808,6 +1473,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             "  %stream$(entryExpressionIndex!)_producer_context = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue), 0" -> println
                             "  %stream$(entryExpressionIndex!)_producer_next = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue), 1" -> println
                             "  %stream$(entryExpressionIndex!)_producer_drop = extractvalue $(entryOpeningProducerLlvmType!) %v$(entryOpeningProducerValue), 2" -> println
+                        }
                         }
                         entryOpeningPipeline.stageStart => entryOpeningStateStageIndex!
                         entryOpeningStateStageIndex! < entryOpeningPipeline.stageStart + entryOpeningPipeline.stageCount -> while {
@@ -1847,7 +1513,8 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             }
                             entryOpeningStateStageIndex! + 1 => entryOpeningStateStageIndex!
                         }
-                        entryOpeningPipeline.status == 0 -> if {
+                        (entryOpeningPartitionRoute < 0 or entryExpressionIndex! == entryOpeningSharedTerminal!) -> if {
+                        entryOpeningStatus! == 0 -> if {
                             "  store i32 " -> print
                             WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryOpeningPipeline.source0 } -> writeWhileValue(context, state)
                             ", ptr %stream$(entryExpressionIndex!)_index_slot, align 4" -> println
@@ -1860,7 +1527,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             "  br i1 %stream$(entryExpressionIndex!)_done, label %stream$(entryExpressionIndex!)_exit, label %stream$(entryExpressionIndex!)_body" -> println
                             "stream$(entryExpressionIndex!)_body:" -> println
                         } else {
-                            context.types[context.ir[entryOpeningPipeline.source0].typeId] => entryOpeningBodyProducerType
+                            context.types[context.ir[entryOpeningSource!].typeId] => entryOpeningBodyProducerType
                             "  br label %stream$(entryExpressionIndex!)_header" -> println
                             "stream$(entryExpressionIndex!)_header:" -> println
                             "  %stream$(entryExpressionIndex!)_has_item = call i1 %stream$(entryExpressionIndex!)_producer_next(ptr %stream$(entryExpressionIndex!)_producer_context, ptr %stream$(entryExpressionIndex!)_producer_item_slot)" -> println
@@ -1870,6 +1537,37 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             entryOpeningBodyProducerType.first -> writeSemanticTypeId(context, state)
                             ", ptr %stream$(entryExpressionIndex!)_producer_item_slot, align " -> print
                             context.typeAligns[entryOpeningBodyProducerType.first] -> writeDecimalLine
+                        }
+                        }
+                        entryOpeningPipeline.stageStart => entryOpeningPrefixStageIndex!
+                        true => entryOpeningPrefixOpen!
+                        (entryOpeningPrefixStageIndex! < entryOpeningPipeline.stageStart + entryOpeningPipeline.stageCount and entryOpeningPrefixOpen!) -> while {
+                            context.streamPlan.stages[entryOpeningPrefixStageIndex!] => entryOpeningPrefixStage
+                            (entryOpeningPrefixStage.flags == 1 or entryOpeningPrefixStage.flags == 2) -> if {
+                                entryOpeningPrefixStage.flags == 1 -> if {
+                                    "  %stream$(entryExpressionIndex!)_taken$(entryOpeningPrefixStageIndex!) = load i32, ptr %stream$(entryExpressionIndex!)_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
+                                    "  %stream$(entryExpressionIndex!)_take_open$(entryOpeningPrefixStageIndex!) = icmp slt i32 %stream$(entryExpressionIndex!)_taken$(entryOpeningPrefixStageIndex!), " -> print
+                                    WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryOpeningPrefixStage.argument0 } -> writeWhileValue(context, state)
+                                    "" -> println
+                                    "  br i1 %stream$(entryExpressionIndex!)_take_open$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex!)_take_pass$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex!)_exit" -> println
+                                    "stream$(entryExpressionIndex!)_take_pass$(entryOpeningPrefixStageIndex!):" -> println
+                                    "  %stream$(entryExpressionIndex!)_taken_next$(entryOpeningPrefixStageIndex!) = add i32 %stream$(entryExpressionIndex!)_taken$(entryOpeningPrefixStageIndex!), 1" -> println
+                                    "  store i32 %stream$(entryExpressionIndex!)_taken_next$(entryOpeningPrefixStageIndex!), ptr %stream$(entryExpressionIndex!)_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
+                                }
+                                entryOpeningPrefixStage.flags == 2 -> if {
+                                    "  %stream$(entryExpressionIndex!)_skipped$(entryOpeningPrefixStageIndex!) = load i32, ptr %stream$(entryExpressionIndex!)_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
+                                    "  %stream$(entryExpressionIndex!)_skip_open$(entryOpeningPrefixStageIndex!) = icmp slt i32 %stream$(entryExpressionIndex!)_skipped$(entryOpeningPrefixStageIndex!), " -> print
+                                    WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryOpeningPrefixStage.argument0 } -> writeWhileValue(context, state)
+                                    "" -> println
+                                    "  br i1 %stream$(entryExpressionIndex!)_skip_open$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex!)_skip_drop$(entryOpeningPrefixStageIndex!), label %stream$(entryExpressionIndex!)_skip_pass$(entryOpeningPrefixStageIndex!)" -> println
+                                    "stream$(entryExpressionIndex!)_skip_drop$(entryOpeningPrefixStageIndex!):" -> println
+                                    "  %stream$(entryExpressionIndex!)_skipped_next$(entryOpeningPrefixStageIndex!) = add i32 %stream$(entryExpressionIndex!)_skipped$(entryOpeningPrefixStageIndex!), 1" -> println
+                                    "  store i32 %stream$(entryExpressionIndex!)_skipped_next$(entryOpeningPrefixStageIndex!), ptr %stream$(entryExpressionIndex!)_slice$(entryOpeningPrefixStageIndex!)_slot, align 4" -> println
+                                    "  br label %stream$(entryExpressionIndex!)_continue" -> println
+                                    "stream$(entryExpressionIndex!)_skip_pass$(entryOpeningPrefixStageIndex!):" -> println
+                                }
+                                entryOpeningPrefixStageIndex! + 1 => entryOpeningPrefixStageIndex!
+                            } else { false => entryOpeningPrefixOpen! }
                         }
                         -1 => entryOpeningFlatMapStage!
                         -1 => entryOpeningBeforeEachStage!
@@ -1931,8 +1629,8 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                             context.ir[entryOpeningFlatMapUseSearch!] => entryOpeningFlatMapUse
                                             (entryOpeningFlatMapUse.kind == 5 and entryOpeningFlatMapUse.symbol == entryOpeningFlatMapRoleSearch!) -> if {
                                                 "  %v$(entryOpeningFlatMapUseSearch!) = freeze " -> print
-                                                entryOpeningPipeline.status == 0 -> if { "i32" -> print } else { entryOpeningFlatMapUse -> writeIrType(context, state) }
-                                                entryOpeningFlatMapRoleOrdinal! == 0 -> if { " %stream$(entryExpressionIndex!)_inner_item" -> println } else { " %stream$(entryExpressionIndex!)_item" -> println }
+                                                entryOpeningStatus! == 0 -> if { "i32" -> print } else { entryOpeningFlatMapUse -> writeIrType(context, state) }
+                                                entryOpeningFlatMapRoleOrdinal! == 0 -> if { " %stream$(entryExpressionIndex!)_inner_item" -> println } else { " %stream$(entryOpeningSharedTerminal!)_item" -> println }
                                             }
                                             entryOpeningFlatMapUseSearch! + 1 => entryOpeningFlatMapUseSearch!
                                         }
@@ -1960,9 +1658,52 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                 (entryFirstStageUse.kind == 5 and entryFirstStageUse.symbol == entryFirstStageRoleSymbol!) -> if {
                                     "  %v$(entryFirstStageUseSearch!) = freeze " -> print
                                     entryFirstStageUse -> writeIrType(context, state)
-                                    " %stream$(entryExpressionIndex!)_item" -> println
+                                    " %stream$(entryOpeningSharedTerminal!)_item" -> println
                                 }
                                 entryFirstStageUseSearch! + 1 => entryFirstStageUseSearch!
+                            }
+                        }
+                        entryOpeningPipeline.stageCount == 0 -> if {
+                            context.ir[entryOpeningPipeline.terminalIr] => entryOpeningTerminal
+                            context.ranges[entryOpeningTerminal.sourceModule] => entryOpeningTerminalRange
+                            -1 => entryOpeningTerminalRoleSymbol!
+                            0 => entryOpeningTerminalRoleSearch!
+                            entryOpeningTerminalRoleSearch! < entryOpeningTerminalRange.symbolCount -> while {
+                                context.symbols[entryOpeningTerminalRange.symbolStart + entryOpeningTerminalRoleSearch!] => entryOpeningTerminalRole
+                                (entryOpeningTerminalRole.kind == 35 and entryOpeningTerminalRole.astNode == entryOpeningTerminal.astNode) -> if { entryOpeningTerminalRoleSearch! => entryOpeningTerminalRoleSymbol! }
+                                entryOpeningTerminalRoleSearch! + 1 => entryOpeningTerminalRoleSearch!
+                            }
+                            functionIndex! + 1 => entryOpeningTerminalUseSearch!
+                            entryOpeningTerminalUseSearch! < entryEnd! -> while {
+                                context.ir[entryOpeningTerminalUseSearch!] => entryOpeningTerminalUse
+                                (entryOpeningTerminalUse.kind == 5 and entryOpeningTerminalUse.symbol == entryOpeningTerminalRoleSymbol!) -> if {
+                                    "  %v$(entryOpeningTerminalUseSearch!) = freeze " -> print
+                                    entryOpeningTerminalUse -> writeIrType(context, state)
+                                    " %stream$(entryOpeningSharedTerminal!)_item" -> println
+                                }
+                                entryOpeningTerminalUseSearch! + 1 => entryOpeningTerminalUseSearch!
+                            }
+                        }
+                        (entryOpeningPartitionRoute >= 0 and entryExpressionIndex! == entryOpeningSharedTerminal!) -> if {
+                            context.streamPlan.junctions[entryOpeningPartitionJunction!] => entryOpeningPartition
+                            context.ir[entryOpeningPartition.junctionIr] => entryOpeningPartitionNode
+                            context.ranges[entryOpeningPartitionNode.sourceModule] => entryOpeningPartitionRange
+                            -1 => entryOpeningPartitionRoleSymbol!
+                            0 => entryOpeningPartitionRoleSearch!
+                            entryOpeningPartitionRoleSearch! < entryOpeningPartitionRange.symbolCount -> while {
+                                context.symbols[entryOpeningPartitionRange.symbolStart + entryOpeningPartitionRoleSearch!] => entryOpeningPartitionRole
+                                (entryOpeningPartitionRole.kind == 35 and entryOpeningPartitionRole.astNode == entryOpeningPartitionNode.astNode) -> if { entryOpeningPartitionRoleSearch! => entryOpeningPartitionRoleSymbol! }
+                                entryOpeningPartitionRoleSearch! + 1 => entryOpeningPartitionRoleSearch!
+                            }
+                            functionIndex! + 1 => entryOpeningPartitionUseSearch!
+                            entryOpeningPartitionUseSearch! < entryEnd! -> while {
+                                context.ir[entryOpeningPartitionUseSearch!] => entryOpeningPartitionUse
+                                (entryOpeningPartitionUse.kind == 5 and entryOpeningPartitionUse.symbol == entryOpeningPartitionRoleSymbol!) -> if {
+                                    "  %v$(entryOpeningPartitionUseSearch!) = freeze " -> print
+                                    entryOpeningPartitionUse -> writeIrType(context, state)
+                                    " %stream$(entryOpeningSharedTerminal!)_item" -> println
+                                }
+                                entryOpeningPartitionUseSearch! + 1 => entryOpeningPartitionUseSearch!
                             }
                         }
                         entryActiveStreamSize! == (entryActiveStreams! -> len) -> if {
@@ -1982,7 +1723,147 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(entryExpressionIndex!), 0" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sollang.text %v$(entryExpressionIndex!)_ptr, i64 $entryExpressionLength, 1" -> println
                     }
-                    entryExpression.kind == 12 -> if {
+                    entryExpression.kind == 36 -> if {
+                        "  %v$(entryExpressionIndex!) = freeze " -> print
+                        entryExpression -> writeIrType(context, state)
+                        " " -> print
+                        entryExpression.operand0 -> writeValue(functionIndex!, context, state)
+                        "" -> println
+                    }
+                    entryExpression.kind == 37 -> if {
+                        entryExpression.operand0 => entryBranchArmValueIndex!
+                        0 => entryBranchArmPosition!
+                        entryBranchArmValueIndex! >= 0 -> while {
+                            context.ir[entryBranchArmValueIndex!] => entryBranchArmValue
+                            "  " -> print
+                            entryBranchArmValue.nextOperand < 0 -> if { "%v$(entryExpressionIndex!)" -> print } else { "%v$(entryExpressionIndex!)_f$(entryBranchArmPosition!)" -> print }
+                            " = insertvalue " -> print
+                            entryExpression -> writeIrType(context, state)
+                            " " -> print
+                            entryBranchArmPosition! == 0 -> if { "poison" -> print } else {
+                                "%v$(entryExpressionIndex!)_f" -> print
+                                entryBranchArmPosition! - 1 -> writeDecimal
+                            }
+                            ", " -> print
+                            entryBranchArmValue -> writeIrType(context, state)
+                            " " -> print
+                            entryBranchArmValueIndex! -> writeValue(functionIndex!, context, state)
+                            ", $(entryBranchArmPosition!)" -> println
+                            entryBranchArmValue.nextOperand => entryBranchArmValueIndex!
+                            entryBranchArmPosition! + 1 => entryBranchArmPosition!
+                        }
+                    }
+                    entryExpression.kind == 39 -> if {
+                        "  %v$(entryExpressionIndex!) = freeze " -> print
+                        entryExpression -> writeIrType(context, state)
+                        " " -> print
+                        entryExpression.operand1 -> writeValue(functionIndex!, context, state)
+                        "" -> println
+                    }
+                    entryExpression.kind == 43 -> if {
+                        entryExpressionIndex! -> plannedStreamJunction(context, state) => entryJunctionIndex
+                        (entryJunctionIndex >= 0 and context.streamPlan.junctions[entryJunctionIndex].kind == 2) -> if {
+                            context.streamPlan.junctions[entryJunctionIndex].policy == 0 -> if { entryExpressionIndex! -> emitZipJunctionValue(entryJunctionIndex, functionIndex!, context, state) }
+                            (context.streamPlan.junctions[entryJunctionIndex].policy == 1 and not (entryJunctionIndex -> junctionRequiresConcurrent(context, state))) -> if { entryExpressionIndex! -> emitMergeJunctionValue(entryJunctionIndex, functionIndex!, context, state) }
+                            ((context.streamPlan.junctions[entryJunctionIndex].policy == 1 or context.streamPlan.junctions[entryJunctionIndex].policy == 3) and (entryJunctionIndex -> junctionRequiresConcurrent(context, state))) -> if { entryExpressionIndex! -> emitConcurrentJunctionValue(entryJunctionIndex, functionIndex!, context, state) }
+                            context.streamPlan.junctions[entryJunctionIndex].policy == 2 -> if { entryExpressionIndex! -> emitConcatJunctionValue(entryJunctionIndex, functionIndex!, context, state) }
+                            (context.streamPlan.junctions[entryJunctionIndex].policy == 3 and not (entryJunctionIndex -> junctionRequiresConcurrent(context, state))) -> if { entryExpressionIndex! -> emitLatestJunctionValue(entryJunctionIndex, functionIndex!, context, state) }
+                        }
+                    }
+                    (entryExpression.kind == 38 and context.supportsComputePool) -> if {
+                        context.ir[entryExpression.operand1] => entryParallelBranchSource
+                        entryExpressionIndex! -> parallelBranchCaptures(context, state) => entryParallelBranchCaptures!
+                        0 => entryParallelBranchArmCount!
+                        entryExpression.operand0 => entryParallelBranchArmCountIndex!
+                        entryParallelBranchArmCountIndex! >= 0 -> while {
+                            entryParallelBranchArmCount! + 1 => entryParallelBranchArmCount!
+                            context.ir[entryParallelBranchArmCountIndex!].nextOperand => entryParallelBranchArmCountIndex!
+                        }
+                        "  %v$(entryExpressionIndex!)_environment = alloca " -> print
+                        entryExpressionIndex! -> writeParallelBranchEnvironmentType(entryParallelBranchCaptures!, context, state)
+                        ", align 8" -> println
+                        "  %v$(entryExpressionIndex!)_source_address = getelementptr " -> print
+                        entryExpressionIndex! -> writeParallelBranchEnvironmentType(entryParallelBranchCaptures!, context, state)
+                        ", ptr %v$(entryExpressionIndex!)_environment, i32 0, i32 0" -> println
+                        "  store " -> print
+                        entryParallelBranchSource -> writeIrType(context, state)
+                        " " -> print
+                        entryExpression.operand1 -> writeValue(functionIndex!, context, state)
+                        ", ptr %v$(entryExpressionIndex!)_source_address, align " -> print
+                        entryParallelBranchSource -> storageAlign(context, state) -> writeDecimalLine
+                        0 => entryParallelBranchCaptureIndex!
+                        entryParallelBranchCaptureIndex! < (entryParallelBranchCaptures! -> len) -> while {
+                            "  %v$(entryExpressionIndex!)_capture_address_$(entryParallelBranchCaptureIndex!) = getelementptr " -> print
+                            entryExpressionIndex! -> writeParallelBranchEnvironmentType(entryParallelBranchCaptures!, context, state)
+                            ", ptr %v$(entryExpressionIndex!)_environment, i32 0, i32 " -> print
+                            entryParallelBranchCaptureIndex! + 1 -> writeDecimalLine
+                            context.ir[entryParallelBranchCaptures![entryParallelBranchCaptureIndex!]] => entryParallelBranchCapture
+                            "  store " -> print
+                            entryParallelBranchCapture -> ownsType -> if {
+                                "ptr " -> print
+                                CaptureValueRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, bindingIndex: entryParallelBranchCaptures![entryParallelBranchCaptureIndex!], captureIndex: entryParallelBranchCaptureIndex! } -> emitCapturePointer(context, state)
+                            } else {
+                                entryParallelBranchCapture -> writeIrType(context, state)
+                                " " -> print
+                                CaptureValueRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, bindingIndex: entryParallelBranchCaptures![entryParallelBranchCaptureIndex!], captureIndex: entryParallelBranchCaptureIndex! } -> emitCaptureValue(context, state)
+                            }
+                            ", ptr %v$(entryExpressionIndex!)_capture_address_$(entryParallelBranchCaptureIndex!), align " -> print
+                            entryParallelBranchCapture -> ownsType -> if { "8" -> println } else { entryParallelBranchCapture -> storageAlign(context, state) -> writeDecimalLine }
+                            entryParallelBranchCaptureIndex! + 1 => entryParallelBranchCaptureIndex!
+                        }
+                        entryExpressionIndex! -> parallelBranchArguments(context) => entryParallelBranchArguments!
+                        0 => entryParallelBranchArgumentIndex!
+                        entryParallelBranchArgumentIndex! < (entryParallelBranchArguments! -> len) -> while {
+                            entryParallelBranchArguments![entryParallelBranchArgumentIndex!] => entryParallelBranchArgument
+                            context.ir[entryParallelBranchArgument].parent => entryParallelBranchArgumentCall
+                            entryParallelBranchArgument -> parallelBranchArgumentOrdinal(context) => entryParallelBranchArgumentOrdinal
+                            entryParallelBranchArgumentCall -> callTargetParameter(entryParallelBranchArgumentOrdinal, context, state) => entryParallelBranchArgumentParameter
+                            "  %v$(entryExpressionIndex!)_argument_address_$(entryParallelBranchArgumentIndex!) = getelementptr " -> print
+                            entryExpressionIndex! -> writeParallelBranchEnvironmentType(entryParallelBranchCaptures!, context, state)
+                            ", ptr %v$(entryExpressionIndex!)_environment, i32 0, i32 " -> print
+                            1 + (entryParallelBranchCaptures! -> len) + entryParallelBranchArgumentIndex! -> writeDecimalLine
+                            "  store " -> print
+                            entryParallelBranchArgument -> writeCallArgument(entryParallelBranchArgumentCall, functionIndex!, entryParallelBranchArgumentOrdinal, context, state)
+                            ", ptr %v$(entryExpressionIndex!)_argument_address_$(entryParallelBranchArgumentIndex!), align " -> print
+                            entryParallelBranchArgumentParameter >= 0 -> if { context.ir[entryParallelBranchArgumentParameter] -> storageAlign(context, state) -> writeDecimalLine } else { context.ir[entryParallelBranchArgument] -> storageAlign(context, state) -> writeDecimalLine }
+                            entryParallelBranchArgumentIndex! + 1 => entryParallelBranchArgumentIndex!
+                        }
+                        "  %v$(entryExpressionIndex!)_output = alloca " -> print
+                        entryExpression -> writeIrType(context, state)
+                        ", align " -> print
+                        entryExpression -> storageAlign(context, state) -> writeDecimalLine
+                        "  %v$(entryExpressionIndex!)_group = alloca %sollang.compute_group, align 8" -> println
+                        "  %v$(entryExpressionIndex!)_callback_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 0" -> println
+                        "  store ptr @sollang_parallel_branch_$(entryExpressionIndex!), ptr %v$(entryExpressionIndex!)_callback_slot, align 8" -> println
+                        "  %v$(entryExpressionIndex!)_input_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 1" -> println
+                        "  store ptr null, ptr %v$(entryExpressionIndex!)_input_slot, align 8" -> println
+                        "  %v$(entryExpressionIndex!)_output_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 2" -> println
+                        "  store ptr %v$(entryExpressionIndex!)_output, ptr %v$(entryExpressionIndex!)_output_slot, align 8" -> println
+                        "  %v$(entryExpressionIndex!)_count_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 3" -> println
+                        "  store i64 $(entryParallelBranchArmCount!), ptr %v$(entryExpressionIndex!)_count_slot, align 8" -> println
+                        "  %v$(entryExpressionIndex!)_environment_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 4" -> println
+                        "  store ptr %v$(entryExpressionIndex!)_environment, ptr %v$(entryExpressionIndex!)_environment_slot, align 8" -> println
+                        "  %v$(entryExpressionIndex!)_sinks = call ptr @malloc(i64 $(entryParallelBranchArmCount! * 24))" -> println
+                        "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex!)_sinks, i8 0, i64 $(entryParallelBranchArmCount! * 24), i1 false)" -> println
+                        "  %v$(entryExpressionIndex!)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 5" -> println
+                        "  store ptr %v$(entryExpressionIndex!)_sinks, ptr %v$(entryExpressionIndex!)_sinks_slot, align 8" -> println
+                        6 => entryParallelBranchRuntimeField!
+                        entryParallelBranchRuntimeField! <= 10 -> while {
+                            "  %v$(entryExpressionIndex!)_runtime_slot_$(entryParallelBranchRuntimeField!) = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 $(entryParallelBranchRuntimeField!)" -> println
+                            "  store ptr null, ptr %v$(entryExpressionIndex!)_runtime_slot_$(entryParallelBranchRuntimeField!), align 8" -> println
+                            entryParallelBranchRuntimeField! + 1 => entryParallelBranchRuntimeField!
+                        }
+                        "  %v$(entryExpressionIndex!)_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 11" -> println
+                        "  store atomic i64 $(entryParallelBranchArmCount!), ptr %v$(entryExpressionIndex!)_failure_limit_slot release, align 8" -> println
+                        "  %v$(entryExpressionIndex!)_initialized_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 12" -> println
+                        "  store ptr null, ptr %v$(entryExpressionIndex!)_initialized_slot, align 8" -> println
+                        "  call void @sollang_compute_execute(ptr %v$(entryExpressionIndex!)_group)" -> println
+                        "  %v$(entryExpressionIndex!) = load " -> print
+                        entryExpression -> writeIrType(context, state)
+                        ", ptr %v$(entryExpressionIndex!)_output, align " -> print
+                        entryExpression -> storageAlign(context, state) -> writeDecimalLine
+                    }
+                    (entryExpression.kind == 12 or entryExpression.kind == 35) -> if {
                         entryExpression.operand0 < 0 -> if {
                             "  %v$(entryExpressionIndex!) = freeze " -> print
                             entryExpression -> writeIrType(context, state)
@@ -2064,6 +1945,14 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             entryFieldValue.nextOperand => entryFieldValueIndex!
                             entryFieldPosition! + 1 => entryFieldPosition!
                         }
+                    }
+                    entryExpression.kind == 31 -> if {
+                        "  %v$(entryExpressionIndex!)_start = insertvalue { i32, i32 } poison, i32 " -> print
+                        entryExpression.operand0 -> writeValue(functionIndex!, context, state)
+                        ", 0" -> println
+                        "  %v$(entryExpressionIndex!) = insertvalue { i32, i32 } %v$(entryExpressionIndex!)_start, i32 " -> print
+                        entryExpression.operand1 -> writeValue(functionIndex!, context, state)
+                        ", 1" -> println
                     }
                     entryExpression.kind == 13 -> if {
                         (entryExpressionIndex! -> canonicalMemberPathAvailable(context, state)) -> if {
@@ -3782,9 +3671,9 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                                     entryExpressionMemberBaseValue.typeId => entryExpressionMemberBaseTypeId!
                                                 }
                                                 entryExpressionMemberBaseTypeId! >= 0 -> if {
-                                                    context.types[entryExpressionMemberBaseTypeId!] => entryExpressionMemberBaseType
-                                                    entryExpressionMemberBaseType.module => entryExpressionMemberOwnerSource!
-                                                    context.ranges[entryExpressionMemberOwnerSource!] => entryExpressionMemberOwnerRange
+                                                    (context.types[entryExpressionMemberBaseTypeId!].kind == 8) -> if {
+                                                        context.types[entryExpressionMemberBaseTypeId!].first => entryExpressionMemberBaseTypeId!
+                                                    }
                                                     entryExpressionRoot.payloadStart => entryExpressionMemberDot!
                                                     entryExpressionRoot.payloadStart + entryExpressionRoot.payloadLength => entryExpressionMemberEnd
                                                     (entryExpressionMemberDot! < entryExpressionMemberEnd and (context.sources[runtimeArgument.sourceModule] -> byte(entryExpressionMemberDot!)) != UInt8(46)) -> while {
@@ -3793,38 +3682,34 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                                     entryExpressionMemberDot! + UIntSize(1) => entryExpressionMemberNameStart
                                                     entryExpressionMemberEnd - entryExpressionMemberNameStart => entryExpressionMemberNameLength
                                                     -1 => entryExpressionMemberFieldOrdinal!
-                                                    -1 => entryExpressionMemberFieldTypeAst!
-                                                    0 => entryExpressionMemberCandidateOrdinal!
                                                     0 => entryExpressionMemberFieldSearch!
-                                                    entryExpressionMemberFieldSearch! < entryExpressionMemberOwnerRange.symbolCount -> while {
-                                                        context.symbols[entryExpressionMemberOwnerRange.symbolStart + entryExpressionMemberFieldSearch!] => entryExpressionMemberField
-                                                        (entryExpressionMemberField.kind == 26 and entryExpressionMemberField.parent == entryExpressionMemberBaseType.symbol) -> if {
-                                                            context.tokens[entryExpressionMemberOwnerRange.tokenStart + entryExpressionMemberField.nameToken] => entryExpressionMemberFieldName
+                                                    entryExpressionMemberFieldSearch! < (context.fields -> len) -> while {
+                                                        context.fields[entryExpressionMemberFieldSearch!] => entryExpressionMemberField
+                                                        (entryExpressionMemberField.status == 0
+                                                            and entryExpressionMemberField.ownerType == entryExpressionMemberBaseTypeId!
+                                                            and entryExpressionMemberField.sourceModule >= 0
+                                                            and (entryExpressionMemberField.fieldSymbol >= 0 or entryExpressionMemberField.labelToken >= 0)) -> if {
+                                                            context.ranges[entryExpressionMemberField.sourceModule] => entryExpressionMemberFieldRange
+                                                            entryExpressionMemberField.labelToken => entryExpressionMemberFieldNameToken!
+                                                            entryExpressionMemberField.fieldSymbol >= 0 -> if {
+                                                                context.symbols[entryExpressionMemberFieldRange.symbolStart + entryExpressionMemberField.fieldSymbol] => entryExpressionMemberFieldSymbol
+                                                                entryExpressionMemberFieldSymbol.nameToken => entryExpressionMemberFieldNameToken!
+                                                            }
+                                                            context.tokens[entryExpressionMemberFieldRange.tokenStart + entryExpressionMemberFieldNameToken!] => entryExpressionMemberFieldName
                                                             entryExpressionMemberFieldName.span.length == entryExpressionMemberNameLength => entryExpressionMemberNameEqual!
                                                             UIntSize(0) => entryExpressionMemberNameByte!
                                                             (entryExpressionMemberNameEqual! and entryExpressionMemberNameByte! < entryExpressionMemberNameLength) -> while {
-                                                                (context.sources[runtimeArgument.sourceModule] -> byte(entryExpressionMemberNameStart + entryExpressionMemberNameByte!)) != (context.sources[entryExpressionMemberOwnerSource!] -> byte(entryExpressionMemberFieldName.span.start + entryExpressionMemberNameByte!)) -> if {
+                                                                (context.sources[runtimeArgument.sourceModule] -> byte(entryExpressionMemberNameStart + entryExpressionMemberNameByte!)) != (context.sources[entryExpressionMemberField.sourceModule] -> byte(entryExpressionMemberFieldName.span.start + entryExpressionMemberNameByte!)) -> if {
                                                                     false => entryExpressionMemberNameEqual!
                                                                 }
                                                                 entryExpressionMemberNameByte! + UIntSize(1) => entryExpressionMemberNameByte!
                                                             }
                                                             entryExpressionMemberNameEqual! -> if {
-                                                                entryExpressionMemberCandidateOrdinal! => entryExpressionMemberFieldOrdinal!
-                                                                entryExpressionMemberField.typeNode => entryExpressionMemberFieldTypeAst!
+                                                                entryExpressionMemberField.ordinal => entryExpressionMemberFieldOrdinal!
+                                                                context.types[entryExpressionMemberField.fieldType].symbol => entryExpressionRootTypeSymbol!
                                                             }
-                                                            entryExpressionMemberCandidateOrdinal! + 1 => entryExpressionMemberCandidateOrdinal!
                                                         }
                                                         entryExpressionMemberFieldSearch! + 1 => entryExpressionMemberFieldSearch!
-                                                    }
-                                                    entryExpressionMemberFieldTypeAst! >= 0 -> if {
-                                                        0 => entryExpressionMemberTypeSearch!
-                                                        entryExpressionMemberTypeSearch! < (context.nominal -> len) -> while {
-                                                            context.nominal[entryExpressionMemberTypeSearch!] => entryExpressionMemberType
-                                                            (entryExpressionMemberType.sourceModule == entryExpressionMemberOwnerSource! and entryExpressionMemberType.typeAst == entryExpressionMemberFieldTypeAst! and entryExpressionMemberType.status == 0) -> if {
-                                                                entryExpressionMemberType.targetSymbol => entryExpressionRootTypeSymbol!
-                                                            }
-                                                            entryExpressionMemberTypeSearch! + 1 => entryExpressionMemberTypeSearch!
-                                                        }
                                                     }
                                                     entryExpressionMemberFieldOrdinal! >= 0 -> if {
                                                         "  %v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!) = extractvalue " -> print
@@ -4159,6 +4044,26 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         "  br label %while$(entryExpressionIndex!)_header" -> println
                         "while$(entryExpressionIndex!)_exit:" -> println
                     }
+                    entryExpressionIndex! -> plannedPartitionPredicateRoute(context, state) => entryCompletedPartitionPredicateRoute
+                    (entryCompletedPartitionPredicateRoute >= 0 and context.streamPlan.partitionRoutes[entryCompletedPartitionPredicateRoute].predicateIr == entryExpressionIndex!) -> if {
+                        entryCompletedPartitionPredicateRoute -> plannedPartitionJunction(context, state) => entryCompletedPartitionPredicateJunction
+                        context.streamPlan.junctions[entryCompletedPartitionPredicateJunction] => entryCompletedPartition
+                        context.streamPlan.partitionRoutes[entryCompletedPartitionPredicateRoute] => entryCompletedPartitionRoute
+                        entryCompletedPartitionPredicateRoute + 1 => entryCompletedPartitionNextRoute!
+                        "  br i1 " -> print
+                        entryExpression.kind == 4 -> if {
+                            entryExpression -> sourceToken(context, state) => entryPartitionPredicateToken
+                            ((context.sources[entryExpression.sourceModule] -> byte(entryPartitionPredicateToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                        } else { "%v$(entryExpressionIndex!)" -> print }
+                        ", label %partition$(entryCompletedPartition.junctionIr)_route$(entryCompletedPartitionRoute.ordinal), label %partition$(entryCompletedPartition.junctionIr)_" -> print
+                        context.streamPlan.partitionRoutes[entryCompletedPartitionNextRoute!].predicateIr >= 0 -> if { "test$(context.streamPlan.partitionRoutes[entryCompletedPartitionNextRoute!].ordinal)" -> println } else { "route$(context.streamPlan.partitionRoutes[entryCompletedPartitionNextRoute!].ordinal)" -> println }
+                        context.streamPlan.partitionRoutes[entryCompletedPartitionNextRoute!].predicateIr >= 0 -> if {
+                            "partition$(entryCompletedPartition.junctionIr)_test$(context.streamPlan.partitionRoutes[entryCompletedPartitionNextRoute!].ordinal):" -> println
+                        } else {
+                            context.streamPlan.partitionRoutes[entryCompletedPartition.routeStart] => entryCompletedPartitionFirstRoute
+                            "partition$(entryCompletedPartition.junctionIr)_route$(entryCompletedPartitionFirstRoute.ordinal):" -> println
+                        }
+                    }
                     (entryExpression.kind == 30 and entryActiveStreamSize! > 0) -> if {
                         1 => entryStreamStops![entryActiveStreamSize! - 1]
                     }
@@ -4399,8 +4304,43 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         false => entryNextInsideStream!
                         entryNextExpressionIndex! >= 0 -> if {
                             NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseStreamPipeline.terminalIr } -> irDescendsFrom(context, state) => entryNextInsideStream!
+                            (not entryNextInsideStream!) -> if {
+                                entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryCloseCandidatePartitionRoute
+                                entryNextExpressionIndex! -> plannedPartitionPredicateRoute(context, state) => entryCloseCandidatePredicateRoute
+                                (entryCloseCandidatePartitionRoute >= 0 and entryCloseCandidatePredicateRoute >= 0) -> if {
+                                    entryCloseCandidatePartitionRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePartitionJunction
+                                    entryCloseCandidatePredicateRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePredicateJunction
+                                    (entryCloseCandidatePartitionJunction == entryCloseCandidatePredicateJunction and entryCloseStreamPipeline.terminalIr == (entryCloseCandidatePartitionJunction -> partitionFirstTerminal(context, state))) -> if { true => entryNextInsideStream! }
+                                }
+                            }
                         }
                         entryNextInsideStream! -> if { false => entryCloseStreamProgress! } else {
+                            entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryClosePartitionRoute
+                            entryClosePartitionRoute >= 0 -> if {
+                                entryClosePartitionRoute -> plannedPartitionJunction(context, state) => entryClosePartitionJunction
+                                context.streamPlan.junctions[entryClosePartitionJunction] => entryClosePartition
+                                entryClosePartitionJunction -> partitionFirstTerminal(context, state) => entryClosePartitionFirstTerminal
+                                entryStreamStops![entryActiveStreamSize! - 1] == 1 -> if {
+                                    "  br label %stream$(entryClosePartitionFirstTerminal)_exit" -> println
+                                } else {
+                                    "  br label %stream$(entryClosePartitionFirstTerminal)_continue" -> println
+                                }
+                                entryCloseStreamPipeline.terminalIr == entryClosePartitionFirstTerminal -> if {
+                                    "stream$(entryClosePartitionFirstTerminal)_continue:" -> println
+                                    "  br label %stream$(entryClosePartitionFirstTerminal)_header" -> println
+                                    "stream$(entryClosePartitionFirstTerminal)_exit:" -> println
+                                    "  %stream$(entryClosePartitionFirstTerminal)_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal)_producer_drop, null" -> println
+                                    "  br i1 %stream$(entryClosePartitionFirstTerminal)_has_drop, label %stream$(entryClosePartitionFirstTerminal)_drop, label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
+                                    "stream$(entryClosePartitionFirstTerminal)_drop:" -> println
+                                    "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context)" -> println
+                                    "  br label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
+                                    "stream$(entryClosePartitionFirstTerminal)_drop_done:" -> println
+                                    "  br label %partition$(entryClosePartition.junctionIr)_done" -> println
+                                }
+                                entryClosePartitionRoute == entryClosePartition.routeStart + entryClosePartition.routeCount - 1 -> if {
+                                    "partition$(entryClosePartition.junctionIr)_done:" -> println
+                                }
+                            } else {
                             -1 => entryCloseTakeStage!
                             -1 => entryCloseFlatMapStage!
                             entryCloseStreamPipeline.stageStart => entryCloseStageSearch!
@@ -4463,6 +4403,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                 "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context)" -> println
                                 "  br label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
                                 "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
+                            }
                             }
                             entryActiveStreamSize! - 1 => entryActiveStreamSize!
                         }

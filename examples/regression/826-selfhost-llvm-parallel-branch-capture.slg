@@ -1,0 +1,24 @@
+import sollang.compiler.llvm.text as llvm
+
+# Readonly captures required by local arm functions are transported by address
+# through the structured worker environment and remain valid until the join.
+main {
+    [
+        """
+        run value: Int, offset: Int -> (adjusted: Int, scaled: Int) {
+            adjust input: Int -> Int => input + offset
+            scale input: Int -> Int => input * offset
+            value -> parallel branch {
+                adjusted: ref -> adjust
+                scaled: ref -> scale
+            }
+        }
+        main {
+            5 -> run(3) => result
+            result.adjusted -> println
+            result.scaled -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

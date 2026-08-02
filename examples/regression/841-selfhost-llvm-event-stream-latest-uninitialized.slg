@@ -1,0 +1,32 @@
+import sollang.compiler.llvm.text as llvm
+
+# latest cannot form a snapshot when one input completes before publishing its
+# first value; it must cancel cleanly and emit nothing.
+main {
+    [
+        """
+        import std.sequence
+        makeValues values: Range -> Stream<Int> => values -> defer
+        asEvents left: move Stream<Int>, right: move Stream<Int> -> EventStream<Int> {
+            (left, right) -> merge
+        }
+        main {
+            1..0 -> makeValues => emptyLeft
+            1..0 -> makeValues => emptyRight
+            emptyLeft -> asEvents(emptyRight) => empty
+            1..2 -> makeValues => valuesLeft
+            10..11 -> makeValues => valuesRight
+            valuesLeft -> asEvents(valuesRight) => values
+            0 => received!
+            (empty: empty, values: values) -> latest => snapshots
+            snapshots -> each snapshot { received! + 1 => received! }
+            "received=$(received!)" -> println
+        }
+        """,
+        """
+        namespace std.sequence
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

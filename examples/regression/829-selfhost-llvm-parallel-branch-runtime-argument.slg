@@ -1,0 +1,25 @@
+import sollang.compiler.llvm.text as llvm
+
+# Non-literal arm arguments are evaluated before the fork, stored in the
+# branch environment, and read by workers without referring to caller SSA.
+main {
+    [
+        """
+        add value: Int, amount: Int -> Int => value + amount
+        double value: Int -> Int => value * 2
+        isEven value: Int -> Bool => value % 2 == 0
+        run value: Int, amount: Int -> (number: Int, flag: Bool) {
+            value -> parallel branch {
+                number: ref -> add(amount) -> double
+                flag: ref -> add(amount) -> isEven
+            }
+        }
+        main {
+            5 -> run(3) => result
+            result.number -> println
+            result.flag -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

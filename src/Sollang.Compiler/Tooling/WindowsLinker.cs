@@ -212,6 +212,11 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             ReleaseSemaphore
             GetActiveProcessorCount
             WaitForSingleObject
+            AcquireSRWLockExclusive
+            ReleaseSRWLockExclusive
+            InitializeConditionVariable
+            SleepConditionVariableSRW
+            WakeAllConditionVariable
             __chkstk
             """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 

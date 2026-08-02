@@ -74,6 +74,36 @@ internal sealed partial class LlvmEmitter
         return new RuntimeStruct(type, aggregate);
     }
 
+    private RuntimeStruct EmitProductExpression(ProductExpression expression)
+    {
+        var values = expression.Elements.Select(element => EmitExpression(element.Value)).ToArray();
+        var definition = _program.Types.Structs.SingleOrDefault(candidate =>
+            candidate.IsProduct
+            && candidate.Fields.Count == values.Length
+            && candidate.Fields.Select(static field => field.Type).SequenceEqual(values.Select(static value => value.Type))
+            && candidate.Fields.Select(static field => field.Name).SequenceEqual(
+                expression.Elements.Select((element, index) => element.Label ?? $"_{index}"),
+                StringComparer.Ordinal))
+            ?? throw new SollangException("semantic product type is missing during LLVM emission");
+
+        var aggregate = "poison";
+        for (var index = 0; index < values.Length; index++)
+        {
+            var field = definition.Fields[index];
+            var value = values[index];
+            EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
+            var materialized = MaterializeAggregateValue(value);
+            var next = NextTemp("product_init");
+            EmitAssign(
+                next,
+                $"insertvalue {LlvmStructType(definition.Id)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+            RemoveOwnedLiteralSources(expression.Elements[index].Value, field.Type);
+        }
+
+        return new RuntimeStruct(definition.Id, aggregate);
+    }
+
     private RuntimeStruct EmitContextualStructLiteral(
         DictionaryLiteralExpression expression,
         BoundType type)
@@ -106,6 +136,12 @@ internal sealed partial class LlvmEmitter
         if (expression is NameExpression name)
         {
             RemoveLocal(name.Name);
+            return;
+        }
+
+        if (expression is TapExpression tap)
+        {
+            RemoveOwnedLiteralSources(tap.Source, expectedType);
             return;
         }
 
@@ -144,6 +180,12 @@ internal sealed partial class LlvmEmitter
                 static field => field.Name,
                 static field => field.Value,
                 StringComparer.Ordinal),
+            ProductExpression product => product.Elements
+                .Select((element, index) => (Name: element.Label ?? $"_{index}", element.Value))
+                .ToDictionary(
+                    static element => element.Name,
+                    static element => element.Value,
+                    StringComparer.Ordinal),
             DictionaryLiteralExpression contextual => contextual.Entries.ToDictionary(
                 entry => ((NameExpression)entry.Key).Name,
                 static entry => entry.Value,

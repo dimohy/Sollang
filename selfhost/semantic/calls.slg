@@ -134,9 +134,9 @@ public resolve source: Text -> [CallResolution; ~] {
             tokens![flowTokenIndex!].kind == grammar.tokenIdDot() -> if { true => hasQualifiedFlowTarget! }
             flowTokenIndex! + 1 => flowTokenIndex!
         }
-        ((node.kind == 10 and hasFlowCallTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression() or node.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or node.kind == 48) -> if {
+        ((node.kind == 10 and hasFlowCallTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression() or node.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or node.kind == 48 or node.kind == 77) -> if {
             -1 => callNameToken!
-            node.kind == 48 -> if { node.payloadToken => callNameToken! }
+            (node.kind == 48 or node.kind == 77) -> if { node.payloadToken => callNameToken! }
             node.kind == 10 -> if {
                 0 => flowNameSearch!
                 flowNameSearch! < (nodes! -> len) -> while {
@@ -147,7 +147,7 @@ public resolve source: Text -> [CallResolution; ~] {
             node.firstToken => tokenIndex!
             false => inFlowTypeArgument!
             false => inFlowCallArguments!
-            (tokenIndex! < node.firstToken + node.tokenCount and node.kind != 48 and callNameToken! < 0) -> while {
+            (tokenIndex! < node.firstToken + node.tokenCount and node.kind != 48 and node.kind != 77 and callNameToken! < 0) -> while {
                 tokens![tokenIndex!].kind == grammar.tokenIdLess() -> if { true => inFlowTypeArgument! }
                 tokens![tokenIndex!].kind == grammar.tokenIdGreater() -> if { false => inFlowTypeArgument! }
                 tokens![tokenIndex!].kind == grammar.tokenIdLeftParen() -> if { true => inFlowCallArguments! }
@@ -187,13 +187,13 @@ public resolve source: Text -> [CallResolution; ~] {
                         callByte != functionByte -> if { false => equal! }
                         nameByte! + UIntSize(1) => nameByte!
                     }
-                    (equal! and (node.kind == 10 or node.kind == 11 or node.kind == 48 or candidate.secondaryTypeNode < 0)) -> if { symbolIndex! => functionSymbol! }
+                    (equal! and (node.kind == 10 or node.kind == 11 or node.kind == 48 or node.kind == 77 or candidate.secondaryTypeNode < 0)) -> if { symbolIndex! => functionSymbol! }
                 }
                 symbolIndex! + 1 => symbolIndex!
             }
             RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
             (callNameToken! > node.firstToken and tokens![callNameToken! - 1].kind == grammar.tokenIdDot()) -> if { false => intrinsicFlow! }
-            (functionSymbol! >= 0 or (not intrinsicFlow! and (node.kind == 10 or node.kind == 11 or node.kind == 48))) -> if {
+            (functionSymbol! >= 0 or (not intrinsicFlow! and (node.kind == 10 or node.kind == 11 or node.kind == 48 or node.kind == 77))) -> if {
                 2 => callStatus!
                 functionSymbol! >= 0 -> if { 0 => callStatus! }
                 resolved! -> push(CallResolution {
@@ -312,9 +312,9 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                     true => moduleGeneratedComHasCallOwner!
                 }
             }
-            ((callNode.kind == 10 and (moduleHasFlowCallTarget! or moduleHasQualifiedCallTarget!)) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression() or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or callNode.kind == 48 or (callNode.kind == 36 and moduleHasGeneratedComTarget! and not moduleGeneratedComHasCallOwner!)) -> if {
+            ((callNode.kind == 10 and (moduleHasFlowCallTarget! or moduleHasQualifiedCallTarget!)) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression() or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or callNode.kind == 48 or callNode.kind == 77 or (callNode.kind == 36 and moduleHasGeneratedComTarget! and not moduleGeneratedComHasCallOwner!)) -> if {
                 -1 => callNameToken!
-                callNode.kind == 48 -> if { callNode.payloadToken => callNameToken! }
+                (callNode.kind == 48 or callNode.kind == 77) -> if { callNode.payloadToken => callNameToken! }
                 callNode.kind == 36 -> if {
                     callNode.firstToken => comCallNameSearch!
                     comCallNameSearch! < callNode.firstToken + callNode.tokenCount -> while {
@@ -332,7 +332,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 callNode.firstToken => callTokenIndex!
                 false => moduleInFlowTypeArgument!
                 false => moduleInFlowCallArguments!
-                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and callNameToken! < 0) -> while {
+                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and callNode.kind != 77 and callNameToken! < 0) -> while {
                     tokens![callTokenIndex!].kind == grammar.tokenIdLess() -> if { true => moduleInFlowTypeArgument! }
                     tokens![callTokenIndex!].kind == grammar.tokenIdGreater() -> if { false => moduleInFlowTypeArgument! }
                     tokens![callTokenIndex!].kind == grammar.tokenIdLeftParen() -> if { true => moduleInFlowCallArguments! }
@@ -372,7 +372,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                             callByte != functionByte -> if { false => localEqual! }
                             localNameByte! + UIntSize(1) => localNameByte!
                         }
-                        (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
+                        (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
@@ -388,7 +388,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 }
                 RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
                 (callNameToken! > callNode.firstToken and tokens![callNameToken! - 1].kind == grammar.tokenIdDot()) -> if { false => intrinsicFlow! }
-                (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)))) -> if {
+                (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)))) -> if {
                     2 => localCallStatus!
                     localFunctionSymbol! != -1 -> if { 0 => localCallStatus! }
                     localCalls! -> push(CallResolution {
@@ -463,7 +463,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
             } else {
                 false => siblingFound!
                 false => siblingAmbiguous!
-                (local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48)) -> if {
+                (local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48 or localCallNode.kind == 77)) -> if {
                     identities![sourceIndex!] => currentIdentity
                     0 => siblingModuleIndex!
                     siblingModuleIndex! < (identities! -> len) -> while {
@@ -651,9 +651,9 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     true => moduleGeneratedComHasCallOwner!
                 }
             }
-            ((callNode.kind == 10 and (moduleHasFlowCallTarget or moduleHasQualifiedCallTarget!)) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression() or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or callNode.kind == 48 or (callNode.kind == 36 and moduleHasGeneratedComTarget! and not moduleGeneratedComHasCallOwner!)) -> if {
+            ((callNode.kind == 10 and (moduleHasFlowCallTarget or moduleHasQualifiedCallTarget!)) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression() or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or callNode.kind == 48 or callNode.kind == 77 or (callNode.kind == 36 and moduleHasGeneratedComTarget! and not moduleGeneratedComHasCallOwner!)) -> if {
                 -1 => callNameToken!
-                callNode.kind == 48 -> if { callNode.payloadToken => callNameToken! }
+                (callNode.kind == 48 or callNode.kind == 77) -> if { callNode.payloadToken => callNameToken! }
                 callNode.kind == 36 -> if {
                     callNode.firstToken => comCallNameSearch!
                     comCallNameSearch! < callNode.firstToken + callNode.tokenCount -> while {
@@ -665,7 +665,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 callNode.firstToken => callTokenIndex!
                 false => moduleInFlowTypeArgument!
                 false => moduleInFlowCallArguments!
-                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and callNameToken! < 0) -> while {
+                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and callNode.kind != 77 and callNameToken! < 0) -> while {
                     package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdLess() -> if { true => moduleInFlowTypeArgument! }
                     package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdGreater() -> if { false => moduleInFlowTypeArgument! }
                     package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdLeftParen() -> if { true => moduleInFlowCallArguments! }
@@ -707,7 +707,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                             callByte != functionByte -> if { false => localEqual! }
                             localNameByte! + UIntSize(1) => localNameByte!
                         }
-                        (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
+                        (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
@@ -722,7 +722,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 }
                 RuntimeNameRequest { source: source, token: package.tokens[sourceRange.tokenStart + callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
                 (callNameToken! > callNode.firstToken and package.tokens[sourceRange.tokenStart + callNameToken! - 1].kind == grammar.tokenIdDot()) -> if { false => intrinsicFlow! }
-                (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)))) -> if {
+                (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)))) -> if {
                     2 => localCallStatus!
                     localFunctionSymbol! != -1 -> if { 0 => localCallStatus! }
                     localCalls! -> push(CallResolution {
@@ -873,7 +873,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 # remain module-local without wrappers or runtime indirection.
                 false => siblingFound!
                 false => siblingAmbiguous!
-                (local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48)) -> if {
+                (local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48 or localCallNode.kind == 77)) -> if {
                     identities![sourceIndex!] => currentIdentity
                     0 => siblingModuleIndex!
                     siblingModuleIndex! < (identities! -> len) -> while {
@@ -1048,7 +1048,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 # or block-function calls such as `defer`, `map`, and `filter`.
                 false => openImportFound!
                 false => openImportAmbiguous!
-                (not siblingFound! and local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48)) -> if {
+                (not siblingFound! and local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48 or localCallNode.kind == 77)) -> if {
                     0 => openImportIndex!
                     openImportIndex! < (resolvedImports! -> len) -> while {
                         resolvedImports![openImportIndex!] => openImport

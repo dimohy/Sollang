@@ -13,6 +13,14 @@ internal sealed partial class SemanticCompiler
     private readonly Dictionary<object, BoundFunction> _resolvedGenericCalls = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<object, BoundDynTraitConversion> _dynTraitConversions = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<object, BoundDynTraitDispatch> _dynTraitDispatches = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<ProductExpression, BoundType> _productExpressionTypes =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<PartitionExpression, (BoundType ElementType, bool IsEvent)> _partitionExpressionSources =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<StreamJoinExpression, BoundStreamJoin> _streamJoins =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BranchExpression, BoundParallelBranch> _parallelBranches =
+        new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _validatingGenericSpecializations = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionBindings =
         new(ReferenceEqualityComparer.Instance);
@@ -30,7 +38,15 @@ internal sealed partial class SemanticCompiler
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Statement, BoundEventStreamPipeline> _eventStreamConsumers =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Statement, BoundPartitionPipeline> _partitionConsumers =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Statement, BoundStreamJoinPipeline> _streamJoinConsumers =
+        new(ReferenceEqualityComparer.Instance);
     private Dictionary<string, DeferredStreamPlan> _currentDeferredStreams =
+        new(StringComparer.Ordinal);
+    private Dictionary<string, PendingPartitionPlan> _currentPartitions =
+        new(StringComparer.Ordinal);
+    private Dictionary<string, PendingStreamJoinPlan> _currentStreamJoins =
         new(StringComparer.Ordinal);
     private readonly HashSet<string> _activeReadonlyReferenceBindings =
         new(StringComparer.Ordinal);
@@ -63,6 +79,30 @@ internal sealed partial class SemanticCompiler
         bool IsEvent = false,
         Expression? EventSource = null,
         BoundType? EventSourceElementType = null);
+
+    private sealed class PendingPartitionPlan(
+        BindingStatement declaration,
+        PartitionExpression expression,
+        BoundType sourceElementType,
+        bool isEvent)
+    {
+        public BindingStatement Declaration { get; } = declaration;
+        public PartitionExpression Expression { get; } = expression;
+        public BoundType SourceElementType { get; } = sourceElementType;
+        public bool IsEvent { get; } = isEvent;
+        public Dictionary<string, (Statement Statement, BlockFunctionPipelineStatement Pipeline)> Consumers { get; } =
+            new(StringComparer.Ordinal);
+    }
+
+    private sealed record DeferredFlowScope(
+        Dictionary<string, DeferredStreamPlan> Streams,
+        Dictionary<string, PendingPartitionPlan> Partitions,
+        Dictionary<string, PendingStreamJoinPlan> Joins);
+
+    private sealed record PendingStreamJoinPlan(
+        BindingStatement Declaration,
+        StreamJoinExpression Expression,
+        BoundStreamJoin Join);
 
     public SemanticCompiler(SollangProgram program, int pointerBitWidth)
     {
@@ -155,7 +195,11 @@ internal sealed partial class SemanticCompiler
             reusedMainSemantics,
             _deferredStreamDeclarations,
             _deferredStreamConsumers,
-            _eventStreamConsumers);
+            _eventStreamConsumers,
+            _partitionConsumers,
+            _streamJoinConsumers,
+            _streamJoins,
+            _parallelBranches);
     }
 
     private IReadOnlyDictionary<string, BoundTraitDefinition> BindTraits(
@@ -1774,6 +1818,51 @@ internal sealed partial class SemanticCompiler
                     }
                 }
                 break;
+            case BranchExpression branch:
+                CollectCapturedNames(branch.Source, locals, candidates, referenced);
+                foreach (var target in branch.Arms.SelectMany(static arm => arm.Targets))
+                {
+                    if (target.Path.Count == 1)
+                    {
+                        _collectingLocalCalls?.Add(target.Path[0]);
+                    }
+                    foreach (var argument in target.Arguments)
+                    {
+                        CollectCapturedNames(argument, locals, candidates, referenced);
+                    }
+                }
+                break;
+            case TapExpression tap:
+                CollectCapturedNames(tap.Source, locals, candidates, referenced);
+                foreach (var target in tap.Targets)
+                {
+                    if (target.Path.Count == 1)
+                    {
+                        _collectingLocalCalls?.Add(target.Path[0]);
+                    }
+                    foreach (var argument in target.Arguments)
+                    {
+                        CollectCapturedNames(argument, locals, candidates, referenced);
+                    }
+                }
+                break;
+            case PartitionExpression partition:
+                CollectCapturedNames(partition.Source, locals, candidates, referenced);
+                foreach (var arm in partition.Arms)
+                {
+                    if (arm.Condition is not null)
+                    {
+                        var routeLocals = new HashSet<string>(locals, StringComparer.Ordinal)
+                        {
+                            partition.ItemName
+                        };
+                        CollectCapturedNames(arm.Condition, routeLocals, candidates, referenced);
+                    }
+                }
+                break;
+            case StreamJoinExpression join:
+                CollectCapturedNames(join.Source, locals, candidates, referenced);
+                break;
             case CallExpression call:
                 if (call.Path.Count == 1)
                 {
@@ -1810,6 +1899,12 @@ internal sealed partial class SemanticCompiler
                 foreach (var field in structure.Fields)
                 {
                     CollectCapturedNames(field.Value, locals, candidates, referenced);
+                }
+                break;
+            case ProductExpression product:
+                foreach (var element in product.Elements)
+                {
+                    CollectCapturedNames(element.Value, locals, candidates, referenced);
                 }
                 break;
             case FieldAccessExpression field:
@@ -1956,6 +2051,38 @@ internal sealed partial class SemanticCompiler
                     $"parallel callback cannot capture non-sendable binding '{name}' of type {FormatType(type)}");
             }
         }
+    }
+
+    private IReadOnlyDictionary<string, BoundType> SelectParallelBranchCapturedBindings(
+        IEnumerable<BoundFunction> targets,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> candidates)
+    {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<BoundFunction>(targets.Where(static target => target.IsLocal));
+        var visited = new HashSet<BoundFunction>();
+        while (pending.TryDequeue(out var target))
+        {
+            if (!visited.Add(target))
+            {
+                continue;
+            }
+
+            var captures = SelectCapturedBindings(target, candidates, out var nestedCalls);
+            referenced.UnionWith(captures.Keys);
+            foreach (var nestedCall in nestedCalls)
+            {
+                if (functions.TryGetValue(nestedCall, out var nestedTarget) && nestedTarget.IsLocal)
+                {
+                    pending.Enqueue(nestedTarget);
+                }
+            }
+        }
+
+        return candidates
+            .Where(binding => referenced.Contains(binding.Key))
+            .OrderBy(static binding => binding.Key, StringComparer.Ordinal)
+            .ToDictionary(binding => binding.Key, binding => binding.Value, StringComparer.Ordinal);
     }
 
     private void ValidateUserFunction(
@@ -2132,6 +2259,15 @@ internal sealed partial class SemanticCompiler
                 function.Line,
                 function.Column,
                 $"function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
+        }
+        if (function.ReturnType == BoundType.Text
+            && function.Body is not null
+            && IsUnmaterializedDeferredText(function.Body))
+        {
+            throw Error(
+                function.Body.Line,
+                function.Body.Column,
+                $"function '{function.Name}' cannot return deferred interpolation; materialize it into an explicit Arena owner");
         }
 
         if (TypeContainsReadonlyReference(function.ReturnType)
@@ -3036,14 +3172,16 @@ internal sealed partial class SemanticCompiler
         return bindings;
     }
 
-    private Dictionary<string, DeferredStreamPlan> BeginDeferredStreamScope()
+    private DeferredFlowScope BeginDeferredStreamScope()
     {
-        var parent = _currentDeferredStreams;
+        var parent = new DeferredFlowScope(_currentDeferredStreams, _currentPartitions, _currentStreamJoins);
         _currentDeferredStreams = new Dictionary<string, DeferredStreamPlan>(StringComparer.Ordinal);
+        _currentPartitions = new Dictionary<string, PendingPartitionPlan>(StringComparer.Ordinal);
+        _currentStreamJoins = new Dictionary<string, PendingStreamJoinPlan>(StringComparer.Ordinal);
         return parent;
     }
 
-    private void EndDeferredStreamScope(Dictionary<string, DeferredStreamPlan> parent)
+    private void EndDeferredStreamScope(DeferredFlowScope parent)
     {
         if (_currentDeferredStreams.Count != 0)
         {
@@ -3055,7 +3193,29 @@ internal sealed partial class SemanticCompiler
                 + "must be consumed exactly once with each");
         }
 
-        _currentDeferredStreams = parent;
+        if (_currentPartitions.Count != 0)
+        {
+            var unconsumed = _currentPartitions.First();
+            var missing = unconsumed.Value.Expression.Arms
+                .Where(arm => !unconsumed.Value.Consumers.ContainsKey(arm.Label))
+                .Select(static arm => arm.Label);
+            throw Error(
+                unconsumed.Value.Expression.Line,
+                unconsumed.Value.Expression.Column,
+                $"partition binding '{unconsumed.Key}' must consume every route exactly once; missing: {string.Join(", ", missing)}");
+        }
+        if (_currentStreamJoins.Count != 0)
+        {
+            var unconsumed = _currentStreamJoins.First();
+            throw Error(
+                unconsumed.Value.Expression.Line,
+                unconsumed.Value.Expression.Column,
+                $"{unconsumed.Value.Join.Policy.ToString().ToLowerInvariant()} binding '{unconsumed.Key}' must be consumed exactly once");
+        }
+
+        _currentDeferredStreams = parent.Streams;
+        _currentPartitions = parent.Partitions;
+        _currentStreamJoins = parent.Joins;
     }
 
     private void BindStatements(
@@ -3116,7 +3276,30 @@ internal sealed partial class SemanticCompiler
                     var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, bindings);
                     var movedFieldOwnerPlace = GetMoveConsumingOwnedFieldPlace(binding.Value, bindings);
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
-                    var aggregateLiteralSourceNames = GetOwnedAggregateLiteralSourceNames(binding.Value, bindings);
+                    var valueType = InferExpression(
+                        binding.Value,
+                        functions,
+                        bindings,
+                        allowPrintCall: false,
+                        allowReadIntCall: true,
+                        allowFlowBindingTarget: false,
+                        yieldInputType: yieldInputType,
+                        mutableBindings: mutableBindings);
+                    if (valueType == BoundType.Unit)
+                    {
+                        throw Error(binding.Line, binding.Column, "cannot bind a unit value");
+                    }
+                    if (valueType == BoundType.Text && IsUnmaterializedDeferredText(binding.Value))
+                    {
+                        throw Error(
+                            binding.Value.Line,
+                            binding.Value.Column,
+                            "deferred interpolation cannot be stored directly; materialize it into an explicit Arena owner");
+                    }
+                    var aggregateLiteralSourceNames = GetOwnedAggregateLiteralSourceNames(
+                        binding.Value,
+                        bindings,
+                        valueType);
                     RejectBorrowedTextOriginInvalidation(
                         movedSourceName,
                         movedFieldOwnerPlace,
@@ -3134,20 +3317,6 @@ internal sealed partial class SemanticCompiler
                         && !aggregateLiteralSourceNames.Contains(binding.Name, StringComparer.Ordinal))
                     {
                         throw Error(binding.Line, binding.Column, $"binding '{binding.Name}' already exists in this scope");
-                    }
-
-                    var valueType = InferExpression(
-                        binding.Value,
-                        functions,
-                        bindings,
-                        allowPrintCall: false,
-                        allowReadIntCall: true,
-                        allowFlowBindingTarget: false,
-                        yieldInputType: yieldInputType,
-                        mutableBindings: mutableBindings);
-                    if (valueType == BoundType.Unit)
-                    {
-                        throw Error(binding.Line, binding.Column, "cannot bind a unit value");
                     }
                     if (isMutableRebind && valueType != reboundType)
                     {
@@ -3241,6 +3410,41 @@ internal sealed partial class SemanticCompiler
                             _activeBorrowedTextOrigins[carrierName] = carrier.Value;
                             _activeReadonlyReferenceBindings.Add(carrierName);
                         }
+                    }
+
+                    if (binding.Value is PartitionExpression partition)
+                    {
+                        if (binding.IsMutable)
+                        {
+                            throw Error(binding.Line, binding.Column, "partition route products are affine and cannot be mutable");
+                        }
+                        if (!_partitionExpressionSources.TryGetValue(partition, out var partitionSource))
+                        {
+                            throw new InvalidOperationException("partition source type was not recorded during inference");
+                        }
+                        _currentPartitions.Add(
+                            binding.Name,
+                            new PendingPartitionPlan(
+                                binding,
+                                partition,
+                                partitionSource.ElementType,
+                                partitionSource.IsEvent));
+                        _deferredStreamDeclarations.Add(binding);
+                    }
+                    if (binding.Value is StreamJoinExpression join)
+                    {
+                        if (binding.IsMutable)
+                        {
+                            throw Error(binding.Line, binding.Column, "stream join results are affine and cannot be mutable");
+                        }
+                        if (!_streamJoins.TryGetValue(join, out var boundJoin))
+                        {
+                            throw new InvalidOperationException("stream join metadata was not recorded during inference");
+                        }
+                        _currentStreamJoins.Add(
+                            binding.Name,
+                            new PendingStreamJoinPlan(binding, join, boundJoin));
+                        _deferredStreamDeclarations.Add(binding);
                     }
 
                     break;
@@ -3515,7 +3719,7 @@ internal sealed partial class SemanticCompiler
             transferred.Add(consumedName);
         }
         foreach (var fieldSourceName in GetOwnedAggregateLiteralSourceNames(
-                     assignment.Value, bindings))
+                     assignment.Value, bindings, field.Type))
         {
             transferred.Add(fieldSourceName);
         }
@@ -3627,7 +3831,7 @@ internal sealed partial class SemanticCompiler
                 transferred.Add(consumedName);
             }
             foreach (var fieldSourceName in GetOwnedAggregateLiteralSourceNames(
-                         assignment.Value, bindings))
+                         assignment.Value, bindings, expectedValueType))
             {
                 transferred.Add(fieldSourceName);
             }
@@ -3692,6 +3896,25 @@ internal sealed partial class SemanticCompiler
         HashSet<string> mutableBindings,
         BoundType? yieldInputType)
     {
+        var partitionPipeline = new BlockFunctionPipelineStatement([call], call.Line, call.Column);
+        if (TryBindStreamJoinPipeline(
+                partitionPipeline,
+                functions,
+                bindings,
+                mutableBindings,
+                call))
+        {
+            return;
+        }
+        if (TryBindPartitionRoutePipeline(
+                partitionPipeline,
+                functions,
+                bindings,
+                mutableBindings,
+                call))
+        {
+            return;
+        }
         var target = string.Join('.', call.Target);
         if (call.Source is NameExpression eventSource
             && ((_currentDeferredStreams.TryGetValue(eventSource.Name, out var eventPlan)
@@ -3772,6 +3995,24 @@ internal sealed partial class SemanticCompiler
         HashSet<string> mutableBindings,
         BoundType? yieldInputType)
     {
+        if (TryBindStreamJoinPipeline(
+                pipeline,
+                functions,
+                bindings,
+                mutableBindings,
+                pipeline))
+        {
+            return;
+        }
+        if (TryBindPartitionRoutePipeline(
+                pipeline,
+                functions,
+                bindings,
+                mutableBindings,
+                pipeline))
+        {
+            return;
+        }
         if (pipeline.Calls[0].Source is NameExpression eventSource
             && ((_currentDeferredStreams.TryGetValue(eventSource.Name, out var eventPlan)
                     && eventPlan.EventSource is not null)
@@ -3795,6 +4036,271 @@ internal sealed partial class SemanticCompiler
         {
             BindBlockFunctionCall(pipeline.Calls[index], functions, bindings, mutableBindings, yieldInputType);
         }
+    }
+
+    private bool TryBindStreamJoinPipeline(
+        BlockFunctionPipelineStatement pipeline,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
+        Statement originalStatement)
+    {
+        PendingStreamJoinPlan plan;
+        string? sourceBindingName = null;
+        if (pipeline.Calls[0].Source is NameExpression source
+            && _currentStreamJoins.TryGetValue(source.Name, out var pending))
+        {
+            plan = pending;
+            sourceBindingName = source.Name;
+        }
+        else if (pipeline.Calls[0].Source is StreamJoinExpression directJoin
+            && _streamJoins.TryGetValue(directJoin, out var directBoundJoin))
+        {
+            plan = new PendingStreamJoinPlan(
+                new BindingStatement("$direct_join", directJoin, directJoin.Line, directJoin.Column, IsMutable: false),
+                directJoin,
+                directBoundJoin);
+        }
+        else
+        {
+            return false;
+        }
+
+        var currentElementType = (BoundType)plan.Join.OutputElementType;
+        for (var index = 0; index < pipeline.Calls.Count; index++)
+        {
+            var call = pipeline.Calls[index];
+            var target = string.Join('.', call.Target);
+            if (target == "each")
+            {
+                if (index != pipeline.Calls.Count - 1)
+                {
+                    throw Error(call.Line, call.Column, "each must terminate a stream join pipeline");
+                }
+                BindEachBlockBody(
+                    call,
+                    currentElementType,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    allowStreamStop: true);
+                break;
+            }
+
+            if (!TryGetFunction(target, functions, out var streamFunction)
+                || (streamFunction.StreamElementType is null
+                    && streamFunction.StreamElementTypeTemplate is null))
+            {
+                if (index != pipeline.Calls.Count - 1
+                    || !TryGetFunction(target, functions, out var terminalFunction)
+                    || terminalFunction.Kind != BoundFunctionKind.UserBlock)
+                {
+                    throw Error(
+                        call.Line,
+                        call.Column,
+                        "a stream join pipeline may end only with each or a Unit block function");
+                }
+                BindUserBlockFunctionCall(
+                    call,
+                    terminalFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    terminalFunction.Name,
+                    streamedInputType: currentElementType);
+                if (terminalFunction.ReturnType != BoundType.Unit)
+                {
+                    throw Error(call.Line, call.Column, "a stream join terminal must return Unit");
+                }
+                break;
+            }
+
+            if (streamFunction.Kind == BoundFunctionKind.User
+                && streamFunction.BlockInputType is null)
+            {
+                BindBlocklessStreamFunctionCall(
+                    call,
+                    streamFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    currentElementType);
+            }
+            else
+            {
+                BindUserBlockFunctionCall(
+                    call,
+                    streamFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    streamFunction.Name,
+                    suppressResultBinding: true,
+                    streamedInputType: currentElementType);
+            }
+            streamFunction = _resolvedGenericCalls.TryGetValue(call, out var specialization)
+                ? specialization
+                : streamFunction;
+            currentElementType = streamFunction.StreamElementType
+                ?? throw Error(call.Line, call.Column, "stream join element type was not specialized");
+        }
+
+        _streamJoinConsumers.Add(
+            originalStatement,
+            new BoundStreamJoinPipeline(plan.Expression, plan.Join, pipeline));
+        if (sourceBindingName is not null)
+        {
+            _currentStreamJoins.Remove(sourceBindingName);
+            bindings.Remove(sourceBindingName);
+            mutableBindings.Remove(sourceBindingName);
+        }
+        return true;
+    }
+
+    private bool TryBindPartitionRoutePipeline(
+        BlockFunctionPipelineStatement pipeline,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
+        Statement originalStatement)
+    {
+        if (pipeline.Calls[0].Source is not FieldAccessExpression
+            {
+                Source: NameExpression owner
+            } routeAccess
+            || !_currentPartitions.TryGetValue(owner.Name, out var partition))
+        {
+            return false;
+        }
+
+        var arm = partition.Expression.Arms.FirstOrDefault(candidate => candidate.Label == routeAccess.FieldName)
+            ?? throw Error(
+                routeAccess.Line,
+                routeAccess.Column,
+                $"partition '{owner.Name}' has no route '{routeAccess.FieldName}'");
+        if (partition.Consumers.ContainsKey(arm.Label))
+        {
+            throw Error(
+                routeAccess.Line,
+                routeAccess.Column,
+                $"partition route '{owner.Name}.{arm.Label}' must be consumed exactly once");
+        }
+
+        var currentElementType = partition.SourceElementType;
+        for (var index = 0; index < pipeline.Calls.Count; index++)
+        {
+            var call = pipeline.Calls[index];
+            var target = string.Join('.', call.Target);
+            if (target == "each")
+            {
+                if (index != pipeline.Calls.Count - 1)
+                {
+                    throw Error(call.Line, call.Column, "each must terminate a partition route pipeline");
+                }
+                BindEachBlockBody(
+                    call,
+                    currentElementType,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    allowStreamStop: true);
+                break;
+            }
+
+            if (!TryGetFunction(target, functions, out var streamFunction)
+                || (streamFunction.StreamElementType is null
+                    && streamFunction.StreamElementTypeTemplate is null))
+            {
+                if (index != pipeline.Calls.Count - 1
+                    || !TryGetFunction(target, functions, out var terminalFunction)
+                    || terminalFunction.Kind != BoundFunctionKind.UserBlock)
+                {
+                    throw Error(
+                        call.Line,
+                        call.Column,
+                        "a partition route pipeline may end only with each or a Unit block function");
+                }
+                BindUserBlockFunctionCall(
+                    call,
+                    terminalFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    terminalFunction.Name,
+                    streamedInputType: currentElementType);
+                if (terminalFunction.ReturnType != BoundType.Unit)
+                {
+                    throw Error(call.Line, call.Column, "a partition route terminal must return Unit");
+                }
+                break;
+            }
+
+            if (streamFunction.Kind == BoundFunctionKind.User
+                && streamFunction.BlockInputType is null)
+            {
+                BindBlocklessStreamFunctionCall(
+                    call,
+                    streamFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    currentElementType);
+            }
+            else
+            {
+                BindUserBlockFunctionCall(
+                    call,
+                    streamFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    streamFunction.Name,
+                    suppressResultBinding: true,
+                    streamedInputType: currentElementType);
+            }
+            streamFunction = _resolvedGenericCalls.TryGetValue(call, out var specialization)
+                ? specialization
+                : streamFunction;
+            currentElementType = streamFunction.StreamElementType
+                ?? throw Error(call.Line, call.Column, "partition route element type was not specialized");
+        }
+
+        partition.Consumers.Add(arm.Label, (originalStatement, pipeline));
+        if (partition.Consumers.Count != partition.Expression.Arms.Count)
+        {
+            _deferredStreamDeclarations.Add(originalStatement);
+            return true;
+        }
+
+        var routes = partition.Expression.Arms.Select(route =>
+        {
+            var consumer = partition.Consumers[route.Label];
+            return new BoundPartitionRoute(
+                route.Label,
+                route.Condition,
+                consumer.Pipeline,
+                route.Line,
+                route.Column);
+        }).ToArray();
+        foreach (var consumer in partition.Consumers.Values)
+        {
+            if (!ReferenceEquals(consumer.Statement, originalStatement))
+            {
+                _deferredStreamDeclarations.Add(consumer.Statement);
+            }
+        }
+        _partitionConsumers.Add(
+            originalStatement,
+            new BoundPartitionPipeline(
+                partition.Expression.Source,
+                partition.Expression.ItemName,
+                routes,
+                partition.SourceElementType,
+                partition.IsEvent));
+        _currentPartitions.Remove(owner.Name);
+        bindings.Remove(owner.Name);
+        mutableBindings.Remove(owner.Name);
+        return true;
     }
 
     private bool TryBindStreamingPipeline(
@@ -5166,6 +5672,11 @@ internal sealed partial class SemanticCompiler
             TypedEmptyArrayExpression typedArray => InferTypedEmptyArrayExpression(typedArray),
             DictionaryLiteralExpression dictionary => InferDictionaryLiteralExpression(dictionary, functions, bindings, allowReadIntCall),
             TypedEmptyDictionaryExpression typedDictionary => InferTypedEmptyDictionaryExpression(typedDictionary),
+            ProductExpression product => InferProductExpression(product, functions, bindings, allowReadIntCall),
+            BranchExpression branch => InferBranchExpression(branch, functions, bindings, allowReadIntCall, mutableBindings),
+            TapExpression tap => InferTapExpression(tap, functions, bindings, allowReadIntCall, mutableBindings),
+            PartitionExpression partition => InferPartitionExpression(partition, functions, bindings, allowReadIntCall, mutableBindings),
+            StreamJoinExpression join => InferStreamJoinExpression(join, functions, bindings, allowReadIntCall, mutableBindings),
             IndexExpression index => InferIndexExpression(
                 index,
                 functions,
@@ -5280,6 +5791,451 @@ internal sealed partial class SemanticCompiler
 
         return BoundType.Range;
     }
+
+    private BoundType InferProductExpression(
+        ProductExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        var fields = new List<(string? Label, BoundType Type)>(expression.Elements.Count);
+        foreach (var element in expression.Elements)
+        {
+            var type = InferExpression(
+                element.Value,
+                functions,
+                bindings,
+                allowPrintCall: false,
+                allowReadIntCall,
+                allowFlowBindingTarget: false);
+            if (type == BoundType.Unit)
+            {
+                throw Error(element.Line, element.Column, "product fields must produce values");
+            }
+            fields.Add((element.Label, type));
+        }
+
+        var displayName = "(" + string.Join(", ", fields.Select(field =>
+            field.Label is null
+                ? FormatType(field.Type)
+                : field.Label + ": " + FormatType(field.Type))) + ")";
+        var productType = _types.GetOrAddProduct(fields, displayName, expression.Line, expression.Column);
+        _productExpressionTypes[expression] = productType;
+        return productType;
+    }
+
+    private BoundType InferBranchExpression(
+        BranchExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        var sourceType = InferExpression(
+            expression.Source,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        var sourceOwnsStorage = _types.ContainsOwnedStorage(sourceType);
+        if (expression.IsParallel
+            && sourceOwnsStorage
+            && !IsParallelSharedTypeSupported(sourceType))
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"parallel branch cannot share non-sendable input {FormatType(sourceType)}");
+        }
+        var consumingArm = -1;
+        var mutableArm = -1;
+        var fields = new List<(string? Label, BoundType Type)>(expression.Arms.Count);
+        var parallelArmTargets = new List<IReadOnlyList<BoundFunction>>(expression.Arms.Count);
+        for (var index = 0; index < expression.Arms.Count; index++)
+        {
+            var arm = expression.Arms[index];
+            if (arm.Targets.Count == 0)
+            {
+                throw Error(arm.Line, arm.Column, $"branch arm '{arm.Label}' requires a flow target");
+            }
+
+            var mode = ResolveBranchArmMode(arm, sourceType, functions);
+            if (expression.IsParallel
+                && mode is BranchInputMode.Move or BranchInputMode.MutableBorrow)
+            {
+                throw Error(
+                    arm.Line,
+                    arm.Column,
+                    $"parallel branch arm '{arm.Label}' must use a Copy input or readonly ref; {FormatBranchInputMode(mode)} cannot overlap");
+            }
+            if (mode == BranchInputMode.Move && sourceOwnsStorage)
+            {
+                if (consumingArm >= 0)
+                {
+                    throw Error(
+                        arm.Line,
+                        arm.Column,
+                        $"branch arm '{arm.Label}' duplicates an affine input already consumed by arm '{expression.Arms[consumingArm].Label}'");
+                }
+                consumingArm = index;
+            }
+            if (mode == BranchInputMode.MutableBorrow)
+            {
+                if (mutableArm >= 0)
+                {
+                    throw Error(
+                        arm.Line,
+                        arm.Column,
+                        $"branch arm '{arm.Label}' has an overlapping mutable borrow");
+                }
+                mutableArm = index;
+            }
+            if (sourceOwnsStorage && consumingArm >= 0 && index > consumingArm)
+            {
+                throw Error(
+                    arm.Line,
+                    arm.Column,
+                    $"branch arm '{arm.Label}' starts after affine input consumption in arm '{expression.Arms[consumingArm].Label}'");
+            }
+
+            var flow = new FlowExpression(expression.Source, arm.Targets, arm.Line, arm.Column);
+            var result = InferFlowExpression(
+                flow,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowFlowBindingTarget: false,
+                mutableBindings: mutableBindings);
+            if (result.Type == BoundType.Unit)
+            {
+                throw Error(arm.Line, arm.Column, $"branch arm '{arm.Label}' must produce a value");
+            }
+            if (expression.IsParallel)
+            {
+                var resolvedTargets = new List<BoundFunction>(arm.Targets.Count);
+                foreach (var target in arm.Targets)
+                {
+                    if (!(_resolvedGenericCalls.TryGetValue(target, out var targetFunction)
+                            || TryGetFunction(string.Join('.', target.Path), functions, out targetFunction)
+                            || TryResolveInstanceMethod(sourceType, string.Join('.', target.Path), functions, out targetFunction)))
+                    {
+                        continue;
+                    }
+                    resolvedTargets.Add(targetFunction);
+                    if (targetFunction.IsAsync || (targetFunction.Effects?.Count ?? 0) != 0)
+                    {
+                        throw Error(
+                            target.Line,
+                            target.Column,
+                            $"parallel branch arm '{arm.Label}' cannot call effectful or async target '{string.Join('.', target.Path)}'");
+                    }
+                    var unsafeParameter = (targetFunction.AdditionalParameters ?? [])
+                        .FirstOrDefault(parameter => parameter.Ownership is
+                            BoundFunctionInputOwnership.Move or BoundFunctionInputOwnership.MutableBorrow);
+                    if (unsafeParameter is not null)
+                    {
+                        throw Error(
+                            target.Line,
+                            target.Column,
+                            $"parallel branch arm '{arm.Label}' argument '{unsafeParameter.Name}' must be Copy or readonly ref");
+                    }
+                }
+                if (resolvedTargets.Count != arm.Targets.Count)
+                {
+                    throw Error(
+                        arm.Line,
+                        arm.Column,
+                        $"parallel branch arm '{arm.Label}' contains an unresolved flow target");
+                }
+                parallelArmTargets.Add(resolvedTargets);
+            }
+            fields.Add((arm.Label, result.Type));
+        }
+
+        var displayName = "(" + string.Join(", ", fields.Select(field =>
+            field.Label + ": " + FormatType(field.Type))) + ")";
+        var resultType = _types.GetOrAddProduct(fields, displayName, expression.Line, expression.Column);
+        if (expression.IsParallel)
+        {
+            var captures = SelectParallelBranchCapturedBindings(
+                parallelArmTargets.SelectMany(static targets => targets),
+                functions,
+                bindings);
+            foreach (var (name, type) in captures)
+            {
+                if (mutableBindings?.Contains(name) == true)
+                {
+                    throw Error(
+                        expression.Line,
+                        expression.Column,
+                        $"parallel branch cannot capture mutable binding '{name}'");
+                }
+                if (!IsParallelSharedTypeSupported(type))
+                {
+                    throw Error(
+                        expression.Line,
+                        expression.Column,
+                        $"parallel branch cannot capture non-sendable binding '{name}' of type {FormatType(type)}");
+                }
+            }
+            _parallelBranches[expression] = new BoundParallelBranch(
+                sourceType,
+                resultType,
+                parallelArmTargets,
+                captures);
+        }
+        return resultType;
+    }
+
+    private BoundType InferTapExpression(
+        TapExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        var sourceType = InferExpression(
+            expression.Source,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        if (expression.Targets.Count == 0)
+        {
+            throw Error(expression.Line, expression.Column, "tap requires a side-flow target");
+        }
+        var first = new BranchArm("tap", BranchInputMode.Default, expression.Targets, expression.Line, expression.Column);
+        var mode = ResolveBranchArmMode(first, sourceType, functions);
+        if (_types.ContainsOwnedStorage(sourceType) && mode == BranchInputMode.Move)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                "tap cannot preserve an affine input after a move; use a readonly or mutable borrow target");
+        }
+        _ = InferFlowExpression(
+            new FlowExpression(expression.Source, expression.Targets, expression.Line, expression.Column),
+            functions,
+            bindings,
+            allowReadIntCall,
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        return sourceType;
+    }
+
+    private BoundType InferPartitionExpression(
+        PartitionExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        var sourceType = InferExpression(
+            expression.Source,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        var isEvent = _types.TryGetEventStreamValue(sourceType, out var elementType);
+        if (!isEvent && !_types.TryGetStreamValue(sourceType, out elementType))
+        {
+            throw Error(
+                expression.Source.Line,
+                expression.Source.Column,
+                $"partition expects Stream<T> or EventStream<T> but received {FormatType(sourceType)}");
+        }
+
+        var routeBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal);
+        if (!routeBindings.TryAdd(expression.ItemName, elementType))
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"partition item name '{expression.ItemName}' conflicts with an existing binding");
+        }
+        foreach (var arm in expression.Arms)
+        {
+            if (arm.Condition is null) continue;
+            var conditionType = InferExpression(
+                arm.Condition,
+                functions,
+                routeBindings,
+                allowPrintCall: false,
+                allowReadIntCall,
+                allowFlowBindingTarget: false,
+                mutableBindings: mutableBindings);
+            if (conditionType != BoundType.Bool)
+            {
+                throw Error(
+                    arm.Condition.Line,
+                    arm.Condition.Column,
+                    $"partition route '{arm.Label}' predicate must be Bool but received {FormatType(conditionType)}");
+            }
+            var consumedPredicateSources = GetOwnedParameterConsumedSourceNames(
+                arm.Condition,
+                functions,
+                routeBindings);
+            if (consumedPredicateSources.Contains(expression.ItemName, StringComparer.Ordinal))
+            {
+                throw Error(
+                    arm.Condition.Line,
+                    arm.Condition.Column,
+                    $"partition route '{arm.Label}' predicate cannot consume item '{expression.ItemName}' before routing");
+            }
+        }
+
+        var fields = expression.Arms
+            .Select(arm => ((string?)arm.Label, (BoundType)sourceType))
+            .ToArray();
+        var displayName = "(" + string.Join(", ", fields.Select(field =>
+            field.Item1 + ": " + FormatType(field.Item2))) + ")";
+        _partitionExpressionSources[expression] = (elementType, isEvent);
+        return _types.GetOrAddProduct(fields, displayName, expression.Line, expression.Column);
+    }
+
+    private BoundType InferStreamJoinExpression(
+        StreamJoinExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        var sourceType = InferExpression(
+            expression.Source,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        if (!_types.IsProduct(sourceType))
+        {
+            throw Error(
+                expression.Source.Line,
+                expression.Source.Column,
+                $"{expression.Policy.ToString().ToLowerInvariant()} expects a product of at least two streams");
+        }
+
+        var product = _types.GetStruct(sourceType);
+        if (product.Fields.Count < 2)
+        {
+            throw Error(expression.Line, expression.Column, "a stream join requires at least two inputs");
+        }
+        var inputs = new List<BoundStreamJoinInput>(product.Fields.Count);
+        foreach (var field in product.Fields)
+        {
+            var isEvent = _types.TryGetEventStreamValue(field.Type, out var elementType);
+            if (!isEvent && !_types.TryGetStreamValue(field.Type, out elementType))
+            {
+                throw Error(
+                    expression.Source.Line,
+                    expression.Source.Column,
+                    $"{expression.Policy.ToString().ToLowerInvariant()} input field '{field.Name}' must be Stream<T> or EventStream<T> but received {FormatType(field.Type)}");
+            }
+            inputs.Add(new BoundStreamJoinInput(field.Name, field.Type, elementType, isEvent));
+        }
+
+        TypeId outputElementType;
+        if (expression.Policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Concat)
+        {
+            outputElementType = inputs[0].ElementType;
+            var incompatible = inputs.FirstOrDefault(input => input.ElementType != outputElementType);
+            if (incompatible is not null)
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"{expression.Policy.ToString().ToLowerInvariant()} requires identical element types; field '{incompatible.FieldName}' is {FormatType(incompatible.ElementType)} instead of {FormatType(outputElementType)}");
+            }
+        }
+        else
+        {
+            var fields = inputs.Select(input =>
+            {
+                var sourceField = product.GetField(input.FieldName);
+                var label = sourceField.Name.StartsWith('_') ? null : sourceField.Name;
+                return ((string?)label, input.ElementType);
+            }).ToArray();
+            var displayName = "(" + string.Join(", ", fields.Select(field =>
+                field.Item1 is null
+                    ? FormatType(field.ElementType)
+                    : field.Item1 + ": " + FormatType(field.ElementType))) + ")";
+            outputElementType = _types.GetOrAddProduct(fields, displayName, expression.Line, expression.Column);
+            if (expression.Policy == StreamJoinPolicy.Latest
+                && inputs.Any(input => _types.ContainsOwnedStorage(input.ElementType)))
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    "latest requires Copy element types because every update re-emits the current tuple; clone owned values explicitly before joining");
+            }
+        }
+
+        var isEventResult = inputs.Any(static input => input.IsEvent)
+            || expression.Policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Latest;
+        var resultType = isEventResult
+            ? _types.GetOrAddEventStream(outputElementType)
+            : _types.GetOrAddStream(outputElementType);
+        var bufferCapacity = expression.Policy switch
+        {
+            StreamJoinPolicy.Concat => 0,
+            StreamJoinPolicy.Zip => 1,
+            StreamJoinPolicy.Merge => 1,
+            StreamJoinPolicy.Latest => 1,
+            _ => throw new InvalidOperationException("unknown stream join policy")
+        };
+        _streamJoins[expression] = new BoundStreamJoin(
+            expression.Policy,
+            sourceType,
+            inputs,
+            outputElementType,
+            resultType,
+            isEventResult,
+            bufferCapacity);
+        return resultType;
+    }
+
+    private BranchInputMode ResolveBranchArmMode(
+        BranchArm arm,
+        BoundType sourceType,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        var firstTarget = arm.Targets[0];
+        var path = string.Join('.', firstTarget.Path);
+        if (!TryGetFunction(path, functions, out var function)
+            && !TryResolveInstanceMethod(sourceType, path, functions, out function))
+        {
+            return arm.InputMode;
+        }
+        var functionMode = function.InputOwnership switch
+        {
+            BoundFunctionInputOwnership.Move => BranchInputMode.Move,
+            BoundFunctionInputOwnership.MutableBorrow => BranchInputMode.MutableBorrow,
+            _ => BranchInputMode.ReadonlyBorrow
+        };
+        if (arm.InputMode != BranchInputMode.Default && arm.InputMode != functionMode)
+        {
+            throw Error(
+                arm.Line,
+                arm.Column,
+                $"branch arm '{arm.Label}' declares {FormatBranchInputMode(arm.InputMode)} but target '{path}' requires {FormatBranchInputMode(functionMode)}");
+        }
+        return arm.InputMode == BranchInputMode.Default ? functionMode : arm.InputMode;
+    }
+
+    private static string FormatBranchInputMode(BranchInputMode mode) => mode switch
+    {
+        BranchInputMode.ReadonlyBorrow => "ref",
+        BranchInputMode.MutableBorrow => "mut",
+        BranchInputMode.Move => "move",
+        _ => "default flow"
+    };
 
     private BoundType InferStringExpression(
         StringExpression expression,
@@ -10458,6 +11414,10 @@ internal sealed partial class SemanticCompiler
         {
             return specializedType;
         }
+        if (typeName.StartsWith('(') && typeName.EndsWith(')'))
+        {
+            return ParseProductType(typeName, field => ParseType(field, line, column), line, column);
+        }
         if (typeName.StartsWith("dyn ", StringComparison.Ordinal))
         {
             var requestedName = typeName[4..].Trim();
@@ -10619,6 +11579,16 @@ internal sealed partial class SemanticCompiler
         {
             return BoundType.IntSlice;
         }
+        if (typeName.StartsWith('(') && typeName.EndsWith(')'))
+        {
+            return ParseProductType(
+                typeName,
+                field => ParseFunctionType(field, genericParameterName,
+                    secondaryGenericParameterName, tertiaryGenericParameterName,
+                    line, column, genericParameterNames),
+                line,
+                column);
+        }
         if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
         {
             var value = ParseFunctionType(typeName[7..^1].Trim(), genericParameterName,
@@ -10653,6 +11623,14 @@ internal sealed partial class SemanticCompiler
         if (specializedTypes.TryGetValue(typeName, out var specialized))
         {
             return specialized;
+        }
+        if (typeName.StartsWith('(') && typeName.EndsWith(')'))
+        {
+            return ParseProductType(
+                typeName,
+                field => ParseSpecializedFunctionType(field, specializedTypes, line, column),
+                line,
+                column);
         }
         if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
         {
@@ -10727,6 +11705,17 @@ internal sealed partial class SemanticCompiler
                 column,
                 $"cannot infer type parameter '{tertiaryGenericParameterName}'");
         }
+        if (typeName.StartsWith('(') && typeName.EndsWith(')'))
+        {
+            return ParseProductType(
+                typeName,
+                field => ParseSpecializedFunctionType(
+                    field, genericParameterName, primaryType,
+                    secondaryGenericParameterName, secondaryType,
+                    tertiaryGenericParameterName, tertiaryType, line, column),
+                line,
+                column);
+        }
         if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
         {
             var value = ParseSpecializedFunctionType(
@@ -10793,6 +11782,77 @@ internal sealed partial class SemanticCompiler
             }
         }
         return ParseType(typeName, line, column);
+    }
+
+    private BoundType ParseProductType(
+        string typeName,
+        Func<string, BoundType> parseFieldType,
+        int line,
+        int column)
+    {
+        var contents = typeName[1..^1];
+        var parts = SplitTopLevelProductFields(contents);
+        if (parts.Count < 2)
+        {
+            throw Error(line, column, "product types require at least two fields");
+        }
+
+        var labels = new HashSet<string>(StringComparer.Ordinal);
+        var fields = new List<(string? Label, BoundType Type)>(parts.Count);
+        foreach (var part in parts)
+        {
+            var separator = FindTopLevelTypeColon(part.AsSpan());
+            string? label = null;
+            var fieldText = part;
+            if (separator >= 0)
+            {
+                label = part[..separator].Trim();
+                fieldText = part[(separator + 1)..].Trim();
+                if (label.Length == 0 || !labels.Add(label))
+                {
+                    throw Error(line, column, $"duplicate or empty product field label '{label}'");
+                }
+            }
+            fields.Add((label, parseFieldType(fieldText)));
+        }
+
+        var displayName = "(" + string.Join(", ", fields.Select(field =>
+            field.Label is null
+                ? FormatType(field.Type)
+                : field.Label + ": " + FormatType(field.Type))) + ")";
+        return _types.GetOrAddProduct(fields, displayName, line, column);
+    }
+
+    private static IReadOnlyList<string> SplitTopLevelProductFields(string text)
+    {
+        var fields = new List<string>();
+        var start = 0;
+        var angleDepth = 0;
+        var squareDepth = 0;
+        var braceDepth = 0;
+        var parenDepth = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            switch (text[index])
+            {
+                case '<': angleDepth++; break;
+                case '>': angleDepth--; break;
+                case '[': squareDepth++; break;
+                case ']': squareDepth--; break;
+                case '{': braceDepth++; break;
+                case '}': braceDepth--; break;
+                case '(': parenDepth++; break;
+                case ')': parenDepth--; break;
+                case ',' when angleDepth == 0 && squareDepth == 0 && braceDepth == 0 && parenDepth == 0:
+                    var field = text[start..index].Trim();
+                    if (field.Length != 0) fields.Add(field);
+                    start = index + 1;
+                    break;
+            }
+        }
+        var last = text[start..].Trim();
+        if (last.Length != 0) fields.Add(last);
+        return fields;
     }
 
     private static int FindTopLevelTypeColon(ReadOnlySpan<char> text)
@@ -11246,6 +12306,11 @@ internal sealed partial class SemanticCompiler
             or BoxExpression
             or MapExpression
             or StructLiteralExpression
+            or ProductExpression
+            or BranchExpression
+            or TapExpression
+            or PartitionExpression
+            or StreamJoinExpression
             or CallExpression
             or TryExpression
             or TypeApplicationExpression
@@ -11340,7 +12405,8 @@ internal sealed partial class SemanticCompiler
 
     private IReadOnlyList<string> GetOwnedAggregateLiteralSourceNames(
         Expression expression,
-        IReadOnlyDictionary<string, BoundType> bindings)
+        IReadOnlyDictionary<string, BoundType> bindings,
+        BoundType? inferredAggregateType = null)
     {
         var transferred = new List<string>();
         switch (expression)
@@ -11349,6 +12415,11 @@ internal sealed partial class SemanticCompiler
                 when _types.TryResolve(structure.TypeName, out var structureType)
                      && _types.IsStruct(structureType):
                 CollectOwnedLiteralSourceNames(structure, structureType, bindings, transferred);
+                break;
+            case ProductExpression product
+                when (inferredAggregateType is { } productType && _types.IsProduct(productType))
+                     || _productExpressionTypes.TryGetValue(product, out productType):
+                CollectOwnedLiteralSourceNames(product, productType, bindings, transferred);
                 break;
             case ArrayLiteralExpression { ElementType: { } elementTypeName } array
                 when _types.TryResolve(elementTypeName, out var elementType):
@@ -11452,6 +12523,7 @@ internal sealed partial class SemanticCompiler
             or BoxExpression
             or CallExpression
             or FlowExpression
+            or StreamJoinExpression
             or IfExpression
             or WhenExpression
             or EnumMatchExpression)
@@ -11702,6 +12774,12 @@ internal sealed partial class SemanticCompiler
                 static field => field.Name,
                 static field => field.Value,
                 StringComparer.Ordinal),
+            ProductExpression product => product.Elements
+                .Select((element, index) => (Name: element.Label ?? $"_{index}", element.Value))
+                .ToDictionary(
+                    static element => element.Name,
+                    static element => element.Value,
+                    StringComparer.Ordinal),
             DictionaryLiteralExpression contextual => contextual.Entries
                 .Where(static entry => entry.Key is NameExpression)
                 .ToDictionary(
@@ -11775,6 +12853,55 @@ internal sealed partial class SemanticCompiler
             }
 
             return consumed;
+        }
+
+        if (expression is BranchExpression branch
+            && branch.Source is NameExpression branchSource
+            && bindings.TryGetValue(branchSource.Name, out var branchSourceType))
+        {
+            foreach (var target in branch.Arms.SelectMany(static arm => arm.Targets.Take(1)))
+            {
+                var path = string.Join('.', target.Path);
+                if ((TryGetFunction(target.Path, functions, out var targetFunction)
+                        || TryResolveInstanceMethod(branchSourceType, path, functions, out targetFunction))
+                    && FunctionMovesOwnedHeapInput(targetFunction))
+                {
+                    return [branchSource.Name];
+                }
+            }
+        }
+
+        if (expression is PartitionExpression { Source: NameExpression partitionSource }
+            && bindings.TryGetValue(partitionSource.Name, out var partitionSourceType)
+            && (_types.IsStream(partitionSourceType) || _types.IsEventStream(partitionSourceType)))
+        {
+            return [partitionSource.Name];
+        }
+
+        if (expression is StreamJoinExpression { Source: NameExpression joinSource }
+            && bindings.TryGetValue(joinSource.Name, out var joinSourceType)
+            && _types.IsProduct(joinSourceType)
+            && _types.ContainsOwnedStorage(joinSourceType))
+        {
+            return [joinSource.Name];
+        }
+        if (expression is StreamJoinExpression { Source: ProductExpression product })
+        {
+            return product.Elements
+                .Select(static element => element.Value)
+                .OfType<NameExpression>()
+                .Where(name => bindings.TryGetValue(name.Name, out var inputType)
+                    && (_types.IsStream(inputType) || _types.IsEventStream(inputType)))
+                .Select(static name => name.Name)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        if (expression is TapExpression { Source: NameExpression tapSource }
+            && bindings.TryGetValue(tapSource.Name, out var tapSourceType)
+            && _types.ContainsOwnedStorage(tapSourceType))
+        {
+            return [tapSource.Name];
         }
 
         if (expression is IfExpression or WhenExpression)
@@ -11867,6 +12994,16 @@ internal sealed partial class SemanticCompiler
             && flow.Source is NameExpression sourceName
             && sourceName.Name == inputName
             && flow.Targets.Any(target =>
+                TryGetFunction(target.Path, functions, out var targetFunction)
+                && FunctionMovesOwnedHeapInput(targetFunction)))
+        {
+            return MoveInputDisposition.Transferred;
+        }
+
+        if (expression is BranchExpression branch
+            && branch.Source is NameExpression branchSource
+            && branchSource.Name == inputName
+            && branch.Arms.SelectMany(static arm => arm.Targets.Take(1)).Any(target =>
                 TryGetFunction(target.Path, functions, out var targetFunction)
                 && FunctionMovesOwnedHeapInput(targetFunction)))
         {
@@ -12194,6 +13331,18 @@ internal sealed partial class SemanticCompiler
                     target.Path.Count == 1 && target.Path[0] == "slice")
                 || ContainsSliceFlow(flow.Source)
                 || flow.Targets.Any(target => target.Arguments.Any(ContainsSliceFlow)),
+            BranchExpression branch => branch.Arms.SelectMany(static arm => arm.Targets).Any(target =>
+                    target.Path.Count == 1 && target.Path[0] == "slice")
+                || ContainsSliceFlow(branch.Source)
+                || branch.Arms.SelectMany(static arm => arm.Targets)
+                    .Any(target => target.Arguments.Any(ContainsSliceFlow)),
+            TapExpression tap => tap.Targets.Any(target =>
+                    target.Path.Count == 1 && target.Path[0] == "slice")
+                || ContainsSliceFlow(tap.Source)
+                || tap.Targets.Any(target => target.Arguments.Any(ContainsSliceFlow)),
+            PartitionExpression partition => ContainsSliceFlow(partition.Source)
+                || partition.Arms.Any(arm => arm.Condition is not null && ContainsSliceFlow(arm.Condition)),
+            StreamJoinExpression join => ContainsSliceFlow(join.Source),
             CallExpression call => call.Arguments.Any(ContainsSliceFlow),
             StringExpression text => text.Segments
                 .OfType<InterpolationSegment>()
@@ -12231,6 +13380,7 @@ internal sealed partial class SemanticCompiler
                 ContainsSliceFlow(entry.Key) || ContainsSliceFlow(entry.Value)),
             IndexExpression index => ContainsSliceFlow(index.Source) || ContainsSliceFlow(index.Index),
             StructLiteralExpression structure => structure.Fields.Any(field => ContainsSliceFlow(field.Value)),
+            ProductExpression product => product.Elements.Any(element => ContainsSliceFlow(element.Value)),
             FieldAccessExpression field => ContainsSliceFlow(field.Source),
             BoxExpression box => ContainsSliceFlow(box.Value),
             MapExpression map => ContainsSliceFlow(map.Path)
@@ -12247,6 +13397,31 @@ internal sealed partial class SemanticCompiler
     {
         return ContainsSliceFlow(body.Statements)
             || (body.Value is not null && ContainsSliceFlow(body.Value));
+    }
+
+    private static bool IsUnmaterializedDeferredText(Expression expression)
+    {
+        return expression switch
+        {
+            StringExpression text => text.Segments.OfType<InterpolationSegment>().Any(),
+            FlowExpression flow when flow.Targets.Any(target =>
+                target.Path.Count == 1 && target.Path[0] == "materialize") => false,
+            FlowExpression flow when flow.Targets.Count == 0 => IsUnmaterializedDeferredText(flow.Source),
+            IfExpression conditional => IsUnmaterializedDeferredText(conditional.Then)
+                || (conditional.Else is not null && IsUnmaterializedDeferredText(conditional.Else)),
+            WhenExpression selection => selection.Arms.Any(arm => IsUnmaterializedDeferredText(arm.Body))
+                || IsUnmaterializedDeferredText(selection.Else),
+            EnumMatchExpression match => match.Arms.Any(arm => IsUnmaterializedDeferredText(arm.Body))
+                || (match.Else is not null && IsUnmaterializedDeferredText(match.Else)),
+            _ => false
+        };
+    }
+
+    private static bool IsUnmaterializedDeferredText(BlockBody body)
+    {
+        return (body.Value is not null && IsUnmaterializedDeferredText(body.Value))
+            || body.Statements.OfType<ReturnStatement>().Any(statement =>
+                statement.Value is not null && IsUnmaterializedDeferredText(statement.Value));
     }
 
     private static bool ContainsSliceFlow(IReadOnlyList<Statement> statements)

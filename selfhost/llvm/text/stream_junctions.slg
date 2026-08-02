@@ -1,0 +1,905 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.stream_join_runtime as streamJoinRuntime
+
+emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.ir[junction.junctionIr] => junctionNode
+    "%sollang.join.$(junction.junctionIr) = type { " -> print
+    0 => contextField!
+    contextField! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
+        context.types[input.typeId] => inputType
+        inputType.symbol == 4 -> if { "%sollang.event_stream" -> print } else { "%sollang.stream" -> print }
+        ", " -> print
+        contextField! + 1 => contextField!
+    }
+    "i32 }" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr)_next(ptr %context, ptr %output) {" -> println
+    "entry:" -> println
+    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %cursor = load i32, ptr %cursor_address, align 4" -> println
+    "  switch i32 %cursor, label %done [" -> println
+    0 => switchInput!
+    switchInput! < junction.inputCount -> while {
+        "    i32 $(switchInput!), label %input$(switchInput!)" -> println
+        switchInput! + 1 => switchInput!
+    }
+    "  ]" -> println
+    0 => nextInput!
+    nextInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + nextInput!] => input
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => producerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+        "input$(nextInput!):" -> println
+        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(nextInput!)" -> println
+        "  %stream$(nextInput!) = load $(producerType!), ptr %stream_address$(nextInput!), align 8" -> println
+        "  %stream_context$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 0" -> println
+        "  %stream_next$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 1" -> println
+        "  %has_value$(nextInput!) = call i1 %stream_next$(nextInput!)(ptr %stream_context$(nextInput!), ptr %output)" -> println
+        "  br i1 %has_value$(nextInput!), label %value$(nextInput!), label %exhausted$(nextInput!)" -> println
+        "value$(nextInput!):" -> println
+        "  ret i1 true" -> println
+        "exhausted$(nextInput!):" -> println
+        "  store i32 $(nextInput! + 1), ptr %cursor_address, align 4" -> println
+        nextInput! + 1 < junction.inputCount -> if { "  br label %input$(nextInput! + 1)" -> println } else { "  br label %done" -> println }
+        nextInput! + 1 => nextInput!
+    }
+    "done:" -> println
+    "  ret i1 false" -> println
+    "}" -> println
+    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+    "entry:" -> println
+    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %done" -> println }
+    0 => dropInput!
+    dropInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => dropProducerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => dropProducerType! }
+        "check$(dropInput!):" -> println
+        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+        "  %drop_stream$(dropInput!) = load $(dropProducerType!), ptr %drop_stream_address$(dropInput!), align 8" -> println
+        "  %drop_context$(dropInput!) = extractvalue $(dropProducerType!) %drop_stream$(dropInput!), 0" -> println
+        "  %drop_callback$(dropInput!) = extractvalue $(dropProducerType!) %drop_stream$(dropInput!), 2" -> println
+        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
+        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+        "drop$(dropInput!):" -> println
+        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!))" -> println
+        "  br label %after$(dropInput!)" -> println
+        "after$(dropInput!):" -> println
+        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %done" -> println }
+        dropInput! + 1 => dropInput!
+    }
+    "done:" -> println
+    "  call void @free(ptr %context)" -> println
+    "  ret void" -> println
+    "}" -> println
+}
+emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.ir[junction.junctionIr] => junctionNode
+    context.types[junctionNode.typeId].first => outputElementType
+    "%sollang.join.$(junction.junctionIr) = type { " -> print
+    0 => contextField!
+    contextField! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
+        context.types[input.typeId] => inputType
+        inputType.symbol == 4 -> if { "%sollang.event_stream" -> print } else { "%sollang.stream" -> print }
+        ", " -> print
+        contextField! + 1 => contextField!
+    }
+    "i1 }" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr)_next(ptr %context, ptr %output) {" -> println
+    "entry:" -> println
+    "  %done_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %done_value = load i1, ptr %done_address, align 1" -> println
+    junction.inputCount > 0 -> if { "  br i1 %done_value, label %done, label %input0" -> println } else { "  br label %done" -> println }
+    0 => nextInput!
+    nextInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + nextInput!] => input
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => producerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+        "input$(nextInput!):" -> println
+        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(nextInput!)" -> println
+        "  %stream$(nextInput!) = load $(producerType!), ptr %stream_address$(nextInput!), align 8" -> println
+        "  %stream_context$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 0" -> println
+        "  %stream_next$(nextInput!) = extractvalue $(producerType!) %stream$(nextInput!), 1" -> println
+        "  %output_field$(nextInput!) = getelementptr " -> print
+        outputElementType -> writeSemanticTypeId(context, state)
+        ", ptr %output, i32 0, i32 $(nextInput!)" -> println
+        "  %has_value$(nextInput!) = call i1 %stream_next$(nextInput!)(ptr %stream_context$(nextInput!), ptr %output_field$(nextInput!))" -> println
+        "  br i1 %has_value$(nextInput!), label %value$(nextInput!), label %failed$(nextInput!)" -> println
+        "value$(nextInput!):" -> println
+        nextInput! + 1 < junction.inputCount -> if { "  br label %input$(nextInput! + 1)" -> println } else { "  ret i1 true" -> println }
+        "failed$(nextInput!):" -> println
+        nextInput! > 0 -> if {
+            nextInput! => partialInput!
+            partialInput! > 0 -> while {
+                partialInput! - 1 => partialInput!
+                context.streamPlan.junctionInputs[junction.inputStart + partialInput!] => partial
+                context.types[partial.typeId].first => partialType
+                context.typeTraits[partialType] % 2 == 1 -> if {
+                    "  %partial$(nextInput!)_field$(partialInput!) = getelementptr " -> print
+                    outputElementType -> writeSemanticTypeId(context, state)
+                    ", ptr %output, i32 0, i32 $(partialInput!)" -> println
+                    "  %partial$(nextInput!)_value$(partialInput!) = load " -> print
+                    partialType -> writeSemanticTypeId(context, state)
+                    ", ptr %partial$(nextInput!)_field$(partialInput!), align $(context.typeAligns[partialType])" -> println
+                    "  call void @sollang_drop_t$(partialType)(" -> print
+                    partialType -> writeSemanticTypeId(context, state)
+                    " %partial$(nextInput!)_value$(partialInput!))" -> println
+                }
+            }
+        }
+        "  store i1 true, ptr %done_address, align 1" -> println
+        "  ret i1 false" -> println
+        nextInput! + 1 => nextInput!
+    }
+    "done:" -> println
+    "  ret i1 false" -> println
+    "}" -> println
+    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+    "entry:" -> println
+    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %done" -> println }
+    0 => dropInput!
+    dropInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => dropProducerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => dropProducerType! }
+        "check$(dropInput!):" -> println
+        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+        "  %drop_stream$(dropInput!) = load $(dropProducerType!), ptr %drop_stream_address$(dropInput!), align 8" -> println
+        "  %drop_context$(dropInput!) = extractvalue $(dropProducerType!) %drop_stream$(dropInput!), 0" -> println
+        "  %drop_callback$(dropInput!) = extractvalue $(dropProducerType!) %drop_stream$(dropInput!), 2" -> println
+        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
+        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+        "drop$(dropInput!):" -> println
+        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!))" -> println
+        "  br label %after$(dropInput!)" -> println
+        "after$(dropInput!):" -> println
+        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %done" -> println }
+        dropInput! + 1 => dropInput!
+    }
+    "done:" -> println
+    "  call void @free(ptr %context)" -> println
+    "  ret void" -> println
+    "}" -> println
+}
+
+emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    "%sollang.join.$(junction.junctionIr) = type { " -> print
+    0 => contextField!
+    contextField! < junction.inputCount -> while {
+        "%sollang.stream, " -> print
+        contextField! + 1 => contextField!
+    }
+    "i32" -> print
+    0 => activeField!
+    activeField! < junction.inputCount -> while {
+        ", i1" -> print
+        activeField! + 1 => activeField!
+    }
+    " }" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr)_next(ptr %context, ptr %output) {" -> println
+    "entry:" -> println
+    "  %checked_slot = alloca i32, align 4" -> println
+    "  store i32 0, ptr %checked_slot, align 4" -> println
+    "  br label %loop" -> println
+    "loop:" -> println
+    "  %checked = load i32, ptr %checked_slot, align 4" -> println
+    "  %all_checked = icmp sge i32 %checked, $(junction.inputCount)" -> println
+    "  br i1 %all_checked, label %done, label %dispatch" -> println
+    "dispatch:" -> println
+    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %cursor = load i32, ptr %cursor_address, align 4" -> println
+    "  switch i32 %cursor, label %done [" -> println
+    0 => switchInput!
+    switchInput! < junction.inputCount -> while {
+        "    i32 $(switchInput!), label %input$(switchInput!)" -> println
+        switchInput! + 1 => switchInput!
+    }
+    "  ]" -> println
+    0 => nextInput!
+    nextInput! < junction.inputCount -> while {
+        "input$(nextInput!):" -> println
+        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount + 1 + nextInput!)" -> println
+        "  %active$(nextInput!) = load i1, ptr %active_address$(nextInput!), align 1" -> println
+        "  br i1 %active$(nextInput!), label %pull$(nextInput!), label %advance$(nextInput!)" -> println
+        "pull$(nextInput!):" -> println
+        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(nextInput!)" -> println
+        "  %stream$(nextInput!) = load %sollang.stream, ptr %stream_address$(nextInput!), align 8" -> println
+        "  %stream_context$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 0" -> println
+        "  %stream_next$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 1" -> println
+        "  %has_value$(nextInput!) = call i1 %stream_next$(nextInput!)(ptr %stream_context$(nextInput!), ptr %output)" -> println
+        "  br i1 %has_value$(nextInput!), label %value$(nextInput!), label %exhausted$(nextInput!)" -> println
+        "value$(nextInput!):" -> println
+        "  store i32 $((nextInput! + 1) % junction.inputCount), ptr %cursor_address, align 4" -> println
+        "  ret i1 true" -> println
+        "exhausted$(nextInput!):" -> println
+        "  store i1 false, ptr %active_address$(nextInput!), align 1" -> println
+        "  br label %advance$(nextInput!)" -> println
+        "advance$(nextInput!):" -> println
+        "  store i32 $((nextInput! + 1) % junction.inputCount), ptr %cursor_address, align 4" -> println
+        "  %checked_before$(nextInput!) = load i32, ptr %checked_slot, align 4" -> println
+        "  %checked_next$(nextInput!) = add i32 %checked_before$(nextInput!), 1" -> println
+        "  store i32 %checked_next$(nextInput!), ptr %checked_slot, align 4" -> println
+        "  br label %loop" -> println
+        nextInput! + 1 => nextInput!
+    }
+    "done:" -> println
+    "  ret i1 false" -> println
+    "}" -> println
+    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+    "entry:" -> println
+    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %done" -> println }
+    0 => dropInput!
+    dropInput! < junction.inputCount -> while {
+        "check$(dropInput!):" -> println
+        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+        "  %drop_stream$(dropInput!) = load %sollang.stream, ptr %drop_stream_address$(dropInput!), align 8" -> println
+        "  %drop_context$(dropInput!) = extractvalue %sollang.stream %drop_stream$(dropInput!), 0" -> println
+        "  %drop_callback$(dropInput!) = extractvalue %sollang.stream %drop_stream$(dropInput!), 2" -> println
+        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
+        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+        "drop$(dropInput!):" -> println
+        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!))" -> println
+        "  br label %after$(dropInput!)" -> println
+        "after$(dropInput!):" -> println
+        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %done" -> println }
+        dropInput! + 1 => dropInput!
+    }
+    "done:" -> println
+    "  call void @free(ptr %context)" -> println
+    "  ret void" -> println
+    "}" -> println
+}
+
+emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.ir[junction.junctionIr] => junctionNode
+    context.types[junctionNode.typeId].first => outputElementType
+    "%sollang.join.$(junction.junctionIr) = type { " -> print
+    0 => streamField!
+    streamField! < junction.inputCount -> while {
+        "%sollang.stream, " -> print
+        streamField! + 1 => streamField!
+    }
+    "i32, i32" -> print
+    0 => activeField!
+    activeField! < junction.inputCount -> while {
+        ", i1" -> print
+        activeField! + 1 => activeField!
+    }
+    0 => cacheField!
+    cacheField! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + cacheField!] => cacheInput
+        ", " -> print
+        context.types[cacheInput.typeId].first -> writeSemanticTypeId(context, state)
+        cacheField! + 1 => cacheField!
+    }
+    " }" -> println
+    "define internal i1 @sollang_join_$(junction.junctionIr)_next(ptr %context, ptr %output) {" -> println
+    "entry:" -> println
+    "  %cursor_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %state_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+    "  %state = load i32, ptr %state_address, align 4" -> println
+    "  switch i32 %state, label %done [" -> println
+    "    i32 0, label %initial0" -> println
+    "    i32 1, label %scan_entry" -> println
+    "  ]" -> println
+    0 => initialInput!
+    initialInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + initialInput!] => input
+        context.types[input.typeId].first => inputElementType
+        "initial$(initialInput!):" -> println
+        "  %initial_stream_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(initialInput!)" -> println
+        "  %initial_stream$(initialInput!) = load %sollang.stream, ptr %initial_stream_address$(initialInput!), align 8" -> println
+        "  %initial_context$(initialInput!) = extractvalue %sollang.stream %initial_stream$(initialInput!), 0" -> println
+        "  %initial_next$(initialInput!) = extractvalue %sollang.stream %initial_stream$(initialInput!), 1" -> println
+        "  %cache_address$(initialInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + initialInput!)" -> println
+        "  %initial_has$(initialInput!) = call i1 %initial_next$(initialInput!)(ptr %initial_context$(initialInput!), ptr %cache_address$(initialInput!))" -> println
+        "  br i1 %initial_has$(initialInput!), label %initial_value$(initialInput!), label %initial_failed" -> println
+        "initial_value$(initialInput!):" -> println
+        initialInput! + 1 < junction.inputCount -> if { "  br label %initial$(initialInput! + 1)" -> println } else {
+            "  store i32 1, ptr %state_address, align 4" -> println
+            "  br label %snapshot" -> println
+        }
+        initialInput! + 1 => initialInput!
+    }
+    "initial_failed:" -> println
+    "  store i32 2, ptr %state_address, align 4" -> println
+    "  ret i1 false" -> println
+    "scan_entry:" -> println
+    "  %checked_slot = alloca i32, align 4" -> println
+    "  store i32 0, ptr %checked_slot, align 4" -> println
+    "  br label %loop" -> println
+    "loop:" -> println
+    "  %checked = load i32, ptr %checked_slot, align 4" -> println
+    "  %all_checked = icmp sge i32 %checked, $(junction.inputCount)" -> println
+    "  br i1 %all_checked, label %done, label %dispatch" -> println
+    "dispatch:" -> println
+    "  %cursor = load i32, ptr %cursor_address, align 4" -> println
+    "  switch i32 %cursor, label %done [" -> println
+    0 => switchInput!
+    switchInput! < junction.inputCount -> while {
+        "    i32 $(switchInput!), label %input$(switchInput!)" -> println
+        switchInput! + 1 => switchInput!
+    }
+    "  ]" -> println
+    0 => nextInput!
+    nextInput! < junction.inputCount -> while {
+        "input$(nextInput!):" -> println
+        "  %active_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount + 2 + nextInput!)" -> println
+        "  %active$(nextInput!) = load i1, ptr %active_address$(nextInput!), align 1" -> println
+        "  br i1 %active$(nextInput!), label %pull$(nextInput!), label %advance$(nextInput!)" -> println
+        "pull$(nextInput!):" -> println
+        "  %stream_address$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(nextInput!)" -> println
+        "  %stream$(nextInput!) = load %sollang.stream, ptr %stream_address$(nextInput!), align 8" -> println
+        "  %stream_context$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 0" -> println
+        "  %stream_next$(nextInput!) = extractvalue %sollang.stream %stream$(nextInput!), 1" -> println
+        "  %update_cache$(nextInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + nextInput!)" -> println
+        "  %has_value$(nextInput!) = call i1 %stream_next$(nextInput!)(ptr %stream_context$(nextInput!), ptr %update_cache$(nextInput!))" -> println
+        "  br i1 %has_value$(nextInput!), label %value$(nextInput!), label %exhausted$(nextInput!)" -> println
+        "value$(nextInput!):" -> println
+        "  store i32 $((nextInput! + 1) % junction.inputCount), ptr %cursor_address, align 4" -> println
+        "  br label %snapshot" -> println
+        "exhausted$(nextInput!):" -> println
+        "  store i1 false, ptr %active_address$(nextInput!), align 1" -> println
+        "  br label %advance$(nextInput!)" -> println
+        "advance$(nextInput!):" -> println
+        "  store i32 $((nextInput! + 1) % junction.inputCount), ptr %cursor_address, align 4" -> println
+        "  %checked_before$(nextInput!) = load i32, ptr %checked_slot, align 4" -> println
+        "  %checked_next$(nextInput!) = add i32 %checked_before$(nextInput!), 1" -> println
+        "  store i32 %checked_next$(nextInput!), ptr %checked_slot, align 4" -> println
+        "  br label %loop" -> println
+        nextInput! + 1 => nextInput!
+    }
+    "snapshot:" -> println
+    0 => snapshotField!
+    snapshotField! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + snapshotField!] => snapshotInput
+        context.types[snapshotInput.typeId].first => snapshotType
+        "  %snapshot_cache$(snapshotField!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount * 2 + 2 + snapshotField!)" -> println
+        "  %snapshot_value$(snapshotField!) = load " -> print
+        snapshotType -> writeSemanticTypeId(context, state)
+        ", ptr %snapshot_cache$(snapshotField!), align $(context.typeAligns[snapshotType])" -> println
+        "  %snapshot_output$(snapshotField!) = getelementptr " -> print
+        outputElementType -> writeSemanticTypeId(context, state)
+        ", ptr %output, i32 0, i32 $(snapshotField!)" -> println
+        "  store " -> print
+        snapshotType -> writeSemanticTypeId(context, state)
+        " %snapshot_value$(snapshotField!), ptr %snapshot_output$(snapshotField!), align $(context.typeAligns[snapshotType])" -> println
+        snapshotField! + 1 => snapshotField!
+    }
+    "  ret i1 true" -> println
+    "done:" -> println
+    "  ret i1 false" -> println
+    "}" -> println
+    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+    "entry:" -> println
+    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %done" -> println }
+    0 => dropInput!
+    dropInput! < junction.inputCount -> while {
+        "check$(dropInput!):" -> println
+        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+        "  %drop_stream$(dropInput!) = load %sollang.stream, ptr %drop_stream_address$(dropInput!), align 8" -> println
+        "  %drop_context$(dropInput!) = extractvalue %sollang.stream %drop_stream$(dropInput!), 0" -> println
+        "  %drop_callback$(dropInput!) = extractvalue %sollang.stream %drop_stream$(dropInput!), 2" -> println
+        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
+        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+        "drop$(dropInput!):" -> println
+        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!))" -> println
+        "  br label %after$(dropInput!)" -> println
+        "after$(dropInput!):" -> println
+        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %done" -> println }
+        dropInput! + 1 => dropInput!
+    }
+    "done:" -> println
+    "  call void @free(ptr %context)" -> println
+    "  ret void" -> println
+    "}" -> println
+}
+
+junctionRequiresConcurrent junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.streamPlan.junctions[junctionIndex] => junction
+    false => concurrent!
+    (junction.kind == 2 and (junction.policy == 1 or junction.policy == 3)) -> if {
+        junction.inputStart => inputIndex!
+        inputIndex! < junction.inputStart + junction.inputCount -> while {
+            context.streamPlan.junctionInputs[inputIndex!].typeId => inputTypeId
+            (inputTypeId >= 0 and inputTypeId < (context.types -> len)) -> if {
+                context.types[inputTypeId] => inputType
+                (inputType.kind == 7 and inputType.symbol == 4) -> if { true => concurrent! }
+            }
+            inputIndex! + 1 => inputIndex!
+        }
+    }
+    concurrent!
+}
+
+emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    "define internal i1 @sollang_join_$(junction.junctionIr)_pull(ptr %context, i32 %index, ptr %slot) {" -> println
+    "entry:" -> println
+    "  switch i32 %index, label %invalid [" -> println
+    0 => switchInput!
+    switchInput! < junction.inputCount -> while {
+        "    i32 $(switchInput!), label %input$(switchInput!)" -> println
+        switchInput! + 1 => switchInput!
+    }
+    "  ]" -> println
+    0 => pullInput!
+    pullInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + pullInput!] => input
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => producerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+        "input$(pullInput!):" -> println
+        "  %stream_address$(pullInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(pullInput!)" -> println
+        "  %stream$(pullInput!) = load $(producerType!), ptr %stream_address$(pullInput!), align 8" -> println
+        "  %stream_context$(pullInput!) = extractvalue $(producerType!) %stream$(pullInput!), 0" -> println
+        "  %stream_next$(pullInput!) = extractvalue $(producerType!) %stream$(pullInput!), 1" -> println
+        "  %has_value$(pullInput!) = call i1 %stream_next$(pullInput!)(ptr %stream_context$(pullInput!), ptr %slot)" -> println
+        "  ret i1 %has_value$(pullInput!)" -> println
+        pullInput! + 1 => pullInput!
+    }
+    "invalid:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "}" -> println
+
+    "define internal void @sollang_join_$(junction.junctionIr)_drop_item(ptr %context, i32 %index, ptr %slot) {" -> println
+    "entry:" -> println
+    false => hasOwnedInput!
+    0 => ownedSearch!
+    ownedSearch! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + ownedSearch!] => ownedInput
+        context.types[ownedInput.typeId].first => ownedElementType
+        context.typeTraits[ownedElementType] % 2 == 1 -> if { true => hasOwnedInput! }
+        ownedSearch! + 1 => ownedSearch!
+    }
+    hasOwnedInput! -> if {
+        "  switch i32 %index, label %done [" -> println
+        0 => ownedSwitch!
+        ownedSwitch! < junction.inputCount -> while {
+            context.streamPlan.junctionInputs[junction.inputStart + ownedSwitch!] => ownedSwitchInput
+            context.types[ownedSwitchInput.typeId].first => ownedSwitchType
+            context.typeTraits[ownedSwitchType] % 2 == 1 -> if { "    i32 $(ownedSwitch!), label %drop$(ownedSwitch!)" -> println }
+            ownedSwitch! + 1 => ownedSwitch!
+        }
+        "  ]" -> println
+        0 => ownedDrop!
+        ownedDrop! < junction.inputCount -> while {
+            context.streamPlan.junctionInputs[junction.inputStart + ownedDrop!] => ownedDropInput
+            context.types[ownedDropInput.typeId].first => ownedDropType
+            context.typeTraits[ownedDropType] % 2 == 1 -> if {
+                "drop$(ownedDrop!):" -> println
+                "  %pending$(ownedDrop!) = load " -> print
+                ownedDropType -> writeSemanticTypeId(context, state)
+                ", ptr %slot, align $(context.typeAligns[ownedDropType])" -> println
+                "  call void @sollang_drop_t$(ownedDropType)(" -> print
+                ownedDropType -> writeSemanticTypeId(context, state)
+                " %pending$(ownedDrop!))" -> println
+                "  br label %done" -> println
+            }
+            ownedDrop! + 1 => ownedDrop!
+        }
+        "done:" -> println
+    }
+    "  ret void" -> println
+    "}" -> println
+}
+
+emitConcurrentJunctionDrop junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+    "entry:" -> println
+    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
+    "  call void @sollang_stream_join_runtime_cancel(ptr %runtime)" -> println
+    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %destroy" -> println }
+    0 => dropInput!
+    dropInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => producerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+        "check$(dropInput!):" -> println
+        "  %stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+        "  %stream$(dropInput!) = load $(producerType!), ptr %stream_address$(dropInput!), align 8" -> println
+        "  %stream_context$(dropInput!) = extractvalue $(producerType!) %stream$(dropInput!), 0" -> println
+        "  %stream_drop$(dropInput!) = extractvalue $(producerType!) %stream$(dropInput!), 2" -> println
+        "  %has_drop$(dropInput!) = icmp ne ptr %stream_drop$(dropInput!), null" -> println
+        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+        "drop$(dropInput!):" -> println
+        "  call void %stream_drop$(dropInput!)(ptr %stream_context$(dropInput!))" -> println
+        "  br label %after$(dropInput!)" -> println
+        "after$(dropInput!):" -> println
+        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %destroy" -> println }
+        dropInput! + 1 => dropInput!
+    }
+    "destroy:" -> println
+    "  call void @sollang_stream_join_runtime_join_destroy(ptr %runtime)" -> println
+    "  call void @free(ptr %context)" -> println
+    "  ret void" -> println
+    "}" -> println
+}
+
+emitConcurrentMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    "%sollang.join.$(junction.junctionIr) = type { " -> print
+    0 => contextField!
+    contextField! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
+        context.types[input.typeId].symbol == 4 -> if { "%sollang.event_stream, " -> print } else { "%sollang.stream, " -> print }
+        contextField! + 1 => contextField!
+    }
+    "ptr }" -> println
+    junctionIndex -> emitConcurrentJunctionInputCallbacks(context, state)
+    "define internal i1 @sollang_join_$(junction.junctionIr)_next(ptr %context, ptr %output) {" -> println
+    "entry:" -> println
+    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
+    "  %index_address = alloca i32, align 4" -> println
+    "  %kind_address = alloca i32, align 4" -> println
+    "  %slot_address = alloca ptr, align 8" -> println
+    "  br label %wait" -> println
+    "wait:" -> println
+    "  %available = call i1 @sollang_stream_join_runtime_next_event(ptr %runtime, ptr %index_address, ptr %kind_address, ptr %slot_address)" -> println
+    "  br i1 %available, label %received, label %done" -> println
+    "received:" -> println
+    "  %kind = load i32, ptr %kind_address, align 4" -> println
+    "  %is_value = icmp eq i32 %kind, 0" -> println
+    "  br i1 %is_value, label %value, label %wait" -> println
+    "value:" -> println
+    "  %index = load i32, ptr %index_address, align 4" -> println
+    "  %slot = load ptr, ptr %slot_address, align 8" -> println
+    context.streamPlan.junctionInputs[junction.inputStart] => firstInput
+    context.types[firstInput.typeId].first => outputType
+    "  %item = load " -> print
+    outputType -> writeSemanticTypeId(context, state)
+    ", ptr %slot, align $(context.typeAligns[outputType])" -> println
+    "  store " -> print
+    outputType -> writeSemanticTypeId(context, state)
+    " %item, ptr %output, align $(context.typeAligns[outputType])" -> println
+    "  call void @sollang_stream_join_runtime_release(ptr %runtime, i32 %index)" -> println
+    "  ret i1 true" -> println
+    "done:" -> println
+    "  ret i1 false" -> println
+    "}" -> println
+    junctionIndex -> emitConcurrentJunctionDrop(context, state)
+}
+
+emitConcurrentLatestSnapshot junctionIndex: Int, snapshotOrdinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.ir[junction.junctionIr] => junctionNode
+    context.types[junctionNode.typeId].first => outputType
+    0 => snapshotInput!
+    snapshotInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + snapshotInput!] => input
+        context.types[input.typeId].first => elementType
+        "  %snapshot$(snapshotOrdinal)_cache$(snapshotInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount + 3 + snapshotInput!)" -> println
+        "  %snapshot$(snapshotOrdinal)_value$(snapshotInput!) = load " -> print
+        elementType -> writeSemanticTypeId(context, state)
+        ", ptr %snapshot$(snapshotOrdinal)_cache$(snapshotInput!), align $(context.typeAligns[elementType])" -> println
+        "  %snapshot$(snapshotOrdinal)_output$(snapshotInput!) = getelementptr " -> print
+        outputType -> writeSemanticTypeId(context, state)
+        ", ptr %output, i32 0, i32 $(snapshotInput!)" -> println
+        "  store " -> print
+        elementType -> writeSemanticTypeId(context, state)
+        " %snapshot$(snapshotOrdinal)_value$(snapshotInput!), ptr %snapshot$(snapshotOrdinal)_output$(snapshotInput!), align $(context.typeAligns[elementType])" -> println
+        snapshotInput! + 1 => snapshotInput!
+    }
+    "  ret i1 true" -> println
+}
+
+emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    "%sollang.join.$(junction.junctionIr) = type { " -> print
+    0 => contextField!
+    contextField! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + contextField!] => input
+        context.types[input.typeId].symbol == 4 -> if { "%sollang.event_stream, " -> print } else { "%sollang.stream, " -> print }
+        contextField! + 1 => contextField!
+    }
+    "ptr, i32, [$(junction.inputCount) x i1]" -> print
+    0 => cacheField!
+    cacheField! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + cacheField!] => cacheInput
+        ", " -> print
+        context.types[cacheInput.typeId].first -> writeSemanticTypeId(context, state)
+        cacheField! + 1 => cacheField!
+    }
+    " }" -> println
+    junctionIndex -> emitConcurrentJunctionInputCallbacks(context, state)
+    "define internal i1 @sollang_join_$(junction.junctionIr)_next(ptr %context, ptr %output) {" -> println
+    "entry:" -> println
+    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+    "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
+    "  %index_address = alloca i32, align 4" -> println
+    "  %kind_address = alloca i32, align 4" -> println
+    "  %slot_address = alloca ptr, align 8" -> println
+    "  br label %wait" -> println
+    "wait:" -> println
+    "  %available = call i1 @sollang_stream_join_runtime_next_event(ptr %runtime, ptr %index_address, ptr %kind_address, ptr %slot_address)" -> println
+    "  br i1 %available, label %received, label %done" -> println
+    "received:" -> println
+    "  %index = load i32, ptr %index_address, align 4" -> println
+    "  switch i32 %index, label %done [" -> println
+    0 => switchInput!
+    switchInput! < junction.inputCount -> while {
+        "    i32 $(switchInput!), label %input$(switchInput!)" -> println
+        switchInput! + 1 => switchInput!
+    }
+    "  ]" -> println
+    0 => eventInput!
+    eventInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + eventInput!] => input
+        context.types[input.typeId].first => elementType
+        "input$(eventInput!):" -> println
+        "  %kind$(eventInput!) = load i32, ptr %kind_address, align 4" -> println
+        "  %is_value$(eventInput!) = icmp eq i32 %kind$(eventInput!), 0" -> println
+        "  %initialized_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount + 2), i32 $(eventInput!)" -> println
+        "  br i1 %is_value$(eventInput!), label %value$(eventInput!), label %completion$(eventInput!)" -> println
+        "completion$(eventInput!):" -> println
+        "  %was_initialized$(eventInput!) = load i1, ptr %initialized_address$(eventInput!), align 1" -> println
+        "  br i1 %was_initialized$(eventInput!), label %wait, label %impossible$(eventInput!)" -> println
+        "impossible$(eventInput!):" -> println
+        "  call void @sollang_stream_join_runtime_cancel(ptr %runtime)" -> println
+        "  ret i1 false" -> println
+        "value$(eventInput!):" -> println
+        "  %slot$(eventInput!) = load ptr, ptr %slot_address, align 8" -> println
+        "  %item$(eventInput!) = load " -> print
+        elementType -> writeSemanticTypeId(context, state)
+        ", ptr %slot$(eventInput!), align $(context.typeAligns[elementType])" -> println
+        "  %cache$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount + 3 + eventInput!)" -> println
+        "  store " -> print
+        elementType -> writeSemanticTypeId(context, state)
+        " %item$(eventInput!), ptr %cache$(eventInput!), align $(context.typeAligns[elementType])" -> println
+        "  call void @sollang_stream_join_runtime_release(ptr %runtime, i32 $(eventInput!))" -> println
+        "  %already_initialized$(eventInput!) = load i1, ptr %initialized_address$(eventInput!), align 1" -> println
+        "  br i1 %already_initialized$(eventInput!), label %ready_check$(eventInput!), label %initialize$(eventInput!)" -> println
+        "initialize$(eventInput!):" -> println
+        "  store i1 true, ptr %initialized_address$(eventInput!), align 1" -> println
+        "  %initialized_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+        "  %initialized_count$(eventInput!) = load i32, ptr %initialized_count_address$(eventInput!), align 4" -> println
+        "  %next_initialized_count$(eventInput!) = add i32 %initialized_count$(eventInput!), 1" -> println
+        "  store i32 %next_initialized_count$(eventInput!), ptr %initialized_count_address$(eventInput!), align 4" -> println
+        "  br label %ready_check$(eventInput!)" -> println
+        "ready_check$(eventInput!):" -> println
+        "  %current_count_address$(eventInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount + 1)" -> println
+        "  %current_count$(eventInput!) = load i32, ptr %current_count_address$(eventInput!), align 4" -> println
+        "  %ready$(eventInput!) = icmp eq i32 %current_count$(eventInput!), $(junction.inputCount)" -> println
+        "  br i1 %ready$(eventInput!), label %snapshot$(eventInput!), label %wait" -> println
+        "snapshot$(eventInput!):" -> println
+        junctionIndex -> emitConcurrentLatestSnapshot(eventInput!, context, state)
+        eventInput! + 1 => eventInput!
+    }
+    "done:" -> println
+    "  ret i1 false" -> println
+    "}" -> println
+    junctionIndex -> emitConcurrentJunctionDrop(context, state)
+}
+
+emitStreamJunctionRuntimes context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    false => concurrentRuntimeEmitted!
+    0 => junctionIndex!
+    junctionIndex! < (context.streamPlan.junctions -> len) -> while {
+        context.streamPlan.junctions[junctionIndex!] => junction
+        (junction.kind == 2 and junction.policy == 0) -> if { junctionIndex! -> emitZipJunctionRuntime(context, state) }
+        (junction.kind == 2 and junction.policy == 1 and not (junctionIndex! -> junctionRequiresConcurrent(context, state))) -> if { junctionIndex! -> emitMergeJunctionRuntime(context, state) }
+        (junction.kind == 2 and junction.policy == 1 and (junctionIndex! -> junctionRequiresConcurrent(context, state))) -> if {
+            not concurrentRuntimeEmitted! -> if {
+                context.expectedPathStyle == 1 -> if { streamJoinRuntime.emitWindowsPlatform() } else { streamJoinRuntime.emitLinuxPlatform() }
+                streamJoinRuntime.emitCommon()
+                true => concurrentRuntimeEmitted!
+            }
+            junctionIndex! -> emitConcurrentMergeJunctionRuntime(context, state)
+        }
+        (junction.kind == 2 and junction.policy == 2) -> if { junctionIndex! -> emitConcatJunctionRuntime(context, state) }
+        (junction.kind == 2 and junction.policy == 3 and not (junctionIndex! -> junctionRequiresConcurrent(context, state))) -> if { junctionIndex! -> emitLatestJunctionRuntime(context, state) }
+        (junction.kind == 2 and junction.policy == 3 and (junctionIndex! -> junctionRequiresConcurrent(context, state))) -> if {
+            not concurrentRuntimeEmitted! -> if {
+                context.expectedPathStyle == 1 -> if { streamJoinRuntime.emitWindowsPlatform() } else { streamJoinRuntime.emitLinuxPlatform() }
+                streamJoinRuntime.emitCommon()
+                true => concurrentRuntimeEmitted!
+            }
+            junctionIndex! -> emitConcurrentLatestJunctionRuntime(context, state)
+        }
+        junctionIndex! + 1 => junctionIndex!
+    }
+}
+
+emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.ir[expressionIndex] => expression
+    "  %join$(expressionIndex)_size_pointer = getelementptr %sollang.join.$(expressionIndex), ptr null, i32 1" -> println
+    "  %join$(expressionIndex)_size = ptrtoint ptr %join$(expressionIndex)_size_pointer to i64" -> println
+    "  %join$(expressionIndex)_context = call ptr @malloc(i64 %join$(expressionIndex)_size)" -> println
+    0 => inputIndex!
+    inputIndex! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
+        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => producerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+        "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
+        "  store $(producerType!) " -> print
+        valueIndex -> writeValue(ownerIndex, context, state)
+        ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
+        inputIndex! + 1 => inputIndex!
+    }
+    "  %join$(expressionIndex)_done = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  store i1 false, ptr %join$(expressionIndex)_done, align 1" -> println
+    "%sollang.stream" => resultType!
+    context.types[expression.typeId].symbol == 4 -> if { "%sollang.event_stream" => resultType! }
+    "  %join$(expressionIndex)_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex)_context, 0" -> println
+    "  %join$(expressionIndex)_with_next = insertvalue $(resultType!) %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
+    "  %v$(expressionIndex) = insertvalue $(resultType!) %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println
+}
+
+emitMergeJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.ir[expressionIndex] => expression
+    "  %join$(expressionIndex)_size_pointer = getelementptr %sollang.join.$(expressionIndex), ptr null, i32 1" -> println
+    "  %join$(expressionIndex)_size = ptrtoint ptr %join$(expressionIndex)_size_pointer to i64" -> println
+    "  %join$(expressionIndex)_context = call ptr @malloc(i64 %join$(expressionIndex)_size)" -> println
+    0 => inputIndex!
+    inputIndex! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
+        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
+        "  store %sollang.stream " -> print
+        valueIndex -> writeValue(ownerIndex, context, state)
+        ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
+        inputIndex! + 1 => inputIndex!
+    }
+    "  %join$(expressionIndex)_cursor = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  store i32 0, ptr %join$(expressionIndex)_cursor, align 4" -> println
+    0 => activeIndex!
+    activeIndex! < junction.inputCount -> while {
+        "  %join$(expressionIndex)_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount + 1 + activeIndex!)" -> println
+        "  store i1 true, ptr %join$(expressionIndex)_active$(activeIndex!), align 1" -> println
+        activeIndex! + 1 => activeIndex!
+    }
+    "%sollang.stream" => resultType!
+    context.types[expression.typeId].symbol == 4 -> if { "%sollang.event_stream" => resultType! }
+    "  %join$(expressionIndex)_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex)_context, 0" -> println
+    "  %join$(expressionIndex)_with_next = insertvalue $(resultType!) %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
+    "  %v$(expressionIndex) = insertvalue $(resultType!) %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println
+}
+
+emitLatestJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.ir[expressionIndex] => expression
+    "  %join$(expressionIndex)_size_pointer = getelementptr %sollang.join.$(expressionIndex), ptr null, i32 1" -> println
+    "  %join$(expressionIndex)_size = ptrtoint ptr %join$(expressionIndex)_size_pointer to i64" -> println
+    "  %join$(expressionIndex)_context = call ptr @malloc(i64 %join$(expressionIndex)_size)" -> println
+    0 => inputIndex!
+    inputIndex! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
+        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
+        "  store %sollang.stream " -> print
+        valueIndex -> writeValue(ownerIndex, context, state)
+        ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
+        inputIndex! + 1 => inputIndex!
+    }
+    "  %join$(expressionIndex)_cursor = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  store i32 0, ptr %join$(expressionIndex)_cursor, align 4" -> println
+    "  %join$(expressionIndex)_state = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount + 1)" -> println
+    "  store i32 0, ptr %join$(expressionIndex)_state, align 4" -> println
+    0 => activeIndex!
+    activeIndex! < junction.inputCount -> while {
+        "  %join$(expressionIndex)_active$(activeIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount + 2 + activeIndex!)" -> println
+        "  store i1 true, ptr %join$(expressionIndex)_active$(activeIndex!), align 1" -> println
+        activeIndex! + 1 => activeIndex!
+    }
+    "%sollang.stream" => resultType!
+    context.types[expression.typeId].symbol == 4 -> if { "%sollang.event_stream" => resultType! }
+    "  %join$(expressionIndex)_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex)_context, 0" -> println
+    "  %join$(expressionIndex)_with_next = insertvalue $(resultType!) %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
+    "  %v$(expressionIndex) = insertvalue $(resultType!) %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println
+}
+
+emitConcurrentJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    "  %join$(expressionIndex)_size_pointer = getelementptr %sollang.join.$(expressionIndex), ptr null, i32 1" -> println
+    "  %join$(expressionIndex)_size = ptrtoint ptr %join$(expressionIndex)_size_pointer to i64" -> println
+    "  %join$(expressionIndex)_context = call ptr @malloc(i64 %join$(expressionIndex)_size)" -> println
+    "  %join$(expressionIndex)_allocated = icmp ne ptr %join$(expressionIndex)_context, null" -> println
+    "  br i1 %join$(expressionIndex)_allocated, label %join$(expressionIndex)_initialize, label %join$(expressionIndex)_allocation_failed" -> println
+    "join$(expressionIndex)_allocation_failed:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "join$(expressionIndex)_initialize:" -> println
+    0 => inputIndex!
+    inputIndex! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
+        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => producerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+        "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
+        "  store $(producerType!) " -> print
+        valueIndex -> writeValue(ownerIndex, context, state)
+        ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
+        inputIndex! + 1 => inputIndex!
+    }
+    junction.policy == 3 -> if {
+        "  %join$(expressionIndex)_initialized_count = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount + 1)" -> println
+        "  store i32 0, ptr %join$(expressionIndex)_initialized_count, align 4" -> println
+        0 => initializedInput!
+        initializedInput! < junction.inputCount -> while {
+            "  %join$(expressionIndex)_initialized$(initializedInput!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount + 2), i32 $(initializedInput!)" -> println
+            "  store i1 false, ptr %join$(expressionIndex)_initialized$(initializedInput!), align 1" -> println
+            initializedInput! + 1 => initializedInput!
+        }
+    }
+    -1 => maximumInput!
+    0 => sizeInput!
+    sizeInput! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + sizeInput!] => sizeInputPlan
+        context.types[sizeInputPlan.typeId].first => elementType
+        "  %join$(expressionIndex)_item$(sizeInput!)_size_pointer = getelementptr " -> print
+        elementType -> writeSemanticTypeId(context, state)
+        ", ptr null, i32 1" -> println
+        "  %join$(expressionIndex)_item$(sizeInput!)_size = ptrtoint ptr %join$(expressionIndex)_item$(sizeInput!)_size_pointer to i64" -> println
+        maximumInput! < 0 -> if {
+            sizeInput! => maximumInput!
+        } else {
+            "  %join$(expressionIndex)_item$(sizeInput!)_larger = icmp ugt i64 %join$(expressionIndex)_item$(sizeInput!)_size, %join$(expressionIndex)_item_max$(sizeInput! - 1)" -> println
+            "  %join$(expressionIndex)_item_max$(sizeInput!) = select i1 %join$(expressionIndex)_item$(sizeInput!)_larger, i64 %join$(expressionIndex)_item$(sizeInput!)_size, i64 %join$(expressionIndex)_item_max$(sizeInput! - 1)" -> println
+        }
+        sizeInput! == 0 -> if {
+            "  %join$(expressionIndex)_item_max0 = add i64 %join$(expressionIndex)_item0_size, 0" -> println
+        }
+        sizeInput! + 1 => sizeInput!
+    }
+    "  %join$(expressionIndex)_runtime = call ptr @sollang_stream_join_runtime_create(i32 $(junction.inputCount), i64 %join$(expressionIndex)_item_max$(junction.inputCount - 1), ptr @sollang_join_$(expressionIndex)_pull, ptr @sollang_join_$(expressionIndex)_drop_item, ptr %join$(expressionIndex)_context)" -> println
+    "  %join$(expressionIndex)_runtime_created = icmp ne ptr %join$(expressionIndex)_runtime, null" -> println
+    "  br i1 %join$(expressionIndex)_runtime_created, label %join$(expressionIndex)_runtime_ready, label %join$(expressionIndex)_runtime_failed" -> println
+    "join$(expressionIndex)_runtime_failed:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "join$(expressionIndex)_runtime_ready:" -> println
+    "  %join$(expressionIndex)_runtime_address = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  store ptr %join$(expressionIndex)_runtime, ptr %join$(expressionIndex)_runtime_address, align 8" -> println
+    "  %join$(expressionIndex)_with_context = insertvalue %sollang.event_stream poison, ptr %join$(expressionIndex)_context, 0" -> println
+    "  %join$(expressionIndex)_with_next = insertvalue %sollang.event_stream %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
+    "  %v$(expressionIndex) = insertvalue %sollang.event_stream %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println
+}
+
+emitConcatJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.ir[expressionIndex] => expression
+    "  %join$(expressionIndex)_size_pointer = getelementptr %sollang.join.$(expressionIndex), ptr null, i32 1" -> println
+    "  %join$(expressionIndex)_size = ptrtoint ptr %join$(expressionIndex)_size_pointer to i64" -> println
+    "  %join$(expressionIndex)_context = call ptr @malloc(i64 %join$(expressionIndex)_size)" -> println
+    0 => inputIndex!
+    inputIndex! < junction.inputCount -> while {
+        context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
+        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        context.types[input.typeId] => inputType
+        "%sollang.stream" => producerType!
+        inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+        "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
+        "  store $(producerType!) " -> print
+        valueIndex -> writeValue(ownerIndex, context, state)
+        ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
+        inputIndex! + 1 => inputIndex!
+    }
+    "  %join$(expressionIndex)_cursor = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount)" -> println
+    "  store i32 0, ptr %join$(expressionIndex)_cursor, align 4" -> println
+    "%sollang.stream" => resultType!
+    context.types[expression.typeId].symbol == 4 -> if { "%sollang.event_stream" => resultType! }
+    "  %join$(expressionIndex)_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex)_context, 0" -> println
+    "  %join$(expressionIndex)_with_next = insertvalue $(resultType!) %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
+    "  %v$(expressionIndex) = insertvalue $(resultType!) %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println
+}

@@ -104,7 +104,10 @@ internal static class SourceFormatter
             var leadingCloses = CountLeadingClosingBraces(trimmed);
             var lineDepth = Math.Max(0, depth - leadingCloses) + continuationBlockDepths.Count;
             var isContinuation = IsContinuation(trimmed);
-            if (isContinuation)
+            var isJunctionBlockContinuation = isContinuation
+                && continuationBlockDepths.Count > 0
+                && continuationBlockDepths[^1] <= depth;
+            if (isContinuation && !isJunctionBlockContinuation)
             {
                 lineDepth++;
             }

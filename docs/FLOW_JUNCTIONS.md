@@ -1,6 +1,6 @@
 # Flow Junctions: Branching And Joining
-Status: accepted design; implementation queued after the 0.4 native distribution
-Updated: 2026-07-30
+Status: implemented and verified across Windows, Linux, browser, Stage 2, and Stage 3
+Updated: 2026-08-02
 
 ## Purpose
 
@@ -293,7 +293,7 @@ owner when two locations establish the error.
 
 Learning examples and exhaustive fixtures remain separate.
 
-Ten user examples will be added under `examples/user/`:
+Ten Flow Junctions user examples are kept under `examples/user/`:
 
 1. scalar `branch`;
 2. multi-stage named branch arms;
@@ -306,8 +306,10 @@ Ten user examples will be added under `examples/user/`:
 9. `concat` and `latest`; and
 10. readonly ownership plus explicit `parallel branch`.
 
-Each user example must have a byte-identical regression counterpart. The first
-implementation gate contains at least 114 logical regression cases:
+Each user example has a byte-identical regression counterpart. The exhaustive
+track contains 57 positive fixtures (`788` through `844`) and 26 focused
+diagnostic fixtures. Those 83 physical fixtures cover the following
+114 separately counted logical cases:
 
 | Area | Logical cases |
 | --- | ---: |
@@ -321,15 +323,23 @@ implementation gate contains at least 114 logical regression cases:
 | Bootstrap/self-host differential and LLVM execution | 12 |
 | **Total** | **114** |
 
-The 114 cases run on Windows x64 and every applicable case runs on Linux x64.
-At least 30 syntax, diagnostic, formatter, and bounded-stream cases also run in
-the browser/Wasm surface. The complete cumulative suite, Stage 2 differential
-gate, and Stage 3 fixed point remain mandatory. Test counts are updated only
-from the runner's measured inventory after the fixtures exist.
+The 114 logical cases run on Windows x64 and every applicable case runs on
+Linux x64. The browser gate runs 20 exact-output runtime cases and 4 exact
+diagnostic cases, including 9 Flow Junctions runtime cases and the explicit
+parallel-branch target diagnostic. The browser catalog exposes 40 samples.
+The complete cumulative suite, Stage 2 differential gate, and Stage 3 fixed
+point remain mandatory. Test counts are updated only from measured runner
+inventory after the fixtures exist.
+
+The repository-wide runner inventory after adding this track is 20 user
+examples, 827 regression cases, and 257 diagnostic cases: 1,084 logical
+fixtures in total. Supporting `.sources.txt`, LLVM validation, execution, and
+contains files do not add to that count.
 
 ## Delivery Order
 
-This work begins only after the 0.4 native-only distribution goal is complete:
+Implementation was completed in this order after the 0.4 native-only
+distribution gate:
 
 1. add tuple and labeled-product grammar, types, ownership, and LLVM layout;
 2. implement sequential `branch` and `tap`;

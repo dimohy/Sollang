@@ -1,0 +1,33 @@
+import sollang.compiler.llvm.text as llvm
+
+# wasm32-browser cannot implement bounded concurrent EventStream fan-in with
+# the synchronous affine pull ABI, so the self-hosted backend must reject it.
+main {
+    [
+        """
+        import std.sequence
+
+        makeValues values: Range -> Stream<Int> { values -> defer }
+        asEvents left: move Stream<Int>, right: move Stream<Int> -> EventStream<Int> {
+            (left, right) -> merge
+        }
+
+        main {
+            1..2 -> makeValues => left
+            10..11 -> makeValues => right
+            left -> asEvents(right) => first
+            20..21 -> makeValues => otherLeft
+            30..31 -> makeValues => otherRight
+            otherLeft -> asEvents(otherRight) => second
+            (first, second) -> merge => all
+            all -> each value { value -> println }
+        }
+        """,
+        """
+        namespace std.sequence
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emitWasmChecked => diagnosticCount
+    "diagnostics = $diagnosticCount" -> println
+}

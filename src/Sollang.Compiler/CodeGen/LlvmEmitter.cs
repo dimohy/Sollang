@@ -20,6 +20,7 @@ internal sealed partial class LlvmEmitter
     private bool _usesDirectoryTraversal;
     private readonly bool _usesParallel;
     private readonly bool _usesMouseEvents;
+    private readonly bool _usesConcurrentStreamJoins;
     private readonly bool _usesRangeStreams;
     private readonly bool _usesStandardError;
     private sealed record ParallelCallbackInfo(
@@ -31,8 +32,28 @@ internal sealed partial class LlvmEmitter
         Expression Expression,
         BoundType Type,
         BoundFunctionInputOwnership Ownership);
+    private sealed record ParallelBranchCapture(
+        Expression Expression,
+        BoundType Type,
+        bool UsesBorrowAbi,
+        bool IsSharedOwner,
+        string LocalName);
+    private sealed record ParallelBranchCallbackInfo(
+        string Name,
+        BoundParallelBranch Branch,
+        IReadOnlyList<ParallelBranchCapture> Captures,
+        IReadOnlyList<BranchArm> RewrittenArms,
+        string EnvironmentType);
+    private sealed record StreamJoinRuntimeInfo(
+        string Prefix,
+        string ContextType,
+        BoundStreamJoin Join);
 
     private readonly Dictionary<BlockFunctionCallStatement, ParallelCallbackInfo> _parallelCallbacks =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BranchExpression, ParallelBranchCallbackInfo> _parallelBranchCallbacks =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<StreamJoinExpression, StreamJoinRuntimeInfo> _streamJoinRuntimeInfos =
         new(ReferenceEqualityComparer.Instance);
     private bool UsesProcessRuntime => _usesProcessArguments || _usesProcessEnvironment || _usesChildProcesses;
     private MemoryOutputSink _activeGlobals = new();
@@ -106,11 +127,17 @@ internal sealed partial class LlvmEmitter
                 or BoundFunctionKind.RuntimeOpenFileAsync
                 or BoundFunctionKind.RuntimeOpenWriteFileAsync);
         _usesParallel = _platform.SupportsComputePool
-            && program.ResolvedGenericCalls.Values.Any(function =>
+            && (program.ParallelBranches.Count != 0
+                || program.ResolvedGenericCalls.Values.Any(function =>
                 function.Kind is BoundFunctionKind.RuntimeParallel
                     or BoundFunctionKind.RuntimeTryParallel
-                    or BoundFunctionKind.RuntimeLimitParallelWorkers);
-        _usesMouseEvents = program.EventStreamConsumers.Values.Any(static pipeline => pipeline.IsEvent);
+                    or BoundFunctionKind.RuntimeLimitParallelWorkers));
+        _usesMouseEvents = program.EventStreamConsumers.Values.Any(static pipeline => pipeline.IsEvent)
+            || program.PartitionConsumers.Values.Any(static pipeline => pipeline.IsEvent)
+            || program.StreamJoins.Values.Any(join => join.Inputs.Any(static input => input.IsEvent));
+        _usesConcurrentStreamJoins = program.StreamJoins.Values.Any(join =>
+            join.Policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Latest
+            && join.Inputs.Any(static input => input.IsEvent));
         _usesRangeStreams = program.MainStatements.Any(UsesRangeStream)
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
                 (function.Body is not null && UsesRangeStream(function.Body))
@@ -129,6 +156,7 @@ internal sealed partial class LlvmEmitter
         _platform.UsesComputePool = _usesParallel;
         _platform.UsesDirectoryTraversal = _usesDirectoryTraversal;
         _platform.UsesMouseEvents = _usesMouseEvents;
+        _platform.UsesConcurrentStreamJoins = _usesConcurrentStreamJoins;
         _platform.UsesStandardError = _usesStandardError;
     }
 
@@ -178,6 +206,11 @@ internal sealed partial class LlvmEmitter
             NotExpression value => UsesChildProcess(value.Value),
             FlowExpression value => UsesChildProcess(value.Source)
                 || value.Targets.SelectMany(target => target.Arguments).Any(UsesChildProcess),
+            BranchExpression value => UsesChildProcess(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesChildProcess),
+            TapExpression value => UsesChildProcess(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesChildProcess),
+            StreamJoinExpression value => UsesChildProcess(value.Source),
             CallExpression value => value.Arguments.Any(UsesChildProcess),
             RangeExpression value => UsesChildProcess(value.Start) || UsesChildProcess(value.End),
             ArrayLiteralExpression value => value.Elements.Any(UsesChildProcess),
@@ -185,6 +218,7 @@ internal sealed partial class LlvmEmitter
             DictionaryLiteralExpression value => value.Entries.Any(x => UsesChildProcess(x.Key) || UsesChildProcess(x.Value)),
             IndexExpression value => UsesChildProcess(value.Source) || UsesChildProcess(value.Index),
             StructLiteralExpression value => value.Fields.Any(x => UsesChildProcess(x.Value)),
+            ProductExpression value => value.Elements.Any(x => UsesChildProcess(x.Value)),
             BoxExpression value => UsesChildProcess(value.Value),
             TryExpression value => UsesChildProcess(value.Value),
             FieldAccessExpression value => UsesChildProcess(value.Source),
@@ -242,6 +276,11 @@ internal sealed partial class LlvmEmitter
             NotExpression value => UsesProcessExit(value.Value),
             FlowExpression value => UsesProcessExit(value.Source)
                 || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessExit),
+            BranchExpression value => UsesProcessExit(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesProcessExit),
+            TapExpression value => UsesProcessExit(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessExit),
+            StreamJoinExpression value => UsesProcessExit(value.Source),
             CallExpression value => value.Arguments.Any(UsesProcessExit),
             RangeExpression value => UsesProcessExit(value.Start) || UsesProcessExit(value.End),
             ArrayLiteralExpression value => value.Elements.Any(UsesProcessExit),
@@ -249,6 +288,7 @@ internal sealed partial class LlvmEmitter
             DictionaryLiteralExpression value => value.Entries.Any(x => UsesProcessExit(x.Key) || UsesProcessExit(x.Value)),
             IndexExpression value => UsesProcessExit(value.Source) || UsesProcessExit(value.Index),
             StructLiteralExpression value => value.Fields.Any(x => UsesProcessExit(x.Value)),
+            ProductExpression value => value.Elements.Any(x => UsesProcessExit(x.Value)),
             BoxExpression value => UsesProcessExit(value.Value),
             TryExpression value => UsesProcessExit(value.Value),
             FieldAccessExpression value => UsesProcessExit(value.Source),
@@ -306,6 +346,11 @@ internal sealed partial class LlvmEmitter
             NotExpression value => UsesRuntimeSleep(value.Value),
             FlowExpression value => UsesRuntimeSleep(value.Source)
                 || value.Targets.SelectMany(target => target.Arguments).Any(UsesRuntimeSleep),
+            BranchExpression value => UsesRuntimeSleep(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesRuntimeSleep),
+            TapExpression value => UsesRuntimeSleep(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesRuntimeSleep),
+            StreamJoinExpression value => UsesRuntimeSleep(value.Source),
             CallExpression value => value.Arguments.Any(UsesRuntimeSleep),
             RangeExpression value => UsesRuntimeSleep(value.Start) || UsesRuntimeSleep(value.End),
             ArrayLiteralExpression value => value.Elements.Any(UsesRuntimeSleep),
@@ -313,6 +358,7 @@ internal sealed partial class LlvmEmitter
             DictionaryLiteralExpression value => value.Entries.Any(x => UsesRuntimeSleep(x.Key) || UsesRuntimeSleep(x.Value)),
             IndexExpression value => UsesRuntimeSleep(value.Source) || UsesRuntimeSleep(value.Index),
             StructLiteralExpression value => value.Fields.Any(x => UsesRuntimeSleep(x.Value)),
+            ProductExpression value => value.Elements.Any(x => UsesRuntimeSleep(x.Value)),
             BoxExpression value => UsesRuntimeSleep(value.Value),
             TryExpression value => UsesRuntimeSleep(value.Value),
             FieldAccessExpression value => UsesRuntimeSleep(value.Source),
@@ -367,6 +413,11 @@ internal sealed partial class LlvmEmitter
             NotExpression value => UsesRangeStream(value.Value),
             FlowExpression value => UsesRangeStream(value.Source)
                 || value.Targets.SelectMany(target => target.Arguments).Any(UsesRangeStream),
+            BranchExpression value => UsesRangeStream(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesRangeStream),
+            TapExpression value => UsesRangeStream(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesRangeStream),
+            StreamJoinExpression value => UsesRangeStream(value.Source),
             CallExpression value => value.Arguments.Any(UsesRangeStream),
             RangeExpression value => UsesRangeStream(value.Start) || UsesRangeStream(value.End),
             ArrayLiteralExpression value => value.Elements.Any(UsesRangeStream),
@@ -374,6 +425,7 @@ internal sealed partial class LlvmEmitter
             DictionaryLiteralExpression value => value.Entries.Any(x => UsesRangeStream(x.Key) || UsesRangeStream(x.Value)),
             IndexExpression value => UsesRangeStream(value.Source) || UsesRangeStream(value.Index),
             StructLiteralExpression value => value.Fields.Any(x => UsesRangeStream(x.Value)),
+            ProductExpression value => value.Elements.Any(x => UsesRangeStream(x.Value)),
             BoxExpression value => UsesRangeStream(value.Value),
             TryExpression value => UsesRangeStream(value.Value),
             FieldAccessExpression value => UsesRangeStream(value.Source),
@@ -439,6 +491,11 @@ internal sealed partial class LlvmEmitter
             RangeExpression value => UsesProcessArguments(value.Start) || UsesProcessArguments(value.End),
             FlowExpression value => UsesProcessArguments(value.Source)
                 || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessArguments),
+            BranchExpression value => UsesProcessArguments(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesProcessArguments),
+            TapExpression value => UsesProcessArguments(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessArguments),
+            StreamJoinExpression value => UsesProcessArguments(value.Source),
             CallExpression value => value.Arguments.Any(UsesProcessArguments),
             ArrayLiteralExpression value => value.Elements.Any(UsesProcessArguments),
             ArrayRepeatExpression value => UsesProcessArguments(value.Value),
@@ -446,6 +503,7 @@ internal sealed partial class LlvmEmitter
                 UsesProcessArguments(entry.Key) || UsesProcessArguments(entry.Value)),
             IndexExpression value => UsesProcessArguments(value.Source) || UsesProcessArguments(value.Index),
             StructLiteralExpression value => value.Fields.Any(field => UsesProcessArguments(field.Value)),
+            ProductExpression value => value.Elements.Any(element => UsesProcessArguments(element.Value)),
             BoxExpression value => UsesProcessArguments(value.Value),
             FieldAccessExpression value => UsesProcessArguments(value.Source),
             TryExpression value => UsesProcessArguments(value.Value),
@@ -513,6 +571,11 @@ internal sealed partial class LlvmEmitter
             OrExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
             NotExpression value => UsesProcessEnvironment(value.Value),
             FlowExpression value => UsesProcessEnvironment(value.Source) || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessEnvironment),
+            BranchExpression value => UsesProcessEnvironment(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesProcessEnvironment),
+            TapExpression value => UsesProcessEnvironment(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessEnvironment),
+            StreamJoinExpression value => UsesProcessEnvironment(value.Source),
             CallExpression value => value.Arguments.Any(UsesProcessEnvironment),
             RangeExpression value => UsesProcessEnvironment(value.Start) || UsesProcessEnvironment(value.End),
             ArrayLiteralExpression value => value.Elements.Any(UsesProcessEnvironment),
@@ -520,6 +583,7 @@ internal sealed partial class LlvmEmitter
             DictionaryLiteralExpression value => value.Entries.Any(entry => UsesProcessEnvironment(entry.Key) || UsesProcessEnvironment(entry.Value)),
             IndexExpression value => UsesProcessEnvironment(value.Source) || UsesProcessEnvironment(value.Index),
             StructLiteralExpression value => value.Fields.Any(field => UsesProcessEnvironment(field.Value)),
+            ProductExpression value => value.Elements.Any(element => UsesProcessEnvironment(element.Value)),
             BoxExpression value => UsesProcessEnvironment(value.Value),
             TryExpression value => UsesProcessEnvironment(value.Value),
             FieldAccessExpression value => UsesProcessEnvironment(value.Source),
@@ -570,6 +634,11 @@ internal sealed partial class LlvmEmitter
         if (_usesDirectoryTraversal && !_platform.SupportsDirectoryTraversal)
         {
             throw new SollangException("directory traversal is unavailable on the current target");
+        }
+        if (_usesConcurrentStreamJoins && !_platform.SupportsConcurrentStreamJoins)
+        {
+            throw new SollangException(
+                "merge/latest of EventStream<T> inputs are unavailable on the current target because bounded concurrent fan-in requires native worker wakeup and join support");
         }
         if (_usesMouseEvents && !_platform.SupportsEventStreams)
         {
@@ -677,6 +746,10 @@ internal sealed partial class LlvmEmitter
         EmitNativeDeclarations();
         EmitComDeclarations();
         EmitPlatformFunctionBlock(_platform.EmitMemoryDeclarations);
+        if (_usesConcurrentStreamJoins)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitConcurrentStreamJoinPrimitives);
+        }
         if (_usesAsync)
         {
             EmitPlatformFunctionBlock(_platform.EmitAsyncPrimitives);
@@ -695,6 +768,8 @@ internal sealed partial class LlvmEmitter
 
         EmitDynTraitTables();
         EmitOwnedDropHelpers();
+        EmitStreamJoinRuntimeCallbacks();
+        EmitParallelBranchCallbacks();
         EmitParallelCallbacks();
         var prefixKey = reuse?.PrefixKey ?? default;
         units.Add(reuse is not null

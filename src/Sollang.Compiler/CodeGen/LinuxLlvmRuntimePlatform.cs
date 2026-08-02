@@ -14,6 +14,8 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsComputePool => true;
 
+    public override bool SupportsConcurrentStreamJoins => true;
+
     public override void EmitGlobals(StringBuilder globals)
     {
         globals.AppendLine("@sollang_file_writer_fd = internal global i32 -1");
@@ -78,7 +80,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare i64 @strlen(ptr)");
             functions.AppendLine("declare i32 @stat(ptr, ptr)");
         }
-        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents)
+        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare i32 @eventfd(i32, i32)");
             functions.AppendLine("declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
@@ -98,6 +100,17 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare i64 @sysconf(i32)");
             functions.AppendLine("declare i64 @syscall(i64, ...)");
         }
+        if (UsesConcurrentStreamJoins)
+        {
+            functions.AppendLine("declare i32 @pthread_mutex_init(ptr, ptr)");
+            functions.AppendLine("declare i32 @pthread_mutex_destroy(ptr)");
+            functions.AppendLine("declare i32 @pthread_mutex_lock(ptr)");
+            functions.AppendLine("declare i32 @pthread_mutex_unlock(ptr)");
+            functions.AppendLine("declare i32 @pthread_cond_init(ptr, ptr)");
+            functions.AppendLine("declare i32 @pthread_cond_destroy(ptr)");
+            functions.AppendLine("declare i32 @pthread_cond_wait(ptr, ptr)");
+            functions.AppendLine("declare i32 @pthread_cond_broadcast(ptr)");
+        }
         functions.AppendLine("@environ = external global ptr");
     }
 
@@ -105,6 +118,94 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
     {
         functions.AppendLine("declare ptr @malloc(i64)");
         functions.AppendLine("declare void @free(ptr)");
+    }
+
+    protected override void EmitConcurrentStreamJoinPlatformPrimitives(StringBuilder functions)
+    {
+        functions.AppendLine("""
+            define internal ptr @sollang_linux_stream_join_worker(ptr %argument) #0 {
+            entry:
+              call void @sollang_stream_join_worker_run(ptr %argument)
+              ret ptr null
+            }
+
+            define internal i1 @sollang_stream_join_sync_init(ptr %runtime) #0 {
+            entry:
+              %mutex = getelementptr i8, ptr %runtime, i64 112
+              %mutex_result = call i32 @pthread_mutex_init(ptr %mutex, ptr null)
+              %mutex_ok = icmp eq i32 %mutex_result, 0
+              br i1 %mutex_ok, label %initialize_condition, label %fail
+
+            initialize_condition:
+              %condition = getelementptr i8, ptr %runtime, i64 152
+              %condition_result = call i32 @pthread_cond_init(ptr %condition, ptr null)
+              %condition_ok = icmp eq i32 %condition_result, 0
+              br i1 %condition_ok, label %ready, label %destroy_mutex
+
+            destroy_mutex:
+              %destroyed = call i32 @pthread_mutex_destroy(ptr %mutex)
+              br label %fail
+
+            ready:
+              ret i1 true
+
+            fail:
+              ret i1 false
+            }
+
+            define internal void @sollang_stream_join_lock(ptr %runtime) #0 {
+            entry:
+              %mutex = getelementptr i8, ptr %runtime, i64 112
+              %locked = call i32 @pthread_mutex_lock(ptr %mutex)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_unlock(ptr %runtime) #0 {
+            entry:
+              %mutex = getelementptr i8, ptr %runtime, i64 112
+              %unlocked = call i32 @pthread_mutex_unlock(ptr %mutex)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_wait(ptr %runtime) #0 {
+            entry:
+              %mutex = getelementptr i8, ptr %runtime, i64 112
+              %condition = getelementptr i8, ptr %runtime, i64 152
+              %waited = call i32 @pthread_cond_wait(ptr %condition, ptr %mutex)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_wake_all(ptr %runtime) #0 {
+            entry:
+              %condition = getelementptr i8, ptr %runtime, i64 152
+              %woken = call i32 @pthread_cond_broadcast(ptr %condition)
+              ret void
+            }
+
+            define internal void @sollang_stream_join_sync_destroy(ptr %runtime) #0 {
+            entry:
+              %condition = getelementptr i8, ptr %runtime, i64 152
+              %condition_destroyed = call i32 @pthread_cond_destroy(ptr %condition)
+              %mutex = getelementptr i8, ptr %runtime, i64 112
+              %mutex_destroyed = call i32 @pthread_mutex_destroy(ptr %mutex)
+              ret void
+            }
+
+            define internal i1 @sollang_stream_join_thread_start(ptr %thread_slot, ptr %argument) #0 {
+            entry:
+              %created = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_stream_join_worker, ptr %argument)
+              %ok = icmp eq i32 %created, 0
+              ret i1 %ok
+            }
+
+            define internal void @sollang_stream_join_thread_join(ptr %thread_slot) #0 {
+            entry:
+              %thread = load i64, ptr %thread_slot, align 8
+              %joined = call i32 @pthread_join(i64 %thread, ptr null)
+              ret void
+            }
+
+            """);
     }
 
     public override void EmitEventPrimitives(StringBuilder functions)
@@ -463,6 +564,8 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               store ptr %buffer, ptr %buffer_address, align 8
               %termios_address = getelementptr i8, ptr %context, i64 48
               store ptr %original, ptr %termios_address, align 8
+              %active_next_address = getelementptr i8, ptr %context, i64 56
+              store atomic i32 0, ptr %active_next_address release, align 4
               %enabled = call i64 @write(i32 1, ptr @sollang_mouse_enable, i64 16)
               %thread_slot = alloca i64, align 8
               %created = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_mouse_worker, ptr %context)
@@ -501,6 +604,8 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal i1 @sollang_mouse_event_next_raw(ptr %context, ptr %x, ptr %y, ptr %delta, ptr %button, ptr %kind) #0 {
             entry:
+              %active_next_address = getelementptr i8, ptr %context, i64 56
+              %previous_active_next = atomicrmw add ptr %active_next_address, i32 1 acq_rel, align 4
               br label %queue_lock
 
             queue_lock:
@@ -558,19 +663,39 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %next_count = sub i32 %count, 1
               store i32 %next_count, ptr %count_address, align 4
               store atomic i32 0, ptr %lock_address release, align 4
+              %active_before_value_return = atomicrmw sub ptr %active_next_address, i32 1 acq_rel, align 4
+              call void @sollang_linux_mouse_signal(ptr %context)
               ret i1 true
 
             closed:
+              %active_before_closed_return = atomicrmw sub ptr %active_next_address, i32 1 acq_rel, align 4
+              call void @sollang_linux_mouse_signal(ptr %context)
               ret i1 false
             }
 
             define internal void @sollang_mouse_event_stream_drop(ptr %context) #0 {
             entry:
+              %counter = alloca i64, align 8
               %cancel_address = getelementptr i8, ptr %context, i64 20
               store atomic i32 1, ptr %cancel_address release, align 4
               %thread_address = getelementptr i8, ptr %context, i64 32
               %thread = load i64, ptr %thread_address, align 8
               %joined = call i32 @pthread_join(i64 %thread, ptr null)
+              br label %wait_active_next
+
+            wait_active_next:
+              %active_next_address = getelementptr i8, ptr %context, i64 56
+              %active_next = load atomic i32, ptr %active_next_address acquire, align 4
+              %next_idle = icmp eq i32 %active_next, 0
+              br i1 %next_idle, label %cleanup, label %wait_next_exit
+
+            wait_next_exit:
+              %event_address_wait = getelementptr i8, ptr %context, i64 28
+              %event_fd_wait = load i32, ptr %event_address_wait, align 4
+              %next_signal = call i64 @read(i32 %event_fd_wait, ptr %counter, i64 8)
+              br label %wait_active_next
+
+            cleanup:
               %disabled = call i64 @write(i32 1, ptr @sollang_mouse_disable, i64 16)
               %termios_address = getelementptr i8, ptr %context, i64 48
               %original = load ptr, ptr %termios_address, align 8

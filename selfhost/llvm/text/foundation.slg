@@ -620,10 +620,14 @@ canonicalMemberFieldIndex ownerTypeId: Int, sourceModule: Int, memberTokenIndex:
     0 => fieldSearch!
     fieldSearch! < (context.fields -> len) -> while {
         context.fields[fieldSearch!] => field
-        (field.status == 0 and field.ownerType == ownerTypeId and field.sourceModule >= 0 and field.fieldSymbol >= 0) -> if {
+        (field.status == 0 and field.ownerType == ownerTypeId and field.sourceModule >= 0 and (field.fieldSymbol >= 0 or field.labelToken >= 0)) -> if {
             context.ranges[field.sourceModule] => fieldRange
-            context.symbols[fieldRange.symbolStart + field.fieldSymbol] => fieldSymbol
-            context.tokens[fieldRange.tokenStart + fieldSymbol.nameToken] => fieldName
+            field.labelToken => fieldNameToken!
+            field.fieldSymbol >= 0 -> if {
+                context.symbols[fieldRange.symbolStart + field.fieldSymbol] => fieldSymbol
+                fieldSymbol.nameToken => fieldNameToken!
+            }
+            context.tokens[fieldRange.tokenStart + fieldNameToken!] => fieldName
             fieldName.span.length == memberName.span.length => equal!
             UIntSize(0) => nameByte!
             (equal! and nameByte! < memberName.span.length) -> while {
@@ -880,10 +884,14 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 (memberFieldCandidate.status == 0
                     and memberFieldCandidate.ownerType == memberOwnerTypeId!
                     and memberFieldCandidate.sourceModule >= 0
-                    and memberFieldCandidate.fieldSymbol >= 0) -> if {
+                    and (memberFieldCandidate.fieldSymbol >= 0 or memberFieldCandidate.labelToken >= 0)) -> if {
                     context.ranges[memberFieldCandidate.sourceModule] => memberFieldRange
-                    context.symbols[memberFieldRange.symbolStart + memberFieldCandidate.fieldSymbol] => memberFieldSymbol
-                    context.tokens[memberFieldRange.tokenStart + memberFieldSymbol.nameToken] => memberFieldName
+                    memberFieldCandidate.labelToken => memberFieldNameToken!
+                    memberFieldCandidate.fieldSymbol >= 0 -> if {
+                        context.symbols[memberFieldRange.symbolStart + memberFieldCandidate.fieldSymbol] => memberFieldSymbol
+                        memberFieldSymbol.nameToken => memberFieldNameToken!
+                    }
+                    context.tokens[memberFieldRange.tokenStart + memberFieldNameToken!] => memberFieldName
                     memberFieldName.span.length == memberNameLength => memberFieldNameEqual!
                     UIntSize(0) => memberFieldNameByte!
                     (memberFieldNameEqual! and memberFieldNameByte! < memberNameLength) -> while {
@@ -1233,7 +1241,7 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                         true => changed!
                     }
                 }
-                (current.kind == 1 and (current.origin == 0 or current.origin == 2)) -> if {
+                ((current.kind == 1 and (current.origin == 0 or current.origin == 2)) or current.kind == 10) -> if {
                     0 => size!
                     1 => align!
                     true => ready!

@@ -1,0 +1,29 @@
+import sollang.compiler.llvm.text as llvm
+
+# Latest waits for one value from every producer, then emits a labeled snapshot
+# after each cold-stream update until no producer can update it again.
+main {
+    [
+        """
+        import std.sequence
+
+        makeValues values: Range -> Stream<Int> { values -> defer }
+
+        main {
+            1..3 -> makeValues => left
+            10..11 -> makeValues => right
+            (left: left, right: right) -> latest => combined
+            combined -> each pair {
+                pair.left -> println
+                pair.right -> println
+            }
+        }
+        """,
+        """
+        namespace std.sequence
+
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

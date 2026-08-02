@@ -92,6 +92,18 @@ internal sealed partial class LlvmEmitter
             EmitStackLifetimeEndsAfter(statement);
             return;
         }
+        if (_program.PartitionConsumers.TryGetValue(statement, out var partition))
+        {
+            EmitPartitionPipeline(partition);
+            EmitStackLifetimeEndsAfter(statement);
+            return;
+        }
+        if (_program.StreamJoinConsumers.TryGetValue(statement, out var join))
+        {
+            EmitStreamJoinPipeline(join);
+            EmitStackLifetimeEndsAfter(statement);
+            return;
+        }
 
         if (statement is ExpressionStatement cfgYield && TryEmitCfgYieldStatement(cfgYield))
         {
@@ -635,56 +647,7 @@ internal sealed partial class LlvmEmitter
         EmitStore("i1", "false", cancellationSlot, 1);
         _currentStreamCancellationSlot = cancellationSlot;
 
-        var callSite = new RuntimeStreamCallSite(CaptureLocals(), _currentFunctions, _currentFunction);
-        var lastCall = pipeline.Calls[^1];
-        RuntimeStreamSink sink;
-        if (string.Join('.', lastCall.Target) == "each")
-        {
-            sink = new RuntimeStreamConsumer(new RuntimeBlockInvocation(
-                lastCall.ItemName,
-                [],
-                lastCall.Body,
-                CaptureLocals(),
-                _currentFunctions,
-                _currentFunction,
-                BoundType.Unit,
-                OwnsItem: true));
-        }
-        else
-        {
-            if (!(_program.ResolvedGenericCalls.TryGetValue(lastCall, out var terminalFunction)
-                    || TryResolveFunction(lastCall.Target, out terminalFunction))
-                || terminalFunction.Kind != BoundFunctionKind.UserBlock
-                || terminalFunction.ReturnType != BoundType.Unit)
-            {
-                throw new SollangException("a runtime Stream<T> pipeline must end with each or a Unit block function");
-            }
-            var terminalArguments = (lastCall.Arguments ?? []).Select(EmitExpression).ToArray();
-            sink = new RuntimeStreamTerminalStage(lastCall, terminalFunction, callSite, terminalArguments);
-        }
-
-        for (var index = pipeline.Calls.Count - 2; index >= 0; index--)
-        {
-            var call = pipeline.Calls[index];
-            if (!(_program.ResolvedGenericCalls.TryGetValue(call, out var function)
-                    || TryResolveFunction(call.Target, out function))
-                || function.StreamElementType is null)
-            {
-                throw new SollangException(
-                    "a runtime Stream<T> pipeline may contain only stream functions before its terminal");
-            }
-            var arguments = (call.Arguments ?? []).Select(EmitExpression).ToArray();
-            if ((function.Kind == BoundFunctionKind.User && function.BlockInputType is null)
-                || function.BlockBody.Any(static statement =>
-                    statement is BindingStatement { IsStreamState: true }))
-            {
-                sink = CreateUserStreamStage(call, function, sink, callSite, arguments, cancellationSlot);
-            }
-            else
-            {
-                sink = new RuntimeStreamStage(call, function, sink, callSite, arguments);
-            }
-        }
+        var sink = BuildRuntimeStreamSink(pipeline.Calls, cancellationSlot);
 
         var elementType = LlvmType(source.ElementType);
         var elementAddress = NextTemp("stream_element_address");
@@ -728,6 +691,624 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = doneLabel;
         DropOwnedRuntimeValue(source);
         _currentStreamCancellationSlot = previousCancellationSlot;
+    }
+
+    private RuntimeStreamSink BuildRuntimeStreamSink(
+        IReadOnlyList<BlockFunctionCallStatement> calls,
+        string cancellationSlot)
+    {
+        var callSite = new RuntimeStreamCallSite(CaptureLocals(), _currentFunctions, _currentFunction);
+        var lastCall = calls[^1];
+        RuntimeStreamSink sink;
+        if (string.Join('.', lastCall.Target) == "each")
+        {
+            sink = new RuntimeStreamConsumer(new RuntimeBlockInvocation(
+                lastCall.ItemName,
+                [],
+                lastCall.Body,
+                CaptureLocals(),
+                _currentFunctions,
+                _currentFunction,
+                BoundType.Unit,
+                OwnsItem: true));
+        }
+        else
+        {
+            if (!(_program.ResolvedGenericCalls.TryGetValue(lastCall, out var terminalFunction)
+                    || TryResolveFunction(lastCall.Target, out terminalFunction))
+                || terminalFunction.Kind != BoundFunctionKind.UserBlock
+                || terminalFunction.ReturnType != BoundType.Unit)
+            {
+                throw new SollangException("a runtime Stream<T> pipeline must end with each or a Unit block function");
+            }
+            var terminalArguments = (lastCall.Arguments ?? []).Select(EmitExpression).ToArray();
+            sink = new RuntimeStreamTerminalStage(lastCall, terminalFunction, callSite, terminalArguments);
+        }
+
+        for (var index = calls.Count - 2; index >= 0; index--)
+        {
+            var call = calls[index];
+            if (!(_program.ResolvedGenericCalls.TryGetValue(call, out var function)
+                    || TryResolveFunction(call.Target, out function))
+                || function.StreamElementType is null)
+            {
+                throw new SollangException(
+                    "a runtime Stream<T> pipeline may contain only stream functions before its terminal");
+            }
+            var arguments = (call.Arguments ?? []).Select(EmitExpression).ToArray();
+            if ((function.Kind == BoundFunctionKind.User && function.BlockInputType is null)
+                || function.BlockBody.Any(static statement =>
+                    statement is BindingStatement { IsStreamState: true }))
+            {
+                sink = CreateUserStreamStage(call, function, sink, callSite, arguments, cancellationSlot);
+            }
+            else
+            {
+                sink = new RuntimeStreamStage(call, function, sink, callSite, arguments);
+            }
+        }
+        return sink;
+    }
+
+    private void EmitPartitionPipeline(BoundPartitionPipeline pipeline)
+    {
+        var source = EmitExpression(pipeline.Source) as RuntimeProducerStream
+            ?? throw new SollangException("partition source did not produce a Stream<T> producer handle");
+        if (source.ElementType != pipeline.SourceElementType || source.IsEvent != pipeline.IsEvent)
+        {
+            throw new SollangException("partition source producer ABI type mismatch");
+        }
+        if (pipeline.Source is NameExpression sourceName)
+        {
+            RemoveLocal(sourceName.Name);
+        }
+
+        var previousCancellationSlot = _currentStreamCancellationSlot;
+        var cancellationSlot = NextTemp("partition_cancelled");
+        EmitAlloca(cancellationSlot, "i1", 1);
+        EmitStore("i1", "false", cancellationSlot, 1);
+        _currentStreamCancellationSlot = cancellationSlot;
+        var sinks = pipeline.Routes
+            .Select(route => BuildRuntimeStreamSink(route.Consumer.Calls, cancellationSlot))
+            .ToArray();
+
+        var elementType = LlvmType(source.ElementType);
+        var elementAddress = NextTemp("partition_element_address");
+        EmitAlloca(elementAddress, elementType, RuntimeAlignment(source.ElementType));
+        var nextLabel = NextLabel("partition_next");
+        var valueLabel = NextLabel("partition_value");
+        var continueLabel = NextLabel("partition_continue");
+        var doneLabel = NextLabel("partition_done");
+        EmitBranch(nextLabel);
+        EmitFunctionLine();
+        EmitLabel(nextLabel);
+        var hasValue = NextTemp("partition_has_value");
+        EmitIndirectCall(
+            hasValue,
+            "i1",
+            source.NextName,
+            $"ptr {source.ContextName}, ptr {elementAddress}");
+        EmitConditionalBranch(hasValue, valueLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(valueLabel);
+        var materializedElement = NextTemp("partition_element");
+        EmitLoad(
+            materializedElement,
+            elementType,
+            elementAddress,
+            RuntimeAlignment(source.ElementType));
+        var item = DematerializeAggregateValue(source.ElementType, materializedElement);
+        var outerLocals = CaptureLocals();
+        _locals[pipeline.ItemName] = item;
+        try
+        {
+            for (var index = 0; index < pipeline.Routes.Count; index++)
+            {
+                var route = pipeline.Routes[index];
+                if (route.Condition is null)
+                {
+                    EmitStreamValue(item, sinks[index]);
+                    if (!_currentBlockTerminated)
+                    {
+                        EmitBranch(continueLabel);
+                    }
+                    break;
+                }
+
+                var routeLabel = NextLabel($"partition_{route.Label}");
+                var nextRouteLabel = NextLabel("partition_test");
+                var condition = EmitExpression(route.Condition) as RuntimeBool
+                    ?? throw new SollangException($"partition route '{route.Label}' predicate did not produce Bool");
+                EmitConditionalBranch(condition.ValueName, routeLabel, nextRouteLabel);
+                EmitFunctionLine();
+                EmitLabel(routeLabel);
+                EmitStreamValue(item, sinks[index]);
+                if (!_currentBlockTerminated)
+                {
+                    EmitBranch(continueLabel);
+                }
+                EmitFunctionLine();
+                EmitLabel(nextRouteLabel);
+            }
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
+
+        EmitFunctionLine();
+        EmitLabel(continueLabel);
+        var cancelled = NextTemp("partition_cancelled");
+        EmitLoad(cancelled, "i1", cancellationSlot, 1);
+        EmitConditionalBranch(cancelled, doneLabel, nextLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+        DropOwnedRuntimeValue(source);
+        _currentStreamCancellationSlot = previousCancellationSlot;
+    }
+
+    private void EmitStreamJoinPipeline(BoundStreamJoinPipeline pipeline)
+    {
+        if (pipeline.Join.Policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Latest
+            && pipeline.Join.Inputs.Any(static input => input.IsEvent))
+        {
+            EmitRuntimeProducerPipeline(new BoundEventStreamPipeline(
+                pipeline.Expression,
+                pipeline.Consumer.Calls,
+                pipeline.Join.OutputElementType,
+                IsEvent: true));
+            return;
+        }
+        switch (pipeline.Join.Policy)
+        {
+            case StreamJoinPolicy.Zip:
+                EmitZipPipeline(pipeline);
+                return;
+            case StreamJoinPolicy.Concat:
+                EmitConcatPipeline(pipeline);
+                return;
+            case StreamJoinPolicy.Merge:
+                EmitMergePipeline(pipeline);
+                return;
+            case StreamJoinPolicy.Latest:
+                EmitLatestPipeline(pipeline);
+                return;
+            default:
+                throw new InvalidOperationException("unknown stream join policy");
+        }
+    }
+
+    private RuntimeProducerStream[] EmitStreamJoinSources(BoundStreamJoinPipeline pipeline)
+    {
+        var product = EmitExpression(pipeline.Expression.Source) as RuntimeStruct
+            ?? throw new SollangException("stream join source did not produce a product");
+        if (product.Type != pipeline.Join.InputProductType)
+        {
+            throw new SollangException("stream join input product type mismatch");
+        }
+        var productType = LlvmStructType(product.Type);
+        var sources = new RuntimeProducerStream[pipeline.Join.Inputs.Count];
+        for (var index = 0; index < sources.Length; index++)
+        {
+            var input = pipeline.Join.Inputs[index];
+            var aggregate = NextTemp("join_source");
+            EmitAssign(
+                aggregate,
+                $"extractvalue {productType} {product.ValueName}, {index.ToString(CultureInfo.InvariantCulture)}");
+            sources[index] = DematerializeAggregateValue(input.StreamType, aggregate) as RuntimeProducerStream
+                ?? throw new SollangException("stream join field did not contain a producer handle");
+            if (sources[index].ElementType != input.ElementType
+                || sources[index].IsEvent != input.IsEvent)
+            {
+                throw new SollangException("stream join producer ABI type mismatch");
+            }
+        }
+        return sources;
+    }
+
+    private void EmitConcatPipeline(BoundStreamJoinPipeline pipeline)
+    {
+        var sources = EmitStreamJoinSources(pipeline);
+        var previousCancellationSlot = _currentStreamCancellationSlot;
+        var cancellationSlot = NextTemp("concat_cancelled");
+        EmitAlloca(cancellationSlot, "i1", 1);
+        EmitStore("i1", "false", cancellationSlot, 1);
+        _currentStreamCancellationSlot = cancellationSlot;
+        var sink = BuildRuntimeStreamSink(pipeline.Consumer.Calls, cancellationSlot);
+        var doneLabel = NextLabel("concat_done");
+
+        foreach (var source in sources)
+        {
+            var elementType = LlvmType(source.ElementType);
+            var elementAddress = NextTemp("concat_element_address");
+            EmitAlloca(elementAddress, elementType, RuntimeAlignment(source.ElementType));
+            var nextLabel = NextLabel("concat_next");
+            var valueLabel = NextLabel("concat_value");
+            var continueLabel = NextLabel("concat_continue");
+            var sourceDoneLabel = NextLabel("concat_source_done");
+            EmitBranch(nextLabel);
+            EmitFunctionLine();
+            EmitLabel(nextLabel);
+            var hasValue = NextTemp("concat_has_value");
+            EmitIndirectCall(
+                hasValue,
+                "i1",
+                source.NextName,
+                $"ptr {source.ContextName}, ptr {elementAddress}");
+            EmitConditionalBranch(hasValue, valueLabel, sourceDoneLabel);
+            EmitFunctionLine();
+            EmitLabel(valueLabel);
+            var materialized = NextTemp("concat_element");
+            EmitLoad(materialized, elementType, elementAddress, RuntimeAlignment(source.ElementType));
+            EmitStreamValue(DematerializeAggregateValue(source.ElementType, materialized), sink);
+            if (!_currentBlockTerminated)
+            {
+                EmitBranch(continueLabel);
+            }
+            EmitFunctionLine();
+            EmitLabel(continueLabel);
+            var cancelled = NextTemp("concat_cancelled");
+            EmitLoad(cancelled, "i1", cancellationSlot, 1);
+            EmitConditionalBranch(cancelled, doneLabel, nextLabel);
+            EmitFunctionLine();
+            EmitLabel(sourceDoneLabel);
+        }
+        EmitBranch(doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        foreach (var source in sources)
+        {
+            DropOwnedRuntimeValue(source);
+        }
+        _currentStreamCancellationSlot = previousCancellationSlot;
+    }
+
+    private void EmitZipPipeline(BoundStreamJoinPipeline pipeline)
+    {
+        var sources = EmitStreamJoinSources(pipeline);
+        var previousCancellationSlot = _currentStreamCancellationSlot;
+        var cancellationSlot = NextTemp("zip_cancelled");
+        EmitAlloca(cancellationSlot, "i1", 1);
+        EmitStore("i1", "false", cancellationSlot, 1);
+        _currentStreamCancellationSlot = cancellationSlot;
+        var sink = BuildRuntimeStreamSink(pipeline.Consumer.Calls, cancellationSlot);
+        var addresses = sources.Select(source =>
+        {
+            var address = NextTemp("zip_element_address");
+            EmitAlloca(address, LlvmType(source.ElementType), RuntimeAlignment(source.ElementType));
+            return address;
+        }).ToArray();
+        var nextLabel = NextLabel("zip_next");
+        var emitLabel = NextLabel("zip_emit");
+        var continueLabel = NextLabel("zip_continue");
+        var doneLabel = NextLabel("zip_done");
+        var failureLabels = sources.Select((_, index) =>
+            index == 0 ? doneLabel : NextLabel("zip_partial_done")).ToArray();
+        EmitBranch(nextLabel);
+        EmitFunctionLine();
+        EmitLabel(nextLabel);
+        for (var index = 0; index < sources.Length; index++)
+        {
+            var source = sources[index];
+            var successLabel = index == sources.Length - 1
+                ? emitLabel
+                : NextLabel("zip_pull");
+            var hasValue = NextTemp("zip_has_value");
+            EmitIndirectCall(
+                hasValue,
+                "i1",
+                source.NextName,
+                $"ptr {source.ContextName}, ptr {addresses[index]}");
+            EmitConditionalBranch(hasValue, successLabel, failureLabels[index]);
+            if (index != sources.Length - 1)
+            {
+                EmitFunctionLine();
+                EmitLabel(successLabel);
+            }
+        }
+        EmitFunctionLine();
+        EmitLabel(emitLabel);
+        var outputDefinition = _program.Types.GetStruct(pipeline.Join.OutputElementType);
+        var outputAggregate = "poison";
+        for (var index = 0; index < sources.Length; index++)
+        {
+            var source = sources[index];
+            var loaded = NextTemp("zip_element");
+            EmitLoad(
+                loaded,
+                LlvmType(source.ElementType),
+                addresses[index],
+                RuntimeAlignment(source.ElementType));
+            var next = NextTemp("zip_product");
+            EmitAssign(
+                next,
+                $"insertvalue {LlvmStructType(outputDefinition.Id)} {outputAggregate}, {LlvmType(source.ElementType)} {loaded}, {index.ToString(CultureInfo.InvariantCulture)}");
+            outputAggregate = next;
+        }
+        EmitStreamValue(new RuntimeStruct(outputDefinition.Id, outputAggregate), sink);
+        if (!_currentBlockTerminated)
+        {
+            EmitBranch(continueLabel);
+        }
+        EmitFunctionLine();
+        EmitLabel(continueLabel);
+        var cancelled = NextTemp("zip_cancelled");
+        EmitLoad(cancelled, "i1", cancellationSlot, 1);
+        EmitConditionalBranch(cancelled, doneLabel, nextLabel);
+
+        for (var failureIndex = 1; failureIndex < sources.Length; failureIndex++)
+        {
+            EmitFunctionLine();
+            EmitLabel(failureLabels[failureIndex]);
+            for (var pulledIndex = failureIndex - 1; pulledIndex >= 0; pulledIndex--)
+            {
+                var pulled = sources[pulledIndex];
+                var loaded = NextTemp("zip_unmatched");
+                EmitLoad(
+                    loaded,
+                    LlvmType(pulled.ElementType),
+                    addresses[pulledIndex],
+                    RuntimeAlignment(pulled.ElementType));
+                DropOwnedRuntimeValue(DematerializeAggregateValue(pulled.ElementType, loaded));
+            }
+            EmitBranch(doneLabel);
+        }
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        foreach (var source in sources)
+        {
+            DropOwnedRuntimeValue(source);
+        }
+        _currentStreamCancellationSlot = previousCancellationSlot;
+    }
+
+    private void EmitMergePipeline(BoundStreamJoinPipeline pipeline)
+    {
+        var sources = EmitStreamJoinSources(pipeline);
+        if (sources.Any(static source => source.IsEvent))
+        {
+            throw new SollangException("merge of EventStream<T> inputs requires the bounded concurrent join runtime");
+        }
+        var previousCancellationSlot = _currentStreamCancellationSlot;
+        var cancellationSlot = NextTemp("merge_cancelled");
+        EmitAlloca(cancellationSlot, "i1", 1);
+        EmitStore("i1", "false", cancellationSlot, 1);
+        _currentStreamCancellationSlot = cancellationSlot;
+        var sink = BuildRuntimeStreamSink(pipeline.Consumer.Calls, cancellationSlot);
+        var activeSlots = sources.Select(_ =>
+        {
+            var slot = NextTemp("merge_active");
+            EmitAlloca(slot, "i1", 1);
+            EmitStore("i1", "true", slot, 1);
+            return slot;
+        }).ToArray();
+        var elementType = LlvmType(pipeline.Join.OutputElementType);
+        var elementAddress = NextTemp("merge_element_address");
+        EmitAlloca(elementAddress, elementType, RuntimeAlignment(pipeline.Join.OutputElementType));
+        var cycleLabel = NextLabel("merge_cycle");
+        var doneLabel = NextLabel("merge_done");
+        EmitBranch(cycleLabel);
+        EmitFunctionLine();
+        EmitLabel(cycleLabel);
+
+        for (var index = 0; index < sources.Length; index++)
+        {
+            var source = sources[index];
+            var pullLabel = NextLabel("merge_pull");
+            var valueLabel = NextLabel("merge_value");
+            var exhaustedLabel = NextLabel("merge_exhausted");
+            var afterLabel = NextLabel("merge_after_input");
+            var active = NextTemp("merge_active");
+            EmitLoad(active, "i1", activeSlots[index], 1);
+            EmitConditionalBranch(active, pullLabel, afterLabel);
+            EmitFunctionLine();
+            EmitLabel(pullLabel);
+            var hasValue = NextTemp("merge_has_value");
+            EmitIndirectCall(
+                hasValue,
+                "i1",
+                source.NextName,
+                $"ptr {source.ContextName}, ptr {elementAddress}");
+            EmitConditionalBranch(hasValue, valueLabel, exhaustedLabel);
+            EmitFunctionLine();
+            EmitLabel(valueLabel);
+            var materialized = NextTemp("merge_element");
+            EmitLoad(
+                materialized,
+                elementType,
+                elementAddress,
+                RuntimeAlignment(pipeline.Join.OutputElementType));
+            EmitStreamValue(DematerializeAggregateValue(pipeline.Join.OutputElementType, materialized), sink);
+            if (!_currentBlockTerminated)
+            {
+                EmitBranch(afterLabel);
+            }
+            EmitFunctionLine();
+            EmitLabel(exhaustedLabel);
+            EmitStore("i1", "false", activeSlots[index], 1);
+            EmitBranch(afterLabel);
+            EmitFunctionLine();
+            EmitLabel(afterLabel);
+            var cancelled = NextTemp("merge_cancelled");
+            EmitLoad(cancelled, "i1", cancellationSlot, 1);
+            var nextInputLabel = index == sources.Length - 1
+                ? NextLabel("merge_cycle_check")
+                : NextLabel("merge_next_input");
+            EmitConditionalBranch(cancelled, doneLabel, nextInputLabel);
+            EmitFunctionLine();
+            EmitLabel(nextInputLabel);
+        }
+
+        string? anyActive = null;
+        for (var index = 0; index < activeSlots.Length; index++)
+        {
+            var active = NextTemp("merge_active");
+            EmitLoad(active, "i1", activeSlots[index], 1);
+            if (anyActive is null)
+            {
+                anyActive = active;
+            }
+            else
+            {
+                var combined = NextTemp("merge_any_active");
+                EmitBinary(combined, "or", "i1", anyActive, active);
+                anyActive = combined;
+            }
+        }
+        EmitConditionalBranch(anyActive!, cycleLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        foreach (var source in sources)
+        {
+            DropOwnedRuntimeValue(source);
+        }
+        _currentStreamCancellationSlot = previousCancellationSlot;
+    }
+
+    private void EmitLatestPipeline(BoundStreamJoinPipeline pipeline)
+    {
+        var sources = EmitStreamJoinSources(pipeline);
+        if (sources.Any(static source => source.IsEvent))
+        {
+            throw new SollangException("latest of EventStream<T> inputs requires the bounded concurrent join runtime");
+        }
+        var previousCancellationSlot = _currentStreamCancellationSlot;
+        var cancellationSlot = NextTemp("latest_cancelled");
+        EmitAlloca(cancellationSlot, "i1", 1);
+        EmitStore("i1", "false", cancellationSlot, 1);
+        _currentStreamCancellationSlot = cancellationSlot;
+        var sink = BuildRuntimeStreamSink(pipeline.Consumer.Calls, cancellationSlot);
+        var valueSlots = sources.Select(source =>
+        {
+            var slot = NextTemp("latest_value");
+            EmitAlloca(slot, LlvmType(source.ElementType), RuntimeAlignment(source.ElementType));
+            return slot;
+        }).ToArray();
+        var activeSlots = sources.Select(_ =>
+        {
+            var slot = NextTemp("latest_active");
+            EmitAlloca(slot, "i1", 1);
+            EmitStore("i1", "true", slot, 1);
+            return slot;
+        }).ToArray();
+        var initialDoneLabel = NextLabel("latest_initial_done");
+        var doneLabel = NextLabel("latest_done");
+        for (var index = 0; index < sources.Length; index++)
+        {
+            var hasValue = NextTemp("latest_has_initial");
+            EmitIndirectCall(
+                hasValue,
+                "i1",
+                sources[index].NextName,
+                $"ptr {sources[index].ContextName}, ptr {valueSlots[index]}");
+            var nextLabel = index == sources.Length - 1
+                ? initialDoneLabel
+                : NextLabel("latest_initial_next");
+            EmitConditionalBranch(hasValue, nextLabel, doneLabel);
+            EmitFunctionLine();
+            EmitLabel(nextLabel);
+        }
+        EmitLatestSnapshot(pipeline, sources, valueSlots, sink);
+        var cancelledAfterInitial = NextTemp("latest_cancelled");
+        EmitLoad(cancelledAfterInitial, "i1", cancellationSlot, 1);
+        var cycleLabel = NextLabel("latest_cycle");
+        EmitConditionalBranch(cancelledAfterInitial, doneLabel, cycleLabel);
+        EmitFunctionLine();
+        EmitLabel(cycleLabel);
+
+        for (var index = 0; index < sources.Length; index++)
+        {
+            var source = sources[index];
+            var pullLabel = NextLabel("latest_pull");
+            var updateLabel = NextLabel("latest_update");
+            var exhaustedLabel = NextLabel("latest_exhausted");
+            var afterLabel = NextLabel("latest_after_input");
+            var active = NextTemp("latest_active");
+            EmitLoad(active, "i1", activeSlots[index], 1);
+            EmitConditionalBranch(active, pullLabel, afterLabel);
+            EmitFunctionLine();
+            EmitLabel(pullLabel);
+            var hasValue = NextTemp("latest_has_value");
+            EmitIndirectCall(
+                hasValue,
+                "i1",
+                source.NextName,
+                $"ptr {source.ContextName}, ptr {valueSlots[index]}");
+            EmitConditionalBranch(hasValue, updateLabel, exhaustedLabel);
+            EmitFunctionLine();
+            EmitLabel(updateLabel);
+            EmitLatestSnapshot(pipeline, sources, valueSlots, sink);
+            if (!_currentBlockTerminated)
+            {
+                EmitBranch(afterLabel);
+            }
+            EmitFunctionLine();
+            EmitLabel(exhaustedLabel);
+            EmitStore("i1", "false", activeSlots[index], 1);
+            EmitBranch(afterLabel);
+            EmitFunctionLine();
+            EmitLabel(afterLabel);
+            var cancelled = NextTemp("latest_cancelled");
+            EmitLoad(cancelled, "i1", cancellationSlot, 1);
+            var nextInputLabel = index == sources.Length - 1
+                ? NextLabel("latest_cycle_check")
+                : NextLabel("latest_next_input");
+            EmitConditionalBranch(cancelled, doneLabel, nextInputLabel);
+            EmitFunctionLine();
+            EmitLabel(nextInputLabel);
+        }
+
+        string? anyActive = null;
+        for (var index = 0; index < activeSlots.Length; index++)
+        {
+            var active = NextTemp("latest_active");
+            EmitLoad(active, "i1", activeSlots[index], 1);
+            if (anyActive is null)
+            {
+                anyActive = active;
+            }
+            else
+            {
+                var combined = NextTemp("latest_any_active");
+                EmitBinary(combined, "or", "i1", anyActive, active);
+                anyActive = combined;
+            }
+        }
+        EmitConditionalBranch(anyActive!, cycleLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        foreach (var source in sources)
+        {
+            DropOwnedRuntimeValue(source);
+        }
+        _currentStreamCancellationSlot = previousCancellationSlot;
+    }
+
+    private void EmitLatestSnapshot(
+        BoundStreamJoinPipeline pipeline,
+        IReadOnlyList<RuntimeProducerStream> sources,
+        IReadOnlyList<string> valueSlots,
+        RuntimeStreamSink sink)
+    {
+        var outputDefinition = _program.Types.GetStruct(pipeline.Join.OutputElementType);
+        var aggregate = "poison";
+        for (var index = 0; index < sources.Count; index++)
+        {
+            var source = sources[index];
+            var loaded = NextTemp("latest_value");
+            EmitLoad(
+                loaded,
+                LlvmType(source.ElementType),
+                valueSlots[index],
+                RuntimeAlignment(source.ElementType));
+            var next = NextTemp("latest_product");
+            EmitAssign(
+                next,
+                $"insertvalue {LlvmStructType(outputDefinition.Id)} {aggregate}, {LlvmType(source.ElementType)} {loaded}, {index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+        EmitStreamValue(new RuntimeStruct(outputDefinition.Id, aggregate), sink);
     }
 
     private RuntimeUserStreamStage CreateUserStreamStage(

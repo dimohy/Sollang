@@ -55,9 +55,17 @@ internal static class FunctionControlFlowFacts
             || (each.DictionaryValueSelector is not null && ContainsStackCandidate(each.DictionaryValueSelector)),
         FlowExpression flow => ContainsStackCandidate(flow.Source)
             || flow.Targets.SelectMany(target => target.Arguments).Any(ContainsStackCandidate),
+        BranchExpression branch => ContainsStackCandidate(branch.Source)
+            || branch.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(ContainsStackCandidate),
+        TapExpression tap => ContainsStackCandidate(tap.Source)
+            || tap.Targets.SelectMany(target => target.Arguments).Any(ContainsStackCandidate),
+        PartitionExpression partition => ContainsStackCandidate(partition.Source)
+            || partition.Arms.Any(arm => arm.Condition is not null && ContainsStackCandidate(arm.Condition)),
+        StreamJoinExpression join => ContainsStackCandidate(join.Source),
         CallExpression call => call.Arguments.Any(ContainsStackCandidate),
         IndexExpression index => ContainsStackCandidate(index.Source) || ContainsStackCandidate(index.Index),
         StructLiteralExpression structure => structure.Fields.Any(field => ContainsStackCandidate(field.Value)),
+        ProductExpression product => product.Elements.Any(element => ContainsStackCandidate(element.Value)),
         FieldAccessExpression field => ContainsStackCandidate(field.Source),
         TryExpression attempt => ContainsStackCandidate(attempt.Value),
         BoxExpression box => ContainsStackCandidate(box.Value),
@@ -121,6 +129,13 @@ internal static class FunctionControlFlowFacts
             || (each.DictionaryValueSelector is not null && ContainsReturn(each.DictionaryValueSelector)),
         FlowExpression flow => ContainsReturn(flow.Source)
             || flow.Targets.SelectMany(target => target.Arguments).Any(ContainsReturn),
+        BranchExpression branch => ContainsReturn(branch.Source)
+            || branch.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(ContainsReturn),
+        TapExpression tap => ContainsReturn(tap.Source)
+            || tap.Targets.SelectMany(target => target.Arguments).Any(ContainsReturn),
+        PartitionExpression partition => ContainsReturn(partition.Source)
+            || partition.Arms.Any(arm => arm.Condition is not null && ContainsReturn(arm.Condition)),
+        StreamJoinExpression join => ContainsReturn(join.Source),
         CallExpression call => call.Arguments.Any(ContainsReturn),
         ArrayLiteralExpression array => array.Elements.Any(ContainsReturn),
         ArrayRepeatExpression repeat => ContainsReturn(repeat.Value),
@@ -128,6 +143,7 @@ internal static class FunctionControlFlowFacts
             ContainsReturn(entry.Key) || ContainsReturn(entry.Value)),
         IndexExpression index => ContainsReturn(index.Source) || ContainsReturn(index.Index),
         StructLiteralExpression structure => structure.Fields.Any(field => ContainsReturn(field.Value)),
+        ProductExpression product => product.Elements.Any(element => ContainsReturn(element.Value)),
         FieldAccessExpression field => ContainsReturn(field.Source),
         TryExpression attempt => ContainsReturn(attempt.Value),
         BoxExpression box => ContainsReturn(box.Value),

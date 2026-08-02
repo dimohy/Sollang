@@ -10,6 +10,7 @@ $modulePaths = @(
     "selfhost/llvm/emitter/text_output_runtime.slg"
     "selfhost/llvm/emitter/process_runtime.slg"
     "selfhost/llvm/emitter/mouse_event_runtime.slg"
+    "selfhost/llvm/emitter/stream_join_runtime.slg"
     "selfhost/llvm/emitter/com_runtime.slg"
     "selfhost/llvm/emitter/ownership.slg"
     "selfhost/llvm/emitter/context.slg"
@@ -22,11 +23,14 @@ $fragmentPaths = @(
     "selfhost/llvm/text/native_handles.slg"
     "selfhost/llvm/text/entrypoints.slg"
     "selfhost/llvm/text/core_calls.slg"
+    "selfhost/llvm/text/runtime_preamble.slg"
+    "selfhost/llvm/text/stream_junctions.slg"
     "selfhost/llvm/text/ownership.slg"
     "selfhost/llvm/text/platform_io.slg"
     "selfhost/llvm/text/containers.slg"
     "selfhost/llvm/text/control.slg"
     "selfhost/llvm/text/functions.slg"
+    "selfhost/llvm/text/function_scheduling.slg"
 )
 
 $facadeLines = [IO.File]::ReadAllLines($facadePath)
@@ -35,6 +39,9 @@ if ($facadeLines.Count -gt 4500) {
 }
 
 $facadeText = [IO.File]::ReadAllText($facadePath)
+$logicalText = $facadeText + "`n" + (($fragmentPaths | ForEach-Object {
+    [IO.File]::ReadAllText((Join-Path $repoRoot $_))
+}) -join "`n")
 foreach ($relativePath in $modulePaths) {
     $absolutePath = Join-Path $repoRoot $relativePath
     if (-not (Test-Path -LiteralPath $absolutePath -PathType Leaf)) {
@@ -48,8 +55,8 @@ foreach ($relativePath in $modulePaths) {
         throw "$relativePath must declare '$expectedNamespace'."
     }
 
-    if ($facadeText -notmatch [regex]::Escape("sollang.compiler.llvm.emitter.$moduleName")) {
-        throw "selfhost/llvm/text.slg does not import $relativePath."
+    if ($logicalText -notmatch [regex]::Escape("sollang.compiler.llvm.emitter.$moduleName")) {
+        throw "The sollang.compiler.llvm.text module does not import $relativePath."
     }
 }
 
@@ -72,7 +79,7 @@ foreach ($relativePath in $fragmentPaths) {
 }
 
 $statefulFragments = $fragmentPaths | Where-Object {
-    $_ -match "/(core_calls|ownership|platform_io|containers|control|functions)\.slg$"
+    $_ -match "/(core_calls|runtime_preamble|stream_junctions|ownership|platform_io|containers|control|functions|function_scheduling)\.slg$"
 }
 foreach ($relativePath in $statefulFragments) {
     $text = [IO.File]::ReadAllText((Join-Path $repoRoot $relativePath))

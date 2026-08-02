@@ -1,0 +1,28 @@
+import sollang.compiler.llvm.text as llvm
+
+# Cold Stream merge uses bounded O(1) state and fair round-robin polling.
+# EventStream merge has a separate arrival-ordered concurrent runtime.
+main {
+    [
+        """
+        import std.sequence
+
+        makeValues values: Range -> Stream<Int> { values -> defer }
+
+        main {
+            1..3 -> makeValues => left
+            10..11 -> makeValues => right
+            (left, right) -> merge => merged
+            merged -> each value {
+                value -> println
+            }
+        }
+        """,
+        """
+        namespace std.sequence
+
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

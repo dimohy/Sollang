@@ -1,0 +1,42 @@
+import sollang.compiler.llvm.text as llvm
+
+# Parallel compute and concurrent EventStream fan-in share native thread APIs.
+# The generated module must declare those APIs exactly once and run both paths.
+main {
+    [
+        """
+        import std.sequence
+
+        incrementOne value: Int -> Int { value + 1 }
+        makeValues values: Range -> Stream<Int> { values -> defer }
+        asEvents left: move Stream<Int>, right: move Stream<Int> -> EventStream<Int> {
+            (left, right) -> merge
+        }
+
+        main {
+            [1, 2; ~] -> parallel value { value -> incrementOne } => computed!
+
+            1..2 -> makeValues => firstLeft
+            10..11 -> makeValues => firstRight
+            firstLeft -> asEvents(firstRight) => first
+            3..4 -> makeValues => secondLeft
+            5..6 -> makeValues => secondRight
+            secondLeft -> asEvents(secondRight) => second
+
+            0 => count!
+            0 => sum!
+            (first, second) -> merge => all
+            all -> each value {
+                count! + 1 => count!
+                sum! + value => sum!
+            }
+            "parallel=$(computed! -> len),count=$(count!),sum=$(sum!)" -> println
+        }
+        """,
+        """
+        namespace std.sequence
+        public defer values: Range -> Stream<Int> = intrinsic
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}
