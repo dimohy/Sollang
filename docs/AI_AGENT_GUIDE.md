@@ -260,7 +260,9 @@ environment-variable path as well as the explicit option.
 6. Update user examples, regression expectations, browser samples, formatter,
    language server, and standard library wherever the public surface requires.
 7. Run focused probes, complete Windows/Linux suites, applicable browser gates,
-   and required Stage 2/Stage 3 fixed-point verification.
+   and required Stage 2/Stage 3 fixed-point verification. Browser execution
+   changes must include exact stdout from named roles used directly and in
+   interpolation expressions, not only a one-line implicit-main smoke test.
 8. If compiler or standard-library artifacts changed, synchronize and verify
    the installed compiler at `P:\\Utils\\sollang`.
 9. Update this guide when the preferred syntax, semantics, CLI, target boundary,

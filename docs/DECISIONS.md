@@ -11353,3 +11353,29 @@ Monaco's command service and executes the editor model's current source. The
 window shortcut remains available outside the editor. Browser regression now
 executes the one-line implicit main and then runs edited source from the editor
 shortcut, comparing exact stdout for both paths.
+
+## D298 — Direct `each` Roles Remain Visible Inside Interpolation
+
+Status: implemented and browser-verified
+Date: 2026-08-02
+
+A role introduced by `source -> each name { ... }` is a semantic symbol even
+though it is not lowered as an ordinary lexical binding. Self-host LLVM
+emission now gives that role a stable SSA alias at the loop-body boundary and
+resolves the same symbol for direct interpolation, unary expressions, and
+binary expressions inside interpolation.
+
+Previously, direct use such as `dan -> println` emitted the loop item, while
+`"$dan x $multiplier = $(dan * multiplier)" -> println` searched only ordinary
+bindings and stream-terminal roles. The missing lookup produced empty LLVM
+operands instead of a compiler diagnostic, so browser compilation appeared to
+succeed and the generated module was invalid. This was independent of implicit
+main selection: wrapping the same source in `main { ... }` failed identically.
+
+The retained regression is a top-level nested `each` multiplication table with
+named roles, direct interpolation, interpolation arithmetic, and exact 72-line
+stdout. It is compiled by the C# reference compiler and the Stage 2 browser
+compiler, executed as WebAssembly, and entered into Monaco by the real browser
+playground regression. The playground must compile the original user source;
+source wrapping, interpolation substitution, sample-specific output, and
+target fallback remain forbidden.

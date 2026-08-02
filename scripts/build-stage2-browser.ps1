@@ -68,6 +68,7 @@ if ($ReuseCompilerArtifact) {
 
 Write-Host "[browser 3/4] Execute browser compiler regressions."
 foreach ($case in @(
+    @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-implicit-main-multiplication-table.slg", "browser-stage2-implicit-main-multiplication-table.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-implicit-main-multiplication-table.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-each.slg", "browser-stage2-range-each.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-each.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-fold.slg", "browser-stage2-range-fold.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-fold.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-when.slg", "browser-stage2-when.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-when.stdout.txt"),

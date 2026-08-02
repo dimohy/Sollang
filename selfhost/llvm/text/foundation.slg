@@ -340,6 +340,70 @@ writeParameterReference context: ref emitterContext.EmitContext, functionIndex: 
     matched!
 }
 
+isDirectEachRoleSymbol sourceModule: Int, symbolIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    false => matched!
+    (sourceModule >= 0 and sourceModule < (context.ranges -> len)) -> if {
+        context.ranges[sourceModule] => roleRange
+        (symbolIndex >= 0 and symbolIndex < roleRange.symbolCount) -> if {
+            context.symbols[roleRange.symbolStart + symbolIndex] => roleSymbol
+            (roleSymbol.kind == 35 and roleSymbol.parent >= 0 and roleSymbol.parent < roleRange.symbolCount) -> if {
+                context.symbols[roleRange.symbolStart + roleSymbol.parent] => roleOwner
+                (roleOwner.kind == 48 and roleOwner.astNode == roleSymbol.astNode and roleOwner.astNode >= 0) -> if {
+                    context.nodes[roleRange.astStart + roleOwner.astNode] => roleAst
+                    roleAst.payloadToken >= 0 -> if {
+                        context.tokens[roleRange.tokenStart + roleAst.payloadToken] => roleName
+                        (roleName.span.length == UIntSize(4)
+                            and (context.sources[sourceModule] -> byte(roleName.span.start)) == UInt8(101)
+                            and (context.sources[sourceModule] -> byte(roleName.span.start + UIntSize(1))) == UInt8(97)
+                            and (context.sources[sourceModule] -> byte(roleName.span.start + UIntSize(2))) == UInt8(99)
+                            and (context.sources[sourceModule] -> byte(roleName.span.start + UIntSize(3))) == UInt8(104)) -> if {
+                            true => matched!
+                        }
+                    }
+                }
+            }
+        }
+    }
+    matched!
+}
+
+writeDirectEachRoleValue node: interpolation.InterpolationNode, sourceModule: Int, context: ref emitterContext.EmitContext -> Bool uses Console {
+    sourceModule -> isDirectEachRoleSymbol(node.symbol, context) => matched
+    matched -> if { "%each_role_m$(sourceModule)_s$(node.symbol)" -> print }
+    matched
+}
+
+directEachRoleUsedInInterpolation sourceModule: Int, symbolIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    false => used!
+    (sourceModule >= 0 and sourceModule < (context.interpolationRanges -> len)) -> if {
+        context.interpolationRanges[sourceModule] => interpolationRange
+        0 => interpolationIndex!
+        (interpolationIndex! < interpolationRange.nodeCount and not used!) -> while {
+            context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
+            (interpolationNode.kind == 1 and interpolationNode.symbol == symbolIndex) -> if { true => used! }
+            interpolationIndex! + 1 => interpolationIndex!
+        }
+    }
+    used!
+}
+
+emitDirectEachRoleAliases eachIndex: Int, eachSource: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[eachIndex] => eachNode
+    context.ranges[eachNode.sourceModule] => eachRange
+    0 => eachRoleSymbolIndex!
+    eachRoleSymbolIndex! < eachRange.symbolCount -> while {
+        context.symbols[eachRange.symbolStart + eachRoleSymbolIndex!] => eachRoleSymbol
+        (eachRoleSymbol.astNode == eachNode.astNode
+            and (eachNode.sourceModule -> isDirectEachRoleSymbol(eachRoleSymbolIndex!, context))
+            and (eachNode.sourceModule -> directEachRoleUsedInInterpolation(eachRoleSymbolIndex!, context))) -> if {
+            "  %each_role_m$(eachNode.sourceModule)_s$(eachRoleSymbolIndex!) = freeze " -> print
+            eachSource.kind == 31 -> if { "i32" -> print } else { eachSource -> writeArrayElementType(context, state) }
+            " %each$(eachIndex)_item" -> println
+        }
+        eachRoleSymbolIndex! + 1 => eachRoleSymbolIndex!
+    }
+}
+
 interpolationBindingIndex node: interpolation.InterpolationNode, sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     -1 => parameterIndex!
     ownerIndex >= 0 -> if {
@@ -464,6 +528,8 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
             (context.sources[sourceModule] -> byte(node.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
         } else {
             node.kind == 1 -> if {
+                node -> writeDirectEachRoleValue(sourceModule, context) => directEachRole
+                not directEachRole -> if {
                 node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
                 (bindingIndex >= 0 and context.ir[bindingIndex].kind == 10) -> if {
                     context.ir[bindingIndex] => interpolationParameter
@@ -496,6 +562,7 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
                             }
                         }
                     }
+                }
                 }
             } else {
                 "%v$(labelIndex)_expression$(nodeIndex)" -> print
