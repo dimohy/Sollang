@@ -11464,3 +11464,27 @@ scheduling treats an `each` body as a source-ordered effect region, so the blank
 line runs after its nested loop rather than before the next outer iteration.
 Exact native and browser stdout fixes both the leading and trailing newline
 positions; merely observing that `println()` ran is insufficient.
+
+## D302 — Checked Compilation Blocks Syntax Errors Before LLVM Output
+
+Status: implemented and browser-verified
+Date: 2026-08-03
+
+All checked Windows, Linux, and wasm32-browser compiler entrypoints count syntax
+diagnostics as blocking diagnostics. An invalid source never begins LLVM output.
+Lexical diagnostics take precedence over downstream semantic diagnostics so an
+unterminated string reports its actual source defect rather than disappearing or
+surfacing later as a missing entry point or linker failure.
+
+The defect was not in string recognition: the self-host lexer already emitted an
+Invalid token and syntax analysis already classified a quote-starting Invalid
+token as `unterminated string literal`. The checked LLVM entrypoints counted only
+semantic and Typed-IR diagnostics, so recovered syntax trees continued into
+lowering. Native linking eventually complained about a missing `main`, while the
+browser's no-entry link could complete with no visible behavior.
+
+The permanent diagnostic retains the exact user input
+`"Hello World!" -> println(")`. C# reference, native self-host, browser Stage2,
+and the actual playground must reject it with `unterminated string literal` and
+must not emit a target triple. Source rewriting, sample-specific matching, and
+linker-error substitution remain forbidden.

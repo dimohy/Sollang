@@ -154,6 +154,13 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
     $compilerArtifact `
+    (Join-Path $repoRoot "examples\regression\diagnostics\849-unterminated-flow-println.slg") `
+    (Join-Path $repoRoot "artifacts\browser-stage2-unterminated-string-diagnostic.txt") `
+    "unterminated string literal"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
+    $compilerArtifact `
     (Join-Path $repoRoot "examples\regression\588-mouse-event-stream.slg") `
     (Join-Path $repoRoot "artifacts\browser-stage2-mouse-event-diagnostic.txt") `
     "mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering"

@@ -30,6 +30,10 @@ const barePrintlnSource = await readFile(
   new URL("../examples/regression/diagnostics/848-bare-println-expression.slg", import.meta.url),
   "utf8"
 );
+const unterminatedPrintlnSource = await readFile(
+  new URL("../examples/regression/diagnostics/849-unterminated-flow-println.slg", import.meta.url),
+  "utf8"
+);
 const printlnCallTableSource = await readFile(
   new URL("../examples/regression/575-multiplication-table.slg", import.meta.url),
   "utf8"
@@ -357,6 +361,14 @@ try {
   if (!barePrintlnDiagnostic.includes("function 'println' expects an argument and must use call or flow syntax")) {
     throw new Error(`missing bare-function diagnostic: ${barePrintlnDiagnostic}`);
   }
+
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.insertText(unterminatedPrintlnSource);
+  await page.getByRole("button", { name: /^Run/ }).click();
+  await page.waitForFunction(() =>
+    document.querySelector(".terminal pre")?.textContent?.includes("unterminated string literal")
+  , undefined, { timeout: 120_000 });
 
   await page.locator(".monaco-editor .view-lines").click();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");

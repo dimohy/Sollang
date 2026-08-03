@@ -31,6 +31,7 @@ import sollang.compiler.semantic.ownership_check as ownershipCheck
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.syntax as syntax
+import sollang.compiler.diagnostics as syntaxDiagnostics
 import syntax.generated.slg as grammar
 import sys.file as file
 import sys.path as path
@@ -638,6 +639,48 @@ emitWasmContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> emitCore
 }
 
+syntaxDiagnosticCount sources: [Text; ~] -> Int {
+    0 => count!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics!
+        count! + Int(sourceDiagnostics! -> len) => count!
+        sourceIndex! + 1 => sourceIndex!
+    }
+    count!
+}
+
+emitSyntaxDiagnostics sources: [Text; ~] -> Unit uses Console {
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sourceIndex! => diagnosticSourceIndex
+        sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics!
+        (sourceDiagnostics! -> len) > 0 -> if {
+            sourceDiagnostics![0] => diagnostic
+            diagnostic.code == 1 -> if {
+                sources[sourceIndex!] -> slice(diagnostic.span.start, diagnostic.span.length) => unexpected
+                "; sollang syntax error: unexpected character '$unexpected' (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
+            } else {
+                diagnostic.code == 3 -> if {
+                    "; sollang syntax error: unterminated string literal (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
+                } else {
+                    sources[sourceIndex!] -> syntaxDiagnostics.expectedCodes => expected!
+                    expected![(expected! -> len) - 1] => expectedCode
+                    expectedCode >= 0 -> if {
+                        grammar.tokenNames() => tokenNames!
+                        "; sollang syntax error: expected $(tokenNames![expectedCode]) (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
+                    } else {
+                        grammar.keywordTexts() => keywordTexts!
+                        0 - expectedCode - 1 => keywordIndex
+                        "; sollang syntax error: expected '$(keywordTexts![keywordIndex])' (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
+                    }
+                }
+            }
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+}
+
 public emit sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.windowsX64() => target
     target.dataLayoutLine -> println
@@ -769,78 +812,108 @@ emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
 }
 
 public emitChecked sources: move [Text; ~] -> Int uses Console {
+    sources -> syntaxDiagnosticCount => syntaxCount
     llvmTarget.windowsX64() => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
-    context! -> irInvariantDiagnosticCount => irDiagnosticCount
-    diagnosticCount! + irDiagnosticCount => diagnosticCount!
+    syntaxCount => diagnosticCount!
+    syntaxCount == 0 -> if {
+        context! -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+        context! -> irInvariantDiagnosticCount => irDiagnosticCount
+        semanticDiagnosticCount + irDiagnosticCount => diagnosticCount!
+    }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitWindowsContext
     } else {
-        context! -> diagnostics.emitBlockingDiagnostics
-        context! -> emitIrInvariantDiagnostics
+        syntaxCount > 0 -> if {
+            context!.sources -> emitSyntaxDiagnostics
+        } else {
+            context! -> diagnostics.emitBlockingDiagnostics
+            context! -> emitIrInvariantDiagnostics
+        }
     }
     diagnosticCount!
 }
 
 public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
+    sources -> syntaxDiagnosticCount => syntaxCount
     llvmTarget.linuxX64() => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
-    context! -> irInvariantDiagnosticCount => irDiagnosticCount
-    diagnosticCount! + irDiagnosticCount => diagnosticCount!
-    context! -> diagnostics.comInteropFunctionCount => comInteropCount
-    comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    syntaxCount => diagnosticCount!
+    0 => comInteropCount!
+    syntaxCount == 0 -> if {
+        context! -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+        context! -> irInvariantDiagnosticCount => irDiagnosticCount
+        semanticDiagnosticCount + irDiagnosticCount => diagnosticCount!
+        context! -> diagnostics.comInteropFunctionCount => comInteropCount!
+        comInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitLinuxContext
     } else {
-        context! -> diagnostics.emitBlockingDiagnostics
-        context! -> emitIrInvariantDiagnostics
-        comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+        syntaxCount > 0 -> if {
+            context!.sources -> emitSyntaxDiagnostics
+        } else {
+            context! -> diagnostics.emitBlockingDiagnostics
+            context! -> emitIrInvariantDiagnostics
+            comInteropCount! > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+        }
     }
     diagnosticCount!
 }
 
 public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
+    sources -> syntaxDiagnosticCount => syntaxCount
     llvmTarget.wasm32Browser() => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
-    context! -> irInvariantDiagnosticCount => irDiagnosticCount
-    diagnosticCount! + irDiagnosticCount => diagnosticCount!
-    context! -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents
-    usesUnsupportedMouseEvents -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context!.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins
-    usesUnsupportedConcurrentStreamJoins -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context! -> diagnostics.usesParallelBranches => usesUnsupportedParallel
-    usesUnsupportedParallel -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context! -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount
-    unsupportedNativeInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
-    context! -> diagnostics.comInteropFunctionCount => unsupportedComInteropCount
-    unsupportedComInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    syntaxCount => diagnosticCount!
+    false => usesUnsupportedMouseEvents!
+    false => usesUnsupportedConcurrentStreamJoins!
+    false => usesUnsupportedParallel!
+    0 => unsupportedNativeInteropCount!
+    0 => unsupportedComInteropCount!
+    syntaxCount == 0 -> if {
+        context! -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+        context! -> irInvariantDiagnosticCount => irDiagnosticCount
+        semanticDiagnosticCount + irDiagnosticCount => diagnosticCount!
+        context! -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents!
+        usesUnsupportedMouseEvents! -> if { diagnosticCount! + 1 => diagnosticCount! }
+        context!.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins!
+        usesUnsupportedConcurrentStreamJoins! -> if { diagnosticCount! + 1 => diagnosticCount! }
+        context! -> diagnostics.usesParallelBranches => usesUnsupportedParallel!
+        usesUnsupportedParallel! -> if { diagnosticCount! + 1 => diagnosticCount! }
+        context! -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount!
+        unsupportedNativeInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+        context! -> diagnostics.comInteropFunctionCount => unsupportedComInteropCount!
+        unsupportedComInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitWasmContext
     } else {
-        context! -> diagnostics.emitBlockingDiagnostics
-        context! -> emitIrInvariantDiagnostics
-        usesUnsupportedMouseEvents -> if {
-            "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
-        }
-        usesUnsupportedConcurrentStreamJoins -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
-        usesUnsupportedParallel -> if { diagnostics.emitWasmParallelDiagnostic() }
-        unsupportedNativeInteropCount > 0 -> if {
-            diagnostics.emitWasmNativeInteropDiagnostic()
-        }
-        unsupportedComInteropCount > 0 -> if {
-            "wasm32-browser" -> diagnostics.emitComTargetDiagnostic
+        syntaxCount > 0 -> if {
+            context!.sources -> emitSyntaxDiagnostics
+        } else {
+            context! -> diagnostics.emitBlockingDiagnostics
+            context! -> emitIrInvariantDiagnostics
+            usesUnsupportedMouseEvents! -> if {
+                "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
+            }
+            usesUnsupportedConcurrentStreamJoins! -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
+            usesUnsupportedParallel! -> if { diagnostics.emitWasmParallelDiagnostic() }
+            unsupportedNativeInteropCount! > 0 -> if {
+                diagnostics.emitWasmNativeInteropDiagnostic()
+            }
+            unsupportedComInteropCount! > 0 -> if {
+                "wasm32-browser" -> diagnostics.emitComTargetDiagnostic
+            }
         }
     }
     diagnosticCount!
