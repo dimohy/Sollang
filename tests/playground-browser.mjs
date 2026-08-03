@@ -30,6 +30,14 @@ const barePrintlnSource = await readFile(
   new URL("../examples/regression/diagnostics/848-bare-println-expression.slg", import.meta.url),
   "utf8"
 );
+const printlnCallTableSource = await readFile(
+  new URL("../examples/regression/575-multiplication-table.slg", import.meta.url),
+  "utf8"
+);
+const printlnCallTableOutput = await readFile(
+  new URL("../examples/regression/expected/575-multiplication-table.stdout.txt", import.meta.url),
+  "utf8"
+);
 const browser = await chromium.launch({
   executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   headless: true
@@ -349,6 +357,14 @@ try {
   if (!barePrintlnDiagnostic.includes("function 'println' expects an argument and must use call or flow syntax")) {
     throw new Error(`missing bare-function diagnostic: ${barePrintlnDiagnostic}`);
   }
+
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.insertText(printlnCallTableSource);
+  await page.getByRole("button", { name: /^Run/ }).click();
+  await page.waitForFunction(expected =>
+    document.querySelector(".terminal pre")?.textContent === expected
+  , printlnCallTableOutput, { timeout: 120_000 });
 
   const tokenColors = await page.locator(".view-lines span[class*='mtk']").evaluateAll(
     nodes => new Set(nodes.map(node => getComputedStyle(node).color)).size

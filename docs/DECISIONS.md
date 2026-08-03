@@ -11447,14 +11447,20 @@ error. Functions that require input report that call or flow syntax is required;
 zero-input functions report the required `name()` spelling.
 
 The self-host semantic package already resolved a bare name to its function
-symbol, but LLVM blocking diagnostics only counted unresolved calls and selected
-ownership, import, interpolation, and ABI failures. Lowering consequently omitted
-the name expression and let compilation succeed with no behavior. The emitter
-context now retains the package's resolved-name table and rejects every resolved
-function name expression before LLVM emission. The rule is symbol-based and is
-not specialized for `println` or for one sample.
+symbol, but call resolution recorded only call AST nodes. LLVM lowering therefore
+omitted the name expression and let compilation succeed with no behavior. Call
+resolution now records bare function-name expressions from the package's resolved
+names and the existing runtime-function table, using distinct blocking statuses
+for input and zero-input functions. The rule is symbol-based and is not
+specialized for `println` or for one sample.
 
 The retained diagnostic uses the original nested multiplication-table source
 with a trailing bare `println`. Browser regression enters that exact source and
 requires a visible compiler error. Source rewriting, ignored expressions, and
 sample-specific diagnostics remain forbidden.
+
+The valid counterpart ends each outer `each` body with `println()`. Effect
+scheduling treats an `each` body as a source-ordered effect region, so the blank
+line runs after its nested loop rather than before the next outer iteration.
+Exact native and browser stdout fixes both the leading and trailing newline
+positions; merely observing that `println()` ran is insufficient.

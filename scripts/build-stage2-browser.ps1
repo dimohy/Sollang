@@ -89,6 +89,7 @@ foreach ($case in @(
     @("examples\regression\800-merge-cold-stream-availability.slg", "browser-stage2-flow-merge.ll", "examples\regression\expected\800-merge-cold-stream-availability.stdout.txt"),
     @("examples\regression\801-concat-and-latest-policies.slg", "browser-stage2-flow-latest.ll", "examples\regression\expected\801-concat-and-latest-policies.stdout.txt"),
     @("examples\regression\845-browser-unit-block-yield.slg", "browser-stage2-unit-block-yield.ll", "examples\regression\expected\845-browser-unit-block-yield.stdout.txt"),
+    @("examples\regression\575-multiplication-table.slg", "browser-stage2-println-call-order.ll", "examples\regression\expected\575-multiplication-table.stdout.txt"),
     @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.slg",
         "browser-stage2-read-int.ll",
