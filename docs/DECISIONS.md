@@ -11434,3 +11434,27 @@ The permanent regression executes `2..<10` and `2..10` together and compares
 their complete stdout. The Monaco tokenizer likewise classifies both `..` and
 `..<` as the same dedicated range-operator family, using one bold visual style
 instead of leaving inclusive `..` visually subordinate to the half-open form.
+
+## D301 — Function Names Are Not Implicit Calls
+
+Status: implemented and browser-verified
+Date: 2026-08-03
+
+`value -> println` is an explicit flow call. An independent invocation of a
+zero-input function uses parentheses, such as `println()`. A bare function name
+is neither a call nor an ignorable statement and therefore produces a semantic
+error. Functions that require input report that call or flow syntax is required;
+zero-input functions report the required `name()` spelling.
+
+The self-host semantic package already resolved a bare name to its function
+symbol, but LLVM blocking diagnostics only counted unresolved calls and selected
+ownership, import, interpolation, and ABI failures. Lowering consequently omitted
+the name expression and let compilation succeed with no behavior. The emitter
+context now retains the package's resolved-name table and rejects every resolved
+function name expression before LLVM emission. The rule is symbol-based and is
+not specialized for `println` or for one sample.
+
+The retained diagnostic uses the original nested multiplication-table source
+with a trailing bare `println`. Browser regression enters that exact source and
+requires a visible compiler error. Source rewriting, ignored expressions, and
+sample-specific diagnostics remain forbidden.

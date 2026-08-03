@@ -80,8 +80,10 @@ main {
 ```
 
 Inputs are written before `->`; the return type follows it. Expression bodies
-use `=>`, while statement bodies use `{ ... }`. Call a zero-input function with
-`()`. Enum members and computed self properties remain member-like, for example
+use `=>`, while statement bodies use `{ ... }`. A flow sink such as
+`value -> println` is a call, but an independent invocation must use call syntax:
+`println()` for a zero-input function. A bare function name is not an invocation
+and is a semantic error. Enum members and computed self properties remain member-like, for example
 `Status.Ready` and `point.doubled`.
 
 ### Control flow

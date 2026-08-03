@@ -519,6 +519,7 @@ public unresolvedCallNameToken context: ref emitterContext.EmitContext, callInde
         context.ranges[call.sourceModule] => sourceRange
         context.nodes[sourceRange.astStart + call.callAst] => callNode
         callNode.kind == 48 -> if { callNode.payloadToken => nameToken! }
+        callNode.kind == 15 -> if { callNode.payloadToken => nameToken! }
         callNode.kind == 10 -> if {
             false => afterArrow!
             false => insideArguments!
@@ -544,6 +545,7 @@ public isBlockingUnresolvedCall context: ref emitterContext.EmitContext, callInd
     false => blocking!
     (callIndex >= 0 and callIndex < (context.calls -> len)) -> if {
         context.calls[callIndex] => candidate
+        (candidate.status == 4 or candidate.status == 5) -> if { true => blocking! }
         (candidate.status == 2 or candidate.status == 3) -> if {
             context.ranges[candidate.sourceModule] => candidateRange
             context.nodes[candidateRange.astStart + candidate.callAst] => candidateNode
@@ -621,7 +623,15 @@ public emitCallDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
             nameToken.span.start => nameStart
             nameToken.span.length => nameLength
             context.sources[call.sourceModule] -> slice(nameStart, nameLength) => name
-            "; sollang semantic error: unresolved call target '$name' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
+            call.status == 4 -> if {
+                "; sollang semantic error: function '$name' expects an argument and must use call or flow syntax (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
+            } else {
+                call.status == 5 -> if {
+                    "; sollang semantic error: zero-input function '$name' must be called with parentheses: '$name()' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
+                } else {
+                    "; sollang semantic error: unresolved call target '$name' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
+                }
+            }
         }
         callIndex! + 1 => callIndex!
     }

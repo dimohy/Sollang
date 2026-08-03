@@ -559,6 +559,62 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
     package -> moduleResolve.resolveAnalyzed => resolvedImports!
     package -> qualified.resolveAnalyzed => qualifiedResults!
     [ModuleCallResolution; ~] => results!
+    0 => bareSourceIndex!
+    bareSourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[bareSourceIndex!] => bareRange
+        package.sources[bareSourceIndex!] -> len => bareSourceLength
+        package.sources[bareSourceIndex!] -> slice(UIntSize(0), bareSourceLength) => bareSource
+        0 => bareNameOffset!
+        bareNameOffset! < bareRange.nameCount -> while {
+            package.names[bareRange.nameStart + bareNameOffset!] => bareName
+            (bareName.astNode >= 0 and bareName.astNode < bareRange.astCount
+                and bareName.symbol >= 0 and bareName.symbol < bareRange.symbolCount) -> if {
+                package.nodes[bareRange.astStart + bareName.astNode] => bareNameNode
+                package.symbols[bareRange.symbolStart + bareName.symbol] => bareTarget
+                (bareNameNode.kind == 15 and (bareTarget.kind == 7 or bareTarget.kind == 31)) -> if {
+                    results! -> push(ModuleCallResolution {
+                        sourceModule: bareSourceIndex!
+                        callAst: bareName.astNode
+                        origin: 0
+                        targetModule: bareSourceIndex!
+                        targetSourceModule: bareSourceIndex!
+                        functionSymbol: bareName.symbol
+                        status: bareTarget.secondaryTypeNode >= 0 -> if { 4 } else { 5 }
+                    })
+                }
+            }
+            bareNameOffset! + 1 => bareNameOffset!
+        }
+        0 => bareAstOffset!
+        bareAstOffset! < bareRange.astCount -> while {
+            package.nodes[bareRange.astStart + bareAstOffset!] => bareNode
+            bareNode.kind == 15 -> if {
+                false => bareResolved!
+                0 => bareResolutionOffset!
+                (bareResolutionOffset! < bareRange.nameCount and not bareResolved!) -> while {
+                    package.names[bareRange.nameStart + bareResolutionOffset!].astNode == bareAstOffset! -> if { true => bareResolved! }
+                    bareResolutionOffset! + 1 => bareResolutionOffset!
+                }
+                not bareResolved! -> if {
+                    package.tokens[bareRange.tokenStart + bareNode.payloadToken] => bareToken
+                    RuntimeNameRequest { source: bareSource, token: bareToken } -> runtimeFunctionSymbol => bareRuntimeSymbol
+                    bareRuntimeSymbol < -1 -> if {
+                        results! -> push(ModuleCallResolution {
+                            sourceModule: bareSourceIndex!
+                            callAst: bareAstOffset!
+                            origin: 2
+                            targetModule: bareSourceIndex!
+                            targetSourceModule: -1
+                            functionSymbol: bareRuntimeSymbol
+                            status: (bareRuntimeSymbol == -108 or bareRuntimeSymbol == -111 or bareRuntimeSymbol == -112 or bareRuntimeSymbol == -114) -> if { 5 } else { 4 }
+                        })
+                    }
+                }
+            }
+            bareAstOffset! + 1 => bareAstOffset!
+        }
+        bareSourceIndex! + 1 => bareSourceIndex!
+    }
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
         package.sources[sourceIndex!] -> len => sourceLength

@@ -26,6 +26,10 @@ const inclusiveAndHalfOpenEachOutput = await readFile(
   new URL("../examples/regression/expected/847-inclusive-and-half-open-each.stdout.txt", import.meta.url),
   "utf8"
 );
+const barePrintlnSource = await readFile(
+  new URL("../examples/regression/diagnostics/848-bare-println-expression.slg", import.meta.url),
+  "utf8"
+);
 const browser = await chromium.launch({
   executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   headless: true
@@ -334,6 +338,16 @@ try {
     || unresolvedCallDiagnostic.includes("FS error")
   ) {
     throw new Error(`missing English unresolved-call diagnostic: ${unresolvedCallDiagnostic}`);
+  }
+
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.insertText(barePrintlnSource);
+  await page.getByRole("button", { name: /^Run/ }).click();
+  await page.locator(".result-error").waitFor({ timeout: 120_000 });
+  const barePrintlnDiagnostic = await page.locator(".terminal pre").innerText();
+  if (!barePrintlnDiagnostic.includes("function 'println' expects an argument and must use call or flow syntax")) {
+    throw new Error(`missing bare-function diagnostic: ${barePrintlnDiagnostic}`);
   }
 
   const tokenColors = await page.locator(".view-lines span[class*='mtk']").evaluateAll(
