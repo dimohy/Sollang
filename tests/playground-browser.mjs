@@ -18,6 +18,14 @@ const implicitDefaultEachOutput = await readFile(
   new URL("../examples/regression/expected/846-implicit-main-default-each-print.stdout.txt", import.meta.url),
   "utf8"
 );
+const inclusiveAndHalfOpenEachSource = await readFile(
+  new URL("../examples/regression/847-inclusive-and-half-open-each.slg", import.meta.url),
+  "utf8"
+);
+const inclusiveAndHalfOpenEachOutput = await readFile(
+  new URL("../examples/regression/expected/847-inclusive-and-half-open-each.stdout.txt", import.meta.url),
+  "utf8"
+);
 const browser = await chromium.launch({
   executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   headless: true
@@ -176,6 +184,13 @@ try {
   if (!whileTokens.some(token => token.offset === 14 && token.type.includes("keyword"))) {
     throw new Error(`while was not highlighted as a keyword: ${JSON.stringify(whileTokens)}`);
   }
+  const rangeTokens = await page.locator(".monaco-editor").evaluate(() =>
+    window.monaco.editor.tokenize("2..9 2..<10", "sollang")[0]
+  );
+  const highlightedRanges = rangeTokens.filter(token => token.type.includes("operator.range"));
+  if (highlightedRanges.length !== 2 || highlightedRanges[0].offset !== 1 || highlightedRanges[1].offset !== 6) {
+    throw new Error(`inclusive and half-open ranges do not share range styling: ${JSON.stringify(rangeTokens)}`);
+  }
   await page.locator("#sample").selectOption("loop");
   await page.screenshot({
     path: "artifacts/browser/playground-while-keyword.png",
@@ -268,6 +283,14 @@ try {
   await page.waitForFunction(expected =>
     document.querySelector(".terminal pre")?.textContent === expected
   , implicitDefaultEachOutput, { timeout: 120_000 });
+
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.insertText(inclusiveAndHalfOpenEachSource);
+  await page.getByRole("button", { name: /^Run/ }).click();
+  await page.waitForFunction(expected =>
+    document.querySelector(".terminal pre")?.textContent === expected
+  , inclusiveAndHalfOpenEachOutput, { timeout: 120_000 });
 
   await page.locator(".monaco-editor .view-lines").click();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");

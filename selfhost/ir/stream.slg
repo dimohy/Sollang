@@ -22,6 +22,7 @@ public struct StreamStage {
     callbackRoot: Int
     roleToken: Int
     flags: Int
+    rangeFlags: Int
 }
 
 public struct StreamPipeline {
@@ -35,6 +36,7 @@ public struct StreamPipeline {
     callbackRoot: Int
     roleToken: Int
     status: Int
+    flags: Int
 }
 
 public struct StreamJunctionInput {
@@ -358,7 +360,9 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
                 call -> streamSliceKind(prepared) => sliceKind
                 parts.argument0 => stageArgument0!
                 parts.argument1 => stageArgument1!
+                0 => stageRangeFlags!
                 (sliceKind == 3 and stageArgument0! >= 0 and ir[stageArgument0!].kind == 31) -> if {
+                    ir[stageArgument0!].opcode == grammar.tokenIdRangeUntil() -> if { 1 => stageRangeFlags! }
                     ir[stageArgument0!].operand1 => stageArgument1!
                     ir[stageArgument0!].operand0 => stageArgument0!
                 }
@@ -376,6 +380,7 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
                     callbackRoot: parts.callbackRoot
                     roleToken: parts.roleToken
                     flags: sliceKind
+                    rangeFlags: stageRangeFlags!
                 })
                 stageCount! + 1 => stageCount!
             }
@@ -444,6 +449,7 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
                             callbackRoot: -1
                             roleToken: -1
                             flags: recoveredSliceKind!
+                            rangeFlags: 0
                         })
                         stageCount! + 1 => stageCount!
                     }
@@ -453,6 +459,7 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
             prepared -> stageParts(ir, terminalIndex!) => terminalParts
             -1 => pipelineSource0!
             -1 => pipelineSource1!
+            0 => pipelineFlags!
             (stages! -> len) > stageStart -> if {
                 stages![stageStart] => firstStage
                 firstStage.source0 => pipelineSource0!
@@ -464,6 +471,7 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
             # Stream planning consumes those bounds as the producer source
             # instead of treating the range aggregate as one scalar value.
             (pipelineSource0! >= 0 and ir[pipelineSource0!].kind == 31) -> if {
+                ir[pipelineSource0!].opcode == grammar.tokenIdRangeUntil() -> if { 1 => pipelineFlags! }
                 ir[pipelineSource0!].operand1 => pipelineSource1!
                 ir[pipelineSource0!].operand0 => pipelineSource0!
             }
@@ -485,6 +493,7 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
                 callbackRoot: terminalParts.callbackRoot
                 roleToken: terminalParts.roleToken
                 status: pipelineStatus!
+                flags: pipelineFlags!
             })
             pipelineSource0! >= 0 -> if {
                 pipelineSource0! => partitionMemberIr!

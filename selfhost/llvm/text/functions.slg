@@ -439,7 +439,9 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     "  br label %each$(expressionIndex!)_header" -> println
                     "each$(expressionIndex!)_header:" -> println
                     "  %each$(expressionIndex!)_index = load i32, ptr %each$(expressionIndex!)_index_slot, align 4" -> println
-                    "  %each$(expressionIndex!)_done = icmp sgt i32 %each$(expressionIndex!)_index, " -> print
+                    "  %each$(expressionIndex!)_done = icmp " -> print
+                    eachSource.opcode == grammar.tokenIdRangeUntil() -> if { "sge" -> print } else { "sgt" -> print }
+                    " i32 %each$(expressionIndex!)_index, " -> print
                     context.ir[eachSource.operand1].kind == 3 -> if {
                         context.ir[eachSource.operand1] -> sourceToken(context, state) => eachRangeEndToken
                         context.sources[eachSource.sourceModule] -> slice(eachRangeEndToken.span.start, eachRangeEndToken.span.length) -> println
@@ -532,7 +534,9 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 "fold$(expressionIndex!)_header:" -> println
                 foldSource.kind == 31 -> if {
                     "  %fold$(expressionIndex!)_item = load i32, ptr %fold$(expressionIndex!)_item_slot, align 4" -> println
-                    "  %fold$(expressionIndex!)_done = icmp sgt i32 %fold$(expressionIndex!)_item, " -> print
+                    "  %fold$(expressionIndex!)_done = icmp " -> print
+                    foldSource.opcode == grammar.tokenIdRangeUntil() -> if { "sge" -> print } else { "sgt" -> print }
+                    " i32 %fold$(expressionIndex!)_item, " -> print
                     foldSource.operand1 -> writeValue(functionIndex!, context, state)
                     "" -> println
                 } else {
@@ -865,8 +869,13 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 "  %v$(expressionIndex!)_start = insertvalue { i32, i32 } poison, i32 " -> print
                 expression.operand0 -> writeValue(functionIndex!, context, state)
                 ", 0" -> println
+                expression.opcode == grammar.tokenIdRangeUntil() -> if {
+                    "  %v$(expressionIndex!)_end_inclusive = sub i32 " -> print
+                    expression.operand1 -> writeValue(functionIndex!, context, state)
+                    ", 1" -> println
+                }
                 "  %v$(expressionIndex!) = insertvalue { i32, i32 } %v$(expressionIndex!)_start, i32 " -> print
-                expression.operand1 -> writeValue(functionIndex!, context, state)
+                expression.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(expressionIndex!)_end_inclusive" -> print } else { expression.operand1 -> writeValue(functionIndex!, context, state) }
                 ", 1" -> println
             }
             expression.kind == 13 -> if {

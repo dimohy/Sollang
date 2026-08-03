@@ -100,8 +100,11 @@ ready -> if {
 }
 ```
 
-Ranges are inclusive with `..` and half-open with `..<`. Block functions keep
-the current value on the left, such as `1..9 -> each value { ... }`.
+Ranges are inclusive with `..` and half-open with `..<`: `2..10` visits 10,
+while `2..<10` stops at 9. Block functions keep the current value on the left,
+such as `1..9 -> each value { ... }`. Compiler and playground regressions must
+exercise both forms with exact output; testing only the inclusive form cannot
+prove the half-open contract.
 
 ### Types, products, and collections
 

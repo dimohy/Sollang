@@ -1521,7 +1521,9 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             "  br label %stream$(entryExpressionIndex!)_header" -> println
                             "stream$(entryExpressionIndex!)_header:" -> println
                             "  %stream$(entryExpressionIndex!)_item = load i32, ptr %stream$(entryExpressionIndex!)_index_slot, align 4" -> println
-                            "  %stream$(entryExpressionIndex!)_done = icmp sgt i32 %stream$(entryExpressionIndex!)_item, " -> print
+                            "  %stream$(entryExpressionIndex!)_done = icmp " -> print
+                            entryOpeningPipeline.flags % 2 == 1 -> if { "sge" -> print } else { "sgt" -> print }
+                            " i32 %stream$(entryExpressionIndex!)_item, " -> print
                             WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryOpeningPipeline.source1 } -> writeWhileValue(context, state)
                             "" -> println
                             "  br i1 %stream$(entryExpressionIndex!)_done, label %stream$(entryExpressionIndex!)_exit, label %stream$(entryExpressionIndex!)_body" -> println
@@ -1595,7 +1597,9 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             "  br label %stream$(entryExpressionIndex!)_inner_header" -> println
                             "stream$(entryExpressionIndex!)_inner_header:" -> println
                             "  %stream$(entryExpressionIndex!)_inner_item = load i32, ptr %stream$(entryExpressionIndex!)_inner_index_slot, align 4" -> println
-                            "  %stream$(entryExpressionIndex!)_inner_done = icmp sgt i32 %stream$(entryExpressionIndex!)_inner_item, " -> print
+                            "  %stream$(entryExpressionIndex!)_inner_done = icmp " -> print
+                            entryOpeningFlatMap.rangeFlags % 2 == 1 -> if { "sge" -> print } else { "sgt" -> print }
+                            " i32 %stream$(entryExpressionIndex!)_inner_item, " -> print
                             WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryOpeningFlatMap.argument1 } -> writeWhileValue(context, state)
                             "" -> println
                             "  br i1 %stream$(entryExpressionIndex!)_inner_done, label %stream$(entryExpressionIndex!)_" -> print
@@ -1950,8 +1954,13 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_start = insertvalue { i32, i32 } poison, i32 " -> print
                         entryExpression.operand0 -> writeValue(functionIndex!, context, state)
                         ", 0" -> println
+                        entryExpression.opcode == grammar.tokenIdRangeUntil() -> if {
+                            "  %v$(entryExpressionIndex!)_end_inclusive = sub i32 " -> print
+                            entryExpression.operand1 -> writeValue(functionIndex!, context, state)
+                            ", 1" -> println
+                        }
                         "  %v$(entryExpressionIndex!) = insertvalue { i32, i32 } %v$(entryExpressionIndex!)_start, i32 " -> print
-                        entryExpression.operand1 -> writeValue(functionIndex!, context, state)
+                        entryExpression.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(entryExpressionIndex!)_end_inclusive" -> print } else { entryExpression.operand1 -> writeValue(functionIndex!, context, state) }
                         ", 1" -> println
                     }
                     entryExpression.kind == 13 -> if {
@@ -2274,7 +2283,9 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             "  br label %each$(entryExpressionIndex!)_header" -> println
                             "each$(entryExpressionIndex!)_header:" -> println
                             "  %each$(entryExpressionIndex!)_index = load i32, ptr %each$(entryExpressionIndex!)_index_slot, align 4" -> println
-                            "  %each$(entryExpressionIndex!)_done = icmp sgt i32 %each$(entryExpressionIndex!)_index, " -> print
+                            "  %each$(entryExpressionIndex!)_done = icmp " -> print
+                            entryEachSource.opcode == grammar.tokenIdRangeUntil() -> if { "sge" -> print } else { "sgt" -> print }
+                            " i32 %each$(entryExpressionIndex!)_index, " -> print
                             context.ir[entryEachSource.operand1].kind == 3 -> if {
                                 context.ir[entryEachSource.operand1] -> sourceToken(context, state) => entryEachEndToken
                                 context.sources[entryEachSource.sourceModule] -> slice(entryEachEndToken.span.start, entryEachEndToken.span.length) -> println
@@ -2361,7 +2372,9 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         "fold$(entryExpressionIndex!)_header:" -> println
                         entryFoldSource.kind == 31 -> if {
                             "  %fold$(entryExpressionIndex!)_item = load i32, ptr %fold$(entryExpressionIndex!)_item_slot, align 4" -> println
-                            "  %fold$(entryExpressionIndex!)_done = icmp sgt i32 %fold$(entryExpressionIndex!)_item, " -> print
+                            "  %fold$(entryExpressionIndex!)_done = icmp " -> print
+                            entryFoldSource.opcode == grammar.tokenIdRangeUntil() -> if { "sge" -> print } else { "sgt" -> print }
+                            " i32 %fold$(entryExpressionIndex!)_item, " -> print
                             entryFoldSource.operand1 -> writeValue(functionIndex!, context, state)
                             "" -> println
                         } else {

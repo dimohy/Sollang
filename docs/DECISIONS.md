@@ -11408,3 +11408,29 @@ the original role use with exact integer stdout.
 The flow arrow remains required: `2..9 -> each { ... }` is valid, while
 `2..9 each { ... }` remains a syntax error. The compiler and playground must
 not insert the missing arrow or rewrite the source.
+
+## D300 — Range End Exclusivity Is a Consumer-Visible IR Contract
+
+Status: implemented and browser-verified
+Date: 2026-08-03
+
+`start..end` includes `end`; `start..<end` excludes it. Every range consumer
+must preserve this distinction, including direct `each`, `fold`, first-class
+`Range` values, range-backed stream producers, and range-returning `flatMap`.
+
+The C# reference code generator already honored this contract. The self-host
+IR also retained the `RangeUntil` opcode, but its LLVM emitters always used the
+inclusive `current > end` termination test. Consequently Stage 2, Stage 3, and
+the browser included 10 for `2..<10`, while the reference compiler correctly
+stopped at 9.
+
+Self-host lowering now selects `current >= end` for a half-open range and
+`current > end` for an inclusive range. First-class half-open ranges store the
+same inclusive runtime endpoint representation as the reference compiler, and
+stream plans explicitly carry range exclusivity instead of discarding it when
+they split a range into start and end operands.
+
+The permanent regression executes `2..<10` and `2..10` together and compares
+their complete stdout. The Monaco tokenizer likewise classifies both `..` and
+`..<` as the same dedicated range-operator family, using one bold visual style
+instead of leaving inclusive `..` visually subordinate to the half-open form.

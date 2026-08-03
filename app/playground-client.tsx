@@ -157,7 +157,8 @@ export default function PlaygroundPage() {
           }],
           [/[^\W\d][\w\u0080-\uFFFF]*/u, "variable"],
           [/\d+/, "number"],
-          [/->|=>|\.\.|==|!=|<=|>=/, "operator"],
+          [/\.\.<|\.\./, "operator.range"],
+          [/->|=>|==|!=|<=|>=/, "operator"],
           [/[+\-*/%=<>!]/, "operator"],
           [/[{}()[\],.:;]/, "delimiter"]
         ],
@@ -183,6 +184,7 @@ export default function PlaygroundPage() {
             }
           }],
           [/\d+/, "number"],
+          [/\.\.<|\.\./, "operator.range"],
           [/[-+*/%.]/, "operator"]
         ]
       }
@@ -207,6 +209,7 @@ export default function PlaygroundPage() {
         { token: "string.escape", foreground: "F28FAD" },
         { token: "variable", foreground: "75C9F1" },
         { token: "operator", foreground: "FF8C66" },
+        { token: "operator.range", foreground: "FFD866", fontStyle: "bold" },
         { token: "delimiter", foreground: "8C959F" }
       ],
       colors: {
