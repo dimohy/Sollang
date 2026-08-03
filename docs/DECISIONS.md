@@ -11379,3 +11379,32 @@ compiler, executed as WebAssembly, and entered into Monaco by the real browser
 playground regression. The playground must compile the original user source;
 source wrapping, interpolation substitution, sample-specific output, and
 target fallback remain forbidden.
+
+## D299 — Default Block Role `it` Has a Real Semantic Identity
+
+Status: implemented and browser-verified
+Date: 2026-08-03
+
+An unnamed block item in `source -> each { ... }` is not a textual shortcut.
+It has the same scoped semantic identity as an explicitly named item, with the
+contextual source spelling `it`. Name resolution, interpolation lowering,
+type inference, and LLVM emission must all consume that identity.
+
+Previously the self-host symbol table created a role symbol only when an
+explicit item name followed `each`. A direct `it -> println` therefore reached
+LLVM emission without a value and printed only newlines, while `$it` failed as
+an unknown interpolation binding. The C# reference compiler separately treated
+the standard-library `sys.io.println` wrapper as an ordinary `Text` function,
+even though the runtime printer contract and code generator already accepted
+displayable integers.
+
+The self-host symbol table now creates a contextual `it` role symbol for an
+unnamed block item, and interpolation resolution recognizes that symbol. The
+C# semantic layer recognizes the standard-library `print` and `println`
+wrappers as their runtime display sinks, preserving the existing displayable
+`Text` or integer contract. Permanent native and browser regressions execute
+the original role use with exact integer stdout.
+
+The flow arrow remains required: `2..9 -> each { ... }` is valid, while
+`2..9 each { ... }` remains a syntax error. The compiler and playground must
+not insert the missing arrow or rewrite the source.

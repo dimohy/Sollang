@@ -10,6 +10,14 @@ const implicitTableOutput = await readFile(
   new URL("./Sollang.ExampleTests/Fixtures/browser-stage2-implicit-main-multiplication-table.stdout.txt", import.meta.url),
   "utf8"
 );
+const implicitDefaultEachSource = await readFile(
+  new URL("../examples/regression/846-implicit-main-default-each-print.slg", import.meta.url),
+  "utf8"
+);
+const implicitDefaultEachOutput = await readFile(
+  new URL("../examples/regression/expected/846-implicit-main-default-each-print.stdout.txt", import.meta.url),
+  "utf8"
+);
 const browser = await chromium.launch({
   executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
   headless: true
@@ -252,6 +260,14 @@ try {
   await page.waitForFunction(expected =>
     document.querySelector(".terminal pre")?.textContent === expected
   , implicitTableOutput, { timeout: 120_000 });
+
+  await page.locator(".monaco-editor .view-lines").click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.insertText(implicitDefaultEachSource);
+  await page.getByRole("button", { name: /^Run/ }).click();
+  await page.waitForFunction(expected =>
+    document.querySelector(".terminal pre")?.textContent === expected
+  , implicitDefaultEachOutput, { timeout: 120_000 });
 
   await page.locator(".monaco-editor .view-lines").click();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");

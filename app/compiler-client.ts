@@ -36,7 +36,7 @@ const importToolFactory = (url: string) =>
   (new Function("url", "return import(url)") as (value: string) => Promise<{ default: ToolFactory }>)(url);
 
 export function preloadStage2(locale: Locale = "en"): Promise<ArrayBuffer> {
-  stage2BytesPromise ??= fetch(assetUrl("/sollangc-stage2-0.4.260801.wasm")).then(response => {
+  stage2BytesPromise ??= fetch(assetUrl("/sollangc-stage2-0.4.260803.wasm")).then(response => {
     if (!response.ok) {
       throw new Error(copy[locale].loadStage2Failed(response.status));
     }
@@ -46,7 +46,7 @@ export function preloadStage2(locale: Locale = "en"): Promise<ArrayBuffer> {
 }
 
 function loadStandardLibrary(locale: Locale): Promise<StandardLibrarySource[]> {
-  standardLibraryPromise ??= fetch(assetUrl("/stdlib-0.4.260801.json")).then(async response => {
+  standardLibraryPromise ??= fetch(assetUrl("/stdlib-0.4.260803.json")).then(async response => {
     if (!response.ok) {
       throw new Error(copy[locale].loadStdlibFailed(response.status));
     }

@@ -4,7 +4,7 @@ import path from "node:path";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const stdlibRoot = path.join(repoRoot, "stdlib");
 const publicRoot = path.join(repoRoot, "public");
-const compilerDestination = path.join(publicRoot, "sollangc-stage2-0.4.260801.wasm");
+const compilerDestination = path.join(publicRoot, "sollangc-stage2-0.4.260803.wasm");
 
 async function slgFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -27,7 +27,7 @@ const sources = await Promise.all(paths.map(async sourcePath => ({
 
 await mkdir(publicRoot, { recursive: true });
 await writeFile(
-  path.join(publicRoot, "stdlib-0.4.260801.json"),
+  path.join(publicRoot, "stdlib-0.4.260803.json"),
   JSON.stringify(sources),
   "utf8"
 );

@@ -8055,30 +8055,31 @@ internal sealed partial class SemanticCompiler
                     currentType = contextualInput;
                 }
 
+                if (TryGetDisplayPrinterKind(function, out var printerKind))
+                {
+                    if (!isLast)
+                    {
+                        throw Error(expression.Line, expression.Column, $"{path} must be the final value-flow target");
+                    }
+
+                    if (printerKind == BoundFunctionKind.RuntimePrintErrorLine
+                        && currentType != BoundType.Text)
+                    {
+                        throw Error(
+                            expression.Line,
+                            expression.Column,
+                            $"{path} expects Text but received {FormatType(currentType)}");
+                    }
+                    EnsureDisplayable(currentType, expression.Line, expression.Column, path);
+                    if (printerKind == BoundFunctionKind.RuntimePrintErrorLine)
+                    {
+                        _resolvedGenericCalls[target] = function;
+                    }
+                    return new FlowResult(BoundType.Unit, FlowEffect.None);
+                }
+
                 switch (function.Kind)
                 {
-                    case BoundFunctionKind.RuntimePrint:
-                    case BoundFunctionKind.RuntimePrintLine:
-                    case BoundFunctionKind.RuntimePrintErrorLine:
-                        if (!isLast)
-                        {
-                            throw Error(expression.Line, expression.Column, $"{path} must be the final value-flow target");
-                        }
-
-                        if (function.Kind == BoundFunctionKind.RuntimePrintErrorLine
-                            && currentType != BoundType.Text)
-                        {
-                            throw Error(
-                                expression.Line,
-                                expression.Column,
-                                $"{path} expects Text but received {FormatType(currentType)}");
-                        }
-                        EnsureDisplayable(currentType, expression.Line, expression.Column, path);
-                        if (function.Kind == BoundFunctionKind.RuntimePrintErrorLine)
-                        {
-                            _resolvedGenericCalls[target] = function;
-                        }
-                        return new FlowResult(BoundType.Unit, FlowEffect.None);
                     case BoundFunctionKind.RuntimeReadInt:
                         if (!allowReadIntCall)
                         {
@@ -9195,42 +9196,43 @@ internal sealed partial class SemanticCompiler
             return BoundType.Unit;
         }
 
+        if (TryGetDisplayPrinterKind(function, out var printerKind))
+        {
+            if (!allowPrintCall)
+            {
+                throw Error(expression.Line, expression.Column, $"{path} is only valid as an expression statement");
+            }
+
+            if (expression.Arguments.Count != 1)
+            {
+                throw Error(expression.Line, expression.Column, $"{path} expects exactly one argument");
+            }
+
+            var valueType = InferExpression(
+                expression.Arguments[0],
+                functions,
+                bindings,
+                allowPrintCall: false,
+                allowReadIntCall,
+                allowFlowBindingTarget: false);
+            if (printerKind == BoundFunctionKind.RuntimePrintErrorLine
+                && valueType != BoundType.Text)
+            {
+                throw Error(
+                    expression.Arguments[0].Line,
+                    expression.Arguments[0].Column,
+                    $"{path} expects Text but received {FormatType(valueType)}");
+            }
+            EnsureDisplayable(valueType, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
+            if (printerKind == BoundFunctionKind.RuntimePrintErrorLine)
+            {
+                _resolvedGenericCalls[expression] = function;
+            }
+            return BoundType.Unit;
+        }
+
         switch (function.Kind)
         {
-            case BoundFunctionKind.RuntimePrint:
-            case BoundFunctionKind.RuntimePrintLine:
-            case BoundFunctionKind.RuntimePrintErrorLine:
-                if (!allowPrintCall)
-                {
-                    throw Error(expression.Line, expression.Column, $"{path} is only valid as an expression statement");
-                }
-
-                if (expression.Arguments.Count != 1)
-                {
-                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one argument");
-                }
-
-                var valueType = InferExpression(
-                    expression.Arguments[0],
-                    functions,
-                    bindings,
-                    allowPrintCall: false,
-                    allowReadIntCall,
-                    allowFlowBindingTarget: false);
-                if (function.Kind == BoundFunctionKind.RuntimePrintErrorLine
-                    && valueType != BoundType.Text)
-                {
-                    throw Error(
-                        expression.Arguments[0].Line,
-                        expression.Arguments[0].Column,
-                        $"{path} expects Text but received {FormatType(valueType)}");
-                }
-                EnsureDisplayable(valueType, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
-                if (function.Kind == BoundFunctionKind.RuntimePrintErrorLine)
-                {
-                    _resolvedGenericCalls[expression] = function;
-                }
-                return BoundType.Unit;
             case BoundFunctionKind.RuntimeReadInt:
                 if (!allowReadIntCall)
                 {
@@ -10647,6 +10649,32 @@ internal sealed partial class SemanticCompiler
         {
             throw Error(line, column, $"{path} expects Text or Int but received {FormatType(type)}");
         }
+    }
+
+    private static bool TryGetDisplayPrinterKind(BoundFunction function, out BoundFunctionKind kind)
+    {
+        if (function.Kind is BoundFunctionKind.RuntimePrint
+            or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintErrorLine)
+        {
+            kind = function.Kind;
+            return true;
+        }
+
+        if (function.IsStandardLibrary && function.Name == "sys.io.print")
+        {
+            kind = BoundFunctionKind.RuntimePrint;
+            return true;
+        }
+
+        if (function.IsStandardLibrary && function.Name == "sys.io.println")
+        {
+            kind = BoundFunctionKind.RuntimePrintLine;
+            return true;
+        }
+
+        kind = default;
+        return false;
     }
 
     private bool IsMainOnlyRuntimeWrapper(BoundFunction function)

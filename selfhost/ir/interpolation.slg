@@ -309,20 +309,27 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                                 request.tokens[candidate.nameToken] => candidateName
                                                 candidateName.span.length => candidateNameLength
                                                 fragmentName.span.length => fragmentNameRawLength
-                                                false => nameEqual!
-                                                candidateNameLength == fragmentNameRawLength -> if {
-                                                    true => nameEqual!
-                                                } else {
-                                                    fragmentNameRawLength == candidateNameLength + UIntSize(1) -> if {
-                                                        (fragment -> byte(fragmentName.span.start + fragmentNameRawLength - UIntSize(1))) == UInt8(33) -> if {
-                                                            true => nameEqual!
+                                                false => contextualIt!
+                                                (candidate.flags / 262144 % 2 == 1 and fragmentNameRawLength == UIntSize(2)) -> if {
+                                                    ((fragment -> byte(fragmentName.span.start)) == UInt8(105)
+                                                        and (fragment -> byte(fragmentName.span.start + UIntSize(1))) == UInt8(116)) => contextualIt!
+                                                }
+                                                contextualIt! => nameEqual!
+                                                not contextualIt! -> if {
+                                                    candidateNameLength == fragmentNameRawLength -> if {
+                                                        true => nameEqual!
+                                                    } else {
+                                                        fragmentNameRawLength == candidateNameLength + UIntSize(1) -> if {
+                                                            (fragment -> byte(fragmentName.span.start + fragmentNameRawLength - UIntSize(1))) == UInt8(33) -> if {
+                                                                true => nameEqual!
+                                                            }
                                                         }
                                                     }
-                                                }
-                                                UIntSize(0) => nameByte!
-                                                (nameEqual! and nameByte! < candidateNameLength) -> while {
-                                                    (fragment -> byte(fragmentName.span.start + nameByte!)) != (source -> byte(candidateName.span.start + nameByte!)) -> if { false => nameEqual! }
-                                                    nameByte! + UIntSize(1) => nameByte!
+                                                    UIntSize(0) => nameByte!
+                                                    (nameEqual! and nameByte! < candidateNameLength) -> while {
+                                                        (fragment -> byte(fragmentName.span.start + nameByte!)) != (source -> byte(candidateName.span.start + nameByte!)) -> if { false => nameEqual! }
+                                                        nameByte! + UIntSize(1) => nameByte!
+                                                    }
                                                 }
                                                 nameEqual! -> if {
                                                     request.nodes[candidate.astNode].start => candidateStart
