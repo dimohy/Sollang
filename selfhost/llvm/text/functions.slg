@@ -251,6 +251,21 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -201 and expression.operand0 >= 0) -> if {
                 expressionIndex! -> emitLengthIntrinsic(functionIndex!, context, state)
             }
+            (expression.kind == 9 and expression.opcode <= -241 and expression.opcode >= -245 and expression.operand0 >= 0) -> if {
+                expressionIndex! -> emitBitSetIntrinsic(functionIndex!, context, state)
+            }
+            (expression.kind == 9 and expression.opcode <= -246 and expression.opcode >= -251 and expression.operand0 >= 0) -> if {
+                expressionIndex! -> emitDequeIntrinsic(functionIndex!, context, state)
+            }
+            (expression.kind == 9 and expression.opcode <= -252 and expression.opcode >= -254 and expression.operand0 >= 0) -> if {
+                expressionIndex! -> emitHeapIntrinsic(functionIndex!, context, state)
+            }
+            (expression.kind == 9 and expression.opcode <= -255 and expression.opcode >= -257 and expression.operand0 >= 0) -> if {
+                expressionIndex! -> emitSetIntrinsic(functionIndex!, context, state)
+            }
+            ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -236 and expression.operand0 >= 0) -> if {
+                expressionIndex! -> emitCapacityIntrinsic(functionIndex!, context, state)
+            }
             ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -202 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
                 context.ir[expression.operand0] => byteBase
                 expression.operand1 -> aggregateValueIndex(context, state) => byteIndexValue
@@ -450,6 +465,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     "each$(expressionIndex!)_body:" -> println
                     "  %each$(expressionIndex!)_item = freeze i32 %each$(expressionIndex!)_index" -> println
                 } else {
+                    eachSource -> isSetCollection(context) => eachSet
                     false => eachReadonlyReference!
                     eachSource.typeId => eachContainerTypeId!
                     (eachContainerTypeId! >= 0 and context.types[eachContainerTypeId!].kind == 8) -> if {
@@ -463,27 +479,50 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             ", align 8" -> println
                         }
                     }
-                    "  %each$(expressionIndex!)_data = extractvalue %sollang.array.i32 " -> print
-                    eachReadonlyReference! -> if { "%each$(expressionIndex!)_source" -> print } else {
-                        (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    eachSet -> if {
+                        "  %each$(expressionIndex!)_keys = extractvalue %sollang.dict " -> print
+                        expression.operand0 -> writeValue(functionIndex!, context, state)
+                        ", 0" -> println
+                        "  %each$(expressionIndex!)_controls = extractvalue %sollang.dict " -> print
+                        expression.operand0 -> writeValue(functionIndex!, context, state)
+                        ", 1" -> println
+                        "  %each$(expressionIndex!)_length = extractvalue %sollang.dict " -> print
+                        expression.operand0 -> writeValue(functionIndex!, context, state)
+                        ", 3" -> println
+                    } else {
+                        "  %each$(expressionIndex!)_data = extractvalue %sollang.array.i32 " -> print
+                        eachReadonlyReference! -> if { "%each$(expressionIndex!)_source" -> print } else {
+                            (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        }
+                        ", 0" -> println
+                        "  %each$(expressionIndex!)_length = extractvalue %sollang.array.i32 " -> print
+                        eachReadonlyReference! -> if { "%each$(expressionIndex!)_source" -> print } else {
+                            (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        }
+                        ", 1" -> println
                     }
-                    ", 0" -> println
-                    "  %each$(expressionIndex!)_length = extractvalue %sollang.array.i32 " -> print
-                    eachReadonlyReference! -> if { "%each$(expressionIndex!)_source" -> print } else {
-                        (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                    }
-                    ", 1" -> println
                     "  %each$(expressionIndex!)_index_slot = alloca i64, align 8" -> println
                     "  store i64 0, ptr %each$(expressionIndex!)_index_slot, align 8" -> println
                     "  br label %each$(expressionIndex!)_header" -> println
                     "each$(expressionIndex!)_header:" -> println
                     "  %each$(expressionIndex!)_index = load i64, ptr %each$(expressionIndex!)_index_slot, align 8" -> println
                     "  %each$(expressionIndex!)_done = icmp eq i64 %each$(expressionIndex!)_index, %each$(expressionIndex!)_length" -> println
-                    "  br i1 %each$(expressionIndex!)_done, label %each$(expressionIndex!)_exit, label %each$(expressionIndex!)_body" -> println
+                    eachSet -> if {
+                        "  br i1 %each$(expressionIndex!)_done, label %each$(expressionIndex!)_exit, label %each$(expressionIndex!)_check" -> println
+                        "each$(expressionIndex!)_check:" -> println
+                        "  %each$(expressionIndex!)_control_ptr = getelementptr i8, ptr %each$(expressionIndex!)_controls, i64 %each$(expressionIndex!)_index" -> println
+                        "  %each$(expressionIndex!)_control = load i8, ptr %each$(expressionIndex!)_control_ptr, align 1" -> println
+                        "  %each$(expressionIndex!)_occupied = icmp sgt i8 %each$(expressionIndex!)_control, 0" -> println
+                        "  br i1 %each$(expressionIndex!)_occupied, label %each$(expressionIndex!)_body, label %each$(expressionIndex!)_continue" -> println
+                    } else {
+                        "  br i1 %each$(expressionIndex!)_done, label %each$(expressionIndex!)_exit, label %each$(expressionIndex!)_body" -> println
+                    }
                     "each$(expressionIndex!)_body:" -> println
                     "  %each$(expressionIndex!)_item_ptr = getelementptr " -> print
                     eachSource -> writeArrayElementType(context, state)
-                    ", ptr %each$(expressionIndex!)_data, i64 %each$(expressionIndex!)_index" -> println
+                    ", ptr " -> print
+                    eachSet -> if { "%each$(expressionIndex!)_keys" -> print } else { "%each$(expressionIndex!)_data" -> print }
+                    ", i64 %each$(expressionIndex!)_index" -> println
                     "  %each$(expressionIndex!)_item = load " -> print
                     eachSource -> writeArrayElementType(context, state)
                     ", ptr %each$(expressionIndex!)_item_ptr, align " -> print
@@ -879,6 +918,12 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 ", 1" -> println
             }
             expression.kind == 13 -> if {
+                context.ir[expression.operand0] => syntheticProductBase
+                (syntheticProductBase.typeKind == 10 and syntheticProductBase.typeId >= (context.types -> len) and expression.symbol >= 0) -> if {
+                    "  %v$(expressionIndex!) = extractvalue %sollang.product.t$(syntheticProductBase.typeId) " -> print
+                    expression.operand0 -> writeValue(functionIndex!, context, state)
+                    ", $(expression.symbol)" -> println
+                } else {
                 (expressionIndex! -> canonicalMemberPathAvailable(context, state)) -> if {
                     context.ir[expression.operand0] => referenceMemberBase
                     expression -> sourceNode(context, state) => canonicalMemberAst
@@ -1047,6 +1092,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                         memberIdentifierOrdinal! + 1 => memberIdentifierOrdinal!
                     }
                     memberTokenIndex! + 1 => memberTokenIndex!
+                }
                 }
                 }
                 }
@@ -1832,10 +1878,16 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             (expression.kind == 6 and expression.symbol < 0 and expression.opcode == -1 and expression.typeOrigin == 1 and expression.typeSymbol == 15 and expression.operand0 >= 0) -> if {
                 WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitArenaConstructor(context, state)
             }
+            (expression.kind == 6 and expression.opcode <= -237 and expression.opcode >= -240) -> if {
+                WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitCollectionConstructor(context, state)
+            }
+            (expression.kind == 9 and expression.opcode == -27 and expression.operand0 >= 0) -> if {
+                expressionIndex! -> emitBoxIntrinsic(functionIndex!, context, state)
+            }
             ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -229 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
                 WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitTextMaterialize(context, state)
             }
-            (expression.kind == 6 and expression.symbol != -103 and expression.symbol != -115 and not (expression.symbol == -102 and expression.operand0 < 0) and not (expression.symbol < 0 and expression.opcode == -1 and expression.typeOrigin == 1 and expression.typeSymbol == 15) and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and expression.opcode != -215 and expression.opcode != -222 and expression.opcode != -229 and expression.opcode != -230 and expression.opcode != -233 and expression.opcode != -235 and not (expression -> isSourceTextFileIntrinsic) and (expression.opcode > -216 or expression.opcode < -221) and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
+            (expression.kind == 6 and expression.symbol != -103 and expression.symbol != -115 and not (expression.symbol == -102 and expression.operand0 < 0) and not (expression.symbol < 0 and expression.opcode == -1 and expression.typeOrigin == 1 and expression.typeSymbol == 15) and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and expression.opcode != -215 and expression.opcode != -222 and expression.opcode != -229 and expression.opcode != -230 and expression.opcode != -233 and expression.opcode != -235 and (expression.opcode > -237 or expression.opcode < -240) and not (expression -> isSourceTextFileIntrinsic) and (expression.opcode > -216 or expression.opcode < -221) and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
                 (expression.symbol == -101 or expression.symbol == -102 or expression.symbol == -116) -> if {
                     expressionIndex! -> callArgumentIndex(context, state) => runtimeArgumentIndex
                     context.ir[runtimeArgumentIndex] => runtimeArgument

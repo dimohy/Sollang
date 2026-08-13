@@ -312,10 +312,14 @@ internal sealed partial class SemanticCompiler
                     }
                 }
                 return elementTypes.Count == 1
-                    ? array.IsDynamic ? $"[{elementTypes.Single()}; ~]" : $"[{elementTypes.Single()}]"
+                    ? array.BoundedCapacity is { } boundedCapacity
+                        ? $"[{elementTypes.Single()}; <={boundedCapacity}]"
+                        : array.IsDynamic ? $"[{elementTypes.Single()}; ~]" : $"[{elementTypes.Single()}]"
                     : null;
             case TypedEmptyArrayExpression emptyArray:
-                return $"[{emptyArray.ElementType}; ~]";
+                return emptyArray.BoundedCapacity is { } emptyBoundedCapacity
+                    ? $"[{emptyArray.ElementType}; <={emptyBoundedCapacity}]"
+                    : $"[{emptyArray.ElementType}; ~]";
             case DictionaryLiteralExpression dictionary:
                 var keyTypes = new HashSet<string>(StringComparer.Ordinal);
                 var valueTypes = new HashSet<string>(StringComparer.Ordinal);

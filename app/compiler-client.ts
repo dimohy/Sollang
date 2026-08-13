@@ -36,7 +36,7 @@ const importToolFactory = (url: string) =>
   (new Function("url", "return import(url)") as (value: string) => Promise<{ default: ToolFactory }>)(url);
 
 export function preloadStage2(locale: Locale = "en"): Promise<ArrayBuffer> {
-  stage2BytesPromise ??= fetch(assetUrl("/sollangc-stage2-0.4.260803.wasm")).then(response => {
+  stage2BytesPromise ??= fetch(assetUrl("/sollangc-stage2-0.4.260813.wasm")).then(response => {
     if (!response.ok) {
       throw new Error(copy[locale].loadStage2Failed(response.status));
     }
@@ -46,7 +46,7 @@ export function preloadStage2(locale: Locale = "en"): Promise<ArrayBuffer> {
 }
 
 function loadStandardLibrary(locale: Locale): Promise<StandardLibrarySource[]> {
-  standardLibraryPromise ??= fetch(assetUrl("/stdlib-0.4.260803.json")).then(async response => {
+  standardLibraryPromise ??= fetch(assetUrl("/stdlib-0.4.260813.json")).then(async response => {
     if (!response.ok) {
       throw new Error(copy[locale].loadStdlibFailed(response.status));
     }
@@ -345,6 +345,15 @@ async function executeWasm(wasm: Uint8Array, input: string): Promise<string> {
       sollang_browser_alloc: allocate,
       sollang_browser_realloc: reallocate,
       sollang_browser_free() {},
+      memset(pointer: number, value: number, length: number) {
+        new Uint8Array(memory.buffer, pointer, length).fill(value & 0xff);
+        return pointer;
+      },
+      memcpy(destination: number, source: number, length: number) {
+        new Uint8Array(memory.buffer, destination, length)
+          .set(new Uint8Array(memory.buffer, source, length));
+        return destination;
+      },
       sollang_browser_read(pointer: number, capacity: number) {
         if (inputLine >= inputLines.length || capacity <= 0) return 0;
         const line = encoder.encode(`${inputLines[inputLine++]}\n`);

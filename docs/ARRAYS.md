@@ -594,8 +594,10 @@ There is no garbage collector.
 Dynamic arrays allocate through a selected target allocator. The first runtime
 slice can treat allocation failure as a runtime failure/trap, matching the
 current preference for explicit failure over silent fallback. Later, fallible
-APIs such as `tryPush` can return `Result<Unit, AllocError>` once `Result` is in
-the language.
+Heap growth failure currently traps. Bounded `[T; <=N]` owners also trap on an
+overflowing `push`, but perform no allocation and never spill to heap storage.
+A future `tryPush` convenience can expose the same pre-mutation capacity check
+as a typed `Result`.
 
 Target notes:
 

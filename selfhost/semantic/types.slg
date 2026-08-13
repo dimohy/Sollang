@@ -17,7 +17,8 @@ public struct TypeUse {
 }
 
 # Kinds: 1 named, 2 slice, 3 dynamic array, 4 fixed array,
-# 5 dictionary, 6 box, 8 readonly reference. Equivalent token sequences ignore trivia.
+# 5 dictionary, 6 box, 8 readonly reference, 12 bounded inline array,
+# 13 bounded inline dictionary. Equivalent token sequences ignore trivia.
 public canonicalize source: Text -> [TypeUse; ~] {
     source -> ast.lower => nodes!
     source -> lexer.lex => tokens!
@@ -57,10 +58,12 @@ public canonicalizePrepared request: typeTerms.TypeTermRequest -> [TypeUse; ~] {
                 2 => typeKind!
                 false => hasSemicolon!
                 false => hasTilde!
+                false => hasBounded!
                 firstSignificant! => shapeToken!
                 shapeToken! < node.firstToken + node.tokenCount -> while {
                     request.tokens[shapeToken!].kind == grammar.tokenIdSemicolon() -> if { true => hasSemicolon! }
                     request.tokens[shapeToken!].kind == grammar.tokenIdTilde() -> if { true => hasTilde! }
+                    request.tokens[shapeToken!].kind == grammar.tokenIdLessEqual() -> if { true => hasBounded! }
                     (elementToken! < 0 and request.tokens[shapeToken!].kind == grammar.tokenIdIdentifier()) -> if {
                         shapeToken! => elementToken!
                     }
@@ -72,17 +75,24 @@ public canonicalizePrepared request: typeTerms.TypeTermRequest -> [TypeUse; ~] {
                     shapeToken! + 1 => shapeToken!
                 }
                 hasSemicolon! -> if {
-                    hasTilde! -> if { 3 => typeKind! } else { 4 => typeKind! }
+                    hasBounded! -> if { 12 => typeKind! } else {
+                        hasTilde! -> if { 3 => typeKind! } else { 4 => typeKind! }
+                    }
                 }
             } else {
                 request.tokens[firstSignificant!].kind == grammar.tokenIdLeftBrace() -> if {
                     5 => typeKind!
                     false => afterTypeColon!
+                    false => dictionaryBounded!
                     firstSignificant! => dictionaryToken!
                     dictionaryToken! < node.firstToken + node.tokenCount -> while {
                         request.tokens[dictionaryToken!].kind == grammar.tokenIdColon() -> if {
                             true => afterTypeColon!
                         } else {
+                            request.tokens[dictionaryToken!].kind == grammar.tokenIdLessEqual() -> if { true => dictionaryBounded! }
+                            (dictionaryBounded! and lengthToken! < 0 and request.tokens[dictionaryToken!].kind == grammar.tokenIdNumber()) -> if {
+                                dictionaryToken! => lengthToken!
+                            }
                             request.tokens[dictionaryToken!].kind == grammar.tokenIdIdentifier() -> if {
                                 afterTypeColon! -> if {
                                     valueToken! < 0 -> if { dictionaryToken! => valueToken! }
@@ -93,6 +103,7 @@ public canonicalizePrepared request: typeTerms.TypeTermRequest -> [TypeUse; ~] {
                         }
                         dictionaryToken! + 1 => dictionaryToken!
                     }
+                    dictionaryBounded! -> if { 13 => typeKind! }
                 } else {
                     request.tokens[firstSignificant!] => firstTypeToken
                     firstTypeToken.kind == grammar.tokenIdIdentifier() -> if {

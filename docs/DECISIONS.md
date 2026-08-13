@@ -11488,3 +11488,138 @@ The permanent diagnostic retains the exact user input
 and the actual playground must reject it with `unterminated string literal` and
 must not emit a target triple. Source rewriting, sample-specific matching, and
 linker-error substitution remain forbidden.
+
+## D303 — Collections Use Explicit Storage Families
+
+Status: implemented and cross-platform verified; universal performance leadership is not claimed
+Date: 2026-08-12
+
+Sollang keeps fixed inline arrays `[T; N]`, readonly borrowed views `[T]`, heap
+growable arrays `[T; ~]`, and heap capacity hints `[T; N~]`. It adds bounded
+inline growable arrays `[T; <=N]` and bounded inline Swiss dictionaries
+`{K: V; <=N}`. The maximum capacity is part of type identity. Bounded owners
+never allocate and never spill to heap storage; exceeding capacity is an
+explicit trap or a typed fallible operation.
+
+This choice rejects a hidden SmallVec-style storage switch in the ordinary
+growable array. Keeping the heap array as a stable three-word owner avoids an
+access-path branch and preserves address behavior. Workloads with a known
+maximum use the bounded type and receive zero-allocation storage by contract.
+
+The collection suite will build `Set`, `Deque`, `BinaryHeap`, `BitSet`, and
+size-hint-aware `collect` on the same visible-cost rule. Dictionary work will
+advance to wider grouped control-byte probing, mirrored controls, a single
+aligned allocation, and entry/bulk operations without changing key ownership
+or deterministic drop.
+
+Completion requires C# bootstrap/self-host parity, Windows/Linux LLVM and exact
+execution, allocator-call absence for bounded hot paths, full regression, and
+fair C++/Rust/C# NativeAOT/Go/Java memory and throughput measurements.
+
+The bootstrap implementation now includes `putIfAbsent(key, value)` as a
+single-probe, non-escaping dictionary entry primitive. It returns `Bool`, works
+for legacy, generic, and bounded dictionaries, and gives duplicate owned
+arguments deterministic transfer-and-drop semantics. This avoids exposing an
+entry pointer whose validity would end on rehash; self-host parity and bulk
+operations remain part of D303 completion.
+
+Heap collections also implement `reserve(nonnegativeCount)` with one
+representation-aware growth operation: exact slots for arrays/heaps,
+power-of-two rings for deques, and 7/8-safe power-of-two bucket counts for
+dictionaries/sets. Requests within current capacity are no-ops; bounded inline
+owners reject the operation because capacity is part of their type identity.
+
+Ordinary heap arrays now implement `pushAll(fixedArray)` as the first bulk path.
+It accepts only copyable, exactly matching fixed-array elements, checks combined
+length overflow, performs at most one exact reserve, copies contiguous storage,
+and commits logical length once. Dynamic sources are deliberately excluded so a
+receiver reallocation cannot invalidate an aliased source. Owned elements need
+an explicit move bulk operation, while `BinaryHeap` and `Deque` need
+invariant-specific bulk construction rather than raw append.
+
+The 2026-08-13 self-host checkpoint adds canonical identities and LLVM
+constructors/drop glue for `Set`, `Deque`, `BinaryHeap`, and `BitSet`. Stage2
+exposed and fixed two unrelated fixed-point hazards: bare local names matching
+flow intrinsics were classified without proving a flow arrow, and inline `if`
+values inside a short-circuit type lookup did not dominate their use. Intrinsic
+classification is now syntax-directed and bounded type lookup materializes its
+expected kind and length before the predicate. Windows Stage2 passes 7/7 at
+27,315,888 LLVM bytes and Stage3 reaches fixed-point hash
+`E5484BAB603F334FA252C76AC617C30770A472E6E802D60F2CA2DF2BEB1FFCD2`.
+
+The qualified 10-process same-host benchmark still does not alone complete
+D303. The deterministic runner enforces a 10% idle-CPU gate, CPU affinity,
+interleaved runs, exact checksums, and explicit unavailable metrics. Sollang Set
+retains a 297.0 ms median and the lowest sampled peak at 87,117,824 bytes. It is
+ahead of the measured Java, Rust, C++, and Go baselines and near Rust's exact
+one-allocation payload, while .NET NativeAOT reaches 88.226 ms. Allocator-exact
+Sollang metrics remain unavailable, so no overall fastest claim is accepted.
+
+The next self-host checkpoint completes the `BitSet<N>` operation slice.
+Canonical recursive semantics now resolve `set`/`clear` to Unit,
+`contains` to Bool, and `count`/`len` to Int only when the receiver is the
+fixed-inline BitSet type. Typed IR uses dedicated opcodes -241 through -245,
+and LLVM mutates the original local or mutable-borrow pointer, unrolls word
+popcount with `llvm.ctpop.i64`, and keeps `len` constant. The scheduler treats
+`set` and `clear` as mutation barriers, preventing later membership/count reads
+from moving before them. Fixtures 865–867 prove type-directed name-collision
+safety, opcode/result-type parity, LLVM assembly, mutable parameter behavior,
+and exact native execution. Set, Deque, and BinaryHeap operation parity remain
+required before D303 can be completed.
+
+The following operation checkpoint closes that parity gap for the implemented
+surface. Deque and BinaryHeap retain their contiguous three-word mutable ABI;
+Set is dictionary-shaped and therefore passes a pointer to its complete
+four-field structure. Set probing remains hash-indexed, uses positive H2 bytes
+with `0` empty and `-1` deleted, grows at 7/8 load, and compacts tombstones by
+same-capacity rehash at 1/8 live occupancy. `Set.insert` and
+`BinaryHeap.push` join array `push` in the self-host move-event contract;
+otherwise successful insertion of an owned name would be followed by an
+invalid caller cleanup. Duplicate Set keys are dropped by the insertion path,
+and unused-result collection mutations are scheduler effects rather than dead
+expressions.
+
+Fixtures 868–874 prove Typed IR, name-collision safety, mutable-borrow updates,
+Deque/Heap execution, Set growth/tombstone compaction, Text helpers, nominal
+Hash/Eq dispatch, and owned-key transfer/drop. Windows fast regression passes
+896/896 and the same LLVM execution fixtures pass on Linux. Rebuilt Windows
+Stage2/Stage3 are a 28,234,674-byte fixed point with normalized SHA-256
+`0584AB0F40AA6033B5D40B0524915961DC6368FFCD359E45487E782B53195EA3`.
+
+The full-regression checkpoint closes a separate structural-product ordering
+defect exposed by explicit parallel branches and partition dispatch. Synthetic
+products are canonicalized in the recursive type arena after the ordinary
+semantic snapshot is built. Their member labels are therefore repaired to
+ordinals after final type projection, and LLVM lowers those members directly
+with `extractvalue` from the recursive product type instead of indexing a
+missing nominal declaration. The final fixed point also makes `Set.each`
+iterate occupied key-only buckets in entry and function lowering, and requires
+a constructor symbol before a Set-result expression receives the Set
+constructor opcode. The Release build is warning-free; Windows passes
+1,125/1,125 fixtures and Linux passes its complete applicable set of
+1,124/1,124, excluding only the declared Windows-only COM fixture. Windows
+Stage2/Stage3 form a 28,308,563-byte fixed point with normalized SHA-256
+`A1908F55E97BB057E1B07F067E89FB1EC635DAC5A84DCAB1890DC7349C90A4CB`.
+Linux Stage2/Stage3 form a 28,288,193-byte fixed point with normalized SHA-256
+`867D03B514F64C68318A8D9C05C1911C3DF4C072CFC4FDD12480563D040996A5`.
+
+## D304 — Browser playground publishes the matching collection compiler
+
+Status: implemented and deployed
+Date: 2026-08-13
+
+The playground compiler and standard-library bundle use versioned
+`0.4.260813` assets so a browser cache cannot pair the new page with the old
+Stage 2. The catalog includes a real key-only `Set<Int>` sample covering
+insertion, duplicate detection, membership, removal, and `each`; the browser
+suite executes all 43 samples in the production static build.
+
+The browser compiler exposed two cross-version LLVM contracts that local LLVM
+22 assembly alone did not prove. Numeric interpolation in a Text value passed
+to another function can require the integer formatter after parameter/member
+types are resolved during emission, so runtime selection follows the
+interpolated Text capability instead of only an explicit materialize opcode.
+The emitted WASM LLVM declares `memcpy` and `memset` intrinsics explicitly, and
+the browser host implements the corresponding imports when LLVM 16 lowers
+them to libc-shaped calls. The verified Stage 2 WASM SHA-256 is
+`3D6E8F825E64588B32AD79CB65ADAC27C33029DA2773717EE12A3001C3B91558`.

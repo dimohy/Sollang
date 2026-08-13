@@ -1146,6 +1146,7 @@ internal sealed partial class SemanticCompiler
 
             if (inputType.Value is not (BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena)
                 && !_types.IsDynamicArray(inputType.Value)
+                && !_types.IsBoundedArray(inputType.Value)
                 && !_types.IsDictionary(inputType.Value)
                 && !_types.IsStruct(inputType.Value))
             {
@@ -3276,6 +3277,9 @@ internal sealed partial class SemanticCompiler
                     var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, bindings);
                     var movedFieldOwnerPlace = GetMoveConsumingOwnedFieldPlace(binding.Value, bindings);
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
+                    var bindingMutationConsumedSourceNames = GetOwnedContainerMutationConsumedSourceNames(
+                        binding.Value,
+                        bindings);
                     var valueType = InferExpression(
                         binding.Value,
                         functions,
@@ -3300,11 +3304,15 @@ internal sealed partial class SemanticCompiler
                         binding.Value,
                         bindings,
                         valueType);
+                    var transferredSourceNames = aggregateLiteralSourceNames
+                        .Concat(bindingMutationConsumedSourceNames)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
                     RejectBorrowedTextOriginInvalidation(
                         movedSourceName,
                         movedFieldOwnerPlace,
                         consumedSourceNames,
-                        aggregateLiteralSourceNames,
+                        transferredSourceNames,
                         binding.Name,
                         isMutableRebind,
                         binding.Line,
@@ -3367,6 +3375,11 @@ internal sealed partial class SemanticCompiler
                         mutableBindings.Remove(consumedName);
                     }
                     foreach (var transferredName in aggregateLiteralSourceNames)
+                    {
+                        bindings.Remove(transferredName);
+                        mutableBindings.Remove(transferredName);
+                    }
+                    foreach (var transferredName in bindingMutationConsumedSourceNames)
                     {
                         bindings.Remove(transferredName);
                         mutableBindings.Remove(transferredName);
@@ -3767,9 +3780,10 @@ internal sealed partial class SemanticCompiler
         }
 
         var isDynamicArray = _types.IsDynamicArray(targetType);
+        var isBoundedArray = _types.IsBoundedArray(targetType);
         var isGenericDictionary = _types.IsDictionary(targetType);
         if (targetType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary
-            or BoundType.MutableMappedBytes) && !isDynamicArray && !isGenericDictionary)
+            or BoundType.MutableMappedBytes) && !isDynamicArray && !isBoundedArray && !isGenericDictionary)
         {
             throw Error(assignment.Line, assignment.Column, "indexed assignment expects an array or dictionary owner");
         }
@@ -3789,7 +3803,9 @@ internal sealed partial class SemanticCompiler
                 : BoundType.Int;
         var expectedValueType = targetType == BoundType.MutableMappedBytes
             ? BoundType.UInt8
-            : isDynamicArray
+            : isBoundedArray
+                ? _types.GetBoundedArray(targetType).ElementType
+                : isDynamicArray
                 ? _types.GetDynamicArray(targetType).ElementType
                 : isGenericDictionary
                     ? _types.GetDictionary(targetType).ValueType
@@ -4788,6 +4804,7 @@ internal sealed partial class SemanticCompiler
                 BoundType.Range => BoundType.Int,
                 BoundType.MappedBytes or BoundType.MutableMappedBytes => BoundType.UInt8,
                 _ when _types.IsStaticArray(sourceType) => _types.GetStaticArray(sourceType).ElementType,
+                _ when _types.IsSet(sourceType) => _types.GetSetElement(sourceType),
                 _ when _types.IsDynamicArray(sourceType) => _types.GetDynamicArray(sourceType).ElementType,
                 _ => BoundType.Unit
             };
@@ -6331,6 +6348,18 @@ internal sealed partial class SemanticCompiler
             inferredElementType = elementType;
         }
 
+        if (expression.BoundedCapacity is { } boundedCapacity)
+        {
+            if (expression.Elements.Count > boundedCapacity)
+            {
+                throw Error(expression.Line, expression.Column,
+                    $"bounded array initializer has {expression.Elements.Count} elements but capacity is {boundedCapacity}");
+            }
+            var elementType = inferredElementType
+                ?? throw Error(expression.Line, expression.Column, "bounded array literal requires an element type");
+            return _types.GetOrAddBoundedArray(elementType, boundedCapacity);
+        }
+
         if (expression.IsDynamic)
         {
             return inferredElementType switch
@@ -6380,6 +6409,15 @@ internal sealed partial class SemanticCompiler
 
     private BoundType InferTypedEmptyArrayExpression(TypedEmptyArrayExpression expression)
     {
+        if (expression.BoundedCapacity is { } boundedCapacity)
+        {
+            var boundedElementType = ParseType(expression.ElementType, expression.Line, expression.Column);
+            if (boundedElementType == BoundType.Unit || IsNestedContainerElementType(boundedElementType))
+            {
+                throw Error(expression.Line, expression.Column, "bounded array elements must be inline scalar or user values");
+            }
+            return _types.GetOrAddBoundedArray(boundedElementType, boundedCapacity);
+        }
         if (expression.ElementType == "Int")
         {
             return BoundType.DynamicIntArray;
@@ -6470,6 +6508,15 @@ internal sealed partial class SemanticCompiler
 
         var key = inferredKeyType ?? throw Error(expression.Line, expression.Column, "dictionary literal requires at least one entry");
         var value = inferredValueType!.Value;
+        if (expression.BoundedCapacity is { } boundedCapacity)
+        {
+            if (expression.Entries.Count > boundedCapacity)
+            {
+                throw Error(expression.Line, expression.Column,
+                    $"bounded dictionary initializer has {expression.Entries.Count} entries but capacity is {boundedCapacity}");
+            }
+            return _types.GetOrAddBoundedDictionary(key, value, boundedCapacity);
+        }
         return key == BoundType.Int && value == BoundType.Int
             ? BoundType.IntDictionary
             : _types.GetOrAddDictionary(key, value);
@@ -6483,6 +6530,10 @@ internal sealed partial class SemanticCompiler
         {
             throw Error(expression.Line, expression.Column,
                 $"dictionary key type {FormatType(keyType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+        }
+        if (expression.BoundedCapacity is { } boundedCapacity)
+        {
+            return _types.GetOrAddBoundedDictionary(keyType, valueType, boundedCapacity);
         }
         return keyType == BoundType.Int && valueType == BoundType.Int
             ? BoundType.IntDictionary
@@ -6508,6 +6559,11 @@ internal sealed partial class SemanticCompiler
         {
             sourceType = _types.GetReference(sourceType).ElementType;
         }
+        if (_types.IsBinaryHeap(sourceType) || _types.IsDeque(sourceType) || _types.IsSet(sourceType))
+        {
+            throw Error(expression.Source.Line, expression.Source.Column,
+                $"{FormatType(sourceType)} preserves its invariant and does not support indexing");
+        }
         if (sourceType is not (BoundType.IntSlice
             or BoundType.StaticIntArray
             or BoundType.StaticTextArray
@@ -6519,6 +6575,7 @@ internal sealed partial class SemanticCompiler
             or BoundType.MutableMappedBytes)
             && !_types.IsStaticArray(sourceType)
             && !_types.IsDynamicArray(sourceType)
+            && !_types.IsBoundedArray(sourceType)
             && !_types.IsDictionary(sourceType))
         {
             throw Error(expression.Source.Line, expression.Source.Column,
@@ -6572,6 +6629,18 @@ internal sealed partial class SemanticCompiler
         if (_types.IsDynamicArray(sourceType))
         {
             var elementType = _types.GetDynamicArray(sourceType).ElementType;
+            if (_types.ContainsOwnedStorage(elementType) && !allowOwnedElementBorrow)
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"indexing owned array element type {FormatType(elementType)} may only borrow it directly for a readonly call; use take to move it out");
+            }
+            return elementType;
+        }
+        if (_types.IsBoundedArray(sourceType))
+        {
+            var elementType = _types.GetBoundedArray(sourceType).ElementType;
             if (_types.ContainsOwnedStorage(elementType) && !allowOwnedElementBorrow)
             {
                 throw Error(
@@ -8808,7 +8877,9 @@ internal sealed partial class SemanticCompiler
                     or BoundType.MutableMappedBytes)
                     && !_types.IsStaticArray(currentType)
                     && !_types.IsDynamicArray(currentType)
-                    && !_types.IsDictionary(currentType))
+                    && !_types.IsBoundedArray(currentType)
+                    && !_types.IsDictionary(currentType)
+                    && !_types.IsBitSet(currentType))
                 {
                     return false;
                 }
@@ -8818,6 +8889,39 @@ internal sealed partial class SemanticCompiler
                         ? BoundType.UIntSize
                         : BoundType.Int,
                     FlowEffect.None);
+                return true;
+            case "count" when _types.IsBitSet(currentType):
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "BitSet count does not accept arguments");
+                }
+                result = new FlowResult(BoundType.Int, FlowEffect.None);
+                return true;
+            case "contains" when _types.IsBitSet(currentType):
+                ValidateBitSetIndexArgument(target, functions, bindings, allowReadIntCall);
+                result = new FlowResult(BoundType.Bool, FlowEffect.None);
+                return true;
+            case "contains" when _types.IsSet(currentType):
+                ValidateSetElementArgument(target, functions, bindings, allowReadIntCall);
+                result = new FlowResult(BoundType.Bool, FlowEffect.None);
+                return true;
+            case "insert" or "remove" when _types.IsSet(currentType):
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, $"Set {path} must be the final value-flow target");
+                }
+                EnsureMutableContainerSource(expression.Source, path, mutableBindings);
+                ValidateSetElementArgument(target, functions, bindings, allowReadIntCall);
+                result = new FlowResult(BoundType.Bool, FlowEffect.None);
+                return true;
+            case "set" or "clear" when _types.IsBitSet(currentType):
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, $"BitSet {path} must be the final value-flow target");
+                }
+                EnsureMutableContainerSource(expression.Source, path, mutableBindings);
+                ValidateBitSetIndexArgument(target, functions, bindings, allowReadIntCall);
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
                 return true;
             case "byte" when currentType is BoundType.Text or BoundType.SourceText:
                 if (target.Arguments.Count != 1)
@@ -8866,6 +8970,7 @@ internal sealed partial class SemanticCompiler
                     or BoundType.IntDictionary
                     or BoundType.Arena)
                     && !_types.IsDynamicArray(currentType)
+                    && !_types.IsBoundedArray(currentType)
                     && !_types.IsDictionary(currentType))
                 {
                     return false;
@@ -8877,8 +8982,88 @@ internal sealed partial class SemanticCompiler
                         : BoundType.Int,
                     FlowEffect.None);
                 return true;
+            case "reserve":
+                if (currentType is not (BoundType.DynamicIntArray or BoundType.IntDictionary)
+                    && !_types.IsDynamicArray(currentType)
+                    && !_types.IsBoundedArray(currentType)
+                    && !_types.IsDictionary(currentType))
+                {
+                    return false;
+                }
+                if (_types.IsBoundedArray(currentType) || _types.IsBoundedDictionary(currentType))
+                {
+                    throw Error(target.Line, target.Column,
+                        "reserve is not available on bounded inline collections; their capacity is part of the type");
+                }
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, "reserve must be the final value-flow target");
+                }
+                EnsureMutableContainerSource(expression.Source, "reserve", mutableBindings);
+                if (target.Arguments.Count != 1)
+                {
+                    throw Error(target.Line, target.Column, "reserve expects one nonnegative Int capacity");
+                }
+                var reserveType = InferExpression(
+                    target.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                if (reserveType != BoundType.Int)
+                {
+                    throw Error(target.Arguments[0].Line, target.Arguments[0].Column,
+                        "reserve capacity must be Int");
+                }
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
+            case "pushAll":
+                if (currentType != BoundType.DynamicIntArray
+                    && (!_types.IsDynamicArray(currentType)
+                        || _types.IsBinaryHeap(currentType)
+                        || _types.IsDeque(currentType)))
+                {
+                    return false;
+                }
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, "pushAll must be the final value-flow target");
+                }
+                EnsureMutableContainerSource(expression.Source, "pushAll", mutableBindings);
+                if (target.Arguments.Count != 1)
+                {
+                    throw Error(target.Line, target.Column, "pushAll expects one fixed-array source");
+                }
+                var bulkSourceType = InferExpression(
+                    target.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                var targetElementType = currentType == BoundType.DynamicIntArray
+                    ? BoundType.Int
+                    : _types.GetDynamicArray(currentType).ElementType;
+                BoundType? bulkElementType = bulkSourceType switch
+                {
+                    BoundType.StaticIntArray => BoundType.Int,
+                    BoundType.StaticTextArray => BoundType.Text,
+                    _ when _types.IsStaticArray(bulkSourceType) => _types.GetStaticArray(bulkSourceType).ElementType,
+                    _ => null
+                };
+                if (bulkElementType is null || bulkElementType.Value != targetElementType)
+                {
+                    throw Error(target.Arguments[0].Line, target.Arguments[0].Column,
+                        $"pushAll expects a fixed array of {FormatType(targetElementType)}");
+                }
+                if (_types.ContainsOwnedStorage(targetElementType))
+                {
+                    throw Error(target.Line, target.Column,
+                        "pushAll currently requires copyable elements; owned elements require an explicit move bulk operation");
+                }
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
             case "push":
-                if (currentType != BoundType.DynamicIntArray && !_types.IsDynamicArray(currentType))
+                if (_types.IsDeque(currentType))
+                {
+                    return false;
+                }
+                if (currentType != BoundType.DynamicIntArray
+                    && !_types.IsDynamicArray(currentType)
+                    && !_types.IsBoundedArray(currentType))
                 {
                     return false;
                 }
@@ -8897,6 +9082,8 @@ internal sealed partial class SemanticCompiler
 
                 var expectedPushedType = currentType == BoundType.DynamicIntArray
                     ? BoundType.Int
+                    : _types.IsBoundedArray(currentType)
+                        ? _types.GetBoundedArray(currentType).ElementType
                     : _types.GetDynamicArray(currentType).ElementType;
                 var pushedArgument = target.Arguments[0];
                 var pushedType = pushedArgument is DictionaryLiteralExpression contextualPushed
@@ -8923,10 +9110,74 @@ internal sealed partial class SemanticCompiler
                 }
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
                 return true;
+            case "peek" when _types.IsBinaryHeap(currentType):
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "BinaryHeap peek does not accept arguments");
+                }
+                result = new FlowResult(_types.GetBinaryHeapElement(currentType), FlowEffect.None);
+                return true;
+            case "pushFront" or "pushBack" when _types.IsDeque(currentType):
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, $"Deque {path} must be the final value-flow target");
+                }
+                EnsureMutableContainerSource(expression.Source, path, mutableBindings);
+                if (target.Arguments.Count != 1)
+                {
+                    throw Error(target.Line, target.Column, $"Deque {path} expects exactly one argument");
+                }
+                var dequeElementType = _types.GetDequeElement(currentType);
+                var dequeArgumentType = InferExpression(
+                    target.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                if (dequeArgumentType != dequeElementType)
+                {
+                    throw Error(target.Arguments[0].Line, target.Arguments[0].Column,
+                        $"Deque {path} expects {FormatType(dequeElementType)}, got {FormatType(dequeArgumentType)}");
+                }
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
+            case "front" or "back" when _types.IsDeque(currentType):
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, $"Deque {path} does not accept arguments");
+                }
+                result = new FlowResult(_types.GetDequeElement(currentType), FlowEffect.None);
+                return true;
+            case "popFront" or "popBack" when _types.IsDeque(currentType):
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, $"Deque {path} must be the final value-flow target");
+                }
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, $"Deque {path} does not accept arguments");
+                }
+                EnsureMutableContainerSource(expression.Source, path, mutableBindings);
+                result = new FlowResult(_types.GetDequeElement(currentType), FlowEffect.None);
+                return true;
+            case "pop" when _types.IsBinaryHeap(currentType):
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, "BinaryHeap pop must be the final value-flow target");
+                }
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "BinaryHeap pop does not accept arguments");
+                }
+                EnsureMutableContainerSource(expression.Source, "pop", mutableBindings);
+                result = new FlowResult(_types.GetBinaryHeapElement(currentType), FlowEffect.None);
+                return true;
             case "take":
+                if (_types.IsBinaryHeap(currentType) || _types.IsDeque(currentType) || _types.IsSet(currentType))
+                {
+                    return false;
+                }
                 if (currentType != BoundType.DynamicIntArray
                     && currentType != BoundType.IntDictionary
                     && !_types.IsDynamicArray(currentType)
+                    && !_types.IsBoundedArray(currentType)
                     && !_types.IsDictionary(currentType))
                 {
                     return false;
@@ -8971,6 +9222,8 @@ internal sealed partial class SemanticCompiler
                         ? BoundType.Int
                         : _types.IsDynamicArray(currentType)
                             ? _types.GetDynamicArray(currentType).ElementType
+                            : _types.IsBoundedArray(currentType)
+                                ? _types.GetBoundedArray(currentType).ElementType
                             : _types.GetDictionary(currentType).ValueType;
                 result = new FlowResult(takenType, FlowEffect.None);
                 return true;
@@ -9006,13 +9259,17 @@ internal sealed partial class SemanticCompiler
 
                 result = new FlowResult(BoundType.DynamicIntArray, FlowEffect.None);
                 return true;
-            case "put":
+            case "put" or "putIfAbsent":
+                if (_types.IsSet(currentType))
+                {
+                    return false;
+                }
                 if (currentType == BoundType.IntDictionaryView)
                 {
                     throw Error(
                         target.Line,
                         target.Column,
-                        "put is not available on a readonly dictionary parameter; use 'mut {Int: Int}'");
+                        $"{path} is not available on a readonly dictionary parameter; use 'mut {{Int: Int}}'");
                 }
 
                 if (currentType != BoundType.IntDictionary && !_types.IsDictionary(currentType))
@@ -9022,14 +9279,14 @@ internal sealed partial class SemanticCompiler
 
                 if (!isLast)
                 {
-                    throw Error(target.Line, target.Column, "put must be the final value-flow target");
+                    throw Error(target.Line, target.Column, $"{path} must be the final value-flow target");
                 }
 
-                EnsureMutableContainerSource(expression.Source, "put", mutableBindings);
+                EnsureMutableContainerSource(expression.Source, path, mutableBindings);
 
                 if (target.Arguments.Count != 2)
                 {
-                    throw Error(target.Line, target.Column, "put expects key and value arguments");
+                    throw Error(target.Line, target.Column, $"{path} expects key and value arguments");
                 }
 
                 var putKeyType = currentType == BoundType.IntDictionary
@@ -9061,11 +9318,11 @@ internal sealed partial class SemanticCompiler
                     if (argumentType != expectedPutTypes[argumentIndex])
                     {
                         throw Error(argument.Line, argument.Column,
-                            $"put expects {FormatType(putKeyType)} key and {FormatType(putValueType)} value arguments");
+                            $"{path} expects {FormatType(putKeyType)} key and {FormatType(putValueType)} value arguments");
                     }
                 }
 
-                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                result = new FlowResult(path == "putIfAbsent" ? BoundType.Bool : BoundType.Unit, FlowEffect.None);
                 return true;
             case "updated":
                 if (currentType == BoundType.IntDictionaryView)
@@ -9126,6 +9383,53 @@ internal sealed partial class SemanticCompiler
                         $"cancel expects Task<T> but received {FormatType(currentType)}");
                 }
                 return false;
+        }
+
+        void ValidateBitSetIndexArgument(
+            FlowTarget bitSetTarget,
+            IReadOnlyDictionary<string, BoundFunction> availableFunctions,
+            IReadOnlyDictionary<string, BoundType> availableBindings,
+            bool allowRead)
+        {
+            if (bitSetTarget.Arguments.Count != 1)
+            {
+                throw Error(bitSetTarget.Line, bitSetTarget.Column,
+                    "BitSet operation expects exactly one Int bit index");
+            }
+            var indexType = InferExpression(bitSetTarget.Arguments[0], availableFunctions, availableBindings,
+                allowPrintCall: false, allowReadIntCall: allowRead, allowFlowBindingTarget: false);
+            if (indexType != BoundType.Int)
+            {
+                throw Error(bitSetTarget.Arguments[0].Line, bitSetTarget.Arguments[0].Column,
+                    $"BitSet index must be Int, got {FormatType(indexType)}");
+            }
+        }
+
+        void ValidateSetElementArgument(
+            FlowTarget setTarget,
+            IReadOnlyDictionary<string, BoundFunction> availableFunctions,
+            IReadOnlyDictionary<string, BoundType> availableBindings,
+            bool allowRead)
+        {
+            if (setTarget.Arguments.Count != 1)
+            {
+                throw Error(setTarget.Line, setTarget.Column,
+                    $"Set {string.Join('.', setTarget.Path)} expects exactly one element");
+            }
+            var expected = _types.GetSetElement(currentType);
+            var argument = setTarget.Arguments[0];
+            var actual = argument is DictionaryLiteralExpression contextualSetElement
+                && _types.IsStruct(expected)
+                    ? InferContextualStructLiteral(
+                        contextualSetElement, expected, availableFunctions, availableBindings, allowRead)
+                    : InferExpression(argument, availableFunctions, availableBindings,
+                        allowPrintCall: false, allowReadIntCall: allowRead,
+                        allowFlowBindingTarget: false);
+            if (actual != expected)
+            {
+                throw Error(argument.Line, argument.Column,
+                    $"Set element must be {FormatType(expected)}, got {FormatType(actual)}");
+            }
         }
     }
 
@@ -10003,6 +10307,87 @@ internal sealed partial class SemanticCompiler
         bool allowRuntimeCall)
     {
         var path = string.Join('.', expression.Path);
+        if (path == "BitSet")
+        {
+            if ((expression.Arguments?.Count ?? 0) != 0
+                || expression.AdditionalTypeArguments is { Count: > 0 }
+                || !int.TryParse(expression.TypeArgument, out var bitCount)
+                || bitCount <= 0)
+            {
+                throw Error(expression.Line, expression.Column,
+                    "BitSet requires one positive compile-time size and no runtime arguments");
+            }
+            return _types.GetOrAddBitSet(bitCount);
+        }
+        if (path == "BinaryHeap")
+        {
+            if (expression.AdditionalTypeArguments is { Count: > 0 }
+                || (expression.Arguments?.Count ?? 0) != 1)
+            {
+                throw Error(expression.Line, expression.Column,
+                    "BinaryHeap<T>(capacity) requires one element type and one Int capacity");
+            }
+            var elementType = ParseType(expression.TypeArgument, expression.Line, expression.Column);
+            if (!IsNumericType(elementType) && elementType != BoundType.CodePoint)
+            {
+                throw Error(expression.Line, expression.Column,
+                    $"BinaryHeap ordering currently requires a numeric or CodePoint element, got {FormatType(elementType)}");
+            }
+            if (expression.Arguments![0] is not NumberExpression capacity
+                || !long.TryParse(capacity.Text, out var capacityValue)
+                || capacityValue <= 0)
+            {
+                throw Error(expression.Arguments[0].Line, expression.Arguments[0].Column,
+                    "BinaryHeap capacity must currently be a positive Int literal");
+            }
+            return _types.GetOrAddBinaryHeap(elementType);
+        }
+        if (path == "Deque")
+        {
+            if (expression.AdditionalTypeArguments is { Count: > 0 }
+                || (expression.Arguments?.Count ?? 0) != 1)
+            {
+                throw Error(expression.Line, expression.Column,
+                    "Deque<T>(capacity) requires one element type and one Int capacity");
+            }
+            var elementType = ParseType(expression.TypeArgument, expression.Line, expression.Column);
+            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            {
+                throw Error(expression.Line, expression.Column,
+                    "Deque elements must be inline scalar or user values");
+            }
+            if (expression.Arguments![0] is not NumberExpression capacity
+                || !long.TryParse(capacity.Text, out var capacityValue)
+                || capacityValue <= 0)
+            {
+                throw Error(expression.Arguments[0].Line, expression.Arguments[0].Column,
+                    "Deque capacity must currently be a positive Int literal");
+            }
+            return _types.GetOrAddDeque(elementType);
+        }
+        if (path == "Set")
+        {
+            if (expression.AdditionalTypeArguments is { Count: > 0 }
+                || (expression.Arguments?.Count ?? 0) != 1)
+            {
+                throw Error(expression.Line, expression.Column,
+                    "Set<T>(capacity) requires one element type and one Int capacity");
+            }
+            var elementType = ParseType(expression.TypeArgument, expression.Line, expression.Column);
+            if (!IsSupportedDictionaryKeyType(elementType))
+            {
+                throw Error(expression.Line, expression.Column,
+                    $"set element type {FormatType(elementType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+            }
+            if (expression.Arguments![0] is not NumberExpression capacity
+                || !long.TryParse(capacity.Text, out var capacityValue)
+                || capacityValue <= 0)
+            {
+                throw Error(expression.Arguments[0].Line, expression.Arguments[0].Column,
+                    "Set capacity must currently be a positive Int literal");
+            }
+            return _types.GetOrAddSet(elementType);
+        }
         if (!TryGetFunction(path, functions, out var template))
         {
             throw Error(expression.Line, expression.Column, $"unknown generic function '{path}'");
@@ -11046,6 +11431,10 @@ internal sealed partial class SemanticCompiler
             [TypeId.UInt8] = TypeId.DynamicUInt8Array,
             [TypeId.DirectoryEntry] = TypeId.DynamicDirectoryEntryArray
         };
+        var predeclaredBoundedArrays = new Dictionary<TypeId, (TypeId ElementType, int Capacity)>();
+        var predeclaredBoundedArraysByShape = new Dictionary<(TypeId ElementType, int Capacity), TypeId>();
+        var predeclaredBoundedDictionaries = new Dictionary<TypeId, (TypeId KeyType, TypeId ValueType, int MaxEntries)>();
+        var predeclaredBoundedDictionariesByShape = new Dictionary<(TypeId KeyType, TypeId ValueType, int MaxEntries), TypeId>();
         var boxableTypes = names
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
                 || (structTypes.Values.Contains(item.Value)
@@ -11079,6 +11468,14 @@ internal sealed partial class SemanticCompiler
             if (TryResolveDefinitionDynamicArray(typeName, out var dynamicArray))
             {
                 return dynamicArray;
+            }
+            if (TryResolveDefinitionBoundedArray(typeName, line, column, out var boundedArray))
+            {
+                return boundedArray;
+            }
+            if (TryResolveDefinitionBoundedDictionary(typeName, line, column, out var boundedDictionary))
+            {
+                return boundedDictionary;
             }
             if (typeName.StartsWith("ref ", StringComparison.Ordinal))
             {
@@ -11237,7 +11634,8 @@ internal sealed partial class SemanticCompiler
         {
             var payloadBytes = definition.Variants
                 .Where(static variant => variant.PayloadType is not null)
-                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, references, predeclaredDynamicArrays))
+                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, references,
+                    predeclaredDynamicArrays, predeclaredBoundedArrays, predeclaredBoundedDictionaries))
                 .DefaultIfEmpty(0)
                 .Max();
             enums[id] = definition with { PayloadWords = (payloadBytes + 7) / 8 };
@@ -11245,7 +11643,8 @@ internal sealed partial class SemanticCompiler
 
         foreach (var (id, definition) in boxes.ToArray())
         {
-            var size = InlineSize(definition.ElementType, structs, enums, boxes, references, predeclaredDynamicArrays);
+            var size = InlineSize(definition.ElementType, structs, enums, boxes, references,
+                predeclaredDynamicArrays, predeclaredBoundedArrays, predeclaredBoundedDictionaries);
             boxes[id] = definition with
             {
                 Size = size,
@@ -11261,6 +11660,8 @@ internal sealed partial class SemanticCompiler
             references,
             _pointerBitWidth / 8);
         result.RegisterDynamicArrays(predeclaredDynamicArrays);
+        result.RegisterBoundedArrays(predeclaredBoundedArrays);
+        result.RegisterBoundedDictionaries(predeclaredBoundedDictionaries);
         return result;
 
         bool TryResolveDefinitionDynamicArray(string typeName, out TypeId type)
@@ -11291,6 +11692,75 @@ internal sealed partial class SemanticCompiler
             type = (TypeId)nextTypeId++;
             predeclaredDynamicArrays.Add(type, elementType);
             predeclaredDynamicArraysByElement.Add(elementType, type);
+            names.TryAdd(typeName, type);
+            return true;
+        }
+
+        bool TryResolveDefinitionBoundedArray(string typeName, int line, int column, out TypeId type)
+        {
+            type = default;
+            var separator = typeName.LastIndexOf("; <=", StringComparison.Ordinal);
+            if (!typeName.StartsWith('[', StringComparison.Ordinal)
+                || !typeName.EndsWith(']')
+                || separator <= 1)
+            {
+                return false;
+            }
+            var elementName = typeName[1..separator].Trim();
+            var capacityText = typeName[(separator + 4)..^1].Trim();
+            if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
+            {
+                throw Error(line, column, "bounded array capacity must be a positive integer literal");
+            }
+            if (!names.TryGetValue(elementName, out var elementType) || elementType == BoundType.Unit)
+            {
+                return false;
+            }
+            if (predeclaredBoundedArraysByShape.TryGetValue((elementType, capacity), out type))
+            {
+                return true;
+            }
+            type = (TypeId)nextTypeId++;
+            predeclaredBoundedArrays.Add(type, (elementType, capacity));
+            predeclaredBoundedArraysByShape.Add((elementType, capacity), type);
+            names.TryAdd(typeName, type);
+            return true;
+        }
+
+        bool TryResolveDefinitionBoundedDictionary(
+            string typeName, int line, int column, out TypeId type)
+        {
+            type = default;
+            if (typeName.Length < 5 || typeName[0] != '{' || typeName[^1] != '}')
+            {
+                return false;
+            }
+            var keySeparator = typeName.IndexOf(':', StringComparison.Ordinal);
+            var capacitySeparator = typeName.LastIndexOf("; <=", StringComparison.Ordinal);
+            if (keySeparator <= 1 || capacitySeparator <= keySeparator)
+            {
+                return false;
+            }
+            var keyName = typeName[1..keySeparator].Trim();
+            var valueName = typeName[(keySeparator + 1)..capacitySeparator].Trim();
+            var capacityText = typeName[(capacitySeparator + 4)..^1].Trim();
+            if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
+            {
+                throw Error(line, column, "bounded dictionary capacity must be a positive integer literal");
+            }
+            if (!names.TryGetValue(keyName, out var keyType)
+                || !names.TryGetValue(valueName, out var valueType))
+            {
+                return false;
+            }
+            var shape = (keyType, valueType, capacity);
+            if (predeclaredBoundedDictionariesByShape.TryGetValue(shape, out type))
+            {
+                return true;
+            }
+            type = (TypeId)nextTypeId++;
+            predeclaredBoundedDictionaries.Add(type, shape);
+            predeclaredBoundedDictionariesByShape.Add(shape, type);
             names.TryAdd(typeName, type);
             return true;
         }
@@ -11366,7 +11836,9 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
         IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes,
         IReadOnlyDictionary<TypeId, BoundReferenceDefinition> references,
-        IReadOnlyDictionary<TypeId, TypeId> dynamicArrays)
+        IReadOnlyDictionary<TypeId, TypeId> dynamicArrays,
+        IReadOnlyDictionary<TypeId, (TypeId ElementType, int Capacity)> boundedArrays,
+        IReadOnlyDictionary<TypeId, (TypeId KeyType, TypeId ValueType, int MaxEntries)> boundedDictionaries)
     {
         if (boxes.ContainsKey(type) || references.ContainsKey(type))
         {
@@ -11387,7 +11859,8 @@ internal sealed partial class SemanticCompiler
             var maxAlignment = 1;
             foreach (var field in structure.Fields)
             {
-                var size = InlineSize(field.Type, structs, enums, boxes, references, dynamicArrays);
+                var size = InlineSize(field.Type, structs, enums, boxes, references,
+                    dynamicArrays, boundedArrays, boundedDictionaries);
                 var alignment = Math.Min(Math.Max(size, 1), 8);
                 offset = AlignUp(offset, alignment);
                 offset += size;
@@ -11401,7 +11874,8 @@ internal sealed partial class SemanticCompiler
         {
             var payloadBytes = enumeration.Variants
                 .Where(static variant => variant.PayloadType is not null)
-                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, references, dynamicArrays))
+                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, references,
+                    dynamicArrays, boundedArrays, boundedDictionaries))
                 .DefaultIfEmpty(0)
                 .Max();
             return 8 + AlignUp(payloadBytes, 8);
@@ -11410,6 +11884,34 @@ internal sealed partial class SemanticCompiler
         if (dynamicArrays.ContainsKey(type))
         {
             return 3 * (_pointerBitWidth / 8);
+        }
+
+        if (boundedArrays.TryGetValue(type, out var boundedArray))
+        {
+            var elementSize = InlineSize(boundedArray.ElementType, structs, enums, boxes, references,
+                dynamicArrays, boundedArrays, boundedDictionaries);
+            var alignment = Math.Max(8, Math.Min(Math.Max(elementSize, 1), 8));
+            return AlignUp(checked(8 + checked(elementSize * boundedArray.Capacity)), alignment);
+        }
+
+        if (boundedDictionaries.TryGetValue(type, out var boundedDictionary))
+        {
+            var keySize = InlineSize(boundedDictionary.KeyType, structs, enums, boxes, references,
+                dynamicArrays, boundedArrays, boundedDictionaries);
+            var valueSize = InlineSize(boundedDictionary.ValueType, structs, enums, boxes, references,
+                dynamicArrays, boundedArrays, boundedDictionaries);
+            var keyAlignment = Math.Min(Math.Max(keySize, 1), 8);
+            var valueAlignment = Math.Min(Math.Max(valueSize, 1), 8);
+            var valueOffset = AlignUp(keySize, valueAlignment);
+            var stride = AlignUp(checked(valueOffset + valueSize), Math.Max(keyAlignment, valueAlignment));
+            var minimumBuckets = checked((boundedDictionary.MaxEntries * 8 + 6) / 7);
+            var buckets = 16;
+            while (buckets < minimumBuckets)
+            {
+                buckets = checked(buckets * 2);
+            }
+            var entriesOffset = AlignUp(buckets, Math.Max(keyAlignment, valueAlignment));
+            return AlignUp(checked(8 + entriesOffset + checked(buckets * stride)), 8);
         }
 
         return type switch
@@ -11438,6 +11940,44 @@ internal sealed partial class SemanticCompiler
 
     private BoundType ParseType(string typeName, int line, int column)
     {
+        if (typeName.StartsWith("BitSet<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var countText = typeName[7..^1].Trim();
+            if (!int.TryParse(countText, out var bitCount) || bitCount <= 0)
+            {
+                throw Error(line, column, "BitSet size must be a positive integer literal");
+            }
+            return _types.GetOrAddBitSet(bitCount);
+        }
+        if (typeName.StartsWith("BinaryHeap<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var elementType = ParseType(typeName[11..^1].Trim(), line, column);
+            if (!IsNumericType(elementType) && elementType != BoundType.CodePoint)
+            {
+                throw Error(line, column,
+                    $"BinaryHeap ordering currently requires a numeric or CodePoint element, got {FormatType(elementType)}");
+            }
+            return _types.GetOrAddBinaryHeap(elementType);
+        }
+        if (typeName.StartsWith("Deque<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var elementType = ParseType(typeName[6..^1].Trim(), line, column);
+            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            {
+                throw Error(line, column, "Deque elements must be inline scalar or user values");
+            }
+            return _types.GetOrAddDeque(elementType);
+        }
+        if (typeName.StartsWith("Set<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var elementType = ParseType(typeName[4..^1].Trim(), line, column);
+            if (!IsSupportedDictionaryKeyType(elementType))
+            {
+                throw Error(line, column,
+                    $"set element type {FormatType(elementType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+            }
+            return _types.GetOrAddSet(elementType);
+        }
         if (_activeGenericTypeArguments.TryGetValue(typeName, out var specializedType))
         {
             return specializedType;
@@ -11538,19 +12078,48 @@ internal sealed partial class SemanticCompiler
                 ? BoundType.DynamicIntArray
                 : _types.GetOrAddDynamicArray(elementType);
         }
+        if (typeName.StartsWith('[', StringComparison.Ordinal)
+            && typeName.EndsWith(']')
+            && typeName.LastIndexOf("; <=", StringComparison.Ordinal) is var boundedSeparator
+            && boundedSeparator > 1)
+        {
+            var elementName = typeName[1..boundedSeparator].Trim();
+            var capacityText = typeName[(boundedSeparator + 4)..^1].Trim();
+            if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
+            {
+                throw Error(line, column, "bounded array capacity must be a positive integer literal");
+            }
+            var elementType = ParseType(elementName, line, column);
+            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            {
+                throw Error(line, column, "bounded array elements must be inline scalar or user values");
+            }
+            return _types.GetOrAddBoundedArray(elementType, capacity);
+        }
         if (typeName.Length >= 5 && typeName[0] == '{' && typeName[^1] == '}')
         {
             var separator = typeName.IndexOf(':', StringComparison.Ordinal);
             if (separator > 1)
             {
                 var keyName = typeName[1..separator].Trim();
-                var valueName = typeName[(separator + 1)..^1].Trim();
+                var dictionaryBoundedSeparator = typeName.LastIndexOf("; <=", StringComparison.Ordinal);
+                var valueEnd = dictionaryBoundedSeparator > separator ? dictionaryBoundedSeparator : typeName.Length - 1;
+                var valueName = typeName[(separator + 1)..valueEnd].Trim();
                 var keyType = ParseType(keyName, line, column);
                 var valueType = ParseType(valueName, line, column);
                 if (!IsSupportedDictionaryKeyType(keyType))
                 {
                     throw Error(line, column,
                         $"dictionary key type {FormatType(keyType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+                }
+                if (dictionaryBoundedSeparator > separator)
+                {
+                    var capacityText = typeName[(dictionaryBoundedSeparator + 4)..^1].Trim();
+                    if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
+                    {
+                        throw Error(line, column, "bounded dictionary capacity must be a positive integer literal");
+                    }
+                    return _types.GetOrAddBoundedDictionary(keyType, valueType, capacity);
                 }
                 return keyType == BoundType.Int && valueType == BoundType.Int
                     ? BoundType.IntDictionary
@@ -11953,6 +12522,22 @@ internal sealed partial class SemanticCompiler
 
     private string FormatType(BoundType type)
     {
+        if (_types.IsBitSet(type))
+        {
+            return $"BitSet<{_types.GetBitSet(type).BitCount}>";
+        }
+        if (_types.IsBinaryHeap(type))
+        {
+            return $"BinaryHeap<{FormatType(_types.GetBinaryHeapElement(type))}>";
+        }
+        if (_types.IsDeque(type))
+        {
+            return $"Deque<{FormatType(_types.GetDequeElement(type))}>";
+        }
+        if (_types.IsSet(type))
+        {
+            return $"Set<{FormatType(_types.GetSetElement(type))}>";
+        }
         if (_types.IsDynTrait(type))
         {
             return "dyn " + _types.GetDynTrait(type).TraitName;
@@ -11990,8 +12575,18 @@ internal sealed partial class SemanticCompiler
         {
             return $"[{FormatType(_types.GetDynamicArray(type).ElementType)}; ~]";
         }
+        if (_types.IsBoundedArray(type))
+        {
+            var bounded = _types.GetBoundedArray(type);
+            return $"[{FormatType(bounded.ElementType)}; <={bounded.Capacity}]";
+        }
         if (_types.IsDictionary(type))
         {
+            if (_types.IsBoundedDictionary(type))
+            {
+                var bounded = _types.GetBoundedDictionary(type);
+                return $"{{{FormatType(bounded.KeyType)}: {FormatType(bounded.ValueType)}; <={bounded.MaxEntries}}}";
+            }
             var dictionary = _types.GetDictionary(type);
             return $"{{{FormatType(dictionary.KeyType)}: {FormatType(dictionary.ValueType)}}}";
         }
@@ -12054,6 +12649,7 @@ internal sealed partial class SemanticCompiler
         return type is BoundType.StaticIntArray or BoundType.StaticTextArray or BoundType.DynamicIntArray or BoundType.IntDictionary
             || _types.IsStaticArray(type)
             || _types.IsDynamicArray(type)
+            || _types.IsBoundedArray(type)
             || _types.IsDictionary(type)
             || _types.ContainsOwnedStorage(type);
     }
@@ -12068,6 +12664,7 @@ internal sealed partial class SemanticCompiler
             or BoundType.IntDictionary
             || _types.IsStaticArray(type)
             || _types.IsDynamicArray(type)
+            || _types.IsBoundedArray(type)
             || _types.IsDictionary(type);
     }
 
@@ -12712,9 +13309,11 @@ internal sealed partial class SemanticCompiler
         }
 
         var consumed = new List<string>();
-        if (_types.IsDynamicArray(containerType))
+        if (_types.IsDynamicArray(containerType) || _types.IsBoundedArray(containerType))
         {
-            var elementType = _types.GetDynamicArray(containerType).ElementType;
+            var elementType = _types.IsBoundedArray(containerType)
+                ? _types.GetBoundedArray(containerType).ElementType
+                : _types.GetDynamicArray(containerType).ElementType;
             foreach (var target in flow.Targets)
             {
                 if (target.Path.Count == 1
@@ -12731,7 +13330,7 @@ internal sealed partial class SemanticCompiler
             foreach (var target in flow.Targets)
             {
                 if (target.Path.Count == 1
-                    && target.Path[0] == "put"
+                    && target.Path[0] is "put" or "putIfAbsent"
                     && target.Arguments.Count == 2)
                 {
                     CollectOwnedLiteralSourceNames(target.Arguments[0], definition.KeyType, bindings, consumed);
@@ -12770,10 +13369,12 @@ internal sealed partial class SemanticCompiler
             }
             return;
         }
-        if (_types.IsDynamicArray(expectedType)
+        if ((_types.IsDynamicArray(expectedType) || _types.IsBoundedArray(expectedType))
             && expression is ArrayLiteralExpression array)
         {
-            var elementType = _types.GetDynamicArray(expectedType).ElementType;
+            var elementType = _types.IsBoundedArray(expectedType)
+                ? _types.GetBoundedArray(expectedType).ElementType
+                : _types.GetDynamicArray(expectedType).ElementType;
             foreach (var element in array.Elements)
             {
                 CollectOwnedLiteralSourceNames(element, elementType, bindings, consumed);
@@ -13574,6 +14175,7 @@ internal sealed partial class SemanticCompiler
             && function.InputType is { } inputType
             && (inputType is BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena
                 || _types.IsDynamicArray(inputType)
+                || _types.IsBoundedArray(inputType)
                 || _types.IsDictionary(inputType)
                 || _types.IsStruct(inputType));
     }
@@ -13583,7 +14185,8 @@ internal sealed partial class SemanticCompiler
         return (function.InputType == BoundType.IntDictionaryView
                 && actualType == BoundType.IntDictionary)
             || (function.InputType == actualType && _types.IsDictionary(actualType))
-            || (function.InputType == actualType && _types.IsDynamicArray(actualType))
+            || (function.InputType == actualType
+                && (_types.IsDynamicArray(actualType) || _types.IsBoundedArray(actualType)))
             || (function.InputType == BoundType.IntSlice
                 && actualType == BoundType.DynamicIntArray);
     }

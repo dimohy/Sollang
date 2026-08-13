@@ -89,6 +89,13 @@ internal sealed partial class LlvmEmitter
                     EmitArenaFunction(function);
                     break;
                 default:
+                    if (_program.Types.IsBoundedArray(function.ReturnType)
+                        || _program.Types.IsBoundedDictionary(function.ReturnType)
+                        || _program.Types.IsBitSet(function.ReturnType))
+                    {
+                        EmitStructFunction(function);
+                        break;
+                    }
                     if (_program.Types.IsDynamicArray(function.ReturnType))
                     {
                         EmitDynamicInlineArrayFunction(function);
@@ -631,7 +638,8 @@ internal sealed partial class LlvmEmitter
             return function.InputType switch
             {
                 BoundType.DynamicIntArray => "%sollang.mutable_container %it",
-                _ when function.InputType is { } type && _program.Types.IsDynamicArray(type) => "%sollang.mutable_container %it",
+                _ when function.InputType is { } type
+                    && (_program.Types.IsDynamicArray(type) || _program.Types.IsBoundedArray(type)) => "%sollang.mutable_container %it",
                 BoundType.IntDictionary => "%sollang.mutable_container %it",
                 BoundType.Arena => "%sollang.mutable_container %it",
                 _ when function.InputType is { } type && _program.Types.IsDictionary(type) => "%sollang.mutable_container %it",
@@ -654,7 +662,8 @@ internal sealed partial class LlvmEmitter
             return $"{LlvmType(inputType)} %it";
         }
 
-        if (function.InputType is { } dynamicArrayType && _program.Types.IsDynamicArray(dynamicArrayType))
+        if (function.InputType is { } dynamicArrayType
+            && (_program.Types.IsDynamicArray(dynamicArrayType) || _program.Types.IsBoundedArray(dynamicArrayType)))
         {
             return "%sollang.dynamic_int_array %it";
         }
@@ -820,9 +829,12 @@ internal sealed partial class LlvmEmitter
                 dictionaryType, definition.KeyType, definition.ValueType, pointer, length, capacity));
             return;
         }
-        if (function.InputType is { } dynamicArrayType && _program.Types.IsDynamicArray(dynamicArrayType))
+        if (function.InputType is { } dynamicArrayType
+            && (_program.Types.IsDynamicArray(dynamicArrayType) || _program.Types.IsBoundedArray(dynamicArrayType)))
         {
-            var definition = _program.Types.GetDynamicArray(dynamicArrayType);
+            var elementType = _program.Types.IsBoundedArray(dynamicArrayType)
+                ? _program.Types.GetBoundedArray(dynamicArrayType).ElementType
+                : _program.Types.GetDynamicArray(dynamicArrayType).ElementType;
             var pointer = NextTemp("param_generic_array_ptr");
             EmitAssign(pointer, "extractvalue %sollang.dynamic_int_array %it, 0");
             var length = NextTemp("param_generic_array_len");
@@ -830,7 +842,10 @@ internal sealed partial class LlvmEmitter
             var capacity = NextTemp("param_generic_array_capacity");
             EmitAssign(capacity, "extractvalue %sollang.dynamic_int_array %it, 2");
             _locals.Add(function.InputName ?? "it", new RuntimeDynamicInlineArray(
-                dynamicArrayType, definition.ElementType, pointer, length, capacity));
+                dynamicArrayType, elementType, pointer, length, capacity,
+                _program.Types.IsBoundedArray(dynamicArrayType)
+                    ? RuntimeContainerStorage.Stack
+                    : RuntimeContainerStorage.Heap));
             return;
         }
 
@@ -986,6 +1001,7 @@ internal sealed partial class LlvmEmitter
 
         if (type is not (BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena)
             && !_program.Types.IsDynamicArray(type)
+            && !_program.Types.IsBoundedArray(type)
             && !_program.Types.IsDictionary(type))
         {
             throw new SollangException("unsupported mutable borrow input type");
@@ -999,11 +1015,16 @@ internal sealed partial class LlvmEmitter
         EmitAssign(capacityAddress, $"extractvalue %sollang.mutable_container {argumentName}, 2");
 
         RuntimeValue mutableValue;
-        if (_program.Types.IsDynamicArray(type))
+        if (_program.Types.IsDynamicArray(type) || _program.Types.IsBoundedArray(type))
         {
-            var definition = _program.Types.GetDynamicArray(type);
+            var elementType = _program.Types.IsBoundedArray(type)
+                ? _program.Types.GetBoundedArray(type).ElementType
+                : _program.Types.GetDynamicArray(type).ElementType;
             mutableValue = new RuntimeDynamicInlineArray(
-                type, definition.ElementType, "", "", "");
+                type, elementType, "", "", "",
+                _program.Types.IsBoundedArray(type)
+                    ? RuntimeContainerStorage.Stack
+                    : RuntimeContainerStorage.Heap);
         }
         else if (_program.Types.IsDictionary(type))
         {

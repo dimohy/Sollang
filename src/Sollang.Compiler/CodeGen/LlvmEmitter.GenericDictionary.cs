@@ -36,6 +36,40 @@ internal sealed partial class LlvmEmitter
         return dictionary;
     }
 
+    private RuntimeInlineDictionary EmitBoundedInlineDictionaryLiteral(
+        BoundType dictionaryType,
+        IReadOnlyList<(RuntimeValue Key, RuntimeValue Value)> entries)
+    {
+        var dictionary = EmitEmptyBoundedInlineDictionary(dictionaryType) with
+        {
+            LengthName = entries.Count.ToString(CultureInfo.InvariantCulture)
+        };
+        foreach (var entry in entries)
+        {
+            EmitInlineDictionaryInsertUnique(dictionary, entry.Key, entry.Value);
+        }
+        return dictionary;
+    }
+
+    private RuntimeInlineDictionary EmitEmptyBoundedInlineDictionary(BoundType dictionaryType)
+    {
+        var bounded = _program.Types.GetBoundedDictionary(dictionaryType);
+        var pointer = NextTemp("bounded_dict_storage");
+        EmitAlloca(pointer, $"[{bounded.StorageSize.ToString(CultureInfo.InvariantCulture)} x i8]", bounded.Alignment);
+        EmitZeroByteBuffer(
+            pointer,
+            (bounded.BucketCapacity + 16).ToString(CultureInfo.InvariantCulture),
+            "bounded_dict_control_init");
+        return new RuntimeInlineDictionary(
+            dictionaryType,
+            bounded.KeyType,
+            bounded.ValueType,
+            pointer,
+            "0",
+            bounded.BucketCapacity.ToString(CultureInfo.InvariantCulture),
+            RuntimeContainerStorage.Stack);
+    }
+
     private RuntimeInlineDictionary EmitTypedEmptyInlineDictionary(
         TypedEmptyDictionaryExpression expression,
         BoundType dictionaryType)
@@ -61,7 +95,9 @@ internal sealed partial class LlvmEmitter
         var totalBytes = NextTemp("generic_dict_bytes");
         EmitBinary(totalBytes, "add", "i64", entriesOffset, entriesBytes);
         var pointer = EmitHeapAllocate(totalBytes);
-        EmitZeroByteBuffer(pointer, capacity, "generic_dict_control_init");
+        var controlBytes = NextTemp("generic_dict_control_bytes");
+        EmitBinary(controlBytes, "add", "i64", capacity, "16");
+        EmitZeroByteBuffer(pointer, controlBytes, "generic_dict_control_init");
         return pointer;
     }
 
@@ -122,6 +158,20 @@ internal sealed partial class LlvmEmitter
         var pointer = NextTemp("generic_dict_control_slot");
         EmitAssign(pointer, $"getelementptr i8, ptr {dictionary.PointerName}, i64 {slot}");
         EmitStore("i8", control, pointer, 1);
+        var mirrored = NextTemp("generic_dict_control_mirrored");
+        EmitCompare(mirrored, "ult", "i64", slot, "16");
+        var mirror = NextLabel("generic_dict_control_mirror");
+        var done = NextLabel("generic_dict_control_done");
+        EmitConditionalBranch(mirrored, mirror, done); EmitFunctionLine();
+        EmitLabel(mirror);
+        var mirrorIndex = NextTemp("generic_dict_control_mirror_index");
+        EmitBinary(mirrorIndex, "add", "i64", dictionary.CapacityName, slot);
+        var mirrorPointer = NextTemp("generic_dict_control_mirror_slot");
+        EmitAssign(mirrorPointer, $"getelementptr i8, ptr {dictionary.PointerName}, i64 {mirrorIndex}");
+        EmitStore("i8", control, mirrorPointer, 1);
+        EmitBranch(done); EmitFunctionLine();
+        EmitLabel(done);
+        _currentBlockLabel = done;
     }
 
     private string EmitInlineDictionaryHash(RuntimeValue key)
@@ -326,49 +376,76 @@ internal sealed partial class LlvmEmitter
 
     private void EmitInlineDictionaryInsertUnique(RuntimeInlineDictionary dictionary, RuntimeValue key, RuntimeValue value)
     {
+        var found = EmitInlineDictionaryFindSlot(dictionary, key);
+        StoreInlineDictionaryEntry(dictionary, found.SlotName, key, value);
+        StoreInlineDictionaryControl(dictionary, found.SlotName, found.H2ByteName);
+    }
+
+    // Read/remove probes do not need to remember a tombstone or produce an
+    // insertion slot. Keeping that work out of the lookup hot path avoids a
+    // deleted-control vector comparison, cttz, mask, and loop-carried phi for
+    // every contains/remove operation while retaining identical probe order.
+    private DictionaryFindResult EmitInlineDictionaryFindExistingSlot(
+        RuntimeInlineDictionary dictionary,
+        RuntimeValue key)
+    {
+        if (key is not RuntimeInt)
+        {
+            return EmitInlineDictionaryFindExistingSlotGrouped(dictionary, key);
+        }
+
+        var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
         var hash = EmitInlineDictionaryHash(key);
         var h2 = EmitDictionaryH2Byte(hash);
         var mask = EmitDictionaryCapacityMask(dictionary.CapacityName);
         var start = EmitDictionaryStartSlot(hash, mask);
-        var entry = _currentBlockLabel;
-        var loop = NextLabel("generic_dict_insert");
-        var body = NextLabel("generic_dict_insert_body");
-        var place = NextLabel("generic_dict_insert_place");
-        var next = NextLabel("generic_dict_insert_next");
-        var full = NextLabel("generic_dict_insert_full");
-        var done = NextLabel("generic_dict_insert_done");
-        var nextProbe = NextTemp("generic_dict_insert_next_probe");
-        EmitBranch(loop); EmitFunctionLine();
-        EmitLabel(loop);
-        var probe = NextTemp("generic_dict_insert_probe");
-        EmitPhi(probe, "i64", ("0", entry), (nextProbe, next));
-        var active = NextTemp("generic_dict_insert_active");
-        EmitCompare(active, "ult", "i64", probe, dictionary.CapacityName);
-        EmitConditionalBranch(active, body, full); EmitFunctionLine();
-        EmitLabel(body);
-        var unwrapped = NextTemp("generic_dict_insert_unwrapped");
-        EmitBinary(unwrapped, "add", "i64", start, probe);
-        var slot = NextTemp("generic_dict_insert_slot");
-        EmitBinary(slot, "and", "i64", unwrapped, mask);
-        var control = LoadInlineDictionaryControl(dictionary, slot);
-        var empty = NextTemp("generic_dict_insert_empty");
+        var occupied = NextLabel("generic_dict_lookup_first_occupied");
+        var compare = NextLabel("generic_dict_lookup_first_compare");
+        var match = NextLabel("generic_dict_lookup_first_match");
+        var fallback = NextLabel("generic_dict_lookup_first_fallback");
+        var miss = NextLabel("generic_dict_lookup_first_miss");
+        var done = NextLabel("generic_dict_lookup_first_done");
+        var control = LoadInlineDictionaryControl(dictionary, start);
+        var empty = NextTemp("generic_dict_lookup_first_empty");
         EmitCompare(empty, "eq", "i8", control, "0");
-        EmitConditionalBranch(empty, place, next); EmitFunctionLine();
-        EmitLabel(place);
-        _currentBlockLabel = place;
-        StoreInlineDictionaryEntry(dictionary, slot, key, value);
-        StoreInlineDictionaryControl(dictionary, slot, h2);
-        EmitBranch(done); EmitFunctionLine();
-        EmitLabel(next);
-        EmitBinary(nextProbe, "add", "i64", probe, "1");
-        EmitBranch(loop); EmitFunctionLine();
-        EmitLabel(full);
-        EmitTrap(); EmitFunctionLine();
+        EmitConditionalBranch(empty, miss, occupied); EmitFunctionLine();
+
+        EmitLabel(occupied); _currentBlockLabel = occupied;
+        var h2Match = NextTemp("generic_dict_lookup_first_h2");
+        EmitCompare(h2Match, "eq", "i8", control, h2);
+        EmitConditionalBranch(h2Match, compare, fallback); EmitFunctionLine();
+
+        EmitLabel(compare); _currentBlockLabel = compare;
+        var storedKey = LoadInlineDictionaryField(
+            dictionary, start, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_lookup_first_key");
+        var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
+        EmitConditionalBranch(equal, match, fallback); EmitFunctionLine();
+
+        EmitLabel(match); _currentBlockLabel = match;
+        EmitBranch(done);
+        var matchEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(miss); _currentBlockLabel = miss;
+        EmitBranch(done);
+        var missEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(fallback); _currentBlockLabel = fallback;
+        var grouped = EmitInlineDictionaryFindExistingSlotGrouped(dictionary, key);
+        EmitBranch(done);
+        var fallbackEnd = _currentBlockLabel; EmitFunctionLine();
+
         EmitLabel(done);
+        var found = NextTemp("generic_dict_lookup_first_found");
+        EmitPhi(found, "i1", ("true", matchEnd), ("false", missEnd), (grouped.FoundName, fallbackEnd));
+        var foundSlot = NextTemp("generic_dict_lookup_first_slot_result");
+        EmitPhi(foundSlot, "i64", (start, matchEnd), ("0", missEnd), (grouped.SlotName, fallbackEnd));
         _currentBlockLabel = done;
+        return new DictionaryFindResult(found, foundSlot, h2);
     }
 
-    private DictionaryFindResult EmitInlineDictionaryFindSlot(RuntimeInlineDictionary dictionary, RuntimeValue key)
+    private DictionaryFindResult EmitInlineDictionaryFindExistingSlotGrouped(
+        RuntimeInlineDictionary dictionary,
+        RuntimeValue key)
     {
         var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
         var hash = EmitInlineDictionaryHash(key);
@@ -376,52 +453,304 @@ internal sealed partial class LlvmEmitter
         var mask = EmitDictionaryCapacityMask(dictionary.CapacityName);
         var start = EmitDictionaryStartSlot(hash, mask);
         var entry = _currentBlockLabel;
-        var loop = NextLabel("generic_dict_find");
-        var body = NextLabel("generic_dict_find_body");
-        var empty = NextLabel("generic_dict_find_empty");
-        var full = NextLabel("generic_dict_find_full");
-        var compare = NextLabel("generic_dict_find_compare");
-        var match = NextLabel("generic_dict_find_match");
-        var next = NextLabel("generic_dict_find_next");
-        var miss = NextLabel("generic_dict_find_miss");
-        var done = NextLabel("generic_dict_find_done");
-        var nextProbe = NextTemp("generic_dict_find_next_probe");
-        EmitBranch(loop); EmitFunctionLine();
-        EmitLabel(loop);
-        var probe = NextTemp("generic_dict_find_probe");
-        EmitPhi(probe, "i64", ("0", entry), (nextProbe, next));
-        var active = NextTemp("generic_dict_find_active");
+        var groupLoop = NextLabel("generic_dict_lookup_group");
+        var groupBody = NextLabel("generic_dict_lookup_group_body");
+        var candidateLoop = NextLabel("generic_dict_lookup_candidate_loop");
+        var candidateBody = NextLabel("generic_dict_lookup_candidate_body");
+        var candidateNext = NextLabel("generic_dict_lookup_candidate_next");
+        var groupDecision = NextLabel("generic_dict_lookup_group_decision");
+        var match = NextLabel("generic_dict_lookup_group_match");
+        var nextGroup = NextLabel("generic_dict_lookup_group_next");
+        var miss = NextLabel("generic_dict_lookup_group_miss");
+        var done = NextLabel("generic_dict_lookup_group_done");
+        var nextProbe = NextTemp("generic_dict_lookup_group_next_probe");
+        EmitBranch(groupLoop); EmitFunctionLine();
+
+        EmitLabel(groupLoop); _currentBlockLabel = groupLoop;
+        var probe = NextTemp("generic_dict_lookup_group_probe");
+        EmitPhi(probe, "i64", ("0", entry), (nextProbe, nextGroup));
+        var active = NextTemp("generic_dict_lookup_group_active");
         EmitCompare(active, "ult", "i64", probe, dictionary.CapacityName);
-        EmitConditionalBranch(active, body, miss); EmitFunctionLine();
-        EmitLabel(body);
-        var unwrapped = NextTemp("generic_dict_find_unwrapped");
+        EmitConditionalBranch(active, groupBody, miss); EmitFunctionLine();
+
+        EmitLabel(groupBody); _currentBlockLabel = groupBody;
+        var unwrapped = NextTemp("generic_dict_lookup_group_unwrapped");
         EmitBinary(unwrapped, "add", "i64", start, probe);
-        var slot = NextTemp("generic_dict_find_slot");
-        EmitBinary(slot, "and", "i64", unwrapped, mask);
-        var control = LoadInlineDictionaryControl(dictionary, slot);
-        var isEmpty = NextTemp("generic_dict_find_empty_control");
-        EmitCompare(isEmpty, "eq", "i8", control, "0");
-        EmitConditionalBranch(isEmpty, empty, full); EmitFunctionLine();
-        EmitLabel(empty); EmitBranch(done); EmitFunctionLine();
-        EmitLabel(full);
-        var h2Match = NextTemp("generic_dict_find_h2");
-        EmitCompare(h2Match, "eq", "i8", control, h2);
-        EmitConditionalBranch(h2Match, compare, next); EmitFunctionLine();
-        EmitLabel(compare);
-        _currentBlockLabel = compare;
-        var storedKey = LoadInlineDictionaryField(dictionary, slot, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_key");
+        var groupStart = NextTemp("generic_dict_lookup_group_start");
+        EmitBinary(groupStart, "and", "i64", unwrapped, mask);
+        var groupPointer = NextTemp("generic_dict_lookup_group_pointer");
+        EmitAssign(groupPointer, $"getelementptr i8, ptr {dictionary.PointerName}, i64 {groupStart}");
+        var controls = NextTemp("generic_dict_lookup_group_controls");
+        EmitLoad(controls, "<16 x i8>", groupPointer, 1);
+        var h2Seed = NextTemp("generic_dict_lookup_group_h2_seed");
+        EmitAssign(h2Seed, $"insertelement <16 x i8> poison, i8 {h2}, i64 0");
+        var h2Vector = NextTemp("generic_dict_lookup_group_h2_vector");
+        EmitAssign(h2Vector, $"shufflevector <16 x i8> {h2Seed}, <16 x i8> poison, <16 x i32> zeroinitializer");
+        var matchesVector = NextTemp("generic_dict_lookup_group_matches_vector");
+        EmitAssign(matchesVector, $"icmp eq <16 x i8> {controls}, {h2Vector}");
+        var matchBits = NextTemp("generic_dict_lookup_group_match_bits");
+        EmitAssign(matchBits, $"bitcast <16 x i1> {matchesVector} to i16");
+        var emptyVector = NextTemp("generic_dict_lookup_group_empty_vector");
+        EmitAssign(emptyVector, $"icmp eq <16 x i8> {controls}, zeroinitializer");
+        var emptyBits = NextTemp("generic_dict_lookup_group_empty_bits");
+        EmitAssign(emptyBits, $"bitcast <16 x i1> {emptyVector} to i16");
+        EmitBranch(candidateLoop); EmitFunctionLine();
+
+        EmitLabel(candidateLoop); _currentBlockLabel = candidateLoop;
+        var candidateBits = NextTemp("generic_dict_lookup_candidate_bits");
+        var clearedBits = NextTemp("generic_dict_lookup_candidate_cleared_bits");
+        EmitPhi(candidateBits, "i16", (matchBits, groupBody), (clearedBits, candidateNext));
+        var hasCandidate = NextTemp("generic_dict_lookup_has_candidate");
+        EmitCompare(hasCandidate, "ne", "i16", candidateBits, "0");
+        EmitConditionalBranch(hasCandidate, candidateBody, groupDecision); EmitFunctionLine();
+
+        EmitLabel(candidateBody); _currentBlockLabel = candidateBody;
+        var candidateOffset16 = NextTemp("generic_dict_lookup_candidate_offset16");
+        EmitCall(candidateOffset16, "i16", "llvm.cttz.i16", $"i16 {candidateBits}, i1 false");
+        var candidateOffset = NextTemp("generic_dict_lookup_candidate_offset");
+        EmitAssign(candidateOffset, $"zext i16 {candidateOffset16} to i64");
+        var candidateUnwrapped = NextTemp("generic_dict_lookup_candidate_unwrapped");
+        EmitBinary(candidateUnwrapped, "add", "i64", groupStart, candidateOffset);
+        var candidateSlot = NextTemp("generic_dict_lookup_candidate_slot");
+        EmitBinary(candidateSlot, "and", "i64", candidateUnwrapped, mask);
+        var storedKey = LoadInlineDictionaryField(
+            dictionary, candidateSlot, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_lookup_key");
         var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
-        EmitConditionalBranch(equal, match, next); EmitFunctionLine();
-        EmitLabel(match); EmitBranch(done); EmitFunctionLine();
-        EmitLabel(next);
-        EmitBinary(nextProbe, "add", "i64", probe, "1");
-        EmitBranch(loop); EmitFunctionLine();
-        EmitLabel(miss); EmitBranch(done); EmitFunctionLine();
+        EmitConditionalBranch(equal, match, candidateNext); EmitFunctionLine();
+
+        EmitLabel(candidateNext); _currentBlockLabel = candidateNext;
+        var bitsMinusOne = NextTemp("generic_dict_lookup_candidate_bits_minus_one");
+        EmitBinary(bitsMinusOne, "sub", "i16", candidateBits, "1");
+        EmitBinary(clearedBits, "and", "i16", candidateBits, bitsMinusOne);
+        EmitBranch(candidateLoop); EmitFunctionLine();
+
+        EmitLabel(groupDecision); _currentBlockLabel = groupDecision;
+        var hasEmpty = NextTemp("generic_dict_lookup_group_has_empty");
+        EmitCompare(hasEmpty, "ne", "i16", emptyBits, "0");
+        EmitConditionalBranch(hasEmpty, miss, nextGroup); EmitFunctionLine();
+
+        EmitLabel(nextGroup); _currentBlockLabel = nextGroup;
+        EmitBinary(nextProbe, "add", "i64", probe, "16");
+        EmitBranch(groupLoop); EmitFunctionLine();
+
+        EmitLabel(match); _currentBlockLabel = match;
+        EmitBranch(done); EmitFunctionLine();
+
+        EmitLabel(miss); _currentBlockLabel = miss;
+        EmitBranch(done); EmitFunctionLine();
+
+        EmitLabel(done);
+        var found = NextTemp("generic_dict_lookup_found");
+        EmitPhi(found, "i1", ("true", match), ("false", miss));
+        var foundSlot = NextTemp("generic_dict_lookup_slot_result");
+        EmitPhi(foundSlot, "i64", (candidateSlot, match), ("0", miss));
+        _currentBlockLabel = done;
+        return new DictionaryFindResult(found, foundSlot, h2);
+    }
+
+    private DictionaryFindResult EmitInlineDictionaryFindSlot(RuntimeInlineDictionary dictionary, RuntimeValue key)
+    {
+        if (key is not RuntimeInt)
+        {
+            return EmitInlineDictionaryFindSlotGrouped(dictionary, key);
+        }
+
+        var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
+        var hash = EmitInlineDictionaryHash(key);
+        var h2 = EmitDictionaryH2Byte(hash);
+        var mask = EmitDictionaryCapacityMask(dictionary.CapacityName);
+        var start = EmitDictionaryStartSlot(hash, mask);
+        var occupied = NextLabel("generic_dict_insert_first_occupied");
+        var compare = NextLabel("generic_dict_insert_first_compare");
+        var match = NextLabel("generic_dict_insert_first_match");
+        var fallback = NextLabel("generic_dict_insert_first_fallback");
+        var vacant = NextLabel("generic_dict_insert_first_vacant");
+        var done = NextLabel("generic_dict_insert_first_done");
+        var control = LoadInlineDictionaryControl(dictionary, start);
+        var empty = NextTemp("generic_dict_insert_first_empty");
+        EmitCompare(empty, "eq", "i8", control, "0");
+        EmitConditionalBranch(empty, vacant, occupied); EmitFunctionLine();
+
+        EmitLabel(occupied); _currentBlockLabel = occupied;
+        var h2Match = NextTemp("generic_dict_insert_first_h2");
+        EmitCompare(h2Match, "eq", "i8", control, h2);
+        EmitConditionalBranch(h2Match, compare, fallback); EmitFunctionLine();
+
+        EmitLabel(compare); _currentBlockLabel = compare;
+        var storedKey = LoadInlineDictionaryField(
+            dictionary, start, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_insert_first_key");
+        var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
+        EmitConditionalBranch(equal, match, fallback); EmitFunctionLine();
+
+        EmitLabel(match); _currentBlockLabel = match;
+        EmitBranch(done);
+        var matchEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(vacant); _currentBlockLabel = vacant;
+        EmitBranch(done);
+        var vacantEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(fallback); _currentBlockLabel = fallback;
+        var grouped = EmitInlineDictionaryFindSlotGrouped(dictionary, key);
+        EmitBranch(done);
+        var fallbackEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(done);
+        var found = NextTemp("generic_dict_insert_first_found");
+        EmitPhi(found, "i1", ("true", matchEnd), ("false", vacantEnd), (grouped.FoundName, fallbackEnd));
+        var foundSlot = NextTemp("generic_dict_insert_first_slot_result");
+        EmitPhi(foundSlot, "i64", (start, matchEnd), (start, vacantEnd), (grouped.SlotName, fallbackEnd));
+        _currentBlockLabel = done;
+        return new DictionaryFindResult(found, foundSlot, h2);
+    }
+
+    private DictionaryFindResult EmitInlineDictionaryFindSlotGrouped(RuntimeInlineDictionary dictionary, RuntimeValue key)
+    {
+        var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
+        var hash = EmitInlineDictionaryHash(key);
+        var h2 = EmitDictionaryH2Byte(hash);
+        var mask = EmitDictionaryCapacityMask(dictionary.CapacityName);
+        var start = EmitDictionaryStartSlot(hash, mask);
+        var entry = _currentBlockLabel;
+        var groupLoop = NextLabel("generic_dict_group_find");
+        var groupBody = NextLabel("generic_dict_group_body");
+        var candidateLoop = NextLabel("generic_dict_candidate_loop");
+        var candidateBody = NextLabel("generic_dict_candidate_body");
+        var candidateNext = NextLabel("generic_dict_candidate_next");
+        var groupDecision = NextLabel("generic_dict_group_decision");
+        var empty = NextLabel("generic_dict_group_empty");
+        var match = NextLabel("generic_dict_group_match");
+        var nextGroup = NextLabel("generic_dict_group_next");
+        var miss = NextLabel("generic_dict_group_miss");
+        var done = NextLabel("generic_dict_group_done");
+        var nextProbe = NextTemp("generic_dict_group_next_probe");
+        var nextFirstDeleted = NextTemp("generic_dict_group_next_deleted");
+        EmitBranch(groupLoop); EmitFunctionLine();
+
+        EmitLabel(groupLoop); _currentBlockLabel = groupLoop;
+        var probe = NextTemp("generic_dict_group_probe");
+        EmitPhi(probe, "i64", ("0", entry), (nextProbe, nextGroup));
+        var firstDeleted = NextTemp("generic_dict_group_deleted");
+        EmitPhi(firstDeleted, "i64", (dictionary.CapacityName, entry), (nextFirstDeleted, nextGroup));
+        var active = NextTemp("generic_dict_group_active");
+        EmitCompare(active, "ult", "i64", probe, dictionary.CapacityName);
+        EmitConditionalBranch(active, groupBody, miss); EmitFunctionLine();
+
+        EmitLabel(groupBody); _currentBlockLabel = groupBody;
+        var unwrapped = NextTemp("generic_dict_group_unwrapped");
+        EmitBinary(unwrapped, "add", "i64", start, probe);
+        var groupStart = NextTemp("generic_dict_group_start");
+        EmitBinary(groupStart, "and", "i64", unwrapped, mask);
+        var groupPointer = NextTemp("generic_dict_group_pointer");
+        EmitAssign(groupPointer, $"getelementptr i8, ptr {dictionary.PointerName}, i64 {groupStart}");
+        var controls = NextTemp("generic_dict_group_controls");
+        EmitLoad(controls, "<16 x i8>", groupPointer, 1);
+        var h2Seed = NextTemp("generic_dict_group_h2_seed");
+        EmitAssign(h2Seed, $"insertelement <16 x i8> poison, i8 {h2}, i64 0");
+        var h2Vector = NextTemp("generic_dict_group_h2_vector");
+        EmitAssign(h2Vector, $"shufflevector <16 x i8> {h2Seed}, <16 x i8> poison, <16 x i32> zeroinitializer");
+        var matchesVector = NextTemp("generic_dict_group_matches_vector");
+        EmitAssign(matchesVector, $"icmp eq <16 x i8> {controls}, {h2Vector}");
+        var matchBits = NextTemp("generic_dict_group_match_bits");
+        EmitAssign(matchBits, $"bitcast <16 x i1> {matchesVector} to i16");
+        var emptyVector = NextTemp("generic_dict_group_empty_vector");
+        EmitAssign(emptyVector, $"icmp eq <16 x i8> {controls}, zeroinitializer");
+        var emptyBits = NextTemp("generic_dict_group_empty_bits");
+        EmitAssign(emptyBits, $"bitcast <16 x i1> {emptyVector} to i16");
+        var deletedSeed = NextTemp("generic_dict_group_deleted_seed");
+        EmitAssign(deletedSeed, "insertelement <16 x i8> poison, i8 -1, i64 0");
+        var deletedVector = NextTemp("generic_dict_group_deleted_vector");
+        EmitAssign(deletedVector, $"shufflevector <16 x i8> {deletedSeed}, <16 x i8> poison, <16 x i32> zeroinitializer");
+        var deletedMatches = NextTemp("generic_dict_group_deleted_matches");
+        EmitAssign(deletedMatches, $"icmp eq <16 x i8> {controls}, {deletedVector}");
+        var deletedBits = NextTemp("generic_dict_group_deleted_bits");
+        EmitAssign(deletedBits, $"bitcast <16 x i1> {deletedMatches} to i16");
+        var hasDeleted = NextTemp("generic_dict_group_has_deleted");
+        EmitCompare(hasDeleted, "ne", "i16", deletedBits, "0");
+        var noPreviousDeleted = NextTemp("generic_dict_group_no_previous_deleted");
+        EmitCompare(noPreviousDeleted, "eq", "i64", firstDeleted, dictionary.CapacityName);
+        var captureDeleted = NextTemp("generic_dict_group_capture_deleted");
+        EmitBinary(captureDeleted, "and", "i1", hasDeleted, noPreviousDeleted);
+        var deletedOffset16 = NextTemp("generic_dict_group_deleted_offset16");
+        EmitCall(deletedOffset16, "i16", "llvm.cttz.i16", $"i16 {deletedBits}, i1 false");
+        var deletedOffset = NextTemp("generic_dict_group_deleted_offset");
+        EmitAssign(deletedOffset, $"zext i16 {deletedOffset16} to i64");
+        var deletedUnwrapped = NextTemp("generic_dict_group_deleted_unwrapped");
+        EmitBinary(deletedUnwrapped, "add", "i64", groupStart, deletedOffset);
+        var deletedSlot = NextTemp("generic_dict_group_deleted_slot");
+        EmitBinary(deletedSlot, "and", "i64", deletedUnwrapped, mask);
+        var capturedDeleted = NextTemp("generic_dict_group_captured_deleted");
+        EmitSelect(capturedDeleted, captureDeleted, $"i64 {deletedSlot}", $"i64 {firstDeleted}");
+        EmitBranch(candidateLoop); EmitFunctionLine();
+
+        EmitLabel(candidateLoop); _currentBlockLabel = candidateLoop;
+        var candidateBits = NextTemp("generic_dict_candidate_bits");
+        var clearedBits = NextTemp("generic_dict_candidate_cleared_bits");
+        EmitPhi(candidateBits, "i16", (matchBits, groupBody), (clearedBits, candidateNext));
+        var hasCandidate = NextTemp("generic_dict_has_candidate");
+        EmitCompare(hasCandidate, "ne", "i16", candidateBits, "0");
+        EmitConditionalBranch(hasCandidate, candidateBody, groupDecision); EmitFunctionLine();
+
+        EmitLabel(candidateBody); _currentBlockLabel = candidateBody;
+        var candidateOffset16 = NextTemp("generic_dict_candidate_offset16");
+        EmitCall(candidateOffset16, "i16", "llvm.cttz.i16", $"i16 {candidateBits}, i1 false");
+        var candidateOffset = NextTemp("generic_dict_candidate_offset");
+        EmitAssign(candidateOffset, $"zext i16 {candidateOffset16} to i64");
+        var candidateUnwrapped = NextTemp("generic_dict_candidate_unwrapped");
+        EmitBinary(candidateUnwrapped, "add", "i64", groupStart, candidateOffset);
+        var candidateSlot = NextTemp("generic_dict_candidate_slot");
+        EmitBinary(candidateSlot, "and", "i64", candidateUnwrapped, mask);
+        var storedKey = LoadInlineDictionaryField(
+            dictionary, candidateSlot, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_key");
+        var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
+        EmitConditionalBranch(equal, match, candidateNext); EmitFunctionLine();
+
+        EmitLabel(candidateNext); _currentBlockLabel = candidateNext;
+        var bitsMinusOne = NextTemp("generic_dict_candidate_bits_minus_one");
+        EmitBinary(bitsMinusOne, "sub", "i16", candidateBits, "1");
+        EmitBinary(clearedBits, "and", "i16", candidateBits, bitsMinusOne);
+        EmitBranch(candidateLoop); EmitFunctionLine();
+
+        EmitLabel(groupDecision); _currentBlockLabel = groupDecision;
+        var hasEmpty = NextTemp("generic_dict_group_has_empty");
+        EmitCompare(hasEmpty, "ne", "i16", emptyBits, "0");
+        EmitConditionalBranch(hasEmpty, empty, nextGroup); EmitFunctionLine();
+
+        EmitLabel(empty); _currentBlockLabel = empty;
+        var emptyOffset16 = NextTemp("generic_dict_group_empty_offset16");
+        EmitCall(emptyOffset16, "i16", "llvm.cttz.i16", $"i16 {emptyBits}, i1 false");
+        var emptyOffset = NextTemp("generic_dict_group_empty_offset");
+        EmitAssign(emptyOffset, $"zext i16 {emptyOffset16} to i64");
+        var emptyUnwrapped = NextTemp("generic_dict_group_empty_unwrapped");
+        EmitBinary(emptyUnwrapped, "add", "i64", groupStart, emptyOffset);
+        var firstEmptySlot = NextTemp("generic_dict_group_empty_slot");
+        EmitBinary(firstEmptySlot, "and", "i64", emptyUnwrapped, mask);
+        var useEmpty = NextTemp("generic_dict_group_use_empty");
+        EmitCompare(useEmpty, "eq", "i64", capturedDeleted, dictionary.CapacityName);
+        var insertionSlot = NextTemp("generic_dict_group_insertion_slot");
+        EmitSelect(insertionSlot, useEmpty, $"i64 {firstEmptySlot}", $"i64 {capturedDeleted}");
+        EmitBranch(done); EmitFunctionLine();
+
+        EmitLabel(match); _currentBlockLabel = match;
+        EmitBranch(done); EmitFunctionLine();
+
+        EmitLabel(nextGroup); _currentBlockLabel = nextGroup;
+        EmitBinary(nextProbe, "add", "i64", probe, "16");
+        EmitBinary(nextFirstDeleted, "add", "i64", capturedDeleted, "0");
+        EmitBranch(groupLoop); EmitFunctionLine();
+
+        EmitLabel(miss); _currentBlockLabel = miss;
+        var missHasNoDeleted = NextTemp("generic_dict_group_miss_no_deleted");
+        EmitCompare(missHasNoDeleted, "eq", "i64", firstDeleted, dictionary.CapacityName);
+        var missSlot = NextTemp("generic_dict_group_miss_slot");
+        EmitSelect(missSlot, missHasNoDeleted, "i64 0", $"i64 {firstDeleted}");
+        EmitBranch(done); EmitFunctionLine();
+
         EmitLabel(done);
         var found = NextTemp("generic_dict_find_found");
         EmitPhi(found, "i1", ("false", empty), ("true", match), ("false", miss));
         var foundSlot = NextTemp("generic_dict_find_slot_result");
-        EmitPhi(foundSlot, "i64", (slot, empty), (slot, match), ("0", miss));
+        EmitPhi(foundSlot, "i64", (insertionSlot, empty), (candidateSlot, match), (missSlot, miss));
         _currentBlockLabel = done;
         return new DictionaryFindResult(found, foundSlot, h2);
     }
@@ -445,6 +774,30 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = insert;
         var nextLength = NextTemp("generic_dict_next_len");
         EmitBinary(nextLength, "add", "i64", dictionary.LengthName, "1");
+        if (_program.Types.IsBoundedDictionary(dictionary.DictionaryType))
+        {
+            var bounded = _program.Types.GetBoundedDictionary(dictionary.DictionaryType);
+            var withinBound = NextTemp("bounded_dict_within_capacity");
+            EmitCompare(withinBound, "ule", "i64", nextLength,
+                bounded.MaxEntries.ToString(CultureInfo.InvariantCulture));
+            EmitTrapUnless(withinBound, "bounded_dictionary_capacity");
+            StoreInlineDictionaryEntry(dictionary, found.SlotName, key, value);
+            StoreInlineDictionaryControl(dictionary, found.SlotName, found.H2ByteName);
+            EmitBranch(done);
+            var boundedInsertEnd = _currentBlockLabel;
+            EmitFunctionLine();
+            EmitLabel(done);
+            var boundedPointer = NextTemp("bounded_dict_ptr");
+            EmitPhi(boundedPointer, "ptr",
+                (dictionary.PointerName, updateEnd),
+                (dictionary.PointerName, boundedInsertEnd));
+            var boundedLength = NextTemp("bounded_dict_len");
+            EmitPhi(boundedLength, "i64",
+                (dictionary.LengthName, updateEnd),
+                (nextLength, boundedInsertEnd));
+            _currentBlockLabel = done;
+            return dictionary with { PointerName = boundedPointer, LengthName = boundedLength };
+        }
         var numerator = NextTemp("generic_dict_load_num");
         var denominator = NextTemp("generic_dict_load_den");
         EmitBinary(numerator, "mul", "i64", nextLength, "8");
@@ -473,6 +826,91 @@ internal sealed partial class LlvmEmitter
         EmitPhi(capacity, "i64", (dictionary.CapacityName, updateEnd), (dictionary.CapacityName, currentEnd), (grown.CapacityName, grownEnd));
         _currentBlockLabel = done;
         return dictionary with { PointerName = pointer, LengthName = length, CapacityName = capacity };
+    }
+
+    private (RuntimeInlineDictionary Dictionary, RuntimeBool Inserted) EmitInlineDictionaryPutIfAbsent(
+        RuntimeInlineDictionary dictionary,
+        RuntimeValue key,
+        RuntimeValue value)
+    {
+        var found = EmitInlineDictionaryFindSlot(dictionary, key);
+        var duplicate = NextLabel("generic_dict_put_if_absent_duplicate");
+        var insert = NextLabel("generic_dict_put_if_absent_insert");
+        var current = NextLabel("generic_dict_put_if_absent_current");
+        var grow = NextLabel("generic_dict_put_if_absent_grow");
+        var done = NextLabel("generic_dict_put_if_absent_done");
+        EmitConditionalBranch(found.FoundName, duplicate, insert); EmitFunctionLine();
+
+        EmitLabel(duplicate);
+        _currentBlockLabel = duplicate;
+        if (_program.Types.ContainsOwnedStorage(dictionary.KeyType))
+        {
+            DropOwnedRuntimeValue(key);
+        }
+        if (_program.Types.ContainsOwnedStorage(dictionary.ValueType))
+        {
+            DropOwnedRuntimeValue(value);
+        }
+        EmitBranch(done);
+        var duplicateEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(insert);
+        _currentBlockLabel = insert;
+        var nextLength = NextTemp("generic_dict_put_if_absent_length");
+        EmitBinary(nextLength, "add", "i64", dictionary.LengthName, "1");
+        if (_program.Types.IsBoundedDictionary(dictionary.DictionaryType))
+        {
+            var bounded = _program.Types.GetBoundedDictionary(dictionary.DictionaryType);
+            var withinBound = NextTemp("bounded_dict_put_if_absent_within_capacity");
+            EmitCompare(withinBound, "ule", "i64", nextLength,
+                bounded.MaxEntries.ToString(CultureInfo.InvariantCulture));
+            EmitTrapUnless(withinBound, "bounded_dictionary_capacity");
+            StoreInlineDictionaryEntry(dictionary, found.SlotName, key, value);
+            StoreInlineDictionaryControl(dictionary, found.SlotName, found.H2ByteName);
+            EmitBranch(done);
+            var insertedEnd = _currentBlockLabel; EmitFunctionLine();
+            EmitLabel(done);
+            var boundedLength = NextTemp("bounded_dict_put_if_absent_length_result");
+            EmitPhi(boundedLength, "i64", (dictionary.LengthName, duplicateEnd), (nextLength, insertedEnd));
+            var boundedInserted = NextTemp("bounded_dict_put_if_absent_inserted");
+            EmitPhi(boundedInserted, "i1", ("false", duplicateEnd), ("true", insertedEnd));
+            _currentBlockLabel = done;
+            return (dictionary with { LengthName = boundedLength }, new RuntimeBool(boundedInserted));
+        }
+
+        var numerator = NextTemp("generic_dict_put_if_absent_load_num");
+        var denominator = NextTemp("generic_dict_put_if_absent_load_den");
+        EmitBinary(numerator, "mul", "i64", nextLength, "8");
+        EmitBinary(denominator, "mul", "i64", dictionary.CapacityName, "7");
+        var shouldGrow = NextTemp("generic_dict_put_if_absent_should_grow");
+        EmitCompare(shouldGrow, "ugt", "i64", numerator, denominator);
+        EmitConditionalBranch(shouldGrow, grow, current); EmitFunctionLine();
+
+        EmitLabel(current);
+        _currentBlockLabel = current;
+        StoreInlineDictionaryEntry(dictionary, found.SlotName, key, value);
+        StoreInlineDictionaryControl(dictionary, found.SlotName, found.H2ByteName);
+        EmitBranch(done);
+        var currentEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(grow);
+        _currentBlockLabel = grow;
+        var grown = EmitInlineDictionaryGrow(dictionary);
+        EmitInlineDictionaryInsertUnique(grown, key, value);
+        EmitBranch(done);
+        var growEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(done);
+        var pointer = NextTemp("generic_dict_put_if_absent_ptr");
+        EmitPhi(pointer, "ptr", (dictionary.PointerName, duplicateEnd), (dictionary.PointerName, currentEnd), (grown.PointerName, growEnd));
+        var length = NextTemp("generic_dict_put_if_absent_length_result");
+        EmitPhi(length, "i64", (dictionary.LengthName, duplicateEnd), (nextLength, currentEnd), (nextLength, growEnd));
+        var capacity = NextTemp("generic_dict_put_if_absent_capacity");
+        EmitPhi(capacity, "i64", (dictionary.CapacityName, duplicateEnd), (dictionary.CapacityName, currentEnd), (grown.CapacityName, growEnd));
+        var inserted = NextTemp("generic_dict_put_if_absent_inserted");
+        EmitPhi(inserted, "i1", ("false", duplicateEnd), ("true", currentEnd), ("true", growEnd));
+        _currentBlockLabel = done;
+        return (dictionary with { PointerName = pointer, LengthName = length, CapacityName = capacity }, new RuntimeBool(inserted));
     }
 
     private void EmitInlineDictionaryAssignExisting(
@@ -541,6 +979,11 @@ internal sealed partial class LlvmEmitter
 
         var nextLength = NextTemp("generic_dict_take_length");
         EmitBinary(nextLength, "sub", "i64", dictionary.LengthName, "1");
+        if (_program.Types.IsBoundedDictionary(dictionary.DictionaryType))
+        {
+            StoreInlineDictionaryControl(dictionary, found.SlotName, "-1");
+            return (dictionary with { LengthName = nextLength }, value);
+        }
         var target = dictionary with
         {
             PointerName = EmitInlineDictionaryAllocate(dictionary.CapacityName, definition),
@@ -568,6 +1011,45 @@ internal sealed partial class LlvmEmitter
         EmitInlineDictionaryRehash(dictionary, target);
         EmitCall(target: null, "void", "sollang_free", $"ptr {dictionary.PointerName}");
         return target;
+    }
+
+    private RuntimeInlineDictionary EmitInlineDictionaryReserve(
+        RuntimeInlineDictionary dictionary,
+        string requestedEntries)
+    {
+        var requestedCapacity = EmitDictionaryCapacityForEntries(requestedEntries, "generic_dict_reserve");
+        var grow = NextTemp("generic_dict_reserve_grow");
+        EmitCompare(grow, "ugt", "i64", requestedCapacity, dictionary.CapacityName);
+        var allocate = NextLabel("generic_dict_reserve_allocate");
+        var keep = NextLabel("generic_dict_reserve_keep");
+        var done = NextLabel("generic_dict_reserve_done");
+        EmitConditionalBranch(grow, allocate, keep); EmitFunctionLine();
+
+        EmitLabel(keep);
+        _currentBlockLabel = keep;
+        EmitBranch(done);
+        var keepEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(allocate);
+        _currentBlockLabel = allocate;
+        var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
+        var target = dictionary with
+        {
+            PointerName = EmitInlineDictionaryAllocate(requestedCapacity, definition),
+            CapacityName = requestedCapacity
+        };
+        EmitInlineDictionaryRehash(dictionary, target);
+        EmitCall(null, "void", "sollang_free", $"ptr {dictionary.PointerName}");
+        EmitBranch(done);
+        var allocateEnd = _currentBlockLabel; EmitFunctionLine();
+
+        EmitLabel(done);
+        var pointer = NextTemp("generic_dict_reserve_ptr");
+        EmitPhi(pointer, "ptr", (dictionary.PointerName, keepEnd), (target.PointerName, allocateEnd));
+        var capacity = NextTemp("generic_dict_reserve_capacity_result");
+        EmitPhi(capacity, "i64", (dictionary.CapacityName, keepEnd), (requestedCapacity, allocateEnd));
+        _currentBlockLabel = done;
+        return dictionary with { PointerName = pointer, CapacityName = capacity };
     }
 
     private void EmitInlineDictionaryRehash(RuntimeInlineDictionary source, RuntimeInlineDictionary target)
@@ -687,7 +1169,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(body);
         var control = LoadInlineDictionaryControl(dictionary, i);
         var full = NextTemp("drop_generic_dict_full");
-        EmitCompare(full, "ne", "i8", control, "0");
+        EmitCompare(full, "sgt", "i8", control, "0");
         EmitConditionalBranch(full, occupied, next); EmitFunctionLine();
         EmitLabel(occupied);
         _currentBlockLabel = occupied;

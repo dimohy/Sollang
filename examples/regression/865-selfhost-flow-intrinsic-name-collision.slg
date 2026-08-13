@@ -1,0 +1,74 @@
+# Bare bindings and typed user functions named like flow intrinsics remain ordinary.
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        set value: Int -> Int => value + 10
+        pushFront value: Int -> Int => value + 1
+        pushBack value: Int -> Int => value + 2
+        front value: Int -> Int => value + 3
+        back value: Int -> Int => value + 4
+        popFront value: Int -> Int => value + 5
+        popBack value: Int -> Int => value + 6
+        push value: Int -> Int => value + 7
+        peek value: Int -> Int => value + 8
+        pop value: Int -> Int => value + 9
+        insert value: Int -> Int => value + 10
+        remove value: Int -> Int => value + 11
+
+        main {
+            -1 => capacity!
+            -2 => clear!
+            -3 => contains!
+            -4 => count!
+            [1; ~] => values!
+            values! -> capacity => measured
+            capacity! => result
+            clear! => clearResult
+            contains! => containsResult
+            count! => countResult
+            3 -> set => mapped
+            3 -> pushFront => mappedPushFront
+            3 -> pushBack => mappedPushBack
+            3 -> front => mappedFront
+            3 -> back => mappedBack
+            3 -> popFront => mappedPopFront
+            3 -> popBack => mappedPopBack
+            3 -> push => mappedPush
+            3 -> peek => mappedPeek
+            3 -> pop => mappedPop
+            3 -> insert => mappedInsert
+            3 -> remove => mappedRemove
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+
+    0 => capacityOpcodeCount!
+    0 => bitSetOpcodeCount!
+    0 => dequeOpcodeCount!
+    0 => heapOpcodeCount!
+    0 => setOpcodeCount!
+    0 => ordinaryIntrinsicNameCallCount!
+    ir! -> each node {
+        node.opcode == -236 -> if { capacityOpcodeCount! + 1 => capacityOpcodeCount! }
+        (node.opcode <= -241 and node.opcode >= -245) -> if { bitSetOpcodeCount! + 1 => bitSetOpcodeCount! }
+        (node.opcode <= -246 and node.opcode >= -251) -> if { dequeOpcodeCount! + 1 => dequeOpcodeCount! }
+        (node.opcode <= -252 and node.opcode >= -254) -> if { heapOpcodeCount! + 1 => heapOpcodeCount! }
+        (node.opcode <= -255 and node.opcode >= -257) -> if { setOpcodeCount! + 1 => setOpcodeCount! }
+        (node.kind == 6 and node.opcode == -1 and node.typeOrigin == 1 and node.typeSymbol == 2) -> if { ordinaryIntrinsicNameCallCount! + 1 => ordinaryIntrinsicNameCallCount! }
+    }
+    capacityOpcodeCount! + 0 => finalCount
+    bitSetOpcodeCount! + 0 => finalBitSetCount
+    "capacity-opcodes=$finalCount" -> println
+    "bitset-opcodes=$finalBitSetCount" -> println
+    dequeOpcodeCount! + 0 => finalDequeCount
+    ordinaryIntrinsicNameCallCount! + 0 => finalOrdinaryCallCount
+    "deque-opcodes=$finalDequeCount" -> println
+    heapOpcodeCount! + 0 => finalHeapCount
+    setOpcodeCount! + 0 => finalSetCount
+    "heap-opcodes=$finalHeapCount" -> println
+    "set-opcodes=$finalSetCount" -> println
+    "ordinary-intrinsic-name-calls=$finalOrdinaryCallCount" -> println
+}

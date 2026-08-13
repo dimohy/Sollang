@@ -65,7 +65,7 @@ the following retained matrices:
 driver files, verifies `sollang --version`, and uses the compiler and bundled
 standard library to build and run a smoke program before archiving.
 
-The `0.4.260803` packages contain only the native compiler, `stdlib`, `README`,
+The `0.4.260813` packages contain only the native compiler, `stdlib`, `README`,
 and `LICENSE`. Their archive SHA-256 values are:
 
 - Windows x64 ZIP: `8840818b8f3de88e28931bb8ee45493773c1047fc71ff97281768e82e98ed8fa`

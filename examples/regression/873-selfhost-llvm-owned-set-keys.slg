@@ -1,0 +1,59 @@
+# Verifies self-host Set Hash/Eq dispatch, owned-key transfer, duplicate drop,
+# key-preserving growth, borrowed lookup/remove, and final element cleanup.
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        struct OwnedKey {
+            id: Int
+            payload: [Int; ~]
+        }
+
+        trait Hash {
+            hash: self -> Int
+        }
+
+        trait Eq {
+            eq: self -> Int
+        }
+
+        impl Hash for OwnedKey {
+            hash: self -> Int => self.id
+        }
+
+        impl Eq for OwnedKey {
+            eq: self -> Int => self.id
+        }
+
+        main {
+            Set<OwnedKey>(4) => set!
+            OwnedKey { id: 1, payload: [10; ~] } => key1!
+            set! -> insert(key1!) -> println
+            OwnedKey { id: 1, payload: [20; ~] } => duplicate!
+            set! -> insert(duplicate!) -> println
+            set! -> insert(OwnedKey { id: 2, payload: [2; ~] }) => inserted2
+            set! -> insert(OwnedKey { id: 3, payload: [3; ~] }) => inserted3
+            set! -> insert(OwnedKey { id: 4, payload: [4; ~] }) => inserted4
+            set! -> insert(OwnedKey { id: 5, payload: [5; ~] }) => inserted5
+            set! -> insert(OwnedKey { id: 6, payload: [6; ~] }) => inserted6
+            set! -> insert(OwnedKey { id: 7, payload: [7; ~] }) => inserted7
+            set! -> insert(OwnedKey { id: 8, payload: [8; ~] }) => inserted8
+            set! -> insert(OwnedKey { id: 9, payload: [9; ~] }) => inserted9
+            set! -> insert(OwnedKey { id: 10, payload: [10; ~] }) => inserted10
+            set! -> insert(OwnedKey { id: 11, payload: [11; ~] }) => inserted11
+            set! -> insert(OwnedKey { id: 12, payload: [12; ~] }) => inserted12
+            set! -> insert(OwnedKey { id: 13, payload: [13; ~] }) => inserted13
+            set! -> insert(OwnedKey { id: 14, payload: [14; ~] }) => inserted14
+            set! -> insert(OwnedKey { id: 15, payload: [15; ~] }) => inserted15
+            OwnedKey { id: 1, payload: [99; ~] } => query!
+            set! -> contains(query!) -> println
+            set! -> remove(query!) -> println
+            query!.id -> println
+            set! -> contains(query!) -> println
+            set! -> len -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

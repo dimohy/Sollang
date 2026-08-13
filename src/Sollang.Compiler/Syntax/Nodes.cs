@@ -420,7 +420,8 @@ internal sealed record ArrayLiteralExpression(
     bool IsDynamic,
     int Line,
     int Column,
-    string? ElementType = null)
+    string? ElementType = null,
+    int? BoundedCapacity = null)
     : Expression(Line, Column);
 
 internal sealed record TypeApplicationExpression(
@@ -440,7 +441,12 @@ internal sealed record ArrayRepeatExpression(
     int Column)
     : Expression(Line, Column);
 
-internal sealed record TypedEmptyArrayExpression(string ElementType, int? CapacityHint, int Line, int Column)
+internal sealed record TypedEmptyArrayExpression(
+    string ElementType,
+    int? CapacityHint,
+    int Line,
+    int Column,
+    int? BoundedCapacity = null)
     : Expression(Line, Column);
 
 internal sealed record DictionaryLiteralExpression(
@@ -448,10 +454,17 @@ internal sealed record DictionaryLiteralExpression(
     int Line,
     int Column,
     string? KeyType = null,
-    string? ValueType = null)
+    string? ValueType = null,
+    int? BoundedCapacity = null)
     : Expression(Line, Column);
 
-internal sealed record TypedEmptyDictionaryExpression(string KeyType, string ValueType, int? CapacityHint, int Line, int Column)
+internal sealed record TypedEmptyDictionaryExpression(
+    string KeyType,
+    string ValueType,
+    int? CapacityHint,
+    int Line,
+    int Column,
+    int? BoundedCapacity = null)
     : Expression(Line, Column);
 
 internal sealed record DictionaryEntryExpression(Expression Key, Expression Value);

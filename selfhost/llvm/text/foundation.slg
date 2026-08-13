@@ -1244,8 +1244,28 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                 8 => align!
                 0 => status!
             }
+            current.kind == 12 -> if {
+                # Bounded arrays keep inline backing storage at the owner, but
+                # expression values use the common { data, length, capacity }
+                # handle so calls and collection operations stay uniform.
+                24 => size!
+                8 => align!
+                0 => status!
+            }
             current.kind == 5 -> if {
                 pointerSize * 2 + 16 => size!
+                8 => align!
+                0 => status!
+            }
+            current.kind == 13 -> if {
+                # Bounded dictionaries likewise use the dictionary handle;
+                # both pointers address one owner-inline allocation.
+                pointerSize * 2 + 16 => size!
+                8 => align!
+                0 => status!
+            }
+            current.kind == 14 -> if {
+                ((current.length + 63) / 64) * 8 => size!
                 8 => align!
                 0 => status!
             }
@@ -1273,6 +1293,16 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                 (current.origin == 4 and (current.symbol == 3 or current.symbol == 4)) -> if {
                     pointerSize * 3 => size!
                     pointerSize => align!
+                    0 => status!
+                }
+                (current.origin == 4 and current.symbol == 5) -> if {
+                    pointerSize * 2 + 16 => size!
+                    8 => align!
+                    0 => status!
+                }
+                (current.origin == 4 and (current.symbol == 6 or current.symbol == 7)) -> if {
+                    24 => size!
+                    8 => align!
                     0 => status!
                 }
             }

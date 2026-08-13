@@ -10,12 +10,38 @@ internal sealed partial class LlvmEmitter
 {
     private string EmitStructTypeDefinitions()
     {
-        if (_program.Types.Structs.Count == 0 && _program.Types.Enums.Count == 0)
+        if (_program.Types.Structs.Count == 0 && _program.Types.Enums.Count == 0
+            && _program.Types.BoundedArrays.Count == 0
+            && _program.Types.BoundedDictionaries.Count == 0
+            && _program.Types.BitSets.Count == 0)
         {
             return string.Empty;
         }
 
         var builder = new StringBuilder();
+        foreach (var definition in _program.Types.BoundedArrays.OrderBy(static definition => definition.Id))
+        {
+            builder.Append(LlvmBoundedArrayType(definition.Id))
+                .Append(" = type { i64, [")
+                .Append(definition.Capacity.ToString(CultureInfo.InvariantCulture))
+                .Append(" x ")
+                .Append(LlvmType(definition.ElementType))
+                .AppendLine("] }");
+        }
+        foreach (var definition in _program.Types.BoundedDictionaries.OrderBy(static definition => definition.Id))
+        {
+            builder.Append(LlvmBoundedDictionaryType(definition.Id))
+                .Append(" = type { i64, [")
+                .Append(definition.StorageSize.ToString(CultureInfo.InvariantCulture))
+                .AppendLine(" x i8] }");
+        }
+        foreach (var definition in _program.Types.BitSets.OrderBy(static definition => definition.Id))
+        {
+            builder.Append(LlvmBitSetType(definition.Id))
+                .Append(" = type { [")
+                .Append(definition.WordCount.ToString(CultureInfo.InvariantCulture))
+                .AppendLine(" x i64] }");
+        }
         foreach (var definition in _program.Types.Structs
                      .Where(definition => ShouldEmitTypeDefinition(definition.Id))
                      .OrderBy(static definition => definition.Id))
@@ -48,6 +74,12 @@ internal sealed partial class LlvmEmitter
             or TypeId.DynamicDirectoryEntryArray
             or TypeId.DirectoryRawResult
             or TypeId.DirectoryReadResult);
+
+    private static string LlvmBoundedArrayType(TypeId type) => $"%sollang.bounded_array.t{(int)type}";
+
+    private static string LlvmBoundedDictionaryType(TypeId type) => $"%sollang.bounded_dictionary.t{(int)type}";
+
+    private static string LlvmBitSetType(TypeId type) => $"%sollang.bitset.t{(int)type}";
 
     private RuntimeStruct EmitStructLiteralExpression(StructLiteralExpression expression)
     {
@@ -494,6 +526,9 @@ internal sealed partial class LlvmEmitter
             RuntimeDynamicIntArray array => (
                 "%sollang.dynamic_int_array",
                 BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
+            RuntimeDynamicInlineArray array when _program.Types.IsBoundedArray(array.Type) => (
+                LlvmBoundedArrayType(array.Type),
+                BuildBoundedArrayAggregate(array)),
             RuntimeDynamicInlineArray array => (
                 "%sollang.dynamic_int_array",
                 BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
@@ -506,9 +541,13 @@ internal sealed partial class LlvmEmitter
             RuntimeIntDictionary dictionary => (
                 "%sollang.int_dictionary",
                 BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
+            RuntimeInlineDictionary dictionary when _program.Types.IsBoundedDictionary(dictionary.Type) => (
+                LlvmBoundedDictionaryType(dictionary.Type),
+                BuildBoundedDictionaryAggregate(dictionary)),
             RuntimeInlineDictionary dictionary => (
                 "%sollang.int_dictionary",
                 BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
+            RuntimeBitSet bitSet => (LlvmBitSetType(bitSet.Type), BuildBitSetAggregate(bitSet)),
             _ => throw new SollangException(
                 $"runtime value {value.GetType().Name} with type {value.Type} is not supported in an inline struct field "
                 + $"while emitting '{_currentFunction?.ModuleName}.{_currentFunction?.Name ?? "main"}'")
@@ -575,6 +614,16 @@ internal sealed partial class LlvmEmitter
             EmitAssign(vtable, $"extractvalue %sollang.dyn {valueName}, 1");
             return new RuntimeDynTrait(type, data, vtable);
         }
+        if (_program.Types.IsBitSet(type))
+        {
+            var definition = _program.Types.GetBitSet(type);
+            var owner = NextTemp("bitset_owner");
+            EmitAlloca(owner, LlvmBitSetType(type), definition.Alignment);
+            EmitStore(LlvmBitSetType(type), valueName, owner, definition.Alignment);
+            var pointer = NextTemp("bitset_data");
+            EmitAssign(pointer, $"getelementptr {LlvmBitSetType(type)}, ptr {owner}, i64 0, i32 0, i64 0");
+            return new RuntimeBitSet(type, pointer);
+        }
         if (_program.Types.TryGetStreamValue(type, out var streamElementType)
             || _program.Types.TryGetEventStreamValue(type, out streamElementType))
         {
@@ -599,6 +648,20 @@ internal sealed partial class LlvmEmitter
             var (pointer, length, capacity) = ExtractDynamicArrayAggregate(valueName);
             return new RuntimeDynamicInlineArray(type, definition.ElementType, pointer, length, capacity);
         }
+        if (_program.Types.IsBoundedArray(type))
+        {
+            var definition = _program.Types.GetBoundedArray(type);
+            var owner = NextTemp("bounded_array_owner");
+            EmitAlloca(owner, LlvmBoundedArrayType(type), definition.Alignment);
+            EmitStore(LlvmBoundedArrayType(type), valueName, owner, definition.Alignment);
+            var pointer = NextTemp("bounded_array_data");
+            EmitAssign(pointer, $"getelementptr {LlvmBoundedArrayType(type)}, ptr {owner}, i64 0, i32 1, i64 0");
+            var length = NextTemp("bounded_array_length");
+            EmitAssign(length, $"extractvalue {LlvmBoundedArrayType(type)} {valueName}, 0");
+            return new RuntimeDynamicInlineArray(
+                type, definition.ElementType, pointer, length,
+                definition.Capacity.ToString(CultureInfo.InvariantCulture), RuntimeContainerStorage.Stack);
+        }
         if (type == BoundType.IntDictionary)
         {
             var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
@@ -616,6 +679,20 @@ internal sealed partial class LlvmEmitter
             var length = NextTemp("slice_len");
             EmitAssign(length, $"extractvalue %sollang.int_slice {valueName}, 1");
             return new RuntimeIntSlice(pointer, length);
+        }
+        if (_program.Types.IsBoundedDictionary(type))
+        {
+            var definition = _program.Types.GetBoundedDictionary(type);
+            var owner = NextTemp("bounded_dictionary_owner");
+            EmitAlloca(owner, LlvmBoundedDictionaryType(type), definition.Alignment);
+            EmitStore(LlvmBoundedDictionaryType(type), valueName, owner, definition.Alignment);
+            var pointer = NextTemp("bounded_dictionary_data");
+            EmitAssign(pointer, $"getelementptr {LlvmBoundedDictionaryType(type)}, ptr {owner}, i64 0, i32 1, i64 0");
+            var length = NextTemp("bounded_dictionary_length");
+            EmitAssign(length, $"extractvalue {LlvmBoundedDictionaryType(type)} {valueName}, 0");
+            return new RuntimeInlineDictionary(
+                type, definition.KeyType, definition.ValueType, pointer, length,
+                definition.BucketCapacity.ToString(CultureInfo.InvariantCulture), RuntimeContainerStorage.Stack);
         }
         if (_program.Types.IsDictionary(type))
         {
@@ -668,6 +745,43 @@ internal sealed partial class LlvmEmitter
         var aggregate1 = NextTemp("slice_value");
         EmitAssign(aggregate1, $"insertvalue %sollang.int_slice {aggregate0}, i64 {length}, 1");
         return aggregate1;
+    }
+
+    private string BuildBoundedArrayAggregate(RuntimeDynamicInlineArray array)
+    {
+        var definition = _program.Types.GetBoundedArray(array.Type);
+        var storageType = $"[{definition.Capacity.ToString(CultureInfo.InvariantCulture)} x {LlvmType(definition.ElementType)}]";
+        var storage = NextTemp("bounded_array_value_storage");
+        EmitLoad(storage, storageType, array.PointerName, definition.ElementAlignment);
+        var withLength = NextTemp("bounded_array_value");
+        EmitAssign(withLength, $"insertvalue {LlvmBoundedArrayType(array.Type)} poison, i64 {array.LengthName}, 0");
+        var aggregate = NextTemp("bounded_array_value");
+        EmitAssign(aggregate, $"insertvalue {LlvmBoundedArrayType(array.Type)} {withLength}, {storageType} {storage}, 1");
+        return aggregate;
+    }
+
+    private string BuildBoundedDictionaryAggregate(RuntimeInlineDictionary dictionary)
+    {
+        var definition = _program.Types.GetBoundedDictionary(dictionary.Type);
+        var storageType = $"[{definition.StorageSize.ToString(CultureInfo.InvariantCulture)} x i8]";
+        var storage = NextTemp("bounded_dictionary_value_storage");
+        EmitLoad(storage, storageType, dictionary.PointerName, definition.Alignment);
+        var withLength = NextTemp("bounded_dictionary_value");
+        EmitAssign(withLength, $"insertvalue {LlvmBoundedDictionaryType(dictionary.Type)} poison, i64 {dictionary.LengthName}, 0");
+        var aggregate = NextTemp("bounded_dictionary_value");
+        EmitAssign(aggregate, $"insertvalue {LlvmBoundedDictionaryType(dictionary.Type)} {withLength}, {storageType} {storage}, 1");
+        return aggregate;
+    }
+
+    private string BuildBitSetAggregate(RuntimeBitSet bitSet)
+    {
+        var definition = _program.Types.GetBitSet(bitSet.Type);
+        var storageType = $"[{definition.WordCount.ToString(CultureInfo.InvariantCulture)} x i64]";
+        var storage = NextTemp("bitset_value_storage");
+        EmitLoad(storage, storageType, bitSet.PointerName, definition.Alignment);
+        var aggregate = NextTemp("bitset_value");
+        EmitAssign(aggregate, $"insertvalue {LlvmBitSetType(bitSet.Type)} poison, {storageType} {storage}, 0");
+        return aggregate;
     }
 
     private RuntimeText ExtractTextAggregate(string aggregate)
@@ -758,6 +872,10 @@ internal sealed partial class LlvmEmitter
 
     private string LlvmType(BoundType type)
     {
+        if (_program.Types.IsBitSet(type))
+        {
+            return LlvmBitSetType(type);
+        }
         if (type == BoundType.SourceText)
         {
             return "%sollang.source_text";
@@ -786,9 +904,17 @@ internal sealed partial class LlvmEmitter
         {
             return "%sollang.dyn";
         }
+        if (_program.Types.IsBoundedDictionary(type))
+        {
+            return LlvmBoundedDictionaryType(type);
+        }
         if (_program.Types.IsDictionary(type))
         {
             return "%sollang.int_dictionary";
+        }
+        if (_program.Types.IsBoundedArray(type))
+        {
+            return LlvmBoundedArrayType(type);
         }
         if (_program.Types.IsDynamicArray(type))
         {

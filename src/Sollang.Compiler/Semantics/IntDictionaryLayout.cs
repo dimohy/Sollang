@@ -16,7 +16,7 @@ internal static class IntDictionaryLayout
 
     public static int EntriesOffsetForCapacity(int capacity)
     {
-        return capacity == 4 ? 8 : capacity;
+        return checked((capacity + 23) & ~7);
     }
 
     public static int AllocationBytesForCapacity(int capacity)

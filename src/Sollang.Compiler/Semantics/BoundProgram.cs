@@ -337,6 +337,16 @@ internal sealed record BoundDynamicArrayDefinition(
     int ElementSize,
     int ElementAlignment);
 
+internal sealed record BoundBoundedArrayDefinition(
+    TypeId Id,
+    TypeId ElementType,
+    int Capacity,
+    int ElementSize,
+    int ElementAlignment,
+    int DataOffset,
+    int Size,
+    int Alignment);
+
 internal sealed record BoundDictionaryDefinition(
     TypeId Id,
     TypeId KeyType,
@@ -347,6 +357,26 @@ internal sealed record BoundDictionaryDefinition(
     int ValueSize,
     int ValueAlignment,
     int EntryStride);
+
+internal sealed record BoundBoundedDictionaryDefinition(
+    TypeId Id,
+    TypeId KeyType,
+    TypeId ValueType,
+    int MaxEntries,
+    int BucketCapacity,
+    int ControlsOffset,
+    int EntriesOffset,
+    int StorageSize,
+    int Size,
+    int Alignment,
+    BoundDictionaryDefinition Layout);
+
+internal sealed record BoundBitSetDefinition(
+    TypeId Id,
+    int BitCount,
+    int WordCount,
+    int Size,
+    int Alignment);
 
 internal sealed class TypeDefinitionTable
 {
@@ -362,8 +392,20 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<TypeId, TypeId> _staticArraysByElement = [];
     private readonly Dictionary<TypeId, BoundDynamicArrayDefinition> _dynamicArrays = [];
     private readonly Dictionary<TypeId, TypeId> _dynamicArraysByElement = [];
+    private readonly Dictionary<TypeId, BoundBoundedArrayDefinition> _boundedArrays = [];
+    private readonly Dictionary<(TypeId Element, int Capacity), TypeId> _boundedArraysByShape = [];
     private readonly Dictionary<TypeId, BoundDictionaryDefinition> _dictionaries = [];
     private readonly Dictionary<(TypeId Key, TypeId Value), TypeId> _dictionariesByTypes = [];
+    private readonly Dictionary<TypeId, BoundBoundedDictionaryDefinition> _boundedDictionaries = [];
+    private readonly Dictionary<(TypeId Key, TypeId Value, int Capacity), TypeId> _boundedDictionariesByShape = [];
+    private readonly Dictionary<TypeId, BoundBitSetDefinition> _bitSets = [];
+    private readonly Dictionary<int, TypeId> _bitSetsByBitCount = [];
+    private readonly Dictionary<TypeId, TypeId> _binaryHeaps = [];
+    private readonly Dictionary<TypeId, TypeId> _binaryHeapsByElement = [];
+    private readonly Dictionary<TypeId, TypeId> _deques = [];
+    private readonly Dictionary<TypeId, TypeId> _dequesByElement = [];
+    private readonly Dictionary<TypeId, TypeId> _sets = [];
+    private readonly Dictionary<TypeId, TypeId> _setsByElement = [];
     private readonly Dictionary<TypeId, TypeId> _optionsByValue = [];
     private readonly Dictionary<(TypeId Ok, TypeId Error), TypeId> _resultsByTypes = [];
     private readonly Dictionary<TypeId, TypeId> _optionValues = [];
@@ -427,7 +469,13 @@ internal sealed class TypeDefinitionTable
 
     public IReadOnlyCollection<BoundDynamicArrayDefinition> DynamicArrays => _dynamicArrays.Values.ToArray();
 
+    public IReadOnlyCollection<BoundBoundedArrayDefinition> BoundedArrays => _boundedArrays.Values.ToArray();
+
     public IReadOnlyCollection<BoundDictionaryDefinition> Dictionaries => _dictionaries.Values.ToArray();
+
+    public IReadOnlyCollection<BoundBoundedDictionaryDefinition> BoundedDictionaries => _boundedDictionaries.Values.ToArray();
+
+    public IReadOnlyCollection<BoundBitSetDefinition> BitSets => _bitSets.Values.ToArray();
 
     public bool TryResolve(string name, out TypeId type) => _names.TryGetValue(name, out type);
 
@@ -515,7 +563,19 @@ internal sealed class TypeDefinitionTable
 
     public bool IsDynamicArray(TypeId type) => _dynamicArrays.ContainsKey(type);
 
-    public bool IsDictionary(TypeId type) => _dictionaries.ContainsKey(type);
+    public bool IsBoundedArray(TypeId type) => _boundedArrays.ContainsKey(type);
+
+    public bool IsDictionary(TypeId type) => _dictionaries.ContainsKey(type) || _boundedDictionaries.ContainsKey(type);
+
+    public bool IsBoundedDictionary(TypeId type) => _boundedDictionaries.ContainsKey(type);
+
+    public bool IsBitSet(TypeId type) => _bitSets.ContainsKey(type);
+
+    public bool IsBinaryHeap(TypeId type) => _binaryHeaps.ContainsKey(type);
+
+    public bool IsDeque(TypeId type) => _deques.ContainsKey(type);
+
+    public bool IsSet(TypeId type) => _sets.ContainsKey(type);
 
     public TypeId GetOrAddStaticArray(TypeId elementType)
     {
@@ -600,8 +660,83 @@ internal sealed class TypeDefinitionTable
         }
     }
 
+    public void RegisterBoundedArrays(
+        IReadOnlyDictionary<TypeId, (TypeId ElementType, int Capacity)> definitions)
+    {
+        foreach (var (id, shape) in definitions)
+        {
+            var elementSize = InlineSizeOf(shape.ElementType);
+            var elementAlignment = Math.Min(Math.Max(elementSize, 1), 8);
+            var dataOffset = AlignUp(8, elementAlignment);
+            var alignment = Math.Max(8, elementAlignment);
+            var size = AlignUp(checked(dataOffset + checked(elementSize * shape.Capacity)), alignment);
+            _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
+                id, shape.ElementType, shape.Capacity, elementSize, elementAlignment,
+                dataOffset, size, alignment));
+            _boundedArraysByShape.Add((shape.ElementType, shape.Capacity), id);
+            _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
+        }
+    }
+
+    public void RegisterBoundedDictionaries(
+        IReadOnlyDictionary<TypeId, (TypeId KeyType, TypeId ValueType, int MaxEntries)> definitions)
+    {
+        foreach (var (id, shape) in definitions)
+        {
+            var heapDictionaryType = GetOrAddDictionary(shape.KeyType, shape.ValueType);
+            var layout = _dictionaries[heapDictionaryType];
+            var minimumBuckets = checked((shape.MaxEntries * 8 + 6) / 7);
+            var bucketCapacity = 16;
+            while (bucketCapacity < minimumBuckets)
+            {
+                bucketCapacity = checked(bucketCapacity * 2);
+            }
+            var entriesOffset = AlignUp(checked(bucketCapacity + 16),
+                Math.Max(layout.KeyAlignment, layout.ValueAlignment));
+            var alignment = Math.Max(8, Math.Max(layout.KeyAlignment, layout.ValueAlignment));
+            var storageSize = AlignUp(
+                checked(entriesOffset + checked(bucketCapacity * layout.EntryStride)), alignment);
+            var size = AlignUp(checked(8 + storageSize), alignment);
+            _boundedDictionaries.Add(id, new BoundBoundedDictionaryDefinition(
+                id, shape.KeyType, shape.ValueType, shape.MaxEntries, bucketCapacity,
+                ControlsOffset: 0, entriesOffset, storageSize, size, alignment, layout));
+            _boundedDictionariesByShape.Add(
+                (shape.KeyType, shape.ValueType, shape.MaxEntries), id);
+            _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
+        }
+    }
+
     public bool TryGetDynamicArrayForElement(TypeId elementType, out TypeId arrayType) =>
         _dynamicArraysByElement.TryGetValue(elementType, out arrayType);
+
+    public TypeId GetOrAddBoundedArray(TypeId elementType, int capacity)
+    {
+        if (capacity <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(capacity), "bounded array capacity must be positive");
+        }
+        if (_boundedArraysByShape.TryGetValue((elementType, capacity), out var existing))
+        {
+            return existing;
+        }
+
+        var elementSize = InlineSizeOf(elementType);
+        var elementAlignment = Math.Min(Math.Max(elementSize, 1), 8);
+        var dataOffset = AlignUp(8, elementAlignment);
+        var alignment = Math.Max(8, elementAlignment);
+        var size = AlignUp(checked(dataOffset + checked(elementSize * capacity)), alignment);
+        var id = (TypeId)_nextParametricTypeId++;
+        _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
+            id, elementType, capacity, elementSize, elementAlignment,
+            dataOffset, size, alignment));
+        _boundedArraysByShape.Add((elementType, capacity), id);
+        return id;
+    }
+
+    public BoundBoundedArrayDefinition GetBoundedArray(TypeId type) =>
+        _boundedArrays.TryGetValue(type, out var definition)
+            ? definition
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a bounded array");
 
     public TypeId GetOrAddDictionary(TypeId keyType, TypeId valueType)
     {
@@ -625,13 +760,147 @@ internal sealed class TypeDefinitionTable
         return id;
     }
 
+    public TypeId GetOrAddBoundedDictionary(TypeId keyType, TypeId valueType, int maxEntries)
+    {
+        if (maxEntries <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxEntries), "bounded dictionary capacity must be positive");
+        }
+        if (_boundedDictionariesByShape.TryGetValue((keyType, valueType, maxEntries), out var existing))
+        {
+            return existing;
+        }
+
+        var heapDictionaryType = GetOrAddDictionary(keyType, valueType);
+        var layout = _dictionaries[heapDictionaryType];
+        var minimumBuckets = checked((maxEntries * 8 + 6) / 7);
+        var bucketCapacity = 16;
+        while (bucketCapacity < minimumBuckets)
+        {
+            bucketCapacity = checked(bucketCapacity * 2);
+        }
+        var controlsOffset = 0;
+        var entriesOffset = AlignUp(checked(bucketCapacity + 16),
+            Math.Max(layout.KeyAlignment, layout.ValueAlignment));
+        var alignment = Math.Max(8, Math.Max(layout.KeyAlignment, layout.ValueAlignment));
+        var storageSize = AlignUp(checked(entriesOffset + checked(bucketCapacity * layout.EntryStride)), alignment);
+        var size = AlignUp(checked(8 + storageSize), alignment);
+        var id = (TypeId)_nextParametricTypeId++;
+        _boundedDictionaries.Add(id, new BoundBoundedDictionaryDefinition(
+            id, keyType, valueType, maxEntries, bucketCapacity,
+            controlsOffset, entriesOffset, storageSize, size, alignment, layout));
+        _boundedDictionariesByShape.Add((keyType, valueType, maxEntries), id);
+        return id;
+    }
+
+    public BoundBoundedDictionaryDefinition GetBoundedDictionary(TypeId type) =>
+        _boundedDictionaries.TryGetValue(type, out var definition)
+            ? definition
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a bounded dictionary");
+
     public bool TryGetDictionaryForTypes(TypeId keyType, TypeId valueType, out TypeId dictionaryType) =>
         _dictionariesByTypes.TryGetValue((keyType, valueType), out dictionaryType);
 
     public BoundDictionaryDefinition GetDictionary(TypeId type) =>
         _dictionaries.TryGetValue(type, out var definition)
             ? definition
-            : throw new KeyNotFoundException($"type id '{(int)type}' is not a dictionary");
+            : _boundedDictionaries.TryGetValue(type, out var bounded)
+                ? bounded.Layout
+                : throw new KeyNotFoundException($"type id '{(int)type}' is not a dictionary");
+
+    public TypeId GetOrAddBitSet(int bitCount)
+    {
+        if (bitCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bitCount), "BitSet size must be positive");
+        }
+        if (_bitSetsByBitCount.TryGetValue(bitCount, out var existing))
+        {
+            return existing;
+        }
+        var wordCount = checked((bitCount + 63) / 64);
+        var id = (TypeId)_nextParametricTypeId++;
+        _bitSets.Add(id, new BoundBitSetDefinition(id, bitCount, wordCount,
+            checked(wordCount * 8), Alignment: 8));
+        _bitSetsByBitCount.Add(bitCount, id);
+        _names.TryAdd($"BitSet<{bitCount}>", id);
+        return id;
+    }
+
+    public BoundBitSetDefinition GetBitSet(TypeId type) =>
+        _bitSets.TryGetValue(type, out var definition)
+            ? definition
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a BitSet");
+
+    public TypeId GetOrAddBinaryHeap(TypeId elementType)
+    {
+        if (_binaryHeapsByElement.TryGetValue(elementType, out var existing))
+        {
+            return existing;
+        }
+        var id = (TypeId)_nextParametricTypeId++;
+        var size = InlineSizeOf(elementType);
+        var alignment = Math.Min(Math.Max(size, 1), 8);
+        _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
+        _binaryHeaps.Add(id, elementType);
+        _binaryHeapsByElement.Add(elementType, id);
+        _names.TryAdd($"BinaryHeap<{DisplayTypeName(elementType)}>", id);
+        return id;
+    }
+
+    public TypeId GetBinaryHeapElement(TypeId type) =>
+        _binaryHeaps.TryGetValue(type, out var elementType)
+            ? elementType
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a BinaryHeap");
+
+    public TypeId GetOrAddDeque(TypeId elementType)
+    {
+        if (_dequesByElement.TryGetValue(elementType, out var existing))
+        {
+            return existing;
+        }
+        var id = (TypeId)_nextParametricTypeId++;
+        var size = InlineSizeOf(elementType);
+        var alignment = Math.Min(Math.Max(size, 1), 8);
+        _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
+        _deques.Add(id, elementType);
+        _dequesByElement.Add(elementType, id);
+        _names.TryAdd($"Deque<{DisplayTypeName(elementType)}>", id);
+        return id;
+    }
+
+    public TypeId GetDequeElement(TypeId type) =>
+        _deques.TryGetValue(type, out var elementType)
+            ? elementType
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a Deque");
+
+    public TypeId GetOrAddSet(TypeId elementType)
+    {
+        if (_setsByElement.TryGetValue(elementType, out var existing))
+        {
+            return existing;
+        }
+        var keySize = InlineSizeOf(elementType);
+        var keyAlignment = Math.Min(Math.Max(keySize, 1), 8);
+        var id = (TypeId)_nextParametricTypeId++;
+        _dictionaries.Add(id, new BoundDictionaryDefinition(
+            id, elementType, BoundType.Unit,
+            keySize, keyAlignment,
+            ValueOffset: keySize, ValueSize: 0, ValueAlignment: 1,
+            EntryStride: AlignUp(keySize, keyAlignment)));
+        _sets.Add(id, elementType);
+        _setsByElement.Add(elementType, id);
+        _names.TryAdd($"Set<{DisplayTypeName(elementType)}>", id);
+        return id;
+    }
+
+    public TypeId GetSetElement(TypeId type) =>
+        _sets.TryGetValue(type, out var elementType)
+            ? elementType
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a Set");
+
+    private string DisplayTypeName(TypeId type) =>
+        _names.FirstOrDefault(item => item.Value == type).Key ?? ((int)type).ToString();
 
     public TypeId GetOrAddOption(TypeId valueType, string displayName)
     {
@@ -738,12 +1007,21 @@ internal sealed class TypeDefinitionTable
 
     private bool ContainsOwnedStorage(TypeId type, HashSet<TypeId> visiting)
     {
+        if (_boundedArrays.TryGetValue(type, out var boundedArray))
+        {
+            return ContainsOwnedStorage(boundedArray.ElementType, visiting);
+        }
+        if (_boundedDictionaries.TryGetValue(type, out var boundedDictionary))
+        {
+            return ContainsOwnedStorage(boundedDictionary.KeyType, visiting)
+                || ContainsOwnedStorage(boundedDictionary.ValueType, visiting);
+        }
         if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena
             or TypeId.File or TypeId.FileWriter
             or TypeId.SourceText or TypeId.MappedBytes or TypeId.MutableMappedBytes
             || IsTask(type) || IsBox(type) || IsDynTrait(type)
             || IsStream(type) || IsEventStream(type)
-            || IsStaticArray(type) || IsDynamicArray(type) || IsDictionary(type))
+            || IsStaticArray(type) || IsDynamicArray(type) || _dictionaries.ContainsKey(type))
         {
             return true;
         }
@@ -818,6 +1096,18 @@ internal sealed class TypeDefinitionTable
 
     public int InlineSizeOf(TypeId type)
     {
+        if (_bitSets.TryGetValue(type, out var bitSet))
+        {
+            return bitSet.Size;
+        }
+        if (_boundedDictionaries.TryGetValue(type, out var boundedDictionary))
+        {
+            return boundedDictionary.Size;
+        }
+        if (_boundedArrays.TryGetValue(type, out var boundedArray))
+        {
+            return boundedArray.Size;
+        }
         if (type is TypeId.DynamicIntArray or TypeId.IntDictionary)
         {
             return 24;
@@ -884,6 +1174,18 @@ internal sealed class TypeDefinitionTable
 
     public int AlignmentOf(TypeId type)
     {
+        if (_bitSets.TryGetValue(type, out var bitSet))
+        {
+            return bitSet.Alignment;
+        }
+        if (_boundedDictionaries.TryGetValue(type, out var boundedDictionary))
+        {
+            return boundedDictionary.Alignment;
+        }
+        if (_boundedArrays.TryGetValue(type, out var boundedArray))
+        {
+            return boundedArray.Alignment;
+        }
         if (_structs.TryGetValue(type, out var structure))
         {
             return structure.Fields.Count == 0

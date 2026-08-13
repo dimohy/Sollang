@@ -1,0 +1,42 @@
+# Verifies self-host LLVM ring wrap-around, growth, peeks, pops, and mutable-borrow updates.
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        fill queue: mut Deque<Int> -> Unit {
+            queue! -> pushBack(2)
+            queue! -> pushBack(3)
+            queue! -> pushFront(1)
+            queue! -> pushBack(4)
+            queue! -> pushBack(5)
+        }
+
+        main {
+            Deque<Int>(3) => queue!
+            queue! -> fill
+            queue! -> front -> println
+            queue! -> back -> println
+            queue! -> popFront -> println
+            queue! -> popBack -> println
+            queue! -> front -> println
+            queue! -> back -> println
+            queue! -> len -> println
+            queue! -> pushFront(0)
+            queue! -> popBack -> println
+            queue! -> popFront -> println
+            queue! -> popFront -> println
+            queue! -> popFront -> println
+            queue! -> len -> println
+
+            Deque<box Int>(2) => owned!
+            owned! -> pushBack(box 1)
+            owned! -> pushBack(box 2)
+            owned! -> pushFront(box 3)
+            owned! -> popFront => first
+            "owned-ok" -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

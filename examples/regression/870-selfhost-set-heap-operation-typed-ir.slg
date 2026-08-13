@@ -1,0 +1,37 @@
+# Verifies receiver-specialized self-host Typed IR for Set and BinaryHeap.
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        main {
+            Set<Int>(4) => set!
+            set! -> insert(10) => inserted
+            set! -> contains(10) => present
+            set! -> remove(10) => removed
+            BinaryHeap<Int>(2) => heap!
+            heap! -> push(4)
+            heap! -> peek => top
+            heap! -> pop => popped
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+
+    [false, false, false, false, false, false; ~] => found!
+    ir! -> each node {
+        (node.kind == 9 and node.opcode == -255 and node.typeOrigin == 1 and node.typeSymbol == 23) -> if { true => found![0] }
+        (node.kind == 9 and node.opcode == -256 and node.typeOrigin == 1 and node.typeSymbol == 23) -> if { true => found![1] }
+        (node.kind == 9 and node.opcode == -257 and node.typeOrigin == 1 and node.typeSymbol == 23) -> if { true => found![2] }
+        (node.kind == 9 and node.opcode == -252 and node.typeOrigin == 1 and node.typeSymbol == 0) -> if { true => found![3] }
+        (node.kind == 9 and node.opcode == -253 and node.typeOrigin == 1 and node.typeSymbol == 2) -> if { true => found![4] }
+        (node.kind == 9 and node.opcode == -254 and node.typeOrigin == 1 and node.typeSymbol == 2) -> if { true => found![5] }
+    }
+
+    found![0] -> if { "set-insert=true" -> println } else { "set-insert=false" -> println }
+    found![1] -> if { "set-contains=true" -> println } else { "set-contains=false" -> println }
+    found![2] -> if { "set-remove=true" -> println } else { "set-remove=false" -> println }
+    found![3] -> if { "heap-push=true" -> println } else { "heap-push=false" -> println }
+    found![4] -> if { "heap-peek=true" -> println } else { "heap-peek=false" -> println }
+    found![5] -> if { "heap-pop=true" -> println } else { "heap-pop=false" -> println }
+}

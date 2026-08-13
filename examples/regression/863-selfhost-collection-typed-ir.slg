@@ -1,0 +1,32 @@
+# Verifies that collection constructor identities survive into self-host Typed IR.
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        main {
+            Set<Int>(2) => set!
+            Deque<Int>(2) => deque!
+            BinaryHeap<Int>(2) => heap!
+            BitSet<130>() => bits!
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+
+    false => hasSet!
+    false => hasDeque!
+    false => hasHeap!
+    false => hasBits!
+    ir! -> each node {
+        (node.kind == 6 and node.opcode == -237 and node.typeKind == 7 and node.typeOrigin == 4 and node.typeSymbol == 5) -> if { true => hasSet! }
+        (node.kind == 6 and node.opcode == -238 and node.typeKind == 7 and node.typeOrigin == 4 and node.typeSymbol == 6) -> if { true => hasDeque! }
+        (node.kind == 6 and node.opcode == -239 and node.typeKind == 7 and node.typeOrigin == 4 and node.typeSymbol == 7) -> if { true => hasHeap! }
+        (node.kind == 6 and node.opcode == -240 and node.typeKind == 14 and node.typeOrigin == 4 and node.typeSymbol == 8) -> if { true => hasBits! }
+    }
+
+    hasSet! -> if { "set=true" -> println } else { "set=false" -> println }
+    hasDeque! -> if { "deque=true" -> println } else { "deque=false" -> println }
+    hasHeap! -> if { "heap=true" -> println } else { "heap=false" -> println }
+    hasBits! -> if { "bits=true" -> println } else { "bits=false" -> println }
+}

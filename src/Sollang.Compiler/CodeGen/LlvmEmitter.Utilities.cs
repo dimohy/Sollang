@@ -546,8 +546,13 @@ internal sealed partial class LlvmEmitter
 
     private void DropDynamicInlineArrayElements(RuntimeDynamicInlineArray array)
     {
-        var definition = _program.Types.GetDynamicArray(array.ArrayType);
-        if (!_program.Types.ContainsOwnedStorage(definition.ElementType))
+        var elementType = _program.Types.IsBoundedArray(array.ArrayType)
+            ? _program.Types.GetBoundedArray(array.ArrayType).ElementType
+            : _program.Types.GetDynamicArray(array.ArrayType).ElementType;
+        var elementAlignment = _program.Types.IsBoundedArray(array.ArrayType)
+            ? _program.Types.GetBoundedArray(array.ArrayType).ElementAlignment
+            : _program.Types.GetDynamicArray(array.ArrayType).ElementAlignment;
+        if (!_program.Types.ContainsOwnedStorage(elementType))
         {
             return;
         }
@@ -558,7 +563,7 @@ internal sealed partial class LlvmEmitter
         var continueLabel = NextLabel("drop_dynamic_array_continue");
         var doneLabel = NextLabel("drop_dynamic_array_done");
         var nextIndex = NextTemp("drop_dynamic_array_next");
-        var llvmType = LlvmType(definition.ElementType);
+        var llvmType = LlvmType(elementType);
         EmitBranch(loopLabel);
         EmitFunctionLine();
         EmitLabel(loopLabel);
@@ -569,11 +574,19 @@ internal sealed partial class LlvmEmitter
         EmitConditionalBranch(active, bodyLabel, doneLabel);
         EmitFunctionLine();
         EmitLabel(bodyLabel);
-        var slot = NextTemp("drop_dynamic_array_slot");
-        EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
+        string slot;
+        if (_program.Types.IsDeque(array.ArrayType))
+        {
+            slot = EmitDequeElementPointer(array, index, "drop_deque");
+        }
+        else
+        {
+            slot = NextTemp("drop_dynamic_array_slot");
+            EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
+        }
         var value = NextTemp("drop_dynamic_array_value");
-        EmitLoad(value, llvmType, slot, definition.ElementAlignment);
-        EmitOwnedDropCall(definition.ElementType, value);
+        EmitLoad(value, llvmType, slot, elementAlignment);
+        EmitOwnedDropCall(elementType, value);
         EmitBranch(continueLabel);
         EmitFunctionLine();
         EmitLabel(continueLabel);
@@ -620,7 +633,13 @@ internal sealed partial class LlvmEmitter
 
     private void CreateMutableContainerSlot(BindingStatement binding, RuntimeValue value)
     {
-        if (!RequiresHeapAllocation(value))
+        var isInlineBoundedContainer = value switch
+        {
+            RuntimeDynamicInlineArray array => _program.Types.IsBoundedArray(array.ArrayType),
+            RuntimeInlineDictionary dictionary => _program.Types.IsBoundedDictionary(dictionary.DictionaryType),
+            _ => false
+        };
+        if (!RequiresHeapAllocation(value) && !isInlineBoundedContainer)
         {
             if (value is not (RuntimeInt or RuntimeFloat or RuntimeBool or RuntimeText))
             {
@@ -1237,6 +1256,9 @@ internal sealed partial class LlvmEmitter
         string CapacityName,
         RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
         : RuntimeValue(DictionaryType);
+
+    private sealed record RuntimeBitSet(BoundType BitSetType, string PointerName)
+        : RuntimeValue(BitSetType);
 
     private sealed record RuntimeMutableContainerReference(
         BoundType TargetType,

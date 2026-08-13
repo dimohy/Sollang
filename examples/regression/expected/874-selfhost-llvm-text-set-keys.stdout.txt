@@ -1,0 +1,1028 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @GetConsoleMode(ptr, ptr)
+declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @GetProcessHeap()
+declare ptr @HeapAlloc(ptr, i32, i64)
+declare i32 @HeapFree(ptr, i32, ptr)
+define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+entry:
+  %mode = alloca i32, align 4
+  %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+  %is_console = icmp ne i32 %console_status, 0
+  br i1 %is_console, label %console_prepare, label %redirected
+redirected:
+  %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
+  ret i32 %redirected_ok
+console_prepare:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @GetProcessHeap()
+  %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+convert:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+console_write:
+  %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
+  %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  ret i32 %console_ok
+conversion_free:
+  %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+conversion_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+}
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+@sollang_runtime_bool_true = private constant [4 x i8] c"true"
+@sollang_runtime_bool_false = private constant [5 x i8] c"false"
+define internal void @sollang_runtime_print_i1(i1 %value, i1 %newline) {
+entry:
+  %data = select i1 %value, ptr @sollang_runtime_bool_true, ptr @sollang_runtime_bool_false
+  %length = select i1 %value, i64 4, i64 5
+  call void @sollang_runtime_print(ptr %data, i64 %length, i1 %newline)
+  ret void
+}
+declare ptr @malloc(i64)
+declare void @free(ptr)
+%sollang.dict = type { ptr, ptr, i64, i64 }
+define internal void @sollang_drop_t26(%sollang.dict %value) {
+entry:
+  %keys = extractvalue %sollang.dict %value, 0
+  %controls = extractvalue %sollang.dict %value, 1
+  %capacity = extractvalue %sollang.dict %value, 3
+  call void @free(ptr %controls)
+  ret void
+}
+declare void @llvm.trap()
+%sollang.text = type { ptr, i64 }
+define internal i64 @sollang_dictionary_hash_text(%sollang.text %value) {
+entry:
+  %data = extractvalue %sollang.text %value, 0
+  %length = extractvalue %sollang.text %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next_index, %body ]
+  %hash = phi i64 [ -3750763034362895579, %entry ], [ %next_hash, %body ]
+  %active = icmp ult i64 %index, %length
+  br i1 %active, label %body, label %done
+body:
+  %byte_ptr = getelementptr i8, ptr %data, i64 %index
+  %byte = load i8, ptr %byte_ptr, align 1
+  %wide = zext i8 %byte to i64
+  %mixed = xor i64 %hash, %wide
+  %next_hash = mul i64 %mixed, 1099511628211
+  %next_index = add i64 %index, 1
+  br label %loop
+done:
+  ret i64 %hash
+}
+
+define internal i1 @sollang_dictionary_text_equal(%sollang.text %left, %sollang.text %right) {
+entry:
+  %left_data = extractvalue %sollang.text %left, 0
+  %left_length = extractvalue %sollang.text %left, 1
+  %right_data = extractvalue %sollang.text %right, 0
+  %right_length = extractvalue %sollang.text %right, 1
+  %same_length = icmp eq i64 %left_length, %right_length
+  br i1 %same_length, label %loop, label %mismatch
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next_index, %next ]
+  %active = icmp ult i64 %index, %left_length
+  br i1 %active, label %body, label %match
+body:
+  %left_ptr = getelementptr i8, ptr %left_data, i64 %index
+  %right_ptr = getelementptr i8, ptr %right_data, i64 %index
+  %left_byte = load i8, ptr %left_ptr, align 1
+  %right_byte = load i8, ptr %right_ptr, align 1
+  %same_byte = icmp eq i8 %left_byte, %right_byte
+  br i1 %same_byte, label %next, label %mismatch
+next:
+  %next_index = add i64 %index, 1
+  br label %loop
+match:
+  ret i1 true
+mismatch:
+  ret i1 false
+}
+@sollang_str_6 = private unnamed_addr constant [5 x i8] c"alpha"
+@sollang_str_9 = private unnamed_addr constant [4 x i8] c"beta"
+@sollang_str_12 = private unnamed_addr constant [5 x i8] c"alpha"
+@sollang_str_15 = private unnamed_addr constant [4 x i8] c"beta"
+@sollang_str_18 = private unnamed_addr constant [5 x i8] c"alpha"
+@sollang_str_21 = private unnamed_addr constant [5 x i8] c"alpha"
+define i32 @main() {
+entry:
+  %slot1 = alloca %sollang.dict, align 8
+  %v6_ptr = insertvalue %sollang.text poison, ptr @sollang_str_6, 0
+  %v6 = insertvalue %sollang.text %v6_ptr, i64 5, 1
+  %v9_ptr = insertvalue %sollang.text poison, ptr @sollang_str_9, 0
+  %v9 = insertvalue %sollang.text %v9_ptr, i64 4, 1
+  %v12_ptr = insertvalue %sollang.text poison, ptr @sollang_str_12, 0
+  %v12 = insertvalue %sollang.text %v12_ptr, i64 5, 1
+  %v15_ptr = insertvalue %sollang.text poison, ptr @sollang_str_15, 0
+  %v15 = insertvalue %sollang.text %v15_ptr, i64 4, 1
+  %v18_ptr = insertvalue %sollang.text poison, ptr @sollang_str_18, 0
+  %v18 = insertvalue %sollang.text %v18_ptr, i64 5, 1
+  %v21_ptr = insertvalue %sollang.text poison, ptr @sollang_str_21, 0
+  %v21 = insertvalue %sollang.text %v21_ptr, i64 5, 1
+  %v2_requested = add i64 0, 4
+  %v2_nonnegative = icmp sge i64 %v2_requested, 0
+  br i1 %v2_nonnegative, label %collection2_capacity_ok, label %collection2_capacity_fail
+collection2_capacity_fail:
+  call void @llvm.trap()
+  unreachable
+collection2_capacity_ok:
+  %v2_scaled = mul i64 %v2_requested, 8
+  %v2_rounded_entries = add i64 %v2_scaled, 6
+  %v2_required = udiv i64 %v2_rounded_entries, 7
+  %v2_below_minimum = icmp ult i64 %v2_required, 16
+  %v2_minimum = select i1 %v2_below_minimum, i64 16, i64 %v2_required
+  %v2_minus_one = sub i64 %v2_minimum, 1
+  %v2_shift1 = lshr i64 %v2_minus_one, 1
+  %v2_round1 = or i64 %v2_minus_one, %v2_shift1
+  %v2_shift2 = lshr i64 %v2_round1, 2
+  %v2_round2 = or i64 %v2_round1, %v2_shift2
+  %v2_shift4 = lshr i64 %v2_round2, 4
+  %v2_round4 = or i64 %v2_round2, %v2_shift4
+  %v2_shift8 = lshr i64 %v2_round4, 8
+  %v2_round8 = or i64 %v2_round4, %v2_shift8
+  %v2_shift16 = lshr i64 %v2_round8, 16
+  %v2_round16 = or i64 %v2_round8, %v2_shift16
+  %v2_shift32 = lshr i64 %v2_round16, 32
+  %v2_round32 = or i64 %v2_round16, %v2_shift32
+  %v2_capacity = add i64 %v2_round32, 1
+  %v2_control_bytes = add i64 %v2_capacity, 16
+  %v2_key_bytes = mul i64 %v2_capacity, 16
+  %v2_bytes = add i64 %v2_control_bytes, %v2_key_bytes
+  %v2_controls = call ptr @malloc(i64 %v2_bytes)
+  call void @llvm.memset.p0.i64(ptr %v2_controls, i8 0, i64 %v2_control_bytes, i1 false)
+  %v2_keys = getelementptr i8, ptr %v2_controls, i64 %v2_control_bytes
+  %v2_0 = insertvalue %sollang.dict poison, ptr %v2_keys, 0
+  %v2_1 = insertvalue %sollang.dict %v2_0, ptr %v2_controls, 1
+  %v2_2 = insertvalue %sollang.dict %v2_1, i64 0, 2
+  %v2 = insertvalue %sollang.dict %v2_2, i64 %v2_capacity, 3
+  store %sollang.dict %v2, ptr %slot1, align 8
+  %v5 = load %sollang.dict, ptr %slot1, align 8
+  %set24_source = load %sollang.dict, ptr %slot1, align 8
+  %set24_keys = extractvalue %sollang.dict %set24_source, 0
+  %set24_controls = extractvalue %sollang.dict %set24_source, 1
+  %set24_length = extractvalue %sollang.dict %set24_source, 2
+  %set24_capacity = extractvalue %sollang.dict %set24_source, 3
+  %set24_query_addr = alloca %sollang.text, align 8
+  store %sollang.text %v6, ptr %set24_query_addr, align 8
+  %set24_query = load %sollang.text, ptr %set24_query_addr, align 8
+  %set24_query_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set24_query)
+  %set24_h2_shifted = lshr i64 %set24_query_hash, 57
+  %set24_h2_raw = and i64 %set24_h2_shifted, 127
+  %set24_h2_zero = icmp eq i64 %set24_h2_raw, 0
+  %set24_h2_value = select i1 %set24_h2_zero, i64 1, i64 %set24_h2_raw
+  %set24_h2 = trunc i64 %set24_h2_value to i8
+  %set24_mask = sub i64 %set24_capacity, 1
+  %set24_start_slot = and i64 %set24_query_hash, %set24_mask
+  br label %set24_lookup_entry
+set24_lookup_entry:
+  br label %set24_lookup
+set24_lookup:
+  %set24_slot = phi i64 [ %set24_start_slot, %set24_lookup_entry ], [ %set24_next_slot, %set24_advance ]
+  %set24_probe = phi i64 [ 0, %set24_lookup_entry ], [ %set24_next_probe, %set24_advance ]
+  %set24_first_deleted = phi i64 [ %set24_capacity, %set24_lookup_entry ], [ %set24_next_first_deleted, %set24_advance ]
+  %set24_active = icmp ult i64 %set24_probe, %set24_capacity
+  br i1 %set24_active, label %set24_check, label %set24_exhausted
+set24_check:
+  %set24_control_ptr = getelementptr i8, ptr %set24_controls, i64 %set24_slot
+  %set24_control = load i8, ptr %set24_control_ptr, align 1
+  %set24_deleted = icmp eq i8 %set24_control, -1
+  %set24_without_deleted = icmp eq i64 %set24_first_deleted, %set24_capacity
+  %set24_capture_deleted = and i1 %set24_deleted, %set24_without_deleted
+  %set24_captured_deleted = select i1 %set24_capture_deleted, i64 %set24_slot, i64 %set24_first_deleted
+  %set24_empty = icmp eq i8 %set24_control, 0
+  br i1 %set24_empty, label %set24_missing, label %set24_check_h2
+set24_check_h2:
+  %set24_h2_match = icmp eq i8 %set24_control, %set24_h2
+  br i1 %set24_h2_match, label %set24_check_key, label %set24_advance
+set24_check_key:
+  %set24_stored_ptr = getelementptr %sollang.text, ptr %set24_keys, i64 %set24_slot
+  %set24_stored = load %sollang.text, ptr %set24_stored_ptr, align 8
+  %set24_lookup_equal = call i1 @sollang_dictionary_text_equal(%sollang.text %set24_stored, %sollang.text %set24_query)
+  br i1 %set24_lookup_equal, label %set24_found, label %set24_advance
+set24_advance:
+  %set24_slot_plus_one = add i64 %set24_slot, 1
+  %set24_next_slot = and i64 %set24_slot_plus_one, %set24_mask
+  %set24_next_probe = add i64 %set24_probe, 1
+  %set24_next_first_deleted = add i64 %set24_captured_deleted, 0
+  br label %set24_lookup
+set24_exhausted:
+  br label %set24_insert_exhausted
+set24_insert_exhausted:
+  br label %set24_insert_decide
+set24_missing:
+  %set24_missing_has_deleted = icmp ne i64 %set24_first_deleted, %set24_capacity
+  %set24_missing_slot = select i1 %set24_missing_has_deleted, i64 %set24_first_deleted, i64 %set24_slot
+  br label %set24_insert_decide
+set24_insert_decide:
+  %set24_insert_slot = phi i64 [ %set24_first_deleted, %set24_insert_exhausted ], [ %set24_missing_slot, %set24_missing ]
+  %set24_next_length = add i64 %set24_length, 1
+  %set24_scaled_length = mul i64 %set24_next_length, 8
+  %set24_load_limit = mul i64 %set24_capacity, 7
+  %set24_fits = icmp ule i64 %set24_scaled_length, %set24_load_limit
+  br i1 %set24_fits, label %set24_insert_current, label %set24_grow
+set24_insert_current:
+  %set24_insert_key_ptr = getelementptr %sollang.text, ptr %set24_keys, i64 %set24_insert_slot
+  store %sollang.text %set24_query, ptr %set24_insert_key_ptr, align 8
+  %set24_insert_control_ptr = getelementptr i8, ptr %set24_controls, i64 %set24_insert_slot
+  store i8 %set24_h2, ptr %set24_insert_control_ptr, align 1
+  %set24_current_result = insertvalue %sollang.dict %set24_source, i64 %set24_next_length, 2
+  store %sollang.dict %set24_current_result, ptr %slot1, align 8
+  br label %set24_inserted
+set24_grow:
+  %set24_grown_capacity = mul i64 %set24_capacity, 2
+  br label %set24_grow_rehash_entry
+set24_grow_rehash_entry:
+  %set24_grow_rehash_control_bytes = add i64 %set24_grown_capacity, 16
+  %set24_grow_rehash_key_bytes = mul i64 %set24_grown_capacity, 16
+  %set24_grow_rehash_allocation_bytes = add i64 %set24_grow_rehash_control_bytes, %set24_grow_rehash_key_bytes
+  %set24_grow_rehash_controls = call ptr @malloc(i64 %set24_grow_rehash_allocation_bytes)
+  call void @llvm.memset.p0.i64(ptr %set24_grow_rehash_controls, i8 0, i64 %set24_grow_rehash_control_bytes, i1 false)
+  %set24_grow_rehash_keys = getelementptr i8, ptr %set24_grow_rehash_controls, i64 %set24_grow_rehash_control_bytes
+  br label %set24_grow_rehash_loop
+set24_grow_rehash_loop:
+  %set24_grow_rehash_index = phi i64 [ 0, %set24_grow_rehash_entry ], [ %set24_grow_rehash_next_index, %set24_grow_rehash_advance ]
+  %set24_grow_rehash_active = icmp ult i64 %set24_grow_rehash_index, %set24_capacity
+  br i1 %set24_grow_rehash_active, label %set24_grow_rehash_check, label %set24_grow_rehash_done
+set24_grow_rehash_check:
+  %set24_grow_rehash_old_control_ptr = getelementptr i8, ptr %set24_controls, i64 %set24_grow_rehash_index
+  %set24_grow_rehash_old_control = load i8, ptr %set24_grow_rehash_old_control_ptr, align 1
+  %set24_grow_rehash_occupied = icmp sgt i8 %set24_grow_rehash_old_control, 0
+  br i1 %set24_grow_rehash_occupied, label %set24_grow_rehash_move, label %set24_grow_rehash_advance
+set24_grow_rehash_move:
+  %set24_grow_rehash_old_key_ptr = getelementptr %sollang.text, ptr %set24_keys, i64 %set24_grow_rehash_index
+  %set24_grow_rehash_key = load %sollang.text, ptr %set24_grow_rehash_old_key_ptr, align 8
+  %set24_grow_rehash_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set24_grow_rehash_key)
+  %set24_grow_rehash_h2_shifted = lshr i64 %set24_grow_rehash_hash, 57
+  %set24_grow_rehash_h2_raw = and i64 %set24_grow_rehash_h2_shifted, 127
+  %set24_grow_rehash_h2_zero = icmp eq i64 %set24_grow_rehash_h2_raw, 0
+  %set24_grow_rehash_h2_value = select i1 %set24_grow_rehash_h2_zero, i64 1, i64 %set24_grow_rehash_h2_raw
+  %set24_grow_rehash_h2 = trunc i64 %set24_grow_rehash_h2_value to i8
+  %set24_grow_rehash_mask = sub i64 %set24_grown_capacity, 1
+  %set24_grow_rehash_start_slot = and i64 %set24_grow_rehash_hash, %set24_grow_rehash_mask
+  br label %set24_grow_rehash_find
+set24_grow_rehash_find:
+  %set24_grow_rehash_slot = phi i64 [ %set24_grow_rehash_start_slot, %set24_grow_rehash_move ], [ %set24_grow_rehash_next_slot, %set24_grow_rehash_find_advance ]
+  %set24_grow_rehash_control_ptr = getelementptr i8, ptr %set24_grow_rehash_controls, i64 %set24_grow_rehash_slot
+  %set24_grow_rehash_control = load i8, ptr %set24_grow_rehash_control_ptr, align 1
+  %set24_grow_rehash_empty = icmp eq i8 %set24_grow_rehash_control, 0
+  br i1 %set24_grow_rehash_empty, label %set24_grow_rehash_store, label %set24_grow_rehash_find_advance
+set24_grow_rehash_find_advance:
+  %set24_grow_rehash_slot_plus_one = add i64 %set24_grow_rehash_slot, 1
+  %set24_grow_rehash_next_slot = and i64 %set24_grow_rehash_slot_plus_one, %set24_grow_rehash_mask
+  br label %set24_grow_rehash_find
+set24_grow_rehash_store:
+  %set24_grow_rehash_new_key_ptr = getelementptr %sollang.text, ptr %set24_grow_rehash_keys, i64 %set24_grow_rehash_slot
+  store %sollang.text %set24_grow_rehash_key, ptr %set24_grow_rehash_new_key_ptr, align 8
+  store i8 %set24_grow_rehash_h2, ptr %set24_grow_rehash_control_ptr, align 1
+  br label %set24_grow_rehash_advance
+set24_grow_rehash_advance:
+  %set24_grow_rehash_next_index = add i64 %set24_grow_rehash_index, 1
+  br label %set24_grow_rehash_loop
+set24_grow_rehash_done:
+  call void @free(ptr %set24_controls)
+  %set24_grow_rehash_result0 = insertvalue %sollang.dict poison, ptr %set24_grow_rehash_keys, 0
+  %set24_grow_rehash_result1 = insertvalue %sollang.dict %set24_grow_rehash_result0, ptr %set24_grow_rehash_controls, 1
+  %set24_grow_rehash_result2 = insertvalue %sollang.dict %set24_grow_rehash_result1, i64 %set24_length, 2
+  %set24_grow_rehash_result = insertvalue %sollang.dict %set24_grow_rehash_result2, i64 %set24_grown_capacity, 3
+  %set24_grown_mask = sub i64 %set24_grown_capacity, 1
+  %set24_grown_start = and i64 %set24_query_hash, %set24_grown_mask
+  br label %set24_grown_find
+set24_grown_find:
+  %set24_grown_slot = phi i64 [ %set24_grown_start, %set24_grow_rehash_done ], [ %set24_grown_next, %set24_grown_advance ]
+  %set24_grown_control_ptr = getelementptr i8, ptr %set24_grow_rehash_controls, i64 %set24_grown_slot
+  %set24_grown_control = load i8, ptr %set24_grown_control_ptr, align 1
+  %set24_grown_empty = icmp eq i8 %set24_grown_control, 0
+  br i1 %set24_grown_empty, label %set24_grown_store, label %set24_grown_advance
+set24_grown_advance:
+  %set24_grown_plus_one = add i64 %set24_grown_slot, 1
+  %set24_grown_next = and i64 %set24_grown_plus_one, %set24_grown_mask
+  br label %set24_grown_find
+set24_grown_store:
+  %set24_grown_key_ptr = getelementptr %sollang.text, ptr %set24_grow_rehash_keys, i64 %set24_grown_slot
+  store %sollang.text %set24_query, ptr %set24_grown_key_ptr, align 8
+  store i8 %set24_h2, ptr %set24_grown_control_ptr, align 1
+  %set24_grown_result = insertvalue %sollang.dict %set24_grow_rehash_result, i64 %set24_next_length, 2
+  store %sollang.dict %set24_grown_result, ptr %slot1, align 8
+  br label %set24_inserted
+set24_found:
+  br label %set24_duplicate
+set24_inserted:
+  br label %set24_complete
+set24_duplicate:
+  br label %set24_complete
+set24_complete:
+  %v24 = phi i1 [ true, %set24_inserted ], [ false, %set24_duplicate ]
+  call void @sollang_runtime_print_i1(i1 %v24, i1 true)
+  %v8 = load %sollang.dict, ptr %slot1, align 8
+  %set25_source = load %sollang.dict, ptr %slot1, align 8
+  %set25_keys = extractvalue %sollang.dict %set25_source, 0
+  %set25_controls = extractvalue %sollang.dict %set25_source, 1
+  %set25_length = extractvalue %sollang.dict %set25_source, 2
+  %set25_capacity = extractvalue %sollang.dict %set25_source, 3
+  %set25_query_addr = alloca %sollang.text, align 8
+  store %sollang.text %v9, ptr %set25_query_addr, align 8
+  %set25_query = load %sollang.text, ptr %set25_query_addr, align 8
+  %set25_query_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set25_query)
+  %set25_h2_shifted = lshr i64 %set25_query_hash, 57
+  %set25_h2_raw = and i64 %set25_h2_shifted, 127
+  %set25_h2_zero = icmp eq i64 %set25_h2_raw, 0
+  %set25_h2_value = select i1 %set25_h2_zero, i64 1, i64 %set25_h2_raw
+  %set25_h2 = trunc i64 %set25_h2_value to i8
+  %set25_mask = sub i64 %set25_capacity, 1
+  %set25_start_slot = and i64 %set25_query_hash, %set25_mask
+  br label %set25_lookup_entry
+set25_lookup_entry:
+  br label %set25_lookup
+set25_lookup:
+  %set25_slot = phi i64 [ %set25_start_slot, %set25_lookup_entry ], [ %set25_next_slot, %set25_advance ]
+  %set25_probe = phi i64 [ 0, %set25_lookup_entry ], [ %set25_next_probe, %set25_advance ]
+  %set25_first_deleted = phi i64 [ %set25_capacity, %set25_lookup_entry ], [ %set25_next_first_deleted, %set25_advance ]
+  %set25_active = icmp ult i64 %set25_probe, %set25_capacity
+  br i1 %set25_active, label %set25_check, label %set25_exhausted
+set25_check:
+  %set25_control_ptr = getelementptr i8, ptr %set25_controls, i64 %set25_slot
+  %set25_control = load i8, ptr %set25_control_ptr, align 1
+  %set25_deleted = icmp eq i8 %set25_control, -1
+  %set25_without_deleted = icmp eq i64 %set25_first_deleted, %set25_capacity
+  %set25_capture_deleted = and i1 %set25_deleted, %set25_without_deleted
+  %set25_captured_deleted = select i1 %set25_capture_deleted, i64 %set25_slot, i64 %set25_first_deleted
+  %set25_empty = icmp eq i8 %set25_control, 0
+  br i1 %set25_empty, label %set25_missing, label %set25_check_h2
+set25_check_h2:
+  %set25_h2_match = icmp eq i8 %set25_control, %set25_h2
+  br i1 %set25_h2_match, label %set25_check_key, label %set25_advance
+set25_check_key:
+  %set25_stored_ptr = getelementptr %sollang.text, ptr %set25_keys, i64 %set25_slot
+  %set25_stored = load %sollang.text, ptr %set25_stored_ptr, align 8
+  %set25_lookup_equal = call i1 @sollang_dictionary_text_equal(%sollang.text %set25_stored, %sollang.text %set25_query)
+  br i1 %set25_lookup_equal, label %set25_found, label %set25_advance
+set25_advance:
+  %set25_slot_plus_one = add i64 %set25_slot, 1
+  %set25_next_slot = and i64 %set25_slot_plus_one, %set25_mask
+  %set25_next_probe = add i64 %set25_probe, 1
+  %set25_next_first_deleted = add i64 %set25_captured_deleted, 0
+  br label %set25_lookup
+set25_exhausted:
+  br label %set25_insert_exhausted
+set25_insert_exhausted:
+  br label %set25_insert_decide
+set25_missing:
+  %set25_missing_has_deleted = icmp ne i64 %set25_first_deleted, %set25_capacity
+  %set25_missing_slot = select i1 %set25_missing_has_deleted, i64 %set25_first_deleted, i64 %set25_slot
+  br label %set25_insert_decide
+set25_insert_decide:
+  %set25_insert_slot = phi i64 [ %set25_first_deleted, %set25_insert_exhausted ], [ %set25_missing_slot, %set25_missing ]
+  %set25_next_length = add i64 %set25_length, 1
+  %set25_scaled_length = mul i64 %set25_next_length, 8
+  %set25_load_limit = mul i64 %set25_capacity, 7
+  %set25_fits = icmp ule i64 %set25_scaled_length, %set25_load_limit
+  br i1 %set25_fits, label %set25_insert_current, label %set25_grow
+set25_insert_current:
+  %set25_insert_key_ptr = getelementptr %sollang.text, ptr %set25_keys, i64 %set25_insert_slot
+  store %sollang.text %set25_query, ptr %set25_insert_key_ptr, align 8
+  %set25_insert_control_ptr = getelementptr i8, ptr %set25_controls, i64 %set25_insert_slot
+  store i8 %set25_h2, ptr %set25_insert_control_ptr, align 1
+  %set25_current_result = insertvalue %sollang.dict %set25_source, i64 %set25_next_length, 2
+  store %sollang.dict %set25_current_result, ptr %slot1, align 8
+  br label %set25_inserted
+set25_grow:
+  %set25_grown_capacity = mul i64 %set25_capacity, 2
+  br label %set25_grow_rehash_entry
+set25_grow_rehash_entry:
+  %set25_grow_rehash_control_bytes = add i64 %set25_grown_capacity, 16
+  %set25_grow_rehash_key_bytes = mul i64 %set25_grown_capacity, 16
+  %set25_grow_rehash_allocation_bytes = add i64 %set25_grow_rehash_control_bytes, %set25_grow_rehash_key_bytes
+  %set25_grow_rehash_controls = call ptr @malloc(i64 %set25_grow_rehash_allocation_bytes)
+  call void @llvm.memset.p0.i64(ptr %set25_grow_rehash_controls, i8 0, i64 %set25_grow_rehash_control_bytes, i1 false)
+  %set25_grow_rehash_keys = getelementptr i8, ptr %set25_grow_rehash_controls, i64 %set25_grow_rehash_control_bytes
+  br label %set25_grow_rehash_loop
+set25_grow_rehash_loop:
+  %set25_grow_rehash_index = phi i64 [ 0, %set25_grow_rehash_entry ], [ %set25_grow_rehash_next_index, %set25_grow_rehash_advance ]
+  %set25_grow_rehash_active = icmp ult i64 %set25_grow_rehash_index, %set25_capacity
+  br i1 %set25_grow_rehash_active, label %set25_grow_rehash_check, label %set25_grow_rehash_done
+set25_grow_rehash_check:
+  %set25_grow_rehash_old_control_ptr = getelementptr i8, ptr %set25_controls, i64 %set25_grow_rehash_index
+  %set25_grow_rehash_old_control = load i8, ptr %set25_grow_rehash_old_control_ptr, align 1
+  %set25_grow_rehash_occupied = icmp sgt i8 %set25_grow_rehash_old_control, 0
+  br i1 %set25_grow_rehash_occupied, label %set25_grow_rehash_move, label %set25_grow_rehash_advance
+set25_grow_rehash_move:
+  %set25_grow_rehash_old_key_ptr = getelementptr %sollang.text, ptr %set25_keys, i64 %set25_grow_rehash_index
+  %set25_grow_rehash_key = load %sollang.text, ptr %set25_grow_rehash_old_key_ptr, align 8
+  %set25_grow_rehash_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set25_grow_rehash_key)
+  %set25_grow_rehash_h2_shifted = lshr i64 %set25_grow_rehash_hash, 57
+  %set25_grow_rehash_h2_raw = and i64 %set25_grow_rehash_h2_shifted, 127
+  %set25_grow_rehash_h2_zero = icmp eq i64 %set25_grow_rehash_h2_raw, 0
+  %set25_grow_rehash_h2_value = select i1 %set25_grow_rehash_h2_zero, i64 1, i64 %set25_grow_rehash_h2_raw
+  %set25_grow_rehash_h2 = trunc i64 %set25_grow_rehash_h2_value to i8
+  %set25_grow_rehash_mask = sub i64 %set25_grown_capacity, 1
+  %set25_grow_rehash_start_slot = and i64 %set25_grow_rehash_hash, %set25_grow_rehash_mask
+  br label %set25_grow_rehash_find
+set25_grow_rehash_find:
+  %set25_grow_rehash_slot = phi i64 [ %set25_grow_rehash_start_slot, %set25_grow_rehash_move ], [ %set25_grow_rehash_next_slot, %set25_grow_rehash_find_advance ]
+  %set25_grow_rehash_control_ptr = getelementptr i8, ptr %set25_grow_rehash_controls, i64 %set25_grow_rehash_slot
+  %set25_grow_rehash_control = load i8, ptr %set25_grow_rehash_control_ptr, align 1
+  %set25_grow_rehash_empty = icmp eq i8 %set25_grow_rehash_control, 0
+  br i1 %set25_grow_rehash_empty, label %set25_grow_rehash_store, label %set25_grow_rehash_find_advance
+set25_grow_rehash_find_advance:
+  %set25_grow_rehash_slot_plus_one = add i64 %set25_grow_rehash_slot, 1
+  %set25_grow_rehash_next_slot = and i64 %set25_grow_rehash_slot_plus_one, %set25_grow_rehash_mask
+  br label %set25_grow_rehash_find
+set25_grow_rehash_store:
+  %set25_grow_rehash_new_key_ptr = getelementptr %sollang.text, ptr %set25_grow_rehash_keys, i64 %set25_grow_rehash_slot
+  store %sollang.text %set25_grow_rehash_key, ptr %set25_grow_rehash_new_key_ptr, align 8
+  store i8 %set25_grow_rehash_h2, ptr %set25_grow_rehash_control_ptr, align 1
+  br label %set25_grow_rehash_advance
+set25_grow_rehash_advance:
+  %set25_grow_rehash_next_index = add i64 %set25_grow_rehash_index, 1
+  br label %set25_grow_rehash_loop
+set25_grow_rehash_done:
+  call void @free(ptr %set25_controls)
+  %set25_grow_rehash_result0 = insertvalue %sollang.dict poison, ptr %set25_grow_rehash_keys, 0
+  %set25_grow_rehash_result1 = insertvalue %sollang.dict %set25_grow_rehash_result0, ptr %set25_grow_rehash_controls, 1
+  %set25_grow_rehash_result2 = insertvalue %sollang.dict %set25_grow_rehash_result1, i64 %set25_length, 2
+  %set25_grow_rehash_result = insertvalue %sollang.dict %set25_grow_rehash_result2, i64 %set25_grown_capacity, 3
+  %set25_grown_mask = sub i64 %set25_grown_capacity, 1
+  %set25_grown_start = and i64 %set25_query_hash, %set25_grown_mask
+  br label %set25_grown_find
+set25_grown_find:
+  %set25_grown_slot = phi i64 [ %set25_grown_start, %set25_grow_rehash_done ], [ %set25_grown_next, %set25_grown_advance ]
+  %set25_grown_control_ptr = getelementptr i8, ptr %set25_grow_rehash_controls, i64 %set25_grown_slot
+  %set25_grown_control = load i8, ptr %set25_grown_control_ptr, align 1
+  %set25_grown_empty = icmp eq i8 %set25_grown_control, 0
+  br i1 %set25_grown_empty, label %set25_grown_store, label %set25_grown_advance
+set25_grown_advance:
+  %set25_grown_plus_one = add i64 %set25_grown_slot, 1
+  %set25_grown_next = and i64 %set25_grown_plus_one, %set25_grown_mask
+  br label %set25_grown_find
+set25_grown_store:
+  %set25_grown_key_ptr = getelementptr %sollang.text, ptr %set25_grow_rehash_keys, i64 %set25_grown_slot
+  store %sollang.text %set25_query, ptr %set25_grown_key_ptr, align 8
+  store i8 %set25_h2, ptr %set25_grown_control_ptr, align 1
+  %set25_grown_result = insertvalue %sollang.dict %set25_grow_rehash_result, i64 %set25_next_length, 2
+  store %sollang.dict %set25_grown_result, ptr %slot1, align 8
+  br label %set25_inserted
+set25_found:
+  br label %set25_duplicate
+set25_inserted:
+  br label %set25_complete
+set25_duplicate:
+  br label %set25_complete
+set25_complete:
+  %v25 = phi i1 [ true, %set25_inserted ], [ false, %set25_duplicate ]
+  call void @sollang_runtime_print_i1(i1 %v25, i1 true)
+  %v11 = load %sollang.dict, ptr %slot1, align 8
+  %set26_source = load %sollang.dict, ptr %slot1, align 8
+  %set26_keys = extractvalue %sollang.dict %set26_source, 0
+  %set26_controls = extractvalue %sollang.dict %set26_source, 1
+  %set26_length = extractvalue %sollang.dict %set26_source, 2
+  %set26_capacity = extractvalue %sollang.dict %set26_source, 3
+  %set26_query_addr = alloca %sollang.text, align 8
+  store %sollang.text %v12, ptr %set26_query_addr, align 8
+  %set26_query = load %sollang.text, ptr %set26_query_addr, align 8
+  %set26_query_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set26_query)
+  %set26_h2_shifted = lshr i64 %set26_query_hash, 57
+  %set26_h2_raw = and i64 %set26_h2_shifted, 127
+  %set26_h2_zero = icmp eq i64 %set26_h2_raw, 0
+  %set26_h2_value = select i1 %set26_h2_zero, i64 1, i64 %set26_h2_raw
+  %set26_h2 = trunc i64 %set26_h2_value to i8
+  %set26_mask = sub i64 %set26_capacity, 1
+  %set26_start_slot = and i64 %set26_query_hash, %set26_mask
+  br label %set26_lookup_entry
+set26_lookup_entry:
+  br label %set26_lookup
+set26_lookup:
+  %set26_slot = phi i64 [ %set26_start_slot, %set26_lookup_entry ], [ %set26_next_slot, %set26_advance ]
+  %set26_probe = phi i64 [ 0, %set26_lookup_entry ], [ %set26_next_probe, %set26_advance ]
+  %set26_first_deleted = phi i64 [ %set26_capacity, %set26_lookup_entry ], [ %set26_next_first_deleted, %set26_advance ]
+  %set26_active = icmp ult i64 %set26_probe, %set26_capacity
+  br i1 %set26_active, label %set26_check, label %set26_exhausted
+set26_check:
+  %set26_control_ptr = getelementptr i8, ptr %set26_controls, i64 %set26_slot
+  %set26_control = load i8, ptr %set26_control_ptr, align 1
+  %set26_deleted = icmp eq i8 %set26_control, -1
+  %set26_without_deleted = icmp eq i64 %set26_first_deleted, %set26_capacity
+  %set26_capture_deleted = and i1 %set26_deleted, %set26_without_deleted
+  %set26_captured_deleted = select i1 %set26_capture_deleted, i64 %set26_slot, i64 %set26_first_deleted
+  %set26_empty = icmp eq i8 %set26_control, 0
+  br i1 %set26_empty, label %set26_missing, label %set26_check_h2
+set26_check_h2:
+  %set26_h2_match = icmp eq i8 %set26_control, %set26_h2
+  br i1 %set26_h2_match, label %set26_check_key, label %set26_advance
+set26_check_key:
+  %set26_stored_ptr = getelementptr %sollang.text, ptr %set26_keys, i64 %set26_slot
+  %set26_stored = load %sollang.text, ptr %set26_stored_ptr, align 8
+  %set26_lookup_equal = call i1 @sollang_dictionary_text_equal(%sollang.text %set26_stored, %sollang.text %set26_query)
+  br i1 %set26_lookup_equal, label %set26_found, label %set26_advance
+set26_advance:
+  %set26_slot_plus_one = add i64 %set26_slot, 1
+  %set26_next_slot = and i64 %set26_slot_plus_one, %set26_mask
+  %set26_next_probe = add i64 %set26_probe, 1
+  %set26_next_first_deleted = add i64 %set26_captured_deleted, 0
+  br label %set26_lookup
+set26_exhausted:
+  br label %set26_insert_exhausted
+set26_insert_exhausted:
+  br label %set26_insert_decide
+set26_missing:
+  %set26_missing_has_deleted = icmp ne i64 %set26_first_deleted, %set26_capacity
+  %set26_missing_slot = select i1 %set26_missing_has_deleted, i64 %set26_first_deleted, i64 %set26_slot
+  br label %set26_insert_decide
+set26_insert_decide:
+  %set26_insert_slot = phi i64 [ %set26_first_deleted, %set26_insert_exhausted ], [ %set26_missing_slot, %set26_missing ]
+  %set26_next_length = add i64 %set26_length, 1
+  %set26_scaled_length = mul i64 %set26_next_length, 8
+  %set26_load_limit = mul i64 %set26_capacity, 7
+  %set26_fits = icmp ule i64 %set26_scaled_length, %set26_load_limit
+  br i1 %set26_fits, label %set26_insert_current, label %set26_grow
+set26_insert_current:
+  %set26_insert_key_ptr = getelementptr %sollang.text, ptr %set26_keys, i64 %set26_insert_slot
+  store %sollang.text %set26_query, ptr %set26_insert_key_ptr, align 8
+  %set26_insert_control_ptr = getelementptr i8, ptr %set26_controls, i64 %set26_insert_slot
+  store i8 %set26_h2, ptr %set26_insert_control_ptr, align 1
+  %set26_current_result = insertvalue %sollang.dict %set26_source, i64 %set26_next_length, 2
+  store %sollang.dict %set26_current_result, ptr %slot1, align 8
+  br label %set26_inserted
+set26_grow:
+  %set26_grown_capacity = mul i64 %set26_capacity, 2
+  br label %set26_grow_rehash_entry
+set26_grow_rehash_entry:
+  %set26_grow_rehash_control_bytes = add i64 %set26_grown_capacity, 16
+  %set26_grow_rehash_key_bytes = mul i64 %set26_grown_capacity, 16
+  %set26_grow_rehash_allocation_bytes = add i64 %set26_grow_rehash_control_bytes, %set26_grow_rehash_key_bytes
+  %set26_grow_rehash_controls = call ptr @malloc(i64 %set26_grow_rehash_allocation_bytes)
+  call void @llvm.memset.p0.i64(ptr %set26_grow_rehash_controls, i8 0, i64 %set26_grow_rehash_control_bytes, i1 false)
+  %set26_grow_rehash_keys = getelementptr i8, ptr %set26_grow_rehash_controls, i64 %set26_grow_rehash_control_bytes
+  br label %set26_grow_rehash_loop
+set26_grow_rehash_loop:
+  %set26_grow_rehash_index = phi i64 [ 0, %set26_grow_rehash_entry ], [ %set26_grow_rehash_next_index, %set26_grow_rehash_advance ]
+  %set26_grow_rehash_active = icmp ult i64 %set26_grow_rehash_index, %set26_capacity
+  br i1 %set26_grow_rehash_active, label %set26_grow_rehash_check, label %set26_grow_rehash_done
+set26_grow_rehash_check:
+  %set26_grow_rehash_old_control_ptr = getelementptr i8, ptr %set26_controls, i64 %set26_grow_rehash_index
+  %set26_grow_rehash_old_control = load i8, ptr %set26_grow_rehash_old_control_ptr, align 1
+  %set26_grow_rehash_occupied = icmp sgt i8 %set26_grow_rehash_old_control, 0
+  br i1 %set26_grow_rehash_occupied, label %set26_grow_rehash_move, label %set26_grow_rehash_advance
+set26_grow_rehash_move:
+  %set26_grow_rehash_old_key_ptr = getelementptr %sollang.text, ptr %set26_keys, i64 %set26_grow_rehash_index
+  %set26_grow_rehash_key = load %sollang.text, ptr %set26_grow_rehash_old_key_ptr, align 8
+  %set26_grow_rehash_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set26_grow_rehash_key)
+  %set26_grow_rehash_h2_shifted = lshr i64 %set26_grow_rehash_hash, 57
+  %set26_grow_rehash_h2_raw = and i64 %set26_grow_rehash_h2_shifted, 127
+  %set26_grow_rehash_h2_zero = icmp eq i64 %set26_grow_rehash_h2_raw, 0
+  %set26_grow_rehash_h2_value = select i1 %set26_grow_rehash_h2_zero, i64 1, i64 %set26_grow_rehash_h2_raw
+  %set26_grow_rehash_h2 = trunc i64 %set26_grow_rehash_h2_value to i8
+  %set26_grow_rehash_mask = sub i64 %set26_grown_capacity, 1
+  %set26_grow_rehash_start_slot = and i64 %set26_grow_rehash_hash, %set26_grow_rehash_mask
+  br label %set26_grow_rehash_find
+set26_grow_rehash_find:
+  %set26_grow_rehash_slot = phi i64 [ %set26_grow_rehash_start_slot, %set26_grow_rehash_move ], [ %set26_grow_rehash_next_slot, %set26_grow_rehash_find_advance ]
+  %set26_grow_rehash_control_ptr = getelementptr i8, ptr %set26_grow_rehash_controls, i64 %set26_grow_rehash_slot
+  %set26_grow_rehash_control = load i8, ptr %set26_grow_rehash_control_ptr, align 1
+  %set26_grow_rehash_empty = icmp eq i8 %set26_grow_rehash_control, 0
+  br i1 %set26_grow_rehash_empty, label %set26_grow_rehash_store, label %set26_grow_rehash_find_advance
+set26_grow_rehash_find_advance:
+  %set26_grow_rehash_slot_plus_one = add i64 %set26_grow_rehash_slot, 1
+  %set26_grow_rehash_next_slot = and i64 %set26_grow_rehash_slot_plus_one, %set26_grow_rehash_mask
+  br label %set26_grow_rehash_find
+set26_grow_rehash_store:
+  %set26_grow_rehash_new_key_ptr = getelementptr %sollang.text, ptr %set26_grow_rehash_keys, i64 %set26_grow_rehash_slot
+  store %sollang.text %set26_grow_rehash_key, ptr %set26_grow_rehash_new_key_ptr, align 8
+  store i8 %set26_grow_rehash_h2, ptr %set26_grow_rehash_control_ptr, align 1
+  br label %set26_grow_rehash_advance
+set26_grow_rehash_advance:
+  %set26_grow_rehash_next_index = add i64 %set26_grow_rehash_index, 1
+  br label %set26_grow_rehash_loop
+set26_grow_rehash_done:
+  call void @free(ptr %set26_controls)
+  %set26_grow_rehash_result0 = insertvalue %sollang.dict poison, ptr %set26_grow_rehash_keys, 0
+  %set26_grow_rehash_result1 = insertvalue %sollang.dict %set26_grow_rehash_result0, ptr %set26_grow_rehash_controls, 1
+  %set26_grow_rehash_result2 = insertvalue %sollang.dict %set26_grow_rehash_result1, i64 %set26_length, 2
+  %set26_grow_rehash_result = insertvalue %sollang.dict %set26_grow_rehash_result2, i64 %set26_grown_capacity, 3
+  %set26_grown_mask = sub i64 %set26_grown_capacity, 1
+  %set26_grown_start = and i64 %set26_query_hash, %set26_grown_mask
+  br label %set26_grown_find
+set26_grown_find:
+  %set26_grown_slot = phi i64 [ %set26_grown_start, %set26_grow_rehash_done ], [ %set26_grown_next, %set26_grown_advance ]
+  %set26_grown_control_ptr = getelementptr i8, ptr %set26_grow_rehash_controls, i64 %set26_grown_slot
+  %set26_grown_control = load i8, ptr %set26_grown_control_ptr, align 1
+  %set26_grown_empty = icmp eq i8 %set26_grown_control, 0
+  br i1 %set26_grown_empty, label %set26_grown_store, label %set26_grown_advance
+set26_grown_advance:
+  %set26_grown_plus_one = add i64 %set26_grown_slot, 1
+  %set26_grown_next = and i64 %set26_grown_plus_one, %set26_grown_mask
+  br label %set26_grown_find
+set26_grown_store:
+  %set26_grown_key_ptr = getelementptr %sollang.text, ptr %set26_grow_rehash_keys, i64 %set26_grown_slot
+  store %sollang.text %set26_query, ptr %set26_grown_key_ptr, align 8
+  store i8 %set26_h2, ptr %set26_grown_control_ptr, align 1
+  %set26_grown_result = insertvalue %sollang.dict %set26_grow_rehash_result, i64 %set26_next_length, 2
+  store %sollang.dict %set26_grown_result, ptr %slot1, align 8
+  br label %set26_inserted
+set26_found:
+  br label %set26_duplicate
+set26_inserted:
+  br label %set26_complete
+set26_duplicate:
+  br label %set26_complete
+set26_complete:
+  %v26 = phi i1 [ true, %set26_inserted ], [ false, %set26_duplicate ]
+  call void @sollang_runtime_print_i1(i1 %v26, i1 true)
+  %v14 = load %sollang.dict, ptr %slot1, align 8
+  %set27_source = load %sollang.dict, ptr %slot1, align 8
+  %set27_keys = extractvalue %sollang.dict %set27_source, 0
+  %set27_controls = extractvalue %sollang.dict %set27_source, 1
+  %set27_length = extractvalue %sollang.dict %set27_source, 2
+  %set27_capacity = extractvalue %sollang.dict %set27_source, 3
+  %set27_query_addr = alloca %sollang.text, align 8
+  store %sollang.text %v15, ptr %set27_query_addr, align 8
+  %set27_query = load %sollang.text, ptr %set27_query_addr, align 8
+  %set27_query_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set27_query)
+  %set27_h2_shifted = lshr i64 %set27_query_hash, 57
+  %set27_h2_raw = and i64 %set27_h2_shifted, 127
+  %set27_h2_zero = icmp eq i64 %set27_h2_raw, 0
+  %set27_h2_value = select i1 %set27_h2_zero, i64 1, i64 %set27_h2_raw
+  %set27_h2 = trunc i64 %set27_h2_value to i8
+  %set27_mask = sub i64 %set27_capacity, 1
+  %set27_start_slot = and i64 %set27_query_hash, %set27_mask
+  br label %set27_lookup_entry
+set27_lookup_entry:
+  br label %set27_lookup
+set27_lookup:
+  %set27_slot = phi i64 [ %set27_start_slot, %set27_lookup_entry ], [ %set27_next_slot, %set27_advance ]
+  %set27_probe = phi i64 [ 0, %set27_lookup_entry ], [ %set27_next_probe, %set27_advance ]
+  %set27_first_deleted = phi i64 [ %set27_capacity, %set27_lookup_entry ], [ %set27_next_first_deleted, %set27_advance ]
+  %set27_active = icmp ult i64 %set27_probe, %set27_capacity
+  br i1 %set27_active, label %set27_check, label %set27_exhausted
+set27_check:
+  %set27_control_ptr = getelementptr i8, ptr %set27_controls, i64 %set27_slot
+  %set27_control = load i8, ptr %set27_control_ptr, align 1
+  %set27_deleted = icmp eq i8 %set27_control, -1
+  %set27_without_deleted = icmp eq i64 %set27_first_deleted, %set27_capacity
+  %set27_capture_deleted = and i1 %set27_deleted, %set27_without_deleted
+  %set27_captured_deleted = select i1 %set27_capture_deleted, i64 %set27_slot, i64 %set27_first_deleted
+  %set27_empty = icmp eq i8 %set27_control, 0
+  br i1 %set27_empty, label %set27_missing, label %set27_check_h2
+set27_check_h2:
+  %set27_h2_match = icmp eq i8 %set27_control, %set27_h2
+  br i1 %set27_h2_match, label %set27_check_key, label %set27_advance
+set27_check_key:
+  %set27_stored_ptr = getelementptr %sollang.text, ptr %set27_keys, i64 %set27_slot
+  %set27_stored = load %sollang.text, ptr %set27_stored_ptr, align 8
+  %set27_lookup_equal = call i1 @sollang_dictionary_text_equal(%sollang.text %set27_stored, %sollang.text %set27_query)
+  br i1 %set27_lookup_equal, label %set27_found, label %set27_advance
+set27_advance:
+  %set27_slot_plus_one = add i64 %set27_slot, 1
+  %set27_next_slot = and i64 %set27_slot_plus_one, %set27_mask
+  %set27_next_probe = add i64 %set27_probe, 1
+  %set27_next_first_deleted = add i64 %set27_captured_deleted, 0
+  br label %set27_lookup
+set27_exhausted:
+  br label %set27_not_found
+set27_missing:
+  br label %set27_not_found
+set27_found:
+  br label %set27_present
+set27_present:
+  br label %set27_complete
+set27_not_found:
+  br label %set27_complete
+set27_complete:
+  %v27 = phi i1 [ true, %set27_present ], [ false, %set27_not_found ]
+  call void @sollang_runtime_print_i1(i1 %v27, i1 true)
+  %v17 = load %sollang.dict, ptr %slot1, align 8
+  %set28_source = load %sollang.dict, ptr %slot1, align 8
+  %set28_keys = extractvalue %sollang.dict %set28_source, 0
+  %set28_controls = extractvalue %sollang.dict %set28_source, 1
+  %set28_length = extractvalue %sollang.dict %set28_source, 2
+  %set28_capacity = extractvalue %sollang.dict %set28_source, 3
+  %set28_query_addr = alloca %sollang.text, align 8
+  store %sollang.text %v18, ptr %set28_query_addr, align 8
+  %set28_query = load %sollang.text, ptr %set28_query_addr, align 8
+  %set28_query_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set28_query)
+  %set28_h2_shifted = lshr i64 %set28_query_hash, 57
+  %set28_h2_raw = and i64 %set28_h2_shifted, 127
+  %set28_h2_zero = icmp eq i64 %set28_h2_raw, 0
+  %set28_h2_value = select i1 %set28_h2_zero, i64 1, i64 %set28_h2_raw
+  %set28_h2 = trunc i64 %set28_h2_value to i8
+  %set28_mask = sub i64 %set28_capacity, 1
+  %set28_start_slot = and i64 %set28_query_hash, %set28_mask
+  br label %set28_lookup_entry
+set28_lookup_entry:
+  br label %set28_lookup
+set28_lookup:
+  %set28_slot = phi i64 [ %set28_start_slot, %set28_lookup_entry ], [ %set28_next_slot, %set28_advance ]
+  %set28_probe = phi i64 [ 0, %set28_lookup_entry ], [ %set28_next_probe, %set28_advance ]
+  %set28_first_deleted = phi i64 [ %set28_capacity, %set28_lookup_entry ], [ %set28_next_first_deleted, %set28_advance ]
+  %set28_active = icmp ult i64 %set28_probe, %set28_capacity
+  br i1 %set28_active, label %set28_check, label %set28_exhausted
+set28_check:
+  %set28_control_ptr = getelementptr i8, ptr %set28_controls, i64 %set28_slot
+  %set28_control = load i8, ptr %set28_control_ptr, align 1
+  %set28_deleted = icmp eq i8 %set28_control, -1
+  %set28_without_deleted = icmp eq i64 %set28_first_deleted, %set28_capacity
+  %set28_capture_deleted = and i1 %set28_deleted, %set28_without_deleted
+  %set28_captured_deleted = select i1 %set28_capture_deleted, i64 %set28_slot, i64 %set28_first_deleted
+  %set28_empty = icmp eq i8 %set28_control, 0
+  br i1 %set28_empty, label %set28_missing, label %set28_check_h2
+set28_check_h2:
+  %set28_h2_match = icmp eq i8 %set28_control, %set28_h2
+  br i1 %set28_h2_match, label %set28_check_key, label %set28_advance
+set28_check_key:
+  %set28_stored_ptr = getelementptr %sollang.text, ptr %set28_keys, i64 %set28_slot
+  %set28_stored = load %sollang.text, ptr %set28_stored_ptr, align 8
+  %set28_lookup_equal = call i1 @sollang_dictionary_text_equal(%sollang.text %set28_stored, %sollang.text %set28_query)
+  br i1 %set28_lookup_equal, label %set28_found, label %set28_advance
+set28_advance:
+  %set28_slot_plus_one = add i64 %set28_slot, 1
+  %set28_next_slot = and i64 %set28_slot_plus_one, %set28_mask
+  %set28_next_probe = add i64 %set28_probe, 1
+  %set28_next_first_deleted = add i64 %set28_captured_deleted, 0
+  br label %set28_lookup
+set28_exhausted:
+  br label %set28_not_found
+set28_missing:
+  br label %set28_not_found
+set28_found:
+  store i8 -1, ptr %set28_control_ptr, align 1
+  %set28_next_length = sub i64 %set28_length, 1
+  %set28_compact_threshold = lshr i64 %set28_capacity, 3
+  %set28_should_compact = icmp eq i64 %set28_next_length, %set28_compact_threshold
+  br i1 %set28_should_compact, label %set28_compact, label %set28_keep
+set28_keep:
+  %set28_keep_result = insertvalue %sollang.dict %set28_source, i64 %set28_next_length, 2
+  store %sollang.dict %set28_keep_result, ptr %slot1, align 8
+  br label %set28_removed
+set28_compact:
+  br label %set28_compact_rehash_entry
+set28_compact_rehash_entry:
+  %set28_compact_rehash_control_bytes = add i64 %set28_capacity, 16
+  %set28_compact_rehash_key_bytes = mul i64 %set28_capacity, 16
+  %set28_compact_rehash_allocation_bytes = add i64 %set28_compact_rehash_control_bytes, %set28_compact_rehash_key_bytes
+  %set28_compact_rehash_controls = call ptr @malloc(i64 %set28_compact_rehash_allocation_bytes)
+  call void @llvm.memset.p0.i64(ptr %set28_compact_rehash_controls, i8 0, i64 %set28_compact_rehash_control_bytes, i1 false)
+  %set28_compact_rehash_keys = getelementptr i8, ptr %set28_compact_rehash_controls, i64 %set28_compact_rehash_control_bytes
+  br label %set28_compact_rehash_loop
+set28_compact_rehash_loop:
+  %set28_compact_rehash_index = phi i64 [ 0, %set28_compact_rehash_entry ], [ %set28_compact_rehash_next_index, %set28_compact_rehash_advance ]
+  %set28_compact_rehash_active = icmp ult i64 %set28_compact_rehash_index, %set28_capacity
+  br i1 %set28_compact_rehash_active, label %set28_compact_rehash_check, label %set28_compact_rehash_done
+set28_compact_rehash_check:
+  %set28_compact_rehash_old_control_ptr = getelementptr i8, ptr %set28_controls, i64 %set28_compact_rehash_index
+  %set28_compact_rehash_old_control = load i8, ptr %set28_compact_rehash_old_control_ptr, align 1
+  %set28_compact_rehash_occupied = icmp sgt i8 %set28_compact_rehash_old_control, 0
+  br i1 %set28_compact_rehash_occupied, label %set28_compact_rehash_move, label %set28_compact_rehash_advance
+set28_compact_rehash_move:
+  %set28_compact_rehash_old_key_ptr = getelementptr %sollang.text, ptr %set28_keys, i64 %set28_compact_rehash_index
+  %set28_compact_rehash_key = load %sollang.text, ptr %set28_compact_rehash_old_key_ptr, align 8
+  %set28_compact_rehash_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set28_compact_rehash_key)
+  %set28_compact_rehash_h2_shifted = lshr i64 %set28_compact_rehash_hash, 57
+  %set28_compact_rehash_h2_raw = and i64 %set28_compact_rehash_h2_shifted, 127
+  %set28_compact_rehash_h2_zero = icmp eq i64 %set28_compact_rehash_h2_raw, 0
+  %set28_compact_rehash_h2_value = select i1 %set28_compact_rehash_h2_zero, i64 1, i64 %set28_compact_rehash_h2_raw
+  %set28_compact_rehash_h2 = trunc i64 %set28_compact_rehash_h2_value to i8
+  %set28_compact_rehash_mask = sub i64 %set28_capacity, 1
+  %set28_compact_rehash_start_slot = and i64 %set28_compact_rehash_hash, %set28_compact_rehash_mask
+  br label %set28_compact_rehash_find
+set28_compact_rehash_find:
+  %set28_compact_rehash_slot = phi i64 [ %set28_compact_rehash_start_slot, %set28_compact_rehash_move ], [ %set28_compact_rehash_next_slot, %set28_compact_rehash_find_advance ]
+  %set28_compact_rehash_control_ptr = getelementptr i8, ptr %set28_compact_rehash_controls, i64 %set28_compact_rehash_slot
+  %set28_compact_rehash_control = load i8, ptr %set28_compact_rehash_control_ptr, align 1
+  %set28_compact_rehash_empty = icmp eq i8 %set28_compact_rehash_control, 0
+  br i1 %set28_compact_rehash_empty, label %set28_compact_rehash_store, label %set28_compact_rehash_find_advance
+set28_compact_rehash_find_advance:
+  %set28_compact_rehash_slot_plus_one = add i64 %set28_compact_rehash_slot, 1
+  %set28_compact_rehash_next_slot = and i64 %set28_compact_rehash_slot_plus_one, %set28_compact_rehash_mask
+  br label %set28_compact_rehash_find
+set28_compact_rehash_store:
+  %set28_compact_rehash_new_key_ptr = getelementptr %sollang.text, ptr %set28_compact_rehash_keys, i64 %set28_compact_rehash_slot
+  store %sollang.text %set28_compact_rehash_key, ptr %set28_compact_rehash_new_key_ptr, align 8
+  store i8 %set28_compact_rehash_h2, ptr %set28_compact_rehash_control_ptr, align 1
+  br label %set28_compact_rehash_advance
+set28_compact_rehash_advance:
+  %set28_compact_rehash_next_index = add i64 %set28_compact_rehash_index, 1
+  br label %set28_compact_rehash_loop
+set28_compact_rehash_done:
+  call void @free(ptr %set28_controls)
+  %set28_compact_rehash_result0 = insertvalue %sollang.dict poison, ptr %set28_compact_rehash_keys, 0
+  %set28_compact_rehash_result1 = insertvalue %sollang.dict %set28_compact_rehash_result0, ptr %set28_compact_rehash_controls, 1
+  %set28_compact_rehash_result2 = insertvalue %sollang.dict %set28_compact_rehash_result1, i64 %set28_next_length, 2
+  %set28_compact_rehash_result = insertvalue %sollang.dict %set28_compact_rehash_result2, i64 %set28_capacity, 3
+  store %sollang.dict %set28_compact_rehash_result, ptr %slot1, align 8
+  br label %set28_removed
+set28_removed:
+  br label %set28_complete
+set28_not_found:
+  br label %set28_complete
+set28_complete:
+  %v28 = phi i1 [ true, %set28_removed ], [ false, %set28_not_found ]
+  call void @sollang_runtime_print_i1(i1 %v28, i1 true)
+  %v20 = load %sollang.dict, ptr %slot1, align 8
+  %set29_source = load %sollang.dict, ptr %slot1, align 8
+  %set29_keys = extractvalue %sollang.dict %set29_source, 0
+  %set29_controls = extractvalue %sollang.dict %set29_source, 1
+  %set29_length = extractvalue %sollang.dict %set29_source, 2
+  %set29_capacity = extractvalue %sollang.dict %set29_source, 3
+  %set29_query_addr = alloca %sollang.text, align 8
+  store %sollang.text %v21, ptr %set29_query_addr, align 8
+  %set29_query = load %sollang.text, ptr %set29_query_addr, align 8
+  %set29_query_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %set29_query)
+  %set29_h2_shifted = lshr i64 %set29_query_hash, 57
+  %set29_h2_raw = and i64 %set29_h2_shifted, 127
+  %set29_h2_zero = icmp eq i64 %set29_h2_raw, 0
+  %set29_h2_value = select i1 %set29_h2_zero, i64 1, i64 %set29_h2_raw
+  %set29_h2 = trunc i64 %set29_h2_value to i8
+  %set29_mask = sub i64 %set29_capacity, 1
+  %set29_start_slot = and i64 %set29_query_hash, %set29_mask
+  br label %set29_lookup_entry
+set29_lookup_entry:
+  br label %set29_lookup
+set29_lookup:
+  %set29_slot = phi i64 [ %set29_start_slot, %set29_lookup_entry ], [ %set29_next_slot, %set29_advance ]
+  %set29_probe = phi i64 [ 0, %set29_lookup_entry ], [ %set29_next_probe, %set29_advance ]
+  %set29_first_deleted = phi i64 [ %set29_capacity, %set29_lookup_entry ], [ %set29_next_first_deleted, %set29_advance ]
+  %set29_active = icmp ult i64 %set29_probe, %set29_capacity
+  br i1 %set29_active, label %set29_check, label %set29_exhausted
+set29_check:
+  %set29_control_ptr = getelementptr i8, ptr %set29_controls, i64 %set29_slot
+  %set29_control = load i8, ptr %set29_control_ptr, align 1
+  %set29_deleted = icmp eq i8 %set29_control, -1
+  %set29_without_deleted = icmp eq i64 %set29_first_deleted, %set29_capacity
+  %set29_capture_deleted = and i1 %set29_deleted, %set29_without_deleted
+  %set29_captured_deleted = select i1 %set29_capture_deleted, i64 %set29_slot, i64 %set29_first_deleted
+  %set29_empty = icmp eq i8 %set29_control, 0
+  br i1 %set29_empty, label %set29_missing, label %set29_check_h2
+set29_check_h2:
+  %set29_h2_match = icmp eq i8 %set29_control, %set29_h2
+  br i1 %set29_h2_match, label %set29_check_key, label %set29_advance
+set29_check_key:
+  %set29_stored_ptr = getelementptr %sollang.text, ptr %set29_keys, i64 %set29_slot
+  %set29_stored = load %sollang.text, ptr %set29_stored_ptr, align 8
+  %set29_lookup_equal = call i1 @sollang_dictionary_text_equal(%sollang.text %set29_stored, %sollang.text %set29_query)
+  br i1 %set29_lookup_equal, label %set29_found, label %set29_advance
+set29_advance:
+  %set29_slot_plus_one = add i64 %set29_slot, 1
+  %set29_next_slot = and i64 %set29_slot_plus_one, %set29_mask
+  %set29_next_probe = add i64 %set29_probe, 1
+  %set29_next_first_deleted = add i64 %set29_captured_deleted, 0
+  br label %set29_lookup
+set29_exhausted:
+  br label %set29_not_found
+set29_missing:
+  br label %set29_not_found
+set29_found:
+  br label %set29_present
+set29_present:
+  br label %set29_complete
+set29_not_found:
+  br label %set29_complete
+set29_complete:
+  %v29 = phi i1 [ true, %set29_present ], [ false, %set29_not_found ]
+  call void @sollang_runtime_print_i1(i1 %v29, i1 true)
+  %v23 = load %sollang.dict, ptr %slot1, align 8
+  %v30_length_source = load %sollang.dict, ptr %slot1, align 8
+  %v30_raw = extractvalue %sollang.dict %v30_length_source, 2
+  %v30 = trunc i64 %v30_raw to i32
+  call void @sollang_runtime_print_i32(i32 %v30, i1 true)
+  %cleanup6_b1_current = load %sollang.dict, ptr %slot1, align 8
+  call void @sollang_drop_t26(%sollang.dict %cleanup6_b1_current)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

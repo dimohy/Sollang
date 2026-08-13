@@ -1,0 +1,392 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @GetConsoleMode(ptr, ptr)
+declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @GetProcessHeap()
+declare ptr @HeapAlloc(ptr, i32, i64)
+declare i32 @HeapFree(ptr, i32, ptr)
+define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+entry:
+  %mode = alloca i32, align 4
+  %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+  %is_console = icmp ne i32 %console_status, 0
+  br i1 %is_console, label %console_prepare, label %redirected
+redirected:
+  %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
+  ret i32 %redirected_ok
+console_prepare:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @GetProcessHeap()
+  %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+convert:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+console_write:
+  %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
+  %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  ret i32 %console_ok
+conversion_free:
+  %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+conversion_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+}
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+@sollang_runtime_bool_true = private constant [4 x i8] c"true"
+@sollang_runtime_bool_false = private constant [5 x i8] c"false"
+define internal void @sollang_runtime_print_i1(i1 %value, i1 %newline) {
+entry:
+  %data = select i1 %value, ptr @sollang_runtime_bool_true, ptr @sollang_runtime_bool_false
+  %length = select i1 %value, i64 4, i64 5
+  call void @sollang_runtime_print(ptr %data, i64 %length, i1 %newline)
+  ret void
+}
+%sollang.bitset.t26 = type { [3 x i64] }
+declare void @llvm.trap()
+declare i64 @llvm.ctpop.i64(i64)
+define void @sollang_m0_s0(ptr %arg_mut_struct) {
+entry:
+  %arg = load %sollang.bitset.t26, ptr %arg_mut_struct, align 8
+  %v4 = load %sollang.bitset.t26, ptr %arg_mut_struct, align 8
+  %v3_index = sext i32 5 to i64
+  %v3_nonnegative = icmp sge i64 %v3_index, 0
+  %v3_below_limit = icmp ult i64 %v3_index, 130
+  %v3_valid = and i1 %v3_nonnegative, %v3_below_limit
+  br i1 %v3_valid, label %bitset3_index_ok, label %bitset3_index_fail
+bitset3_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset3_index_ok:
+  %v3_word_index = lshr i64 %v3_index, 6
+  %v3_bit_index = and i64 %v3_index, 63
+  %v3_mask = shl i64 1, %v3_bit_index
+  %v3_word_ptr = getelementptr inbounds %sollang.bitset.t26, ptr %arg_mut_struct, i32 0, i32 0, i64 %v3_word_index
+  %v3_word = load i64, ptr %v3_word_ptr, align 8
+  %v3_updated = or i64 %v3_word, %v3_mask
+  store i64 %v3_updated, ptr %v3_word_ptr, align 8
+  ret void
+}
+define i32 @main() {
+entry:
+  %slot7 = alloca %sollang.bitset.t26, align 8
+  %v8 = freeze %sollang.bitset.t26 zeroinitializer
+  store %sollang.bitset.t26 %v8, ptr %slot7, align 8
+  %v10 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %callmut9_arg0 = getelementptr i8, ptr %slot7, i64 0
+  call void @sollang_m0_s0(ptr %callmut9_arg0)
+  %v12 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v11_index = sext i32 0 to i64
+  %v11_nonnegative = icmp sge i64 %v11_index, 0
+  %v11_below_limit = icmp ult i64 %v11_index, 130
+  %v11_valid = and i1 %v11_nonnegative, %v11_below_limit
+  br i1 %v11_valid, label %bitset11_index_ok, label %bitset11_index_fail
+bitset11_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset11_index_ok:
+  %v11_word_index = lshr i64 %v11_index, 6
+  %v11_bit_index = and i64 %v11_index, 63
+  %v11_mask = shl i64 1, %v11_bit_index
+  %v11_word_ptr = getelementptr inbounds %sollang.bitset.t26, ptr %slot7, i32 0, i32 0, i64 %v11_word_index
+  %v11_word = load i64, ptr %v11_word_ptr, align 8
+  %v11_updated = or i64 %v11_word, %v11_mask
+  store i64 %v11_updated, ptr %v11_word_ptr, align 8
+  %v15 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v14_index = sext i32 64 to i64
+  %v14_nonnegative = icmp sge i64 %v14_index, 0
+  %v14_below_limit = icmp ult i64 %v14_index, 130
+  %v14_valid = and i1 %v14_nonnegative, %v14_below_limit
+  br i1 %v14_valid, label %bitset14_index_ok, label %bitset14_index_fail
+bitset14_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset14_index_ok:
+  %v14_word_index = lshr i64 %v14_index, 6
+  %v14_bit_index = and i64 %v14_index, 63
+  %v14_mask = shl i64 1, %v14_bit_index
+  %v14_word_ptr = getelementptr inbounds %sollang.bitset.t26, ptr %slot7, i32 0, i32 0, i64 %v14_word_index
+  %v14_word = load i64, ptr %v14_word_ptr, align 8
+  %v14_updated = or i64 %v14_word, %v14_mask
+  store i64 %v14_updated, ptr %v14_word_ptr, align 8
+  %v18 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v17_index = sext i32 129 to i64
+  %v17_nonnegative = icmp sge i64 %v17_index, 0
+  %v17_below_limit = icmp ult i64 %v17_index, 130
+  %v17_valid = and i1 %v17_nonnegative, %v17_below_limit
+  br i1 %v17_valid, label %bitset17_index_ok, label %bitset17_index_fail
+bitset17_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset17_index_ok:
+  %v17_word_index = lshr i64 %v17_index, 6
+  %v17_bit_index = and i64 %v17_index, 63
+  %v17_mask = shl i64 1, %v17_bit_index
+  %v17_word_ptr = getelementptr inbounds %sollang.bitset.t26, ptr %slot7, i32 0, i32 0, i64 %v17_word_index
+  %v17_word = load i64, ptr %v17_word_ptr, align 8
+  %v17_updated = or i64 %v17_word, %v17_mask
+  store i64 %v17_updated, ptr %v17_word_ptr, align 8
+  %v21 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v24 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v27 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v30 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v39_index = sext i32 5 to i64
+  %v39_nonnegative = icmp sge i64 %v39_index, 0
+  %v39_below_limit = icmp ult i64 %v39_index, 130
+  %v39_valid = and i1 %v39_nonnegative, %v39_below_limit
+  br i1 %v39_valid, label %bitset39_index_ok, label %bitset39_index_fail
+bitset39_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset39_index_ok:
+  %v39_word_index = lshr i64 %v39_index, 6
+  %v39_bit_index = and i64 %v39_index, 63
+  %v39_mask = shl i64 1, %v39_bit_index
+  %v39_source = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v39_word0 = extractvalue %sollang.bitset.t26 %v39_source, 0, 0
+  %v39_word1 = extractvalue %sollang.bitset.t26 %v39_source, 0, 1
+  %v39_word2 = extractvalue %sollang.bitset.t26 %v39_source, 0, 2
+  %v39_is_word1 = icmp eq i64 %v39_word_index, 1
+  %v39_selected1 = select i1 %v39_is_word1, i64 %v39_word1, i64 %v39_word0
+  %v39_is_word2 = icmp eq i64 %v39_word_index, 2
+  %v39_selected2 = select i1 %v39_is_word2, i64 %v39_word2, i64 %v39_selected1
+  %v39_masked = and i64 %v39_selected2, %v39_mask
+  %v39 = icmp ne i64 %v39_masked, 0
+  %v40_index = sext i32 0 to i64
+  %v40_nonnegative = icmp sge i64 %v40_index, 0
+  %v40_below_limit = icmp ult i64 %v40_index, 130
+  %v40_valid = and i1 %v40_nonnegative, %v40_below_limit
+  br i1 %v40_valid, label %bitset40_index_ok, label %bitset40_index_fail
+bitset40_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset40_index_ok:
+  %v40_word_index = lshr i64 %v40_index, 6
+  %v40_bit_index = and i64 %v40_index, 63
+  %v40_mask = shl i64 1, %v40_bit_index
+  %v40_source = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v40_word0 = extractvalue %sollang.bitset.t26 %v40_source, 0, 0
+  %v40_word1 = extractvalue %sollang.bitset.t26 %v40_source, 0, 1
+  %v40_word2 = extractvalue %sollang.bitset.t26 %v40_source, 0, 2
+  %v40_is_word1 = icmp eq i64 %v40_word_index, 1
+  %v40_selected1 = select i1 %v40_is_word1, i64 %v40_word1, i64 %v40_word0
+  %v40_is_word2 = icmp eq i64 %v40_word_index, 2
+  %v40_selected2 = select i1 %v40_is_word2, i64 %v40_word2, i64 %v40_selected1
+  %v40_masked = and i64 %v40_selected2, %v40_mask
+  %v40 = icmp ne i64 %v40_masked, 0
+  %v41_index = sext i32 64 to i64
+  %v41_nonnegative = icmp sge i64 %v41_index, 0
+  %v41_below_limit = icmp ult i64 %v41_index, 130
+  %v41_valid = and i1 %v41_nonnegative, %v41_below_limit
+  br i1 %v41_valid, label %bitset41_index_ok, label %bitset41_index_fail
+bitset41_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset41_index_ok:
+  %v41_word_index = lshr i64 %v41_index, 6
+  %v41_bit_index = and i64 %v41_index, 63
+  %v41_mask = shl i64 1, %v41_bit_index
+  %v41_source = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v41_word0 = extractvalue %sollang.bitset.t26 %v41_source, 0, 0
+  %v41_word1 = extractvalue %sollang.bitset.t26 %v41_source, 0, 1
+  %v41_word2 = extractvalue %sollang.bitset.t26 %v41_source, 0, 2
+  %v41_is_word1 = icmp eq i64 %v41_word_index, 1
+  %v41_selected1 = select i1 %v41_is_word1, i64 %v41_word1, i64 %v41_word0
+  %v41_is_word2 = icmp eq i64 %v41_word_index, 2
+  %v41_selected2 = select i1 %v41_is_word2, i64 %v41_word2, i64 %v41_selected1
+  %v41_masked = and i64 %v41_selected2, %v41_mask
+  %v41 = icmp ne i64 %v41_masked, 0
+  call void @sollang_runtime_print_i1(i1 %v39, i1 true)
+  call void @sollang_runtime_print_i1(i1 %v40, i1 true)
+  call void @sollang_runtime_print_i1(i1 %v41, i1 true)
+  %v29_index = sext i32 64 to i64
+  %v29_nonnegative = icmp sge i64 %v29_index, 0
+  %v29_below_limit = icmp ult i64 %v29_index, 130
+  %v29_valid = and i1 %v29_nonnegative, %v29_below_limit
+  br i1 %v29_valid, label %bitset29_index_ok, label %bitset29_index_fail
+bitset29_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset29_index_ok:
+  %v29_word_index = lshr i64 %v29_index, 6
+  %v29_bit_index = and i64 %v29_index, 63
+  %v29_mask = shl i64 1, %v29_bit_index
+  %v29_word_ptr = getelementptr inbounds %sollang.bitset.t26, ptr %slot7, i32 0, i32 0, i64 %v29_word_index
+  %v29_word = load i64, ptr %v29_word_ptr, align 8
+  %v29_inverse = xor i64 %v29_mask, -1
+  %v29_updated = and i64 %v29_word, %v29_inverse
+  store i64 %v29_updated, ptr %v29_word_ptr, align 8
+  %v33 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v36 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v38 = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v42_index = sext i32 64 to i64
+  %v42_nonnegative = icmp sge i64 %v42_index, 0
+  %v42_below_limit = icmp ult i64 %v42_index, 130
+  %v42_valid = and i1 %v42_nonnegative, %v42_below_limit
+  br i1 %v42_valid, label %bitset42_index_ok, label %bitset42_index_fail
+bitset42_index_fail:
+  call void @llvm.trap()
+  unreachable
+bitset42_index_ok:
+  %v42_word_index = lshr i64 %v42_index, 6
+  %v42_bit_index = and i64 %v42_index, 63
+  %v42_mask = shl i64 1, %v42_bit_index
+  %v42_source = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v42_word0 = extractvalue %sollang.bitset.t26 %v42_source, 0, 0
+  %v42_word1 = extractvalue %sollang.bitset.t26 %v42_source, 0, 1
+  %v42_word2 = extractvalue %sollang.bitset.t26 %v42_source, 0, 2
+  %v42_is_word1 = icmp eq i64 %v42_word_index, 1
+  %v42_selected1 = select i1 %v42_is_word1, i64 %v42_word1, i64 %v42_word0
+  %v42_is_word2 = icmp eq i64 %v42_word_index, 2
+  %v42_selected2 = select i1 %v42_is_word2, i64 %v42_word2, i64 %v42_selected1
+  %v42_masked = and i64 %v42_selected2, %v42_mask
+  %v42 = icmp ne i64 %v42_masked, 0
+  %v43_source = load %sollang.bitset.t26, ptr %slot7, align 8
+  %v43_word0 = extractvalue %sollang.bitset.t26 %v43_source, 0, 0
+  %v43_pop0 = call i64 @llvm.ctpop.i64(i64 %v43_word0)
+  %v43_word1 = extractvalue %sollang.bitset.t26 %v43_source, 0, 1
+  %v43_pop1 = call i64 @llvm.ctpop.i64(i64 %v43_word1)
+  %v43_sum1 = add i64 %v43_pop0, %v43_pop1
+  %v43_word2 = extractvalue %sollang.bitset.t26 %v43_source, 0, 2
+  %v43_pop2 = call i64 @llvm.ctpop.i64(i64 %v43_word2)
+  %v43_sum2 = add i64 %v43_sum1, %v43_pop2
+  %v43 = trunc i64 %v43_sum2 to i32
+  %v44 = add i32 0, 130
+  call void @sollang_runtime_print_i1(i1 %v42, i1 true)
+  call void @sollang_runtime_print_i32(i32 %v43, i1 true)
+  call void @sollang_runtime_print_i32(i32 %v44, i1 true)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

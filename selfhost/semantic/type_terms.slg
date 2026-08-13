@@ -9,7 +9,9 @@ import syntax.generated.slg as grammar
 # back into the same arena, so nested types do not require recursive objects.
 # Kinds: 1 nominal, 2 slice, 3 dynamic array, 4 fixed array,
 # 5 dictionary, 6 box, 7 nominal application, 8 readonly reference,
-# 10 structural product, 11 structural product field.
+# 10 structural product, 11 structural product field,
+# 12 bounded inline array, 13 bounded inline dictionary,
+# 14 fixed inline BitSet.
 public struct TypeTerm {
     astNode: Int
     canonical: Int
@@ -95,23 +97,37 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
                 0 => depth!
                 false => outerSemicolon!
                 false => outerTilde!
+                false => outerBounded!
                 firstToken! => shapeToken!
                 shapeToken! < node.firstToken + node.tokenCount -> while {
                     request.tokens[shapeToken!].kind == grammar.tokenIdLeftBracket() -> if { depth! + 1 => depth! }
                     request.tokens[shapeToken!].kind == grammar.tokenIdRightBracket() -> if { depth! - 1 => depth! }
                     (depth! == 1 and request.tokens[shapeToken!].kind == grammar.tokenIdSemicolon()) -> if { true => outerSemicolon! }
                     (depth! == 1 and request.tokens[shapeToken!].kind == grammar.tokenIdTilde()) -> if { true => outerTilde! }
+                    (depth! == 1 and request.tokens[shapeToken!].kind == grammar.tokenIdLessEqual()) -> if { true => outerBounded! }
                     (outerSemicolon! and lengthToken! < 0 and depth! == 1 and (request.tokens[shapeToken!].kind == grammar.tokenIdIdentifier() or request.tokens[shapeToken!].kind == grammar.tokenIdNumber())) -> if {
                         shapeToken! => lengthToken!
                     }
                     shapeToken! + 1 => shapeToken!
                 }
                 outerSemicolon! -> if {
-                    outerTilde! -> if { 3 => kind! } else { 4 => kind! }
+                    outerBounded! -> if { 12 => kind! } else {
+                        outerTilde! -> if { 3 => kind! } else { 4 => kind! }
+                    }
                 }
             } else {
                 (kind! == 1 and request.tokens[firstToken!].kind == grammar.tokenIdLeftBrace()) -> if {
                     5 => kind!
+                    false => dictionaryBounded!
+                    firstToken! => dictionaryShapeToken!
+                    dictionaryShapeToken! < node.firstToken + node.tokenCount -> while {
+                        request.tokens[dictionaryShapeToken!].kind == grammar.tokenIdLessEqual() -> if { true => dictionaryBounded! }
+                        (dictionaryBounded! and lengthToken! < 0 and request.tokens[dictionaryShapeToken!].kind == grammar.tokenIdNumber()) -> if {
+                            dictionaryShapeToken! => lengthToken!
+                        }
+                        dictionaryShapeToken! + 1 => dictionaryShapeToken!
+                    }
+                    dictionaryBounded! -> if { 13 => kind! }
                 } else {
                     (kind! == 1 and request.tokens[firstToken!].kind == grammar.tokenIdIdentifier()) -> if {
                         firstToken! => nameToken!
@@ -127,6 +143,22 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
                             (keywordByte0 == UInt8(114) and keywordByte1 == UInt8(101) and keywordByte2 == UInt8(102)) -> if {
                                 8 => kind!
                                 -1 => nameToken!
+                            }
+                        }
+                        firstName.span.length == UIntSize(6) -> if {
+                            request.source -> byte(firstName.span.start) => keywordByte0
+                            request.source -> byte(firstName.span.start + UIntSize(1)) => keywordByte1
+                            request.source -> byte(firstName.span.start + UIntSize(2)) => keywordByte2
+                            request.source -> byte(firstName.span.start + UIntSize(3)) => keywordByte3
+                            request.source -> byte(firstName.span.start + UIntSize(4)) => keywordByte4
+                            request.source -> byte(firstName.span.start + UIntSize(5)) => keywordByte5
+                            (keywordByte0 == UInt8(66) and keywordByte1 == UInt8(105) and keywordByte2 == UInt8(116) and keywordByte3 == UInt8(83) and keywordByte4 == UInt8(101) and keywordByte5 == UInt8(116)) -> if {
+                                14 => kind!
+                                firstToken! + 1 => bitSetToken!
+                                (bitSetToken! < node.firstToken + node.tokenCount and lengthToken! < 0) -> while {
+                                    request.tokens[bitSetToken!].kind == grammar.tokenIdNumber() -> if { bitSetToken! => lengthToken! }
+                                    bitSetToken! + 1 => bitSetToken!
+                                }
                             }
                         }
                     }

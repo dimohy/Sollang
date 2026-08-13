@@ -457,7 +457,7 @@ export default function PlaygroundPage() {
       </section>
 
       <footer>
-        <span>Sollang 0.4.260803 · Apache-2.0 · <a href={`${basePath}/ai/AI_AGENT_GUIDE.md`}>AI Agent Guide</a></span>
+        <span>Sollang 0.4.260813 · Apache-2.0 · <a href={`${basePath}/ai/AI_AGENT_GUIDE.md`}>AI Agent Guide</a></span>
         <span>{text.footer}</span>
       </footer>
     </main>

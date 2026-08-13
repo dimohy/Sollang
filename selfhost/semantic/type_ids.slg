@@ -11,7 +11,8 @@ import syntax.generated.slg as grammar
 
 # Kinds match type_terms: 1 nominal, 2 slice, 3 dynamic array, 4 fixed
 # array, 5 dictionary, 6 box, 7 nominal application, 8 readonly reference,
-# 9 affine external handle (COM interface or native opaque handle).
+# 9 affine external handle (COM interface or native opaque handle),
+# 12 bounded inline array, 13 bounded inline dictionary, 14 fixed inline BitSet.
 # Nominal origins: 0 local declaration, 1 builtin, 2 imported declaration,
 # 3 generic parameter, 4 intrinsic type constructor.
 public struct SemanticType {
@@ -142,6 +143,7 @@ public classify request: TypeClassificationRequest -> [Int; ~] {
             true => owns!
             true => reachesHeap!
         }
+        (current.kind == 12 or current.kind == 13) -> if { true => owns! }
         (current.kind == 1 and current.origin == 1 and current.symbol == 24) -> if {
             true => owns!
             true => reachesHeap!
@@ -155,7 +157,11 @@ public classify request: TypeClassificationRequest -> [Int; ~] {
             true => owns!
             true => reachesHeap!
         }
-        (current.kind == 4 or current.kind == 7) -> if {
+        (current.kind == 7 and current.origin == 4 and (current.symbol == 5 or current.symbol == 6 or current.symbol == 7)) -> if {
+            true => owns!
+            true => reachesHeap!
+        }
+        (current.kind == 4 or current.kind == 7 or current.kind == 12 or current.kind == 13) -> if {
             current.first >= 0 -> if {
                 traits![current.first] % 2 == 1 -> if { true => owns! }
                 (traits![current.first] / 2) % 2 == 1 -> if { true => reachesHeap! }
@@ -180,7 +186,7 @@ public classify request: TypeClassificationRequest -> [Int; ~] {
             traits![typeIndex!] => value!
             value! % 2 == 1 => owns!
             (value! / 2) % 2 == 1 => reachesHeap!
-            (current.kind == 4 or current.kind == 7) -> if {
+            (current.kind == 4 or current.kind == 7 or current.kind == 12 or current.kind == 13) -> if {
                 current.first >= 0 -> if {
                     traits![current.first] % 2 == 1 -> if { true => owns! }
                     (traits![current.first] / 2) % 2 == 1 -> if { true => reachesHeap! }
@@ -540,6 +546,33 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 source -> byte(constructorName.span.start + UIntSize(3)) => byte3
                                 (byte0 == UInt8(84) and byte1 == UInt8(97) and byte2 == UInt8(115) and byte3 == UInt8(107)) -> if { 2 => targetSymbol! }
                             }
+                            constructorName.span.length == UIntSize(3) -> if {
+                                source -> byte(constructorName.span.start) => byte0
+                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
+                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
+                                (byte0 == UInt8(83) and byte1 == UInt8(101) and byte2 == UInt8(116)) -> if { 5 => targetSymbol! }
+                            }
+                            constructorName.span.length == UIntSize(5) -> if {
+                                source -> byte(constructorName.span.start) => byte0
+                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
+                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
+                                source -> byte(constructorName.span.start + UIntSize(3)) => byte3
+                                source -> byte(constructorName.span.start + UIntSize(4)) => byte4
+                                (byte0 == UInt8(68) and byte1 == UInt8(101) and byte2 == UInt8(113) and byte3 == UInt8(117) and byte4 == UInt8(101)) -> if { 6 => targetSymbol! }
+                            }
+                            constructorName.span.length == UIntSize(10) -> if {
+                                source -> byte(constructorName.span.start) => byte0
+                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
+                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
+                                source -> byte(constructorName.span.start + UIntSize(3)) => byte3
+                                source -> byte(constructorName.span.start + UIntSize(4)) => byte4
+                                source -> byte(constructorName.span.start + UIntSize(5)) => byte5
+                                source -> byte(constructorName.span.start + UIntSize(6)) => byte6
+                                source -> byte(constructorName.span.start + UIntSize(7)) => byte7
+                                source -> byte(constructorName.span.start + UIntSize(8)) => byte8
+                                source -> byte(constructorName.span.start + UIntSize(9)) => byte9
+                                (byte0 == UInt8(66) and byte1 == UInt8(105) and byte2 == UInt8(110) and byte3 == UInt8(97) and byte4 == UInt8(114) and byte5 == UInt8(121) and byte6 == UInt8(72) and byte7 == UInt8(101) and byte8 == UInt8(97) and byte9 == UInt8(112)) -> if { 7 => targetSymbol! }
+                            }
                             constructorName.span.length == UIntSize(11) -> if {
                                 source -> byte(constructorName.span.start) => byte0
                                 source -> byte(constructorName.span.start + UIntSize(1)) => byte1
@@ -555,6 +588,11 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 (byte0 == UInt8(69) and byte1 == UInt8(118) and byte2 == UInt8(101) and byte3 == UInt8(110) and byte4 == UInt8(116) and byte5 == UInt8(83) and byte6 == UInt8(116) and byte7 == UInt8(114) and byte8 == UInt8(101) and byte9 == UInt8(97) and byte10 == UInt8(109)) -> if { 4 => targetSymbol! }
                             }
                             targetSymbol! < 0 -> if { 2 => status! }
+                        }
+                        term.kind == 14 -> if {
+                            4 => origin!
+                            -1 => targetModule!
+                            8 => targetSymbol!
                         }
 
                         -1 => firstType!

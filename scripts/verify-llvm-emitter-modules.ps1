@@ -84,12 +84,12 @@ $statefulFragments = $fragmentPaths | Where-Object {
 }
 foreach ($relativePath in $statefulFragments) {
     $text = [IO.File]::ReadAllText((Join-Path $repoRoot $relativePath))
-    if (-not $text.Contains("context: ref emitterContext.EmitContext", [System.StringComparison]::Ordinal) `
-        -or -not $text.Contains("state: ref CoreEmitterState", [System.StringComparison]::Ordinal)) {
+    if ($text.IndexOf("context: ref emitterContext.EmitContext", [System.StringComparison]::Ordinal) -lt 0 `
+        -or $text.IndexOf("state: ref CoreEmitterState", [System.StringComparison]::Ordinal) -lt 0) {
         throw "$relativePath must pass emitter context and frozen state by readonly reference."
     }
-    if ($text.Contains("context: emitterContext.EmitContext", [System.StringComparison]::Ordinal) `
-        -or $text.Contains("state: CoreEmitterState", [System.StringComparison]::Ordinal)) {
+    if ($text.IndexOf("context: emitterContext.EmitContext", [System.StringComparison]::Ordinal) -ge 0 `
+        -or $text.IndexOf("state: CoreEmitterState", [System.StringComparison]::Ordinal) -ge 0) {
         throw "$relativePath contains a by-value emitter context/state boundary."
     }
 }
@@ -110,6 +110,11 @@ foreach ($manifestPath in $manifestPaths) {
         if ($lines -notcontains $relativePath) {
             throw "$($manifestPath.Name) omits imported emitter module $relativePath."
         }
+    }
+
+    if ($lines -contains "selfhost/llvm/text/entrypoints.slg" `
+        -and $lines -notcontains "selfhost/syntax/diagnostics.slg") {
+        throw "$($manifestPath.Name) omits entrypoint syntax diagnostics dependency."
     }
 }
 

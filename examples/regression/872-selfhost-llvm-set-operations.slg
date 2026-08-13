@@ -1,0 +1,76 @@
+# Verifies self-host LLVM Set growth, tombstone reuse, compaction, and mutable-borrow ABI.
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        fill set: mut Set<Int> -> Unit {
+            set! -> insert(1) => inserted1
+            set! -> insert(2) => inserted2
+            set! -> insert(3) => inserted3
+            set! -> insert(4) => inserted4
+            set! -> insert(5) => inserted5
+            set! -> insert(6) => inserted6
+            set! -> insert(7) => inserted7
+            set! -> insert(8) => inserted8
+            set! -> insert(9) => inserted9
+            set! -> insert(10) => inserted10
+            set! -> insert(11) => inserted11
+            set! -> insert(12) => inserted12
+            set! -> insert(13) => inserted13
+            set! -> insert(14) => inserted14
+            set! -> insert(15) => inserted15
+        }
+
+        emptySet: -> Set<Int> {
+            Set<Int>(4)
+        }
+
+        sumFresh: -> Int {
+            Set<Int>(4) => local!
+            local! -> insert(1) => inserted1
+            local! -> insert(2) => inserted2
+            0 => total!
+            local! -> each value {
+                total! + value => total!
+            }
+            total!
+        }
+
+        main {
+            emptySet() => set!
+            set! -> fill
+            0 => total!
+            set! -> each value {
+                total! + value => total!
+            }
+            total! -> println
+            sumFresh() -> println
+            set! -> contains(1) -> println
+            set! -> contains(99) -> println
+            set! -> insert(10) -> println
+            set! -> len -> println
+            set! -> capacity -> println
+            set! -> remove(1) -> println
+            set! -> insert(33) -> println
+            set! -> contains(33) -> println
+            set! -> remove(33) -> println
+            set! -> remove(2) => removed2
+            set! -> remove(3) => removed3
+            set! -> remove(4) => removed4
+            set! -> remove(5) => removed5
+            set! -> remove(6) => removed6
+            set! -> remove(7) => removed7
+            set! -> remove(8) => removed8
+            set! -> remove(9) => removed9
+            set! -> remove(10) => removed10
+            set! -> remove(11) => removed11
+            set! -> contains(12) -> println
+            set! -> remove(99) -> println
+            set! -> len -> println
+            set! -> capacity -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

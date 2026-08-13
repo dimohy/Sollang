@@ -496,9 +496,68 @@ internal sealed partial class LlvmEmitter
                         new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(sourceText.LengthName)), null, _mainOk),
                     RuntimeArguments arguments => new RuntimeFlowResult(
                         new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(arguments.LengthName)), null, _mainOk),
+                    RuntimeBitSet bitSet => new RuntimeFlowResult(
+                        new RuntimeInt(_program.Types.GetBitSet(bitSet.Type).BitCount.ToString(CultureInfo.InvariantCulture)),
+                        null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;
+            case "count" when current is RuntimeBitSet countBitSet:
+                result = new RuntimeFlowResult(EmitBitSetCount(countBitSet), null, _mainOk);
+                return true;
+            case "contains" when current is RuntimeBitSet containsBitSet:
+                result = new RuntimeFlowResult(
+                    EmitBitSetContains(containsBitSet, EmitIntExpression(target.Arguments[0])), null, _mainOk);
+                return true;
+            case "contains" when current is RuntimeInlineDictionary set
+                                     && _program.Types.IsSet(set.DictionaryType):
+            {
+                var setKey = target.Arguments[0] is DictionaryLiteralExpression contextualSetKey
+                    && _program.Types.IsStruct(set.KeyType)
+                        ? EmitContextualStructLiteral(contextualSetKey, set.KeyType)
+                        : EmitExpression(target.Arguments[0]);
+                result = new RuntimeFlowResult(EmitSetContains(set, setKey), null, _mainOk);
+                return true;
+            }
+            case "insert" when current is RuntimeInlineDictionary set
+                                   && _program.Types.IsSet(set.DictionaryType):
+            {
+                var setName = RequireMutableContainerSource(source, "insert");
+                var setKey = target.Arguments[0] is DictionaryLiteralExpression contextualSetKey
+                    && _program.Types.IsStruct(set.KeyType)
+                        ? EmitContextualStructLiteral(contextualSetKey, set.KeyType)
+                        : EmitExpression(target.Arguments[0]);
+                var inserted = EmitSetInsert(set, setKey);
+                StoreMutableContainer(setName, inserted.Set);
+                _locals[setName] = inserted.Set;
+                RemoveOwnedLiteralSources(target.Arguments[0], set.KeyType);
+                result = new RuntimeFlowResult(inserted.Inserted, null, _mainOk);
+                return true;
+            }
+            case "remove" when current is RuntimeInlineDictionary set
+                                   && _program.Types.IsSet(set.DictionaryType):
+            {
+                var setName = RequireMutableContainerSource(source, "remove");
+                var setKey = target.Arguments[0] is DictionaryLiteralExpression contextualSetKey
+                    && _program.Types.IsStruct(set.KeyType)
+                        ? EmitContextualStructLiteral(contextualSetKey, set.KeyType)
+                        : EmitExpression(target.Arguments[0]);
+                var removed = EmitSetRemove(set, setKey);
+                StoreMutableContainer(setName, removed.Set);
+                _locals[setName] = removed.Set;
+                result = new RuntimeFlowResult(removed.Removed, null, _mainOk);
+                return true;
+            }
+            case "set" when current is RuntimeBitSet setBitSet:
+                RequireMutableContainerSource(source, "set");
+                EmitBitSetMutation(setBitSet, EmitIntExpression(target.Arguments[0]), set: true);
+                result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
+                return true;
+            case "clear" when current is RuntimeBitSet clearBitSet:
+                RequireMutableContainerSource(source, "clear");
+                EmitBitSetMutation(clearBitSet, EmitIntExpression(target.Arguments[0]), set: false);
+                result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
+                return true;
             case "byte" when current is RuntimeSourceText sourceText:
                 if (target.Arguments.Count != 1)
                 {
@@ -562,14 +621,69 @@ internal sealed partial class LlvmEmitter
                     RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(EmitSizeAsInt(dynamicArray.CapacityName, "array_capacity_value"), null, _mainOk),
                     RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(EmitSizeAsInt(dictionaryView.CapacityName, "dict_capacity_value"), null, _mainOk),
                     RuntimeIntDictionary intDictionary => new RuntimeFlowResult(EmitSizeAsInt(intDictionary.CapacityName, "dict_capacity_value"), null, _mainOk),
-                    RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(EmitSizeAsInt(inlineMap.CapacityName, "dict_capacity_value"), null, _mainOk),
+                    RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(
+                        EmitSizeAsInt(
+                            _program.Types.IsBoundedDictionary(inlineMap.DictionaryType)
+                                ? _program.Types.GetBoundedDictionary(inlineMap.DictionaryType).MaxEntries.ToString(CultureInfo.InvariantCulture)
+                                : inlineMap.CapacityName,
+                            "dict_capacity_value"),
+                        null,
+                        _mainOk),
                     RuntimeArena arena => new RuntimeFlowResult(
                         new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(arena.CapacityName)), null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;
+            case "reserve":
+            {
+                var ownerName = RequireMutableContainerSource(source, "reserve");
+                var requestedInt = EmitIntExpression(target.Arguments[0]);
+                var nonnegative = NextTemp("reserve_nonnegative");
+                EmitCompare(nonnegative, "sge", "i32", requestedInt.ValueName, "0");
+                EmitTrapUnless(nonnegative, "reserve_negative_capacity");
+                var requested = EmitIntAsSize(requestedInt, "reserve_capacity");
+                RuntimeValue reserved = current switch
+                {
+                    RuntimeDynamicIntArray array => EmitDynamicArrayReserve(array, requested),
+                    RuntimeDynamicInlineArray array when _program.Types.IsDeque(array.ArrayType) =>
+                        EmitDequeReserve(array, requested),
+                    RuntimeDynamicInlineArray array => EmitDynamicInlineArrayReserve(array, requested),
+                    RuntimeIntDictionary reserveIntDictionary => EmitDictionaryReserve(reserveIntDictionary, requested),
+                    RuntimeInlineDictionary reserveSet when _program.Types.IsSet(reserveSet.DictionaryType) =>
+                        EmitSetReserve(reserveSet, requested),
+                    RuntimeInlineDictionary reserveDictionary => EmitInlineDictionaryReserve(reserveDictionary, requested),
+                    _ => throw new SollangException("reserve expects a mutable heap collection owner")
+                };
+                StoreMutableContainer(ownerName, reserved);
+                _locals[ownerName] = reserved;
+                result = new RuntimeFlowResult(null, null, _mainOk);
+                return true;
+            }
+            case "pushAll":
+            {
+                var ownerName = RequireMutableContainerSource(source, "pushAll");
+                var bulkSource = EmitExpression(target.Arguments[0]);
+                RuntimeValue bulkResult = current switch
+                {
+                    RuntimeDynamicIntArray array when bulkSource is RuntimeStaticIntArray fixedArray =>
+                        EmitDynamicArrayPushAll(array, fixedArray),
+                    RuntimeDynamicInlineArray array when !_program.Types.IsBinaryHeap(array.ArrayType)
+                                                         && !_program.Types.IsDeque(array.ArrayType) =>
+                        EmitDynamicInlineArrayPushAll(array, bulkSource),
+                    _ => throw new SollangException("pushAll expects a mutable heap array and a compatible fixed array")
+                };
+                StoreMutableContainer(ownerName, bulkResult);
+                _locals[ownerName] = bulkResult;
+                result = new RuntimeFlowResult(null, null, _mainOk);
+                return true;
+            }
             case "push":
                 if (current is not (RuntimeDynamicIntArray or RuntimeDynamicInlineArray))
+                {
+                    return false;
+                }
+                if (current is RuntimeDynamicInlineArray invariantArray
+                    && _program.Types.IsDeque(invariantArray.ArrayType))
                 {
                     return false;
                 }
@@ -594,6 +708,8 @@ internal sealed partial class LlvmEmitter
                 {
                     RuntimeDynamicIntArray array when pushed is RuntimeInt integer =>
                         (RuntimeValue)EmitDynamicArrayPush(array, integer.ValueName),
+                    RuntimeDynamicInlineArray array when _program.Types.IsBinaryHeap(array.ArrayType) =>
+                        EmitBinaryHeapPush(array, pushed),
                     RuntimeDynamicInlineArray array => EmitDynamicInlineArrayPush(array, pushed),
                     _ => throw new SollangException("push argument does not match array element type")
                 };
@@ -606,6 +722,64 @@ internal sealed partial class LlvmEmitter
                 }
                 result = new RuntimeFlowResult(null, null, _mainOk);
                 return true;
+            case "pushFront" or "pushBack" when current is RuntimeDynamicInlineArray deque
+                                                   && _program.Types.IsDeque(deque.ArrayType):
+            {
+                if (target.Arguments.Count != 1)
+                {
+                    throw new SollangException($"Deque {path} expects exactly one argument");
+                }
+                var dequeName = RequireMutableContainerSource(source, path);
+                var item = target.Arguments[0] is DictionaryLiteralExpression contextualDequeElement
+                    && _program.Types.IsStruct(deque.ElementType)
+                        ? EmitContextualStructLiteral(contextualDequeElement, deque.ElementType)
+                        : EmitExpression(target.Arguments[0]);
+                var pushedDeque = EmitDequePush(deque, item, front: path == "pushFront");
+                StoreMutableContainer(dequeName, pushedDeque);
+                _locals[dequeName] = pushedDeque;
+                if (_program.Types.ContainsOwnedStorage(deque.ElementType))
+                {
+                    RemoveOwnedLiteralSources(target.Arguments[0], deque.ElementType);
+                }
+                result = new RuntimeFlowResult(null, null, _mainOk);
+                return true;
+            }
+            case "front" or "back" when current is RuntimeDynamicInlineArray deque
+                                            && _program.Types.IsDeque(deque.ArrayType):
+                result = new RuntimeFlowResult(EmitDequePeek(deque, front: path == "front"), null, _mainOk);
+                return true;
+            case "popFront" or "popBack" when current is RuntimeDynamicInlineArray deque
+                                                  && _program.Types.IsDeque(deque.ArrayType):
+            {
+                var dequeName = RequireMutableContainerSource(source, path);
+                var popped = EmitDequePop(deque, front: path == "popFront");
+                StoreMutableContainer(dequeName, popped.Deque);
+                _locals[dequeName] = popped.Deque;
+                result = new RuntimeFlowResult(popped.Value, null, _mainOk);
+                return true;
+            }
+            case "peek" when current is RuntimeDynamicInlineArray peekHeap
+                                  && _program.Types.IsBinaryHeap(peekHeap.ArrayType):
+                if (target.Arguments.Count != 0)
+                {
+                    throw new SollangException("BinaryHeap peek does not accept arguments");
+                }
+                result = new RuntimeFlowResult(EmitBinaryHeapPeek(peekHeap), null, _mainOk);
+                return true;
+            case "pop" when current is RuntimeDynamicInlineArray popHeap
+                                 && _program.Types.IsBinaryHeap(popHeap.ArrayType):
+            {
+                if (target.Arguments.Count != 0)
+                {
+                    throw new SollangException("BinaryHeap pop does not accept arguments");
+                }
+                var heapName = RequireMutableContainerSource(source, "pop");
+                var popped = EmitBinaryHeapPop(popHeap);
+                StoreMutableContainer(heapName, popped.Heap);
+                _locals[heapName] = popped.Heap;
+                result = new RuntimeFlowResult(popped.Value, null, _mainOk);
+                return true;
+            }
             case "take":
             {
                 if (current is not (RuntimeDynamicIntArray
@@ -694,6 +868,48 @@ internal sealed partial class LlvmEmitter
                     null,
                     _mainOk);
                 return true;
+            case "putIfAbsent":
+                if (current is RuntimeInlineDictionary conditionalDictionary)
+                {
+                    if (!isLast || target.Arguments.Count != 2)
+                    {
+                        throw new SollangException("putIfAbsent must be final and expects key and value arguments");
+                    }
+                    var conditionalName = RequireMutableContainerSource(source, "putIfAbsent");
+                    var conditionalKey = target.Arguments[0] is DictionaryLiteralExpression contextualKey
+                        && _program.Types.IsStruct(conditionalDictionary.KeyType)
+                            ? EmitContextualStructLiteral(contextualKey, conditionalDictionary.KeyType)
+                            : EmitExpression(target.Arguments[0]);
+                    var conditionalValue = target.Arguments[1] is DictionaryLiteralExpression contextualValue
+                        && _program.Types.IsStruct(conditionalDictionary.ValueType)
+                            ? EmitContextualStructLiteral(contextualValue, conditionalDictionary.ValueType)
+                            : EmitExpression(target.Arguments[1]);
+                    var conditional = EmitInlineDictionaryPutIfAbsent(
+                        conditionalDictionary, conditionalKey, conditionalValue);
+                    RemoveOwnedLiteralSources(target.Arguments[0], conditionalDictionary.KeyType);
+                    RemoveOwnedLiteralSources(target.Arguments[1], conditionalDictionary.ValueType);
+                    StoreMutableContainer(conditionalName, conditional.Dictionary);
+                    _locals[conditionalName] = conditional.Dictionary;
+                    result = new RuntimeFlowResult(conditional.Inserted, null, _mainOk);
+                    return true;
+                }
+                if (current is RuntimeIntDictionary conditionalIntDictionary)
+                {
+                    if (!isLast || target.Arguments.Count != 2)
+                    {
+                        throw new SollangException("putIfAbsent must be final and expects key and value arguments");
+                    }
+                    var conditionalName = RequireMutableContainerSource(source, "putIfAbsent");
+                    var conditionalKey = EmitIntExpression(target.Arguments[0]);
+                    var conditionalValue = EmitIntExpression(target.Arguments[1]);
+                    var conditional = EmitDictionaryPutIfAbsent(
+                        conditionalIntDictionary, conditionalKey.ValueName, conditionalValue.ValueName);
+                    StoreMutableContainer(conditionalName, conditional.Dictionary);
+                    _locals[conditionalName] = conditional.Dictionary;
+                    result = new RuntimeFlowResult(conditional.Inserted, null, _mainOk);
+                    return true;
+                }
+                return false;
             case "put":
                 if (current is RuntimeInlineDictionary inlineDictionary)
                 {

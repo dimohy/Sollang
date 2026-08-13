@@ -1414,11 +1414,20 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
     call -> integerNodeWidth(context, state) => resultWidth
     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableLengthParameterOrdinal
     mutableLengthParameterOrdinal >= 0 -> if {
-        "  %v$(callIndex)" -> print
-        resultWidth == 32 -> if { "_raw" -> print }
-        " = load i64, ptr " -> print
-        mutableLengthParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(mutableLengthParameterOrdinal)_mut_len_addr" -> print }
-        ", align 8" -> println
+        base -> isDictionaryType -> if {
+            "  %v$(callIndex)_length_source = load %sollang.dict, ptr " -> print
+            mutableLengthParameterOrdinal -> writeMutableStructParameterPointer
+            ", align 8" -> println
+            "  %v$(callIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = extractvalue %sollang.dict %v$(callIndex)_length_source, 2" -> println
+        } else {
+            "  %v$(callIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = load i64, ptr " -> print
+            mutableLengthParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(mutableLengthParameterOrdinal)_mut_len_addr" -> print }
+            ", align 8" -> println
+        }
         resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
     } else {
         base -> isArgumentsType -> if {
@@ -1434,11 +1443,16 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
                 true => readonlyReference!
             }
             -1 => mutableRoot!
-            (not readonlyReference! and base.typeOrigin == 15) -> if {
+            (not readonlyReference! and (base -> isDictionaryType)) -> if {
+                call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
+            }
+            (not readonlyReference! and valueTypeId! >= 0 and context.types[valueTypeId!].kind == 7 and context.types[valueTypeId!].origin == 4 and (context.types[valueTypeId!].symbol == 6 or context.types[valueTypeId!].symbol == 7)) -> if {
                 call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
             }
             mutableRoot! >= 0 -> if {
-                "  %v$(callIndex)_length_source = load %sollang.dict, ptr %slot$(mutableRoot!), align 8" -> println
+                "  %v$(callIndex)_length_source = load " -> print
+                valueTypeId! -> writeSemanticTypeId(context, state)
+                ", ptr %slot$(mutableRoot!), align 8" -> println
             }
             readonlyReference! -> if {
                 "  %v$(callIndex)_length_source = load " -> print
@@ -1462,7 +1476,7 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
                 call.operand0 -> writeValue(ownerIndex, context, state)
             }
             ", " -> print
-            ((readonlyReference! and context.types[valueTypeId!].kind == 5) or (not readonlyReference! and base.typeOrigin == 15)) -> if {
+            ((readonlyReference! and (context.types[valueTypeId!].kind == 5 or context.types[valueTypeId!].kind == 13)) or (not readonlyReference! and (base -> isDictionaryType))) -> if {
                 "2" -> println
             } else {
                 "1" -> println
@@ -1472,17 +1486,79 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
     }
 }
 
+emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => call
+    context.ir[call.operand0] => base
+    call -> integerNodeWidth(context, state) => resultWidth
+    call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableCapacityParameterOrdinal
+    mutableCapacityParameterOrdinal >= 0 -> if {
+        base -> isDictionaryType -> if {
+            "  %v$(callIndex)_capacity_source = load %sollang.dict, ptr " -> print
+            mutableCapacityParameterOrdinal -> writeMutableStructParameterPointer
+            ", align 8" -> println
+            "  %v$(callIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = extractvalue %sollang.dict %v$(callIndex)_capacity_source, 3" -> println
+        } else {
+            "  %v$(callIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = load i64, ptr " -> print
+            mutableCapacityParameterOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(mutableCapacityParameterOrdinal)_mut_capacity_addr" -> print }
+            ", align 8" -> println
+        }
+        resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
+    } else {
+        base.typeId => valueTypeId!
+        false => readonlyReference!
+        (valueTypeId! >= 0 and context.types[valueTypeId!].kind == 8) -> if {
+            context.types[valueTypeId!].first => valueTypeId!
+            true => readonlyReference!
+        }
+        call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
+        mutableRoot! >= 0 -> if {
+            "  %v$(callIndex)_capacity_source = load " -> print
+            readonlyReference! -> if { valueTypeId! -> writeSemanticTypeId(context, state) } else { base -> writeIrType(context, state) }
+            ", ptr %slot$(mutableRoot!), align 8" -> println
+        }
+        readonlyReference! -> if {
+            "  %v$(callIndex)_capacity_source = load " -> print
+            valueTypeId! -> writeSemanticTypeId(context, state)
+            ", ptr " -> print
+            call.operand0 -> writeValue(ownerIndex, context, state)
+            ", align 8" -> println
+        }
+        "  %v$(callIndex)" -> print
+        resultWidth == 32 -> if { "_raw" -> print }
+        " = extractvalue " -> print
+        readonlyReference! -> if { valueTypeId! -> writeSemanticTypeId(context, state) } else { base -> writeIrType(context, state) }
+        " " -> print
+        (mutableRoot! >= 0 or readonlyReference!) -> if { "%v$(callIndex)_capacity_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
+        ", " -> print
+        ((readonlyReference! and (context.types[valueTypeId!].kind == 5 or context.types[valueTypeId!].kind == 13)) or (not readonlyReference! and (base -> isDictionaryType))) -> if { "3" -> println } else { "2" -> println }
+        resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
+    }
+}
+
 emitWhileLengthIntrinsic request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[request.nodeIndex] => call
     context.ir[call.operand0] => base
     call -> integerNodeWidth(context, state) => resultWidth
     call.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => mutableLengthParameterOrdinal
     mutableLengthParameterOrdinal >= 0 -> if {
-        "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
-        resultWidth == 32 -> if { "_raw" -> print }
-        " = load i64, ptr " -> print
-        mutableLengthParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(mutableLengthParameterOrdinal)_mut_len_addr" -> print }
-        ", align 8" -> println
+        base -> isDictionaryType -> if {
+            "  %while$(request.whileIndex)_v$(request.nodeIndex)_length_source = load %sollang.dict, ptr " -> print
+            mutableLengthParameterOrdinal -> writeMutableStructParameterPointer
+            ", align 8" -> println
+            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = extractvalue %sollang.dict %while$(request.whileIndex)_v$(request.nodeIndex)_length_source, 2" -> println
+        } else {
+            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = load i64, ptr " -> print
+            mutableLengthParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(mutableLengthParameterOrdinal)_mut_len_addr" -> print }
+            ", align 8" -> println
+        }
         resultWidth == 32 -> if {
             "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
         }

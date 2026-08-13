@@ -48,10 +48,18 @@ internal sealed partial class LlvmEmitter
         {
             EmitDynamicArrayDropHelper(array.Id, array.ElementType);
         }
+        foreach (var array in _program.Types.BoundedArrays.OrderBy(static array => array.Id))
+        {
+            EmitBoundedArrayDropHelper(array);
+        }
         EmitDictionaryDropHelper(BoundType.IntDictionary);
         foreach (var dictionary in _program.Types.Dictionaries.OrderBy(static dictionary => dictionary.Id))
         {
             EmitDictionaryDropHelper(dictionary.Id);
+        }
+        foreach (var dictionary in _program.Types.BoundedDictionaries.OrderBy(static dictionary => dictionary.Id))
+        {
+            EmitBoundedDictionaryDropHelper(dictionary);
         }
         foreach (var structure in _program.Types.Structs
                      .Where(definition => ShouldEmitTypeDefinition(definition.Id)
@@ -135,8 +143,43 @@ internal sealed partial class LlvmEmitter
     {
         return _program.Types.IsBox(type)
             || _program.Types.IsDynTrait(type)
+            || ((_program.Types.IsBoundedArray(type) || _program.Types.IsBoundedDictionary(type))
+                && _program.Types.ContainsOwnedStorage(type))
             || ((_program.Types.IsStruct(type) || _program.Types.IsEnum(type))
                 && _program.Types.ContainsOwnedStorage(type));
+    }
+
+    private void EmitBoundedArrayDropHelper(BoundBoundedArrayDefinition definition)
+    {
+        var llvmType = LlvmType(definition.Id);
+        EmitFunctionLine($"define internal void {DropSymbol(definition.Id)}({llvmType} %value) #0 {{");
+        EmitFunctionLine("entry:");
+        _currentBlockLabel = "entry";
+        if (_program.Types.ContainsOwnedStorage(definition.ElementType))
+        {
+            var array = (RuntimeDynamicInlineArray)DematerializeAggregateValue(definition.Id, "%value");
+            DropDynamicInlineArrayElements(array);
+        }
+        EmitInstruction("ret void");
+        EmitFunctionLine("}");
+        EmitFunctionLine();
+    }
+
+    private void EmitBoundedDictionaryDropHelper(BoundBoundedDictionaryDefinition definition)
+    {
+        var llvmType = LlvmType(definition.Id);
+        EmitFunctionLine($"define internal void {DropSymbol(definition.Id)}({llvmType} %value) #0 {{");
+        EmitFunctionLine("entry:");
+        _currentBlockLabel = "entry";
+        if (_program.Types.ContainsOwnedStorage(definition.KeyType)
+            || _program.Types.ContainsOwnedStorage(definition.ValueType))
+        {
+            var dictionary = (RuntimeInlineDictionary)DematerializeAggregateValue(definition.Id, "%value");
+            DropInlineDictionaryElements(dictionary);
+        }
+        EmitInstruction("ret void");
+        EmitFunctionLine("}");
+        EmitFunctionLine();
     }
 
     private void EmitBoxDropHelper(BoundBoxDefinition box)
@@ -188,6 +231,12 @@ internal sealed partial class LlvmEmitter
         {
             var length = NextTemp("drop_array_len");
             EmitAssign(length, $"extractvalue {llvmType} %value, 1");
+            string? capacity = null;
+            if (_program.Types.IsDeque(arrayType))
+            {
+                capacity = NextTemp("drop_deque_capacity");
+                EmitAssign(capacity, $"extractvalue {llvmType} %value, 2");
+            }
             var loopLabel = NextLabel("drop_array_loop");
             var itemLabel = NextLabel("drop_array_item");
             var continueLabel = NextLabel("drop_array_continue");
@@ -203,8 +252,19 @@ internal sealed partial class LlvmEmitter
             EmitConditionalBranch(inRange, itemLabel, endLabel);
             EmitLabel(itemLabel);
             _currentBlockLabel = itemLabel;
-            var slot = NextTemp("drop_array_slot");
-            EmitAssign(slot, $"getelementptr {LlvmType(elementType)}, ptr {pointer}, i64 {index}");
+            string slot;
+            if (_program.Types.IsDeque(arrayType))
+            {
+                slot = EmitDequeElementPointer(
+                    new RuntimeDynamicInlineArray(arrayType, elementType, pointer, length, capacity!),
+                    index,
+                    "drop_deque");
+            }
+            else
+            {
+                slot = NextTemp("drop_array_slot");
+                EmitAssign(slot, $"getelementptr {LlvmType(elementType)}, ptr {pointer}, i64 {index}");
+            }
             var element = NextTemp("drop_array_element");
             EmitLoad(element, LlvmType(elementType), slot, RuntimeAlignment(elementType));
             EmitOwnedDropCall(elementType, element);

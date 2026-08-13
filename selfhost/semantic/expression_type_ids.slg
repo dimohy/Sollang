@@ -241,17 +241,25 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 0 => typedArraySyntaxChildSearch!
                 typedArraySyntaxChildSearch! < sourceRange.astCount -> while {
                     prepared.package.nodes[sourceRange.astStart + typedArraySyntaxChildSearch!] => typedArraySyntaxChild
-                    (typedArraySyntaxChild.kind == 16 and typedArraySyntaxChild.parent == astIndex!) -> if {
+                    ((typedArraySyntaxChild.kind == 12 or typedArraySyntaxChild.kind == 16) and typedArraySyntaxChild.parent == astIndex!) -> if {
                         true => typedArrayTypeSyntax!
                     }
                     typedArraySyntaxChildSearch! + 1 => typedArraySyntaxChildSearch!
+                }
+                node.firstToken => typedArraySyntaxTokenSearch!
+                typedArraySyntaxTokenSearch! < node.firstToken + node.tokenCount -> while {
+                    prepared.package.tokens[sourceRange.tokenStart + typedArraySyntaxTokenSearch!] => typedArraySyntaxToken
+                    (typedArraySyntaxToken.kind == grammar.tokenIdLessEqual() or typedArraySyntaxToken.kind == grammar.tokenIdTilde()) -> if {
+                        true => typedArrayTypeSyntax!
+                    }
+                    typedArraySyntaxTokenSearch! + 1 => typedArraySyntaxTokenSearch!
                 }
             }
             (node.kind == 37 and typedArrayTypeSyntax!) -> if {
                 0 => arrayReferenceSearch!
                 arrayReferenceSearch! < (references! -> len) -> while {
                     references![arrayReferenceSearch!] => arrayReference
-                    (arrayReference.status == 0 and arrayReference.sourceModule == sourceIndex! and types![arrayReference.typeId].kind == 3) -> if {
+                    (arrayReference.status == 0 and arrayReference.sourceModule == sourceIndex! and (types![arrayReference.typeId].kind == 3 or types![arrayReference.typeId].kind == 12)) -> if {
                         (arrayReference.typeAst == astIndex! or prepared.package.nodes[sourceRange.astStart + arrayReference.typeAst].parent == astIndex!) -> if {
                             arrayReference.typeId => builtinTypeId!
                         }
@@ -263,7 +271,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     0 => typedArrayChildSearch!
                     typedArrayChildSearch! < sourceRange.astCount -> while {
                         prepared.package.nodes[sourceRange.astStart + typedArrayChildSearch!] => typedArrayChild
-                        (typedArrayChild.kind == 16 and typedArrayPathAst! < 0) -> if {
+                        ((typedArrayChild.kind == 12 or typedArrayChild.kind == 16) and typedArrayPathAst! < 0) -> if {
                             typedArrayChild.parent => typedArrayPathAncestor!
                             (typedArrayPathAncestor! >= 0 and typedArrayPathAncestor! != astIndex!) -> while {
                                 prepared.package.nodes[sourceRange.astStart + typedArrayPathAncestor!].parent => typedArrayPathAncestor!
@@ -274,9 +282,21 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     }
                     -1 => typedArrayElementType!
                     -1 => typedArrayNameToken!
+                    false => typedArrayBounded!
+                    -1 => typedArrayCapacity!
                     node.firstToken => typedArrayTokenIndex!
                     typedArrayTokenIndex! < node.firstToken + node.tokenCount -> while {
                         prepared.package.tokens[sourceRange.tokenStart + typedArrayTokenIndex!] => typedArrayToken
+                        typedArrayToken.kind == grammar.tokenIdLessEqual() -> if { true => typedArrayBounded! }
+                        (typedArrayBounded! and typedArrayCapacity! < 0 and typedArrayToken.kind == grammar.tokenIdNumber()) -> if {
+                            0 => typedArrayCapacity!
+                            UIntSize(0) => typedArrayCapacityByte!
+                            typedArrayCapacityByte! < typedArrayToken.span.length -> while {
+                                source -> byte(typedArrayToken.span.start + typedArrayCapacityByte!) => typedArrayCapacityDigit
+                                typedArrayCapacity! * 10 + Int(typedArrayCapacityDigit - UInt8(48)) => typedArrayCapacity!
+                                typedArrayCapacityByte! + UIntSize(1) => typedArrayCapacityByte!
+                            }
+                        }
                         # The element name of a qualified type is its final
                         # identifier (`SourceText` in `file.SourceText`).
                         typedArrayToken.kind == grammar.tokenIdIdentifier() -> if { typedArrayTokenIndex! => typedArrayNameToken! }
@@ -398,23 +418,29 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         }
                     }
                     typedArrayElementType! >= 0 -> if {
+                            3 => typedArrayKind!
+                            -1 => typedArrayLength!
+                            typedArrayBounded! -> if {
+                                12 => typedArrayKind!
+                                typedArrayCapacity! => typedArrayLength!
+                            }
                             -1 => typedArrayType!
                             0 => typedArrayTypeSearch!
                             typedArrayTypeSearch! < (types! -> len) -> while {
                                 types![typedArrayTypeSearch!] => typedArrayCandidate
-                                (typedArrayCandidate.kind == 3 and typedArrayCandidate.first == typedArrayElementType! and typedArrayCandidate.status == 0) -> if { typedArrayTypeSearch! => typedArrayType! }
+                                (typedArrayCandidate.kind == typedArrayKind! and typedArrayCandidate.first == typedArrayElementType! and typedArrayCandidate.length == typedArrayLength! and typedArrayCandidate.status == 0) -> if { typedArrayTypeSearch! => typedArrayType! }
                                 typedArrayTypeSearch! + 1 => typedArrayTypeSearch!
                             }
                             typedArrayType! < 0 -> if {
                                 types! -> len => typedArrayType!
                                 types! -> push(typeIds.SemanticType {
-                                    kind: 3
+                                    kind: typedArrayKind!
                                     origin: -1
                                     module: -1
                                     symbol: -1
                                     first: typedArrayElementType!
                                     second: -1
-                                    length: -1
+                                    length: typedArrayLength!
                                     lengthHash: UInt64(0)
                                     containsParameter: types![typedArrayElementType!].containsParameter
                                     status: 0
@@ -449,6 +475,25 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             node.kind == 38 -> if {
                 -1 => typedDictionaryKeyType!
                 -1 => typedDictionaryValueType!
+                false => typedDictionaryBounded!
+                -1 => typedDictionaryCapacity!
+                node.firstToken => typedDictionaryTokenSearch!
+                typedDictionaryTokenSearch! < node.firstToken + node.tokenCount -> while {
+                    prepared.package.tokens[sourceRange.tokenStart + typedDictionaryTokenSearch!].kind == grammar.tokenIdLessEqual() -> if {
+                        true => typedDictionaryBounded!
+                    }
+                    (typedDictionaryBounded! and typedDictionaryCapacity! < 0 and prepared.package.tokens[sourceRange.tokenStart + typedDictionaryTokenSearch!].kind == grammar.tokenIdNumber()) -> if {
+                        prepared.package.tokens[sourceRange.tokenStart + typedDictionaryTokenSearch!] => typedDictionaryCapacityToken
+                        0 => typedDictionaryCapacity!
+                        UIntSize(0) => typedDictionaryCapacityByte!
+                        typedDictionaryCapacityByte! < typedDictionaryCapacityToken.span.length -> while {
+                            source -> byte(typedDictionaryCapacityToken.span.start + typedDictionaryCapacityByte!) => typedDictionaryCapacityDigit
+                            typedDictionaryCapacity! * 10 + Int(typedDictionaryCapacityDigit - UInt8(48)) => typedDictionaryCapacity!
+                            typedDictionaryCapacityByte! + UIntSize(1) => typedDictionaryCapacityByte!
+                        }
+                    }
+                    typedDictionaryTokenSearch! + 1 => typedDictionaryTokenSearch!
+                }
                 0 => typedDictionaryChildSearch!
                 typedDictionaryChildSearch! < sourceRange.astCount -> while {
                     prepared.package.nodes[sourceRange.astStart + typedDictionaryChildSearch!] => typedDictionaryChild
@@ -468,11 +513,17 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     typedDictionaryChildSearch! + 1 => typedDictionaryChildSearch!
                 }
                 (typedDictionaryKeyType! >= 0 and typedDictionaryValueType! >= 0) -> if {
+                    5 => typedDictionaryKind!
+                    -1 => typedDictionaryLength!
+                    typedDictionaryBounded! -> if {
+                        13 => typedDictionaryKind!
+                        typedDictionaryCapacity! => typedDictionaryLength!
+                    }
                     -1 => typedDictionaryType!
                     0 => typedDictionaryTypeSearch!
                     typedDictionaryTypeSearch! < (types! -> len) -> while {
                         types![typedDictionaryTypeSearch!] => typedDictionaryCandidate
-                        (typedDictionaryCandidate.kind == 5 and typedDictionaryCandidate.first == typedDictionaryKeyType! and typedDictionaryCandidate.second == typedDictionaryValueType! and typedDictionaryCandidate.status == 0) -> if {
+                        (typedDictionaryCandidate.kind == typedDictionaryKind! and typedDictionaryCandidate.first == typedDictionaryKeyType! and typedDictionaryCandidate.second == typedDictionaryValueType! and typedDictionaryCandidate.length == typedDictionaryLength! and typedDictionaryCandidate.status == 0) -> if {
                             typedDictionaryTypeSearch! => typedDictionaryType!
                         }
                         typedDictionaryTypeSearch! + 1 => typedDictionaryTypeSearch!
@@ -480,13 +531,13 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     typedDictionaryType! < 0 -> if {
                         types! -> len => typedDictionaryType!
                         types! -> push(typeIds.SemanticType {
-                            kind: 5
+                            kind: typedDictionaryKind!
                             origin: -1
                             module: -1
                             symbol: -1
                             first: typedDictionaryKeyType!
                             second: typedDictionaryValueType!
-                            length: -1
+                            length: typedDictionaryLength!
                             lengthHash: UInt64(0)
                             containsParameter: types![typedDictionaryKeyType!].containsParameter or types![typedDictionaryValueType!].containsParameter
                             status: 0
@@ -559,6 +610,97 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             }
             node.kind == 11 -> if {
                 prepared.package.tokens[sourceRange.tokenStart + node.payloadToken] => conversionName
+                -1 => collectionConstructorSymbol!
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Set" } -> textMatches -> if { 5 => collectionConstructorSymbol! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Deque" } -> textMatches -> if { 6 => collectionConstructorSymbol! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "BinaryHeap" } -> textMatches -> if { 7 => collectionConstructorSymbol! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "BitSet" } -> textMatches -> if { 8 => collectionConstructorSymbol! }
+                (collectionConstructorSymbol! >= 5 and collectionConstructorSymbol! <= 7) -> if {
+                    -1 => collectionElementType!
+                    0 => collectionTypeArgumentSearch!
+                    collectionTypeArgumentSearch! < sourceRange.astCount -> while {
+                        prepared.package.nodes[sourceRange.astStart + collectionTypeArgumentSearch!] => collectionTypeArgumentNode
+                        (collectionTypeArgumentNode.kind == 12 and collectionTypeArgumentNode.parent == astIndex!) -> if {
+                            referenceIndexByTypeAst![sourceRange.astStart + collectionTypeArgumentSearch!] => collectionArgumentReference!
+                            collectionArgumentReference! >= 0 -> if {
+                                references![collectionArgumentReference!] => collectionTypeArgument
+                                collectionTypeArgument.status == 0 -> if { collectionTypeArgument.typeId => collectionElementType! }
+                            }
+                        }
+                        collectionTypeArgumentSearch! + 1 => collectionTypeArgumentSearch!
+                    }
+                    collectionElementType! >= 0 -> if {
+                        -1 => collectionTypeId!
+                        0 => knownCollectionTypeSearch!
+                        (knownCollectionTypeSearch! < (types! -> len) and collectionTypeId! < 0) -> while {
+                            types![knownCollectionTypeSearch!] => knownCollectionType
+                            (knownCollectionType.kind == 7 and knownCollectionType.origin == 4 and knownCollectionType.symbol == collectionConstructorSymbol! and knownCollectionType.first == collectionElementType! and knownCollectionType.second < 0 and knownCollectionType.status == 0) -> if {
+                                knownCollectionTypeSearch! => collectionTypeId!
+                            }
+                            knownCollectionTypeSearch! + 1 => knownCollectionTypeSearch!
+                        }
+                        collectionTypeId! < 0 -> if {
+                            types! -> len => collectionTypeId!
+                            types! -> push(typeIds.SemanticType {
+                                kind: 7
+                                origin: 4
+                                module: -1
+                                symbol: collectionConstructorSymbol!
+                                first: collectionElementType!
+                                second: -1
+                                length: -1
+                                lengthHash: UInt64(0)
+                                containsParameter: types![collectionElementType!].containsParameter
+                                status: 0
+                            })
+                        }
+                        collectionTypeId! => builtinTypeId!
+                    }
+                }
+                collectionConstructorSymbol! == 8 -> if {
+                    -1 => bitSetLength!
+                    UInt64(1469598103934665603) => bitSetLengthHash!
+                    node.firstToken => bitSetLengthTokenSearch!
+                    bitSetLengthTokenSearch! < node.firstToken + node.tokenCount -> while {
+                        prepared.package.tokens[sourceRange.tokenStart + bitSetLengthTokenSearch!] => bitSetLengthToken
+                        bitSetLengthToken.kind == grammar.tokenIdNumber() -> if {
+                            0 => bitSetLength!
+                            UIntSize(0) => bitSetLengthByte!
+                            bitSetLengthByte! < bitSetLengthToken.span.length -> while {
+                                source -> byte(bitSetLengthToken.span.start + bitSetLengthByte!) => bitSetDigit
+                                bitSetLength! * 10 + Int(bitSetDigit - UInt8(48)) => bitSetLength!
+                                bitSetLengthHash! * UInt64(1099511628211) + UInt64(bitSetDigit) => bitSetLengthHash!
+                                bitSetLengthByte! + UIntSize(1) => bitSetLengthByte!
+                            }
+                        }
+                        bitSetLengthTokenSearch! + 1 => bitSetLengthTokenSearch!
+                    }
+                    bitSetLength! > 0 -> if {
+                        -1 => bitSetTypeId!
+                        0 => knownBitSetSearch!
+                        (knownBitSetSearch! < (types! -> len) and bitSetTypeId! < 0) -> while {
+                            types![knownBitSetSearch!] => knownBitSet
+                            (knownBitSet.kind == 14 and knownBitSet.origin == 4 and knownBitSet.symbol == 8 and knownBitSet.length == bitSetLength! and knownBitSet.status == 0) -> if { knownBitSetSearch! => bitSetTypeId! }
+                            knownBitSetSearch! + 1 => knownBitSetSearch!
+                        }
+                        bitSetTypeId! < 0 -> if {
+                            types! -> len => bitSetTypeId!
+                            types! -> push(typeIds.SemanticType {
+                                kind: 14
+                                origin: 4
+                                module: -1
+                                symbol: 8
+                                first: -1
+                                second: -1
+                                length: bitSetLength!
+                                lengthHash: bitSetLengthHash!
+                                containsParameter: false
+                                status: 0
+                            })
+                        }
+                        bitSetTypeId! => builtinTypeId!
+                    }
+                }
                 TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Int" } -> textMatches -> if { 2 => builtinTypeId! }
                 TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Int8" } -> textMatches -> if { 3 => builtinTypeId! }
                 TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Int16" } -> textMatches -> if { 4 => builtinTypeId! }
@@ -1056,11 +1198,41 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     compositeChildCount![compositeGlobalAst] => childPosition!
                     compositeHomogeneous![compositeGlobalAst] => homogeneousComposite!
                     false => dynamicArray!
+                    false => boundedComposite!
+                    -1 => boundedCompositeCapacity!
                     compositeNode.kind == 37 -> if {
                         compositeNode.firstToken => compositeTokenIndex!
                         compositeTokenIndex! < compositeNode.firstToken + compositeNode.tokenCount -> while {
                             prepared.package.tokens[compositeRange.tokenStart + compositeTokenIndex!].kind == grammar.tokenIdTilde() -> if { true => dynamicArray! }
+                            prepared.package.tokens[compositeRange.tokenStart + compositeTokenIndex!].kind == grammar.tokenIdLessEqual() -> if { true => boundedComposite! }
+                            (boundedComposite! and boundedCompositeCapacity! < 0 and prepared.package.tokens[compositeRange.tokenStart + compositeTokenIndex!].kind == grammar.tokenIdNumber()) -> if {
+                                prepared.package.tokens[compositeRange.tokenStart + compositeTokenIndex!] => boundedCompositeCapacityToken
+                                0 => boundedCompositeCapacity!
+                                UIntSize(0) => boundedCompositeCapacityByte!
+                                boundedCompositeCapacityByte! < boundedCompositeCapacityToken.span.length -> while {
+                                    prepared.package.sources[compositeSourceIndex!] -> byte(boundedCompositeCapacityToken.span.start + boundedCompositeCapacityByte!) => boundedCompositeCapacityDigit
+                                    boundedCompositeCapacity! * 10 + Int(boundedCompositeCapacityDigit - UInt8(48)) => boundedCompositeCapacity!
+                                    boundedCompositeCapacityByte! + UIntSize(1) => boundedCompositeCapacityByte!
+                                }
+                            }
                             compositeTokenIndex! + 1 => compositeTokenIndex!
+                        }
+                    }
+                    compositeNode.kind == 38 -> if {
+                        compositeNode.firstToken => compositeDictionaryTokenIndex!
+                        compositeDictionaryTokenIndex! < compositeNode.firstToken + compositeNode.tokenCount -> while {
+                            prepared.package.tokens[compositeRange.tokenStart + compositeDictionaryTokenIndex!].kind == grammar.tokenIdLessEqual() -> if { true => boundedComposite! }
+                            (boundedComposite! and boundedCompositeCapacity! < 0 and prepared.package.tokens[compositeRange.tokenStart + compositeDictionaryTokenIndex!].kind == grammar.tokenIdNumber()) -> if {
+                                prepared.package.tokens[compositeRange.tokenStart + compositeDictionaryTokenIndex!] => boundedCompositeCapacityToken
+                                0 => boundedCompositeCapacity!
+                                UIntSize(0) => boundedCompositeCapacityByte!
+                                boundedCompositeCapacityByte! < boundedCompositeCapacityToken.span.length -> while {
+                                    prepared.package.sources[compositeSourceIndex!] -> byte(boundedCompositeCapacityToken.span.start + boundedCompositeCapacityByte!) => boundedCompositeCapacityDigit
+                                    boundedCompositeCapacity! * 10 + Int(boundedCompositeCapacityDigit - UInt8(48)) => boundedCompositeCapacity!
+                                    boundedCompositeCapacityByte! + UIntSize(1) => boundedCompositeCapacityByte!
+                                }
+                            }
+                            compositeDictionaryTokenIndex! + 1 => compositeDictionaryTokenIndex!
                         }
                     }
                     false => canBuildComposite!
@@ -1075,17 +1247,22 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         3 => compositeKind!
                         true => canBuildComposite!
                     }
+                    (compositeNode.kind == 37 and boundedComposite! and firstChildType! >= 0 and homogeneousComposite!) -> if {
+                        12 => compositeKind!
+                        true => canBuildComposite!
+                    }
                     (compositeNode.kind == 37 and not dynamicArray! and childPosition! > 0 and firstChildType! >= 0 and homogeneousComposite!) -> if {
                         4 => compositeKind!
                         true => canBuildComposite!
                     }
                     (compositeNode.kind == 38 and childPosition! > 0 and childPosition! % 2 == 0 and firstChildType! >= 0 and secondChildType! >= 0 and homogeneousComposite!) -> if {
-                        5 => compositeKind!
+                        boundedComposite! -> if { 13 => compositeKind! } else { 5 => compositeKind! }
                         true => canBuildComposite!
                     }
                     canBuildComposite! -> if {
                         -1 => compositeLength!
                         compositeKind! == 4 -> if { childPosition! => compositeLength! }
+                        (compositeKind! == 12 or compositeKind! == 13) -> if { boundedCompositeCapacity! => compositeLength! }
                         -1 => existingType!
                         0 => typeSearch!
                         (typeSearch! < (types! -> len) and existingType! < 0) -> while {
@@ -2534,7 +2711,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                             -1 => eachElementType!
                             (eachCollectionType.kind >= 2 and eachCollectionType.kind <= 4) -> if { eachCollectionType.first => eachElementType! }
                             (eachCollectionType.kind == 1 and eachCollectionType.origin == 1 and eachCollectionType.symbol == 25) -> if { 2 => eachElementType! }
-                            (eachCollectionType.kind == 7 and eachCollectionType.origin == 4 and (eachCollectionType.symbol == 3 or eachCollectionType.symbol == 4) and eachCollectionType.first >= 0 and eachCollectionType.first < (types! -> len)) -> if { eachCollectionType.first => eachElementType! }
+                            (eachCollectionType.kind == 7 and eachCollectionType.origin == 4 and (eachCollectionType.symbol == 3 or eachCollectionType.symbol == 4 or eachCollectionType.symbol == 5) and eachCollectionType.first >= 0 and eachCollectionType.first < (types! -> len)) -> if { eachCollectionType.first => eachElementType! }
                             eachElementType! < 0 -> if {
                                 expressions![eachSourceExpression!] => eachStreamSourceExpression
                                 0 => eachStreamCallSearch!
@@ -3095,10 +3272,22 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 nearestBindingDistanceByAst![bindingCandidateGlobalAst] => bindingDistance!
                 bindingAncestorGlobal! >= 0 -> while {
                     bindingSymbolByAst![bindingAncestorGlobal!] => bindingGlobalSymbol
-                    (bindingGlobalSymbol >= 0 and (bindingDistance! < bindingValueDistance![bindingGlobalSymbol] or (bindingDistance! == bindingValueDistance![bindingGlobalSymbol] and bindingCandidateNode.start > bindingValueStart![bindingGlobalSymbol]))) -> if {
-                        bindingCandidate.typeId => bindingValueType![bindingGlobalSymbol]
-                        bindingDistance! => bindingValueDistance![bindingGlobalSymbol]
-                        bindingCandidateNode.start => bindingValueStart![bindingGlobalSymbol]
+                    bindingGlobalSymbol >= 0 -> if {
+                        types![bindingCandidate.typeId] => bindingCandidateType
+                        (bindingCandidateType.kind == 7 and bindingCandidateType.origin == 4 and bindingCandidateType.symbol >= 5 and bindingCandidateType.symbol <= 7) => bindingCandidateIsCollection
+                        false => bindingExistingIsCollection!
+                        bindingValueType![bindingGlobalSymbol] >= 0 -> if {
+                            types![bindingValueType![bindingGlobalSymbol]] => bindingExistingType
+                            (bindingExistingType.kind == 7 and bindingExistingType.origin == 4 and bindingExistingType.symbol >= 5 and bindingExistingType.symbol <= 7) => bindingExistingIsCollection!
+                        }
+                        (bindingDistance! < bindingValueDistance![bindingGlobalSymbol] or (bindingDistance! == bindingValueDistance![bindingGlobalSymbol] and bindingCandidateNode.start > bindingValueStart![bindingGlobalSymbol])) => bindingCandidateWins!
+                        (bindingCandidateIsCollection and not bindingExistingIsCollection! and bindingCandidateNode.start <= bindingValueStart![bindingGlobalSymbol]) -> if { true => bindingCandidateWins! }
+                        (bindingExistingIsCollection! and not bindingCandidateIsCollection and bindingValueStart![bindingGlobalSymbol] <= bindingCandidateNode.start) -> if { false => bindingCandidateWins! }
+                        bindingCandidateWins! -> if {
+                            bindingCandidate.typeId => bindingValueType![bindingGlobalSymbol]
+                            bindingDistance! => bindingValueDistance![bindingGlobalSymbol]
+                            bindingCandidateNode.start => bindingValueStart![bindingGlobalSymbol]
+                        }
                     }
                     nearestBindingDistanceByAst![bindingAncestorGlobal!] + bindingDistance! => bindingDistance!
                     nearestBindingAncestorByAst![bindingAncestorGlobal!] => bindingAncestorGlobal!
@@ -3209,6 +3398,15 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     # so it cannot be overwritten by the conservative seed.
                     pathNode.kind == 10 -> if {
                         false => canonicalLengthFlow!
+                        false => canonicalBitSetCountFlow!
+                        false => canonicalBitSetContainsFlow!
+                        false => canonicalBitSetSetFlow!
+                        false => canonicalBitSetClearFlow!
+                        false => canonicalDequePushFlow!
+                        false => canonicalDequeReadFlow!
+                        false => canonicalHeapPushFlow!
+                        false => canonicalHeapReadFlow!
+                        false => canonicalSetBoolFlow!
                         flowTargetTokenByAst![pathGlobalAst] => canonicalLengthToken
                         canonicalLengthToken >= 0 -> if {
                             prepared.package.tokens[pathRange.tokenStart + canonicalLengthToken] => canonicalLengthName
@@ -3218,21 +3416,76 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 length: canonicalLengthName.span.length
                                 expected: "len"
                             } -> textMatches -> if { true => canonicalLengthFlow! }
+                            TextMatchRequest {
+                                source: pathSource
+                                start: canonicalLengthName.span.start
+                                length: canonicalLengthName.span.length
+                                expected: "count"
+                            } -> textMatches -> if { true => canonicalBitSetCountFlow! }
+                            TextMatchRequest {
+                                source: pathSource
+                                start: canonicalLengthName.span.start
+                                length: canonicalLengthName.span.length
+                                expected: "contains"
+                            } -> textMatches -> if { true => canonicalBitSetContainsFlow! }
+                            TextMatchRequest {
+                                source: pathSource
+                                start: canonicalLengthName.span.start
+                                length: canonicalLengthName.span.length
+                                expected: "set"
+                            } -> textMatches -> if { true => canonicalBitSetSetFlow! }
+                            TextMatchRequest {
+                                source: pathSource
+                                start: canonicalLengthName.span.start
+                                length: canonicalLengthName.span.length
+                                expected: "clear"
+                            } -> textMatches -> if { true => canonicalBitSetClearFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "pushFront" } -> textMatches -> if { true => canonicalDequePushFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "pushBack" } -> textMatches -> if { true => canonicalDequePushFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "front" } -> textMatches -> if { true => canonicalDequeReadFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "back" } -> textMatches -> if { true => canonicalDequeReadFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "popFront" } -> textMatches -> if { true => canonicalDequeReadFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "popBack" } -> textMatches -> if { true => canonicalDequeReadFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "push" } -> textMatches -> if { true => canonicalHeapPushFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "peek" } -> textMatches -> if { true => canonicalHeapReadFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "pop" } -> textMatches -> if { true => canonicalHeapReadFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "insert" } -> textMatches -> if { true => canonicalSetBoolFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "contains" } -> textMatches -> if { true => canonicalSetBoolFlow! }
+                            TextMatchRequest { source: pathSource, start: canonicalLengthName.span.start, length: canonicalLengthName.span.length, expected: "remove" } -> textMatches -> if { true => canonicalSetBoolFlow! }
                         }
-                        canonicalLengthFlow! -> if {
+                        (canonicalLengthFlow! or canonicalBitSetCountFlow! or canonicalBitSetContainsFlow! or canonicalBitSetSetFlow! or canonicalBitSetClearFlow! or canonicalDequePushFlow! or canonicalDequeReadFlow! or canonicalHeapPushFlow! or canonicalHeapReadFlow! or canonicalSetBoolFlow!) -> if {
                             baseExpression.typeId => canonicalLengthBaseTypeId!
                             (types![canonicalLengthBaseTypeId!].kind == 8 and types![canonicalLengthBaseTypeId!].first >= 0) -> if {
                                 types![canonicalLengthBaseTypeId!].first => canonicalLengthBaseTypeId!
                             }
                             types![canonicalLengthBaseTypeId!] => canonicalLengthBaseType
-                            (canonicalLengthBaseType.kind >= 2 and canonicalLengthBaseType.kind <= 5) -> if {
+                            -1 => canonicalCollectionFlowType!
+                            (canonicalLengthFlow! and canonicalLengthBaseType.kind >= 2 and canonicalLengthBaseType.kind <= 5) -> if {
+                                2 => canonicalCollectionFlowType!
+                            }
+                            canonicalLengthBaseType.kind == 14 -> if {
+                                (canonicalLengthFlow! or canonicalBitSetCountFlow!) -> if { 2 => canonicalCollectionFlowType! }
+                                canonicalBitSetContainsFlow! -> if { 23 => canonicalCollectionFlowType! }
+                                (canonicalBitSetSetFlow! or canonicalBitSetClearFlow!) -> if { 0 => canonicalCollectionFlowType! }
+                            }
+                            (canonicalLengthBaseType.kind == 7 and canonicalLengthBaseType.origin == 4 and canonicalLengthBaseType.symbol >= 5 and canonicalLengthBaseType.symbol <= 7 and canonicalLengthFlow!) -> if { 2 => canonicalCollectionFlowType! }
+                            (canonicalLengthBaseType.kind == 7 and canonicalLengthBaseType.origin == 4 and canonicalLengthBaseType.symbol == 6) -> if {
+                                canonicalDequePushFlow! -> if { 0 => canonicalCollectionFlowType! }
+                                (canonicalDequeReadFlow! and canonicalLengthBaseType.first >= 0) -> if { canonicalLengthBaseType.first => canonicalCollectionFlowType! }
+                            }
+                            (canonicalLengthBaseType.kind == 7 and canonicalLengthBaseType.origin == 4 and canonicalLengthBaseType.symbol == 7) -> if {
+                                canonicalHeapPushFlow! -> if { 0 => canonicalCollectionFlowType! }
+                                (canonicalHeapReadFlow! and canonicalLengthBaseType.first >= 0) -> if { canonicalLengthBaseType.first => canonicalCollectionFlowType! }
+                            }
+                            (canonicalLengthBaseType.kind == 7 and canonicalLengthBaseType.origin == 4 and canonicalLengthBaseType.symbol == 5 and canonicalSetBoolFlow!) -> if { 23 => canonicalCollectionFlowType! }
+                            canonicalCollectionFlowType! >= 0 -> if {
                                 expressionIndexByAst![pathGlobalAst] => canonicalLengthExpression!
                                 canonicalLengthExpression! < 0 -> if {
                                     expressions! -> len => canonicalLengthExpression!
                                     expressions! -> push(ExpressionTypeId {
                                         sourceModule: pathSourceIndex!
                                         astNode: pathAstIndex!
-                                        typeId: 2
+                                        typeId: canonicalCollectionFlowType!
                                         status: 0
                                     })
                                     canonicalLengthExpression! => expressionIndexByAst![pathGlobalAst]
@@ -3240,8 +3493,8 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     true => pathRoundChanged!
                                 } else {
                                     expressions![canonicalLengthExpression!] => existingCanonicalLength!
-                                    (existingCanonicalLength!.typeId != 2 or existingCanonicalLength!.status != 0) -> if {
-                                        2 => existingCanonicalLength!.typeId
+                                    (existingCanonicalLength!.typeId != canonicalCollectionFlowType! or existingCanonicalLength!.status != 0) -> if {
+                                        canonicalCollectionFlowType! => existingCanonicalLength!.typeId
                                         0 => existingCanonicalLength!.status
                                         existingCanonicalLength! => expressions![canonicalLengthExpression!]
                                         true => pathChanged!

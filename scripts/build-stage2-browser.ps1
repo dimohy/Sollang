@@ -17,7 +17,7 @@ $compilerError = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.err"
 $compilerBitcode = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.bc"
 $compilerObject = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.o"
 $compilerArtifact = Join-Path $repoRoot "artifacts\sollangc-browser.wasm"
-$publicCompiler = Join-Path $repoRoot "public\sollangc-stage2-0.4.260803.wasm"
+$publicCompiler = Join-Path $repoRoot "public\sollangc-stage2-0.4.260813.wasm"
 
 $browserSources = Get-Content -LiteralPath $manifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -74,6 +74,7 @@ foreach ($case in @(
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-when.slg", "browser-stage2-when.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-when.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-raw-strings.slg", "browser-stage2-raw-strings.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-raw-strings.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-containers.slg", "browser-stage2-containers.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-containers.stdout.txt"),
+    @("examples\regression\854-set-key-only.slg", "browser-stage2-set.ll", "examples\regression\expected\854-set-key-only.stdout.txt"),
     @("examples\regression\576-linq-multiplication-table.slg", "browser-stage2-table.ll", "examples\regression\expected\576-linq-multiplication-table.stdout.txt"),
     @("examples\regression\580-deferred-text-evaluation.slg", "browser-stage2-deferred-text.ll", "examples\regression\expected\580-deferred-text-evaluation.stdout.txt"),
     @("examples\regression\582-billion-sensor-alerts.slg", "browser-stage2-sensor.ll", "examples\regression\expected\582-billion-sensor-alerts.stdout.txt"),

@@ -133,18 +133,34 @@ internal sealed partial class LlvmEmitter
         EmitStore(llvmType, materialized.ValueName, slot, definition.ElementAlignment);
     }
 
+    private void StoreBoundedArrayElement(
+        string pointer,
+        BoundBoundedArrayDefinition definition,
+        string index,
+        RuntimeValue value)
+    {
+        var llvmType = LlvmType(definition.ElementType);
+        var materialized = MaterializeAggregateValue(value);
+        var slot = NextTemp("bounded_array_slot");
+        EmitAssign(slot, $"getelementptr {llvmType}, ptr {pointer}, i64 {index}");
+        EmitStore(llvmType, materialized.ValueName, slot, definition.ElementAlignment);
+    }
+
     private RuntimeValue EmitDynamicInlineArrayLoad(RuntimeDynamicInlineArray array, string index)
     {
         var inBounds = NextTemp("dynamic_inline_in_bounds");
         EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
         EmitTrapUnless(inBounds, "dynamic_inline_bounds");
-        var definition = _program.Types.GetDynamicArray(array.ArrayType);
-        var llvmType = LlvmType(definition.ElementType);
+        var elementType = array.ElementType;
+        var elementAlignment = _program.Types.IsBoundedArray(array.ArrayType)
+            ? _program.Types.GetBoundedArray(array.ArrayType).ElementAlignment
+            : _program.Types.GetDynamicArray(array.ArrayType).ElementAlignment;
+        var llvmType = LlvmType(elementType);
         var slot = NextTemp("dynamic_inline_slot");
         EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
         var value = NextTemp("dynamic_inline_item");
-        EmitLoad(value, llvmType, slot, definition.ElementAlignment);
-        return DematerializeAggregateValue(definition.ElementType, value);
+        EmitLoad(value, llvmType, slot, elementAlignment);
+        return DematerializeAggregateValue(elementType, value);
     }
 
     private void EmitDynamicInlineArrayAssign(RuntimeDynamicInlineArray array, string index, RuntimeValue value)
@@ -152,18 +168,21 @@ internal sealed partial class LlvmEmitter
         var inBounds = NextTemp("dynamic_inline_assign_in_bounds");
         EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
         EmitTrapUnless(inBounds, "dynamic_inline_assign_bounds");
-        var definition = _program.Types.GetDynamicArray(array.ArrayType);
-        var llvmType = LlvmType(definition.ElementType);
+        var elementType = array.ElementType;
+        var elementAlignment = _program.Types.IsBoundedArray(array.ArrayType)
+            ? _program.Types.GetBoundedArray(array.ArrayType).ElementAlignment
+            : _program.Types.GetDynamicArray(array.ArrayType).ElementAlignment;
+        var llvmType = LlvmType(elementType);
         var slot = NextTemp("dynamic_inline_assign_slot");
         EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
-        if (_program.Types.ContainsOwnedStorage(definition.ElementType))
+        if (_program.Types.ContainsOwnedStorage(elementType))
         {
             var previous = NextTemp("dynamic_inline_assign_previous");
-            EmitLoad(previous, llvmType, slot, definition.ElementAlignment);
-            DropOwnedRuntimeValue(DematerializeAggregateValue(definition.ElementType, previous));
+            EmitLoad(previous, llvmType, slot, elementAlignment);
+            DropOwnedRuntimeValue(DematerializeAggregateValue(elementType, previous));
         }
         var materialized = MaterializeAggregateValue(value);
-        EmitStore(llvmType, materialized.ValueName, slot, definition.ElementAlignment);
+        EmitStore(llvmType, materialized.ValueName, slot, elementAlignment);
     }
 
     private RuntimeInt EmitIntSliceLoad(RuntimeIntSlice slice, string index)
@@ -194,7 +213,9 @@ internal sealed partial class LlvmEmitter
         var totalBytes = NextTemp("dict_bytes");
         EmitBinary(totalBytes, "add", "i64", entriesOffset, entriesBytes);
         var pointer = EmitHeapAllocate(totalBytes);
-        EmitZeroByteBuffer(pointer, capacity, "dict_control_init");
+        var controlBytes = NextTemp("dict_control_bytes");
+        EmitBinary(controlBytes, "add", "i64", capacity, "16");
+        EmitZeroByteBuffer(pointer, controlBytes, "dict_control_init");
         return pointer;
     }
 
@@ -202,17 +223,17 @@ internal sealed partial class LlvmEmitter
     {
         EmitZeroByteBuffer(
             pointer,
-            capacity.ToString(CultureInfo.InvariantCulture),
+            (capacity + 16).ToString(CultureInfo.InvariantCulture),
             "dict_stack_control_init");
         return pointer;
     }
 
     private string EmitDictionaryEntriesOffset(string capacity, string prefix)
     {
+        var withMirror = NextTemp(prefix + "_mirror");
+        EmitBinary(withMirror, "add", "i64", capacity, "23");
         var offset = NextTemp(prefix);
-        var isSmallCapacity = NextTemp(prefix + "_small");
-        EmitCompare(isSmallCapacity, "eq", "i64", capacity, "4");
-        EmitSelect(offset, isSmallCapacity, "i64 8", $"i64 {capacity}");
+        EmitBinary(offset, "and", "i64", withMirror, "-8");
         return offset;
     }
 

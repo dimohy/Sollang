@@ -468,6 +468,28 @@ main {
 }`
   },
   {
+    id: "key-only-set",
+    title: "Key-only Set",
+    category: "containers",
+    input: "",
+    code: `main {
+    Set<Int>(4) => values!
+    values! -> insert(10) => first
+    values! -> insert(20) => second
+    values! -> insert(10) => duplicate
+    values! -> contains(20) => before
+    values! -> remove(20) => removed
+
+    0 => total!
+    values! -> each value {
+        total! + value => total!
+    }
+
+    "first=$first duplicate=$duplicate" -> println
+    "before=$before removed=$removed total=$(total!)" -> println
+}`
+  },
+  {
     id: "readonly-references",
     title: "Readonly references",
     category: "advanced",
@@ -951,6 +973,7 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "dynamic-trait": "Declare the types and implementations used by an owned dyn trait value.",
     effects: "Declare transitive Console capabilities with a checked uses clause.",
     "compile-time-collections": "Create a collection and print its actual fold result.",
+    "key-only-set": "Use the key-only Swiss Set with single-probe insertion, membership, removal, and direct iteration.",
     "readonly-references": "Declare a readonly projected reference without transferring ownership.",
     "numeric-widths": "Use signed and unsigned integer types with explicit widths.",
     ownership: "Move a named owner into a consuming function and print the consumed value.",
@@ -995,6 +1018,7 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "dynamic-trait": "소유 dyn trait에 필요한 타입과 구현을 선언합니다.",
     effects: "uses 절로 전이되는 Console 능력을 선언합니다.",
     "compile-time-collections": "컬렉션을 만들고 실제 fold 결과를 출력합니다.",
+    "key-only-set": "키만 저장하는 Swiss Set의 삽입, 멤버십, 삭제, 직접 순회를 실행합니다.",
     "readonly-references": "소유권을 옮기지 않는 읽기 전용 투영 참조를 선언합니다.",
     "numeric-widths": "명시적 폭의 부호·무부호 정수 타입을 사용합니다.",
     ownership: "이름 있는 소유자를 소비 함수로 이동하고 소비한 값을 출력합니다.",
@@ -1039,6 +1063,7 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "dynamic-trait": "所有 dyn trait に必要な型と実装を宣言します。",
     effects: "uses 句で推移的な Console 能力を宣言します。",
     "compile-time-collections": "コレクションを作成し、実際の fold 結果を出力します。",
+    "key-only-set": "キーのみを格納する Swiss Set の挿入、包含、削除、直接反復を実行します。",
     "readonly-references": "所有権を移さない読み取り専用投影参照を宣言します。",
     "numeric-widths": "幅を明示した符号付き・符号なし整数型を使います。",
     ownership: "名前付き所有者を消費関数へ移動し、消費した値を出力します。",
@@ -1083,6 +1108,7 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "dynamic-trait": "声明拥有的 dyn trait 所需的类型与实现。",
     effects: "通过 uses 子句声明可传递的 Console 能力。",
     "compile-time-collections": "创建集合并输出实际的 fold 结果。",
+    "key-only-set": "运行仅存键的 Swiss Set 的插入、成员检查、删除与直接迭代。",
     "readonly-references": "声明不转移所有权的只读投影引用。",
     "numeric-widths": "使用显式宽度的有符号和无符号整数类型。",
     ownership: "将命名所有者移动到消费函数并输出消费后的值。",
@@ -1120,6 +1146,7 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     containers: "동적 배열",
     "immutable-containers": "불변 값과 fold",
     "compile-time-collections": "컬렉션 fold",
+    "key-only-set": "키 전용 Set",
     struct: "구조체 투영",
     "mutable-method": "가변 구조체 필드",
     enum: "페이로드 enum",
@@ -1164,6 +1191,7 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     containers: "動的配列",
     "immutable-containers": "不変値と fold",
     "compile-time-collections": "コレクション fold",
+    "key-only-set": "キー専用 Set",
     struct: "構造体の投影",
     "mutable-method": "可変構造体フィールド",
     enum: "ペイロード enum",
@@ -1208,6 +1236,7 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     containers: "动态数组",
     "immutable-containers": "不可变值与 fold",
     "compile-time-collections": "集合 fold",
+    "key-only-set": "仅键 Set",
     struct: "结构体投影",
     "mutable-method": "可变结构体字段",
     enum: "带载荷的 enum",

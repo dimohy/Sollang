@@ -1,0 +1,1083 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @GetConsoleMode(ptr, ptr)
+declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @GetProcessHeap()
+declare ptr @HeapAlloc(ptr, i32, i64)
+declare i32 @HeapFree(ptr, i32, ptr)
+define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+entry:
+  %mode = alloca i32, align 4
+  %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+  %is_console = icmp ne i32 %console_status, 0
+  br i1 %is_console, label %console_prepare, label %redirected
+redirected:
+  %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
+  ret i32 %redirected_ok
+console_prepare:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @GetProcessHeap()
+  %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+convert:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+console_write:
+  %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
+  %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  ret i32 %console_ok
+conversion_free:
+  %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+conversion_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+}
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+%sollang.dyn = type { ptr, ptr }
+%sollang.array.i32 = type { ptr, i64, i64 }
+%sollang.mutable_container = type { ptr, ptr, ptr }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+define internal void @sollang_drop_t26(%sollang.array.i32 %value) {
+entry:
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
+  %capacity = extractvalue %sollang.array.i32 %value, 2
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @sollang_drop_t27(ptr %value) {
+entry:
+  %present = icmp ne ptr %value, null
+  br i1 %present, label %drop, label %done
+drop:
+  call void @free(ptr %value)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_drop_t28(%sollang.array.i32 %value) {
+entry:
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
+  %capacity = extractvalue %sollang.array.i32 %value, 2
+  %head = load i64, ptr %data, align 8
+  %payload = getelementptr i8, ptr %data, i64 8
+  %mask = sub i64 %capacity, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %logical = add i64 %head, %index
+  %physical = and i64 %logical, %mask
+  %slot = getelementptr ptr, ptr %payload, i64 %physical
+  %element = load ptr, ptr %slot, align 8
+  call void @sollang_drop_t27(ptr %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @sollang_drop_t29(ptr %value) {
+entry:
+  %present = icmp ne ptr %value, null
+  br i1 %present, label %drop, label %done
+drop:
+  %element = load %sollang.array.i32, ptr %value, align 8
+  call void @sollang_drop_t28(%sollang.array.i32 %element)
+  call void @free(ptr %value)
+  br label %done
+done:
+  ret void
+}
+declare void @llvm.trap()
+%sollang.text = type { ptr, i64 }
+@sollang_str_71 = private unnamed_addr constant [8 x i8] c"owned-ok"
+define void @sollang_m0_s0(%sollang.mutable_container %arg_borrow) {
+entry:
+  %arg_mut_ptr_addr = extractvalue %sollang.mutable_container %arg_borrow, 0
+  %arg_mut_len_addr = extractvalue %sollang.mutable_container %arg_borrow, 1
+  %arg_mut_capacity_addr = extractvalue %sollang.mutable_container %arg_borrow, 2
+  %arg_mut_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %arg_mut_len = load i64, ptr %arg_mut_len_addr, align 8
+  %arg_mut_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %arg_value0 = insertvalue %sollang.array.i32 poison, ptr %arg_mut_ptr, 0
+  %arg_value1 = insertvalue %sollang.array.i32 %arg_value0, i64 %arg_mut_len, 1
+  %arg = insertvalue %sollang.array.i32 %arg_value1, i64 %arg_mut_capacity, 2
+  %v4_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v4_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v4_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v4_current0 = insertvalue %sollang.array.i32 poison, ptr %v4_current_ptr, 0
+  %v4_current1 = insertvalue %sollang.array.i32 %v4_current0, i64 %v4_current_len, 1
+  %v4 = insertvalue %sollang.array.i32 %v4_current1, i64 %v4_current_capacity, 2
+  %deque3_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %deque3_length = load i64, ptr %arg_mut_len_addr, align 8
+  %deque3_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %deque3_head = load i64, ptr %deque3_data, align 8
+  %deque3_has_room = icmp ult i64 %deque3_length, %deque3_capacity
+  br i1 %deque3_has_room, label %deque3_keep, label %deque3_grow
+deque3_keep:
+  br label %deque3_ready
+deque3_grow:
+  %deque3_grown_capacity = mul i64 %deque3_capacity, 2
+  %deque3_grown_payload_bytes = mul i64 %deque3_grown_capacity, 4
+  %deque3_grown_bytes = add i64 %deque3_grown_payload_bytes, 8
+  %deque3_grown_data = call ptr @malloc(i64 %deque3_grown_bytes)
+  store i64 0, ptr %deque3_grown_data, align 8
+  %deque3_old_payload = getelementptr i8, ptr %deque3_data, i64 8
+  %deque3_grown_payload = getelementptr i8, ptr %deque3_grown_data, i64 8
+  %deque3_old_mask = sub i64 %deque3_capacity, 1
+  br label %deque3_copy
+deque3_copy:
+  %deque3_copy_index = phi i64 [ 0, %deque3_grow ], [ %deque3_copy_next, %deque3_copy_body ]
+  %deque3_copy_active = icmp ult i64 %deque3_copy_index, %deque3_length
+  br i1 %deque3_copy_active, label %deque3_copy_body, label %deque3_copy_done
+deque3_copy_body:
+  %deque3_copy_unwrapped = add i64 %deque3_head, %deque3_copy_index
+  %deque3_copy_physical = and i64 %deque3_copy_unwrapped, %deque3_old_mask
+  %deque3_copy_source = getelementptr i32, ptr %deque3_old_payload, i64 %deque3_copy_physical
+  %deque3_copy_value = load i32, ptr %deque3_copy_source, align 4
+  %deque3_copy_target = getelementptr i32, ptr %deque3_grown_payload, i64 %deque3_copy_index
+  store i32 %deque3_copy_value, ptr %deque3_copy_target, align 4
+  %deque3_copy_next = add i64 %deque3_copy_index, 1
+  br label %deque3_copy
+deque3_copy_done:
+  call void @free(ptr %deque3_data)
+  br label %deque3_ready
+deque3_ready:
+  %deque3_active_data = phi ptr [ %deque3_data, %deque3_keep ], [ %deque3_grown_data, %deque3_copy_done ]
+  %deque3_active_capacity = phi i64 [ %deque3_capacity, %deque3_keep ], [ %deque3_grown_capacity, %deque3_copy_done ]
+  %deque3_active_head = phi i64 [ %deque3_head, %deque3_keep ], [ 0, %deque3_copy_done ]
+  %deque3_mask = sub i64 %deque3_active_capacity, 1
+  %deque3_append_unwrapped = add i64 %deque3_active_head, %deque3_length
+  %deque3_physical = and i64 %deque3_append_unwrapped, %deque3_mask
+  %deque3_payload = getelementptr i8, ptr %deque3_active_data, i64 8
+  %deque3_slot = getelementptr i32, ptr %deque3_payload, i64 %deque3_physical
+  store i32 2, ptr %deque3_slot, align 4
+  %deque3_next_length = add i64 %deque3_length, 1
+  store ptr %deque3_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %deque3_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %deque3_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v7_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v7_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v7_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v7_current0 = insertvalue %sollang.array.i32 poison, ptr %v7_current_ptr, 0
+  %v7_current1 = insertvalue %sollang.array.i32 %v7_current0, i64 %v7_current_len, 1
+  %v7 = insertvalue %sollang.array.i32 %v7_current1, i64 %v7_current_capacity, 2
+  %deque6_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %deque6_length = load i64, ptr %arg_mut_len_addr, align 8
+  %deque6_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %deque6_head = load i64, ptr %deque6_data, align 8
+  %deque6_has_room = icmp ult i64 %deque6_length, %deque6_capacity
+  br i1 %deque6_has_room, label %deque6_keep, label %deque6_grow
+deque6_keep:
+  br label %deque6_ready
+deque6_grow:
+  %deque6_grown_capacity = mul i64 %deque6_capacity, 2
+  %deque6_grown_payload_bytes = mul i64 %deque6_grown_capacity, 4
+  %deque6_grown_bytes = add i64 %deque6_grown_payload_bytes, 8
+  %deque6_grown_data = call ptr @malloc(i64 %deque6_grown_bytes)
+  store i64 0, ptr %deque6_grown_data, align 8
+  %deque6_old_payload = getelementptr i8, ptr %deque6_data, i64 8
+  %deque6_grown_payload = getelementptr i8, ptr %deque6_grown_data, i64 8
+  %deque6_old_mask = sub i64 %deque6_capacity, 1
+  br label %deque6_copy
+deque6_copy:
+  %deque6_copy_index = phi i64 [ 0, %deque6_grow ], [ %deque6_copy_next, %deque6_copy_body ]
+  %deque6_copy_active = icmp ult i64 %deque6_copy_index, %deque6_length
+  br i1 %deque6_copy_active, label %deque6_copy_body, label %deque6_copy_done
+deque6_copy_body:
+  %deque6_copy_unwrapped = add i64 %deque6_head, %deque6_copy_index
+  %deque6_copy_physical = and i64 %deque6_copy_unwrapped, %deque6_old_mask
+  %deque6_copy_source = getelementptr i32, ptr %deque6_old_payload, i64 %deque6_copy_physical
+  %deque6_copy_value = load i32, ptr %deque6_copy_source, align 4
+  %deque6_copy_target = getelementptr i32, ptr %deque6_grown_payload, i64 %deque6_copy_index
+  store i32 %deque6_copy_value, ptr %deque6_copy_target, align 4
+  %deque6_copy_next = add i64 %deque6_copy_index, 1
+  br label %deque6_copy
+deque6_copy_done:
+  call void @free(ptr %deque6_data)
+  br label %deque6_ready
+deque6_ready:
+  %deque6_active_data = phi ptr [ %deque6_data, %deque6_keep ], [ %deque6_grown_data, %deque6_copy_done ]
+  %deque6_active_capacity = phi i64 [ %deque6_capacity, %deque6_keep ], [ %deque6_grown_capacity, %deque6_copy_done ]
+  %deque6_active_head = phi i64 [ %deque6_head, %deque6_keep ], [ 0, %deque6_copy_done ]
+  %deque6_mask = sub i64 %deque6_active_capacity, 1
+  %deque6_append_unwrapped = add i64 %deque6_active_head, %deque6_length
+  %deque6_physical = and i64 %deque6_append_unwrapped, %deque6_mask
+  %deque6_payload = getelementptr i8, ptr %deque6_active_data, i64 8
+  %deque6_slot = getelementptr i32, ptr %deque6_payload, i64 %deque6_physical
+  store i32 3, ptr %deque6_slot, align 4
+  %deque6_next_length = add i64 %deque6_length, 1
+  store ptr %deque6_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %deque6_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %deque6_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v10_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v10_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v10_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v10_current0 = insertvalue %sollang.array.i32 poison, ptr %v10_current_ptr, 0
+  %v10_current1 = insertvalue %sollang.array.i32 %v10_current0, i64 %v10_current_len, 1
+  %v10 = insertvalue %sollang.array.i32 %v10_current1, i64 %v10_current_capacity, 2
+  %deque9_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %deque9_length = load i64, ptr %arg_mut_len_addr, align 8
+  %deque9_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %deque9_head = load i64, ptr %deque9_data, align 8
+  %deque9_has_room = icmp ult i64 %deque9_length, %deque9_capacity
+  br i1 %deque9_has_room, label %deque9_keep, label %deque9_grow
+deque9_keep:
+  br label %deque9_ready
+deque9_grow:
+  %deque9_grown_capacity = mul i64 %deque9_capacity, 2
+  %deque9_grown_payload_bytes = mul i64 %deque9_grown_capacity, 4
+  %deque9_grown_bytes = add i64 %deque9_grown_payload_bytes, 8
+  %deque9_grown_data = call ptr @malloc(i64 %deque9_grown_bytes)
+  store i64 0, ptr %deque9_grown_data, align 8
+  %deque9_old_payload = getelementptr i8, ptr %deque9_data, i64 8
+  %deque9_grown_payload = getelementptr i8, ptr %deque9_grown_data, i64 8
+  %deque9_old_mask = sub i64 %deque9_capacity, 1
+  br label %deque9_copy
+deque9_copy:
+  %deque9_copy_index = phi i64 [ 0, %deque9_grow ], [ %deque9_copy_next, %deque9_copy_body ]
+  %deque9_copy_active = icmp ult i64 %deque9_copy_index, %deque9_length
+  br i1 %deque9_copy_active, label %deque9_copy_body, label %deque9_copy_done
+deque9_copy_body:
+  %deque9_copy_unwrapped = add i64 %deque9_head, %deque9_copy_index
+  %deque9_copy_physical = and i64 %deque9_copy_unwrapped, %deque9_old_mask
+  %deque9_copy_source = getelementptr i32, ptr %deque9_old_payload, i64 %deque9_copy_physical
+  %deque9_copy_value = load i32, ptr %deque9_copy_source, align 4
+  %deque9_copy_target = getelementptr i32, ptr %deque9_grown_payload, i64 %deque9_copy_index
+  store i32 %deque9_copy_value, ptr %deque9_copy_target, align 4
+  %deque9_copy_next = add i64 %deque9_copy_index, 1
+  br label %deque9_copy
+deque9_copy_done:
+  call void @free(ptr %deque9_data)
+  br label %deque9_ready
+deque9_ready:
+  %deque9_active_data = phi ptr [ %deque9_data, %deque9_keep ], [ %deque9_grown_data, %deque9_copy_done ]
+  %deque9_active_capacity = phi i64 [ %deque9_capacity, %deque9_keep ], [ %deque9_grown_capacity, %deque9_copy_done ]
+  %deque9_active_head = phi i64 [ %deque9_head, %deque9_keep ], [ 0, %deque9_copy_done ]
+  %deque9_mask = sub i64 %deque9_active_capacity, 1
+  %deque9_head_minus_one = sub i64 %deque9_active_head, 1
+  %deque9_next_head = and i64 %deque9_head_minus_one, %deque9_mask
+  %deque9_physical = add i64 %deque9_next_head, 0
+  store i64 %deque9_next_head, ptr %deque9_active_data, align 8
+  %deque9_payload = getelementptr i8, ptr %deque9_active_data, i64 8
+  %deque9_slot = getelementptr i32, ptr %deque9_payload, i64 %deque9_physical
+  store i32 1, ptr %deque9_slot, align 4
+  %deque9_next_length = add i64 %deque9_length, 1
+  store ptr %deque9_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %deque9_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %deque9_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v13_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v13_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v13_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v13_current0 = insertvalue %sollang.array.i32 poison, ptr %v13_current_ptr, 0
+  %v13_current1 = insertvalue %sollang.array.i32 %v13_current0, i64 %v13_current_len, 1
+  %v13 = insertvalue %sollang.array.i32 %v13_current1, i64 %v13_current_capacity, 2
+  %deque12_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %deque12_length = load i64, ptr %arg_mut_len_addr, align 8
+  %deque12_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %deque12_head = load i64, ptr %deque12_data, align 8
+  %deque12_has_room = icmp ult i64 %deque12_length, %deque12_capacity
+  br i1 %deque12_has_room, label %deque12_keep, label %deque12_grow
+deque12_keep:
+  br label %deque12_ready
+deque12_grow:
+  %deque12_grown_capacity = mul i64 %deque12_capacity, 2
+  %deque12_grown_payload_bytes = mul i64 %deque12_grown_capacity, 4
+  %deque12_grown_bytes = add i64 %deque12_grown_payload_bytes, 8
+  %deque12_grown_data = call ptr @malloc(i64 %deque12_grown_bytes)
+  store i64 0, ptr %deque12_grown_data, align 8
+  %deque12_old_payload = getelementptr i8, ptr %deque12_data, i64 8
+  %deque12_grown_payload = getelementptr i8, ptr %deque12_grown_data, i64 8
+  %deque12_old_mask = sub i64 %deque12_capacity, 1
+  br label %deque12_copy
+deque12_copy:
+  %deque12_copy_index = phi i64 [ 0, %deque12_grow ], [ %deque12_copy_next, %deque12_copy_body ]
+  %deque12_copy_active = icmp ult i64 %deque12_copy_index, %deque12_length
+  br i1 %deque12_copy_active, label %deque12_copy_body, label %deque12_copy_done
+deque12_copy_body:
+  %deque12_copy_unwrapped = add i64 %deque12_head, %deque12_copy_index
+  %deque12_copy_physical = and i64 %deque12_copy_unwrapped, %deque12_old_mask
+  %deque12_copy_source = getelementptr i32, ptr %deque12_old_payload, i64 %deque12_copy_physical
+  %deque12_copy_value = load i32, ptr %deque12_copy_source, align 4
+  %deque12_copy_target = getelementptr i32, ptr %deque12_grown_payload, i64 %deque12_copy_index
+  store i32 %deque12_copy_value, ptr %deque12_copy_target, align 4
+  %deque12_copy_next = add i64 %deque12_copy_index, 1
+  br label %deque12_copy
+deque12_copy_done:
+  call void @free(ptr %deque12_data)
+  br label %deque12_ready
+deque12_ready:
+  %deque12_active_data = phi ptr [ %deque12_data, %deque12_keep ], [ %deque12_grown_data, %deque12_copy_done ]
+  %deque12_active_capacity = phi i64 [ %deque12_capacity, %deque12_keep ], [ %deque12_grown_capacity, %deque12_copy_done ]
+  %deque12_active_head = phi i64 [ %deque12_head, %deque12_keep ], [ 0, %deque12_copy_done ]
+  %deque12_mask = sub i64 %deque12_active_capacity, 1
+  %deque12_append_unwrapped = add i64 %deque12_active_head, %deque12_length
+  %deque12_physical = and i64 %deque12_append_unwrapped, %deque12_mask
+  %deque12_payload = getelementptr i8, ptr %deque12_active_data, i64 8
+  %deque12_slot = getelementptr i32, ptr %deque12_payload, i64 %deque12_physical
+  store i32 4, ptr %deque12_slot, align 4
+  %deque12_next_length = add i64 %deque12_length, 1
+  store ptr %deque12_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %deque12_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %deque12_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v16_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v16_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v16_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v16_current0 = insertvalue %sollang.array.i32 poison, ptr %v16_current_ptr, 0
+  %v16_current1 = insertvalue %sollang.array.i32 %v16_current0, i64 %v16_current_len, 1
+  %v16 = insertvalue %sollang.array.i32 %v16_current1, i64 %v16_current_capacity, 2
+  %deque15_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %deque15_length = load i64, ptr %arg_mut_len_addr, align 8
+  %deque15_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %deque15_head = load i64, ptr %deque15_data, align 8
+  %deque15_has_room = icmp ult i64 %deque15_length, %deque15_capacity
+  br i1 %deque15_has_room, label %deque15_keep, label %deque15_grow
+deque15_keep:
+  br label %deque15_ready
+deque15_grow:
+  %deque15_grown_capacity = mul i64 %deque15_capacity, 2
+  %deque15_grown_payload_bytes = mul i64 %deque15_grown_capacity, 4
+  %deque15_grown_bytes = add i64 %deque15_grown_payload_bytes, 8
+  %deque15_grown_data = call ptr @malloc(i64 %deque15_grown_bytes)
+  store i64 0, ptr %deque15_grown_data, align 8
+  %deque15_old_payload = getelementptr i8, ptr %deque15_data, i64 8
+  %deque15_grown_payload = getelementptr i8, ptr %deque15_grown_data, i64 8
+  %deque15_old_mask = sub i64 %deque15_capacity, 1
+  br label %deque15_copy
+deque15_copy:
+  %deque15_copy_index = phi i64 [ 0, %deque15_grow ], [ %deque15_copy_next, %deque15_copy_body ]
+  %deque15_copy_active = icmp ult i64 %deque15_copy_index, %deque15_length
+  br i1 %deque15_copy_active, label %deque15_copy_body, label %deque15_copy_done
+deque15_copy_body:
+  %deque15_copy_unwrapped = add i64 %deque15_head, %deque15_copy_index
+  %deque15_copy_physical = and i64 %deque15_copy_unwrapped, %deque15_old_mask
+  %deque15_copy_source = getelementptr i32, ptr %deque15_old_payload, i64 %deque15_copy_physical
+  %deque15_copy_value = load i32, ptr %deque15_copy_source, align 4
+  %deque15_copy_target = getelementptr i32, ptr %deque15_grown_payload, i64 %deque15_copy_index
+  store i32 %deque15_copy_value, ptr %deque15_copy_target, align 4
+  %deque15_copy_next = add i64 %deque15_copy_index, 1
+  br label %deque15_copy
+deque15_copy_done:
+  call void @free(ptr %deque15_data)
+  br label %deque15_ready
+deque15_ready:
+  %deque15_active_data = phi ptr [ %deque15_data, %deque15_keep ], [ %deque15_grown_data, %deque15_copy_done ]
+  %deque15_active_capacity = phi i64 [ %deque15_capacity, %deque15_keep ], [ %deque15_grown_capacity, %deque15_copy_done ]
+  %deque15_active_head = phi i64 [ %deque15_head, %deque15_keep ], [ 0, %deque15_copy_done ]
+  %deque15_mask = sub i64 %deque15_active_capacity, 1
+  %deque15_append_unwrapped = add i64 %deque15_active_head, %deque15_length
+  %deque15_physical = and i64 %deque15_append_unwrapped, %deque15_mask
+  %deque15_payload = getelementptr i8, ptr %deque15_active_data, i64 8
+  %deque15_slot = getelementptr i32, ptr %deque15_payload, i64 %deque15_physical
+  store i32 5, ptr %deque15_slot, align 4
+  %deque15_next_length = add i64 %deque15_length, 1
+  store ptr %deque15_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %deque15_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %deque15_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  ret void
+}
+define i32 @main() {
+entry:
+  %slot19 = alloca %sollang.array.i32, align 8
+  %slot20 = alloca %sollang.array.i32, align 8
+  %v71_ptr = insertvalue %sollang.text poison, ptr @sollang_str_71, 0
+  %v71 = insertvalue %sollang.text %v71_ptr, i64 8, 1
+  %v22_requested = add i64 0, 3
+  %v22_nonnegative = icmp sge i64 %v22_requested, 0
+  br i1 %v22_nonnegative, label %collection22_capacity_ok, label %collection22_capacity_fail
+collection22_capacity_fail:
+  call void @llvm.trap()
+  unreachable
+collection22_capacity_ok:
+  %v22_below_minimum = icmp ult i64 %v22_requested, 4
+  %v22_minimum = select i1 %v22_below_minimum, i64 4, i64 %v22_requested
+  %v22_minus_one = sub i64 %v22_minimum, 1
+  %v22_shift1 = lshr i64 %v22_minus_one, 1
+  %v22_round1 = or i64 %v22_minus_one, %v22_shift1
+  %v22_shift2 = lshr i64 %v22_round1, 2
+  %v22_round2 = or i64 %v22_round1, %v22_shift2
+  %v22_shift4 = lshr i64 %v22_round2, 4
+  %v22_round4 = or i64 %v22_round2, %v22_shift4
+  %v22_shift8 = lshr i64 %v22_round4, 8
+  %v22_round8 = or i64 %v22_round4, %v22_shift8
+  %v22_shift16 = lshr i64 %v22_round8, 16
+  %v22_round16 = or i64 %v22_round8, %v22_shift16
+  %v22_shift32 = lshr i64 %v22_round16, 32
+  %v22_round32 = or i64 %v22_round16, %v22_shift32
+  %v22_capacity = add i64 %v22_round32, 1
+  %v22_payload_bytes = mul i64 %v22_capacity, 4
+  %v22_bytes = add i64 %v22_payload_bytes, 8
+  %v22_data = call ptr @malloc(i64 %v22_bytes)
+  store i64 0, ptr %v22_data, align 8
+  %v22_0 = insertvalue %sollang.array.i32 poison, ptr %v22_data, 0
+  %v22_1 = insertvalue %sollang.array.i32 %v22_0, i64 0, 1
+  %v22 = insertvalue %sollang.array.i32 %v22_1, i64 %v22_capacity, 2
+  %v54_requested = add i64 0, 2
+  %v54_nonnegative = icmp sge i64 %v54_requested, 0
+  br i1 %v54_nonnegative, label %collection54_capacity_ok, label %collection54_capacity_fail
+collection54_capacity_fail:
+  call void @llvm.trap()
+  unreachable
+collection54_capacity_ok:
+  %v54_below_minimum = icmp ult i64 %v54_requested, 4
+  %v54_minimum = select i1 %v54_below_minimum, i64 4, i64 %v54_requested
+  %v54_minus_one = sub i64 %v54_minimum, 1
+  %v54_shift1 = lshr i64 %v54_minus_one, 1
+  %v54_round1 = or i64 %v54_minus_one, %v54_shift1
+  %v54_shift2 = lshr i64 %v54_round1, 2
+  %v54_round2 = or i64 %v54_round1, %v54_shift2
+  %v54_shift4 = lshr i64 %v54_round2, 4
+  %v54_round4 = or i64 %v54_round2, %v54_shift4
+  %v54_shift8 = lshr i64 %v54_round4, 8
+  %v54_round8 = or i64 %v54_round4, %v54_shift8
+  %v54_shift16 = lshr i64 %v54_round8, 16
+  %v54_round16 = or i64 %v54_round8, %v54_shift16
+  %v54_shift32 = lshr i64 %v54_round16, 32
+  %v54_round32 = or i64 %v54_round16, %v54_shift32
+  %v54_capacity = add i64 %v54_round32, 1
+  %v54_payload_bytes = mul i64 %v54_capacity, 8
+  %v54_bytes = add i64 %v54_payload_bytes, 8
+  %v54_data = call ptr @malloc(i64 %v54_bytes)
+  store i64 0, ptr %v54_data, align 8
+  %v54_0 = insertvalue %sollang.array.i32 poison, ptr %v54_data, 0
+  %v54_1 = insertvalue %sollang.array.i32 %v54_0, i64 0, 1
+  %v54 = insertvalue %sollang.array.i32 %v54_1, i64 %v54_capacity, 2
+  %v58 = call ptr @malloc(i64 4)
+  store i32 1, ptr %v58, align 4
+  %v62 = call ptr @malloc(i64 4)
+  store i32 2, ptr %v62, align 4
+  %v66 = call ptr @malloc(i64 4)
+  store i32 3, ptr %v66, align 4
+  store %sollang.array.i32 %v22, ptr %slot19, align 8
+  %v25 = load %sollang.array.i32, ptr %slot19, align 8
+  %v53 = call ptr @malloc(i64 24)
+  store %sollang.array.i32 %v54, ptr %v53, align 8
+  %callmut24_arg0_ptr = getelementptr inbounds %sollang.array.i32, ptr %slot19, i32 0, i32 0
+  %callmut24_arg0_len = getelementptr inbounds %sollang.array.i32, ptr %slot19, i32 0, i32 1
+  %callmut24_arg0_capacity = getelementptr inbounds %sollang.array.i32, ptr %slot19, i32 0, i32 2
+  %callmut24_arg0_0 = insertvalue %sollang.mutable_container poison, ptr %callmut24_arg0_ptr, 0
+  %callmut24_arg0_1 = insertvalue %sollang.mutable_container %callmut24_arg0_0, ptr %callmut24_arg0_len, 1
+  %callmut24_arg0 = insertvalue %sollang.mutable_container %callmut24_arg0_1, ptr %callmut24_arg0_capacity, 2
+  call void @sollang_m0_s0(%sollang.mutable_container %callmut24_arg0)
+  %v27 = load %sollang.array.i32, ptr %slot19, align 8
+  %v29 = load %sollang.array.i32, ptr %slot19, align 8
+  %v31 = load %sollang.array.i32, ptr %slot19, align 8
+  %deque72_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque72_data = extractvalue %sollang.array.i32 %deque72_source, 0
+  %deque72_length = extractvalue %sollang.array.i32 %deque72_source, 1
+  %deque72_capacity = extractvalue %sollang.array.i32 %deque72_source, 2
+  %deque72_head = load i64, ptr %deque72_data, align 8
+  %deque72_nonempty = icmp ugt i64 %deque72_length, 0
+  br i1 %deque72_nonempty, label %deque72_read, label %deque72_empty
+deque72_empty:
+  call void @llvm.trap()
+  unreachable
+deque72_read:
+  %deque72_logical = add i64 0, 0
+  %deque72_unwrapped = add i64 %deque72_head, %deque72_logical
+  %deque72_mask = sub i64 %deque72_capacity, 1
+  %deque72_physical = and i64 %deque72_unwrapped, %deque72_mask
+  %deque72_payload = getelementptr i8, ptr %deque72_data, i64 8
+  %deque72_slot = getelementptr i32, ptr %deque72_payload, i64 %deque72_physical
+  %v72 = load i32, ptr %deque72_slot, align 4
+  %deque73_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque73_data = extractvalue %sollang.array.i32 %deque73_source, 0
+  %deque73_length = extractvalue %sollang.array.i32 %deque73_source, 1
+  %deque73_capacity = extractvalue %sollang.array.i32 %deque73_source, 2
+  %deque73_head = load i64, ptr %deque73_data, align 8
+  %deque73_nonempty = icmp ugt i64 %deque73_length, 0
+  br i1 %deque73_nonempty, label %deque73_read, label %deque73_empty
+deque73_empty:
+  call void @llvm.trap()
+  unreachable
+deque73_read:
+  %deque73_logical = sub i64 %deque73_length, 1
+  %deque73_unwrapped = add i64 %deque73_head, %deque73_logical
+  %deque73_mask = sub i64 %deque73_capacity, 1
+  %deque73_physical = and i64 %deque73_unwrapped, %deque73_mask
+  %deque73_payload = getelementptr i8, ptr %deque73_data, i64 8
+  %deque73_slot = getelementptr i32, ptr %deque73_payload, i64 %deque73_physical
+  %v73 = load i32, ptr %deque73_slot, align 4
+  %deque74_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque74_data = extractvalue %sollang.array.i32 %deque74_source, 0
+  %deque74_length = extractvalue %sollang.array.i32 %deque74_source, 1
+  %deque74_capacity = extractvalue %sollang.array.i32 %deque74_source, 2
+  %deque74_head = load i64, ptr %deque74_data, align 8
+  %deque74_nonempty = icmp ugt i64 %deque74_length, 0
+  br i1 %deque74_nonempty, label %deque74_read, label %deque74_empty
+deque74_empty:
+  call void @llvm.trap()
+  unreachable
+deque74_read:
+  %deque74_logical = add i64 0, 0
+  %deque74_unwrapped = add i64 %deque74_head, %deque74_logical
+  %deque74_mask = sub i64 %deque74_capacity, 1
+  %deque74_physical = and i64 %deque74_unwrapped, %deque74_mask
+  %deque74_payload = getelementptr i8, ptr %deque74_data, i64 8
+  %deque74_slot = getelementptr i32, ptr %deque74_payload, i64 %deque74_physical
+  %v74 = load i32, ptr %deque74_slot, align 4
+  %deque74_next_length = sub i64 %deque74_length, 1
+  %deque74_head_plus_one = add i64 %deque74_head, 1
+  %deque74_next_head = and i64 %deque74_head_plus_one, %deque74_mask
+  store i64 %deque74_next_head, ptr %deque74_data, align 8
+  %deque74_result = insertvalue %sollang.array.i32 %deque74_source, i64 %deque74_next_length, 1
+  store %sollang.array.i32 %deque74_result, ptr %slot19, align 8
+  call void @sollang_runtime_print_i32(i32 %v72, i1 true)
+  call void @sollang_runtime_print_i32(i32 %v73, i1 true)
+  call void @sollang_runtime_print_i32(i32 %v74, i1 true)
+  %v33 = load %sollang.array.i32, ptr %slot19, align 8
+  %deque75_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque75_data = extractvalue %sollang.array.i32 %deque75_source, 0
+  %deque75_length = extractvalue %sollang.array.i32 %deque75_source, 1
+  %deque75_capacity = extractvalue %sollang.array.i32 %deque75_source, 2
+  %deque75_head = load i64, ptr %deque75_data, align 8
+  %deque75_nonempty = icmp ugt i64 %deque75_length, 0
+  br i1 %deque75_nonempty, label %deque75_read, label %deque75_empty
+deque75_empty:
+  call void @llvm.trap()
+  unreachable
+deque75_read:
+  %deque75_logical = sub i64 %deque75_length, 1
+  %deque75_unwrapped = add i64 %deque75_head, %deque75_logical
+  %deque75_mask = sub i64 %deque75_capacity, 1
+  %deque75_physical = and i64 %deque75_unwrapped, %deque75_mask
+  %deque75_payload = getelementptr i8, ptr %deque75_data, i64 8
+  %deque75_slot = getelementptr i32, ptr %deque75_payload, i64 %deque75_physical
+  %v75 = load i32, ptr %deque75_slot, align 4
+  %deque75_next_length = sub i64 %deque75_length, 1
+  %deque75_result = insertvalue %sollang.array.i32 %deque75_source, i64 %deque75_next_length, 1
+  store %sollang.array.i32 %deque75_result, ptr %slot19, align 8
+  call void @sollang_runtime_print_i32(i32 %v75, i1 true)
+  %v35 = load %sollang.array.i32, ptr %slot19, align 8
+  %v37 = load %sollang.array.i32, ptr %slot19, align 8
+  %v39 = load %sollang.array.i32, ptr %slot19, align 8
+  %v41 = load %sollang.array.i32, ptr %slot19, align 8
+  %deque76_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque76_data = extractvalue %sollang.array.i32 %deque76_source, 0
+  %deque76_length = extractvalue %sollang.array.i32 %deque76_source, 1
+  %deque76_capacity = extractvalue %sollang.array.i32 %deque76_source, 2
+  %deque76_head = load i64, ptr %deque76_data, align 8
+  %deque76_nonempty = icmp ugt i64 %deque76_length, 0
+  br i1 %deque76_nonempty, label %deque76_read, label %deque76_empty
+deque76_empty:
+  call void @llvm.trap()
+  unreachable
+deque76_read:
+  %deque76_logical = add i64 0, 0
+  %deque76_unwrapped = add i64 %deque76_head, %deque76_logical
+  %deque76_mask = sub i64 %deque76_capacity, 1
+  %deque76_physical = and i64 %deque76_unwrapped, %deque76_mask
+  %deque76_payload = getelementptr i8, ptr %deque76_data, i64 8
+  %deque76_slot = getelementptr i32, ptr %deque76_payload, i64 %deque76_physical
+  %v76 = load i32, ptr %deque76_slot, align 4
+  %deque77_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque77_data = extractvalue %sollang.array.i32 %deque77_source, 0
+  %deque77_length = extractvalue %sollang.array.i32 %deque77_source, 1
+  %deque77_capacity = extractvalue %sollang.array.i32 %deque77_source, 2
+  %deque77_head = load i64, ptr %deque77_data, align 8
+  %deque77_nonempty = icmp ugt i64 %deque77_length, 0
+  br i1 %deque77_nonempty, label %deque77_read, label %deque77_empty
+deque77_empty:
+  call void @llvm.trap()
+  unreachable
+deque77_read:
+  %deque77_logical = sub i64 %deque77_length, 1
+  %deque77_unwrapped = add i64 %deque77_head, %deque77_logical
+  %deque77_mask = sub i64 %deque77_capacity, 1
+  %deque77_physical = and i64 %deque77_unwrapped, %deque77_mask
+  %deque77_payload = getelementptr i8, ptr %deque77_data, i64 8
+  %deque77_slot = getelementptr i32, ptr %deque77_payload, i64 %deque77_physical
+  %v77 = load i32, ptr %deque77_slot, align 4
+  %v78_length_source = load %sollang.array.i32, ptr %slot19, align 8
+  %v78_raw = extractvalue %sollang.array.i32 %v78_length_source, 1
+  %v78 = trunc i64 %v78_raw to i32
+  call void @sollang_runtime_print_i32(i32 %v76, i1 true)
+  call void @sollang_runtime_print_i32(i32 %v77, i1 true)
+  call void @sollang_runtime_print_i32(i32 %v78, i1 true)
+  %deque40_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque40_data = extractvalue %sollang.array.i32 %deque40_source, 0
+  %deque40_length = extractvalue %sollang.array.i32 %deque40_source, 1
+  %deque40_capacity = extractvalue %sollang.array.i32 %deque40_source, 2
+  %deque40_head = load i64, ptr %deque40_data, align 8
+  %deque40_has_room = icmp ult i64 %deque40_length, %deque40_capacity
+  br i1 %deque40_has_room, label %deque40_keep, label %deque40_grow
+deque40_keep:
+  br label %deque40_ready
+deque40_grow:
+  %deque40_grown_capacity = mul i64 %deque40_capacity, 2
+  %deque40_grown_payload_bytes = mul i64 %deque40_grown_capacity, 4
+  %deque40_grown_bytes = add i64 %deque40_grown_payload_bytes, 8
+  %deque40_grown_data = call ptr @malloc(i64 %deque40_grown_bytes)
+  store i64 0, ptr %deque40_grown_data, align 8
+  %deque40_old_payload = getelementptr i8, ptr %deque40_data, i64 8
+  %deque40_grown_payload = getelementptr i8, ptr %deque40_grown_data, i64 8
+  %deque40_old_mask = sub i64 %deque40_capacity, 1
+  br label %deque40_copy
+deque40_copy:
+  %deque40_copy_index = phi i64 [ 0, %deque40_grow ], [ %deque40_copy_next, %deque40_copy_body ]
+  %deque40_copy_active = icmp ult i64 %deque40_copy_index, %deque40_length
+  br i1 %deque40_copy_active, label %deque40_copy_body, label %deque40_copy_done
+deque40_copy_body:
+  %deque40_copy_unwrapped = add i64 %deque40_head, %deque40_copy_index
+  %deque40_copy_physical = and i64 %deque40_copy_unwrapped, %deque40_old_mask
+  %deque40_copy_source = getelementptr i32, ptr %deque40_old_payload, i64 %deque40_copy_physical
+  %deque40_copy_value = load i32, ptr %deque40_copy_source, align 4
+  %deque40_copy_target = getelementptr i32, ptr %deque40_grown_payload, i64 %deque40_copy_index
+  store i32 %deque40_copy_value, ptr %deque40_copy_target, align 4
+  %deque40_copy_next = add i64 %deque40_copy_index, 1
+  br label %deque40_copy
+deque40_copy_done:
+  call void @free(ptr %deque40_data)
+  br label %deque40_ready
+deque40_ready:
+  %deque40_active_data = phi ptr [ %deque40_data, %deque40_keep ], [ %deque40_grown_data, %deque40_copy_done ]
+  %deque40_active_capacity = phi i64 [ %deque40_capacity, %deque40_keep ], [ %deque40_grown_capacity, %deque40_copy_done ]
+  %deque40_active_head = phi i64 [ %deque40_head, %deque40_keep ], [ 0, %deque40_copy_done ]
+  %deque40_mask = sub i64 %deque40_active_capacity, 1
+  %deque40_head_minus_one = sub i64 %deque40_active_head, 1
+  %deque40_next_head = and i64 %deque40_head_minus_one, %deque40_mask
+  %deque40_physical = add i64 %deque40_next_head, 0
+  store i64 %deque40_next_head, ptr %deque40_active_data, align 8
+  %deque40_payload = getelementptr i8, ptr %deque40_active_data, i64 8
+  %deque40_slot = getelementptr i32, ptr %deque40_payload, i64 %deque40_physical
+  store i32 0, ptr %deque40_slot, align 4
+  %deque40_next_length = add i64 %deque40_length, 1
+  %deque40_result0 = insertvalue %sollang.array.i32 poison, ptr %deque40_active_data, 0
+  %deque40_result1 = insertvalue %sollang.array.i32 %deque40_result0, i64 %deque40_next_length, 1
+  %deque40_result = insertvalue %sollang.array.i32 %deque40_result1, i64 %deque40_active_capacity, 2
+  store %sollang.array.i32 %deque40_result, ptr %slot19, align 8
+  %v44 = load %sollang.array.i32, ptr %slot19, align 8
+  %deque79_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque79_data = extractvalue %sollang.array.i32 %deque79_source, 0
+  %deque79_length = extractvalue %sollang.array.i32 %deque79_source, 1
+  %deque79_capacity = extractvalue %sollang.array.i32 %deque79_source, 2
+  %deque79_head = load i64, ptr %deque79_data, align 8
+  %deque79_nonempty = icmp ugt i64 %deque79_length, 0
+  br i1 %deque79_nonempty, label %deque79_read, label %deque79_empty
+deque79_empty:
+  call void @llvm.trap()
+  unreachable
+deque79_read:
+  %deque79_logical = sub i64 %deque79_length, 1
+  %deque79_unwrapped = add i64 %deque79_head, %deque79_logical
+  %deque79_mask = sub i64 %deque79_capacity, 1
+  %deque79_physical = and i64 %deque79_unwrapped, %deque79_mask
+  %deque79_payload = getelementptr i8, ptr %deque79_data, i64 8
+  %deque79_slot = getelementptr i32, ptr %deque79_payload, i64 %deque79_physical
+  %v79 = load i32, ptr %deque79_slot, align 4
+  %deque79_next_length = sub i64 %deque79_length, 1
+  %deque79_result = insertvalue %sollang.array.i32 %deque79_source, i64 %deque79_next_length, 1
+  store %sollang.array.i32 %deque79_result, ptr %slot19, align 8
+  call void @sollang_runtime_print_i32(i32 %v79, i1 true)
+  %v46 = load %sollang.array.i32, ptr %slot19, align 8
+  %deque80_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque80_data = extractvalue %sollang.array.i32 %deque80_source, 0
+  %deque80_length = extractvalue %sollang.array.i32 %deque80_source, 1
+  %deque80_capacity = extractvalue %sollang.array.i32 %deque80_source, 2
+  %deque80_head = load i64, ptr %deque80_data, align 8
+  %deque80_nonempty = icmp ugt i64 %deque80_length, 0
+  br i1 %deque80_nonempty, label %deque80_read, label %deque80_empty
+deque80_empty:
+  call void @llvm.trap()
+  unreachable
+deque80_read:
+  %deque80_logical = add i64 0, 0
+  %deque80_unwrapped = add i64 %deque80_head, %deque80_logical
+  %deque80_mask = sub i64 %deque80_capacity, 1
+  %deque80_physical = and i64 %deque80_unwrapped, %deque80_mask
+  %deque80_payload = getelementptr i8, ptr %deque80_data, i64 8
+  %deque80_slot = getelementptr i32, ptr %deque80_payload, i64 %deque80_physical
+  %v80 = load i32, ptr %deque80_slot, align 4
+  %deque80_next_length = sub i64 %deque80_length, 1
+  %deque80_head_plus_one = add i64 %deque80_head, 1
+  %deque80_next_head = and i64 %deque80_head_plus_one, %deque80_mask
+  store i64 %deque80_next_head, ptr %deque80_data, align 8
+  %deque80_result = insertvalue %sollang.array.i32 %deque80_source, i64 %deque80_next_length, 1
+  store %sollang.array.i32 %deque80_result, ptr %slot19, align 8
+  call void @sollang_runtime_print_i32(i32 %v80, i1 true)
+  %v48 = load %sollang.array.i32, ptr %slot19, align 8
+  %deque81_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque81_data = extractvalue %sollang.array.i32 %deque81_source, 0
+  %deque81_length = extractvalue %sollang.array.i32 %deque81_source, 1
+  %deque81_capacity = extractvalue %sollang.array.i32 %deque81_source, 2
+  %deque81_head = load i64, ptr %deque81_data, align 8
+  %deque81_nonempty = icmp ugt i64 %deque81_length, 0
+  br i1 %deque81_nonempty, label %deque81_read, label %deque81_empty
+deque81_empty:
+  call void @llvm.trap()
+  unreachable
+deque81_read:
+  %deque81_logical = add i64 0, 0
+  %deque81_unwrapped = add i64 %deque81_head, %deque81_logical
+  %deque81_mask = sub i64 %deque81_capacity, 1
+  %deque81_physical = and i64 %deque81_unwrapped, %deque81_mask
+  %deque81_payload = getelementptr i8, ptr %deque81_data, i64 8
+  %deque81_slot = getelementptr i32, ptr %deque81_payload, i64 %deque81_physical
+  %v81 = load i32, ptr %deque81_slot, align 4
+  %deque81_next_length = sub i64 %deque81_length, 1
+  %deque81_head_plus_one = add i64 %deque81_head, 1
+  %deque81_next_head = and i64 %deque81_head_plus_one, %deque81_mask
+  store i64 %deque81_next_head, ptr %deque81_data, align 8
+  %deque81_result = insertvalue %sollang.array.i32 %deque81_source, i64 %deque81_next_length, 1
+  store %sollang.array.i32 %deque81_result, ptr %slot19, align 8
+  call void @sollang_runtime_print_i32(i32 %v81, i1 true)
+  %v50 = load %sollang.array.i32, ptr %slot19, align 8
+  %deque82_source = load %sollang.array.i32, ptr %slot19, align 8
+  %deque82_data = extractvalue %sollang.array.i32 %deque82_source, 0
+  %deque82_length = extractvalue %sollang.array.i32 %deque82_source, 1
+  %deque82_capacity = extractvalue %sollang.array.i32 %deque82_source, 2
+  %deque82_head = load i64, ptr %deque82_data, align 8
+  %deque82_nonempty = icmp ugt i64 %deque82_length, 0
+  br i1 %deque82_nonempty, label %deque82_read, label %deque82_empty
+deque82_empty:
+  call void @llvm.trap()
+  unreachable
+deque82_read:
+  %deque82_logical = add i64 0, 0
+  %deque82_unwrapped = add i64 %deque82_head, %deque82_logical
+  %deque82_mask = sub i64 %deque82_capacity, 1
+  %deque82_physical = and i64 %deque82_unwrapped, %deque82_mask
+  %deque82_payload = getelementptr i8, ptr %deque82_data, i64 8
+  %deque82_slot = getelementptr i32, ptr %deque82_payload, i64 %deque82_physical
+  %v82 = load i32, ptr %deque82_slot, align 4
+  %deque82_next_length = sub i64 %deque82_length, 1
+  %deque82_head_plus_one = add i64 %deque82_head, 1
+  %deque82_next_head = and i64 %deque82_head_plus_one, %deque82_mask
+  store i64 %deque82_next_head, ptr %deque82_data, align 8
+  %deque82_result = insertvalue %sollang.array.i32 %deque82_source, i64 %deque82_next_length, 1
+  store %sollang.array.i32 %deque82_result, ptr %slot19, align 8
+  call void @sollang_runtime_print_i32(i32 %v82, i1 true)
+  %v52 = load %sollang.array.i32, ptr %slot19, align 8
+  %v83_length_source = load %sollang.array.i32, ptr %slot19, align 8
+  %v83_raw = extractvalue %sollang.array.i32 %v83_length_source, 1
+  %v83 = trunc i64 %v83_raw to i32
+  call void @sollang_runtime_print_i32(i32 %v83, i1 true)
+  store %sollang.array.i32 %v54, ptr %slot20, align 8
+  %v57 = load %sollang.array.i32, ptr %slot20, align 8
+  %deque56_source = load %sollang.array.i32, ptr %slot20, align 8
+  %deque56_data = extractvalue %sollang.array.i32 %deque56_source, 0
+  %deque56_length = extractvalue %sollang.array.i32 %deque56_source, 1
+  %deque56_capacity = extractvalue %sollang.array.i32 %deque56_source, 2
+  %deque56_head = load i64, ptr %deque56_data, align 8
+  %deque56_has_room = icmp ult i64 %deque56_length, %deque56_capacity
+  br i1 %deque56_has_room, label %deque56_keep, label %deque56_grow
+deque56_keep:
+  br label %deque56_ready
+deque56_grow:
+  %deque56_grown_capacity = mul i64 %deque56_capacity, 2
+  %deque56_grown_payload_bytes = mul i64 %deque56_grown_capacity, 8
+  %deque56_grown_bytes = add i64 %deque56_grown_payload_bytes, 8
+  %deque56_grown_data = call ptr @malloc(i64 %deque56_grown_bytes)
+  store i64 0, ptr %deque56_grown_data, align 8
+  %deque56_old_payload = getelementptr i8, ptr %deque56_data, i64 8
+  %deque56_grown_payload = getelementptr i8, ptr %deque56_grown_data, i64 8
+  %deque56_old_mask = sub i64 %deque56_capacity, 1
+  br label %deque56_copy
+deque56_copy:
+  %deque56_copy_index = phi i64 [ 0, %deque56_grow ], [ %deque56_copy_next, %deque56_copy_body ]
+  %deque56_copy_active = icmp ult i64 %deque56_copy_index, %deque56_length
+  br i1 %deque56_copy_active, label %deque56_copy_body, label %deque56_copy_done
+deque56_copy_body:
+  %deque56_copy_unwrapped = add i64 %deque56_head, %deque56_copy_index
+  %deque56_copy_physical = and i64 %deque56_copy_unwrapped, %deque56_old_mask
+  %deque56_copy_source = getelementptr ptr, ptr %deque56_old_payload, i64 %deque56_copy_physical
+  %deque56_copy_value = load ptr, ptr %deque56_copy_source, align 8
+  %deque56_copy_target = getelementptr ptr, ptr %deque56_grown_payload, i64 %deque56_copy_index
+  store ptr %deque56_copy_value, ptr %deque56_copy_target, align 8
+  %deque56_copy_next = add i64 %deque56_copy_index, 1
+  br label %deque56_copy
+deque56_copy_done:
+  call void @free(ptr %deque56_data)
+  br label %deque56_ready
+deque56_ready:
+  %deque56_active_data = phi ptr [ %deque56_data, %deque56_keep ], [ %deque56_grown_data, %deque56_copy_done ]
+  %deque56_active_capacity = phi i64 [ %deque56_capacity, %deque56_keep ], [ %deque56_grown_capacity, %deque56_copy_done ]
+  %deque56_active_head = phi i64 [ %deque56_head, %deque56_keep ], [ 0, %deque56_copy_done ]
+  %deque56_mask = sub i64 %deque56_active_capacity, 1
+  %deque56_append_unwrapped = add i64 %deque56_active_head, %deque56_length
+  %deque56_physical = and i64 %deque56_append_unwrapped, %deque56_mask
+  %deque56_payload = getelementptr i8, ptr %deque56_active_data, i64 8
+  %deque56_slot = getelementptr ptr, ptr %deque56_payload, i64 %deque56_physical
+  store ptr %v58, ptr %deque56_slot, align 8
+  %deque56_next_length = add i64 %deque56_length, 1
+  %deque56_result0 = insertvalue %sollang.array.i32 poison, ptr %deque56_active_data, 0
+  %deque56_result1 = insertvalue %sollang.array.i32 %deque56_result0, i64 %deque56_next_length, 1
+  %deque56_result = insertvalue %sollang.array.i32 %deque56_result1, i64 %deque56_active_capacity, 2
+  store %sollang.array.i32 %deque56_result, ptr %slot20, align 8
+  %v61 = load %sollang.array.i32, ptr %slot20, align 8
+  %deque60_source = load %sollang.array.i32, ptr %slot20, align 8
+  %deque60_data = extractvalue %sollang.array.i32 %deque60_source, 0
+  %deque60_length = extractvalue %sollang.array.i32 %deque60_source, 1
+  %deque60_capacity = extractvalue %sollang.array.i32 %deque60_source, 2
+  %deque60_head = load i64, ptr %deque60_data, align 8
+  %deque60_has_room = icmp ult i64 %deque60_length, %deque60_capacity
+  br i1 %deque60_has_room, label %deque60_keep, label %deque60_grow
+deque60_keep:
+  br label %deque60_ready
+deque60_grow:
+  %deque60_grown_capacity = mul i64 %deque60_capacity, 2
+  %deque60_grown_payload_bytes = mul i64 %deque60_grown_capacity, 8
+  %deque60_grown_bytes = add i64 %deque60_grown_payload_bytes, 8
+  %deque60_grown_data = call ptr @malloc(i64 %deque60_grown_bytes)
+  store i64 0, ptr %deque60_grown_data, align 8
+  %deque60_old_payload = getelementptr i8, ptr %deque60_data, i64 8
+  %deque60_grown_payload = getelementptr i8, ptr %deque60_grown_data, i64 8
+  %deque60_old_mask = sub i64 %deque60_capacity, 1
+  br label %deque60_copy
+deque60_copy:
+  %deque60_copy_index = phi i64 [ 0, %deque60_grow ], [ %deque60_copy_next, %deque60_copy_body ]
+  %deque60_copy_active = icmp ult i64 %deque60_copy_index, %deque60_length
+  br i1 %deque60_copy_active, label %deque60_copy_body, label %deque60_copy_done
+deque60_copy_body:
+  %deque60_copy_unwrapped = add i64 %deque60_head, %deque60_copy_index
+  %deque60_copy_physical = and i64 %deque60_copy_unwrapped, %deque60_old_mask
+  %deque60_copy_source = getelementptr ptr, ptr %deque60_old_payload, i64 %deque60_copy_physical
+  %deque60_copy_value = load ptr, ptr %deque60_copy_source, align 8
+  %deque60_copy_target = getelementptr ptr, ptr %deque60_grown_payload, i64 %deque60_copy_index
+  store ptr %deque60_copy_value, ptr %deque60_copy_target, align 8
+  %deque60_copy_next = add i64 %deque60_copy_index, 1
+  br label %deque60_copy
+deque60_copy_done:
+  call void @free(ptr %deque60_data)
+  br label %deque60_ready
+deque60_ready:
+  %deque60_active_data = phi ptr [ %deque60_data, %deque60_keep ], [ %deque60_grown_data, %deque60_copy_done ]
+  %deque60_active_capacity = phi i64 [ %deque60_capacity, %deque60_keep ], [ %deque60_grown_capacity, %deque60_copy_done ]
+  %deque60_active_head = phi i64 [ %deque60_head, %deque60_keep ], [ 0, %deque60_copy_done ]
+  %deque60_mask = sub i64 %deque60_active_capacity, 1
+  %deque60_append_unwrapped = add i64 %deque60_active_head, %deque60_length
+  %deque60_physical = and i64 %deque60_append_unwrapped, %deque60_mask
+  %deque60_payload = getelementptr i8, ptr %deque60_active_data, i64 8
+  %deque60_slot = getelementptr ptr, ptr %deque60_payload, i64 %deque60_physical
+  store ptr %v62, ptr %deque60_slot, align 8
+  %deque60_next_length = add i64 %deque60_length, 1
+  %deque60_result0 = insertvalue %sollang.array.i32 poison, ptr %deque60_active_data, 0
+  %deque60_result1 = insertvalue %sollang.array.i32 %deque60_result0, i64 %deque60_next_length, 1
+  %deque60_result = insertvalue %sollang.array.i32 %deque60_result1, i64 %deque60_active_capacity, 2
+  store %sollang.array.i32 %deque60_result, ptr %slot20, align 8
+  %v65 = load %sollang.array.i32, ptr %slot20, align 8
+  %deque64_source = load %sollang.array.i32, ptr %slot20, align 8
+  %deque64_data = extractvalue %sollang.array.i32 %deque64_source, 0
+  %deque64_length = extractvalue %sollang.array.i32 %deque64_source, 1
+  %deque64_capacity = extractvalue %sollang.array.i32 %deque64_source, 2
+  %deque64_head = load i64, ptr %deque64_data, align 8
+  %deque64_has_room = icmp ult i64 %deque64_length, %deque64_capacity
+  br i1 %deque64_has_room, label %deque64_keep, label %deque64_grow
+deque64_keep:
+  br label %deque64_ready
+deque64_grow:
+  %deque64_grown_capacity = mul i64 %deque64_capacity, 2
+  %deque64_grown_payload_bytes = mul i64 %deque64_grown_capacity, 8
+  %deque64_grown_bytes = add i64 %deque64_grown_payload_bytes, 8
+  %deque64_grown_data = call ptr @malloc(i64 %deque64_grown_bytes)
+  store i64 0, ptr %deque64_grown_data, align 8
+  %deque64_old_payload = getelementptr i8, ptr %deque64_data, i64 8
+  %deque64_grown_payload = getelementptr i8, ptr %deque64_grown_data, i64 8
+  %deque64_old_mask = sub i64 %deque64_capacity, 1
+  br label %deque64_copy
+deque64_copy:
+  %deque64_copy_index = phi i64 [ 0, %deque64_grow ], [ %deque64_copy_next, %deque64_copy_body ]
+  %deque64_copy_active = icmp ult i64 %deque64_copy_index, %deque64_length
+  br i1 %deque64_copy_active, label %deque64_copy_body, label %deque64_copy_done
+deque64_copy_body:
+  %deque64_copy_unwrapped = add i64 %deque64_head, %deque64_copy_index
+  %deque64_copy_physical = and i64 %deque64_copy_unwrapped, %deque64_old_mask
+  %deque64_copy_source = getelementptr ptr, ptr %deque64_old_payload, i64 %deque64_copy_physical
+  %deque64_copy_value = load ptr, ptr %deque64_copy_source, align 8
+  %deque64_copy_target = getelementptr ptr, ptr %deque64_grown_payload, i64 %deque64_copy_index
+  store ptr %deque64_copy_value, ptr %deque64_copy_target, align 8
+  %deque64_copy_next = add i64 %deque64_copy_index, 1
+  br label %deque64_copy
+deque64_copy_done:
+  call void @free(ptr %deque64_data)
+  br label %deque64_ready
+deque64_ready:
+  %deque64_active_data = phi ptr [ %deque64_data, %deque64_keep ], [ %deque64_grown_data, %deque64_copy_done ]
+  %deque64_active_capacity = phi i64 [ %deque64_capacity, %deque64_keep ], [ %deque64_grown_capacity, %deque64_copy_done ]
+  %deque64_active_head = phi i64 [ %deque64_head, %deque64_keep ], [ 0, %deque64_copy_done ]
+  %deque64_mask = sub i64 %deque64_active_capacity, 1
+  %deque64_head_minus_one = sub i64 %deque64_active_head, 1
+  %deque64_next_head = and i64 %deque64_head_minus_one, %deque64_mask
+  %deque64_physical = add i64 %deque64_next_head, 0
+  store i64 %deque64_next_head, ptr %deque64_active_data, align 8
+  %deque64_payload = getelementptr i8, ptr %deque64_active_data, i64 8
+  %deque64_slot = getelementptr ptr, ptr %deque64_payload, i64 %deque64_physical
+  store ptr %v66, ptr %deque64_slot, align 8
+  %deque64_next_length = add i64 %deque64_length, 1
+  %deque64_result0 = insertvalue %sollang.array.i32 poison, ptr %deque64_active_data, 0
+  %deque64_result1 = insertvalue %sollang.array.i32 %deque64_result0, i64 %deque64_next_length, 1
+  %deque64_result = insertvalue %sollang.array.i32 %deque64_result1, i64 %deque64_active_capacity, 2
+  store %sollang.array.i32 %deque64_result, ptr %slot20, align 8
+  %v69 = load %sollang.array.i32, ptr %slot20, align 8
+  %deque68_source = load %sollang.array.i32, ptr %slot20, align 8
+  %deque68_data = extractvalue %sollang.array.i32 %deque68_source, 0
+  %deque68_length = extractvalue %sollang.array.i32 %deque68_source, 1
+  %deque68_capacity = extractvalue %sollang.array.i32 %deque68_source, 2
+  %deque68_head = load i64, ptr %deque68_data, align 8
+  %deque68_nonempty = icmp ugt i64 %deque68_length, 0
+  br i1 %deque68_nonempty, label %deque68_read, label %deque68_empty
+deque68_empty:
+  call void @llvm.trap()
+  unreachable
+deque68_read:
+  %deque68_logical = add i64 0, 0
+  %deque68_unwrapped = add i64 %deque68_head, %deque68_logical
+  %deque68_mask = sub i64 %deque68_capacity, 1
+  %deque68_physical = and i64 %deque68_unwrapped, %deque68_mask
+  %deque68_payload = getelementptr i8, ptr %deque68_data, i64 8
+  %deque68_slot = getelementptr ptr, ptr %deque68_payload, i64 %deque68_physical
+  %v68 = load ptr, ptr %deque68_slot, align 8
+  %deque68_next_length = sub i64 %deque68_length, 1
+  %deque68_head_plus_one = add i64 %deque68_head, 1
+  %deque68_next_head = and i64 %deque68_head_plus_one, %deque68_mask
+  store i64 %deque68_next_head, ptr %deque68_data, align 8
+  %deque68_result = insertvalue %sollang.array.i32 %deque68_source, i64 %deque68_next_length, 1
+  store %sollang.array.i32 %deque68_result, ptr %slot20, align 8
+  call void @sollang_runtime_print(ptr @sollang_str_71, i64 8, i1 true)
+  call void @sollang_drop_t27(ptr %v68)
+  %cleanup186_b20_current = load %sollang.array.i32, ptr %slot20, align 8
+  call void @sollang_drop_t28(%sollang.array.i32 %cleanup186_b20_current)
+  %cleanup186_b19_current = load %sollang.array.i32, ptr %slot19, align 8
+  call void @sollang_drop_t26(%sollang.array.i32 %cleanup186_b19_current)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

@@ -1236,6 +1236,10 @@ internal sealed partial class LlvmEmitter
             BoundType.Int => EmitIntFunctionCall(function, argument, additionalArguments),
             BoundType.Bool => EmitBoolFunctionCall(function, argument, additionalArguments),
             BoundType.DynamicIntArray => EmitDynamicIntArrayFunctionCall(function, argument, additionalArguments),
+            _ when _program.Types.IsBoundedArray(function.ReturnType)
+                || _program.Types.IsBoundedDictionary(function.ReturnType)
+                || _program.Types.IsBitSet(function.ReturnType)
+                => EmitStructFunctionCall(function, argument, additionalArguments),
             _ when _program.Types.IsDynamicArray(function.ReturnType) => EmitDynamicInlineArrayFunctionCall(function, argument, additionalArguments),
             BoundType.IntDictionary => EmitIntDictionaryFunctionCall(function, argument, additionalArguments),
             BoundType.Arena => EmitArenaFunctionCall(function, argument, additionalArguments),
@@ -1760,7 +1764,8 @@ internal sealed partial class LlvmEmitter
         _locals[name] = type switch
         {
             BoundType.DynamicIntArray => new RuntimeDynamicIntArray("", "", ""),
-            _ when _program.Types.IsDynamicArray(reference.TargetType) => CreateEmptyRuntimeDynamicInlineArray(reference.TargetType),
+            _ when _program.Types.IsDynamicArray(reference.TargetType)
+                || _program.Types.IsBoundedArray(reference.TargetType) => CreateEmptyRuntimeDynamicInlineArray(reference.TargetType),
             BoundType.IntDictionary => new RuntimeIntDictionary("", "", ""),
             BoundType.Arena => new RuntimeArena("", "", ""),
             _ when _program.Types.IsDictionary(reference.TargetType) => CreateEmptyRuntimeInlineDictionary(reference.TargetType),
@@ -1857,8 +1862,14 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeDynamicInlineArray CreateEmptyRuntimeDynamicInlineArray(BoundType type)
     {
-        var definition = _program.Types.GetDynamicArray(type);
-        return new RuntimeDynamicInlineArray(type, definition.ElementType, "", "", "");
+        var elementType = _program.Types.IsBoundedArray(type)
+            ? _program.Types.GetBoundedArray(type).ElementType
+            : _program.Types.GetDynamicArray(type).ElementType;
+        return new RuntimeDynamicInlineArray(
+            type, elementType, "", "", "",
+            _program.Types.IsBoundedArray(type)
+                ? RuntimeContainerStorage.Stack
+                : RuntimeContainerStorage.Heap);
     }
 
     private string BuildIntDictionaryArgument(RuntimeIntDictionary dictionary)

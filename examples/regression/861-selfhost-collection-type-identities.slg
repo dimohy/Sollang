@@ -1,0 +1,36 @@
+# Verifies canonical self-host identities for nominal and inline collection types.
+import sollang.compiler.semantic.type_ids as typeIds
+
+main {
+    [
+        """
+        keepSet value: Set<Int> -> Set<Int> => value
+        keepDeque value: Deque<Int> -> Deque<Int> => value
+        keepHeap value: BinaryHeap<Int> -> BinaryHeap<Int> => value
+        keepBits value: BitSet<130> -> BitSet<130> => value
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typeIds.resolve => resolved
+
+    false => hasSet!
+    false => hasDeque!
+    false => hasHeap!
+    false => hasBits!
+    0 => failedReferences!
+    resolved.references -> each reference {
+        reference.status != 0 -> if { failedReferences! + 1 => failedReferences! }
+    }
+    resolved.types -> each semanticType {
+        (semanticType.kind == 7 and semanticType.origin == 4 and semanticType.symbol == 5 and semanticType.first == 2) -> if { true => hasSet! }
+        (semanticType.kind == 7 and semanticType.origin == 4 and semanticType.symbol == 6 and semanticType.first == 2) -> if { true => hasDeque! }
+        (semanticType.kind == 7 and semanticType.origin == 4 and semanticType.symbol == 7 and semanticType.first == 2) -> if { true => hasHeap! }
+        (semanticType.kind == 14 and semanticType.origin == 4 and semanticType.symbol == 8 and semanticType.length == 130) -> if { true => hasBits! }
+    }
+
+    (failedReferences! == 0 and hasSet! and hasDeque! and hasHeap! and hasBits!) -> if {
+        "selfhost collection type identities = valid"
+    } else {
+        "selfhost collection type identities = invalid"
+    } -> println
+}

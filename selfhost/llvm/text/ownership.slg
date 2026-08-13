@@ -491,18 +491,19 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
     dropTypeIndex! < (context.types -> len) -> while {
         context.types[dropTypeIndex!] => dropType
         false => supported!
-        (dropType.kind == 3 or dropType.kind == 4 or dropType.kind == 5 or dropType.kind == 6) -> if { true => supported! }
+        (dropType.kind == 3 or dropType.kind == 4 or dropType.kind == 5 or dropType.kind == 6 or dropType.kind == 12 or dropType.kind == 13) -> if { true => supported! }
         dropType.kind == 9 -> if { true => supported! }
         (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24) -> if { true => supported! }
         ((dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) or dropType.kind == 10) -> if { true => supported! }
         (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1)) -> if { true => supported! }
         (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 3 or dropType.symbol == 4)) -> if { true => supported! }
+        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 5 or dropType.symbol == 6 or dropType.symbol == 7)) -> if { true => supported! }
         (active[dropTypeIndex!] == 1 and context.typeTraits[dropTypeIndex!] % 2 == 1 and supported!) -> if {
             "define internal void @sollang_drop_t$(dropTypeIndex!)(" -> print
             dropTypeIndex! -> writeSemanticTypeId(context, state)
             " %value) {" -> println
             "entry:" -> println
-            dropType.kind == 3 -> if {
+            (dropType.kind == 3 or dropType.kind == 12 or (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 7)) -> if {
                 "  %data = extractvalue %sollang.array.i32 %value, 0" -> println
                 "  %length = extractvalue %sollang.array.i32 %value, 1" -> println
                 (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
@@ -528,7 +529,77 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                     "  br label %loop" -> println
                     "done:" -> println
                 }
+                (dropType.kind == 3 or (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 7)) -> if { "  call void @free(ptr %data)" -> println }
+                "  ret void" -> println
+            }
+            (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 6) -> if {
+                "  %data = extractvalue %sollang.array.i32 %value, 0" -> println
+                "  %length = extractvalue %sollang.array.i32 %value, 1" -> println
+                "  %capacity = extractvalue %sollang.array.i32 %value, 2" -> println
+                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                    "  %head = load i64, ptr %data, align 8" -> println
+                    "  %payload = getelementptr i8, ptr %data, i64 8" -> println
+                    "  %mask = sub i64 %capacity, 1" -> println
+                    "  br label %loop" -> println
+                    "loop:" -> println
+                    "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
+                    "  %in_range = icmp ult i64 %index, %length" -> println
+                    "  br i1 %in_range, label %item, label %done" -> println
+                    "item:" -> println
+                    "  %logical = add i64 %head, %index" -> println
+                    "  %physical = and i64 %logical, %mask" -> println
+                    "  %slot = getelementptr " -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    ", ptr %payload, i64 %physical" -> println
+                    "  %element = load " -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    ", ptr %slot, align " -> print
+                    context.typeAligns[dropType.first] -> writeDecimalLine
+                    "  call void @sollang_drop_t$(dropType.first)(" -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    " %element)" -> println
+                    "  br label %continue" -> println
+                    "continue:" -> println
+                    "  %next = add i64 %index, 1" -> println
+                    "  br label %loop" -> println
+                    "done:" -> println
+                }
                 "  call void @free(ptr %data)" -> println
+                "  ret void" -> println
+            }
+            (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 5) -> if {
+                "  %keys = extractvalue %sollang.dict %value, 0" -> println
+                "  %controls = extractvalue %sollang.dict %value, 1" -> println
+                "  %capacity = extractvalue %sollang.dict %value, 3" -> println
+                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                    "  br label %loop" -> println
+                    "loop:" -> println
+                    "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
+                    "  %in_range = icmp ult i64 %index, %capacity" -> println
+                    "  br i1 %in_range, label %check, label %done" -> println
+                    "check:" -> println
+                    "  %control_slot = getelementptr i8, ptr %controls, i64 %index" -> println
+                    "  %control = load i8, ptr %control_slot, align 1" -> println
+                    "  %occupied = icmp sgt i8 %control, 0" -> println
+                    "  br i1 %occupied, label %item, label %continue" -> println
+                    "item:" -> println
+                    "  %key_slot = getelementptr " -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    ", ptr %keys, i64 %index" -> println
+                    "  %key = load " -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    ", ptr %key_slot, align " -> print
+                    context.typeAligns[dropType.first] -> writeDecimalLine
+                    "  call void @sollang_drop_t$(dropType.first)(" -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    " %key)" -> println
+                    "  br label %continue" -> println
+                    "continue:" -> println
+                    "  %next = add i64 %index, 1" -> println
+                    "  br label %loop" -> println
+                    "done:" -> println
+                }
+                "  call void @free(ptr %controls)" -> println
                 "  ret void" -> println
             }
             dropType.kind == 4 -> if {
@@ -564,7 +635,7 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "done:" -> println
                 "  ret void" -> println
             }
-            dropType.kind == 5 -> if {
+            (dropType.kind == 5 or dropType.kind == 13) -> if {
                 "  %keys = extractvalue %sollang.dict %value, 0" -> println
                 "  %values = extractvalue %sollang.dict %value, 1" -> println
                 "  %length = extractvalue %sollang.dict %value, 2" -> println
@@ -614,8 +685,10 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                     "  br label %loop" -> println
                     "done:" -> println
                 }
-                "  call void @free(ptr %keys)" -> println
-                "  call void @free(ptr %values)" -> println
+                dropType.kind == 5 -> if {
+                    "  call void @free(ptr %keys)" -> println
+                    "  call void @free(ptr %values)" -> println
+                }
                 "  ret void" -> println
             }
             dropType.kind == 6 -> if {
@@ -955,7 +1028,10 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
             context.types[typeTask] => current
             current.kind == 2 -> if { "{ ptr, i64 }" -> print }
             current.kind == 3 -> if { "%sollang.array.i32" -> print }
+            current.kind == 12 -> if { "%sollang.array.i32" -> print }
             current.kind == 5 -> if { "%sollang.dict" -> print }
+            current.kind == 13 -> if { "%sollang.dict" -> print }
+            current.kind == 14 -> if { "%sollang.bitset.t$(typeTask)" -> print }
             current.kind == 6 -> if { "ptr" -> print }
             current.kind == 8 -> if { "ptr" -> print }
             current.kind == 9 -> if { "ptr" -> print }
@@ -965,6 +1041,8 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
                 (current.origin == 4 and current.symbol == 2) -> if { "%sollang.task" -> print }
                 (current.origin == 4 and current.symbol == 3) -> if { "%sollang.stream" -> print }
                 (current.origin == 4 and current.symbol == 4) -> if { "%sollang.event_stream" -> print }
+                (current.origin == 4 and current.symbol == 5) -> if { "%sollang.dict" -> print }
+                (current.origin == 4 and (current.symbol == 6 or current.symbol == 7)) -> if { "%sollang.array.i32" -> print }
             }
             current.kind == 4 -> if {
                 "[$(current.length) x " -> print
@@ -1222,7 +1300,7 @@ integerNodeWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
             leftWidth > rightWidth -> if { leftWidth => width! } else { rightWidth => width! }
         }
     }
-    ((node.kind == 9 or node.kind == 6) and node.opcode == -201 and node.operand0 >= 0) -> if {
+    ((node.kind == 9 or node.kind == 6) and (node.opcode == -201 or node.opcode == -236) and node.operand0 >= 0) -> if {
         node.typeSymbol == 2 -> if { 32 => width! } else { context.pointerBitWidth => width! }
     }
     width!

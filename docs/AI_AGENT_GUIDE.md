@@ -1,12 +1,19 @@
 # Sollang AI Agent Coding Guide
 
 Status: canonical agent onboarding and coding guide
-Updated: 2026-08-02
+Updated: 2026-08-13
 
 This is the single maintained entry point for an AI Agent that must read,
 write, review, or change Sollang code. Do not infer Sollang syntax from another
 language, from an old release, or from one isolated fixture. Read the sources of
 truth below and verify generated code with the real compiler.
+
+Repository-root hygiene is part of the completion contract. Never place
+temporary, diagnostic, benchmark, self-host, LLVM, or experimental outputs in
+the repository root, including ignored `scratch*` executables. Put retained
+intermediate artifacts under `artifacts/scratch/`; put disposable artifacts in
+an OS-created temporary directory. Resolve and verify the output path before
+starting a command that produces an executable or a large intermediate file.
 
 ## 1. Read in this order
 
@@ -125,7 +132,10 @@ struct Point {
 [1, 2, 3] => fixed
 [1, 2; ~] => growable!
 [Int; ~] => empty!
+[1, 2; <=8] => bounded!
+[Int; <=8] => emptyBounded!
 {"one": 1, "two": 2} => lookup
+{Int: Int; <=8} => boundedLookup!
 ```
 
 Ordinary product fields are `_0`, `_1`, and so on. Labeled product fields use
@@ -134,6 +144,36 @@ Structs and enums are nominal; products are structural. Arrays, dictionaries,
 generic types, `Option`, `Result`, traits, `impl`, associated types, and owned
 `dyn<Trait>` values are described in `SPEC.md` and demonstrated by retained
 fixtures.
+
+Collection storage is part of the type contract: `[T; N]` is fixed inline,
+`[T]` is a readonly view, `[T; ~]` is heap-growable, `[T; N~]` is a heap owner
+with an initial capacity hint, and `[T; <=N]` is bounded inline storage.
+`{K: V; <=N}` is the corresponding bounded inline dictionary. Bounded owners
+never allocate or spill, `N` is part of type identity, `capacity` reports `N`,
+and an overflowing `push` or new-key `put` traps without partial mutation.
+Extended collections use explicit constructors: `Set<T>(capacity)`,
+`Deque<T>(capacity)`, `BinaryHeap<T>(capacity)`, and fixed inline `BitSet<N>()`.
+Do not model a set as a dictionary with a dummy value, a deque as a shifting
+array, or a heap as a library wrapper that loses its nominal invariant.
+`Set<T>` entries contain only an aligned key and membership operations return
+`Bool`. Set deletion uses tombstones and performs one same-capacity cleanup when
+the live count crosses exactly one eighth of capacity. `Deque<T>` is a
+power-of-two ring with `front`/`back` and O(1) amortized
+push/pop at both ends; it intentionally has no physical indexing surface.
+Dictionary `putIfAbsent(key, value)` is the non-escaping entry primitive: it
+performs one probe, inserts only when vacant, returns `Bool`, and consumes both
+arguments even when an equal resident key already exists. Do not implement it
+as `contains` followed by `put`.
+Heap collections expose `reserve(nonnegativeCount)` as a final mutable flow.
+Arrays/heaps reserve element slots, deques round to a power of two, and
+dictionaries/sets reserve enough power-of-two buckets for the 7/8 load limit.
+Requests at or below current capacity do not allocate. Bounded inline owners do
+not expose `reserve` because their capacity is already part of type identity.
+Ordinary heap arrays expose `pushAll(fixedArray)` for copyable elements. The
+operation checks the combined length, performs at most one exact `reserve`,
+copies the fixed source contiguously, and publishes the new length once. It does
+not accept dynamic sources, heap/deque receivers, or owned elements: those need
+separate alias-safe and move-explicit APIs rather than hidden cloning.
 
 ### Ownership, references, and effects
 
@@ -234,6 +274,14 @@ segment is the default alias. Standard-library sources live under `stdlib/`.
 Supported release targets are `windows-x64`, `linux-x64`, and browser WebAssembly
 within the capabilities recorded in `SPEC.md`.
 
+The public playground ships the current self-host Stage 2 compiler as a
+versioned WASM asset together with the matching standard-library JSON. A
+compiler or standard-library change must update both asset references, rebuild
+the browser compiler, run its retained compile/assemble/execute cases, and run
+the real browser catalog before deployment. Browser LLVM may lower memory
+intrinsics to `env.memcpy`/`env.memset`; the host ABI must implement both and
+the emitted LLVM must declare the intrinsics explicitly.
+
 The public 0.4 `sollang` executable is the Stage 3 fixed-point native compiler
 built from `.slg` sources. The C# compiler is a bootstrap and differential
 oracle, not a 0.4 release artifact.
@@ -273,6 +321,24 @@ environment-variable path as well as the explicit option.
    changes must include exact stdout from named roles used directly and in
    interpolation expressions, plus the default contextual `it` role, not only
    a one-line implicit-main smoke test.
+   Self-host intrinsic recognition must be syntax-directed: a local binding
+   named `capacity`, `len`, `push`, or another intrinsic is still an ordinary
+   value read unless the AST/token span contains the corresponding top-level
+   flow arrow. Collection intrinsics must additionally prove the canonical
+    receiver type before assigning an opcode; a user function such as
+    `set value: Int -> Int` remains an ordinary call in `3 -> set`. Keep a
+    collision fixture whenever adding an intrinsic opcode.
+    Collection mutation opcodes are also ownership and scheduling contracts:
+    owned arguments to `push`/`insert` move on success, duplicate Set keys are
+    dropped, and unused-result mutations must remain ordered effects. A
+    dictionary-shaped mutable borrow such as `Set<T>` passes a pointer to the
+    whole four-field structure; the single-buffer three-address ABI is only for
+    array-shaped containers.
+   Structural-product member ordinals must be resolved after the final
+   canonical type projection. A synthesized product can exist only in the
+   recursive type arena, beyond the semantic snapshot's nominal type table;
+   emit it directly with `extractvalue` from its canonical product type instead
+   of treating a missing nominal symbol as an indexable declaration.
 8. If compiler or standard-library artifacts changed, synchronize and verify
    the installed compiler at `P:\\Utils\\sollang`.
 9. Update this guide when the preferred syntax, semantics, CLI, target boundary,

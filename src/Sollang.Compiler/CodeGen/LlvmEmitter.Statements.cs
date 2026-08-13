@@ -1422,6 +1422,11 @@ internal sealed partial class LlvmEmitter
     private void EmitArrayEachBlockFunctionCall(BlockFunctionCallStatement statement)
     {
         var source = EmitExpression(statement.Source);
+        if (source is RuntimeInlineDictionary set && _program.Types.IsSet(set.DictionaryType))
+        {
+            EmitDictionaryEachBlockFunctionCall(statement, bindKey: true, source);
+            return;
+        }
         if (source is RuntimeStruct { Type: BoundType.Range } range)
         {
             EmitRangeEachBlockFunctionCall(statement, range);
@@ -1467,6 +1472,8 @@ internal sealed partial class LlvmEmitter
             RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, index),
             RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index),
             RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index),
+            RuntimeDynamicInlineArray array when _program.Types.IsDeque(array.ArrayType) =>
+                EmitDequeLoadUnchecked(array, index, "deque_each_item"),
             RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index),
             RuntimeMappedBytes mapped => EmitMappedLoad(mapped, index),
             RuntimeArguments => EmitArgumentLoad(index),
@@ -2628,9 +2635,10 @@ internal sealed partial class LlvmEmitter
 
     private void EmitDictionaryEachBlockFunctionCall(
         BlockFunctionCallStatement statement,
-        bool bindKey)
+        bool bindKey,
+        RuntimeValue? preparedSource = null)
     {
-        var sourceValue = EmitExpression(statement.Source);
+        var sourceValue = preparedSource ?? EmitExpression(statement.Source);
         RuntimeValue source = sourceValue is RuntimeIntDictionaryView view
             ? new RuntimeIntDictionary(view.PointerName, view.LengthName, view.CapacityName)
             : sourceValue;
@@ -2663,7 +2671,7 @@ internal sealed partial class LlvmEmitter
             _ => throw new SollangException("dictionary iterator source was not lowered")
         };
         var occupied = NextTemp("dictionary_each_occupied");
-        EmitCompare(occupied, "ne", "i8", control, "0");
+        EmitCompare(occupied, "sgt", "i8", control, "0");
         EmitConditionalBranch(occupied, bodyLabel, continueLabel);
         EmitFunctionLine();
 

@@ -1,0 +1,37 @@
+# Verifies canonical self-host Typed IR opcodes and result types for BitSet operations.
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        main {
+            BitSet<130>() => bits!
+            bits! -> set(3)
+            bits! -> contains(3) => present
+            bits! -> clear(3)
+            bits! -> count => total
+            bits! -> len => size
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+
+    false => hasSet!
+    false => hasClear!
+    false => hasContains!
+    false => hasCount!
+    false => hasLength!
+    ir! -> each node {
+        (node.kind == 9 and node.opcode == -241 and node.typeOrigin == 1 and node.typeSymbol == 0) -> if { true => hasSet! }
+        (node.kind == 9 and node.opcode == -242 and node.typeOrigin == 1 and node.typeSymbol == 0) -> if { true => hasClear! }
+        (node.kind == 9 and node.opcode == -243 and node.typeOrigin == 1 and node.typeSymbol == 23) -> if { true => hasContains! }
+        (node.kind == 9 and node.opcode == -244 and node.typeOrigin == 1 and node.typeSymbol == 2) -> if { true => hasCount! }
+        (node.kind == 9 and node.opcode == -245 and node.typeOrigin == 1 and node.typeSymbol == 2) -> if { true => hasLength! }
+    }
+
+    hasSet! -> if { "set=true" -> println } else { "set=false" -> println }
+    hasClear! -> if { "clear=true" -> println } else { "clear=false" -> println }
+    hasContains! -> if { "contains=true" -> println } else { "contains=false" -> println }
+    hasCount! -> if { "count=true" -> println } else { "count=false" -> println }
+    hasLength! -> if { "len=true" -> println } else { "len=false" -> println }
+}

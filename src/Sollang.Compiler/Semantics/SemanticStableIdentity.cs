@@ -249,12 +249,39 @@ internal static class SemanticStableIdentity
         {
             return "StaticArray<" + Type(types, types.GetStaticArray(type).ElementType) + ">";
         }
+        if (types.IsBinaryHeap(type))
+        {
+            return "BinaryHeap<" + Type(types, types.GetBinaryHeapElement(type)) + ">";
+        }
+        if (types.IsDeque(type))
+        {
+            return "Deque<" + Type(types, types.GetDequeElement(type)) + ">";
+        }
+        if (types.IsSet(type))
+        {
+            return "Set<" + Type(types, types.GetSetElement(type)) + ">";
+        }
         if (types.IsDynamicArray(type))
         {
             return "Array<" + Type(types, types.GetDynamicArray(type).ElementType) + ">";
         }
+        if (types.IsBoundedArray(type))
+        {
+            var bounded = types.GetBoundedArray(type);
+            return "BoundedArray<" + Type(types, bounded.ElementType) + "," + bounded.Capacity + ">";
+        }
+        if (types.IsBitSet(type))
+        {
+            return "BitSet<" + types.GetBitSet(type).BitCount + ">";
+        }
         if (types.IsDictionary(type))
         {
+            if (types.IsBoundedDictionary(type))
+            {
+                var bounded = types.GetBoundedDictionary(type);
+                return "BoundedDictionary<" + Type(types, bounded.KeyType) + ","
+                    + Type(types, bounded.ValueType) + "," + bounded.MaxEntries + ">";
+            }
             var dictionary = types.GetDictionary(type);
             return "Dictionary<" + Type(types, dictionary.KeyType) + ","
                 + Type(types, dictionary.ValueType) + ">";
@@ -641,6 +668,14 @@ internal static class SemanticStableIdentity
                 return Close(types.GetOrAddStaticArray(Parse()));
             if (Take("Array<"))
                 return Close(types.GetOrAddDynamicArray(Parse()));
+            if (Take("BoundedArray<"))
+            {
+                var element = Parse();
+                Expect(',');
+                var capacity = ParseNumber();
+                Expect('>');
+                return types.GetOrAddBoundedArray(element, capacity);
+            }
             if (Take("Box<"))
             {
                 var element = Parse();
@@ -672,6 +707,16 @@ internal static class SemanticStableIdentity
                 var value = Parse();
                 Expect('>');
                 return types.GetOrAddDictionary(key, value);
+            }
+            if (Take("BoundedDictionary<"))
+            {
+                var key = Parse();
+                Expect(',');
+                var value = Parse();
+                Expect(',');
+                var capacity = ParseNumber();
+                Expect('>');
+                return types.GetOrAddBoundedDictionary(key, value, capacity);
             }
             if (Take("builtin:"))
             {
@@ -717,6 +762,20 @@ internal static class SemanticStableIdentity
             while (_position < text.Length && text[_position] is not ('>' or ','))
                 _position++;
             return text[start.._position];
+        }
+
+        private int ParseNumber()
+        {
+            var start = _position;
+            while (_position < text.Length && char.IsAsciiDigit(text[_position]))
+                _position++;
+            if (start == _position
+                || !int.TryParse(text.AsSpan(start, _position - start), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out var value))
+            {
+                throw Invalid("expected integer");
+            }
+            return value;
         }
 
         private void Expect(char value)

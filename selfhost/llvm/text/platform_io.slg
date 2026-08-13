@@ -1060,7 +1060,15 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
     node.typeId >= 0 -> if {
         node.typeId => arrayTypeId!
         context.types[arrayTypeId!].kind == 8 -> if { context.types[arrayTypeId!].first => arrayTypeId! }
-        context.types[arrayTypeId!].kind == 3 -> if { context.types[arrayTypeId!].first => elementTypeId! }
+        (context.types[arrayTypeId!].kind == 3
+            or context.types[arrayTypeId!].kind == 12
+            or (context.types[arrayTypeId!].kind == 7
+                and context.types[arrayTypeId!].origin == 4
+                and (context.types[arrayTypeId!].symbol == 5
+                    or context.types[arrayTypeId!].symbol == 6
+                    or context.types[arrayTypeId!].symbol == 7))) -> if {
+            context.types[arrayTypeId!].first => elementTypeId!
+        }
     } else {
         # A freshly lowered non-empty array literal can temporarily retain the
         # legacy dynamic-array projection while its canonical container type is
@@ -1100,6 +1108,17 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
         }
     }
     elementTypeId!
+}
+isSetCollection node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    false => result!
+    node.typeId >= 0 -> if {
+        node.typeId => collectionTypeId!
+        context.types[collectionTypeId!].kind == 8 -> if { context.types[collectionTypeId!].first => collectionTypeId! }
+        (context.types[collectionTypeId!].kind == 7
+            and context.types[collectionTypeId!].origin == 4
+            and context.types[collectionTypeId!].symbol == 5) -> if { true => result! }
+    }
+    result!
 }
 arrayElementSize node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     node -> arrayElementTypeId(context, state) => elementTypeId

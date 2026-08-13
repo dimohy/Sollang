@@ -1,0 +1,925 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @GetConsoleMode(ptr, ptr)
+declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @GetProcessHeap()
+declare ptr @HeapAlloc(ptr, i32, i64)
+declare i32 @HeapFree(ptr, i32, ptr)
+define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+entry:
+  %mode = alloca i32, align 4
+  %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+  %is_console = icmp ne i32 %console_status, 0
+  br i1 %is_console, label %console_prepare, label %redirected
+redirected:
+  %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
+  ret i32 %redirected_ok
+console_prepare:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @GetProcessHeap()
+  %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+convert:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+console_write:
+  %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
+  %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  ret i32 %console_ok
+conversion_free:
+  %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+conversion_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+}
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+%sollang.array.i32 = type { ptr, i64, i64 }
+%sollang.mutable_container = type { ptr, ptr, ptr }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+define internal void @sollang_drop_t26(%sollang.array.i32 %value) {
+entry:
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+declare void @llvm.trap()
+define void @sollang_m0_s0(%sollang.mutable_container %arg_borrow) {
+entry:
+  %arg_mut_ptr_addr = extractvalue %sollang.mutable_container %arg_borrow, 0
+  %arg_mut_len_addr = extractvalue %sollang.mutable_container %arg_borrow, 1
+  %arg_mut_capacity_addr = extractvalue %sollang.mutable_container %arg_borrow, 2
+  %arg_mut_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %arg_mut_len = load i64, ptr %arg_mut_len_addr, align 8
+  %arg_mut_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %arg_value0 = insertvalue %sollang.array.i32 poison, ptr %arg_mut_ptr, 0
+  %arg_value1 = insertvalue %sollang.array.i32 %arg_value0, i64 %arg_mut_len, 1
+  %arg = insertvalue %sollang.array.i32 %arg_value1, i64 %arg_mut_capacity, 2
+  %v4_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v4_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v4_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v4_current0 = insertvalue %sollang.array.i32 poison, ptr %v4_current_ptr, 0
+  %v4_current1 = insertvalue %sollang.array.i32 %v4_current0, i64 %v4_current_len, 1
+  %v4 = insertvalue %sollang.array.i32 %v4_current1, i64 %v4_current_capacity, 2
+  %heap3_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %heap3_length = load i64, ptr %arg_mut_len_addr, align 8
+  %heap3_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %heap3_has_room = icmp ult i64 %heap3_length, %heap3_capacity
+  br i1 %heap3_has_room, label %heap3_keep, label %heap3_grow
+heap3_keep:
+  br label %heap3_ready
+heap3_grow:
+  %heap3_capacity_zero = icmp eq i64 %heap3_capacity, 0
+  %heap3_doubled = mul i64 %heap3_capacity, 2
+  %heap3_grown_capacity = select i1 %heap3_capacity_zero, i64 1, i64 %heap3_doubled
+  %heap3_grown_bytes = mul i64 %heap3_grown_capacity, 4
+  %heap3_grown_data = call ptr @malloc(i64 %heap3_grown_bytes)
+  %heap3_copy_bytes = mul i64 %heap3_length, 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %heap3_grown_data, ptr %heap3_data, i64 %heap3_copy_bytes, i1 false)
+  call void @free(ptr %heap3_data)
+  br label %heap3_ready
+heap3_ready:
+  %heap3_active_data = phi ptr [ %heap3_data, %heap3_keep ], [ %heap3_grown_data, %heap3_grow ]
+  %heap3_active_capacity = phi i64 [ %heap3_capacity, %heap3_keep ], [ %heap3_grown_capacity, %heap3_grow ]
+  %heap3_append = getelementptr i32, ptr %heap3_active_data, i64 %heap3_length
+  store i32 4, ptr %heap3_append, align 4
+  %heap3_index_addr = alloca i64, align 8
+  store i64 %heap3_length, ptr %heap3_index_addr, align 8
+  br label %heap3_up
+heap3_up:
+  %heap3_index = load i64, ptr %heap3_index_addr, align 8
+  %heap3_has_parent = icmp ugt i64 %heap3_index, 0
+  br i1 %heap3_has_parent, label %heap3_up_compare, label %heap3_up_done
+heap3_up_compare:
+  %heap3_index_minus_one = sub i64 %heap3_index, 1
+  %heap3_parent = udiv i64 %heap3_index_minus_one, 2
+  %heap3_child_ptr = getelementptr i32, ptr %heap3_active_data, i64 %heap3_index
+  %heap3_parent_ptr = getelementptr i32, ptr %heap3_active_data, i64 %heap3_parent
+  %heap3_child = load i32, ptr %heap3_child_ptr, align 4
+  %heap3_parent_value = load i32, ptr %heap3_parent_ptr, align 4
+  %heap3_rises = icmp sgt i32 %heap3_child, %heap3_parent_value
+  br i1 %heap3_rises, label %heap3_up_swap, label %heap3_up_done
+heap3_up_swap:
+  store i32 %heap3_parent_value, ptr %heap3_child_ptr, align 4
+  store i32 %heap3_child, ptr %heap3_parent_ptr, align 4
+  store i64 %heap3_parent, ptr %heap3_index_addr, align 8
+  br label %heap3_up
+heap3_up_done:
+  %heap3_next_length = add i64 %heap3_length, 1
+  store ptr %heap3_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %heap3_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %heap3_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v7_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v7_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v7_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v7_current0 = insertvalue %sollang.array.i32 poison, ptr %v7_current_ptr, 0
+  %v7_current1 = insertvalue %sollang.array.i32 %v7_current0, i64 %v7_current_len, 1
+  %v7 = insertvalue %sollang.array.i32 %v7_current1, i64 %v7_current_capacity, 2
+  %heap6_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %heap6_length = load i64, ptr %arg_mut_len_addr, align 8
+  %heap6_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %heap6_has_room = icmp ult i64 %heap6_length, %heap6_capacity
+  br i1 %heap6_has_room, label %heap6_keep, label %heap6_grow
+heap6_keep:
+  br label %heap6_ready
+heap6_grow:
+  %heap6_capacity_zero = icmp eq i64 %heap6_capacity, 0
+  %heap6_doubled = mul i64 %heap6_capacity, 2
+  %heap6_grown_capacity = select i1 %heap6_capacity_zero, i64 1, i64 %heap6_doubled
+  %heap6_grown_bytes = mul i64 %heap6_grown_capacity, 4
+  %heap6_grown_data = call ptr @malloc(i64 %heap6_grown_bytes)
+  %heap6_copy_bytes = mul i64 %heap6_length, 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %heap6_grown_data, ptr %heap6_data, i64 %heap6_copy_bytes, i1 false)
+  call void @free(ptr %heap6_data)
+  br label %heap6_ready
+heap6_ready:
+  %heap6_active_data = phi ptr [ %heap6_data, %heap6_keep ], [ %heap6_grown_data, %heap6_grow ]
+  %heap6_active_capacity = phi i64 [ %heap6_capacity, %heap6_keep ], [ %heap6_grown_capacity, %heap6_grow ]
+  %heap6_append = getelementptr i32, ptr %heap6_active_data, i64 %heap6_length
+  store i32 9, ptr %heap6_append, align 4
+  %heap6_index_addr = alloca i64, align 8
+  store i64 %heap6_length, ptr %heap6_index_addr, align 8
+  br label %heap6_up
+heap6_up:
+  %heap6_index = load i64, ptr %heap6_index_addr, align 8
+  %heap6_has_parent = icmp ugt i64 %heap6_index, 0
+  br i1 %heap6_has_parent, label %heap6_up_compare, label %heap6_up_done
+heap6_up_compare:
+  %heap6_index_minus_one = sub i64 %heap6_index, 1
+  %heap6_parent = udiv i64 %heap6_index_minus_one, 2
+  %heap6_child_ptr = getelementptr i32, ptr %heap6_active_data, i64 %heap6_index
+  %heap6_parent_ptr = getelementptr i32, ptr %heap6_active_data, i64 %heap6_parent
+  %heap6_child = load i32, ptr %heap6_child_ptr, align 4
+  %heap6_parent_value = load i32, ptr %heap6_parent_ptr, align 4
+  %heap6_rises = icmp sgt i32 %heap6_child, %heap6_parent_value
+  br i1 %heap6_rises, label %heap6_up_swap, label %heap6_up_done
+heap6_up_swap:
+  store i32 %heap6_parent_value, ptr %heap6_child_ptr, align 4
+  store i32 %heap6_child, ptr %heap6_parent_ptr, align 4
+  store i64 %heap6_parent, ptr %heap6_index_addr, align 8
+  br label %heap6_up
+heap6_up_done:
+  %heap6_next_length = add i64 %heap6_length, 1
+  store ptr %heap6_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %heap6_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %heap6_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v10_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v10_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v10_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v10_current0 = insertvalue %sollang.array.i32 poison, ptr %v10_current_ptr, 0
+  %v10_current1 = insertvalue %sollang.array.i32 %v10_current0, i64 %v10_current_len, 1
+  %v10 = insertvalue %sollang.array.i32 %v10_current1, i64 %v10_current_capacity, 2
+  %heap9_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %heap9_length = load i64, ptr %arg_mut_len_addr, align 8
+  %heap9_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %heap9_has_room = icmp ult i64 %heap9_length, %heap9_capacity
+  br i1 %heap9_has_room, label %heap9_keep, label %heap9_grow
+heap9_keep:
+  br label %heap9_ready
+heap9_grow:
+  %heap9_capacity_zero = icmp eq i64 %heap9_capacity, 0
+  %heap9_doubled = mul i64 %heap9_capacity, 2
+  %heap9_grown_capacity = select i1 %heap9_capacity_zero, i64 1, i64 %heap9_doubled
+  %heap9_grown_bytes = mul i64 %heap9_grown_capacity, 4
+  %heap9_grown_data = call ptr @malloc(i64 %heap9_grown_bytes)
+  %heap9_copy_bytes = mul i64 %heap9_length, 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %heap9_grown_data, ptr %heap9_data, i64 %heap9_copy_bytes, i1 false)
+  call void @free(ptr %heap9_data)
+  br label %heap9_ready
+heap9_ready:
+  %heap9_active_data = phi ptr [ %heap9_data, %heap9_keep ], [ %heap9_grown_data, %heap9_grow ]
+  %heap9_active_capacity = phi i64 [ %heap9_capacity, %heap9_keep ], [ %heap9_grown_capacity, %heap9_grow ]
+  %heap9_append = getelementptr i32, ptr %heap9_active_data, i64 %heap9_length
+  store i32 1, ptr %heap9_append, align 4
+  %heap9_index_addr = alloca i64, align 8
+  store i64 %heap9_length, ptr %heap9_index_addr, align 8
+  br label %heap9_up
+heap9_up:
+  %heap9_index = load i64, ptr %heap9_index_addr, align 8
+  %heap9_has_parent = icmp ugt i64 %heap9_index, 0
+  br i1 %heap9_has_parent, label %heap9_up_compare, label %heap9_up_done
+heap9_up_compare:
+  %heap9_index_minus_one = sub i64 %heap9_index, 1
+  %heap9_parent = udiv i64 %heap9_index_minus_one, 2
+  %heap9_child_ptr = getelementptr i32, ptr %heap9_active_data, i64 %heap9_index
+  %heap9_parent_ptr = getelementptr i32, ptr %heap9_active_data, i64 %heap9_parent
+  %heap9_child = load i32, ptr %heap9_child_ptr, align 4
+  %heap9_parent_value = load i32, ptr %heap9_parent_ptr, align 4
+  %heap9_rises = icmp sgt i32 %heap9_child, %heap9_parent_value
+  br i1 %heap9_rises, label %heap9_up_swap, label %heap9_up_done
+heap9_up_swap:
+  store i32 %heap9_parent_value, ptr %heap9_child_ptr, align 4
+  store i32 %heap9_child, ptr %heap9_parent_ptr, align 4
+  store i64 %heap9_parent, ptr %heap9_index_addr, align 8
+  br label %heap9_up
+heap9_up_done:
+  %heap9_next_length = add i64 %heap9_length, 1
+  store ptr %heap9_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %heap9_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %heap9_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v13_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v13_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v13_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v13_current0 = insertvalue %sollang.array.i32 poison, ptr %v13_current_ptr, 0
+  %v13_current1 = insertvalue %sollang.array.i32 %v13_current0, i64 %v13_current_len, 1
+  %v13 = insertvalue %sollang.array.i32 %v13_current1, i64 %v13_current_capacity, 2
+  %heap12_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %heap12_length = load i64, ptr %arg_mut_len_addr, align 8
+  %heap12_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %heap12_has_room = icmp ult i64 %heap12_length, %heap12_capacity
+  br i1 %heap12_has_room, label %heap12_keep, label %heap12_grow
+heap12_keep:
+  br label %heap12_ready
+heap12_grow:
+  %heap12_capacity_zero = icmp eq i64 %heap12_capacity, 0
+  %heap12_doubled = mul i64 %heap12_capacity, 2
+  %heap12_grown_capacity = select i1 %heap12_capacity_zero, i64 1, i64 %heap12_doubled
+  %heap12_grown_bytes = mul i64 %heap12_grown_capacity, 4
+  %heap12_grown_data = call ptr @malloc(i64 %heap12_grown_bytes)
+  %heap12_copy_bytes = mul i64 %heap12_length, 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %heap12_grown_data, ptr %heap12_data, i64 %heap12_copy_bytes, i1 false)
+  call void @free(ptr %heap12_data)
+  br label %heap12_ready
+heap12_ready:
+  %heap12_active_data = phi ptr [ %heap12_data, %heap12_keep ], [ %heap12_grown_data, %heap12_grow ]
+  %heap12_active_capacity = phi i64 [ %heap12_capacity, %heap12_keep ], [ %heap12_grown_capacity, %heap12_grow ]
+  %heap12_append = getelementptr i32, ptr %heap12_active_data, i64 %heap12_length
+  store i32 7, ptr %heap12_append, align 4
+  %heap12_index_addr = alloca i64, align 8
+  store i64 %heap12_length, ptr %heap12_index_addr, align 8
+  br label %heap12_up
+heap12_up:
+  %heap12_index = load i64, ptr %heap12_index_addr, align 8
+  %heap12_has_parent = icmp ugt i64 %heap12_index, 0
+  br i1 %heap12_has_parent, label %heap12_up_compare, label %heap12_up_done
+heap12_up_compare:
+  %heap12_index_minus_one = sub i64 %heap12_index, 1
+  %heap12_parent = udiv i64 %heap12_index_minus_one, 2
+  %heap12_child_ptr = getelementptr i32, ptr %heap12_active_data, i64 %heap12_index
+  %heap12_parent_ptr = getelementptr i32, ptr %heap12_active_data, i64 %heap12_parent
+  %heap12_child = load i32, ptr %heap12_child_ptr, align 4
+  %heap12_parent_value = load i32, ptr %heap12_parent_ptr, align 4
+  %heap12_rises = icmp sgt i32 %heap12_child, %heap12_parent_value
+  br i1 %heap12_rises, label %heap12_up_swap, label %heap12_up_done
+heap12_up_swap:
+  store i32 %heap12_parent_value, ptr %heap12_child_ptr, align 4
+  store i32 %heap12_child, ptr %heap12_parent_ptr, align 4
+  store i64 %heap12_parent, ptr %heap12_index_addr, align 8
+  br label %heap12_up
+heap12_up_done:
+  %heap12_next_length = add i64 %heap12_length, 1
+  store ptr %heap12_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %heap12_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %heap12_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v16_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v16_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v16_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v16_current0 = insertvalue %sollang.array.i32 poison, ptr %v16_current_ptr, 0
+  %v16_current1 = insertvalue %sollang.array.i32 %v16_current0, i64 %v16_current_len, 1
+  %v16 = insertvalue %sollang.array.i32 %v16_current1, i64 %v16_current_capacity, 2
+  %heap15_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %heap15_length = load i64, ptr %arg_mut_len_addr, align 8
+  %heap15_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %heap15_has_room = icmp ult i64 %heap15_length, %heap15_capacity
+  br i1 %heap15_has_room, label %heap15_keep, label %heap15_grow
+heap15_keep:
+  br label %heap15_ready
+heap15_grow:
+  %heap15_capacity_zero = icmp eq i64 %heap15_capacity, 0
+  %heap15_doubled = mul i64 %heap15_capacity, 2
+  %heap15_grown_capacity = select i1 %heap15_capacity_zero, i64 1, i64 %heap15_doubled
+  %heap15_grown_bytes = mul i64 %heap15_grown_capacity, 4
+  %heap15_grown_data = call ptr @malloc(i64 %heap15_grown_bytes)
+  %heap15_copy_bytes = mul i64 %heap15_length, 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %heap15_grown_data, ptr %heap15_data, i64 %heap15_copy_bytes, i1 false)
+  call void @free(ptr %heap15_data)
+  br label %heap15_ready
+heap15_ready:
+  %heap15_active_data = phi ptr [ %heap15_data, %heap15_keep ], [ %heap15_grown_data, %heap15_grow ]
+  %heap15_active_capacity = phi i64 [ %heap15_capacity, %heap15_keep ], [ %heap15_grown_capacity, %heap15_grow ]
+  %heap15_append = getelementptr i32, ptr %heap15_active_data, i64 %heap15_length
+  store i32 12, ptr %heap15_append, align 4
+  %heap15_index_addr = alloca i64, align 8
+  store i64 %heap15_length, ptr %heap15_index_addr, align 8
+  br label %heap15_up
+heap15_up:
+  %heap15_index = load i64, ptr %heap15_index_addr, align 8
+  %heap15_has_parent = icmp ugt i64 %heap15_index, 0
+  br i1 %heap15_has_parent, label %heap15_up_compare, label %heap15_up_done
+heap15_up_compare:
+  %heap15_index_minus_one = sub i64 %heap15_index, 1
+  %heap15_parent = udiv i64 %heap15_index_minus_one, 2
+  %heap15_child_ptr = getelementptr i32, ptr %heap15_active_data, i64 %heap15_index
+  %heap15_parent_ptr = getelementptr i32, ptr %heap15_active_data, i64 %heap15_parent
+  %heap15_child = load i32, ptr %heap15_child_ptr, align 4
+  %heap15_parent_value = load i32, ptr %heap15_parent_ptr, align 4
+  %heap15_rises = icmp sgt i32 %heap15_child, %heap15_parent_value
+  br i1 %heap15_rises, label %heap15_up_swap, label %heap15_up_done
+heap15_up_swap:
+  store i32 %heap15_parent_value, ptr %heap15_child_ptr, align 4
+  store i32 %heap15_child, ptr %heap15_parent_ptr, align 4
+  store i64 %heap15_parent, ptr %heap15_index_addr, align 8
+  br label %heap15_up
+heap15_up_done:
+  %heap15_next_length = add i64 %heap15_length, 1
+  store ptr %heap15_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %heap15_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %heap15_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  %v19_current_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %v19_current_len = load i64, ptr %arg_mut_len_addr, align 8
+  %v19_current_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %v19_current0 = insertvalue %sollang.array.i32 poison, ptr %v19_current_ptr, 0
+  %v19_current1 = insertvalue %sollang.array.i32 %v19_current0, i64 %v19_current_len, 1
+  %v19 = insertvalue %sollang.array.i32 %v19_current1, i64 %v19_current_capacity, 2
+  %heap18_data = load ptr, ptr %arg_mut_ptr_addr, align 8
+  %heap18_length = load i64, ptr %arg_mut_len_addr, align 8
+  %heap18_capacity = load i64, ptr %arg_mut_capacity_addr, align 8
+  %heap18_has_room = icmp ult i64 %heap18_length, %heap18_capacity
+  br i1 %heap18_has_room, label %heap18_keep, label %heap18_grow
+heap18_keep:
+  br label %heap18_ready
+heap18_grow:
+  %heap18_capacity_zero = icmp eq i64 %heap18_capacity, 0
+  %heap18_doubled = mul i64 %heap18_capacity, 2
+  %heap18_grown_capacity = select i1 %heap18_capacity_zero, i64 1, i64 %heap18_doubled
+  %heap18_grown_bytes = mul i64 %heap18_grown_capacity, 4
+  %heap18_grown_data = call ptr @malloc(i64 %heap18_grown_bytes)
+  %heap18_copy_bytes = mul i64 %heap18_length, 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %heap18_grown_data, ptr %heap18_data, i64 %heap18_copy_bytes, i1 false)
+  call void @free(ptr %heap18_data)
+  br label %heap18_ready
+heap18_ready:
+  %heap18_active_data = phi ptr [ %heap18_data, %heap18_keep ], [ %heap18_grown_data, %heap18_grow ]
+  %heap18_active_capacity = phi i64 [ %heap18_capacity, %heap18_keep ], [ %heap18_grown_capacity, %heap18_grow ]
+  %heap18_append = getelementptr i32, ptr %heap18_active_data, i64 %heap18_length
+  store i32 3, ptr %heap18_append, align 4
+  %heap18_index_addr = alloca i64, align 8
+  store i64 %heap18_length, ptr %heap18_index_addr, align 8
+  br label %heap18_up
+heap18_up:
+  %heap18_index = load i64, ptr %heap18_index_addr, align 8
+  %heap18_has_parent = icmp ugt i64 %heap18_index, 0
+  br i1 %heap18_has_parent, label %heap18_up_compare, label %heap18_up_done
+heap18_up_compare:
+  %heap18_index_minus_one = sub i64 %heap18_index, 1
+  %heap18_parent = udiv i64 %heap18_index_minus_one, 2
+  %heap18_child_ptr = getelementptr i32, ptr %heap18_active_data, i64 %heap18_index
+  %heap18_parent_ptr = getelementptr i32, ptr %heap18_active_data, i64 %heap18_parent
+  %heap18_child = load i32, ptr %heap18_child_ptr, align 4
+  %heap18_parent_value = load i32, ptr %heap18_parent_ptr, align 4
+  %heap18_rises = icmp sgt i32 %heap18_child, %heap18_parent_value
+  br i1 %heap18_rises, label %heap18_up_swap, label %heap18_up_done
+heap18_up_swap:
+  store i32 %heap18_parent_value, ptr %heap18_child_ptr, align 4
+  store i32 %heap18_child, ptr %heap18_parent_ptr, align 4
+  store i64 %heap18_parent, ptr %heap18_index_addr, align 8
+  br label %heap18_up
+heap18_up_done:
+  %heap18_next_length = add i64 %heap18_length, 1
+  store ptr %heap18_active_data, ptr %arg_mut_ptr_addr, align 8
+  store i64 %heap18_next_length, ptr %arg_mut_len_addr, align 8
+  store i64 %heap18_active_capacity, ptr %arg_mut_capacity_addr, align 8
+  ret void
+}
+define i32 @main() {
+entry:
+  %slot22 = alloca %sollang.array.i32, align 8
+  %v23_requested = add i64 0, 2
+  %v23_nonnegative = icmp sge i64 %v23_requested, 0
+  br i1 %v23_nonnegative, label %collection23_capacity_ok, label %collection23_capacity_fail
+collection23_capacity_fail:
+  call void @llvm.trap()
+  unreachable
+collection23_capacity_ok:
+  %v23_bytes = mul i64 %v23_requested, 4
+  %v23_has_bytes = icmp ugt i64 %v23_bytes, 0
+  %v23_allocation = select i1 %v23_has_bytes, i64 %v23_bytes, i64 1
+  %v23_data = call ptr @malloc(i64 %v23_allocation)
+  %v23_0 = insertvalue %sollang.array.i32 poison, ptr %v23_data, 0
+  %v23_1 = insertvalue %sollang.array.i32 %v23_0, i64 0, 1
+  %v23 = insertvalue %sollang.array.i32 %v23_1, i64 %v23_requested, 2
+  store %sollang.array.i32 %v23, ptr %slot22, align 8
+  %v26 = load %sollang.array.i32, ptr %slot22, align 8
+  %callmut25_arg0_ptr = getelementptr inbounds %sollang.array.i32, ptr %slot22, i32 0, i32 0
+  %callmut25_arg0_len = getelementptr inbounds %sollang.array.i32, ptr %slot22, i32 0, i32 1
+  %callmut25_arg0_capacity = getelementptr inbounds %sollang.array.i32, ptr %slot22, i32 0, i32 2
+  %callmut25_arg0_0 = insertvalue %sollang.mutable_container poison, ptr %callmut25_arg0_ptr, 0
+  %callmut25_arg0_1 = insertvalue %sollang.mutable_container %callmut25_arg0_0, ptr %callmut25_arg0_len, 1
+  %callmut25_arg0 = insertvalue %sollang.mutable_container %callmut25_arg0_1, ptr %callmut25_arg0_capacity, 2
+  call void @sollang_m0_s0(%sollang.mutable_container %callmut25_arg0)
+  %v28 = load %sollang.array.i32, ptr %slot22, align 8
+  %heap43_source = load %sollang.array.i32, ptr %slot22, align 8
+  %heap43_data = extractvalue %sollang.array.i32 %heap43_source, 0
+  %heap43_length = extractvalue %sollang.array.i32 %heap43_source, 1
+  %heap43_capacity = extractvalue %sollang.array.i32 %heap43_source, 2
+  %heap43_nonempty = icmp ugt i64 %heap43_length, 0
+  br i1 %heap43_nonempty, label %heap43_read, label %heap43_empty
+heap43_empty:
+  call void @llvm.trap()
+  unreachable
+heap43_read:
+  %v43 = load i32, ptr %heap43_data, align 4
+  call void @sollang_runtime_print_i32(i32 %v43, i1 true)
+  %v30 = load %sollang.array.i32, ptr %slot22, align 8
+  %heap44_source = load %sollang.array.i32, ptr %slot22, align 8
+  %heap44_data = extractvalue %sollang.array.i32 %heap44_source, 0
+  %heap44_length = extractvalue %sollang.array.i32 %heap44_source, 1
+  %heap44_capacity = extractvalue %sollang.array.i32 %heap44_source, 2
+  %heap44_nonempty = icmp ugt i64 %heap44_length, 0
+  br i1 %heap44_nonempty, label %heap44_read, label %heap44_empty
+heap44_empty:
+  call void @llvm.trap()
+  unreachable
+heap44_read:
+  %v44 = load i32, ptr %heap44_data, align 4
+  %heap44_next_length = sub i64 %heap44_length, 1
+  %heap44_has_tail = icmp ugt i64 %heap44_next_length, 0
+  br i1 %heap44_has_tail, label %heap44_down_init, label %heap44_down_done
+heap44_down_init:
+  %heap44_last_ptr = getelementptr i32, ptr %heap44_data, i64 %heap44_next_length
+  %heap44_last = load i32, ptr %heap44_last_ptr, align 4
+  store i32 %heap44_last, ptr %heap44_data, align 4
+  %heap44_down_index_addr = alloca i64, align 8
+  %heap44_best_addr = alloca i64, align 8
+  store i64 0, ptr %heap44_down_index_addr, align 8
+  br label %heap44_down
+heap44_down:
+  %heap44_down_index = load i64, ptr %heap44_down_index_addr, align 8
+  %heap44_twice = mul i64 %heap44_down_index, 2
+  %heap44_left = add i64 %heap44_twice, 1
+  %heap44_has_left = icmp ult i64 %heap44_left, %heap44_next_length
+  br i1 %heap44_has_left, label %heap44_choose, label %heap44_down_done
+heap44_choose:
+  store i64 %heap44_left, ptr %heap44_best_addr, align 8
+  %heap44_right = add i64 %heap44_left, 1
+  %heap44_has_right = icmp ult i64 %heap44_right, %heap44_next_length
+  br i1 %heap44_has_right, label %heap44_right_compare, label %heap44_down_compare
+heap44_right_compare:
+  %heap44_left_ptr = getelementptr i32, ptr %heap44_data, i64 %heap44_left
+  %heap44_right_ptr = getelementptr i32, ptr %heap44_data, i64 %heap44_right
+  %heap44_left_value = load i32, ptr %heap44_left_ptr, align 4
+  %heap44_right_value = load i32, ptr %heap44_right_ptr, align 4
+  %heap44_right_greater = icmp sgt i32 %heap44_right_value, %heap44_left_value
+  %heap44_best_selected = select i1 %heap44_right_greater, i64 %heap44_right, i64 %heap44_left
+  store i64 %heap44_best_selected, ptr %heap44_best_addr, align 8
+  br label %heap44_down_compare
+heap44_down_compare:
+  %heap44_best = load i64, ptr %heap44_best_addr, align 8
+  %heap44_best_ptr = getelementptr i32, ptr %heap44_data, i64 %heap44_best
+  %heap44_parent_ptr = getelementptr i32, ptr %heap44_data, i64 %heap44_down_index
+  %heap44_child = load i32, ptr %heap44_best_ptr, align 4
+  %heap44_parent = load i32, ptr %heap44_parent_ptr, align 4
+  %heap44_descends = icmp sgt i32 %heap44_child, %heap44_parent
+  br i1 %heap44_descends, label %heap44_down_swap, label %heap44_down_done
+heap44_down_swap:
+  store i32 %heap44_parent, ptr %heap44_best_ptr, align 4
+  store i32 %heap44_child, ptr %heap44_parent_ptr, align 4
+  store i64 %heap44_best, ptr %heap44_down_index_addr, align 8
+  br label %heap44_down
+heap44_down_done:
+  %heap44_result = insertvalue %sollang.array.i32 %heap44_source, i64 %heap44_next_length, 1
+  store %sollang.array.i32 %heap44_result, ptr %slot22, align 8
+  call void @sollang_runtime_print_i32(i32 %v44, i1 true)
+  %v32 = load %sollang.array.i32, ptr %slot22, align 8
+  %heap45_source = load %sollang.array.i32, ptr %slot22, align 8
+  %heap45_data = extractvalue %sollang.array.i32 %heap45_source, 0
+  %heap45_length = extractvalue %sollang.array.i32 %heap45_source, 1
+  %heap45_capacity = extractvalue %sollang.array.i32 %heap45_source, 2
+  %heap45_nonempty = icmp ugt i64 %heap45_length, 0
+  br i1 %heap45_nonempty, label %heap45_read, label %heap45_empty
+heap45_empty:
+  call void @llvm.trap()
+  unreachable
+heap45_read:
+  %v45 = load i32, ptr %heap45_data, align 4
+  %heap45_next_length = sub i64 %heap45_length, 1
+  %heap45_has_tail = icmp ugt i64 %heap45_next_length, 0
+  br i1 %heap45_has_tail, label %heap45_down_init, label %heap45_down_done
+heap45_down_init:
+  %heap45_last_ptr = getelementptr i32, ptr %heap45_data, i64 %heap45_next_length
+  %heap45_last = load i32, ptr %heap45_last_ptr, align 4
+  store i32 %heap45_last, ptr %heap45_data, align 4
+  %heap45_down_index_addr = alloca i64, align 8
+  %heap45_best_addr = alloca i64, align 8
+  store i64 0, ptr %heap45_down_index_addr, align 8
+  br label %heap45_down
+heap45_down:
+  %heap45_down_index = load i64, ptr %heap45_down_index_addr, align 8
+  %heap45_twice = mul i64 %heap45_down_index, 2
+  %heap45_left = add i64 %heap45_twice, 1
+  %heap45_has_left = icmp ult i64 %heap45_left, %heap45_next_length
+  br i1 %heap45_has_left, label %heap45_choose, label %heap45_down_done
+heap45_choose:
+  store i64 %heap45_left, ptr %heap45_best_addr, align 8
+  %heap45_right = add i64 %heap45_left, 1
+  %heap45_has_right = icmp ult i64 %heap45_right, %heap45_next_length
+  br i1 %heap45_has_right, label %heap45_right_compare, label %heap45_down_compare
+heap45_right_compare:
+  %heap45_left_ptr = getelementptr i32, ptr %heap45_data, i64 %heap45_left
+  %heap45_right_ptr = getelementptr i32, ptr %heap45_data, i64 %heap45_right
+  %heap45_left_value = load i32, ptr %heap45_left_ptr, align 4
+  %heap45_right_value = load i32, ptr %heap45_right_ptr, align 4
+  %heap45_right_greater = icmp sgt i32 %heap45_right_value, %heap45_left_value
+  %heap45_best_selected = select i1 %heap45_right_greater, i64 %heap45_right, i64 %heap45_left
+  store i64 %heap45_best_selected, ptr %heap45_best_addr, align 8
+  br label %heap45_down_compare
+heap45_down_compare:
+  %heap45_best = load i64, ptr %heap45_best_addr, align 8
+  %heap45_best_ptr = getelementptr i32, ptr %heap45_data, i64 %heap45_best
+  %heap45_parent_ptr = getelementptr i32, ptr %heap45_data, i64 %heap45_down_index
+  %heap45_child = load i32, ptr %heap45_best_ptr, align 4
+  %heap45_parent = load i32, ptr %heap45_parent_ptr, align 4
+  %heap45_descends = icmp sgt i32 %heap45_child, %heap45_parent
+  br i1 %heap45_descends, label %heap45_down_swap, label %heap45_down_done
+heap45_down_swap:
+  store i32 %heap45_parent, ptr %heap45_best_ptr, align 4
+  store i32 %heap45_child, ptr %heap45_parent_ptr, align 4
+  store i64 %heap45_best, ptr %heap45_down_index_addr, align 8
+  br label %heap45_down
+heap45_down_done:
+  %heap45_result = insertvalue %sollang.array.i32 %heap45_source, i64 %heap45_next_length, 1
+  store %sollang.array.i32 %heap45_result, ptr %slot22, align 8
+  call void @sollang_runtime_print_i32(i32 %v45, i1 true)
+  %v34 = load %sollang.array.i32, ptr %slot22, align 8
+  %heap46_source = load %sollang.array.i32, ptr %slot22, align 8
+  %heap46_data = extractvalue %sollang.array.i32 %heap46_source, 0
+  %heap46_length = extractvalue %sollang.array.i32 %heap46_source, 1
+  %heap46_capacity = extractvalue %sollang.array.i32 %heap46_source, 2
+  %heap46_nonempty = icmp ugt i64 %heap46_length, 0
+  br i1 %heap46_nonempty, label %heap46_read, label %heap46_empty
+heap46_empty:
+  call void @llvm.trap()
+  unreachable
+heap46_read:
+  %v46 = load i32, ptr %heap46_data, align 4
+  %heap46_next_length = sub i64 %heap46_length, 1
+  %heap46_has_tail = icmp ugt i64 %heap46_next_length, 0
+  br i1 %heap46_has_tail, label %heap46_down_init, label %heap46_down_done
+heap46_down_init:
+  %heap46_last_ptr = getelementptr i32, ptr %heap46_data, i64 %heap46_next_length
+  %heap46_last = load i32, ptr %heap46_last_ptr, align 4
+  store i32 %heap46_last, ptr %heap46_data, align 4
+  %heap46_down_index_addr = alloca i64, align 8
+  %heap46_best_addr = alloca i64, align 8
+  store i64 0, ptr %heap46_down_index_addr, align 8
+  br label %heap46_down
+heap46_down:
+  %heap46_down_index = load i64, ptr %heap46_down_index_addr, align 8
+  %heap46_twice = mul i64 %heap46_down_index, 2
+  %heap46_left = add i64 %heap46_twice, 1
+  %heap46_has_left = icmp ult i64 %heap46_left, %heap46_next_length
+  br i1 %heap46_has_left, label %heap46_choose, label %heap46_down_done
+heap46_choose:
+  store i64 %heap46_left, ptr %heap46_best_addr, align 8
+  %heap46_right = add i64 %heap46_left, 1
+  %heap46_has_right = icmp ult i64 %heap46_right, %heap46_next_length
+  br i1 %heap46_has_right, label %heap46_right_compare, label %heap46_down_compare
+heap46_right_compare:
+  %heap46_left_ptr = getelementptr i32, ptr %heap46_data, i64 %heap46_left
+  %heap46_right_ptr = getelementptr i32, ptr %heap46_data, i64 %heap46_right
+  %heap46_left_value = load i32, ptr %heap46_left_ptr, align 4
+  %heap46_right_value = load i32, ptr %heap46_right_ptr, align 4
+  %heap46_right_greater = icmp sgt i32 %heap46_right_value, %heap46_left_value
+  %heap46_best_selected = select i1 %heap46_right_greater, i64 %heap46_right, i64 %heap46_left
+  store i64 %heap46_best_selected, ptr %heap46_best_addr, align 8
+  br label %heap46_down_compare
+heap46_down_compare:
+  %heap46_best = load i64, ptr %heap46_best_addr, align 8
+  %heap46_best_ptr = getelementptr i32, ptr %heap46_data, i64 %heap46_best
+  %heap46_parent_ptr = getelementptr i32, ptr %heap46_data, i64 %heap46_down_index
+  %heap46_child = load i32, ptr %heap46_best_ptr, align 4
+  %heap46_parent = load i32, ptr %heap46_parent_ptr, align 4
+  %heap46_descends = icmp sgt i32 %heap46_child, %heap46_parent
+  br i1 %heap46_descends, label %heap46_down_swap, label %heap46_down_done
+heap46_down_swap:
+  store i32 %heap46_parent, ptr %heap46_best_ptr, align 4
+  store i32 %heap46_child, ptr %heap46_parent_ptr, align 4
+  store i64 %heap46_best, ptr %heap46_down_index_addr, align 8
+  br label %heap46_down
+heap46_down_done:
+  %heap46_result = insertvalue %sollang.array.i32 %heap46_source, i64 %heap46_next_length, 1
+  store %sollang.array.i32 %heap46_result, ptr %slot22, align 8
+  call void @sollang_runtime_print_i32(i32 %v46, i1 true)
+  %v36 = load %sollang.array.i32, ptr %slot22, align 8
+  %heap47_source = load %sollang.array.i32, ptr %slot22, align 8
+  %heap47_data = extractvalue %sollang.array.i32 %heap47_source, 0
+  %heap47_length = extractvalue %sollang.array.i32 %heap47_source, 1
+  %heap47_capacity = extractvalue %sollang.array.i32 %heap47_source, 2
+  %heap47_nonempty = icmp ugt i64 %heap47_length, 0
+  br i1 %heap47_nonempty, label %heap47_read, label %heap47_empty
+heap47_empty:
+  call void @llvm.trap()
+  unreachable
+heap47_read:
+  %v47 = load i32, ptr %heap47_data, align 4
+  %heap47_next_length = sub i64 %heap47_length, 1
+  %heap47_has_tail = icmp ugt i64 %heap47_next_length, 0
+  br i1 %heap47_has_tail, label %heap47_down_init, label %heap47_down_done
+heap47_down_init:
+  %heap47_last_ptr = getelementptr i32, ptr %heap47_data, i64 %heap47_next_length
+  %heap47_last = load i32, ptr %heap47_last_ptr, align 4
+  store i32 %heap47_last, ptr %heap47_data, align 4
+  %heap47_down_index_addr = alloca i64, align 8
+  %heap47_best_addr = alloca i64, align 8
+  store i64 0, ptr %heap47_down_index_addr, align 8
+  br label %heap47_down
+heap47_down:
+  %heap47_down_index = load i64, ptr %heap47_down_index_addr, align 8
+  %heap47_twice = mul i64 %heap47_down_index, 2
+  %heap47_left = add i64 %heap47_twice, 1
+  %heap47_has_left = icmp ult i64 %heap47_left, %heap47_next_length
+  br i1 %heap47_has_left, label %heap47_choose, label %heap47_down_done
+heap47_choose:
+  store i64 %heap47_left, ptr %heap47_best_addr, align 8
+  %heap47_right = add i64 %heap47_left, 1
+  %heap47_has_right = icmp ult i64 %heap47_right, %heap47_next_length
+  br i1 %heap47_has_right, label %heap47_right_compare, label %heap47_down_compare
+heap47_right_compare:
+  %heap47_left_ptr = getelementptr i32, ptr %heap47_data, i64 %heap47_left
+  %heap47_right_ptr = getelementptr i32, ptr %heap47_data, i64 %heap47_right
+  %heap47_left_value = load i32, ptr %heap47_left_ptr, align 4
+  %heap47_right_value = load i32, ptr %heap47_right_ptr, align 4
+  %heap47_right_greater = icmp sgt i32 %heap47_right_value, %heap47_left_value
+  %heap47_best_selected = select i1 %heap47_right_greater, i64 %heap47_right, i64 %heap47_left
+  store i64 %heap47_best_selected, ptr %heap47_best_addr, align 8
+  br label %heap47_down_compare
+heap47_down_compare:
+  %heap47_best = load i64, ptr %heap47_best_addr, align 8
+  %heap47_best_ptr = getelementptr i32, ptr %heap47_data, i64 %heap47_best
+  %heap47_parent_ptr = getelementptr i32, ptr %heap47_data, i64 %heap47_down_index
+  %heap47_child = load i32, ptr %heap47_best_ptr, align 4
+  %heap47_parent = load i32, ptr %heap47_parent_ptr, align 4
+  %heap47_descends = icmp sgt i32 %heap47_child, %heap47_parent
+  br i1 %heap47_descends, label %heap47_down_swap, label %heap47_down_done
+heap47_down_swap:
+  store i32 %heap47_parent, ptr %heap47_best_ptr, align 4
+  store i32 %heap47_child, ptr %heap47_parent_ptr, align 4
+  store i64 %heap47_best, ptr %heap47_down_index_addr, align 8
+  br label %heap47_down
+heap47_down_done:
+  %heap47_result = insertvalue %sollang.array.i32 %heap47_source, i64 %heap47_next_length, 1
+  store %sollang.array.i32 %heap47_result, ptr %slot22, align 8
+  call void @sollang_runtime_print_i32(i32 %v47, i1 true)
+  %v38 = load %sollang.array.i32, ptr %slot22, align 8
+  %heap48_source = load %sollang.array.i32, ptr %slot22, align 8
+  %heap48_data = extractvalue %sollang.array.i32 %heap48_source, 0
+  %heap48_length = extractvalue %sollang.array.i32 %heap48_source, 1
+  %heap48_capacity = extractvalue %sollang.array.i32 %heap48_source, 2
+  %heap48_nonempty = icmp ugt i64 %heap48_length, 0
+  br i1 %heap48_nonempty, label %heap48_read, label %heap48_empty
+heap48_empty:
+  call void @llvm.trap()
+  unreachable
+heap48_read:
+  %v48 = load i32, ptr %heap48_data, align 4
+  %heap48_next_length = sub i64 %heap48_length, 1
+  %heap48_has_tail = icmp ugt i64 %heap48_next_length, 0
+  br i1 %heap48_has_tail, label %heap48_down_init, label %heap48_down_done
+heap48_down_init:
+  %heap48_last_ptr = getelementptr i32, ptr %heap48_data, i64 %heap48_next_length
+  %heap48_last = load i32, ptr %heap48_last_ptr, align 4
+  store i32 %heap48_last, ptr %heap48_data, align 4
+  %heap48_down_index_addr = alloca i64, align 8
+  %heap48_best_addr = alloca i64, align 8
+  store i64 0, ptr %heap48_down_index_addr, align 8
+  br label %heap48_down
+heap48_down:
+  %heap48_down_index = load i64, ptr %heap48_down_index_addr, align 8
+  %heap48_twice = mul i64 %heap48_down_index, 2
+  %heap48_left = add i64 %heap48_twice, 1
+  %heap48_has_left = icmp ult i64 %heap48_left, %heap48_next_length
+  br i1 %heap48_has_left, label %heap48_choose, label %heap48_down_done
+heap48_choose:
+  store i64 %heap48_left, ptr %heap48_best_addr, align 8
+  %heap48_right = add i64 %heap48_left, 1
+  %heap48_has_right = icmp ult i64 %heap48_right, %heap48_next_length
+  br i1 %heap48_has_right, label %heap48_right_compare, label %heap48_down_compare
+heap48_right_compare:
+  %heap48_left_ptr = getelementptr i32, ptr %heap48_data, i64 %heap48_left
+  %heap48_right_ptr = getelementptr i32, ptr %heap48_data, i64 %heap48_right
+  %heap48_left_value = load i32, ptr %heap48_left_ptr, align 4
+  %heap48_right_value = load i32, ptr %heap48_right_ptr, align 4
+  %heap48_right_greater = icmp sgt i32 %heap48_right_value, %heap48_left_value
+  %heap48_best_selected = select i1 %heap48_right_greater, i64 %heap48_right, i64 %heap48_left
+  store i64 %heap48_best_selected, ptr %heap48_best_addr, align 8
+  br label %heap48_down_compare
+heap48_down_compare:
+  %heap48_best = load i64, ptr %heap48_best_addr, align 8
+  %heap48_best_ptr = getelementptr i32, ptr %heap48_data, i64 %heap48_best
+  %heap48_parent_ptr = getelementptr i32, ptr %heap48_data, i64 %heap48_down_index
+  %heap48_child = load i32, ptr %heap48_best_ptr, align 4
+  %heap48_parent = load i32, ptr %heap48_parent_ptr, align 4
+  %heap48_descends = icmp sgt i32 %heap48_child, %heap48_parent
+  br i1 %heap48_descends, label %heap48_down_swap, label %heap48_down_done
+heap48_down_swap:
+  store i32 %heap48_parent, ptr %heap48_best_ptr, align 4
+  store i32 %heap48_child, ptr %heap48_parent_ptr, align 4
+  store i64 %heap48_best, ptr %heap48_down_index_addr, align 8
+  br label %heap48_down
+heap48_down_done:
+  %heap48_result = insertvalue %sollang.array.i32 %heap48_source, i64 %heap48_next_length, 1
+  store %sollang.array.i32 %heap48_result, ptr %slot22, align 8
+  call void @sollang_runtime_print_i32(i32 %v48, i1 true)
+  %v40 = load %sollang.array.i32, ptr %slot22, align 8
+  %heap49_source = load %sollang.array.i32, ptr %slot22, align 8
+  %heap49_data = extractvalue %sollang.array.i32 %heap49_source, 0
+  %heap49_length = extractvalue %sollang.array.i32 %heap49_source, 1
+  %heap49_capacity = extractvalue %sollang.array.i32 %heap49_source, 2
+  %heap49_nonempty = icmp ugt i64 %heap49_length, 0
+  br i1 %heap49_nonempty, label %heap49_read, label %heap49_empty
+heap49_empty:
+  call void @llvm.trap()
+  unreachable
+heap49_read:
+  %v49 = load i32, ptr %heap49_data, align 4
+  %heap49_next_length = sub i64 %heap49_length, 1
+  %heap49_has_tail = icmp ugt i64 %heap49_next_length, 0
+  br i1 %heap49_has_tail, label %heap49_down_init, label %heap49_down_done
+heap49_down_init:
+  %heap49_last_ptr = getelementptr i32, ptr %heap49_data, i64 %heap49_next_length
+  %heap49_last = load i32, ptr %heap49_last_ptr, align 4
+  store i32 %heap49_last, ptr %heap49_data, align 4
+  %heap49_down_index_addr = alloca i64, align 8
+  %heap49_best_addr = alloca i64, align 8
+  store i64 0, ptr %heap49_down_index_addr, align 8
+  br label %heap49_down
+heap49_down:
+  %heap49_down_index = load i64, ptr %heap49_down_index_addr, align 8
+  %heap49_twice = mul i64 %heap49_down_index, 2
+  %heap49_left = add i64 %heap49_twice, 1
+  %heap49_has_left = icmp ult i64 %heap49_left, %heap49_next_length
+  br i1 %heap49_has_left, label %heap49_choose, label %heap49_down_done
+heap49_choose:
+  store i64 %heap49_left, ptr %heap49_best_addr, align 8
+  %heap49_right = add i64 %heap49_left, 1
+  %heap49_has_right = icmp ult i64 %heap49_right, %heap49_next_length
+  br i1 %heap49_has_right, label %heap49_right_compare, label %heap49_down_compare
+heap49_right_compare:
+  %heap49_left_ptr = getelementptr i32, ptr %heap49_data, i64 %heap49_left
+  %heap49_right_ptr = getelementptr i32, ptr %heap49_data, i64 %heap49_right
+  %heap49_left_value = load i32, ptr %heap49_left_ptr, align 4
+  %heap49_right_value = load i32, ptr %heap49_right_ptr, align 4
+  %heap49_right_greater = icmp sgt i32 %heap49_right_value, %heap49_left_value
+  %heap49_best_selected = select i1 %heap49_right_greater, i64 %heap49_right, i64 %heap49_left
+  store i64 %heap49_best_selected, ptr %heap49_best_addr, align 8
+  br label %heap49_down_compare
+heap49_down_compare:
+  %heap49_best = load i64, ptr %heap49_best_addr, align 8
+  %heap49_best_ptr = getelementptr i32, ptr %heap49_data, i64 %heap49_best
+  %heap49_parent_ptr = getelementptr i32, ptr %heap49_data, i64 %heap49_down_index
+  %heap49_child = load i32, ptr %heap49_best_ptr, align 4
+  %heap49_parent = load i32, ptr %heap49_parent_ptr, align 4
+  %heap49_descends = icmp sgt i32 %heap49_child, %heap49_parent
+  br i1 %heap49_descends, label %heap49_down_swap, label %heap49_down_done
+heap49_down_swap:
+  store i32 %heap49_parent, ptr %heap49_best_ptr, align 4
+  store i32 %heap49_child, ptr %heap49_parent_ptr, align 4
+  store i64 %heap49_best, ptr %heap49_down_index_addr, align 8
+  br label %heap49_down
+heap49_down_done:
+  %heap49_result = insertvalue %sollang.array.i32 %heap49_source, i64 %heap49_next_length, 1
+  store %sollang.array.i32 %heap49_result, ptr %slot22, align 8
+  call void @sollang_runtime_print_i32(i32 %v49, i1 true)
+  %v42 = load %sollang.array.i32, ptr %slot22, align 8
+  %v50_length_source = load %sollang.array.i32, ptr %slot22, align 8
+  %v50_raw = extractvalue %sollang.array.i32 %v50_length_source, 1
+  %v50 = trunc i64 %v50_raw to i32
+  call void @sollang_runtime_print_i32(i32 %v50, i1 true)
+  %cleanup216_b22_current = load %sollang.array.i32, ptr %slot22, align 8
+  call void @sollang_drop_t26(%sollang.array.i32 %cleanup216_b22_current)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

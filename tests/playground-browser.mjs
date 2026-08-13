@@ -75,7 +75,7 @@ try {
   const expectedSampleIds = [
     "hello", "main-block", "arithmetic", "input", "flow", "local-functions",
     "loop", "when", "each-repeat", "custom-block", "fold", "containers",
-    "immutable-containers", "compile-time-collections", "struct",
+    "immutable-containers", "compile-time-collections", "key-only-set", "struct",
     "mutable-method", "enum", "traits-generics", "numeric-widths",
     "associated-types", "value-generics", "result-propagation", "async-await",
     "dynamic-trait", "effects", "readonly-references", "ownership",
@@ -99,6 +99,7 @@ try {
     containers: "count = 3, sum = 6",
     "immutable-containers": "immutable values count = 3, sum = 14",
     "compile-time-collections": "collection count = 5, sum = 15",
+    "key-only-set": "first=true duplicate=false\nbefore=true removed=true total=10",
     struct: "Distance squared = 25",
     "mutable-method": "counter = 42",
     enum: "value = 42, number\nmissing = missing\nlabel = sensor",

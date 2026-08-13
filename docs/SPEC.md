@@ -1185,9 +1185,8 @@ dictionary entries before semantic analysis. An explicit item name may replace
 `it`, as in `[1..3 -> each item { item * item }]`. Nonconstant expressions are
 diagnosed; compile-time expansion currently has a 100,000-element limit.
 
-The first container implementation is intentionally `Int`-only. It proves the
-syntax, checked access, mutation surface, and deterministic native cleanup
-before generic containers and borrowing are added.
+Container storage is explicit in the type. Implementations must not silently
+switch an inline owner to heap storage.
 
 Static arrays:
 
@@ -1208,6 +1207,48 @@ values! -> capacity => capacity
 
 99 => values![1]
 
+Bounded inline arrays and dictionaries:
+
+```sollang
+[Int; <=8] => recent!
+recent! -> push(10)
+recent! -> capacity => eight
+
+{Int: Int; <=8} => scores!
+scores! -> put(7, 70)
+```
+
+`[T; <=N]` and `{K: V; <=N}` store their initialized length and all storage
+inside the owner value. `N` is a positive integer and part of type identity.
+They never allocate, reallocate, free, or spill. An initializer larger than
+`N` is rejected before semantic lowering. Runtime insertion past `N` traps
+before mutation. Moving or returning the value copies its complete LLVM value
+representation, so no pointer may outlive a callee stack frame.
+
+Extended collection constructors keep their representation visible:
+
+```sollang
+Set<Int>(16) => seen!
+Deque<Int>(16) => queue!
+BinaryHeap<Int>(16) => priorities!
+BitSet<128>() => flags!
+```
+
+The first three are nominal heap owners with an explicit initial capacity.
+`BitSet<N>` is a nominal fixed inline owner. Set storage contains no dummy
+value, deque indexing uses a power-of-two ring, heap mutation preserves the
+heap invariant, and bit-set words use fixed-width `UInt64` storage.
+
+`Set<T>.insert(value)` and `Set<T>.remove(value)` return `Bool` to report whether
+membership changed; `contains(value)` is readonly. A set entry occupies exactly
+the aligned key stride. Removal writes a tombstone so later probe-chain members
+remain reachable. At the exact one-eighth-live transition, the bootstrap
+implementation performs one same-capacity rehash to bound accumulated
+tombstones. `Deque<T>` exposes readonly `front`/`back` and mutable
+`pushFront`, `pushBack`, `popFront`, and `popBack`. It deliberately exposes no
+indexing or ordinary array `take`, because those operations would leak its
+physical ring representation. Empty `front`, `back`, or pop traps before a load.
+
 [10, 20; ~] => values
 values -> append(30) => values
 values -> updated(0, 99) => values
@@ -1218,6 +1259,7 @@ Dictionaries:
 ```sollang
 { 1: 100, 2: 200 } => scores!
 scores! -> put(3, 300)
+scores! -> putIfAbsent(3, 999) => inserted
 scores![3] => score
 scores! -> len => count
 
@@ -1243,6 +1285,31 @@ Container rules:
   `{Key: Value; keyExpression: valueExpression, ...}` gives nonempty entries
   an explicit type context. Key and value annotations accept imported qualified
   paths and the same recursive type syntax as function signatures.
+  Controls have a 16-byte mirrored tail followed by an aligned entry region.
+  Lookup compares one LLVM `<16 x i8>` group at a time, extracts H2 and empty
+  masks, checks only matching-key candidates, and advances by 16 buckets.
+  Mirroring makes a group crossing the final bucket contiguous without a wrap
+  branch. Primary and mirrored control bytes are updated together.
+  `putIfAbsent(key, value)` performs the grouped lookup once and inserts only
+  on a vacant entry. It returns whether insertion occurred. For owned
+  arguments, the call is a transfer on both paths: a duplicate keeps the
+  resident key/value and destroys the incoming equal key and unused value
+  exactly once. No entry pointer escapes across a possible rehash.
+  Heap arrays, heaps, deques, dictionaries, and sets accept
+  `owner! -> reserve(nonnegativeCount)`. Arrays and heaps reserve exact element
+  slots; deques round upward to a power of two; dictionaries and sets compute
+  enough power-of-two buckets to keep the requested entry count at or below
+  7/8 load. A request no larger than current capacity is a no-op. Bounded
+  inline collections reject `reserve` because their capacity is part of their
+  type and cannot change.
+  Ordinary heap arrays accept `owner! -> pushAll(fixedArray)` when the element
+  type is copyable and exactly matches. The source expression is evaluated once;
+  lowering checks addition overflow, reserves the combined length at most once,
+  copies its contiguous fixed storage, and updates logical length after the copy.
+  Dynamic-array sources are excluded to prevent source/receiver alias
+  invalidation. `BinaryHeap`, `Deque`, bounded arrays, and owned elements do not
+  expose this operation; invariant-preserving or move-explicit bulk APIs are
+  separate language surfaces.
   The legacy `{Int: Int}` layout also supports readonly stack promotion; other
   specializations currently use heap payload storage.
 - Typed empty arrays and dictionaries without capacity hints begin with a null

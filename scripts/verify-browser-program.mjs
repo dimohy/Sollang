@@ -32,6 +32,15 @@ const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath), {
   env: {
     sollang_browser_alloc: allocate,
     sollang_browser_realloc: (_pointer, length) => allocate(length),
+    memset(pointer, value, length) {
+      new Uint8Array(memory.buffer, pointer, length).fill(value & 0xff);
+      return pointer;
+    },
+    memcpy(destination, source, length) {
+      new Uint8Array(memory.buffer, destination, length)
+        .set(new Uint8Array(memory.buffer, source, length));
+      return destination;
+    },
     sollang_browser_now_millis: () => BigInt(Date.now()),
     sollang_browser_source_count: () => 0,
     sollang_browser_source_pointer: () => 0,

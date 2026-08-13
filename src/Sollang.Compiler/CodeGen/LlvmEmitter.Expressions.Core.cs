@@ -484,6 +484,72 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitTypeApplicationExpression(TypeApplicationExpression expression)
     {
+        if (expression.Path.Count == 1 && expression.Path[0] == "BitSet"
+            && int.TryParse(expression.TypeArgument, out var bitCount))
+        {
+            var type = _program.Types.GetOrAddBitSet(bitCount);
+            var definition = _program.Types.GetBitSet(type);
+            var pointer = NextTemp("bitset_storage");
+            EmitAlloca(pointer, $"[{definition.WordCount} x i64]", definition.Alignment);
+            EmitZeroByteBuffer(pointer, definition.Size.ToString(CultureInfo.InvariantCulture), "bitset_init");
+            return new RuntimeBitSet(type, pointer);
+        }
+        if (expression.Path.Count == 1 && expression.Path[0] == "BinaryHeap"
+            && expression.Arguments is { Count: 1 }
+            && TryResolveRuntimeTypeName(expression.TypeArgument, out var elementType))
+        {
+            var type = _program.Types.GetOrAddBinaryHeap(elementType);
+            var definition = _program.Types.GetDynamicArray(type);
+            if (EmitExpression(expression.Arguments[0]) is not RuntimeInt capacity)
+            {
+                throw new SollangException("BinaryHeap capacity must be Int");
+            }
+            var capacitySize = EmitIntAsSize(capacity, "binary_heap_capacity");
+            var bytes = NextTemp("binary_heap_bytes");
+            EmitBinary(bytes, "mul", "i64", capacitySize,
+                definition.ElementSize.ToString(CultureInfo.InvariantCulture));
+            var pointer = EmitHeapAllocate(bytes);
+            return new RuntimeDynamicInlineArray(type, elementType, pointer, "0", capacitySize);
+        }
+        if (expression.Path.Count == 1 && expression.Path[0] == "Deque"
+            && expression.Arguments is { Count: 1 }
+            && expression.Arguments[0] is NumberExpression capacityLiteral
+            && long.TryParse(capacityLiteral.Text, out var requestedCapacity)
+            && TryResolveRuntimeTypeName(expression.TypeArgument, out var dequeElementType))
+        {
+            var capacity = 1L;
+            while (capacity < requestedCapacity)
+            {
+                capacity = checked(capacity * 2);
+            }
+            var type = _program.Types.GetOrAddDeque(dequeElementType);
+            var definition = _program.Types.GetDynamicArray(type);
+            var bytes = checked(8L + capacity * definition.ElementSize);
+            var pointer = EmitHeapAllocate(bytes.ToString(CultureInfo.InvariantCulture));
+            EmitStore("i64", "0", pointer, 8);
+            return new RuntimeDynamicInlineArray(
+                type, dequeElementType, pointer, "0", capacity.ToString(CultureInfo.InvariantCulture));
+        }
+        if (expression.Path.Count == 1 && expression.Path[0] == "Set"
+            && expression.Arguments is { Count: 1 }
+            && expression.Arguments[0] is NumberExpression setCapacityLiteral
+            && int.TryParse(setCapacityLiteral.Text, out var requestedSetCapacity)
+            && TryResolveRuntimeTypeName(expression.TypeArgument, out var setElementType))
+        {
+            var minimumBuckets = checked((requestedSetCapacity * 8 + 6) / 7);
+            var bucketCapacity = 16;
+            while (bucketCapacity < minimumBuckets)
+            {
+                bucketCapacity = checked(bucketCapacity * 2);
+            }
+            var type = _program.Types.GetOrAddSet(setElementType);
+            var definition = _program.Types.GetDictionary(type);
+            return new RuntimeInlineDictionary(
+                type, setElementType, BoundType.Unit,
+                EmitInlineDictionaryAllocate(
+                    bucketCapacity.ToString(CultureInfo.InvariantCulture), definition),
+                "0", bucketCapacity.ToString(CultureInfo.InvariantCulture));
+        }
         if (!_program.ResolvedGenericCalls.TryGetValue(expression, out var function))
         {
             throw new SollangException($"unresolved generic application '{string.Join('.', expression.Path)}'");
@@ -526,9 +592,53 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitArrayLiteral(ArrayLiteralExpression expression)
     {
+        if (expression.BoundedCapacity is not null)
+        {
+            return EmitBoundedArrayLiteral(expression);
+        }
         return expression.IsDynamic
             ? EmitDynamicArrayLiteral(expression)
             : EmitStaticArrayLiteral(expression);
+    }
+
+    private RuntimeDynamicInlineArray EmitBoundedArrayLiteral(ArrayLiteralExpression expression)
+    {
+        var capacity = expression.BoundedCapacity
+            ?? throw new SollangException("bounded array literal is missing its capacity");
+        var elements = EmitArrayLiteralElements(expression);
+        BoundType? elementType = elements.Length > 0 ? elements[0].Type : null;
+        if (elementType is null && expression.ElementType is not null
+            && TryResolveRuntimeTypeName(expression.ElementType, out var declaredElementType))
+        {
+            elementType = declaredElementType;
+        }
+        if (elementType is null)
+        {
+            throw new SollangException("bounded array element type could not be resolved");
+        }
+
+        var arrayType = _program.Types.GetOrAddBoundedArray(elementType.Value, capacity);
+        var definition = _program.Types.GetBoundedArray(arrayType);
+        var pointer = NextTemp("bounded_array_storage");
+        EmitAlloca(
+            pointer,
+            $"[{capacity.ToString(CultureInfo.InvariantCulture)} x {LlvmType(elementType.Value)}]",
+            definition.ElementAlignment);
+        for (var index = 0; index < elements.Length; index++)
+        {
+            StoreBoundedArrayElement(
+                pointer,
+                definition,
+                index.ToString(CultureInfo.InvariantCulture),
+                elements[index]);
+        }
+        return new RuntimeDynamicInlineArray(
+            arrayType,
+            elementType.Value,
+            pointer,
+            elements.Length.ToString(CultureInfo.InvariantCulture),
+            capacity.ToString(CultureInfo.InvariantCulture),
+            RuntimeContainerStorage.Stack);
     }
 
     private RuntimeValue EmitNumberLiteral(NumberExpression expression)
@@ -818,6 +928,27 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitTypedEmptyArray(TypedEmptyArrayExpression expression)
     {
+        if (expression.BoundedCapacity is { } boundedCapacity)
+        {
+            if (!TryResolveRuntimeTypeName(expression.ElementType, out var boundedElementType))
+            {
+                throw new SollangException($"unknown bounded array element type '{expression.ElementType}'");
+            }
+            var boundedType = _program.Types.GetOrAddBoundedArray(boundedElementType, boundedCapacity);
+            var boundedDefinition = _program.Types.GetBoundedArray(boundedType);
+            var boundedPointer = NextTemp("bounded_array_storage");
+            EmitAlloca(
+                boundedPointer,
+                $"[{boundedCapacity.ToString(CultureInfo.InvariantCulture)} x {LlvmType(boundedElementType)}]",
+                boundedDefinition.ElementAlignment);
+            return new RuntimeDynamicInlineArray(
+                boundedType,
+                boundedElementType,
+                boundedPointer,
+                "0",
+                boundedCapacity.ToString(CultureInfo.InvariantCulture),
+                RuntimeContainerStorage.Stack);
+        }
         if (TryResolveRuntimeTypeName(expression.ElementType, out var elementType)
             && elementType == BoundType.Int)
         {
@@ -872,6 +1003,12 @@ internal sealed partial class LlvmEmitter
             inferredValueType ??= value.Type;
             entries.Add((key, value));
         }
+        if (expression.BoundedCapacity is { } boundedCapacity)
+        {
+            var boundedType = _program.Types.GetOrAddBoundedDictionary(
+                entries[0].Key.Type, entries[0].Value.Type, boundedCapacity);
+            return EmitBoundedInlineDictionaryLiteral(boundedType, entries);
+        }
         if (entries[0].Key.Type != BoundType.Int || entries[0].Value.Type != BoundType.Int)
         {
             var dictionaryType = _program.Types.GetOrAddDictionary(entries[0].Key.Type, entries[0].Value.Type);
@@ -903,6 +1040,18 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitTypedEmptyDictionary(TypedEmptyDictionaryExpression expression)
     {
+        if (expression.BoundedCapacity is { } boundedCapacity)
+        {
+            if (!TryResolveRuntimeTypeName(expression.KeyType, out var boundedKeyType)
+                || !TryResolveRuntimeTypeName(expression.ValueType, out var boundedValueType))
+            {
+                throw new SollangException(
+                    $"unknown bounded dictionary type '{{{expression.KeyType}: {expression.ValueType}; <={boundedCapacity}}}'");
+            }
+            var boundedType = _program.Types.GetOrAddBoundedDictionary(
+                boundedKeyType, boundedValueType, boundedCapacity);
+            return EmitEmptyBoundedInlineDictionary(boundedType);
+        }
         if (expression.KeyType != "Int" || expression.ValueType != "Int")
         {
             if (!_program.Types.TryResolve(expression.KeyType, out var keyType)

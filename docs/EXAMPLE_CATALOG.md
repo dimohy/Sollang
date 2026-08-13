@@ -36,7 +36,7 @@ regression counterpart.
 | Flow Junctions diagnostic fixtures | `examples/regression/diagnostics/` | 26 |
 | Flow Junctions physical fixtures | positive + diagnostic | 83 |
 | Flow Junctions independently counted logical cases | coverage matrix | 114 |
-| Browser playground catalog | `app/samples.ts` | 42 (41 runnable + 1 target diagnostic) |
+| Browser playground catalog | `app/samples.ts` | 43 (42 runnable + 1 target diagnostic) |
 
 The catalog counts logical test cases, not every supporting file. Source lists,
 LLVM assertions, expected diagnostics, module fragments, projects, and other

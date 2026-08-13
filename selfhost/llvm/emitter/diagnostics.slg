@@ -255,19 +255,28 @@ public usesIntMaterialization context: ref emitterContext.EmitContext -> Bool {
     0 => nodeIndex!
     (nodeIndex! < (context.ir -> len) and not usesMaterialization!) -> while {
         context.ir[nodeIndex!] => node
-        (node.opcode == -229
+        # Every numeric interpolated Text literal is a potential value. Direct
+        # output can stream it, while function arguments and materialize calls
+        # require the formatter-backed transient buffer. Runtime selection must
+        # therefore follow the literal capability, not one consumer opcode.
+        (node.opcode == -229 or node.kind == 2) => materializesText
+        (materializesText
             and node.sourceModule >= 0
             and node.sourceModule < (context.interpolationRanges -> len)) -> if {
             context.interpolationRanges[node.sourceModule] => interpolationRange
             0 => interpolationIndex!
             (interpolationIndex! < interpolationRange.nodeCount and not usesMaterialization!) -> while {
                 context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
+                # Numeric width for parameters and members can be resolved only
+                # during emission. Any root belonging to a Text value therefore
+                # keeps the integer formatter available; LLVM dead-code removal
+                # discards it when every root is nonnumeric.
                 (interpolationNode.parent < 0
-                    and interpolationNode.typeSymbol >= 2
-                    and interpolationNode.typeSymbol <= 14) -> if {
+                    and (node.opcode == -229 or interpolationNode.sourceToken == node.payloadToken)) -> if {
                     true => usesMaterialization!
                 }
                 (interpolationNode.parent < 0
+                    and (node.opcode == -229 or interpolationNode.sourceToken == node.payloadToken)
                     and interpolationNode.kind == 1
                     and not usesMaterialization!) -> if {
                     0 => valueSearch!
