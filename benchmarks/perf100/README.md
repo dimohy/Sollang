@@ -42,7 +42,8 @@ family across all six implementations. `scripts/perf100-run.mjs` then verifies
 the exact output again for every measured case before collecting samples.
 `scripts/perf100-report.mjs` validates the completed 100-case JSON and produces
 checked-in English and Korean Markdown summaries bound to the same raw report
-by SHA-256.
+by SHA-256. Their family tables show the five profile ranks for Sollang and
+each of the five comparison languages.
 
 ## External methodology
 

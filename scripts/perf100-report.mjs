@@ -25,6 +25,16 @@ function fixed(value, digits = 3) {
   return Number(value).toFixed(digits);
 }
 
+function ranksByProfile(cases, language) {
+  return cases.map((entry) => {
+    const ranking = entry.ranking.find((item) => item.language === language);
+    if (!ranking) {
+      throw new Error(`Perf100 case ${entry.id} is missing the ${language} ranking`);
+    }
+    return ranking.rank;
+  }).join(", ");
+}
+
 const englishLines = [
   `# Perf100 results — ${completedDate}`,
   "",
@@ -66,13 +76,13 @@ englishLines.push(
   "",
   "## Family results",
   "",
-  "| ID | Family | Category | Sollang ranks by profile | First places | Worst rank | Sollang median range ms |",
-  "|---:|---|---|---|---:|---:|---:|",
+  "| ID | Family | Category | Sollang | C++ | Rust | C# NativeAOT | Go | Java | Sollang first places | Sollang worst rank | Sollang median range ms |",
+  "|---:|---|---|---|---|---|---|---|---|---:|---:|---:|",
 );
 for (const familyId of [...new Set(report.cases.map((entry) => entry.familyId))]) {
   const cases = report.cases.filter((entry) => entry.familyId === familyId);
   const medians = cases.map((entry) => entry.statistics.sollang.medianMs);
-  englishLines.push(`| ${familyId} | ${cases[0].family} | ${cases[0].category} | ${cases.map((entry) => entry.sollangRank).join(", ")} | ${cases.filter((entry) => entry.sollangRank === 1).length}/5 | ${Math.max(...cases.map((entry) => entry.sollangRank))} | ${fixed(Math.min(...medians))}–${fixed(Math.max(...medians))} |`);
+  englishLines.push(`| ${familyId} | ${cases[0].family} | ${cases[0].category} | ${ranksByProfile(cases, "sollang")} | ${ranksByProfile(cases, "cpp")} | ${ranksByProfile(cases, "rust")} | ${ranksByProfile(cases, "csharp-nativeaot")} | ${ranksByProfile(cases, "go")} | ${ranksByProfile(cases, "java")} | ${cases.filter((entry) => entry.sollangRank === 1).length}/5 | ${Math.max(...cases.map((entry) => entry.sollangRank))} | ${fixed(Math.min(...medians))}–${fixed(Math.max(...medians))} |`);
 }
 
 englishLines.push(
@@ -108,7 +118,7 @@ const koreanLines = [
   `- 유휴 CPU 게이트: 전체 CPU 사용률 ${fixed(report.idleGate.limitPercent, 2)}% 이하; 실행 세션 ${report.idleGate.sessions.length}개; 허용된 최대 관측값 ${fixed(maxIdleBusy, 3)}%`,
   `- 순위 분포: 1위 ${ranks[0]}개, 2위 ${ranks[1]}개, 3위 ${ranks[2]}개, 목표 미달 ${ranks.slice(3).reduce((sum, value) => sum + value, 0)}개`,
   "",
-  "모든 사례는 시간을 측정하기 전에 Sollang, C++, Rust, C# NativeAOT, Go, Java의 표준 출력이 바이트 단위로 같은지 확인했다. 원시 보고서에는 모든 측정 표본, 중앙값 절대 편차(MAD), 범위, 최대 RSS, 실행 파일·소스 식별 정보와 빌드 시간도 보존한다.",
+  "모든 사례는 시간을 측정하기 전에 Sollang, C++, Rust, C# NativeAOT, Go, Java의 표준 출력이 바이트 단위로 같은지 확인 함. 원시 보고서에는 모든 측정 표본, 중앙값 절대 편차(MAD), 범위, 최대 RSS, 실행 파일·소스 식별 정보와 빌드 시간도 보존 함.",
   "",
   "## 도구 체인",
   "",
@@ -127,22 +137,22 @@ koreanLines.push(
   "",
   "## 알고리즘군별 결과",
   "",
-  "| ID | 알고리즘군 | 분류 | 프로필별 Sollang 순위 | 1위 횟수 | 최하 순위 | Sollang 중앙값 범위(ms) |",
-  "|---:|---|---|---|---:|---:|---:|",
+  "| ID | 알고리즘군 | 분류 | Sollang | C++ | Rust | C# NativeAOT | Go | Java | Sollang 1위 횟수 | Sollang 최하 순위 | Sollang 중앙값 범위(ms) |",
+  "|---:|---|---|---|---|---|---|---|---|---:|---:|---:|",
 );
 for (const familyId of [...new Set(report.cases.map((entry) => entry.familyId))]) {
   const cases = report.cases.filter((entry) => entry.familyId === familyId);
   const medians = cases.map((entry) => entry.statistics.sollang.medianMs);
-  koreanLines.push(`| ${familyId} | ${cases[0].family} | ${koreanCategory[cases[0].category] ?? cases[0].category} | ${cases.map((entry) => entry.sollangRank).join(", ")} | ${cases.filter((entry) => entry.sollangRank === 1).length}/5 | ${Math.max(...cases.map((entry) => entry.sollangRank))} | ${fixed(Math.min(...medians))}–${fixed(Math.max(...medians))} |`);
+  koreanLines.push(`| ${familyId} | ${cases[0].family} | ${koreanCategory[cases[0].category] ?? cases[0].category} | ${ranksByProfile(cases, "sollang")} | ${ranksByProfile(cases, "cpp")} | ${ranksByProfile(cases, "rust")} | ${ranksByProfile(cases, "csharp-nativeaot")} | ${ranksByProfile(cases, "go")} | ${ranksByProfile(cases, "java")} | ${cases.filter((entry) => entry.sollangRank === 1).length}/5 | ${Math.max(...cases.map((entry) => entry.sollangRank))} | ${fixed(Math.min(...medians))}–${fixed(Math.max(...medians))} |`);
 }
 
 koreanLines.push(
   "",
   "## 소수 체 교정",
   "",
-  "첫 번째 전체 기준선에서는 가장 큰 단일 배열 소수 체 사례 하나가 실패했다. 비교 언어들은 저장 공간을 한 번에 할당했지만 Sollang은 확장 가능한 Bool 배열을 수백만 번 push해 초기화하면서 5위가 됐다. 따라서 Sollang만 유리하게 바꾸지 않고 여섯 구현 모두를 동일한 분할 소수 체 계약으로 변경했다. 이 계약은 32,768개 Int64 원소의 세그먼트, Int64 기반 합성수 표, 동일한 초기화·배수 표시·개수 집계 순서, 변경하지 않은 입력과 체크섬을 사용한다. 최종 전체 측정에서 소수 체 프로필 5개는 모두 Sollang이 1위였다.",
+  "첫 번째 전체 기준선에서는 가장 큰 단일 배열 소수 체 사례 하나가 실패 함. 비교 언어들은 저장 공간을 한 번에 할당했지만 Sollang은 확장 가능한 Bool 배열을 수백만 번 push해 초기화하면서 5위가 됨. 따라서 Sollang만 유리하게 바꾸지 않고 여섯 구현 모두를 동일한 분할 소수 체 계약으로 변경 함. 이 계약은 32,768개 Int64 원소의 세그먼트, Int64 기반 합성수 표, 동일한 초기화·배수 표시·개수 집계 순서, 변경하지 않은 입력과 체크섬을 사용 함. 최종 전체 측정에서 소수 체 프로필 5개는 모두 Sollang이 1위를 기록 함.",
   "",
-  "이 벤치마크에는 벤치마크 전용 컴파일러 분기, 결과 사전 계산, 입력 축소, 유휴 CPU 제한 완화, 변경된 소스나 실행 파일을 대상으로 한 이전 결과 재사용이 없다.",
+  "이 벤치마크에는 벤치마크 전용 컴파일러 분기, 결과 사전 계산, 입력 축소, 유휴 CPU 제한 완화, 변경된 소스나 실행 파일을 대상으로 한 이전 결과 재사용이 없음.",
 );
 
 await Promise.all([
