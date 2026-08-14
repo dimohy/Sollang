@@ -1,0 +1,353 @@
+import sys.process as process
+
+parsePositive value: Text -> Int {
+    0 => result!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => digit
+        result! * 10 + Int(digit - UInt8(48)) => result!
+        index! + UIntSize(1) => index!
+    }
+    result!
+}
+
+gcdValue first: Int, second: Int -> Int {
+    first => a!
+    second => b!
+    b! != 0 -> while {
+        a! % b! => next
+        b! => a!
+        next => b!
+    }
+    a!
+}
+
+runKernel family: Int, n: Int, seed: Int -> Int {
+    1000000007 => modulus
+    seed => acc!
+    family == 1 -> if {
+        1 => i!
+        i! <= n -> while {
+            (acc! + i!) % modulus => acc!
+            i! + 1 => i!
+        }
+    }
+    family == 2 -> if {
+        1 => i!
+        i! <= n -> while {
+            i! % 10000 => x
+            (acc! + x * x) % modulus => acc!
+            i! + 1 => i!
+        }
+    }
+    family == 3 -> if {
+        seed => x!
+        0 => i!
+        i! < n -> while {
+            (x! * 482 + 1) % 1000003 => x!
+            (acc! + x!) % modulus => acc!
+            i! + 1 => i!
+        }
+    }
+    family == 4 -> if {
+        1 => i!
+        i! <= n -> while {
+            (i! + seed) % 7 < 3 -> if { acc! + i! % 1009 => acc! } else { acc! + modulus - i! % 997 => acc! }
+            acc! % modulus => acc!
+            i! + 1 => i!
+        }
+    }
+    family == 5 -> if {
+        1 => i!
+        i! <= n -> while {
+            (acc! + gcdValue(i! * 17 + seed, i! * 13 + 97)) % modulus => acc!
+            i! + 1 => i!
+        }
+    }
+    family == 6 -> if {
+        0 => acc!
+        1 => i!
+        i! <= n -> while {
+            (i! + seed) % 100000 + 1 => x!
+            x! != 1 -> while {
+                x! % 2 == 0 -> if { x! / 2 => x! } else { x! * 3 + 1 => x! }
+                acc! + 1 => acc!
+            }
+            i! + 1 => i!
+        }
+        acc! % modulus => acc!
+    }
+    family == 7 -> if {
+        0 => acc!
+        2 => x!
+        x! <= n -> while {
+            true => prime!
+            2 => divisor!
+            (divisor! <= x! / divisor! and prime!) -> while {
+                x! % divisor! == 0 -> if { false => prime! }
+                divisor! + 1 => divisor!
+            }
+            prime! -> if { acc! + 1 => acc! }
+            x! + 1 => x!
+        }
+    }
+    family == 8 -> if {
+        0 => acc!
+        1 => x!
+        x! <= n -> while {
+            1 => divisor!
+            divisor! <= x! / divisor! -> while {
+                x! % divisor! == 0 -> if {
+                    acc! + divisor! => acc!
+                    divisor! != x! / divisor! -> if { acc! + x! / divisor! => acc! }
+                    acc! % modulus => acc!
+                }
+                divisor! + 1 => divisor!
+            }
+            x! + 1 => x!
+        }
+    }
+    family == 9 -> if {
+        0 => acc!
+        0 => i!
+        i! < n -> while {
+            seed => a!
+            seed + 1 => b!
+            0 => step!
+            step! < 24 -> while {
+                (a! + b!) % modulus => next
+                b! => a!
+                next => b!
+                step! + 1 => step!
+            }
+            (acc! + b! + i! % 17) % modulus => acc!
+            i! + 1 => i!
+        }
+    }
+    family == 10 -> if {
+        0 => acc!
+        0 => i!
+        i! < n -> while {
+            (i! + seed) % 1009 => x
+            17 => polynomial!
+            1 => coefficient!
+            coefficient! <= 12 -> while {
+                (polynomial! * x + coefficient! * 13) % 1000003 => polynomial!
+                coefficient! + 1 => coefficient!
+            }
+            (acc! + polynomial!) % modulus => acc!
+            i! + 1 => i!
+        }
+    }
+    family == 11 -> if {
+        1 => i!
+        i! <= n -> while {
+            1 => j!
+            j! <= i! -> while {
+                (acc! + (i! + j!) % 97) % modulus => acc!
+                j! + 1 => j!
+            }
+            i! + 1 => i!
+        }
+    }
+    family == 12 -> if {
+        seed => x!
+        modulus => low!
+        0 => high!
+        0 => i!
+        i! < n -> while {
+            (x! * 482 + 1) % 1000003 => x!
+            x! < low! -> if { x! => low! }
+            x! > high! -> if { x! => high! }
+            i! + 1 => i!
+        }
+        (low! + high!) % modulus => acc!
+    }
+    (family >= 13 and family <= 16) -> if {
+        [Int; ~] => values!
+        0 => i!
+        i! < n -> while {
+            values! -> push(((i! % 1009) * 37 + seed) % 1009)
+            i! + 1 => i!
+        }
+        0 => acc!
+        family == 13 -> if {
+            0 => index!
+            index! < n -> while {
+                (acc! + values![index!]) % modulus => acc!
+                index! + 1 => index!
+            }
+        }
+        family == 14 -> if {
+            n => index!
+            index! > 0 -> while {
+                (acc! + values![index! - 1]) % modulus => acc!
+                index! - 1 => index!
+            }
+        }
+        family == 15 -> if {
+            0 => pass!
+            pass! < 16 -> while {
+                pass! => index!
+                index! < n -> while {
+                    (acc! + values![index!]) % modulus => acc!
+                    index! + 16 => index!
+                }
+                pass! + 1 => pass!
+            }
+        }
+        family == 16 -> if {
+            1 => index!
+            index! < n -> while {
+                (values![index!] + values![index! - 1]) % modulus => values![index!]
+                index! + 1 => index!
+            }
+            values![n - 1] => acc!
+        }
+    }
+    family == 17 -> if {
+        [Int; ~] => values!
+        seed => x!
+        0 => i!
+        i! < n -> while {
+            (x! * 482 + 1) % 1000003 => x!
+            values! -> push(x!)
+            i! + 1 => i!
+        }
+        1 => sortIndex!
+        sortIndex! < n -> while {
+            values![sortIndex!] => value
+            sortIndex! => position!
+            (position! > 0 and values![position! - 1] > value) -> while {
+                values![position! - 1] => values![position!]
+                position! - 1 => position!
+            }
+            value => values![position!]
+            sortIndex! + 1 => sortIndex!
+        }
+        (values![0] + values![n / 2] + values![n - 1]) % modulus => acc!
+    }
+    family == 18 -> if {
+        0 => limit!
+        (limit! + 1) <= n / (limit! + 1) -> while { limit! + 1 => limit! }
+        [Int; ~] => baseComposite!
+        0 => index!
+        index! <= limit! -> while {
+            baseComposite! -> push(0)
+            index! + 1 => index!
+        }
+        2 => prime!
+        prime! <= limit! / prime! -> while {
+            baseComposite![prime!] == 0 -> if {
+                prime! * prime! => multiple!
+                multiple! <= limit! -> while {
+                    1 => baseComposite![multiple!]
+                    multiple! + prime! => multiple!
+                }
+            }
+            prime! + 1 => prime!
+        }
+        32768 => segmentSize
+        [Int; ~] => segment!
+        0 => index!
+        index! < segmentSize -> while {
+            segment! -> push(0)
+            index! + 1 => index!
+        }
+        0 => acc!
+        2 => low!
+        low! <= n -> while {
+            low! + segmentSize - 1 => high!
+            high! > n -> if { n => high! }
+            high! - low! + 1 => active
+            0 => index!
+            index! < active -> while {
+                0 => segment![index!]
+                index! + 1 => index!
+            }
+            2 => prime!
+            prime! <= limit! -> while {
+                baseComposite![prime!] == 0 -> if {
+                    ((low! + prime! - 1) / prime!) * prime! => start!
+                    start! < prime! * prime! -> if { prime! * prime! => start! }
+                    start! => multiple!
+                    multiple! <= high! -> while {
+                        1 => segment![multiple! - low!]
+                        multiple! + prime! => multiple!
+                    }
+                }
+                prime! + 1 => prime!
+            }
+            0 => index!
+            index! < active -> while {
+                segment![index!] == 0 -> if { acc! + 1 => acc! }
+                index! + 1 => index!
+            }
+            high! + 1 => low!
+        }
+    }
+    family == 19 -> if {
+        n * n => cells
+        [Int; ~] => a!
+        [Int; ~] => b!
+        [Int; ~] => c!
+        0 => index!
+        index! < cells -> while {
+            a! -> push((index! * 17 + seed) % 101)
+            b! -> push((index! * 31 + seed) % 103)
+            c! -> push(0)
+            index! + 1 => index!
+        }
+        0 => row!
+        row! < n -> while {
+            0 => k!
+            k! < n -> while {
+                0 => column!
+                column! < n -> while {
+                    row! * n + column! => outputIndex
+                    c![outputIndex] + a![row! * n + k!] * b![k! * n + column!] => c![outputIndex]
+                    column! + 1 => column!
+                }
+                k! + 1 => k!
+            }
+            row! + 1 => row!
+        }
+        0 => acc!
+        0 => index!
+        index! < cells -> while {
+            (acc! + c![index!]) % modulus => acc!
+            index! + 1 => index!
+        }
+    }
+    family == 20 -> if {
+        [Int; ~] => values!
+        0 => index!
+        index! < n -> while {
+            values! -> push(index! * 2 + seed)
+            index! + 1 => index!
+        }
+        0 => acc!
+        0 => query!
+        query! < n -> while {
+            (((query! % 100000) * 7919) % n) * 2 + seed => target
+            0 => low!
+            n => high!
+            low! < high! -> while {
+                low! + (high! - low!) / 2 => middle
+                values![middle] < target -> if { middle + 1 => low! } else { middle => high! }
+            }
+            (acc! + low!) % modulus => acc!
+            query! + 1 => query!
+        }
+    }
+    acc!
+}
+
+main {
+    process.arguments() => arguments
+    (arguments -> len) != UIntSize(4) -> if { 2 -> process.exit }
+    arguments[1] -> parsePositive => family
+    arguments[2] -> parsePositive => n
+    arguments[3] -> parsePositive => seed
+    runKernel(family, n, seed) -> println
+}
