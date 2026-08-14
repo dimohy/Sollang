@@ -11,7 +11,8 @@ if (report.schema !== 1 || report.summary?.total !== 100 || report.cases?.length
 }
 
 const completedDate = report.completedUtc.slice(0, 10);
-const output = resolve(root, process.argv[3] ?? `benchmarks/perf100/results-${completedDate}.md`);
+const englishOutput = resolve(root, process.argv[3] ?? `benchmarks/perf100/results-${completedDate}.md`);
+const koreanOutput = resolve(root, process.argv[4] ?? `benchmarks/perf100/results-${completedDate}.ko.md`);
 const rawSha256 = createHash("sha256").update(bytes).digest("hex");
 const ranks = [1, 2, 3, 4, 5, 6].map((rank) => report.cases.filter((entry) => entry.sollangRank === rank).length);
 const maxIdleBusy = Math.max(
@@ -24,7 +25,7 @@ function fixed(value, digits = 3) {
   return Number(value).toFixed(digits);
 }
 
-const lines = [
+const englishLines = [
   `# Perf100 results — ${completedDate}`,
   "",
   `Status: **${report.summary.passing === 100 ? "PASS" : "FAIL"} — ${report.summary.passing}/100 top-three, ${report.summary.firstPlace}/100 first-place**`,
@@ -58,10 +59,10 @@ for (const language of languages) {
   const peak = Math.max(...report.cases.map((entry) => entry.peakRssKiB[language]));
   const executable = report.executables[language];
   const build = report.build.entries[language];
-  lines.push(`| ${language} | ${toolchainByLanguage[language]} | ${build.elapsedMs} | ${executable.bytes} | \`${executable.sha256}\` | ${peak} |`);
+  englishLines.push(`| ${language} | ${toolchainByLanguage[language]} | ${build.elapsedMs} | ${executable.bytes} | \`${executable.sha256}\` | ${peak} |`);
 }
 
-lines.push(
+englishLines.push(
   "",
   "## Family results",
   "",
@@ -71,10 +72,10 @@ lines.push(
 for (const familyId of [...new Set(report.cases.map((entry) => entry.familyId))]) {
   const cases = report.cases.filter((entry) => entry.familyId === familyId);
   const medians = cases.map((entry) => entry.statistics.sollang.medianMs);
-  lines.push(`| ${familyId} | ${cases[0].family} | ${cases[0].category} | ${cases.map((entry) => entry.sollangRank).join(", ")} | ${cases.filter((entry) => entry.sollangRank === 1).length}/5 | ${Math.max(...cases.map((entry) => entry.sollangRank))} | ${fixed(Math.min(...medians))}–${fixed(Math.max(...medians))} |`);
+  englishLines.push(`| ${familyId} | ${cases[0].family} | ${cases[0].category} | ${cases.map((entry) => entry.sollangRank).join(", ")} | ${cases.filter((entry) => entry.sollangRank === 1).length}/5 | ${Math.max(...cases.map((entry) => entry.sollangRank))} | ${fixed(Math.min(...medians))}–${fixed(Math.max(...medians))} |`);
 }
 
-lines.push(
+englishLines.push(
   "",
   "## Sieve correction",
   "",
@@ -83,5 +84,69 @@ lines.push(
   "The benchmark did not add compiler branches, precompute answers, reduce inputs, relax idle limits, or reuse results across changed source or executable hashes.",
 );
 
-await writeFile(output, `${lines.join("\n")}\n`, "utf8");
-process.stdout.write(`Wrote ${output}\n`);
+const koreanCategory = {
+  integer: "정수 연산",
+  branch: "분기",
+  call: "함수 호출",
+  "floating-point": "부동소수점",
+  loop: "반복",
+  memory: "메모리",
+  sorting: "정렬",
+  search: "검색",
+};
+const koreanLines = [
+  `# Perf100 결과 — ${completedDate}`,
+  "",
+  `상태: **${report.summary.passing === 100 ? "통과" : "실패"} — 3위 이내 ${report.summary.passing}/100개, 1위 ${report.summary.firstPlace}/100개**`,
+  "",
+  "## 측정 계약과 출처",
+  "",
+  `- 원시 보고서 SHA-256: \`${rawSha256}\` (${bytes.length.toLocaleString("ko-KR")}바이트)`,
+  `- 측정 시간: \`${report.startedUtc}\`부터 \`${report.completedUtc}\`까지`,
+  `- 호스트: ${report.machine.cpu}; ${report.machine.kernel}`,
+  `- 측정 방식: 표본마다 새 프로세스를 실행하며, 준비 실행은 호스트 캐시만 예열하고 언어 런타임 상태나 JIT 상태를 유지하지 않음; 언어·사례별 준비 실행 ${report.warmup}회와 측정 ${report.runs}회`,
+  `- 유휴 CPU 게이트: 전체 CPU 사용률 ${fixed(report.idleGate.limitPercent, 2)}% 이하; 실행 세션 ${report.idleGate.sessions.length}개; 허용된 최대 관측값 ${fixed(maxIdleBusy, 3)}%`,
+  `- 순위 분포: 1위 ${ranks[0]}개, 2위 ${ranks[1]}개, 3위 ${ranks[2]}개, 목표 미달 ${ranks.slice(3).reduce((sum, value) => sum + value, 0)}개`,
+  "",
+  "모든 사례는 시간을 측정하기 전에 Sollang, C++, Rust, C# NativeAOT, Go, Java의 표준 출력이 바이트 단위로 같은지 확인했다. 원시 보고서에는 모든 측정 표본, 중앙값 절대 편차(MAD), 범위, 최대 RSS, 실행 파일·소스 식별 정보와 빌드 시간도 보존한다.",
+  "",
+  "## 도구 체인",
+  "",
+  "| 구현 | 도구 체인 | 빌드 시간(ms) | 실행 파일 크기(바이트) | SHA-256 | 최대 RSS(KiB) |",
+  "|---|---|---:|---:|---|---:|",
+];
+
+for (const language of languages) {
+  const peak = Math.max(...report.cases.map((entry) => entry.peakRssKiB[language]));
+  const executable = report.executables[language];
+  const build = report.build.entries[language];
+  koreanLines.push(`| ${language} | ${toolchainByLanguage[language]} | ${build.elapsedMs} | ${executable.bytes} | \`${executable.sha256}\` | ${peak} |`);
+}
+
+koreanLines.push(
+  "",
+  "## 알고리즘군별 결과",
+  "",
+  "| ID | 알고리즘군 | 분류 | 프로필별 Sollang 순위 | 1위 횟수 | 최하 순위 | Sollang 중앙값 범위(ms) |",
+  "|---:|---|---|---|---:|---:|---:|",
+);
+for (const familyId of [...new Set(report.cases.map((entry) => entry.familyId))]) {
+  const cases = report.cases.filter((entry) => entry.familyId === familyId);
+  const medians = cases.map((entry) => entry.statistics.sollang.medianMs);
+  koreanLines.push(`| ${familyId} | ${cases[0].family} | ${koreanCategory[cases[0].category] ?? cases[0].category} | ${cases.map((entry) => entry.sollangRank).join(", ")} | ${cases.filter((entry) => entry.sollangRank === 1).length}/5 | ${Math.max(...cases.map((entry) => entry.sollangRank))} | ${fixed(Math.min(...medians))}–${fixed(Math.max(...medians))} |`);
+}
+
+koreanLines.push(
+  "",
+  "## 소수 체 교정",
+  "",
+  "첫 번째 전체 기준선에서는 가장 큰 단일 배열 소수 체 사례 하나가 실패했다. 비교 언어들은 저장 공간을 한 번에 할당했지만 Sollang은 확장 가능한 Bool 배열을 수백만 번 push해 초기화하면서 5위가 됐다. 따라서 Sollang만 유리하게 바꾸지 않고 여섯 구현 모두를 동일한 분할 소수 체 계약으로 변경했다. 이 계약은 32,768개 Int64 원소의 세그먼트, Int64 기반 합성수 표, 동일한 초기화·배수 표시·개수 집계 순서, 변경하지 않은 입력과 체크섬을 사용한다. 최종 전체 측정에서 소수 체 프로필 5개는 모두 Sollang이 1위였다.",
+  "",
+  "이 벤치마크에는 벤치마크 전용 컴파일러 분기, 결과 사전 계산, 입력 축소, 유휴 CPU 제한 완화, 변경된 소스나 실행 파일을 대상으로 한 이전 결과 재사용이 없다.",
+);
+
+await Promise.all([
+  writeFile(englishOutput, `${englishLines.join("\n")}\n`, "utf8"),
+  writeFile(koreanOutput, `${koreanLines.join("\n")}\n`, "utf8"),
+]);
+process.stdout.write(`Wrote ${englishOutput}\nWrote ${koreanOutput}\n`);

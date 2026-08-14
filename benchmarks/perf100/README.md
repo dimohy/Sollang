@@ -41,7 +41,8 @@ creates a new benchmark contract and requires a fresh baseline.
 family across all six implementations. `scripts/perf100-run.mjs` then verifies
 the exact output again for every measured case before collecting samples.
 `scripts/perf100-report.mjs` validates the completed 100-case JSON and produces
-a checked-in Markdown summary bound to the raw report by SHA-256.
+checked-in English and Korean Markdown summaries bound to the same raw report
+by SHA-256.
 
 ## External methodology
 

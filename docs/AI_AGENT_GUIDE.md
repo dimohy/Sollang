@@ -343,9 +343,9 @@ environment-variable path as well as the explicit option.
    gate for all six implementations, its at-most-10% idle CPU gate, and all 100
    ranking cases. Build with `scripts/perf100-build.sh`, verify representative
    family checksums with `scripts/perf100-check.sh`, measure with
-   `scripts/perf100-run.mjs`, and generate the SHA-256-bound checked-in summary
-   with `scripts/perf100-report.mjs`. Never publish an interrupted, stale-hash,
-   CPU-contended, or correctness-mismatched run.
+   `scripts/perf100-run.mjs`, and generate the SHA-256-bound checked-in English
+   and Korean summaries with `scripts/perf100-report.mjs`. Never publish an
+   interrupted, stale-hash, CPU-contended, or correctness-mismatched run.
 8. If compiler or standard-library artifacts changed, synchronize and verify
    the installed compiler at `P:\\Utils\\sollang`.
 9. Update this guide when the preferred syntax, semantics, CLI, target boundary,
