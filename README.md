@@ -24,6 +24,23 @@ These are four equal design commitments. None is merely a decorative story for
 the name; they guide syntax, diagnostics, libraries, tooling, and documentation.
 See [The Sollang Philosophy](docs/PHILOSOPHY.md).
 
+## For AI Agents
+
+Do not infer Sollang syntax from this README, from another language, or from
+one isolated fixture. Read [llms.txt](llms.txt) and then this order:
+
+1. [Philosophy](docs/PHILOSOPHY.md)
+2. [AI Agent coding guide](docs/AI_AGENT_GUIDE.md)
+3. [User examples](examples/user/README.md)
+4. [Specification](docs/SPEC.md)
+5. [Decision log](docs/DECISIONS.md)
+6. [Flow Junctions](docs/FLOW_JUNCTIONS.md) when branching or streams are involved
+7. [Lexer](syntax/sollang.lexer) and [grammar](syntax/sollang.grammar)
+
+[AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), and
+[.github/copilot-instructions.md](.github/copilot-instructions.md) are short
+pointers to the same guide.
+
 ## Created With
 
 Sollang was created with **GPT-5.6 Sol Medium**. Its creator is satisfied with
@@ -45,7 +62,7 @@ compiler runs in WebAssembly, emits LLVM for the edited program, and lowers it
 to an executable WebAssembly module entirely inside the browser. The standard
 library and source code never travel to a compilation server. The interface
 follows the browser language for Korean, English, Japanese, and Chinese while
-the catalog includes 41 browser-runnable samples and one explicit target
+the catalog includes 42 browser-runnable samples and one explicit target
 diagnostic. Its dedicated 0.4 Flow Junctions section exposes every new feature;
 the native-only `parallel branch` sample reports the browser worker-pool
 capability boundary instead of silently changing semantics. Source code stays
@@ -128,7 +145,7 @@ square: Int -> Int {
 }
 
 main {
-    getName => name
+    getName() => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -143,14 +160,14 @@ Hello, dimohy. square = 49
 Top-level executable statements can omit the `main` wrapper:
 
 ```sollang
-getName => name
+getName() => name
 7 -> square => num
 "Hello, $name. square = $num" -> sys.io.print
 ```
 
-Zero-input functions are values selected by name. Parentheses are reserved for
-calls that actually supply input, so `getName()` is a compile-time error rather
-than an alternative spelling of `getName`.
+A zero-input function is invoked with `()`. A bare function name is not a call
+and is a semantic error. Enum members and one-input computed members stay
+member-like: `Status.Ready`, `point.doubled`.
 
 A range can flow into a block function:
 
@@ -412,7 +429,10 @@ returns a nonzero native process status when any test fails.
 
 ## Documentation
 
+- [AI discovery index](llms.txt)
 - [AI Agent coding guide and maintenance contract](docs/AI_AGENT_GUIDE.md)
+- [Philosophy](docs/PHILOSOPHY.md)
+- [User examples](examples/user/README.md)
 - [Getting started and implementation guide](docs/GETTING_STARTED.md)
 - [Language specification](docs/SPEC.md)
 - [Decision log](docs/DECISIONS.md)

@@ -878,9 +878,11 @@ Use the more specific verification scripts documented in `ROADMAP.md`,
 ## 7. Maintenance contract
 
 This file is canonical and must evolve with the language. `AGENTS.md`,
-`CLAUDE.md`, `.github/copilot-instructions.md`, the website's
-`/ai/AI_AGENT_GUIDE.md`, and `/llms.txt` are discovery entry points; they must
-refer to this file instead of copying its full contents.
+`CLAUDE.md`, `.github/copilot-instructions.md`, the root `llms.txt`,
+`README.md`'s AI section, the website's `/ai/AI_AGENT_GUIDE.md`, and
+`/llms.txt` are discovery entry points; they must refer to this file and its
+read order instead of copying its full contents or teaching a conflicting
+surface syntax.
 
 A change is incomplete when it modifies any of the following without reviewing
 and, when necessary, updating this guide:
