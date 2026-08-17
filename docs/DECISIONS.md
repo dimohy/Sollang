@@ -1,11 +1,12 @@
 # Sollang Decision Log
 
-Updated: 2026-07-23
-Current accepted checkpoint: D273, content-addressed self-host verification
+Updated: 2026-08-18
+Current accepted checkpoint: D337, type-directed enum match arm results
 
 Entries are chronological. Progress counts and "remaining" work inside an
-older decision describe that decision's checkpoint; D254 and
-`SELF_HOSTING_ROADMAP.md` define the current completion state.
+older decision describe that decision's checkpoint; later entries supersede
+those counts. Self-host completion remains D254/`SELF_HOSTING_ROADMAP.md`;
+the current language-surface and compiler-integrity checkpoint is D337.
 
 This file records accepted or working decisions so the language design can
 evolve without losing context.

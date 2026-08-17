@@ -1,7 +1,7 @@
 # Sollang AI Agent Coding Guide
 
 Status: canonical agent onboarding and coding guide
-Updated: 2026-08-16
+Updated: 2026-08-18
 
 This is the single maintained entry point for an AI Agent that must read,
 write, review, or change Sollang code. Do not infer Sollang syntax from another

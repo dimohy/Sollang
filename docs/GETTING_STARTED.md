@@ -1,7 +1,7 @@
 # Sollang Guide
 
 Status: current implementation guide
-Updated: 2026-07-22
+Updated: 2026-08-18
 
 This guide keeps the longer project notes out of the README while preserving the
 details needed to build, run, and understand the current Sollang implementation.
@@ -21,15 +21,15 @@ remain authoritative for syntax and compatibility.
 - single-expression function bodies with `name: Input -> Output => expression`
 - local functions declared inside a function body, scoped to that containing
   function
-- expression-first bindings with `"value" => name`, `getName => name`, and
+- expression-first bindings with `"value" => name`, `getName() => name`, and
   `7 -> square => num`
 - integer `+`, `-`, `*`, `/`, `%`, unary `-`, and parenthesized expressions
 - line comments with `#`
 - `Bool` values from `true`/`false`, integer comparisons, and `and`/`or`/`not`
 - flow-oriented conditionals with `condition -> if { ... } else { ... }`
-- multi-branch `when { condition { ... } else { ... } }` expressions
-- subject-value `when` with `value -> when { >= limit { ... } else { ... } }`
-- subject-value `when` range arms with `value -> when { start..end { ... } }`
+- multi-branch `when { condition => value else => value }` expressions
+- subject-value `when` with `value -> when { >= limit => value else => value }`
+- subject-value `when` range arms with `value -> when { start..end => value }`
 - compact `when` arms with `condition => value`, including implicit `it`
   subject inside one-input functions
 - string interpolation with `"Hello, $name"`
@@ -793,7 +793,7 @@ emitting a runtime closure, function pointer, or block-call dispatch.
 Conditions follow the same flow style as block functions:
 `condition -> if { ... } else { ... }` receives a `Bool` value on the left, and
 `when { ... }` handles multi-branch value selection. When the same value is
-tested in every arm, prefer `value -> when { >= limit { ... } else { ... } }` or
+tested in every arm, prefer `value -> when { >= limit => value else => value }` or
 range arms such as `value -> when { 90..100 => ... else => ... }`; the subject
 value is evaluated once and reused by the arm checks. Inside a one-input
 function that uses the default `it` binding, subject-style `when` arms may omit

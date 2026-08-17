@@ -1,7 +1,7 @@
 # Sollang Language Specification
 
 Status: implemented living specification
-Updated: 2026-07-22
+Updated: 2026-08-18
 
 This document is the living specification for Sollang. Normative language
 rules follow the current compiler and executable examples; historical design
@@ -130,7 +130,7 @@ square: Int -> Int {
 }
 
 main {
-    getName => name
+    getName() => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -195,7 +195,7 @@ The executable `main` wrapper can be omitted. These top-level statements are
 compiled as the main body:
 
 ```sollang
-getName => name
+getName() => name
 7 -> square => num
 "Hello, $name. square = $num" -> sys.io.print
 ```
@@ -269,7 +269,7 @@ square: Int -> Int {
 }
 
 main {
-    getName => name
+    getName() => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -278,7 +278,7 @@ main {
 For short executable scripts, the `main` wrapper may be omitted:
 
 ```sollang
-getName => name
+getName() => name
 7 -> square => num
 "Hello, $name. square = $num" -> print
 ```
@@ -294,8 +294,9 @@ Rationale:
 - `getName: -> Text { ... }`, `square: Int -> Int { ... }`, and
   `square n: Int -> Int { ... }` introduce the smallest zero-input and one-input
   function declaration shapes.
-- `getName => name` and `7 -> square => num` make returned values bindable
-  without hiding the flow behind assignment syntax.
+- `getName() => name` and `7 -> square => num` make returned values bindable
+  without hiding the flow behind assignment syntax. A bare function name is not
+  an invocation.
 - `"..." -> print` makes the primary data flow visible at the call site.
 - The executable entry point can be explicit with `main { ... }` or implicit
   when top-level executable statements are present.
@@ -434,15 +435,14 @@ Notes:
 - A newline may precede `and` or `or`. The line-leading operator continues the
   preceding boolean expression, so a long condition can end with a separately
   visible `-> if` continuation without changing precedence or evaluation order.
-- `when { condition { ... } else { ... } }` is the current multi-branch
-  conditional expression form.
-- `value -> when { >= limit { ... } else { ... } }` is the subject-value
+- `when { condition => value else => fallback }` is the preferred multi-branch
+  expression form. Block arms remain valid for multi-statement bodies.
+- `value -> when { >= limit => value else => fallback }` is the subject-value
   shorthand for ordered comparisons against one value. The subject value is
   evaluated once.
-- `value -> when { start..end { ... } else { ... } }` checks inclusive integer
-  ranges against the subject value.
-- `when { condition => value else => fallback }` is shorthand for single-value
-  arms. Block arms remain valid for multi-statement arm bodies.
+- `value -> when { start..end => value else => fallback }` checks inclusive
+  integer ranges against the subject value. Half-open `..<` uses the same
+  subject-arm shape.
 - In a one-input function using the default input binding `it`, a subject-style
   `when` without an explicit subject uses `it` as the subject. Explicitly named
   inputs should still use `input -> when { ... }`.
@@ -2733,7 +2733,7 @@ input value should be visually explicit:
 
 ```sollang
 main {
-    getName => name
+    getName() => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -2933,7 +2933,7 @@ square: Int -> Int {
 }
 
 main {
-    getName => name
+    getName() => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -2947,7 +2947,7 @@ function getName -> returns text slice
 function square -> accepts i64 %it, evaluates %it * %it at runtime, returns i64
 runtime decimal conversion helper for integer output
 native entry function
--> call getName through flow source and bind name to returned text slice
+-> call getName() as a zero-input invocation and bind name to returned text slice
 -> pass 7 to square through flow and bind num to returned integer
 -> write string literal segments directly
 -> write name as a text slice
@@ -2985,7 +2985,7 @@ square: Int -> Int {
 }
 
 main {
-    getName => name
+    getName() => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }

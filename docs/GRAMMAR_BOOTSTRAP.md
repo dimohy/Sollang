@@ -1,7 +1,7 @@
 # Sollang Grammar Bootstrap
 
 Status: self-host lexer/parser/CST/AST frontend implemented and verified
-Updated: 2026-07-22
+Updated: 2026-08-18
 
 ## Goal
 

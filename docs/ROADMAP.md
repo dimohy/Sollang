@@ -1,7 +1,7 @@
 # Sollang Implementation Roadmap
 
 Status: core implementation and 0.4 native distribution verified
-Updated: 2026-08-02
+Updated: 2026-08-18
 
 Every completed slice must add cumulative `.slg` examples, keep safe-code leak
 freedom statically provable, build with zero warnings, and pass the complete
@@ -146,18 +146,19 @@ normalized SHA-256
 `6C763A697DB9A93FDBD9F579515F85AE46F27820CD3F848C2DE6F3CCB774B1C1`;
 Linux reproduces 26,888,844 bytes at
 `CC6F3E0341EDA15AF93606D17477B3B2FD8FDB45EE812EF82ECB5216B4BE853C`.
-The complete platform suites pass 1085/1085 Windows cases and 1084/1084
-Linux-applicable cases.
+The complete logical catalog is 20 user examples, 985 regression cases, and
+274 diagnostics. Windows passes 1259/1259 selected cases. Linux passes all
+1258/1258 applicable cases; the Windows COM case is structurally validated on
+Linux but is not executed there. Current Stage 3 hashes and package proofs
+are recorded in `STAGE3_COMPILER.md`.
 
 Both fixed-point executables pass 16 exact top-level CLI contracts plus native
 build/run, grammar build 4/4, test 10/10, format 11/11, streaming language
-server 4/4, and bind-cpp 6/6. The immutable executable hashes are
-`D938A20239DE2F4D450275400567810D70DCF6E80198DB439E5F053A650E8E7A`
-for Windows and
-`EEE597698168E3A5628E5939DFD4AF26966AEC5CF460B4A3CFBD8FBB28173FE8`
-for Linux. `publish-release.ps1` requires those hash-bound parity proofs,
-copies only the matching native compiler, rejects managed/bootstrap artifacts,
-and builds and runs a source file from each staged package.
+server 4/4, and bind-cpp 6/6. Use the current hash-bound proofs in
+`STAGE3_COMPILER.md`; do not treat an older roadmap hash as the live compiler
+identity. `publish-release.ps1` requires those current proofs, copies only the
+matching native compiler, rejects managed/bootstrap artifacts, and builds and
+runs a source file from each staged package.
 
 The C# compiler remains a development bootstrap and reference oracle. It is not
 a 0.4 release asset. An internal Stage driver cannot satisfy this milestone by

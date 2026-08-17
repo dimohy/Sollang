@@ -1,7 +1,7 @@
 # Sollang Self-Hosting Roadmap
 
 Status: complete
-Updated: 2026-07-22
+Updated: 2026-08-18
 
 Completion baseline: commit `8be125d`, D254, Windows/Linux self-host suites
 **357/357**, Release build with zero warnings and zero errors.

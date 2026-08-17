@@ -1,7 +1,7 @@
 # Sollang Array And Ownership Design
 
 Status: generic container and ownership model implemented; extensions noted
-Updated: 2026-07-22
+Updated: 2026-08-18
 
 This document records the container and ownership design together with its
 historical first slice. The current compiler supports generic fixed/growable
@@ -191,11 +191,12 @@ mark on the wrong meaning:
 - <https://hexdocs.pm/elixir/main/naming-conventions.html#trailing-bang-foo>
 - <https://docs.julialang.org/en/v1/manual/style-guide/#bang-convention>
 
-Sollang should instead remove the empty-parentheses marker for value-flow
-calls whose only explicit input is the value on the left:
+Sollang removes empty parentheses from value-flow calls whose only explicit
+input is the value on the left. A zero-input function still needs `()` because
+a bare function name is not an invocation:
 
 ```sollang
-getName => name
+getName() => name
 7 -> square => num
 values -> len => count
 ```

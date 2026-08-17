@@ -1,7 +1,11 @@
 # Example and test catalog
 
+Updated: 2026-08-18
+
 Sollang keeps learning-oriented examples separate from exhaustive regression
-fixtures.
+fixtures. The inventory table below is measured from the current runner
+inputs: user examples remain a learning track, while the complete logical
+catalog is the 985 executed regressions plus 274 diagnostics.
 
 ## User examples
 
@@ -29,9 +33,9 @@ regression counterpart.
 | Kind | Location | Count |
 | --- | --- | ---: |
 | User examples | `examples/user/` | 20 |
-| Regression cases | `examples/regression/expected/*.stdout.txt` | 828 |
-| Diagnostic cases | test runner | 257 |
-| Complete logical catalog | test runner | 1,085 |
+| Regression cases | `examples/regression/expected/*.stdout.txt` | 985 |
+| Diagnostic cases | test runner | 274 |
+| Complete logical catalog | test runner | 1,259 |
 | Flow Junctions positive fixtures | `examples/regression/788-844*.slg` | 57 |
 | Flow Junctions diagnostic fixtures | `examples/regression/diagnostics/` | 26 |
 | Flow Junctions physical fixtures | positive + diagnostic | 83 |

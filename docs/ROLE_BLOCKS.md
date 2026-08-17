@@ -1,7 +1,7 @@
 # Typed Role Blocks
 
 Status: common result-block foundation implemented; specialized roles are follow-on work
-Updated: 2026-07-22
+Updated: 2026-08-18
 
 This document is the canonical design and completion checklist for Sollang
 blocks that perform a typed role. A checkbox is completed only when the linked
