@@ -1,0 +1,403 @@
+namespace sys.crypto.ed25519
+
+import sys.crypto.field25519 as field
+import sys.crypto.bits as bits
+import sys.crypto.ed25519_error as errors
+import sys.crypto.random as random
+import sys.crypto.sha512 as sha512
+
+public struct Error {
+    kind: errors.Kind
+}
+
+struct Point {
+    x: [UInt64; 16]
+    y: [UInt64; 16]
+    z: [UInt64; 16]
+    t: [UInt64; 16]
+}
+
+scalarZeros: -> [UInt8; 32] => [0; 32]
+signatureZeros: -> [UInt8; 64] => [0; 64]
+
+order: -> [UInt8; 32] => [
+    237, 211, 245, 92, 26, 99, 18, 88,
+    214, 156, 247, 162, 222, 249, 222, 20,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 16]
+
+curveDoubled: -> [UInt64; 16] => [
+    61_785, 9_906, 39_828, 60_374,
+    45_398, 33_411, 5_274, 224,
+    53_552, 61_171, 33_010, 6_542,
+    64_743, 22_239, 55_772, 9_222]
+
+curveD: -> [UInt64; 16] => [
+    30_883, 4_953, 19_914, 30_187,
+    55_467, 16_705, 2_637, 112,
+    59_544, 30_585, 16_505, 36_039,
+    65_139, 11_119, 27_886, 20_995]
+
+sqrtMinusOne: -> [UInt64; 16] => [
+    41_136, 18_958, 6_951, 50_414,
+    58_488, 44_335, 6_150, 12_099,
+    55_207, 15_867, 153, 11_085,
+    57_099, 20_417, 9_344, 11_139]
+
+baseX: -> [UInt64; 16] => [
+    54_554, 36_645, 11_616, 51_542,
+    42_930, 38_181, 51_040, 26_924,
+    56_412, 64_982, 57_905, 49_316,
+    21_502, 52_590, 14_035, 8_553]
+
+baseY: -> [UInt64; 16] => [
+    26_200, 26_214, 26_214, 26_214,
+    26_214, 26_214, 26_214, 26_214,
+    26_214, 26_214, 26_214, 26_214,
+    26_214, 26_214, 26_214, 26_214]
+
+basePoint: -> Point {
+    baseX() => x
+    baseY() => y
+    field.multiply(x, y) => t
+    Point { x: x, y: y, z: field.one(), t: t }
+}
+
+identity: -> Point {
+    Point { x: field.zeros(), y: field.one(), z: field.one(), t: field.zeros() }
+}
+
+pointAdd left: ref Point, right: ref Point -> Point {
+    field.subtract(left.y, left.x) -> field.multiply(field.subtract(right.y, right.x)) => a
+    field.add(left.y, left.x) -> field.multiply(field.add(right.y, right.x)) => b
+    field.multiply(left.t, right.t) -> field.multiply(curveDoubled()) => c
+    field.multiply(left.z, right.z) -> field.multiplySmall(2) => d
+    field.subtract(b, a) => e
+    field.subtract(d, c) => f
+    field.add(d, c) => g
+    field.add(b, a) => h
+    Point {
+        x: field.multiply(e, f)
+        y: field.multiply(g, h)
+        z: field.multiply(f, g)
+        t: field.multiply(e, h)
+    }
+}
+
+replacePoint destination: mut Point, source: ref Point -> Unit {
+    destination.x -> field.replace(source.x)
+    destination.y -> field.replace(source.y)
+    destination.z -> field.replace(source.z)
+    destination.t -> field.replace(source.t)
+}
+
+scalarBit scalar: [UInt8], bitIndex: Int -> UInt64 {
+    UInt64(scalar[bitIndex / 8]) / bits.powerOfTwo64(UInt64(bitIndex % 8)) % 2
+}
+
+pointMultiply scalar: [UInt8], point: move Point -> Point {
+    identity() => result!
+    point => addend!
+    0 => bitIndex!
+    bitIndex! < 256 -> while {
+        scalarBit(scalar, bitIndex!) == 1 -> if {
+            pointAdd(result!, addend!) => nextResult
+            result! -> replacePoint(nextResult)
+        }
+        pointAdd(addend!, addend!) => nextAddend
+        addend! -> replacePoint(nextAddend)
+        bitIndex! + 1 => bitIndex!
+    }
+    result!
+}
+
+encodePoint point: ref Point -> [UInt8; 32] {
+    field.invert(point.z) => inverseZ
+    field.multiply(point.x, inverseZ) => x
+    field.multiply(point.y, inverseZ) => y
+    field.encode(y) => output!
+    field.encode(x) => xBytes
+    output![31] + UInt8((xBytes[0] % 2) * 128) => output![31]
+    output!
+}
+
+isIdentityPoint point: ref Point -> Bool {
+    encodePoint(point) => encoded
+    encoded[0] == 1 -> unless { false -> return }
+    1 => index!
+    index! < 32 -> while {
+        encoded[index!] == 0 -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+powerForSquareRoot value: [UInt64] -> [UInt64; 16] {
+    field.one() => result!
+    251 => bitIndex!
+    bitIndex! >= 0 -> while {
+        field.square(result!) => squared
+        result! -> field.replace(squared)
+        bitIndex! >= 1 -> if {
+            field.multiply(result!, value) => multiplied
+            result! -> field.replace(multiplied)
+        }
+        bitIndex! - 1 => bitIndex!
+    }
+    result!
+}
+
+decodePoint encoded: [UInt8] -> Result<Point, Error> {
+    (encoded -> len) == 32 -> unless {
+        Result<Point, Error>.Err(Error { kind: errors.Kind.InvalidLength }) -> return
+    }
+    field.byteZeros() => yBytes!
+    0 => index!
+    index! < 32 -> while {
+        encoded[index!] => yBytes![index!]
+        index! + 1 => index!
+    }
+    yBytes![31] / 128 => sign
+    yBytes![31] % 128 => yBytes![31]
+    field.decode(yBytes!) => y
+    field.encode(y) => canonical
+    true => canonicalY!
+    0 => compareIndex!
+    compareIndex! < 32 -> while {
+        canonical[compareIndex!] == yBytes![compareIndex!] -> unless { false => canonicalY! }
+        compareIndex! + 1 => compareIndex!
+    }
+    canonicalY! -> unless {
+        Result<Point, Error>.Err(Error { kind: errors.Kind.NonCanonical }) -> return
+    }
+
+    field.square(y) => ySquared
+    field.subtract(ySquared, field.one()) => numerator
+    field.add(field.multiply(curveD(), ySquared), field.one()) => denominator
+    field.multiply(numerator, field.invert(denominator)) => xSquared
+    powerForSquareRoot(xSquared) => xCandidate!
+    field.equal(field.square(xCandidate!), xSquared) -> unless {
+        field.multiply(xCandidate!, sqrtMinusOne()) => adjusted
+        xCandidate! -> field.replace(adjusted)
+    }
+    field.equal(field.square(xCandidate!), xSquared) -> unless {
+        Result<Point, Error>.Err(Error { kind: errors.Kind.InvalidPoint }) -> return
+    }
+    field.encode(xCandidate!) => xBytes
+    (xBytes[0] % 2) != sign -> if {
+        field.subtract(field.zeros(), xCandidate!) => negated
+        xCandidate! -> field.replace(negated)
+    }
+    (field.equal(xCandidate!, field.zeros()) and sign == 1) -> if {
+        Result<Point, Error>.Err(Error { kind: errors.Kind.InvalidPoint }) -> return
+    }
+    field.multiply(xCandidate!, y) => t
+    Point {
+        x: xCandidate!
+        y: y
+        z: field.one()
+        t: t
+    } => point
+    pointAdd(point, point) => doubled
+    pointAdd(doubled, doubled) => quadrupled
+    pointAdd(quadrupled, quadrupled) => octupled
+    isIdentityPoint(octupled) -> if {
+        Result<Point, Error>.Err(Error { kind: errors.Kind.InvalidPoint }) -> return
+    }
+    Result<Point, Error>.Ok(point)
+}
+
+scalarGreaterOrEqual left: [UInt8], right: [UInt8] -> Bool {
+    true => greaterOrEqual!
+    false => decided!
+    31 => index!
+    index! >= 0 -> while {
+        (not decided! and left[index!] != right[index!]) -> if {
+            left[index!] > right[index!] => greaterOrEqual!
+            true => decided!
+        }
+        index! - 1 => index!
+    }
+    greaterOrEqual!
+}
+
+scalarSubtractOrder value: mut [UInt8; 32] -> Unit {
+    order() => modulus
+    UInt64(0) => borrow!
+    0 => index!
+    index! < 32 -> while {
+        UInt64(modulus[index!]) + borrow! => removed
+        UInt64(value[index!]) >= removed -> if {
+            UInt8(UInt64(value[index!]) - removed) => value[index!]
+            0 => borrow!
+        } else {
+            UInt8(UInt64(value[index!]) + 256 - removed) => value[index!]
+            1 => borrow!
+        }
+        index! + 1 => index!
+    }
+}
+
+scalarDoubleAdd value: mut [UInt8; 32], addedBit: UInt8 -> Unit {
+    UInt64(addedBit) => carry!
+    0 => index!
+    index! < 32 -> while {
+        UInt64(value[index!]) * 2 + carry! => doubled
+        UInt8(doubled % 256) => value[index!]
+        doubled / 256 => carry!
+        index! + 1 => index!
+    }
+    scalarGreaterOrEqual(value, order()) -> if { value -> scalarSubtractOrder }
+}
+
+scalarReduce wide: [UInt8] -> [UInt8; 32] {
+    scalarZeros() => result!
+    Int(wide -> len) * 8 - 1 => bitIndex!
+    bitIndex! >= 0 -> while {
+        UInt8(UInt64(wide[bitIndex! / 8]) / bits.powerOfTwo64(UInt64(bitIndex! % 8)) % 2) => bit
+        scalarDoubleAdd(result!, bit)
+        bitIndex! - 1 => bitIndex!
+    }
+    result!
+}
+
+scalarAdd left: [UInt8], right: [UInt8] -> [UInt8; 32] {
+    scalarZeros() => result!
+    UInt64(0) => carry!
+    0 => index!
+    index! < 32 -> while {
+        UInt64(left[index!]) + UInt64(right[index!]) + carry! => sum
+        UInt8(sum % 256) => result![index!]
+        sum / 256 => carry!
+        index! + 1 => index!
+    }
+    scalarGreaterOrEqual(result!, order()) -> if { result! -> scalarSubtractOrder }
+    result!
+}
+
+scalarMultiply left: [UInt8], right: [UInt8] -> [UInt8; 32] {
+    scalarZeros() => result!
+    scalarReduce(left) => addend!
+    0 => bitIndex!
+    bitIndex! < 256 -> while {
+        scalarBit(right, bitIndex!) == 1 -> if {
+            scalarAdd(result!, addend!) => sum
+            0 => copyIndex!
+            copyIndex! < 32 -> while {
+                sum[copyIndex!] => result![copyIndex!]
+                copyIndex! + 1 => copyIndex!
+            }
+        }
+        scalarDoubleAdd(addend!, 0)
+        bitIndex! + 1 => bitIndex!
+    }
+    result!
+}
+
+appendBytes destination: mut [UInt8; ~], source: [UInt8] -> Unit {
+    0 => index!
+    index! < (source -> len) -> while {
+        destination -> push(source[index!])
+        index! + 1 => index!
+    }
+}
+
+hashParts first: [UInt8], second: [UInt8], third: [UInt8] -> [UInt8; 64] {
+    [UInt8; ~] => joined!
+    appendBytes(joined!, first)
+    appendBytes(joined!, second)
+    appendBytes(joined!, third)
+    sha512.digest(joined!)
+}
+
+public publicKey seed: [UInt8] -> Result<[UInt8; 32], Error> {
+    (seed -> len) == 32 -> unless {
+        Result<[UInt8; 32], Error>.Err(Error { kind: errors.Kind.InvalidLength }) -> return
+    }
+    sha512.digest(seed) => expanded!
+    expanded![0] - expanded![0] % 8 => expanded![0]
+    expanded![31] % 64 + 64 => expanded![31]
+    scalarZeros() => privateScalar!
+    0 => index!
+    index! < 32 -> while {
+        expanded![index!] => privateScalar![index!]
+        index! + 1 => index!
+    }
+    pointMultiply(privateScalar!, basePoint()) => publicPoint
+    Result<[UInt8; 32], Error>.Ok(encodePoint(publicPoint))
+}
+
+public sign seed: [UInt8], message: [UInt8] -> Result<[UInt8; 64], Error> {
+    publicKey(seed)? => publicBytes
+    sha512.digest(seed) => expanded!
+    expanded![0] - expanded![0] % 8 => expanded![0]
+    expanded![31] % 64 + 64 => expanded![31]
+    scalarZeros() => privateScalar!
+    scalarZeros() => prefix!
+    0 => index!
+    index! < 32 -> while {
+        expanded![index!] => privateScalar![index!]
+        expanded![index! + 32] => prefix![index!]
+        index! + 1 => index!
+    }
+    hashParts(prefix!, [], message) -> scalarReduce => nonce
+    pointMultiply(nonce, basePoint()) => noncePoint
+    encodePoint(noncePoint) => encodedNonce
+    hashParts(encodedNonce, publicBytes, message) -> scalarReduce => challenge
+    scalarAdd(nonce, scalarMultiply(challenge, scalarReduce(privateScalar!))) => response
+    signatureZeros() => signature!
+    0 => outputIndex!
+    outputIndex! < 32 -> while {
+        encodedNonce[outputIndex!] => signature![outputIndex!]
+        response[outputIndex!] => signature![outputIndex! + 32]
+        outputIndex! + 1 => outputIndex!
+    }
+    Result<[UInt8; 64], Error>.Ok(signature!)
+}
+
+public verify publicBytes: [UInt8], message: [UInt8], signature: [UInt8] -> Result<Bool, Error> {
+    ((publicBytes -> len) == 32 and (signature -> len) == 64) -> unless {
+        Result<Bool, Error>.Err(Error { kind: errors.Kind.InvalidLength }) -> return
+    }
+    scalarZeros() => response!
+    field.byteZeros() => encodedNonce!
+    0 => index!
+    index! < 32 -> while {
+        signature[index!] => encodedNonce![index!]
+        signature[index! + 32] => response![index!]
+        index! + 1 => index!
+    }
+    scalarGreaterOrEqual(response!, order()) -> if {
+        Result<Bool, Error>.Err(Error { kind: errors.Kind.InvalidScalar }) -> return
+    }
+    decodePoint(publicBytes)? => publicPoint
+    decodePoint(encodedNonce!)? => noncePoint
+    hashParts(encodedNonce!, publicBytes, message) -> scalarReduce => challenge
+    pointMultiply(response!, basePoint()) => left
+    pointMultiply(challenge, publicPoint) => challengedPublic
+    pointAdd(noncePoint, challengedPublic) => right
+    encodePoint(left) => leftBytes
+    encodePoint(right) => rightBytes
+    true => valid!
+    0 => compareIndex!
+    compareIndex! < 32 -> while {
+        leftBytes[compareIndex!] == rightBytes[compareIndex!] -> unless { false => valid! }
+        compareIndex! + 1 => compareIndex!
+    }
+    Result<Bool, Error>.Ok(valid!)
+}
+
+public generateSeed: -> Result<[UInt8; 32], random.Error> uses Random {
+    32 -> random.bytes -> when {
+        Ok(bytes) {
+            scalarZeros() => seed!
+            0 => index!
+            index! < 32 -> while {
+                bytes[index!] => seed![index!]
+                index! + 1 => index!
+            }
+            Result<[UInt8; 32], random.Error>.Ok(seed!)
+        }
+        Err(error) { Result<[UInt8; 32], random.Error>.Err(error) }
+    }
+}

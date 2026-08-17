@@ -329,7 +329,8 @@ guard_loop_control_statement := range_or_logical_expression "->" "if" ("break" |
 statement_end := newline+ | "}" lookahead
 range_expression := logical_or_expression ".." logical_or_expression
 expression   := flow_expression
-flow_expression := range_or_logical_expression ("->" (if_flow_target | while_flow_target | when_flow_target | fold_flow_target | path flow_target_call?))*
+flow_expression := range_or_logical_expression ("->" (if_flow_target | while_flow_target | when_flow_target | fold_flow_target | standard_generic_enum_flow_target | path flow_target_call?))*
+standard_generic_enum_flow_target := ("Option" "<" type ">" | "Result" "<" type "," type ">") "." identifier flow_target_call?
 flow_target_call := "(" argument_list? ")"
 range_or_logical_expression := range_expression | logical_or_expression
 if_flow_target := "if" block_body ("else" block_body)?
@@ -372,9 +373,14 @@ interpolation := "$" identifier | "$(" expression ")"
 Notes:
 
 - Newline is a statement separator, not an indentation rule.
+- Parenthesized call arguments may start on the following line and continue as
+  comma-separated lines; newlines inside the parentheses do not end the call.
 - Array literals may place their opening item, comma-separated items, `; ~`,
   and closing bracket on separate lines. This keeps raw multiline strings and
   other structured values readable without changing their element order.
+- An empty static literal may use `[]` when its element type is supplied by a
+  return, argument, field, or other array context. `[T; ~]` remains the explicit
+  empty growable owner; contextual `[]` never implies growable storage.
 - A one-element growable value array requires the explicit trailing comma
   `[value,; ~]`; `[T; ~]` remains the typed-empty form. The comma removes the
   value/type ambiguity in the same way a trailing comma distinguishes a
@@ -382,6 +388,23 @@ Notes:
 - Semicolons are not statement separators. The array surface uses `;` for
   repeated fixed arrays such as `[0; 8]`, growable seeds such as `[1, 2; ~]`,
   and typed-empty growable arrays such as `[Int; ~]`.
+- The parser gives `[value; N]` and `[value; Count]` fixed-repeat syntax priority
+  over the general comma-separated item alternative. Reference and self-host
+  parsers must accept the same form.
+- The repeated value in `[value; N]` may be any inline copyable value. Its
+  element type is inferred from `value`; owned and nested-container values are
+  rejected because repetition would duplicate ownership.
+- Checked file compilation performs syntax validation before semantic,
+  typed-IR, ownership, or LLVM preparation. A rejected parse may retain
+  recovery nodes for diagnostics, but those partial nodes cannot enter later
+  compiler phases.
+- A concrete type annotation `[T; N]` carries an exact nonnegative length.
+  Struct initialization accepts a compatible owned array only after proving a
+  literal count or emitting a runtime equality check before ownership transfer.
+  `[T; N]` does not expose growable operations.
+- `mut [T; N]` borrows the fixed payload for indexed replacement without
+  transferring ownership. Because the length is invariant, this borrow uses
+  the fixed-array slice ABI and cannot resize or replace its storage.
 - Braces are the only block delimiters.
 - Field, index, mutable-index-view, and propagation suffixes form one repeated
   postfix chain and associate from left to right. Dot and index suffixes may be
@@ -404,6 +427,10 @@ Notes:
   the call marker, so empty parentheses are omitted.
 - `condition -> if { ... } else { ... }` introduces the current conditional
   expression form. The value flowing into `if` must be `Bool`.
+- `condition -> unless { ... }` is the statement-only inverse guard. It runs
+  the block only when the Bool condition is false and is the canonical form for
+  validation failures; an empty `if` success branch followed by `else` is
+  redundant.
 - A newline may precede `and` or `or`. The line-leading operator continues the
   preceding boolean expression, so a long condition can end with a separately
   visible `-> if` continuation without changing precedence or evaluation order.
@@ -433,6 +460,9 @@ Notes:
   source. The value on the left remains the function input.
 - `value -> function()` remains accepted as compatibility syntax, but empty
   parentheses are no longer preferred for receiver-only flow calls.
+- Standard generic enum variants are flow targets. Prefer
+  `value -> Result<T, E>.Ok` and `value -> Option<T>.Some` when the flowing value
+  is the payload; these are equivalent to the direct constructor forms.
 - `->` never creates a binding. Bind results with `=>`: `7 -> square => num`.
 - `1..9 -> each i { ... }` iterates an inclusive integer range and introduces
   `i` only inside the loop body.
@@ -526,7 +556,249 @@ Initial binding rules:
 - Reusing the same name in the same scope is a compile-time error for now.
 - Mutating container operations require a mutable owner binding with a `!`
   suffix.
+- A mutably borrowing call remains in that same ownership context when its
+  result becomes the source of a following `->` pipeline target.
 - Type inference determines the binding's type from the initializer.
+
+The compiler also reports style diagnostics where inference proves a narrower
+source form without changing semantics:
+
+- S001: a numeric constructor repeats the type already supplied by context;
+- S002: a `name!` binding is never mutated and should be immutable;
+- S003: straight-line construction gives a growable array one exact final
+  length, so a fixed array value should be used. A `push` reached through an
+  `if`, `unless`, `when`, or loop does not establish an exact final length. The
+  warning is also suppressed when a downstream parameter requires the
+  growable-array type, because the proposed fixed-array rewrite would not
+  satisfy that contract.
+- S004: an `if` has an empty success branch and only performs work in `else`;
+  use `condition -> unless { ... }`.
+- S005: a never-mutated `name!` binding cannot become immutable by merely
+  removing `!` because the resulting name is reserved; rename it to a
+  non-reserved immutable binding.
+
+S006 is a blocking compiler-integrity diagnostic rather than a style warning.
+It reports that a value-producing typed-IR node reached LLVM allocation, load,
+or store selection without a canonical storage type. In particular, every
+non-empty array literal must be classified as fixed, growable, or bounded
+before LLVM emission. S006 must be fixed in semantic typing or typed-IR
+projection, never silenced by changing valid Sollang source to a wider type.
+
+S007 is also a blocking compiler-integrity diagnostic. It reports that a
+non-empty array's canonical element type disagrees with the type of its first
+lowered direct operand. Nested literals inside an element flow do not determine
+the array type. Header-layout compatibility is not sufficient: element
+identity must remain consistent for indexed access, ownership, drop behavior,
+and ABI selection. S007 must be fixed in semantic typing or Typed-IR lowering.
+
+S008 is a blocking compiler-integrity diagnostic for integer arithmetic whose
+semantic result width differs from the physical width selected from its lowered
+operands. A bare literal paired with an independently typed integer operand
+inherits that operand's exact type; for example, `UInt16(value) / 16` is an
+i16 operation. Runtime printing widens UInt8 and UInt16 values to the i32 print
+ABI explicitly. S008 must be fixed at contextual typing or Typed-IR lowering,
+not hidden with a source constructor or backend signature mismatch.
+
+S009 is a blocking compiler-integrity diagnostic for a scalar binding whose
+initializer is an unresolved name that is neither a local binding nor a
+parameter of the owning function. Function parameters use signature-owned ABI
+names (`%arg`, `%arg1`, ...), so immutable aliases of parameters are emitted
+through the shared parameter-reference path rather than an invented `%v` SSA
+producer. S009 must be fixed in name resolution or ABI-aware value lowering.
+
+S010 is a blocking compiler-integrity diagnostic when an inverse guard's AST
+operator identity and Typed-IR opcode disagree. LLVM branch polarity is shared
+by entry, named-function, and nested control-region emitters for both direct
+and short-circuit conditions. An `unless` body executes only on the false
+condition edge in every scope.
+
+S011 is a blocking compiler-integrity diagnostic when a true enum subject
+pattern does not lower to an enum-constructor operand. The validator identifies
+an enum pattern by the explicit `EnumPattern` AST child, not merely by the
+shared subject-condition wrapper; numeric and relational subject conditions
+must remain ordinary binary operations.
+
+S012 is a blocking compiler-integrity diagnostic when a subject `when` control
+has no canonical subject operand. Final Typed-IR projection recovers the
+nearest preceding canonical integer sibling in the same block when recursive
+lowering placed that subject outside a nested control slice, then attaches it to every
+relational arm. A block result link only forwards a value when the block itself
+is consumed; arm-to-body and unused block-tail links are control structure.
+
+S013 is a blocking compiler-integrity diagnostic when a relational subject arm
+has no canonical left operand. Final Typed-IR projection repairs each arm from
+its explicit arm-to-control parentage rather than assuming every arm remains
+reachable from a sibling chain. The kind-59 AST child keeps enum patterns out
+of this binary normalization.
+
+S014 is a blocking compiler-integrity diagnostic when a member-read node has no
+canonical base operand. A resolved field type alone is insufficient: ownership,
+addressing, and emitted loads require the exact parameter, local, or enum
+pattern payload origin. When recursive lowering omits a payload name node, the
+member reconnects to the unique kind-29 pattern binding owned by its enclosing
+enum arm; spelling and type compatibility are not used as substitutes.
+
+S015 is a blocking compiler-integrity diagnostic when an ordinary binary node
+has no canonical right operand. Both operands must be present and ordered by
+their source AST before LLVM selects comparison or arithmetic instructions.
+Nested-call recovery may use only an exact same-parent predecessor or direct
+continuation edge; it must not guess an operand from a compatible nearby type.
+S016 is a blocking compiler-integrity diagnostic when a conditional node has
+then/else structure but no canonical condition operand. LLVM lowering must not
+silently omit such a conditional. A pipeline condition may be restored only
+from its exact same-parent continuation predecessor, never a nearby value.
+S017 is a blocking compiler-integrity diagnostic when a member base's canonical
+nominal owner cannot be mapped to a source range. Member projection resolves
+the recursive semantic `typeId` first and never indexes source tables from
+stale legacy module metadata. Missing or non-nominal canonical base identity is
+the same S017 failure; legacy type fields are not an accepted substitute.
+
+S018 is a blocking compiler-integrity diagnostic when an enum `when` match does
+not retain a canonical `Option`, `Result`, or nominal enum subject. LLVM enum
+lowering must never extract a tag or payload from a container, struct, stale
+wrapper, missing operand, or untyped value even when shallow execution happens
+not to expose the mismatch.
+An exact unique `(origin, module, symbol)` nominal match may canonicalize a
+legacy binding into `typeId`; ambiguity is never resolved by first-match order.
+
+S019 is a blocking compiler-integrity diagnostic when a value-producing enum
+match has an arm without a canonical result value. The compiler rejects this
+Typed IR before value-use analysis or LLVM emission can reference an undefined
+match SSA value.
+
+S020 is a blocking compiler-integrity diagnostic when an enum match subject is
+a name with neither a same-module parameter ABI identity nor a concrete
+producer link. Symbol ordinals are module-local, so a coincidentally equal
+ordinal from another module cannot justify emitting an undefined `%vN`.
+
+S021 is a blocking compiler-integrity diagnostic when an enum match subject is
+a return, declaration, control-transfer, or region node. Those nodes never
+materialize an LLVM value; stale contextual enum typing cannot make them valid
+subjects. When a value producer shares their AST position, the producer is the
+canonical subject.
+
+S022 is a blocking compiler-integrity diagnostic when a value-producing enum
+match arm result type differs from the match result type. The match slot uses
+the declared function or enclosing value context, and an arm pipeline retains
+its final constructor or transformation rather than its initial payload.
+
+S023 is a blocking compiler-integrity diagnostic when a value-producing enum
+match arm retains a transparent, non-SSA parser wrapper rather than its
+concrete producer. An existing canonical arm result, including a logical
+short-circuit join, is authoritative. Standard generic enum flow targets such
+as `value -> Result<T, E>.Ok` are semantically rewritten to constructors in
+both the surface and CST-backed compiler paths.
+
+S024 is a blocking compiler-integrity diagnostic when a value-producing `if`
+has a then or else region without a concrete result value. This is rejected
+before LLVM result-slot lowering can index an absent IR node.
+
+S025 is the mandatory result-store boundary diagnostic for every
+value-producing control. It reports an invalid concrete source index with its
+control and branch identity rather than permitting an emitter bounds crash.
+
+S026 is a blocking compiler-integrity diagnostic when an enum payload binding
+type differs from its matched variant's canonical payload type. Repair and
+validation apply to stale non-negative ids as well as missing ids.
+
+S027 requires direct fixed or bounded array return literals to inherit the
+function's canonical array identity. S028 requires array-valued nominal struct
+field initializers to match the declaration's exact dynamic, fixed, or bounded
+shape before ABI lowering.
+
+S029 requires a fixed repeat literal `[value; N]` to carry static length `N`,
+not the count of lowered seed operands. S030 rejects a terminal `?` binding
+that retains the enclosing `Result` instead of its success payload. S031
+rejects an unresolved dotted member type once its nominal, field-bearing base
+is canonical.
+
+S032 is the mandatory index-assignment boundary diagnostic when an array
+target has no canonical element type. Fixed arrays participate in the same
+element query as dynamic and bounded arrays. A fixed repeat literal allocates,
+stores, and reports its static repeat length rather than its single seed-operand
+count, including when the literal is emitted inside a `while`, `if`, or `when`
+region.
+An expression-bodied enum-match arm computes its result from the final direct
+arm expression after pattern and payload binding whose canonical type equals
+the arm result type. The payload binding is only the arm input; it is not an
+implicit replacement for transformations such as `Err(error) => -error`, and
+an unrelated nested enum producer cannot replace an enclosing scalar result.
+Struct literal ABI selection uses the literal's canonical nominal owner id.
+Legacy nominal coordinates are consulted only when that id is absent.
+S033 rejects a nominal struct literal whose id has no fields while a
+coordinate-equivalent canonical identity owns the declaration field table.
+S034 guards the final struct emitter when a field position cannot resolve by
+the declaration's explicit ordinal.
+S035 guards the equivalent control-region emitter boundary. Struct literals
+inside control arms use the canonical owner id, explicit field ordinal, and
+the same fixed-array carrier-to-inline ABI materialization as function-body
+literals.
+Fixed arrays are inline inside aggregate storage but use borrowed `{ptr, len}`
+as expression values. Member projection therefore takes the inline field's
+address and constructs a carrier with the canonical static length. S036
+rejects that projection when element or length metadata is not canonical.
+An enum match whose every arm returns terminates its enclosing region. S037
+guards the match-result boundary against re-emitting a constructor already
+defined in a nested arm, which would duplicate an LLVM SSA name.
+Fixed-array success payloads extracted by `?` follow the same storage/value
+boundary as struct fields: the payload is inline in the enum, while the bound
+expression is `{ptr, staticLength}`. S038 rejects missing canonical metadata.
+Empty contextual slice literals emit `{null, 0}` even though they have no
+element operands. S039 rejects an empty literal whose array ABI remains
+unknown at the emitter boundary.
+Subject-style `when` controls cannot be their own comparison subject. Late
+Typed IR canonicalization repairs either a missing or self-referential subject
+from the exact preceding integer producer in the same region. S040 guards that
+invariant at the LLVM boundary before an undefined `%vN` can be referenced.
+Every non-enum subject arm is then synchronized to that canonical subject even
+when both operands are already populated. S013 rejects a stale left operand,
+not only a missing one.
+Binding/control aliases and arithmetic values must preserve one canonical LLVM
+storage class through final Typed IR. S041 rejects stale aggregate projections;
+S042 and S044 reject scalar receivers for `len` and `capacity`; S043 rejects a
+dotted member whose base crosses its structural source span or becomes scalar.
+S045 rejects a partition route product unless every field preserves the exact
+canonical `Stream<T>` or `EventStream<T>` wrapper of the partition source.
+Fixed-point inference treats a preceding `Range` or other provisional type as
+unresolved and updates an already-recorded partition expression when the
+canonical product becomes available.
+Flow intrinsics are recognized only from top-level identifiers after `->`.
+Therefore a local named `capacity` is an ordinary binding, and numeric slice
+bounds are written as literals rather than referenced as nonexistent SSA values.
+LLVM integer constants never preserve source digit separators. All scalar,
+container, index, capacity, interpolation, and control-region literal paths use
+the shared canonical integer writer; booleans use `1` and `0`.
+
+E20 partial-move joins track only bindings live across the branch join or loop
+back-edge. A binding introduced inside an arm/body is dead at region exit and
+does not require artificial field reinitialization.
+Compile-time value generics used as expressions lower to hidden trailing `Int`
+parameters, and numeric `<...>` call arguments feed those parameters. They are
+function-scoped values in interpolation-based loop and control expressions as
+well as direct expressions. The mutable-container ABI carrier is declared from
+actual mutable-parameter use independently of dynamic-array use, because fixed
+arrays have no capacity field and therefore pass their canonical two-field
+value by pointer; growable and bounded carriers use the three-address form.
+
+Fixed-array type annotations accept a numeric or generic length: `[T; N]` and
+`[T; Length]`. Bounded inline storage remains the distinct `[T; <= N]` form.
+The generated grammar must retain the numeric alternative even though array
+expressions have their own repeat and bounded-storage alternatives.
+
+Numeric separators are source syntax and are removed when an integer literal
+is printed into LLVM text. Resolved integer call arguments are converted to the
+declared parameter width before the call with signedness-aware extension or
+truncation. Integer return literals have no SSA producer; the emitter prints
+them directly using the declared return type instead of creating a conversion
+from an undefined `%v` value.
+
+Warning locations retain their originating module and survive exact frontend
+and semantic incremental-cache reuse. Dedicated regression fixtures may assert
+a warning; ordinary standard-library and release builds are expected to have
+none. Mutable-use tracking is declaration- and lexical-scope-aware: mutations
+in a function's final expression belong to declarations in its preceding
+statement body, while a same-named declaration in another scope remains
+independent.
 
 This keeps the smallest program easy to read while avoiding hidden mutation
 semantics before the memory and value model are decided.
@@ -601,6 +873,9 @@ before its lexical scope exits. An explicit `await` chooses where its result is
 needed; otherwise scope cleanup joins the task and discards the result. A task
 cannot be awaited twice or used after `await`. `main` is the implicit root async
 scope, while other functions must declare `async` before using `await`.
+Consumption applies to the complete flow, so `pending -> await -> decode`
+releases `pending` exactly once even though a later target transforms the
+awaited value. Lexical cleanup must not join or release that task again.
 
 The Windows x64 and Linux x64 runtimes represent every task with the same
 two-pointer value while an owned task-control record stores its context,
@@ -846,6 +1121,91 @@ println -> sys.io.println
 readInt -> sys.io.readInt
 ```
 
+### TCP, UDP, and QUIC
+
+`sys.socket` is the portable native socket module for `windows-x64` and
+`linux-x64`. It defines affine `TcpListener`, `TcpStream`, and `UdpSocket`
+values, an `Endpoint { address: Text, port: UInt16 }`, structured
+`SocketError { kind, code }`, TCP `listen`/`connect`/`accept`/`send`/`receive`
+and `shutdown`, and UDP `bindDatagram`/`sendTo`/`receiveFrom`. Every operation
+that can access the network declares `uses Network` and returns `Result`.
+
+Programs flatten sequential failure with postfix `?`:
+
+```sollang
+sendPing endpoint: socket.Endpoint -> Result<Bool, socket.SocketError> uses Network {
+    socket.connect(endpoint)? => connection
+    socket.sendText(connection, "ping")? => count
+    socket.shutdown(connection)?
+    Result<Bool, socket.SocketError>.Ok(count == UIntSize(4))
+}
+```
+
+This is the standard alternative to nesting a `when` for every operation. A
+`when` remains appropriate at a boundary that renders, retries, translates, or
+otherwise recovers from the final error.
+
+`sys.quic` provides affine `Identity`, `Endpoint`, `Connection`, and `BiStream`
+values; generated identities, explicit peer-certificate pinning, bidirectional
+streams, and unreliable datagrams; and the same flat `Result`/`?` contract.
+One QUIC endpoint owns one UDP socket and drives inbound handshakes in the
+Sollang runtime, so a process may call `connect` before `accept` without a
+parallel source-language rendezvous. Protocol state, TLS 1.3, packet protection,
+loss recovery, flow control, streams, and datagrams are pure reachable Sollang
+standard-library modules. The completed native path does not require a Rust
+crate, `sollang_quic.dll`, or `libsollang_quic.so`; the obsolete adapter and
+its packaging/linker paths have been removed. Browser WASM does not silently
+emulate native networking capabilities.
+
+`sys.quic.initial_engine` integrates the v1/v2 long-header parser, Initial key
+derivation, header protection, AEAD, packet-number restoration, CRYPTO frame,
+and ClientHello/ServerHello framing. A client Initial is padded to at least
+1200 bytes. The server derives client Initial keys from the original
+destination connection ID, accepts one offset-zero CRYPTO frame followed only
+by PADDING, and replies with the server Initial key direction. Fixtures 929 and
+933 prove the in-memory and real UDP roundtrips on Windows and Linux; these are
+foundational self-interoperability checks, not yet independent QUIC endpoint
+interoperability.
+
+`sys.quic.handshake_engine` applies the negotiated TLS handshake traffic
+secret to v1/v2 Handshake long-header packets. `sys.quic.application_engine`
+applies the application traffic secret to 1-RTT short-header packets, validates
+the destination connection ID and reserved bits, carries STREAM and DATAGRAM
+frames, and advances the receive key phase only after authentication succeeds
+with the next `traffic upd` secret. CONNECTION_CLOSE transport/application
+forms and HANDSHAKE_DONE have their RFC wire values and strict length checks.
+MAX_DATA, MAX_STREAM_DATA, MAX_STREAMS, DATA_BLOCKED, STREAM_DATA_BLOCKED, and
+STREAMS_BLOCKED share the same varint codec and preserve the bidirectional or
+unidirectional stream-limit bit in their nominal values.
+`frame.encodeAll` and `frame.decodeAll` preserve ordered frame sequences, and
+the 1-RTT application engine seals and opens that sequence as one authenticated
+packet rather than requiring one frame per packet.
+These engines are pure Sollang protocol slices. Their Windows/Linux
+self-roundtrips are required evidence, but do not replace an independent QUIC
+endpoint interoperability test or the connection-level ACK, recovery, flow
+control, coalescing, and handshake-confirmation state machine.
+
+The pure TLS layer emits and strictly decodes TLS 1.3 ClientHello,
+ServerHello, and EncryptedExtensions for AES-128-GCM-SHA256 and X25519. The
+ClientHello carries SNI, ALPN, supported versions, signature algorithms, key
+share, and QUIC transport parameters; the encrypted extensions carry the
+selected ALPN and peer transport parameters. Certificate, CertificateVerify,
+and Finished framing is likewise length-checked, CertificateVerify input uses
+the RFC 9846 64-space context construction, and Finished comparison consumes
+all 32 bytes. The TLS state machines do not advance authentication messages on
+framing alone: exact-DER pinned-certificate mode first compares the complete
+certificate, parses its RFC 5280 TBSCertificate structure, accepts only an
+RFC 8410 Ed25519 SubjectPublicKeyInfo whose algorithm parameters are absent,
+and requires the requested server name to match a subjectAltName dNSName
+exactly under ASCII case folding.
+CertificateVerify then uses only that extracted key over the transcript hash
+before the message; the server creates the message from the same transcript
+point, and received Finished messages must match the expected verify_data.
+Authentication failure moves the state to `Failed`. Exact certificate pinning
+plus exact DNS SAN matching is not general X.509 path, validity, revocation,
+wildcard, IP-address, or IDNA service-identity validation; those remain separate
+authentication gates for a general-purpose Internet-facing QUIC endpoint.
+
 General-purpose sequence operations live in `std.sequence` and require an
 explicit import. `range(start, endInclusive)` returns a first-class `Range`
 that stores only its two `Int` bounds. `each` consumes that value as a direct
@@ -1049,6 +1409,8 @@ pattern:
 ```sollang
 seedRandom value: Int -> Unit
 randomBelow maxExclusive: Int -> Int
+sys.crypto.random.bytes count: UIntSize
+    -> Result<[UInt8; ~], sys.crypto.random.Error> uses Random
 
 openIntWriter path: Text -> Unit
 writeInt value: Int -> Unit
@@ -1058,6 +1420,16 @@ openIntReader path: Text -> Unit
 closestInt target: Int -> Int
 closeIntReader: -> Unit
 ```
+
+`seedRandom` and `randomBelow` are deterministic workflow primitives and are
+not cryptographic. `sys.crypto.random.bytes` allocates an independently owned
+byte array and fills it from the operating-system cryptographic source:
+`BCryptGenRandom` with `BCRYPT_USE_SYSTEM_PREFERRED_RNG` on Windows and
+`getrandom` on Linux. Failure is returned as `Error.Unavailable`; it never
+falls back to the deterministic generator. The declaration, runtime helper,
+and Windows `bcrypt.dll` import are emitted only when the operation is
+reachable. `wasm32-browser` rejects the capability until a host cryptographic
+random source is explicitly provided.
 
 The legacy sorted-`Int` file format is binary, little-endian, signed 64-bit records.
 `writeInt` appends to the current writer through an internal buffer. `closestInt`
@@ -1165,7 +1537,18 @@ success payload. On `Err`, it returns `Result<U, E>.Err(error)` from the nearest
 enclosing Result-returning function after deterministic local cleanup. Error
 types must match exactly. An owned Result may be propagated when the operand is
 a fresh temporary or the function's explicit `move Result<T, E>` input. A named
-non-move owned Result is rejected instead of being copied. Result constructors
+non-move owned Result is rejected instead of being copied.
+The postfix applies to a complete value-flow expression as well as to its
+source, so `owner -> fallibleTransform?` propagates the target Result without
+an intermediate binding. If the target consumes an owned source, both the
+success and propagated-error paths transfer that source exactly once.
+
+An enum-pattern payload containing owned storage is a borrow unless the match
+subject itself is a named owner or a fresh owned temporary. Re-wrapping a
+borrowed payload in an owned aggregate, or passing it to a `move` input, is a
+semantic error rather than an implicit pointer copy.
+
+Result constructors
 consume named owned payloads and transfer their single drop obligation into the
 new enum value.
 
@@ -1196,6 +1579,15 @@ Static arrays:
 numbers[0] => first
 numbers -> len => count
 ```
+
+An array repeat with a concrete count has that exact fixed-array type. In a
+declared array context its repeated value inherits the element type, so
+`zeros: -> [UInt8; 32] => [0; 32]` requires neither a `UInt8(0)` constructor nor
+a growable intermediate. A value-generic fixed array may be mutably borrowed;
+its specialized length name is a compile-time integer in ordinary expressions
+as well as in array type and repeat positions. Returning a fixed array from a
+function preserves this concrete type and length across the call boundary; the
+lowered pointer/length representation does not weaken `[T; N]` into `[T]`.
 
 Dynamic arrays:
 
@@ -1405,19 +1797,24 @@ Container rules:
 - User functions may return concrete `[T; ~]` and `{K: V}` owners. The returned
   owner must be bound directly by the caller so the caller owns the drop point.
   Calling such a function as an anonymous flow source is rejected.
-- User functions may accept `[Int]` readonly views. A static `Int` array or
-  growable `Int` array can be passed to `[Int]` without transferring ownership.
+- User functions may accept generic `[T]` readonly views. A static, fixed, or
+  growable `T` array can be passed to `[T]` without transferring ownership.
   The callee can read with indexing, `len`, `each`, and `fold`, but cannot
-  mutate or store the view beyond the call.
+  mutate or store the view beyond the call. A field or index projection rooted
+  in a named owner may be borrowed directly for that call; it does not need a
+  temporary owned binding and the root owner remains live.
 - User functions may accept any supported concrete `{K: V}` as a readonly
   dictionary view. The
   callee receives `ptr`, `len`, and `capacity` metadata by value and may use
   indexing, `len`, and `capacity`. `put`, indexed assignment, `updated`, return,
   and storage beyond the call are rejected. The caller remains the owner.
-- User functions may accept `mut [T; ~]` and `mut {K: V}` mutable
-  borrows. The caller must pass a named mutable owner such as `values!` or
-  `scores!`. The callee can use existing mutable operations such as `push`,
-  `put`, and indexed assignment, and the caller keeps ownership after the call.
+- User functions may accept mutable struct and container borrows such as
+  `mut State`, `mut [T; ~]`, and `mut {K: V}`. The caller passes either a named
+  mutable owner such as `state!`/`values!` or a field or index place rooted in
+  that owner, such as `state!.transcript`. Projected mutable borrows address the
+  original field storage rather than a copied aggregate. The callee can use
+  existing mutable operations such as `push`, `put`, and indexed assignment,
+  and the caller keeps ownership after the call.
 - User functions may accept `move [T; ~]` and `move {K: V}` owners.
   Passing such a value moves ownership into the callee. The caller binding is
   no longer live after the call. The callee drops the parameter at function
@@ -1521,8 +1918,10 @@ syntax! -> reset
   formats their retained values.
 - A materialized `Text` borrows its arena owner. While that view is live,
   `alloc`, `store`, `reset`, move, and drop of the conflicting arena are
-  rejected. The loan ends at the view's last reachable use and propagates
-  through functions that return the view.
+  rejected. Passing the owner to any `mut Arena` parameter is likewise rejected
+  because that callee may grow or rewrite the backing block. The loan ends at
+  the view's last reachable use and propagates through functions that return
+  the view on both the bootstrap and self-host ownership paths.
 - Immediate sinks consume deferred interpolation directly and do not
   materialize. The explicit boundary is for storage, return, indexing, or code
   that intentionally fixes allocation timing and lifetime.
@@ -2190,7 +2589,11 @@ dropped in reverse declaration order before the LLVM `ret` terminator. The
 reference compiler supports scalar, aggregate, and Unit returns; the
 self-hosted LLVM slice proves a scalar return from a structured region while
 cleaning an owned array. Local functions may use the same explicit return form;
-their local owners are cleaned before either an early or tail return. General
+their local owners are cleaned before either an early or tail return. An owner
+wrapped by value-preserving nodes and owning enum constructors is part of the
+returned aggregate and is therefore excluded from cleanup on that return edge.
+Explicit and tail returns resolve this transfer through the same compiler path.
+General
 moved-region paths remain part of the structured early-exit follow-up.
 
 The loop variable is immutable for the iteration and scoped to the loop body.
@@ -2229,6 +2632,16 @@ both branches produce `Unit`; in that form the `else` branch may be omitted. Whe
 `if` is used as a value, `else` is required and both branches must produce the
 same type.
 
+For a failure-only guard, keep the positive validity condition and use
+`unless`; it is equivalent to `not condition -> if { ... }` without adding a
+negation wrapper around a long expression:
+
+```sollang
+decoded.nextOffset == UIntSize(bytes -> len) -> unless {
+    Result<Message, Error>.Err(error(50)) -> return
+}
+```
+
 ```sollang
 n == 9 -> if {
     "nine"
@@ -2251,7 +2664,15 @@ when {
 
 `when` checks arms in order. Each arm condition must be `Bool`; the `else` block
 is required in the current expression form; all branch values must have the same
-type. Branch-local bindings do not escape their branch body.
+type. When an integer-valued `if` or `when` appears in a typed context such as a
+function argument, struct field, return value, or numeric operand, that expected
+integer type is propagated through surrounding arithmetic and into every arm.
+The existing type of a mutable rebind and the element/value type of an indexed
+assignment are also typed contexts. Nested value-form `if` expressions in a
+declared integer return preserve that return type during semantic analysis and
+code generation.
+Numeric literals therefore stay unannotated instead of requiring a redundant
+constructor. Branch-local bindings do not escape their branch body.
 
 When every arm compares the same value, the value can flow into `when` once and
 each arm can start with a comparison operator:
@@ -2267,7 +2688,10 @@ score -> when {
 
 This form is equivalent to the full-condition form for ordered integer
 comparisons, but the subject expression is evaluated once before the branch
-chain. The current shorthand supports `==`, `!=`, `<`, `<=`, `>`, and `>=`.
+chain. Every signed, unsigned, pointer-sized, and code-point integer subject is
+supported. Numeric literal arm operands are contextually typed from the
+subject; nonliteral operands must have the same integer type. The current
+shorthand supports `==`, `!=`, `<`, `<=`, `>`, and `>=`.
 It also supports inclusive range arms:
 
 ```sollang

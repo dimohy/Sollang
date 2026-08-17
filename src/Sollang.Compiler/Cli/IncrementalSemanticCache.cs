@@ -16,15 +16,16 @@ internal sealed record IncrementalSemanticCacheProbe(
 internal sealed class IncrementalSemanticCache
 {
     private const ulong Magic = 6002245291165495635;
-    private const ulong Schema = 5;
+    private const ulong Schema = 8;
     private const int DigestLength = 32;
-    private const int HeaderWords = 11;
+    private const int HeaderWords = 13;
     private const int MaximumRecords = 1_000_000;
     private const int MaximumIdentityBytes = 1024 * 1024;
     private const long MaximumArtifactBytes = 1024L * 1024 * 1024;
 
     private readonly IncrementalCacheLocation _location;
     private readonly byte[] _declarationFingerprint;
+    private readonly SemanticStaticArrayReuse[] _staticArrays;
     private readonly string[] _functions;
     private readonly KeyValuePair<string, string>[] _calls;
     private readonly KeyValuePair<string, byte[]>[] _modules;
@@ -32,10 +33,12 @@ internal sealed class IncrementalSemanticCache
     private readonly SemanticSpecializationReuse[] _specializations;
     private readonly string? _mainModuleName;
     private readonly IReadOnlyDictionary<string, string>? _mainBindings;
+    private readonly SemanticWarning[] _warnings;
 
     private IncrementalSemanticCache(
         IncrementalCacheLocation location,
         byte[] declarationFingerprint,
+        SemanticStaticArrayReuse[] staticArrays,
         string[] functions,
         KeyValuePair<string, string>[] calls,
         KeyValuePair<string, byte[]>[] modules,
@@ -43,6 +46,7 @@ internal sealed class IncrementalSemanticCache
         SemanticSpecializationReuse[] specializations,
         string? mainModuleName,
         IReadOnlyDictionary<string, string>? mainBindings,
+        SemanticWarning[] warnings,
         string status,
         int mappedFunctions,
         int mappedCalls,
@@ -52,6 +56,7 @@ internal sealed class IncrementalSemanticCache
     {
         _location = location;
         _declarationFingerprint = declarationFingerprint;
+        _staticArrays = staticArrays;
         _functions = functions;
         _calls = calls;
         _modules = modules;
@@ -59,6 +64,7 @@ internal sealed class IncrementalSemanticCache
         _specializations = specializations;
         _mainModuleName = mainModuleName;
         _mainBindings = mainBindings;
+        _warnings = warnings;
         Status = status;
         MappedFunctions = mappedFunctions;
         MappedCalls = mappedCalls;
@@ -114,11 +120,13 @@ internal sealed class IncrementalSemanticCache
                 "loaded",
                 new SemanticReusePlan(
                     old.DeclarationFingerprint,
+                    old.StaticArrays,
                     reusable,
                     old.Calls.ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal),
                     specializations,
                     mainBindings is null ? null : old.MainModuleName,
-                    mainBindings),
+                    mainBindings,
+                    old.Warnings.Where(warning => exactModules.Contains(warning.ModuleName)).ToArray()),
                 old.Functions,
                 old.Calls);
         }
@@ -153,6 +161,13 @@ internal sealed class IncrementalSemanticCache
             .ToArray();
         EnsureUniquePairs(calls, "semantic call-site identity collision");
         var modules = BuildModuleHashes(compilation);
+        var staticArrays = program.Types.StaticArrays
+            .Select(definition => new SemanticStaticArrayReuse(
+                (int)definition.Id,
+                SemanticStableIdentity.Type(program.Types, definition.ElementType),
+                definition.FixedLength))
+            .OrderBy(static definition => definition.Id)
+            .ToArray();
         var reusableFunctions = BuildReusableFunctions(program);
         var specializations = BuildSpecializations(program);
         var (mainModuleName, mainBindings) = BuildReusableMain(compilation, program);
@@ -169,6 +184,7 @@ internal sealed class IncrementalSemanticCache
         return new IncrementalSemanticCache(
             location,
             program.StableDeclarationFingerprint,
+            staticArrays,
             functions,
             calls,
             modules,
@@ -176,6 +192,12 @@ internal sealed class IncrementalSemanticCache
             specializations,
             mainModuleName,
             mainBindings,
+            program.Warnings
+                .OrderBy(static warning => warning.ModuleName, StringComparer.Ordinal)
+                .ThenBy(static warning => warning.Line)
+                .ThenBy(static warning => warning.Column)
+                .ThenBy(static warning => warning.Code, StringComparer.Ordinal)
+                .ToArray(),
             probe.Status,
             mappedFunctions,
             mappedCalls,
@@ -212,11 +234,22 @@ internal sealed class IncrementalSemanticCache
                 WriteUInt64(stream, checksum, checked((ulong)_reusableFunctions.Length));
                 WriteUInt64(stream, checksum, checked((ulong)_specializations.Length));
                 WriteUInt64(stream, checksum, _mainBindings is null ? 0UL : 1UL);
+                WriteUInt64(stream, checksum, checked((ulong)_warnings.Length));
+                WriteUInt64(stream, checksum, checked((ulong)_staticArrays.Length));
                 WriteDigest(stream, checksum, _declarationFingerprint);
                 if (_mainBindings is not null)
                 {
                     WriteString(stream, checksum, _mainModuleName!);
                     WriteBindings(stream, checksum, _mainBindings);
+                }
+                foreach (var staticArray in _staticArrays)
+                {
+                    WriteUInt64(stream, checksum, checked((ulong)staticArray.Id));
+                    WriteString(stream, checksum, staticArray.ElementType);
+                    WriteUInt64(
+                        stream,
+                        checksum,
+                        staticArray.Length is { } length ? checked((ulong)length + 1) : 0);
                 }
                 foreach (var function in _functions)
                     WriteString(stream, checksum, function);
@@ -239,6 +272,14 @@ internal sealed class IncrementalSemanticCache
                 }
                 foreach (var specialization in _specializations)
                     WriteSpecialization(stream, checksum, specialization);
+                foreach (var warning in _warnings)
+                {
+                    WriteString(stream, checksum, warning.Code);
+                    WriteString(stream, checksum, warning.ModuleName);
+                    WriteUInt64(stream, checksum, checked((ulong)warning.Line));
+                    WriteUInt64(stream, checksum, checked((ulong)warning.Column));
+                    WriteString(stream, checksum, warning.Message);
+                }
                 stream.Write(checksum.GetHashAndReset());
                 stream.Flush(flushToDisk: true);
             }
@@ -433,9 +474,24 @@ internal sealed class IncrementalSemanticCache
             1 => true,
             _ => throw new InvalidDataException("semantic main presence is invalid")
         };
+        var warningCount = CheckedCount(ReadUInt64(stream, checksum));
+        var fixedArrayCount = CheckedCount(ReadUInt64(stream, checksum));
         var declarationFingerprint = ReadDigest(stream, checksum);
         var mainModuleName = hasMain ? ReadString(stream, checksum) : null;
         var mainBindings = hasMain ? ReadBindings(stream, checksum) : null;
+        var staticArrays = new SemanticStaticArrayReuse[fixedArrayCount];
+        var previousFixedArrayId = -1;
+        for (var index = 0; index < fixedArrayCount; index++)
+        {
+            var id = CheckedCount(ReadUInt64(stream, checksum));
+            if (id <= previousFixedArrayId)
+                throw new InvalidDataException("fixed-array type ids are not canonical");
+            var elementType = ReadString(stream, checksum);
+            var encodedLength = CheckedCount(ReadUInt64(stream, checksum));
+            int? fixedLength = encodedLength == 0 ? null : encodedLength - 1;
+            staticArrays[index] = new SemanticStaticArrayReuse(id, elementType, fixedLength);
+            previousFixedArrayId = id;
+        }
         var functions = ReadCanonicalStrings(stream, checksum, functionCount, "function identities");
         var calls = ReadCanonicalPairs(stream, checksum, callCount, "call-site identities");
         var modules = new KeyValuePair<string, byte[]>[moduleCount];
@@ -468,6 +524,16 @@ internal sealed class IncrementalSemanticCache
             specializations[index] = specialization;
             previous = specialization.Identity;
         }
+        var warnings = new SemanticWarning[warningCount];
+        for (var index = 0; index < warningCount; index++)
+        {
+            warnings[index] = new SemanticWarning(
+                ReadString(stream, checksum),
+                ReadString(stream, checksum),
+                CheckedCount(ReadUInt64(stream, checksum)),
+                CheckedCount(ReadUInt64(stream, checksum)),
+                ReadString(stream, checksum));
+        }
         if (stream.Position != length - DigestLength)
             throw new InvalidDataException("semantic generation declared lengths do not reach the checksum");
         Span<byte> declared = stackalloc byte[DigestLength];
@@ -476,13 +542,15 @@ internal sealed class IncrementalSemanticCache
             throw new InvalidDataException("semantic generation checksum mismatch");
         return new DecodedSemanticCache(
             declarationFingerprint,
+            staticArrays,
             functions,
             calls,
             modules,
             reusable,
             specializations,
             mainModuleName,
-            mainBindings);
+            mainBindings,
+            warnings);
     }
 
     private static string[] ReadCanonicalStrings(
@@ -742,13 +810,15 @@ internal sealed class IncrementalSemanticCache
 
     private sealed record DecodedSemanticCache(
         byte[] DeclarationFingerprint,
+        IReadOnlyList<SemanticStaticArrayReuse> StaticArrays,
         IReadOnlyList<string> Functions,
         IReadOnlyList<KeyValuePair<string, string>> Calls,
         IReadOnlyList<KeyValuePair<string, byte[]>> Modules,
         IReadOnlyList<SemanticFunctionReuse> ReusableFunctions,
         IReadOnlyList<SemanticSpecializationReuse> Specializations,
         string? MainModuleName,
-        IReadOnlyDictionary<string, string>? MainBindings);
+        IReadOnlyDictionary<string, string>? MainBindings,
+        IReadOnlyList<SemanticWarning> Warnings);
 
     private sealed class SemanticCacheMissException(string message) : Exception(message);
 }

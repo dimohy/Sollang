@@ -501,7 +501,12 @@ Parallel.ForEach(
     var stdoutLlvmValidationPath = Path.Combine(expectedDir, name + ".stdout.llvm.validate.txt");
     var stdoutLlvmExecutionPath = Path.Combine(expectedDir, name + ".stdout.llvm.execute.txt");
     var stdoutLlvmLinkArgumentsPath = Path.Combine(expectedDir, name + ".stdout.llvm.link-args.txt");
+    var targetStdoutPath = Path.Combine(
+        expectedDir,
+        name + ".stdout." + TestTargetName(testTarget) + ".txt");
+    var expectedStdoutPath = File.Exists(targetStdoutPath) ? targetStdoutPath : expectedFile;
     var compileOnlyPath = Path.Combine(expectedDir, name + ".compile-only.txt");
+    var compilerStderrContainsPath = Path.Combine(expectedDir, name + ".compiler.stderr.contains.txt");
     var verifyLlvm = File.Exists(llvmContainsPath) || File.Exists(llvmNotContainsPath);
 
     if (!File.Exists(sourcePath) && !File.Exists(projectPath))
@@ -564,9 +569,20 @@ Parallel.ForEach(
     }
     else if (File.Exists(sourcesPath))
     {
-        compilerArguments.AddRange(File.ReadLines(sourcesPath)
+        var sourceArguments = File.ReadLines(sourcesPath)
             .Where(static line => !string.IsNullOrWhiteSpace(line))
-            .Select(line => Path.GetFullPath(line.Trim(), repoRoot)));
+            .Select(line => Path.GetFullPath(line.Trim(), repoRoot))
+            .ToArray();
+        if (!string.Equals(sourcePath, defaultSourcePath, StringComparison.OrdinalIgnoreCase)
+            && sourceArguments.Length != 0
+            && string.Equals(
+                sourceArguments[0],
+                Path.GetFullPath(defaultSourcePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            sourceArguments[0] = sourcePath;
+        }
+        compilerArguments.AddRange(sourceArguments);
     }
     else
     {
@@ -594,6 +610,20 @@ Parallel.ForEach(
         Console.Error.WriteLine($"FAIL {name}: compiler exited {build.ExitCode}");
         Console.Error.WriteLine(build.Stdout);
         Console.Error.WriteLine(build.Stderr);
+        Interlocked.Increment(ref failures);
+        return;
+    }
+
+    var compilerOutput = build.Stdout + build.Stderr;
+    if (!File.Exists(compilerStderrContainsPath)
+        && Regex.IsMatch(compilerOutput, @"(?:^|\r?\n)warning S\d{3}\b", RegexOptions.CultureInvariant))
+    {
+        File.WriteAllText(
+            Path.Combine(artifactsDir, name + ".unexpected-warnings.log"),
+            compilerOutput,
+            new UTF8Encoding(false));
+        Console.Error.WriteLine($"FAIL {name}: unexpected Sollang compiler warning");
+        Console.Error.WriteLine(compilerOutput);
         Interlocked.Increment(ref failures);
         return;
     }
@@ -638,12 +668,41 @@ Parallel.ForEach(
             Interlocked.Increment(ref failures);
             return;
         }
+        var wasmCompilerOutput = wasmBuild.Stdout + wasmBuild.Stderr;
+        if (!File.Exists(compilerStderrContainsPath)
+            && Regex.IsMatch(wasmCompilerOutput, @"(?:^|\r?\n)warning S\d{3}\b", RegexOptions.CultureInvariant))
+        {
+            File.WriteAllText(
+                Path.Combine(artifactsDir, name + ".wasm32.unexpected-warnings.log"),
+                wasmCompilerOutput,
+                new UTF8Encoding(false));
+            Console.Error.WriteLine($"FAIL {name}: unexpected Sollang compiler warning for wasm32-browser");
+            Console.Error.WriteLine(wasmCompilerOutput);
+            Interlocked.Increment(ref failures);
+            return;
+        }
     }
 
     if (File.Exists(compileOnlyPath))
     {
         passed = true;
         return;
+    }
+
+    if (File.Exists(compilerStderrContainsPath))
+    {
+        var expectedCompilerDiagnostic = Normalize(
+            File.ReadAllText(compilerStderrContainsPath, Encoding.UTF8)).Trim();
+        var actualCompilerDiagnostic = Normalize(build.Stdout + build.Stderr);
+        if (!actualCompilerDiagnostic.Contains(expectedCompilerDiagnostic, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"FAIL {name}: expected compiler diagnostic containing:");
+            Console.Error.WriteLine(expectedCompilerDiagnostic);
+            Console.Error.WriteLine("ACTUAL:");
+            Console.Error.WriteLine(actualCompilerDiagnostic);
+            Interlocked.Increment(ref failures);
+            return;
+        }
     }
 
     var stdin = File.Exists(stdinPath)
@@ -675,12 +734,13 @@ Parallel.ForEach(
         || !reusableSelfHostTest
         || selfHostMode.StartsWith("wasm", StringComparison.Ordinal);
     var expected = compareRawStdout
-        ? Normalize(File.ReadAllText(expectedFile, Encoding.UTF8))
+        ? Normalize(File.ReadAllText(expectedStdoutPath, Encoding.UTF8))
         : actual;
 
     if (run.ExitCode != 0)
     {
         Console.Error.WriteLine($"FAIL {name}: executable exited {run.ExitCode}");
+        Console.Error.WriteLine(run.Stdout);
         Console.Error.WriteLine(run.Stderr);
         Interlocked.Increment(ref failures);
         return;
@@ -704,7 +764,7 @@ Parallel.ForEach(
             }
         }
 
-        File.WriteAllText(expectedFile, actual, new UTF8Encoding(false));
+        File.WriteAllText(expectedStdoutPath, actual, new UTF8Encoding(false));
         expected = actual;
         Console.WriteLine($"UPDATE {name}: expected stdout refreshed");
         Console.Out.Flush();
@@ -1328,7 +1388,7 @@ static void PrepareGitDependencyFixture(string artifactsDir)
     var root = Path.Combine(artifactsDir, "442-git-dependency");
     if (Directory.Exists(root))
     {
-        foreach (var path in Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories))
+        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
             File.SetAttributes(path, FileAttributes.Normal);
         }
@@ -1614,10 +1674,11 @@ static bool VerifyLlvmAssertions(
         return false;
     }
 
-    var llvm = File.ReadAllText(llvmPath, Encoding.UTF8);
+    var llvm = NormalizeLlvmTypeIdentities(File.ReadAllText(llvmPath, Encoding.UTF8));
     foreach (var expected in ReadAssertions(containsPath))
     {
-        if (!llvm.Contains(expected, StringComparison.Ordinal))
+        var normalizedExpected = NormalizeLlvmTypeIdentities(expected);
+        if (!llvm.Contains(normalizedExpected, StringComparison.Ordinal))
         {
             error = $"LLVM does not contain '{expected}'";
             return false;
@@ -1626,7 +1687,8 @@ static bool VerifyLlvmAssertions(
 
     foreach (var forbidden in ReadAssertions(notContainsPath))
     {
-        if (llvm.Contains(forbidden, StringComparison.Ordinal))
+        var normalizedForbidden = NormalizeLlvmTypeIdentities(forbidden);
+        if (llvm.Contains(normalizedForbidden, StringComparison.Ordinal))
         {
             error = $"LLVM unexpectedly contains '{forbidden}'";
             return false;
@@ -1636,6 +1698,21 @@ static bool VerifyLlvmAssertions(
     error = "";
     return true;
 }
+
+static string NormalizeLlvmTypeIdentities(string value) =>
+    Regex.Replace(
+        Regex.Replace(
+            Regex.Replace(
+                value,
+                @"%sollang\.(struct|enum)\.\d+",
+                "%sollang.$1.#"),
+            @"@sollang_drop_\d+",
+            "@sollang_drop_#"),
+        @"@sollang_fn_[A-Za-z0-9_]+(?=\(|\s|$)",
+        static match => Regex.Replace(
+            Regex.Replace(match.Value, @"_\d+", "_#"),
+            @"(?<=_t)\d+",
+            "#"));
 
 static IEnumerable<string> ReadAssertions(string path)
 {

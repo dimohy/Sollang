@@ -44,27 +44,27 @@ main {
             relayed + visited + collected
         }
         """; ~
-    ] => sources!
-    sources! -> expressionTypes.infer => inferred!
-    sources! -> calls.resolveModules => resolvedCalls!
-    sources! -> typeCheck.analyze => errors!
-    sources![1] -> ast.lower => nodes!
-    sources![1] -> symbols.collect => table!
-    sources![1] -> resolution.resolve => resolvedNames!
-    sources! -> typedIr.lower => ir!
+    ] => sources
+    sources -> expressionTypes.infer => inferred
+    sources -> calls.resolveModules => resolvedCalls
+    sources -> typeCheck.analyze => errors
+    sources[1] -> ast.lower => nodes
+    sources[1] -> symbols.collect => table
+    sources[1] -> resolution.resolve => resolvedNames
+    sources -> typedIr.lower => ir
 
     0 => specializedItems!
     0 => specializedCompositeItems!
     0 => typedBodyOperators!
     0 => resolvedRoles!
     0 => resolvedIndex!
-    resolvedIndex! < (resolvedNames! -> len) -> while {
-        resolvedNames![resolvedIndex!] => resolved
-        table![resolved.symbol] => symbol
-        (symbol.kind == 35 and nodes![symbol.astNode].kind == 48) -> if {
+    resolvedIndex! < (resolvedNames -> len) -> while {
+        resolvedNames[resolvedIndex!] => resolved
+        table[resolved.symbol] => symbol
+        (symbol.kind == 35 and nodes[symbol.astNode].kind == 48) -> if {
             0 => itemTypeIndex!
-            itemTypeIndex! < (inferred! -> len) -> while {
-                inferred![itemTypeIndex!] => itemType
+            itemTypeIndex! < (inferred -> len) -> while {
+                inferred[itemTypeIndex!] => itemType
                 (itemType.sourceModule == 1 and itemType.astNode == resolved.astNode and itemType.origin == 1 and itemType.targetSymbol == 2) -> if {
                     specializedItems! + 1 => specializedItems!
                 }
@@ -76,13 +76,13 @@ main {
         }
         resolvedIndex! + 1 => resolvedIndex!
     }
-    resolvedCalls! -> each call {
-        (call.sourceModule == 1 and call.status == 0 and nodes![call.callAst].kind == 48) -> if {
+    resolvedCalls -> each call {
+        (call.sourceModule == 1 and call.status == 0 and nodes[call.callAst].kind == 48) -> if {
             resolvedRoles! + 1 => resolvedRoles!
         }
     }
-    ir! -> each node {
-        (node.sourceModule == 1 and nodes![node.astNode].kind == 20 and node.typeOrigin == 1 and node.typeSymbol == 2) -> if {
+    ir -> each node {
+        (node.sourceModule == 1 and nodes[node.astNode].kind == 20 and node.typeOrigin == 1 and node.typeSymbol == 2) -> if {
             typedBodyOperators! + 1 => typedBodyOperators!
         }
     }
@@ -91,8 +91,8 @@ main {
     specializedCompositeItems! => compositeCount
     resolvedRoles! => roleCount
     typedBodyOperators! => operatorCount
-    "generic role counts = errors:$((errors! -> len)),scalar:$scalarCount,composite:$compositeCount,roles:$roleCount,operators:$operatorCount" -> println
-    ((errors! -> len) == 0 and specializedItems! == 2 and specializedCompositeItems! == 1 and resolvedRoles! == 3 and typedBodyOperators! >= 3) -> if {
+    "generic role counts = errors:$((errors -> len)),scalar:$scalarCount,composite:$compositeCount,roles:$roleCount,operators:$operatorCount" -> println
+    ((errors -> len) == 0 and specializedItems! == 2 and specializedCompositeItems! == 1 and resolvedRoles! == 3 and typedBodyOperators! >= 3) -> if {
         "generic role specialization = valid"
     } else {
         "generic role specialization = invalid"

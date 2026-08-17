@@ -1,0 +1,27 @@
+import sys.quic.varint as varint
+import sys.quic.error as errors
+
+roundtrip value: UInt64 -> Result<Bool, errors.Error> {
+    varint.encode(value)? => encoded
+    varint.decode(encoded, 0)? => decoded
+    Result<Bool, errors.Error>.Ok(decoded.value == value and decoded.nextOffset == UIntSize(encoded -> len))
+}
+
+run: -> Result<Bool, errors.Error> {
+    roundtrip(0)? => zero
+    roundtrip(63)? => oneLimit
+    roundtrip(64)? => twoStart
+    roundtrip(16_383)? => twoLimit
+    roundtrip(16_384)? => fourStart
+    roundtrip(1_073_741_823)? => fourLimit
+    roundtrip(1_073_741_824)? => eightStart
+    roundtrip(4_611_686_018_427_387_903)? => maximum
+    Result<Bool, errors.Error>.Ok(zero and oneLimit and twoStart and twoLimit and fourStart and fourLimit and eightStart and maximum)
+}
+
+main {
+    run() -> when {
+        Ok(success) { success -> if { "quic-varint=ok" } else { "quic-varint=failed" } -> println }
+        Err(error) { "quic-varint=failed" -> println }
+    }
+}

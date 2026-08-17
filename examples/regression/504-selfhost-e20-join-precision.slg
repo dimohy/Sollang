@@ -23,8 +23,8 @@ main {
 
     main { }
     """ => safeSource
-    [safeSource,; ~] -> ownershipCheck.analyze => safeErrors!
-    safeErrors! -> len => safe
+    [safeSource,; ~] -> ownershipCheck.analyze => safeErrors
+    safeErrors -> len => safe
 
     # Binding an owned field is a real move and must be repaired before join.
     """
@@ -43,8 +43,8 @@ main {
 
     main { }
     """ => branchSource
-    [branchSource,; ~] -> ownershipCheck.analyze => branchErrors!
-    branchErrors! -> len => branch
+    [branchSource,; ~] -> ownershipCheck.analyze => branchErrors
+    branchErrors -> len => branch
 
     # A loop back-edge may revisit the move, so an unrepaired path is E20.
     """
@@ -64,8 +64,8 @@ main {
 
     main { }
     """ => loopSource
-    [loopSource,; ~] -> ownershipCheck.analyze => loopErrors!
-    loopErrors! -> len => loop
+    [loopSource,; ~] -> ownershipCheck.analyze => loopErrors
+    loopErrors -> len => loop
 
     # Reinitializing the exact path before the back-edge restores the owner.
     """
@@ -87,8 +87,37 @@ main {
 
     main { }
     """ => repairedSource
-    [repairedSource,; ~] -> ownershipCheck.analyze => repairedErrors!
-    repairedErrors! -> len => repaired
+    [repairedSource,; ~] -> ownershipCheck.analyze => repairedErrors
+    repairedErrors -> len => repaired
 
-    "safe=$safe, branch=$branch, loop=$loop, repaired=$repaired" -> println
+    # A payload binding created inside a when arm is not live at the join.
+    # Moving its owned fields therefore does not require reinitialization.
+    """
+    struct Pair {
+        left: [Int; ~]
+        right: [Int; ~]
+    }
+
+    enum Choice {
+        Value(Pair)
+        None
+    }
+
+    inspect choice: Choice -> UIntSize {
+        choice -> when {
+            Value(pair) {
+                pair.left => left
+                pair.right => right
+                (left -> len) + (right -> len)
+            }
+            None { 0 }
+        }
+    }
+
+    main { }
+    """ => localSource
+    [localSource,; ~] -> ownershipCheck.analyze => localErrors
+    localErrors -> len => local
+
+    "safe=$safe, branch=$branch, loop=$loop, repaired=$repaired, local=$local" -> println
 }

@@ -1,0 +1,58 @@
+import sys.quic.error as errors
+import sys.quic.keys
+import sys.quic.packet
+
+key: -> [UInt8; 16] => [17; 16]
+iv: -> [UInt8; 12] => [34; 12]
+headerProtection: -> [UInt8; 16] => [51; 16]
+destinationConnectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
+sourceConnectionId: -> [UInt8] => [9, 10, 11, 12]
+plaintext: -> [UInt8] => [6, 0, 4, 112, 105, 110, 103, 1, 0, 0, 0, 0]
+
+roundtrip version: UInt32 -> Result<Bool, errors.Error> {
+    packet.sealHandshake(
+        version,
+        destinationConnectionId(),
+        sourceConnectionId(),
+        258,
+        2,
+        plaintext(),
+        key(),
+        iv(),
+        headerProtection())? => protected
+    packet.parseHandshakeHeader(protected)? => header
+    packet.openHandshake(
+        protected,
+        258,
+        key(),
+        iv(),
+        headerProtection())? => opened
+    Result<Bool, errors.Error>.Ok(
+        header.version == version
+            and header.destinationConnectionId[0] == 1
+            and header.destinationConnectionId[7] == 8
+            and header.sourceConnectionId[0] == 9
+            and opened.packetNumber == 258
+            and opened.plaintext[0] == 6
+            and opened.plaintext[3] == 112
+            and opened.plaintext[6] == 103
+            and opened.nextOffset == UIntSize(protected -> len))
+}
+
+verify version: UInt32, label: Text -> Unit uses Console {
+    roundtrip(version) -> when {
+        Ok(valid) {
+            valid -> if {
+                "handshake-$label=ok" -> println
+            } else {
+                "handshake-$label=failed" -> println
+            }
+        }
+        Err(error) { "handshake-$label-error=$(error.code)" -> println }
+    }
+}
+
+main {
+    verify(keys.version1(), "v1")
+    verify(keys.version2(), "v2")
+}

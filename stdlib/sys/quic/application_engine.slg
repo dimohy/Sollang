@@ -1,0 +1,184 @@
+namespace sys.quic.application_engine
+
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+import sys.quic.packet
+import sys.quic.traffic_keys
+
+public struct KeyState {
+    phase: Bool
+    secret: [UInt8; 32]
+}
+
+public struct Opened {
+    packetNumber: UInt64
+    keyPhase: Bool
+    frame: frames.Value
+}
+
+public struct OpenedMany {
+    packetNumber: UInt64
+    keyPhase: Bool
+    frames: [frames.Value; ~]
+}
+
+error kind: errors.Kind, code: UInt64 -> errors.Error {
+    errors.Error { kind: kind, code: code }
+}
+
+sameBool left: Bool, right: Bool -> Bool {
+    (left and right) or (not left and not right)
+}
+
+copySecret secret: [UInt8; 32] -> [UInt8; 32] {
+    [UInt8(0); 32] => copied!
+    0 => index!
+    index! < 32 -> while {
+        secret[index!] => copied![index!]
+        index! + 1 => index!
+    }
+    copied!
+}
+
+public create secret: [UInt8; 32] -> KeyState {
+    KeyState { phase: false, secret: copySecret(secret) }
+}
+
+public update state: mut KeyState -> Unit {
+    traffic_keys.nextSecret(state.secret) => state.secret
+    not state.phase => state.phase
+}
+
+public encode version: UInt32, destinationConnectionId: [UInt8], packetNumber: UInt64, value: move frames.Value, state: ref KeyState -> Result<[UInt8; ~], errors.Error> {
+    frame.encode(value)? => plaintext
+    traffic_keys.derive(version, state.secret) => keys
+    packet.sealOneRtt(
+        destinationConnectionId,
+        state.phase,
+        packetNumber,
+        4,
+        plaintext,
+        keys.key,
+        keys.iv,
+        keys.headerProtection)
+}
+
+public encodeMany version: UInt32, destinationConnectionId: [UInt8], packetNumber: UInt64, values: mut [frames.Value; ~], state: ref KeyState -> Result<[UInt8; ~], errors.Error> {
+    frame.encodeAll(values)? => plaintext
+    traffic_keys.derive(version, state.secret) => keys
+    packet.sealOneRtt(
+        destinationConnectionId,
+        state.phase,
+        packetNumber,
+        4,
+        plaintext,
+        keys.key,
+        keys.iv,
+        keys.headerProtection)
+}
+
+openWithSecret version: UInt32, datagram: [UInt8], destinationConnectionId: [UInt8], expectedPacketNumber: UInt64, expectedPhase: Bool, secret: [UInt8; 32] -> Result<Opened, errors.Error> {
+    traffic_keys.derive(version, secret) => keys
+    packet.openOneRtt(
+        datagram,
+        destinationConnectionId,
+        expectedPacketNumber,
+        keys.key,
+        keys.iv,
+        keys.headerProtection)? => opened
+    sameBool(opened.keyPhase, expectedPhase) -> unless {
+        Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(opened.packetNumber))) -> return
+    }
+    frame.decode(opened.plaintext, 0)? => decoded
+    decoded.nextOffset == UIntSize(opened.plaintext -> len) -> unless {
+        Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(decoded.nextOffset))) -> return
+    }
+    Result<Opened, errors.Error>.Ok(Opened {
+        packetNumber: opened.packetNumber
+        keyPhase: opened.keyPhase
+        frame: decoded.frame
+    })
+}
+
+openManyWithSecret version: UInt32, datagram: [UInt8], destinationConnectionId: [UInt8], expectedPacketNumber: UInt64, expectedPhase: Bool, secret: [UInt8; 32] -> Result<OpenedMany, errors.Error> {
+    traffic_keys.derive(version, secret) => keys
+    packet.openOneRtt(
+        datagram,
+        destinationConnectionId,
+        expectedPacketNumber,
+        keys.key,
+        keys.iv,
+        keys.headerProtection)? => opened
+    sameBool(opened.keyPhase, expectedPhase) -> unless {
+        Result<OpenedMany, errors.Error>.Err(error(errors.Kind.ProtocolViolation, opened.packetNumber)) -> return
+    }
+    frame.decodeAll(opened.plaintext)? => decoded
+    Result<OpenedMany, errors.Error>.Ok(OpenedMany {
+        packetNumber: opened.packetNumber
+        keyPhase: opened.keyPhase
+        frames: decoded
+    })
+}
+
+# A peer can initiate a key update without an extra signal. Try the current
+# packet-protection keys first, then exactly one RFC 9001 next-secret step.
+public open version: UInt32, datagram: [UInt8], destinationConnectionId: [UInt8], expectedPacketNumber: UInt64, state: mut KeyState -> Result<Opened, errors.Error> {
+    openWithSecret(
+        version,
+        datagram,
+        destinationConnectionId,
+        expectedPacketNumber,
+        state.phase,
+        state.secret) -> when {
+        Ok(opened) { Result<Opened, errors.Error>.Ok(opened) }
+        Err(currentError) {
+            traffic_keys.nextSecret(state.secret) => nextSecret
+            not state.phase => nextPhase
+            openWithSecret(
+                version,
+                datagram,
+                destinationConnectionId,
+                expectedPacketNumber,
+                nextPhase,
+                nextSecret) -> when {
+                Ok(opened) {
+                    nextSecret => state.secret
+                    nextPhase => state.phase
+                    Result<Opened, errors.Error>.Ok(opened)
+                }
+                Err(nextError) { Result<Opened, errors.Error>.Err(currentError) }
+            }
+        }
+    }
+}
+
+public openMany version: UInt32, datagram: [UInt8], destinationConnectionId: [UInt8], expectedPacketNumber: UInt64, state: mut KeyState -> Result<OpenedMany, errors.Error> {
+    openManyWithSecret(
+        version,
+        datagram,
+        destinationConnectionId,
+        expectedPacketNumber,
+        state.phase,
+        state.secret) -> when {
+        Ok(opened) { Result<OpenedMany, errors.Error>.Ok(opened) }
+        Err(currentError) {
+            traffic_keys.nextSecret(state.secret) => nextSecret
+            not state.phase => nextPhase
+            openManyWithSecret(
+                version,
+                datagram,
+                destinationConnectionId,
+                expectedPacketNumber,
+                nextPhase,
+                nextSecret) -> when {
+                Ok(opened) {
+                    nextSecret => state.secret
+                    nextPhase => state.phase
+                    Result<OpenedMany, errors.Error>.Ok(opened)
+                }
+                Err(nextError) { Result<OpenedMany, errors.Error>.Err(currentError) }
+            }
+        }
+    }
+}

@@ -1,0 +1,47 @@
+namespace sys.crypto.hmac_sha256
+
+import sys.crypto.bits as bits
+import sys.crypto.sha256 as sha256
+
+normalizedKey key: [UInt8] -> [UInt8; 64] {
+    [UInt8(0); 64] => normalized!
+    (key -> len) > 64 -> if {
+        key -> sha256.digest => hashed
+        0 => hashedIndex!
+        hashedIndex! < (hashed -> len) -> while {
+            hashed[hashedIndex!] => normalized![hashedIndex!]
+            hashedIndex! + 1 => hashedIndex!
+        }
+    } else {
+        0 => keyIndex!
+        keyIndex! < (key -> len) -> while {
+            key[keyIndex!] => normalized![keyIndex!]
+            keyIndex! + 1 => keyIndex!
+        }
+    }
+    normalized!
+}
+
+public digest key: [UInt8], message: [UInt8] -> [UInt8; 32] {
+    key -> normalizedKey => normalized
+    [UInt8; ~] => inner!
+    [UInt8; ~] => outer!
+    0 => padIndex!
+    padIndex! < 64 -> while {
+        inner! -> push(UInt8(bits.xor(UInt32(normalized[padIndex!]), 54)))
+        outer! -> push(UInt8(bits.xor(UInt32(normalized[padIndex!]), 92)))
+        padIndex! + 1 => padIndex!
+    }
+    0 => messageIndex!
+    messageIndex! < (message -> len) -> while {
+        inner! -> push(message[messageIndex!])
+        messageIndex! + 1 => messageIndex!
+    }
+    inner! -> sha256.digest => innerHash
+    0 => hashIndex!
+    hashIndex! < (innerHash -> len) -> while {
+        outer! -> push(innerHash[hashIndex!])
+        hashIndex! + 1 => hashIndex!
+    }
+    outer! -> sha256.digest
+}

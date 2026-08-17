@@ -28,38 +28,38 @@ main {
         (numbers: latestInts, flags: latestFlags) -> latest => combined
     }
     """ => source
-    [source; ~] => sources!
-    sources! -> semanticContext.prepare => snapshot!
-    snapshot! -> expressionTypeIds.resolveContext => typed!
+    [source; ~] => sources
+    sources -> semanticContext.prepare => snapshot
+    snapshot -> expressionTypeIds.resolveContext => typed
 
     0 => expressionIndex!
-    expressionIndex! < (typed!.expressions -> len) -> while {
-        typed!.expressions[expressionIndex!] => expression
-        snapshot!.package.nodes[snapshot!.package.ranges[expression.sourceModule].astStart + expression.astNode] => node
+    expressionIndex! < (typed.expressions -> len) -> while {
+        typed.expressions[expressionIndex!] => expression
+        snapshot.package.nodes[snapshot.package.ranges[expression.sourceModule].astStart + expression.astNode] => node
         node.kind == 81 -> if {
             source -> slice(node.start, node.length) => policy
-            typed!.types[expression.typeId] => wrapper
-            typed!.types[wrapper.first] => element
+            typed.types[expression.typeId] => wrapper
+            typed.types[wrapper.first] => element
             "join type = $policy, wrapper $(wrapper.symbol), element kind $(element.kind), fields $(element.length)" -> println
         }
         expressionIndex! + 1 => expressionIndex!
     }
 
-    snapshot! -> typedIr.lowerContext => ir!
+    snapshot -> typedIr.lowerContext => ir
     0 => irIndex!
-    irIndex! < (ir! -> len) -> while {
-        ir![irIndex!] => node
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
         node.kind == 43 -> if {
-            typed!.types[node.typeId] => wrapper
-            typed!.types[wrapper.first] => element
+            typed.types[node.typeId] => wrapper
+            typed.types[wrapper.first] => element
             "join IR = policy $(node.opcode), wrapper $(wrapper.symbol), element kind $(element.kind), fields $(element.length), source $(node.operand0)" -> println
         }
         irIndex! + 1 => irIndex!
     }
-    snapshot! -> streamIr.build(ir!, typed!) => plan!
+    snapshot -> streamIr.build(ir, typed) => plan
     0 => junctionIndex!
-    junctionIndex! < (plan!.junctions -> len) -> while {
-        plan!.junctions[junctionIndex!] => junction
+    junctionIndex! < (plan.junctions -> len) -> while {
+        plan.junctions[junctionIndex!] => junction
         "join plan = policy $(junction.policy), inputs $(junction.inputCount), status $(junction.status)" -> println
         junctionIndex! + 1 => junctionIndex!
     }

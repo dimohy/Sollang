@@ -53,21 +53,21 @@ main {
             style: Style
         }
         """; ~
-    ] => sources!
-    sources! -> semanticContext.prepare => prepared!
-    prepared! -> typedIr.lowerContext => ir!
-    ir! -> typedIr.movesFrom => moves!
+    ] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> typedIr.lowerContext => ir
+    ir -> typedIr.movesFrom => moves
     0 => pushMoves!
     0 => matchingRegions!
-    moves! -> each event {
-        ir![event.siteIr].opcode == -204 -> if {
+    moves -> each event {
+        ir[event.siteIr].opcode == -204 -> if {
             pushMoves! + 1 => pushMoves!
             0 => bindingIndex!
-            bindingIndex! < (ir! -> len) -> while {
-                (ir![bindingIndex!].kind == 17
-                    and ir![bindingIndex!].sourceModule == event.sourceModule
-                    and ir![bindingIndex!].symbol == event.symbol
-                    and ir![bindingIndex!].parent == event.regionIr) -> if {
+            bindingIndex! < (ir -> len) -> while {
+                (ir[bindingIndex!].kind == 17
+                    and ir[bindingIndex!].sourceModule == event.sourceModule
+                    and ir[bindingIndex!].symbol == event.symbol
+                    and ir[bindingIndex!].parent == event.regionIr) -> if {
                     matchingRegions! + 1 => matchingRegions!
                 }
                 bindingIndex! + 1 => bindingIndex!
@@ -77,40 +77,40 @@ main {
     "owned push move events=$(pushMoves!)" -> println
     "owned push matching regions=$(matchingRegions!)" -> println
 
-    prepared!.package.ranges[0] => sourceRange
+    prepared.package.ranges[0] => sourceRange
     [ast.AstNode; ~] => sourceNodes!
     0 => sourceNodeIndex!
     sourceNodeIndex! < sourceRange.astCount -> while {
-        sourceNodes! -> push(prepared!.package.nodes[sourceRange.astStart + sourceNodeIndex!])
+        sourceNodes! -> push(prepared.package.nodes[sourceRange.astStart + sourceNodeIndex!])
         sourceNodeIndex! + 1 => sourceNodeIndex!
     }
     [syntax.SyntaxToken; ~] => sourceTokens!
     0 => sourceTokenIndex!
     sourceTokenIndex! < sourceRange.tokenCount -> while {
-        sourceTokens! -> push(prepared!.package.tokens[sourceRange.tokenStart + sourceTokenIndex!])
+        sourceTokens! -> push(prepared.package.tokens[sourceRange.tokenStart + sourceTokenIndex!])
         sourceTokenIndex! + 1 => sourceTokenIndex!
     }
     [symbols.Symbol; ~] => sourceSymbols!
     0 => sourceSymbolIndex!
     sourceSymbolIndex! < sourceRange.symbolCount -> while {
-        sourceSymbols! -> push(prepared!.package.symbols[sourceRange.symbolStart + sourceSymbolIndex!])
+        sourceSymbols! -> push(prepared.package.symbols[sourceRange.symbolStart + sourceSymbolIndex!])
         sourceSymbolIndex! + 1 => sourceSymbolIndex!
     }
     interpolation.PreparedInterpolationRequest {
-        source: sources![0]
+        source: sources[0]
         nodes: sourceNodes!
         tokens: sourceTokens!
         symbols: sourceSymbols!
-    } => interpolationRequest!
-    interpolationRequest! -> interpolation.lowerPrepared => interpolationNodes!
+    } => interpolationRequest
+    interpolationRequest -> interpolation.lowerPrepared => interpolationNodes
     0 => interpolationStorageMatches!
-    interpolationNodes! -> each interpolationNode {
+    interpolationNodes -> each interpolationNode {
         interpolationNode.kind == 1 -> if {
             0 => bindingSearch!
-            bindingSearch! < (ir! -> len) -> while {
-                (ir![bindingSearch!].kind == 17
-                    and ir![bindingSearch!].sourceModule == 0
-                    and ir![bindingSearch!].symbol == interpolationNode.symbol) -> if {
+            bindingSearch! < (ir -> len) -> while {
+                (ir[bindingSearch!].kind == 17
+                    and ir[bindingSearch!].sourceModule == 0
+                    and ir[bindingSearch!].symbol == interpolationNode.symbol) -> if {
                     interpolationStorageMatches! + 1 => interpolationStorageMatches!
                 }
                 bindingSearch! + 1 => bindingSearch!

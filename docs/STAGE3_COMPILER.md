@@ -40,12 +40,12 @@ Current fixed-point evidence:
 
 | Target | LLVM bytes | Normalized LLVM SHA-256 | Native executable SHA-256 |
 | --- | ---: | --- | --- |
-| Windows x64 | 26,909,214 | `6C763A697DB9A93FDBD9F579515F85AE46F27820CD3F848C2DE6F3CCB774B1C1` | `D938A20239DE2F4D450275400567810D70DCF6E80198DB439E5F053A650E8E7A` |
-| Linux x64 | 26,888,844 | `CC6F3E0341EDA15AF93606D17477B3B2FD8FDB45EE812EF82ECB5216B4BE853C` | `EEE597698168E3A5628E5939DFD4AF26966AEC5CF460B4A3CFBD8FBB28173FE8` |
+| Windows x64 | 28,317,932 | `E97879C3C968DDB0751425A0109621522AE26F77675E2981856966FC7A63E527` | `971BEDAD6D8842890EAEACA62477C4359E56369495F08CCA1C1B5B8132E4C4BD` |
+| Linux x64 | 28,297,562 | `7D80DCE6C5C6AC4094E5E85AC0FCB1552D16DA233A151277782BC66562B73AAF` | `885E5B869628169A8623A3C15597BC5FE1A0E94A375FEB2968297C8AE7FBE1C1` |
 
-The complete logical catalog contains 20 user examples, 828 regression cases,
-and 257 diagnostics. Windows passes 1085/1085 selected cases. Linux passes all
-1084/1084 applicable cases; the Windows COM case is structurally validated on
+The complete logical catalog contains 20 user examples, 985 regression cases,
+and 274 diagnostics. Windows passes 1259/1259 selected cases. Linux passes all
+1258/1258 applicable cases; the Windows COM case is structurally validated on
 Linux but is not executed there.
 
 Each fixed-point executable passes 16 exact top-level command contracts plus
@@ -65,11 +65,11 @@ the following retained matrices:
 driver files, verifies `sollang --version`, and uses the compiler and bundled
 standard library to build and run a smoke program before archiving.
 
-The `0.4.260813` packages contain only the native compiler, `stdlib`, `README`,
+The `0.4.260817` packages contain only the native compiler, `stdlib`, `README`,
 and `LICENSE`. Their archive SHA-256 values are:
 
-- Windows x64 ZIP: `8840818b8f3de88e28931bb8ee45493773c1047fc71ff97281768e82e98ed8fa`
-- Linux x64 tar.gz: `028e769267b4b79138438f6145fa35c2142d6403c1e54d842052e38acef5ccfc`
+- Windows x64 ZIP: `55e0c55d9687d04b788f94584e3f634c894d8c6427bef5b7b6563eef8973c400`
+- Linux x64 tar.gz: `042f0df38e28d4e0ce332fab76ffe1d0dae45bc347f79ca01d3f2ab7d7c5d82c`
 
 ## Root-cause-only gate
 

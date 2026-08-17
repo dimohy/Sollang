@@ -406,12 +406,18 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     false => usesTextMaterialize!
     false => usesCollectionCapacityTrap!
     false => usesBitSetCount!
+    false => usesMutableContainer!
     0 => arrayTypeSearch!
     arrayTypeSearch! < (context.ir -> len) -> while {
         context.ir[arrayTypeSearch!] => allocationNode
         allocationNode -> isDynamicArrayType -> if {
             true => usesDynamicArray!
             true => usesArrayAllocation!
+        }
+        (allocationNode.kind == 10
+            and allocationNode.flags / 2 % 2 == 1
+            and not (allocationNode -> mutableBorrowUsesStructPointer(context))) -> if {
+            true => usesMutableContainer!
         }
         (allocationNode.kind == 14 and (allocationNode -> isFixedArrayType)) -> if { true => usesArrayAllocation! }
         allocationNode.opcode == -204 -> if { true => usesArrayPush! }
@@ -455,10 +461,11 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         context.composite[arrayCompositeSearch!].kind == 3 -> if { true => usesDynamicArray! }
         arrayCompositeSearch! + 1 => arrayCompositeSearch!
     }
-    usesDynamicArray! -> if {
-        "%sollang.array.i32 = type { ptr, i64, i64 }" -> println
-        "%sollang.mutable_container = type { ptr, ptr, ptr }" -> println
-    }
+    # Mutable container borrows are an ABI carrier for fixed, bounded, and
+    # growable storage alike. Their declaration follows actual parameter use,
+    # independently of the dynamic-array value layout.
+    usesMutableContainer! -> if { "%sollang.mutable_container = type { ptr, ptr, ptr }" -> println }
+    usesDynamicArray! -> if { "%sollang.array.i32 = type { ptr, i64, i64 }" -> println }
     (usesArrayAllocation! or usesArenaAllocation! or usesTextMaterialize! or usesSourceText or usesComputePool or intrinsicRuntimeModule >= 0 or usesOwnedDropRuntime or usesDirectoryTraversal or usesDynTrait! or context.usesConcurrentStreamJoins) -> if {
         context.pointerBitWidth == 32 -> if {
             """
@@ -541,16 +548,20 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     }
     dropTypeActive -> emitSemanticDropHelpers(context, state)
     false => usesNativeInterop!
+    false => hasNativeDeclarations!
     false => usesComInterop!
     0 => nativeInteropSearch!
     nativeInteropSearch! < (context.ir -> len) -> while {
-        context.ir[nativeInteropSearch!] -> isNativeFunction(context, state) -> if { true => usesNativeInterop! }
+        context.ir[nativeInteropSearch!] -> isNativeFunction(context, state) -> if {
+            true => hasNativeDeclarations!
+            nativeInteropSearch! -> nativeFunctionReachable(state) -> if { true => usesNativeInterop! }
+        }
         context.ir[nativeInteropSearch!] -> isComFunction(context, state) -> if { true => usesComInterop! }
         nativeInteropSearch! + 1 => nativeInteropSearch!
     }
-    (usesCollectionCapacityTrap! or usesDictionary! or usesEnumMatch! or usesSourceText or usesNativeInterop! or usesComInterop!) -> if { "declare void @llvm.trap()" -> println }
+    (usesCollectionCapacityTrap! or usesDictionary! or usesEnumMatch! or usesSourceText or hasNativeDeclarations! or usesComInterop!) -> if { "declare void @llvm.trap()" -> println }
     usesBitSetCount! -> if { "declare i64 @llvm.ctpop.i64(i64)" -> println }
-    usesNativeInterop! -> if {
+    hasNativeDeclarations! -> if {
         context.expectedPathStyle == 1 -> if {
             "declare dllimport ptr @LoadLibraryA(ptr)" -> println
             "declare dllimport ptr @GetProcAddress(ptr, ptr)" -> println

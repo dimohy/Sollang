@@ -12,6 +12,7 @@ import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
 import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
 import sollang.compiler.llvm.emitter.process_runtime as processRuntime
 import sollang.compiler.llvm.emitter.environment_runtime as environmentRuntime
+import sollang.compiler.llvm.emitter.socket_runtime as socketRuntime
 import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
 import sollang.compiler.llvm.emitter.com_runtime as comRuntime
 import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
@@ -51,7 +52,7 @@ runtimeFunctionSymbol runtimeModule: Int, expectedName: Text, context: ref emitt
                 (context.sources[runtimeModule] -> byte(nameToken.span.start + byteIndex!)) != (expectedName -> byte(byteIndex!)) -> if {
                     false => matches!
                 }
-                byteIndex! + UIntSize(1) => byteIndex!
+                byteIndex! + 1 => byteIndex!
             }
             matches! -> if { symbolIndex! => matchedSymbol! }
         }
@@ -61,12 +62,29 @@ runtimeFunctionSymbol runtimeModule: Int, expectedName: Text, context: ref emitt
 }
 
 runtimeFunctionSymbols runtimeModule: Int, context: ref emitterContext.EmitContext -> llvmRuntime.RuntimeFunctionSymbols {
+    runtimeModule -> runtimeFunctionSymbol("secureRandomBytes", context) => secureRandomBytesSymbol
+    context -> diagnostics.reachableFunctions => reachableFunctions
+    -1 => secureRandomBytesType!
+    0 => secureRandomFunctionSearch!
+    secureRandomFunctionSearch! < (context.ir -> len) -> while {
+        context.ir[secureRandomFunctionSearch!] => candidate
+        (candidate.kind == 0
+            and candidate.sourceModule == runtimeModule
+            and candidate.symbol == secureRandomBytesSymbol
+            and candidate.typeId >= 0
+            and reachableFunctions[secureRandomFunctionSearch!]) -> if {
+            candidate.typeId => secureRandomBytesType!
+        }
+        secureRandomFunctionSearch! + 1 => secureRandomFunctionSearch!
+    }
     llvmRuntime.RuntimeFunctionSymbols {
         printSymbol: runtimeModule -> runtimeFunctionSymbol("print", context)
         printlnSymbol: runtimeModule -> runtimeFunctionSymbol("println", context)
         readIntSymbol: runtimeModule -> runtimeFunctionSymbol("readInt", context)
         seedRandomSymbol: runtimeModule -> runtimeFunctionSymbol("seedRandom", context)
         randomBelowSymbol: runtimeModule -> runtimeFunctionSymbol("randomBelow", context)
+        secureRandomBytesSymbol: secureRandomBytesSymbol
+        secureRandomBytesType: secureRandomBytesType!
         openIntWriterSymbol: runtimeModule -> runtimeFunctionSymbol("openIntWriter", context)
         writeIntSymbol: runtimeModule -> runtimeFunctionSymbol("writeInt", context)
         closeIntWriterSymbol: runtimeModule -> runtimeFunctionSymbol("closeIntWriter", context)
@@ -85,17 +103,17 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
     request.supportsComputePool => supportsComputePool
     request.expectedPathStyle => expectedPathStyle
     prepared -> typedIr.lowerContext => ir!
-    ir! -> typedLibraryImports.projectLibraries(prepared, libraries, libraryCalls) => libraryCallDiagnostics!
+    ir! -> typedLibraryImports.projectLibraries(prepared, libraries, libraryCalls) => libraryCallDiagnostics
     prepared -> expressionTypeIds.resolveContext => recursiveTypes
-    prepared -> streamIr.build(ir!, recursiveTypes) => streamPlan!
+    prepared -> streamIr.build(ir!, recursiveTypes) => streamPlan
     false => usesConcurrentStreamJoins!
     0 => concurrentStreamJoinSearch!
-    concurrentStreamJoinSearch! < (streamPlan!.junctions -> len) -> while {
-        streamPlan!.junctions[concurrentStreamJoinSearch!] => concurrentStreamJoin
+    concurrentStreamJoinSearch! < (streamPlan.junctions -> len) -> while {
+        streamPlan.junctions[concurrentStreamJoinSearch!] => concurrentStreamJoin
         (concurrentStreamJoin.kind == 2 and (concurrentStreamJoin.policy == 1 or concurrentStreamJoin.policy == 3)) -> if {
             concurrentStreamJoin.inputStart => concurrentStreamInputSearch!
             concurrentStreamInputSearch! < concurrentStreamJoin.inputStart + concurrentStreamJoin.inputCount -> while {
-                streamPlan!.junctionInputs[concurrentStreamInputSearch!].typeId => concurrentStreamInputTypeId
+                streamPlan.junctionInputs[concurrentStreamInputSearch!].typeId => concurrentStreamInputTypeId
                 (concurrentStreamInputTypeId >= 0 and concurrentStreamInputTypeId < (recursiveTypes.types -> len)) -> if {
                     recursiveTypes.types[concurrentStreamInputTypeId] => concurrentStreamInputType
                     (concurrentStreamInputType.kind == 7 and concurrentStreamInputType.symbol == 4) -> if { true => usesConcurrentStreamJoins! }
@@ -105,7 +123,7 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         }
         concurrentStreamJoinSearch! + 1 => concurrentStreamJoinSearch!
     }
-    prepared -> ownershipCheck.analyzeLoweredContext(ir!) => ownershipDiagnostics!
+    prepared -> ownershipCheck.analyzeLoweredContext(ir!) => ownershipDiagnostics
     [typeIds.SemanticType; ~] => semanticTypes!
     0 => semanticTypeCopyIndex351!
     semanticTypeCopyIndex351! < (recursiveTypes.types -> len) -> while {
@@ -217,17 +235,17 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
             nodes: interpolationNodes!
             tokens: interpolationTokens!
             symbols: interpolationSymbols!
-        } => interpolationRequest!
-        interpolationRequest! -> interpolation.lowerPrepared => sourceInterpolations!
+        } => interpolationRequest
+        interpolationRequest -> interpolation.lowerPrepared => sourceInterpolations
         analysisInterpolations! -> len => interpolationStart
         analysisInterpolationRanges! -> push(interpolation.InterpolationSourceRange {
             sourceModule: interpolationSourceIndex!
             nodeStart: interpolationStart
-            nodeCount: sourceInterpolations! -> len
+            nodeCount: sourceInterpolations -> len
         })
         0 => sourceInterpolationIndex!
-        sourceInterpolationIndex! < (sourceInterpolations! -> len) -> while {
-            sourceInterpolations![sourceInterpolationIndex!] => globalInterpolation!
+        sourceInterpolationIndex! < (sourceInterpolations -> len) -> while {
+            sourceInterpolations[sourceInterpolationIndex!] => globalInterpolation!
             globalInterpolation!.parent >= 0 -> if { globalInterpolation!.parent + interpolationStart => globalInterpolation!.parent }
             globalInterpolation!.operand0 >= 0 -> if { globalInterpolation!.operand0 + interpolationStart => globalInterpolation!.operand0 }
             globalInterpolation!.operand1 >= 0 -> if { globalInterpolation!.operand1 + interpolationStart => globalInterpolation!.operand1 }
@@ -265,10 +283,9 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         classificationFields! -> push(classificationField)
         classificationFieldCopyIndex422! + 1 => classificationFieldCopyIndex422!
     }
-    TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: pointerBitWidth } => layoutRequest!
-    layoutRequest! -> layoutsFor => layouts
-    typeIds.TypeClassificationRequest { types: classificationTypes!, fields: classificationFields! } => classificationRequest!
-    classificationRequest! -> typeIds.classify => typeTraits!
+    TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: pointerBitWidth } => layoutRequest
+    layoutRequest -> layoutsFor => layouts
+    typeIds.classify(classificationTypes!, classificationFields!) => typeTraits!
     [Int; ~] => typeSizes!
     0 => typeSizeCopyIndex424!
     typeSizeCopyIndex424! < (layouts.sizes -> len) -> while {
@@ -426,7 +443,7 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
             nominalDependentLayoutIndex! + 1 => nominalDependentLayoutIndex!
         }
     }
-    ir! -> typedIr.movesFrom => moves!
+    ir! -> typedIr.movesFrom => moves
     [Text; ~] => contextSources!
     0 => contextSourceIndex!
     contextSourceIndex! < (request.sources -> len) -> while {
@@ -442,12 +459,12 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         calls: analysisCalls!
         libraries: libraries
         libraryCalls: libraryCalls
-        libraryCallDiagnostics: libraryCallDiagnostics!
+        libraryCallDiagnostics: libraryCallDiagnostics
         interpolationRanges: analysisInterpolationRanges!
         interpolations: analysisInterpolations!
         ir: ir!
-        streamPlan: streamPlan!
-        moves: moves!
+        streamPlan: streamPlan
+        moves: moves
         nominal: nominal!
         composite: composite!
         modules: moduleIdentities!
@@ -463,14 +480,14 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         supportsComputePool: supportsComputePool
         expectedPathStyle: expectedPathStyle
         usesConcurrentStreamJoins: usesConcurrentStreamJoins!
-        ownershipDiagnostics: ownershipDiagnostics!
-    } => context!
-    context!
+        ownershipDiagnostics: ownershipDiagnostics
+    } => context
+    context
 }
 
 prepare request: ref PrepareRequest -> emitterContext.EmitContext {
-    request.sources -> semanticContext.prepare => prepared!
-    request -> prepareSnapshot(prepared!, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~])
+    request.sources -> semanticContext.prepare => prepared
+    request -> prepareSnapshot(prepared, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~])
 }
 
 emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
@@ -482,6 +499,7 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesArgumentsRuntime => needsArgumentsRuntime
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> diagnostics.usesSocketRuntime => needsSocketRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
     context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
     context -> diagnostics.comInteropFunctionCount => comInteropCount
@@ -500,7 +518,7 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     0 => runtimeModuleSearch!
     runtimeModuleSearch! < (context.modules -> len) -> while {
         context.modules[runtimeModuleSearch!] => moduleIdentity
-        moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
+        moduleIdentity.pathHash == 12254170256457402476 -> if { moduleIdentity.sourceIndex => runtimeModule! }
         runtimeModuleSearch! + 1 => runtimeModuleSearch!
     }
     (needsOwnedFileRuntime or needsSourceTextRuntime or runtimeModule! >= 0) -> if {
@@ -553,8 +571,10 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
         }
     }
     needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
+    needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
     comInteropCount > 0 -> if { nativeInteropCount == 0 -> comRuntime.emitWindowsComRuntime }
     context -> emitCore
+    needsSocketRuntime -> if { socketRuntime.emitWindowsRuntime() }
     needsEnvironmentRuntime -> if { environmentRuntime.emitWindowsRuntime() }
     needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime() }
     needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime() }
@@ -586,13 +606,14 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> diagnostics.usesSocketRuntime => needsSocketRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
     context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
     -1 => runtimeModule!
     0 => runtimeModuleSearch!
     runtimeModuleSearch! < (context.modules -> len) -> while {
         context.modules[runtimeModuleSearch!] => moduleIdentity
-        moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
+        moduleIdentity.pathHash == 12254170256457402476 -> if { moduleIdentity.sourceIndex => runtimeModule! }
         runtimeModuleSearch! + 1 => runtimeModuleSearch!
     }
     (capturesParallelOutput or needsMouseEventsRuntime or needsConcurrentStreamJoins) -> if {
@@ -609,7 +630,10 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     (usesStandardError and (context -> diagnostics.usesBoolInterpolation)) -> if { numberFormat.emitBoolStandardErrorRuntime() }
     needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
     needsEnvironmentRuntime -> if { environmentRuntime.emitTypeRuntime() }
+    needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
     context -> emitCore
+    (needsSocketRuntime or needsDirectoryRuntime) -> if { "declare ptr @__errno_location()" -> println }
+    needsSocketRuntime -> if { socketRuntime.emitLinuxRuntime() }
     needsEnvironmentRuntime -> if { environmentRuntime.emitLinuxRuntime() }
     needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
     needsProcessRuntime -> if { capturesParallelOutput -> processRuntime.emitLinuxProcessRuntime }
@@ -643,8 +667,8 @@ syntaxDiagnosticCount sources: [Text; ~] -> Int {
     0 => count!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics!
-        count! + Int(sourceDiagnostics! -> len) => count!
+        sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics
+        count! + Int(sourceDiagnostics -> len) => count!
         sourceIndex! + 1 => sourceIndex!
     }
     count!
@@ -654,9 +678,9 @@ emitSyntaxDiagnostics sources: [Text; ~] -> Unit uses Console {
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
         sourceIndex! => diagnosticSourceIndex
-        sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics!
-        (sourceDiagnostics! -> len) > 0 -> if {
-            sourceDiagnostics![0] => diagnostic
+        sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics
+        (sourceDiagnostics -> len) > 0 -> if {
+            sourceDiagnostics[0] => diagnostic
             diagnostic.code == 1 -> if {
                 sources[sourceIndex!] -> slice(diagnostic.span.start, diagnostic.span.length) => unexpected
                 "; sollang syntax error: unexpected character '$unexpected' (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
@@ -664,15 +688,15 @@ emitSyntaxDiagnostics sources: [Text; ~] -> Unit uses Console {
                 diagnostic.code == 3 -> if {
                     "; sollang syntax error: unterminated string literal (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
                 } else {
-                    sources[sourceIndex!] -> syntaxDiagnostics.expectedCodes => expected!
-                    expected![(expected! -> len) - 1] => expectedCode
+                    sources[sourceIndex!] -> syntaxDiagnostics.expectedCodes => expected
+                    expected[(expected -> len) - 1] => expectedCode
                     expectedCode >= 0 -> if {
-                        grammar.tokenNames() => tokenNames!
-                        "; sollang syntax error: expected $(tokenNames![expectedCode]) (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
+                        grammar.tokenNames() => tokenNames
+                        "; sollang syntax error: expected $(tokenNames[expectedCode]) (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
                     } else {
-                        grammar.keywordTexts() => keywordTexts!
+                        grammar.keywordTexts() => keywordTexts
                         0 - expectedCode - 1 => keywordIndex
-                        "; sollang syntax error: expected '$(keywordTexts![keywordIndex])' (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
+                        "; sollang syntax error: expected '$(keywordTexts[keywordIndex])' (source $diagnosticSourceIndex, byte $(diagnostic.span.start), length $(diagnostic.span.length))" -> println
                     }
                 }
             }
@@ -685,33 +709,33 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.windowsX64() => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
-    prepareRequest! -> prepare => context!
-    context! -> emitWindowsContext
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    prepareRequest -> prepare => context
+    context -> emitWindowsContext
 }
 
 public emitLinux sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.linuxX64() => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepare => context!
-    context! -> diagnostics.comInteropFunctionCount => comInteropCount
-    comInteropCount == 0 -> if { context! -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepare => context
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount == 0 -> if { context -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
 }
 
 public emitWasm sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.wasm32Browser() => target
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepare => context!
-    context! -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
-    context! -> diagnostics.comInteropFunctionCount => comInteropCount
-    context!.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins
-    context! -> diagnostics.usesParallelBranches => usesUnsupportedParallel
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepare => context
+    context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    context.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins
+    context -> diagnostics.usesParallelBranches => usesUnsupportedParallel
     (nativeInteropCount == 0 and comInteropCount == 0 and not usesUnsupportedConcurrentStreamJoins and not usesUnsupportedParallel) -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
-        context! -> emitWasmContext
+        context -> emitWasmContext
     } else {
         nativeInteropCount > 0 -> if { diagnostics.emitWasmNativeInteropDiagnostic() }
         comInteropCount > 0 -> if { "wasm32-browser" -> diagnostics.emitComTargetDiagnostic }
@@ -729,9 +753,51 @@ binaryOpcodeValid opcode: Int -> Bool {
         or opcode == -25)
 }
 
+irScalarIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
+    -1 => symbol!
+    node.typeId >= 0 -> if {
+        context.types[node.typeId] => scalarType
+        (scalarType.kind == 1 and scalarType.origin == 1) -> if { scalarType.symbol => symbol! }
+    } else {
+        (node.typeKind == 1 and node.typeOrigin == 1) -> if { node.typeSymbol => symbol! }
+    }
+    0 => width!
+    (symbol! == 3 or symbol! == 8) -> if { 8 => width! }
+    (symbol! == 4 or symbol! == 9) -> if { 16 => width! }
+    (symbol! == 2 or symbol! == 5 or symbol! == 10 or symbol! == 14) -> if { 32 => width! }
+    (symbol! == 6 or symbol! == 7 or symbol! == 11) -> if { 64 => width! }
+    (symbol! == 12 or symbol! == 13) -> if { context.pointerBitWidth => width! }
+    width!
+}
+
+irAggregateStorageClass node: typedIr.TypedIrNode -> Int {
+    0 => storageClass!
+    node -> isDynamicArrayType -> if { 1 => storageClass! }
+    node -> isTextType -> if { 2 => storageClass! }
+    node -> isSliceArrayType -> if { 3 => storageClass! }
+    node -> isFixedArrayType -> if { 4 => storageClass! }
+    node -> isDictionaryType -> if { 5 => storageClass! }
+    node -> isGenericEnumType -> if { 6 => storageClass! }
+    storageClass!
+}
+
+astNodeHasDirectChildKind context: ref emitterContext.EmitContext, sourceModule: Int, astNode: Int, childKind: Int -> Bool {
+    false => found!
+    (sourceModule >= 0 and sourceModule < (context.ranges -> len)) -> if {
+        context.ranges[sourceModule] => sourceRange
+        0 => candidateIndex!
+        (not found! and candidateIndex! < sourceRange.astCount) -> while {
+            context.nodes[sourceRange.astStart + candidateIndex!] => candidate
+            (candidate.kind == childKind and candidate.parent == astNode) -> if { true => found! }
+            candidateIndex! + 1 => candidateIndex!
+        }
+    }
+    found!
+}
+
 # Typed IR must be structurally valid before any LLVM text is emitted. These
 # codes identify the producer invariant, not an LLVM parser failure.
-irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int -> Int {
+public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int -> Int {
     context.ir[irIndex] => node
     context.ir -> len => irCount
     0 => code!
@@ -745,24 +811,42 @@ irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int -> Int {
     }
     node.kind == 8 -> if {
         false => enumPatternMarker!
+        false => subjectConditionMarker!
         (node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len)) -> if {
             context.ranges[node.sourceModule] => binaryRange
             (node.astNode >= 0 and node.astNode < binaryRange.astCount) -> if {
                 context.nodes[binaryRange.astStart + node.astNode] => binaryAst
-                # A qualified enum payload pattern is represented by the
-                # parser's kind-70 marker with one Typed-IR operand. Ordinary
+                # An enum pattern is represented by the parser's kind-70
+                # wrapper and a direct kind-59 child. Ordinary
                 # subject-when comparisons share the same AST wrapper but
                 # retain both binary operands, so they are not pattern nodes.
                 (node.operand1 < 0
                     and binaryAst.kind == 70
                     and binaryAst.parent >= 0
-                    and context.nodes[binaryRange.astStart + binaryAst.parent].kind == 58) -> if {
+                    and context.nodes[binaryRange.astStart + binaryAst.parent].kind == 58
+                    and (context -> astNodeHasDirectChildKind(node.sourceModule, node.astNode, 59))) -> if {
                     true => enumPatternMarker!
+                }
+                (binaryAst.kind == 70
+                    and binaryAst.parent >= 0
+                    and context.nodes[binaryRange.astStart + binaryAst.parent].kind == 58
+                    and not (context -> astNodeHasDirectChildKind(node.sourceModule, node.astNode, 59))) -> if {
+                    true => subjectConditionMarker!
                 }
             }
         }
         (node.operand0 < 0 or node.operand0 >= irCount) -> if { 3 => code! }
-        (not enumPatternMarker! and code! == 0 and (node.operand1 < 0 or node.operand1 >= irCount)) -> if { 4 => code! }
+        (subjectConditionMarker! and code! == 0 and (node.operand1 < 0 or node.operand1 >= irCount)) -> if { 19 => code! }
+        (subjectConditionMarker!
+            and code! == 0
+            and node.parent >= 0
+            and node.parent < irCount
+            and context.ir[node.parent].kind == 19
+            and context.ir[node.parent].parent >= 0
+            and context.ir[node.parent].parent < irCount
+            and context.ir[context.ir[node.parent].parent].kind == 34
+            and node.operand0 != context.ir[context.ir[node.parent].parent].operand0) -> if { 19 => code! }
+        (not enumPatternMarker! and not subjectConditionMarker! and code! == 0 and (node.operand1 < 0 or node.operand1 >= irCount)) -> if { 4 => code! }
         (not enumPatternMarker! and code! == 0 and not (node.opcode -> binaryOpcodeValid)) -> if { 5 => code! }
         (not enumPatternMarker! and code! == 0) -> if {
             context.ir[node.operand0] => left
@@ -774,12 +858,713 @@ irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int -> Int {
     }
     node.kind == 13 -> if {
         (node.operand0 < 0 or node.operand0 >= irCount) -> if { 8 => code! }
+        (code! == 0 and node.operand0 >= 0 and node.operand0 < irCount) -> if {
+            context.ir[node.operand0].typeId => memberOwnerTypeId!
+            memberOwnerTypeId! < 0 -> if { 20 => code! }
+            memberOwnerTypeId! >= (context.types -> len) -> if { 20 => code! }
+            (code! == 0 and memberOwnerTypeId! >= 0 and context.types[memberOwnerTypeId!].kind == 8) -> if {
+                context.types[memberOwnerTypeId!].first => memberOwnerTypeId!
+            }
+            memberOwnerTypeId! >= (context.types -> len) -> if { 20 => code! }
+            # Structural products (kind 10) own fields in the recursive type
+            # arena rather than in a source module's nominal symbol table.
+            # They are canonical member owners and lower through extractvalue.
+            (code! == 0
+                and memberOwnerTypeId! >= 0
+                and context.types[memberOwnerTypeId!].kind != 1
+                and context.types[memberOwnerTypeId!].kind != 10) -> if { 20 => code! }
+            (code! == 0 and memberOwnerTypeId! >= 0 and context.types[memberOwnerTypeId!].kind == 1) -> if {
+                context.types[memberOwnerTypeId!] => memberOwnerType
+                memberOwnerType.module => memberOwnerSourceModule!
+                memberOwnerType.origin == 2 -> if {
+                    (memberOwnerType.module < 0 or memberOwnerType.module >= (context.modules -> len)) -> if {
+                        -1 => memberOwnerSourceModule!
+                    } else {
+                        context.modules[memberOwnerType.module].sourceIndex => memberOwnerSourceModule!
+                    }
+                }
+                (memberOwnerSourceModule! < 0 or memberOwnerSourceModule! >= (context.ranges -> len)) -> if { 20 => code! }
+            }
+        }
     }
     node.kind == 17 -> if {
         (node.operand0 < 0 or node.operand0 >= irCount) -> if { 9 => code! }
     }
     node.kind == 18 -> if {
         (node.operand0 < 0 or node.operand0 >= irCount) -> if { 10 => code! }
+        (code! == 0
+            and node.sourceModule >= 0
+            and node.sourceModule < (context.ranges -> len)) -> if {
+            context.ranges[node.sourceModule] => inverseRange
+            (node.astNode >= 0 and node.astNode < inverseRange.astCount) -> if {
+                context.nodes[inverseRange.astStart + node.astNode] => inverseAst
+                inverseAst.operatorKind == -28 => astInverse
+                node.opcode == -28 => irInverse
+                ((astInverse and not irInverse) or (not astInverse and irInverse)) -> if { 17 => code! }
+            }
+        }
+    }
+    (code! == 0 and node.kind == 34 and node.operand0 == irIndex) -> if { 36 => code! }
+    node.kind == 26 -> if {
+        (node -> enumVariantTag(context)) < 0 -> if { 12 => code! }
+    }
+    # LLVM enum lowering extracts a tag and payload from operand0. A missing,
+    # container, struct, or otherwise non-enum canonical subject can still
+    # look executable in shallow tests but will eventually corrupt ABI and
+    # ownership behavior.
+    (code! == 0 and node.kind == 27) -> if {
+        false => enumMatchSubjectValid!
+        (node.operand0 >= 0 and node.operand0 < irCount) -> if {
+            context.ir[node.operand0].typeId => enumMatchSubjectTypeId
+            (enumMatchSubjectTypeId >= 0 and enumMatchSubjectTypeId < (context.types -> len)) -> if {
+                context.types[enumMatchSubjectTypeId] => enumMatchSubjectType
+                (enumMatchSubjectType.kind == 7
+                    and enumMatchSubjectType.origin == 4
+                    and (enumMatchSubjectType.symbol == 0 or enumMatchSubjectType.symbol == 1)) -> if { true => enumMatchSubjectValid! }
+                enumMatchSubjectType.kind == 1 -> if {
+                    enumMatchSubjectType.module => enumMatchOwnerSource!
+                    enumMatchSubjectType.origin == 2 -> if {
+                        (enumMatchSubjectType.module >= 0 and enumMatchSubjectType.module < (context.modules -> len)) -> if {
+                            context.modules[enumMatchSubjectType.module].sourceIndex => enumMatchOwnerSource!
+                        } else { -1 => enumMatchOwnerSource! }
+                    }
+                    (enumMatchOwnerSource! >= 0 and enumMatchOwnerSource! < (context.ranges -> len)) -> if {
+                        context.ranges[enumMatchOwnerSource!] => enumMatchOwnerRange
+                        (enumMatchSubjectType.symbol >= 0 and enumMatchSubjectType.symbol < enumMatchOwnerRange.symbolCount) -> if {
+                            context.symbols[enumMatchOwnerRange.symbolStart + enumMatchSubjectType.symbol] => enumMatchDeclaration
+                            (enumMatchDeclaration.astNode >= 0 and context.nodes[enumMatchOwnerRange.astStart + enumMatchDeclaration.astNode].kind == 4) -> if { true => enumMatchSubjectValid! }
+                        }
+                    }
+                }
+            }
+        }
+        not enumMatchSubjectValid! -> if { 21 => code! }
+    }
+    # A canonical enum type is not enough: a name subject must resolve to a
+    # parameter ABI value or retain its concrete producer link. Otherwise LLVM
+    # references an SSA name that is never defined.
+    (code! == 0 and node.kind == 27 and node.operand0 >= 0 and node.operand0 < irCount) -> if {
+        context.ir[node.operand0] => enumValueSubject
+        (enumValueSubject.kind == 0
+            or enumValueSubject.kind == 1
+            or enumValueSubject.kind == 10
+            or enumValueSubject.kind == 11
+            or enumValueSubject.kind == 17
+            or (enumValueSubject.kind >= 19 and enumValueSubject.kind <= 25)) -> if { 24 => code! }
+    }
+    # Control-transfer, declaration, and region nodes do not materialize LLVM
+    # values even when stale contextual typing gives them an enum type.
+    (code! == 0 and node.kind == 27 and node.operand0 >= 0 and node.operand0 < irCount) -> if {
+        context.ir[node.operand0] => enumValueSubject
+        (enumValueSubject.kind == 5 and enumValueSubject.operand0 < 0) -> if {
+            node.parent => enumValueOwner!
+            (enumValueOwner! >= 0 and context.ir[enumValueOwner!].kind != 0 and context.ir[enumValueOwner!].kind != 11) -> while {
+                context.ir[enumValueOwner!].parent => enumValueOwner!
+            }
+            (enumValueOwner! < 0
+                or enumValueSubject.sourceModule != context.ir[enumValueOwner!].sourceModule
+                or (context -> parameterIndexForFunction(enumValueOwner!, enumValueSubject.symbol)) < 0) -> if { 23 => code! }
+        }
+    }
+    # A value-producing `if` needs concrete then/else region results before
+    # result-slot emission. Missing region values otherwise reach
+    # regionResultValueIndex as an out-of-bounds lookup and crash the compiler.
+    (code! == 0
+        and node.kind == 18
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+        and node.nextOperand >= 0) -> if {
+        true => valueIfBranchesValid!
+        (node.operand1 < 0
+            or node.operand1 >= irCount
+            or context.ir[node.operand1].kind != 19
+            or context.ir[node.operand1].operand1 < 0
+            or context.ir[node.operand1].operand1 >= irCount) -> if { false => valueIfBranchesValid! }
+        (node.nextOperand < 0
+            or node.nextOperand >= irCount
+            or context.ir[node.nextOperand].kind != 19
+            or context.ir[node.nextOperand].operand1 < 0
+            or context.ir[node.nextOperand].operand1 >= irCount) -> if { false => valueIfBranchesValid! }
+        not valueIfBranchesValid! -> if { 27 => code! }
+    }
+    # A value-producing `if` also needs one canonical type for its result slot
+    # and both materialized branch values. Integer branches may still carry a
+    # contextual literal identity because the slot width performs that
+    # conversion explicitly; aggregate identities must agree exactly.
+    (code! == 0
+        and node.kind == 18
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+        and node.operand1 >= 0
+        and node.operand1 < irCount
+        and node.nextOperand >= 0
+        and node.nextOperand < irCount
+        and context.ir[node.operand1].kind == 19
+        and context.ir[node.nextOperand].kind == 19
+        and context.ir[node.operand1].operand1 >= 0
+        and context.ir[node.operand1].operand1 < irCount
+        and context.ir[node.nextOperand].operand1 >= 0
+        and context.ir[node.nextOperand].operand1 < irCount) -> if {
+        context.ir[node.operand1].operand1 => typedIfThenValueIndex
+        context.ir[node.nextOperand].operand1 => typedIfElseValueIndex
+        false => typedIfMismatch!
+        node -> irAggregateStorageClass => typedIfStorageClass
+        context.ir[typedIfThenValueIndex] -> irAggregateStorageClass => typedIfThenStorageClass
+        context.ir[typedIfElseValueIndex] -> irAggregateStorageClass => typedIfElseStorageClass
+        ((typedIfStorageClass > 0 or typedIfThenStorageClass > 0)
+            and typedIfStorageClass != typedIfThenStorageClass) -> if { true => typedIfMismatch! }
+        ((typedIfStorageClass > 0 or typedIfElseStorageClass > 0)
+            and typedIfStorageClass != typedIfElseStorageClass) -> if { true => typedIfMismatch! }
+        (not typedIfMismatch!
+            and node.typeId >= 0
+            and context.ir[typedIfThenValueIndex].typeId >= 0
+            and context.ir[typedIfThenValueIndex].typeId != node.typeId) -> if {
+            ((node -> irScalarIntegerWidth(context)) == 0
+                or (context.ir[typedIfThenValueIndex] -> irScalarIntegerWidth(context)) == 0) -> if {
+                true => typedIfMismatch!
+            }
+        }
+        (not typedIfMismatch!
+            and node.typeId >= 0
+            and context.ir[typedIfElseValueIndex].typeId >= 0
+            and context.ir[typedIfElseValueIndex].typeId != node.typeId) -> if {
+            ((node -> irScalarIntegerWidth(context)) == 0
+                or (context.ir[typedIfElseValueIndex] -> irScalarIntegerWidth(context)) == 0) -> if {
+                true => typedIfMismatch!
+            }
+        }
+        typedIfMismatch! -> if { 37 => code! }
+    }
+    # A non-negative payload binding type can still be stale. Intrinsic
+    # Option/Result arms must use the exact canonical payload type carried by
+    # the matched enum or fixed-array values can be lowered as slice headers.
+    (code! == 0
+        and node.kind == 29
+        and node.parent >= 0
+        and node.parent < irCount
+        and context.ir[node.parent].kind == 19
+        and context.ir[node.parent].parent >= 0
+        and context.ir[node.parent].parent < irCount
+        and context.ir[context.ir[node.parent].parent].kind == 27) -> if {
+        context.ir[node.parent] => payloadArm
+        context.ir[payloadArm.parent] => payloadMatch
+        (payloadMatch.operand0 >= 0
+            and payloadMatch.operand0 < irCount
+            and context.ir[payloadMatch.operand0].typeId >= 0
+            and context.ir[payloadMatch.operand0].typeId < (context.types -> len)) -> if {
+            context.types[context.ir[payloadMatch.operand0].typeId] => payloadSubjectType
+            -1 => expectedPayloadType!
+            (payloadSubjectType.kind == 7 and payloadSubjectType.origin == 4 and payloadSubjectType.symbol == 0) -> if {
+                payloadSubjectType.first => expectedPayloadType!
+            }
+            (payloadSubjectType.kind == 7 and payloadSubjectType.origin == 4 and payloadSubjectType.symbol == 1) -> if {
+                payloadArm.opcode == 0 -> if { payloadSubjectType.first => expectedPayloadType! } else { payloadSubjectType.second => expectedPayloadType! }
+            }
+            (expectedPayloadType! >= 0 and node.typeId != expectedPayloadType!) -> if { 28 => code! }
+        }
+    }
+    # Fixed and bounded array return contracts are contextual types, not
+    # suggestions. A direct literal must use the function's exact canonical
+    # array identity before ABI selection.
+    (code! == 0
+        and node.kind == 0
+        and node.typeId >= 0
+        and node.typeId < (context.types -> len)
+        and (context.types[node.typeId].kind == 4 or context.types[node.typeId].kind == 12)
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind == 1
+        and context.ir[node.operand0].operand0 >= 0
+        and context.ir[node.operand0].operand0 < irCount
+        and context.ir[context.ir[node.operand0].operand0].kind == 14
+        and context.ir[context.ir[node.operand0].operand0].typeId != node.typeId) -> if { 29 => code! }
+    # Array-valued nominal fields likewise require the declaration's exact
+    # shape. A dynamic or slice carrier cannot initialize fixed inline storage.
+    (code! == 0 and node.kind == 12 and node.typeId >= 0) -> if {
+        node.operand0 => structArrayValueIndex!
+        0 => structArrayFieldOrdinal!
+        (structArrayValueIndex! >= 0 and structArrayValueIndex! < irCount and code! == 0) -> while {
+            -1 => structArrayFieldTypeId!
+            0 => structArrayFieldSearch!
+            (structArrayFieldSearch! < (context.fields -> len) and structArrayFieldTypeId! < 0) -> while {
+                context.fields[structArrayFieldSearch!] => structArrayField
+                (structArrayField.ownerType == node.typeId and structArrayField.ordinal == structArrayFieldOrdinal!) -> if {
+                    structArrayField.fieldType => structArrayFieldTypeId!
+                }
+                structArrayFieldSearch! + 1 => structArrayFieldSearch!
+            }
+            (structArrayFieldTypeId! >= 0
+                and structArrayFieldTypeId! < (context.types -> len)
+                and (context.types[structArrayFieldTypeId!].kind == 3 or context.types[structArrayFieldTypeId!].kind == 4 or context.types[structArrayFieldTypeId!].kind == 12)
+                and context.ir[structArrayValueIndex!].typeId != structArrayFieldTypeId!) -> if { 30 => code! }
+            context.ir[structArrayValueIndex!].nextOperand => structArrayValueIndex!
+            structArrayFieldOrdinal! + 1 => structArrayFieldOrdinal!
+        }
+    }
+    # A value-producing enum match must provide a canonical value on every
+    # non-returning arm. Otherwise value-use propagation can request the match
+    # SSA while the emitter has no arm value to store.
+    (code! == 0
+        and node.kind == 27
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)) -> if {
+        false => valueMatchResultDemanded!
+        (node.parent >= 0 and node.parent < irCount and context.ir[node.parent].kind == 19) -> if {
+            context.ir[node.parent] => valueMatchParentRegion
+            (valueMatchParentRegion.operand1 == irIndex
+                and valueMatchParentRegion.sourceModule >= 0
+                and valueMatchParentRegion.sourceModule < (context.ranges -> len)) -> if {
+                context.ranges[valueMatchParentRegion.sourceModule] => valueMatchParentRange
+                (valueMatchParentRegion.astNode >= 0 and valueMatchParentRegion.astNode < valueMatchParentRange.astCount) -> if {
+                    context.nodes[valueMatchParentRange.astStart + valueMatchParentRegion.astNode] => valueMatchParentAst
+                    (valueMatchParentAst.kind == 58 or valueMatchParentAst.kind == 70) -> if { true => valueMatchResultDemanded! }
+                }
+            }
+        }
+        valueMatchResultDemanded! -> if {
+            node.operand1 => valueMatchArmIndex!
+            true => valueMatchArmsValid!
+            (valueMatchArmIndex! >= 0 and valueMatchArmIndex! < irCount and valueMatchArmsValid!) -> while {
+                context.ir[valueMatchArmIndex!] => valueMatchArm
+                (valueMatchArm.kind != 19 or valueMatchArm.parent != irIndex) -> if {
+                    false => valueMatchArmsValid!
+                } else {
+                    valueMatchArmIndex! => valueMatchRegionIndex!
+                    (valueMatchArm.operand1 >= 0
+                        and valueMatchArm.operand1 < irCount
+                        and context.ir[valueMatchArm.operand1].kind == 19) -> if {
+                        valueMatchArm.operand1 => valueMatchRegionIndex!
+                    }
+                    context.ir[valueMatchRegionIndex!].operand1 < 0 -> if { false => valueMatchArmsValid! }
+                    valueMatchArm.nextOperand => valueMatchArmIndex!
+                }
+            }
+            not valueMatchArmsValid! -> if { 22 => code! }
+        }
+    }
+    # Every materialized arm of a value-producing enum match must agree with
+    # the match result slot's canonical type. A first-arm payload must never
+    # become the slot type when later arms yield the enclosing Result/Option.
+    (code! == 0
+        and node.kind == 27
+        and node.typeId >= 0
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)) -> if {
+        false => typedMatchResultDemanded!
+        (node.parent >= 0 and node.parent < irCount) -> if {
+            context.ir[node.parent] => typedMatchParent
+            ((typedMatchParent.kind == 1 and typedMatchParent.operand0 == irIndex)
+                or (typedMatchParent.kind == 19 and typedMatchParent.operand1 == irIndex)) -> if { true => typedMatchResultDemanded! }
+        }
+        typedMatchResultDemanded! -> if {
+            node.operand1 => typedMatchArmIndex!
+            (typedMatchArmIndex! >= 0 and typedMatchArmIndex! < irCount and code! == 0) -> while {
+                context.ir[typedMatchArmIndex!] => typedMatchArm
+                typedMatchArmIndex! => typedMatchRegionIndex!
+                (typedMatchArm.operand1 >= 0
+                    and typedMatchArm.operand1 < irCount
+                    and context.ir[typedMatchArm.operand1].kind == 19) -> if { typedMatchArm.operand1 => typedMatchRegionIndex! }
+                context.ir[typedMatchRegionIndex!].operand1 => typedMatchValueIndex
+                (typedMatchValueIndex >= 0 and typedMatchValueIndex < irCount) -> if {
+                    context.ir[typedMatchValueIndex].typeId != node.typeId -> if { 25 => code! }
+                }
+                typedMatchArm.nextOperand => typedMatchArmIndex!
+            }
+        }
+    }
+    # A transparent parser wrapper has no standalone SSA definition. Even if
+    # it carries the correct contextual type, a value-producing match arm must
+    # store the concrete producer beneath that wrapper.
+    (code! == 0 and node.kind == 27) -> if {
+        false => concreteMatchResultDemanded!
+        (node.parent >= 0 and node.parent < irCount) -> if {
+            context.ir[node.parent] => concreteMatchParent
+            ((concreteMatchParent.kind == 1 and concreteMatchParent.operand0 == irIndex)
+                or (concreteMatchParent.kind == 19 and concreteMatchParent.operand1 == irIndex)) -> if {
+                true => concreteMatchResultDemanded!
+            }
+        }
+        concreteMatchResultDemanded! -> if {
+            node.operand1 => concreteMatchArmIndex!
+            (concreteMatchArmIndex! >= 0 and concreteMatchArmIndex! < irCount and code! == 0) -> while {
+                context.ir[concreteMatchArmIndex!] => concreteMatchArm
+                concreteMatchArmIndex! => concreteMatchRegionIndex!
+                (concreteMatchArm.operand1 >= 0
+                    and concreteMatchArm.operand1 < irCount
+                    and context.ir[concreteMatchArm.operand1].kind == 19) -> if {
+                    concreteMatchArm.operand1 => concreteMatchRegionIndex!
+                }
+                context.ir[concreteMatchRegionIndex!].operand1 => concreteMatchValueIndex
+                (concreteMatchValueIndex >= 0
+                    and concreteMatchValueIndex < irCount
+                    and context.ir[concreteMatchValueIndex].kind == 9
+                    and context.ir[concreteMatchValueIndex].opcode == -1) -> if { 26 => code! }
+                concreteMatchArm.nextOperand => concreteMatchArmIndex!
+            }
+        }
+    }
+    # Subject `when` controls must retain the value that every relational arm
+    # compares. Losing it can leave individually plausible one-sided binary
+    # nodes that only fail after nested enum payload lowering.
+    (code! == 0 and node.kind == 34 and (node.operand0 < 0 or node.operand0 >= irCount)) -> if {
+        18 => code!
+    }
+    # Every non-empty array literal must carry its canonical dynamic, bounded,
+    # or fixed-array identity before LLVM storage is selected. Missing this
+    # contract would otherwise surface later as an invalid `alloca void`.
+    (code! == 0 and node.kind == 14 and node.operand0 >= 0 and node.typeId < 0) -> if {
+        13 => code!
+    }
+    # A stale array identity can remain non-negative while naming the wrong
+    # element type. Header-only layouts may let that survive LLVM validation,
+    # but ownership, drop, ABI, and indexed access will eventually diverge.
+    # Numeric and Bool literals are exempt because contextual typing may
+    # intentionally narrow their default literal type.
+    (code! == 0
+        and node.kind == 14
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and node.typeId >= 0
+        and node.typeId < (context.types -> len)) -> if {
+        context.types[node.typeId] => arrayType
+        context.ir[node.operand0] => firstArrayOperand
+        ((arrayType.kind == 3 or arrayType.kind == 4 or arrayType.kind == 12)
+            and arrayType.first >= 0
+            and firstArrayOperand.typeId >= 0
+            and firstArrayOperand.kind != 3
+            and firstArrayOperand.kind != 4
+            and arrayType.first != firstArrayOperand.typeId) -> if {
+            14 => code!
+        }
+    }
+    # A repeat literal has one lowered element operand but its static length is
+    # the source repeat count. Treating operand count as array length silently
+    # changes indexing, ABI, and struct layout even when code generation runs.
+    (code! == 0
+        and node.kind == 14
+        and node.typeId >= 0
+        and node.typeId < (context.types -> len)
+        and context.types[node.typeId].kind == 4
+        and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)) -> if {
+        context.ranges[node.sourceModule] => repeatInvariantRange
+        context.nodes[repeatInvariantRange.astStart + node.astNode] => repeatInvariantAst
+        false => repeatInvariantAfterSemicolon!
+        -1 => repeatInvariantLength!
+        repeatInvariantAst.firstToken => repeatInvariantTokenIndex!
+        repeatInvariantTokenIndex! < repeatInvariantAst.firstToken + repeatInvariantAst.tokenCount -> while {
+            context.tokens[repeatInvariantRange.tokenStart + repeatInvariantTokenIndex!] => repeatInvariantToken
+            repeatInvariantToken.kind == grammar.tokenIdSemicolon() -> if { true => repeatInvariantAfterSemicolon! } else {
+                (repeatInvariantAfterSemicolon! and repeatInvariantLength! < 0 and repeatInvariantToken.kind == grammar.tokenIdNumber()) -> if {
+                    0 => repeatInvariantLength!
+                    UIntSize(0) => repeatInvariantByte!
+                    repeatInvariantByte! < repeatInvariantToken.span.length -> while {
+                        context.sources[node.sourceModule] -> byte(repeatInvariantToken.span.start + repeatInvariantByte!) => repeatInvariantDigit
+                        repeatInvariantDigit != 95 -> if { repeatInvariantLength! * 10 + Int(repeatInvariantDigit - 48) => repeatInvariantLength! }
+                        repeatInvariantByte! + 1 => repeatInvariantByte!
+                    }
+                }
+            }
+            repeatInvariantTokenIndex! + 1 => repeatInvariantTokenIndex!
+        }
+        (repeatInvariantLength! >= 0 and context.types[node.typeId].length != repeatInvariantLength!) -> if { 31 => code! }
+    }
+    # A binding whose final source operator is `?` stores the success payload,
+    # never the enclosing Result. Final synchronization passes must preserve
+    # that distinction instead of copying the call's pre-unwrap type back.
+    (code! == 0
+        and node.kind == 17
+        and node.typeId >= 0
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].typeId == node.typeId
+        and context.types[node.typeId].kind == 7
+        and context.types[node.typeId].origin == 4
+        and context.types[node.typeId].symbol == 1
+        and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)) -> if {
+        context.ranges[node.sourceModule] => tryBindingInvariantRange
+        context.nodes[tryBindingInvariantRange.astStart + node.astNode] => tryBindingInvariantAst
+        -1 => tryBindingInvariantLastFlow!
+        tryBindingInvariantAst.firstToken => tryBindingInvariantTokenIndex!
+        tryBindingInvariantTokenIndex! < tryBindingInvariantAst.firstToken + tryBindingInvariantAst.tokenCount -> while {
+            context.tokens[tryBindingInvariantRange.tokenStart + tryBindingInvariantTokenIndex!] => tryBindingInvariantToken
+            (tryBindingInvariantToken.kind == grammar.tokenIdQuestion() or tryBindingInvariantToken.kind == grammar.tokenIdArrow()) -> if {
+                tryBindingInvariantToken.kind => tryBindingInvariantLastFlow!
+            }
+            tryBindingInvariantToken.kind == grammar.tokenIdFatArrow() -> if { tryBindingInvariantAst.firstToken + tryBindingInvariantAst.tokenCount => tryBindingInvariantTokenIndex! } else {
+                tryBindingInvariantTokenIndex! + 1 => tryBindingInvariantTokenIndex!
+            }
+        }
+        tryBindingInvariantLastFlow! == grammar.tokenIdQuestion() -> if { 32 => code! }
+    }
+    # A binding and every direct read of it share one canonical value type.
+    # A Result binding followed by `?` is the sole intentional initializer
+    # mismatch: the binding stores the success payload rather than the Result.
+    # Any other stale type would make LLVM print one type for an SSA producer
+    # and another type for the value that consumes it.
+    (code! == 0
+        and node.kind == 17
+        and node.typeId >= 0
+        and node.typeId < (context.types -> len)
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].typeId >= 0
+        and context.ir[node.operand0].typeId < (context.types -> len)
+        and node.typeId != context.ir[node.operand0].typeId) -> if {
+        context.ir[node.operand0].typeId => bindingInitializerTypeId
+        false => bindingPayloadUnwrap!
+        ((node -> irScalarIntegerWidth(context)) > 0
+            and (context.ir[node.operand0] -> irScalarIntegerWidth(context)) > 0) -> if {
+            true => bindingPayloadUnwrap!
+        }
+        context.types[node.typeId] => bindingCanonicalType
+        context.types[bindingInitializerTypeId] => bindingInitializerType
+        (bindingCanonicalType.kind == bindingInitializerType.kind
+            and bindingCanonicalType.origin == bindingInitializerType.origin
+            and bindingCanonicalType.module == bindingInitializerType.module
+            and bindingCanonicalType.symbol == bindingInitializerType.symbol
+            and bindingCanonicalType.first == bindingInitializerType.first
+            and bindingCanonicalType.second == bindingInitializerType.second
+            and bindingCanonicalType.length == bindingInitializerType.length) -> if {
+            true => bindingPayloadUnwrap!
+        }
+        (bindingCanonicalType.origin == 3
+            and bindingInitializerType.origin == 3
+            and bindingCanonicalType.module == bindingInitializerType.module) -> if {
+            true => bindingPayloadUnwrap!
+        }
+        (context.types[bindingInitializerTypeId].kind == 7
+            and context.types[bindingInitializerTypeId].origin == 4
+            and context.types[bindingInitializerTypeId].symbol == 1
+            and context.types[bindingInitializerTypeId].first == node.typeId) -> if {
+            true => bindingPayloadUnwrap!
+        }
+        not bindingPayloadUnwrap! -> if { 37 => code! }
+    }
+    (code! == 0
+        and node.kind == 5
+        and node.typeId >= 0
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind == 17
+        and context.ir[node.operand0].operand0 >= 0
+        and context.ir[node.operand0].operand0 < irCount
+        and context.ir[context.ir[node.operand0].operand0].typeId >= 0
+        and node.typeId != context.ir[context.ir[node.operand0].operand0].typeId) -> if {
+        context.ir[node.operand0].operand0 => bindingReadInitializerIndex
+        false => bindingReadCompatible!
+        ((node -> irScalarIntegerWidth(context)) > 0
+            and (context.ir[bindingReadInitializerIndex] -> irScalarIntegerWidth(context)) > 0) -> if {
+            true => bindingReadCompatible!
+        }
+        context.ir[bindingReadInitializerIndex].typeId => bindingReadInitializerTypeId
+        (bindingReadInitializerTypeId >= 0
+            and bindingReadInitializerTypeId < (context.types -> len)
+            and node.typeId < (context.types -> len)) -> if {
+            context.types[node.typeId] => bindingReadCanonicalType
+            context.types[bindingReadInitializerTypeId] => bindingReadInitializerType
+            (bindingReadCanonicalType.kind == bindingReadInitializerType.kind
+                and bindingReadCanonicalType.origin == bindingReadInitializerType.origin
+                and bindingReadCanonicalType.module == bindingReadInitializerType.module
+                and bindingReadCanonicalType.symbol == bindingReadInitializerType.symbol
+                and bindingReadCanonicalType.first == bindingReadInitializerType.first
+                and bindingReadCanonicalType.second == bindingReadInitializerType.second
+                and bindingReadCanonicalType.length == bindingReadInitializerType.length) -> if {
+                true => bindingReadCompatible!
+            }
+            (bindingReadCanonicalType.origin == 3
+                and bindingReadInitializerType.origin == 3
+                and bindingReadCanonicalType.module == bindingReadInitializerType.module) -> if {
+                true => bindingReadCompatible!
+            }
+        }
+        (bindingReadInitializerTypeId >= 0
+            and bindingReadInitializerTypeId < (context.types -> len)
+            and context.types[bindingReadInitializerTypeId].kind == 7
+            and context.types[bindingReadInitializerTypeId].origin == 4
+            and context.types[bindingReadInitializerTypeId].symbol == 1
+            and context.types[bindingReadInitializerTypeId].first == node.typeId) -> if {
+            true => bindingReadCompatible!
+        }
+        not bindingReadCompatible! -> if { 37 => code! }
+    }
+    # A partition result is a structural product whose route fields preserve
+    # the canonical Stream/EventStream wrapper of its source. Committing a
+    # product from an earlier Range or other fixed-point candidate would make
+    # direct dispatch consume a non-stream ABI and eventually reference an
+    # intentionally unmaterialized product value.
+    (code! == 0 and node.kind == 40) -> if {
+        true => partitionTypeInvariantValid!
+        (node.typeId < 0 or node.typeId >= (context.types -> len)) -> if { false => partitionTypeInvariantValid! }
+        (node.operand0 < 0 or node.operand0 >= irCount) -> if { false => partitionTypeInvariantValid! }
+        -1 => partitionTypeInvariantSourceType!
+        partitionTypeInvariantValid! -> if {
+            context.ir[node.operand0].typeId => partitionTypeInvariantSourceType!
+            (partitionTypeInvariantSourceType! < 0 or partitionTypeInvariantSourceType! >= (context.types -> len)) -> if {
+                false => partitionTypeInvariantValid!
+            } else {
+                context.types[partitionTypeInvariantSourceType!] => partitionTypeInvariantSource
+                (partitionTypeInvariantSource.kind != 7
+                    or partitionTypeInvariantSource.origin != 4
+                    or (partitionTypeInvariantSource.symbol != 3 and partitionTypeInvariantSource.symbol != 4)) -> if {
+                    false => partitionTypeInvariantValid!
+                }
+            }
+        }
+        0 => partitionTypeInvariantFieldCount!
+        partitionTypeInvariantValid! -> if {
+            context.types[node.typeId] => partitionTypeInvariantProduct
+            partitionTypeInvariantProduct.kind != 10 -> if { false => partitionTypeInvariantValid! }
+            0 => partitionTypeInvariantFieldSearch!
+            partitionTypeInvariantFieldSearch! < (context.fields -> len) -> while {
+                context.fields[partitionTypeInvariantFieldSearch!] => partitionTypeInvariantField
+                (partitionTypeInvariantField.status == 0 and partitionTypeInvariantField.ownerType == node.typeId) -> if {
+                    partitionTypeInvariantFieldCount! + 1 => partitionTypeInvariantFieldCount!
+                    partitionTypeInvariantField.fieldType != partitionTypeInvariantSourceType! -> if { false => partitionTypeInvariantValid! }
+                }
+                partitionTypeInvariantFieldSearch! + 1 => partitionTypeInvariantFieldSearch!
+            }
+            partitionTypeInvariantFieldCount! != partitionTypeInvariantProduct.length -> if { false => partitionTypeInvariantValid! }
+        }
+        not partitionTypeInvariantValid! -> if { 41 => code! }
+    }
+    # `len` is an aggregate projection. A scalar receiver proves that operand
+    # recovery crossed expression or region boundaries; emitting extractvalue
+    # would otherwise defer the failure to LLVM assembly.
+    (code! == 0
+        and (node.kind == 6 or node.kind == 9)
+        and node.opcode == -201
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and ((context.ir[node.operand0] -> irScalarIntegerWidth(context)) > 0
+            or (context.ir[node.operand0].kind == 8
+                and context.ir[node.operand0].opcode >= grammar.tokenIdPlus()
+                and context.ir[node.operand0].opcode <= grammar.tokenIdPercent()))) -> if {
+        38 => code!
+    }
+    # `capacity` has the same aggregate receiver contract as `len`. In
+    # particular, a local binding named `capacity` is not an intrinsic stage
+    # unless it occurs after a top-level flow arrow.
+    node.operand0 => capacityInvariantReceiver!
+    (capacityInvariantReceiver! >= 0
+        and capacityInvariantReceiver! < irCount
+        and context.ir[capacityInvariantReceiver!].kind == 9
+        and context.ir[capacityInvariantReceiver!].opcode == -236
+        and context.ir[capacityInvariantReceiver!].operand0 >= 0
+        and context.ir[capacityInvariantReceiver!].operand0 != capacityInvariantReceiver!) -> while {
+        context.ir[capacityInvariantReceiver!].operand0 => capacityInvariantReceiver!
+    }
+    (code! == 0
+        and (node.kind == 6 or node.kind == 9)
+        and node.opcode == -236
+        and capacityInvariantReceiver! >= 0
+        and capacityInvariantReceiver! < irCount
+        and ((context.ir[capacityInvariantReceiver!] -> irScalarIntegerWidth(context)) > 0
+            or (context.ir[capacityInvariantReceiver!].kind == 8
+                and context.ir[capacityInvariantReceiver!].opcode >= grammar.tokenIdPlus()
+                and context.ir[capacityInvariantReceiver!].opcode <= grammar.tokenIdPercent()))) -> if {
+        40 => code!
+    }
+    # A dotted member base must be a proper structural prefix of the member
+    # expression. A base outside that span proves that flattened IR parent
+    # recovery crossed into another expression or control region.
+    (code! == 0
+        and node.kind == 13
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind != 29
+        and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)
+        and context.ir[node.operand0].sourceModule == node.sourceModule) -> if {
+        context.ranges[node.sourceModule] => memberBaseInvariantRange
+        context.nodes[memberBaseInvariantRange.astStart + node.astNode] => memberBaseInvariantAst
+        context.nodes[memberBaseInvariantRange.astStart + context.ir[node.operand0].astNode] => memberBaseInvariantOperandAst
+        (memberBaseInvariantOperandAst.start != memberBaseInvariantAst.start
+            or memberBaseInvariantOperandAst.length >= memberBaseInvariantAst.length
+            or memberBaseInvariantOperandAst.start + memberBaseInvariantOperandAst.length > memberBaseInvariantAst.start + memberBaseInvariantAst.length) -> if {
+            39 => code!
+        }
+    }
+    # Once a nominal base is canonical, a dotted member of a field-bearing
+    # type must also carry a canonical field type before ABI lowering.
+    (code! == 0
+        and node.kind == 13
+        and node.opcode == grammar.tokenIdDot()
+        and node.typeId < 0
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].typeId >= 0
+        and context.types[context.ir[node.operand0].typeId].kind == 1) -> if {
+        false => unresolvedNominalMemberHasFields!
+        0 => unresolvedNominalMemberFieldSearch!
+        (unresolvedNominalMemberFieldSearch! < (context.fields -> len) and not unresolvedNominalMemberHasFields!) -> while {
+            context.fields[unresolvedNominalMemberFieldSearch!].ownerType == context.ir[node.operand0].typeId -> if { true => unresolvedNominalMemberHasFields! }
+            unresolvedNominalMemberFieldSearch! + 1 => unresolvedNominalMemberFieldSearch!
+        }
+        unresolvedNominalMemberHasFields! -> if { 33 => code! }
+    }
+    # A nominal struct literal must name the identity that owns its field table.
+    # Coordinate-equivalent duplicates cannot safely drive field ABI selection.
+    (code! == 0
+        and node.kind == 12
+        and node.typeId >= 0
+        and context.types[node.typeId].kind == 1) -> if {
+        false => structOwnerInvariantHasFields!
+        false => structOwnerInvariantEquivalentHasFields!
+        context.types[node.typeId] => structOwnerInvariantType
+        0 => structOwnerInvariantFieldSearch!
+        structOwnerInvariantFieldSearch! < (context.fields -> len) -> while {
+            context.fields[structOwnerInvariantFieldSearch!] => structOwnerInvariantField
+            (structOwnerInvariantField.status == 0 and structOwnerInvariantField.ownerType == node.typeId) -> if { true => structOwnerInvariantHasFields! }
+            context.types[structOwnerInvariantField.ownerType] => structOwnerInvariantCandidateType
+            (structOwnerInvariantCandidateType.kind == 1
+                and structOwnerInvariantCandidateType.origin == structOwnerInvariantType.origin
+                and structOwnerInvariantCandidateType.module == structOwnerInvariantType.module
+                and structOwnerInvariantCandidateType.symbol == structOwnerInvariantType.symbol) -> if {
+                structOwnerInvariantField.status == 0 -> if { true => structOwnerInvariantEquivalentHasFields! }
+            }
+            structOwnerInvariantFieldSearch! + 1 => structOwnerInvariantFieldSearch!
+        }
+        (not structOwnerInvariantHasFields! and structOwnerInvariantEquivalentHasFields!) -> if { 35 => code! }
+    }
+    # Arithmetic is emitted at the widest operand width. Its semantic result
+    # must name that same width; otherwise LLVM text can declare an i16 call
+    # argument while referencing an i32 SSA producer.
+    (code! == 0
+        and node.kind == 8
+        and node.opcode >= grammar.tokenIdPlus()
+        and node.opcode <= grammar.tokenIdPercent()
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and node.operand1 >= 0
+        and node.operand1 < irCount) -> if {
+        node -> irScalarIntegerWidth(context) => arithmeticResultWidth
+        context.ir[node.operand0] -> irScalarIntegerWidth(context) => arithmeticLeftWidth
+        context.ir[node.operand1] -> irScalarIntegerWidth(context) => arithmeticRightWidth
+        arithmeticLeftWidth > arithmeticRightWidth -> if { arithmeticLeftWidth } else { arithmeticRightWidth } => arithmeticStorageWidth
+        ((node -> irAggregateStorageClass) > 0 and arithmeticStorageWidth > 0) -> if { 37 => code! }
+        (code! == 0
+            and arithmeticResultWidth > 0
+            and arithmeticStorageWidth > 0
+            and arithmeticResultWidth != arithmeticStorageWidth) -> if { 15 => code! }
+    }
+    # A scalar local alias may start from a parameter name, whose ABI value is
+    # written directly as %arg/%argN and therefore has no standalone SSA node.
+    # Any other unresolved scalar name used as a binding initializer would
+    # become an undefined %v reference in LLVM.
+    (code! == 0
+        and node.kind == 17
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind == 5
+        and context.ir[node.operand0].operand0 < 0
+        and (context.ir[node.operand0] -> irScalarIntegerWidth(context)) > 0) -> if {
+        node.parent => aliasOwner!
+        (aliasOwner! >= 0 and context.ir[aliasOwner!].kind != 0 and context.ir[aliasOwner!].kind != 11) -> while {
+            context.ir[aliasOwner!].parent => aliasOwner!
+        }
+        (aliasOwner! >= 0
+            and context.ir[aliasOwner!].kind == 0
+            and (context -> parameterIndexForFunction(aliasOwner!, context.ir[node.operand0].symbol)) < 0) -> if {
+            16 => code!
+        }
     }
     code!
 }
@@ -805,7 +1590,484 @@ emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
             node.astNode => astNode
             context.ranges[sourceModule] => diagnosticRange
             context.nodes[diagnosticRange.astStart + astNode] => diagnosticAst
-            "; sollang ir error: invariant $invariantCode at ir $diagnosticIrIndex (kind $(node.kind), parent $(node.parent), operand0 $(node.operand0), operand1 $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            invariantCode == 13 -> if {
+                context.ir[node.operand0] => diagnosticArrayElement
+                "; sollang compiler error S006: non-empty array literal has no canonical storage type at ir $diagnosticIrIndex (arrayType $(node.typeId)/$(node.typeKind)/$(node.typeOrigin)/$(node.typeModule)/$(node.typeSymbol), first $(node.operand0), firstType $(diagnosticArrayElement.typeId)/$(diagnosticArrayElement.typeKind)/$(diagnosticArrayElement.typeOrigin)/$(diagnosticArrayElement.typeModule)/$(diagnosticArrayElement.typeSymbol), firstSource $(diagnosticArrayElement.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 14 -> if {
+                "; sollang compiler error S007: array literal storage element type disagrees with its first lowered operand at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 15 -> if {
+                node -> irScalarIntegerWidth(context) => diagnosticResultWidth
+                context.ir[node.operand0] => diagnosticLeft
+                context.ir[node.operand1] => diagnosticRight
+                diagnosticLeft -> irScalarIntegerWidth(context) => diagnosticLeftWidth
+                diagnosticRight -> irScalarIntegerWidth(context) => diagnosticRightWidth
+                "; sollang compiler error S008: arithmetic result width $diagnosticResultWidth disagrees with emitted operand widths $diagnosticLeftWidth/$diagnosticRightWidth at ir $diagnosticIrIndex (types $(node.typeSymbol)/$(diagnosticLeft.typeSymbol)/$(diagnosticRight.typeSymbol), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 16 -> if {
+                "; sollang compiler error S009: scalar binding initializer has no binding or parameter value source at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 17 -> if {
+                "; sollang compiler error S010: inverse guard identity disagrees between AST and Typed IR at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 11 -> if {
+                "; sollang compiler error S011: enum subject pattern does not lower to an enum constructor at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 18 -> if {
+                "; sollang compiler error S012: subject when has no canonical comparison subject at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 19 -> if {
+                context.ir[node.parent] => subjectArmDiagnostic
+                subjectArmDiagnostic.parent => subjectControlDiagnosticIndex
+                context.ir[subjectControlDiagnosticIndex] => subjectControlDiagnostic
+                "; sollang compiler error S013: subject when comparison has no canonical left operand at ir $diagnosticIrIndex (left $(node.operand0), expected $(subjectControlDiagnostic.operand0), arm $(node.parent)/$(subjectArmDiagnostic.kind), control $subjectControlDiagnosticIndex/$(subjectControlDiagnostic.kind), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 8 -> if {
+                "; sollang compiler error S014: member read has no canonical base operand at ir $diagnosticIrIndex (parent $(node.parent), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 4 -> if {
+                "; sollang compiler error S015: binary expression has no canonical right operand at ir $diagnosticIrIndex (parent $(node.parent), operand0 $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 10 -> if {
+                "; sollang compiler error S016: conditional expression has no canonical condition operand at ir $diagnosticIrIndex (parent $(node.parent), operand1 $(node.operand1), nextOperand $(node.nextOperand), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 20 -> if {
+                context.ir[node.operand0] => memberOwnerDiagnostic
+                -1 => memberOwnerDiagnosticParentKind!
+                -1 => memberOwnerDiagnosticControlKind!
+                -1 => memberOwnerDiagnosticSubjectType!
+                -1 => memberOwnerDiagnosticSubjectKind!
+                -1 => memberOwnerDiagnosticSubjectOrigin!
+                -1 => memberOwnerDiagnosticSubjectModule!
+                -1 => memberOwnerDiagnosticSubjectSymbol!
+                -1 => memberOwnerDiagnosticSubjectFirst!
+                -1 => memberOwnerDiagnosticSubjectSecond!
+                -1 => memberOwnerDiagnosticSubjectNodeKind!
+                -1 => memberOwnerDiagnosticSubjectNodeOpcode!
+                -1 => memberOwnerDiagnosticSubjectNodeParent!
+                -1 => memberOwnerDiagnosticSubjectNodeOperand0!
+                -1 => memberOwnerDiagnosticSubjectNodeNext!
+                -1 => memberOwnerDiagnosticArmOpcode!
+                -1 => memberOwnerDiagnosticOwnerSource!
+                -1 => memberOwnerDiagnosticOwnerSymbolKind!
+                -1 => memberOwnerDiagnosticOwnerSymbolAst!
+                -1 => memberOwnerDiagnosticOwnerSymbolTypeAst!
+                0 => memberOwnerDiagnosticVariantCount!
+                -1 => memberOwnerDiagnosticTakeIr!
+                -1 => memberOwnerDiagnosticTakeParent!
+                -1 => memberOwnerDiagnosticTakeType!
+                -1 => memberOwnerDiagnosticTakeOperandType!
+                UIntSize(0) => memberOwnerDiagnosticTakeStart!
+                memberOwnerDiagnostic.parent >= 0 -> if {
+                    context.ir[memberOwnerDiagnostic.parent].kind => memberOwnerDiagnosticParentKind!
+                    context.ir[memberOwnerDiagnostic.parent].opcode => memberOwnerDiagnosticArmOpcode!
+                    context.ir[memberOwnerDiagnostic.parent].parent => memberOwnerDiagnosticControl
+                    memberOwnerDiagnosticControl >= 0 -> if {
+                        context.ir[memberOwnerDiagnosticControl].kind => memberOwnerDiagnosticControlKind!
+                        context.ranges[sourceModule] => memberOwnerDiagnosticSourceRange
+                        context.nodes[memberOwnerDiagnosticSourceRange.astStart + context.ir[memberOwnerDiagnosticControl].astNode] => memberOwnerDiagnosticControlAst
+                        0 => memberOwnerDiagnosticTakeSearch!
+                        memberOwnerDiagnosticTakeSearch! < (context.ir -> len) -> while {
+                            context.ir[memberOwnerDiagnosticTakeSearch!] => memberOwnerDiagnosticTakeCandidate
+                            (memberOwnerDiagnosticTakeCandidate.sourceModule == sourceModule and memberOwnerDiagnosticTakeCandidate.kind == 9 and memberOwnerDiagnosticTakeCandidate.opcode == -213 and memberOwnerDiagnosticTakeCandidate.astNode >= 0) -> if {
+                                context.nodes[memberOwnerDiagnosticSourceRange.astStart + memberOwnerDiagnosticTakeCandidate.astNode] => memberOwnerDiagnosticTakeAst
+                                (memberOwnerDiagnosticTakeAst.start < memberOwnerDiagnosticControlAst.start and (memberOwnerDiagnosticTakeIr! < 0 or memberOwnerDiagnosticTakeAst.start > memberOwnerDiagnosticTakeStart!)) -> if {
+                                    memberOwnerDiagnosticTakeSearch! => memberOwnerDiagnosticTakeIr!
+                                    memberOwnerDiagnosticTakeCandidate.parent => memberOwnerDiagnosticTakeParent!
+                                    memberOwnerDiagnosticTakeCandidate.typeId => memberOwnerDiagnosticTakeType!
+                                    memberOwnerDiagnosticTakeCandidate.operand0 >= 0 -> if { context.ir[memberOwnerDiagnosticTakeCandidate.operand0].typeId => memberOwnerDiagnosticTakeOperandType! }
+                                    memberOwnerDiagnosticTakeAst.start => memberOwnerDiagnosticTakeStart!
+                                }
+                            }
+                            memberOwnerDiagnosticTakeSearch! + 1 => memberOwnerDiagnosticTakeSearch!
+                        }
+                        context.ir[memberOwnerDiagnosticControl].operand0 => memberOwnerDiagnosticSubject
+                        memberOwnerDiagnosticSubject >= 0 -> if {
+                            context.ir[memberOwnerDiagnosticSubject].kind => memberOwnerDiagnosticSubjectNodeKind!
+                            context.ir[memberOwnerDiagnosticSubject].opcode => memberOwnerDiagnosticSubjectNodeOpcode!
+                            context.ir[memberOwnerDiagnosticSubject].parent => memberOwnerDiagnosticSubjectNodeParent!
+                            context.ir[memberOwnerDiagnosticSubject].operand0 => memberOwnerDiagnosticSubjectNodeOperand0!
+                            context.ir[memberOwnerDiagnosticSubject].nextOperand => memberOwnerDiagnosticSubjectNodeNext!
+                            context.ir[memberOwnerDiagnosticSubject].typeId => memberOwnerDiagnosticSubjectType!
+                            (memberOwnerDiagnosticSubjectType! >= 0 and memberOwnerDiagnosticSubjectType! < (context.types -> len)) -> if {
+                                context.types[memberOwnerDiagnosticSubjectType!] => memberOwnerDiagnosticSubjectCanonical
+                                memberOwnerDiagnosticSubjectCanonical.kind => memberOwnerDiagnosticSubjectKind!
+                                memberOwnerDiagnosticSubjectCanonical.origin => memberOwnerDiagnosticSubjectOrigin!
+                                memberOwnerDiagnosticSubjectCanonical.module => memberOwnerDiagnosticSubjectModule!
+                                memberOwnerDiagnosticSubjectCanonical.symbol => memberOwnerDiagnosticSubjectSymbol!
+                                memberOwnerDiagnosticSubjectCanonical.first => memberOwnerDiagnosticSubjectFirst!
+                                memberOwnerDiagnosticSubjectCanonical.second => memberOwnerDiagnosticSubjectSecond!
+                                memberOwnerDiagnosticSubjectCanonical.module => memberOwnerDiagnosticOwnerSource!
+                                memberOwnerDiagnosticSubjectCanonical.origin == 2 -> if {
+                                    (memberOwnerDiagnosticSubjectCanonical.module >= 0 and memberOwnerDiagnosticSubjectCanonical.module < (context.modules -> len)) -> if {
+                                        context.modules[memberOwnerDiagnosticSubjectCanonical.module].sourceIndex => memberOwnerDiagnosticOwnerSource!
+                                    }
+                                }
+                                (memberOwnerDiagnosticOwnerSource! >= 0 and memberOwnerDiagnosticOwnerSource! < (context.ranges -> len)) -> if {
+                                    context.ranges[memberOwnerDiagnosticOwnerSource!] => memberOwnerDiagnosticOwnerRange
+                                    (memberOwnerDiagnosticSubjectCanonical.symbol >= 0 and memberOwnerDiagnosticSubjectCanonical.symbol < memberOwnerDiagnosticOwnerRange.symbolCount) -> if {
+                                        context.symbols[memberOwnerDiagnosticOwnerRange.symbolStart + memberOwnerDiagnosticSubjectCanonical.symbol] => memberOwnerDiagnosticOwnerSymbol
+                                        memberOwnerDiagnosticOwnerSymbol.kind => memberOwnerDiagnosticOwnerSymbolKind!
+                                        memberOwnerDiagnosticOwnerSymbol.astNode => memberOwnerDiagnosticOwnerSymbolAst!
+                                        memberOwnerDiagnosticOwnerSymbol.typeNode => memberOwnerDiagnosticOwnerSymbolTypeAst!
+                                        0 => memberOwnerDiagnosticVariantSearch!
+                                        memberOwnerDiagnosticVariantSearch! < memberOwnerDiagnosticOwnerRange.symbolCount -> while {
+                                            context.symbols[memberOwnerDiagnosticOwnerRange.symbolStart + memberOwnerDiagnosticVariantSearch!] => memberOwnerDiagnosticVariant
+                                            (memberOwnerDiagnosticVariant.kind == 27 and memberOwnerDiagnosticVariant.parent == memberOwnerDiagnosticSubjectCanonical.symbol) -> if { memberOwnerDiagnosticVariantCount! + 1 => memberOwnerDiagnosticVariantCount! }
+                                            memberOwnerDiagnosticVariantSearch! + 1 => memberOwnerDiagnosticVariantSearch!
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "; sollang compiler error S017: member base canonical owner does not map to a source module at ir $diagnosticIrIndex (parent $(node.parent), operand0 $(node.operand0), base $(memberOwnerDiagnostic.kind)/$(memberOwnerDiagnostic.parent)/$(memberOwnerDiagnostic.operand0)/$(memberOwnerDiagnostic.symbol), arm/control/opcode $(memberOwnerDiagnosticParentKind!)/$(memberOwnerDiagnosticControlKind!)/$(memberOwnerDiagnosticArmOpcode!), subjectNode $(memberOwnerDiagnosticSubjectNodeKind!)/$(memberOwnerDiagnosticSubjectNodeOpcode!)/$(memberOwnerDiagnosticSubjectNodeParent!)/$(memberOwnerDiagnosticSubjectNodeOperand0!)/$(memberOwnerDiagnosticSubjectNodeNext!), subjectType $(memberOwnerDiagnosticSubjectType!)/$(memberOwnerDiagnosticSubjectKind!)/$(memberOwnerDiagnosticSubjectOrigin!)/$(memberOwnerDiagnosticSubjectModule!)/$(memberOwnerDiagnosticSubjectSymbol!)/$(memberOwnerDiagnosticSubjectFirst!)/$(memberOwnerDiagnosticSubjectSecond!), take $(memberOwnerDiagnosticTakeIr!)/$(memberOwnerDiagnosticTakeParent!)/$(memberOwnerDiagnosticTakeType!)/$(memberOwnerDiagnosticTakeOperandType!), owner $(memberOwnerDiagnosticOwnerSource!)/$(memberOwnerDiagnosticOwnerSymbolKind!)/$(memberOwnerDiagnosticOwnerSymbolAst!)/$(memberOwnerDiagnosticOwnerSymbolTypeAst!)/$(memberOwnerDiagnosticVariantCount!), baseType $(memberOwnerDiagnostic.typeId)/$(memberOwnerDiagnostic.typeKind)/$(memberOwnerDiagnostic.typeOrigin)/$(memberOwnerDiagnostic.typeModule)/$(memberOwnerDiagnostic.typeSymbol), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 21 -> if {
+                -1 => enumMatchDiagnosticSubjectKind!
+                -1 => enumMatchDiagnosticSubjectType!
+                -1 => enumMatchDiagnosticSubjectTypeKind!
+                (node.operand0 >= 0 and node.operand0 < (context.ir -> len)) -> if {
+                    context.ir[node.operand0].kind => enumMatchDiagnosticSubjectKind!
+                    context.ir[node.operand0].typeId => enumMatchDiagnosticSubjectType!
+                    (enumMatchDiagnosticSubjectType! >= 0 and enumMatchDiagnosticSubjectType! < (context.types -> len)) -> if { context.types[enumMatchDiagnosticSubjectType!].kind => enumMatchDiagnosticSubjectTypeKind! }
+                }
+                "; sollang compiler error S018: enum match has no canonical enum subject at ir $diagnosticIrIndex (operand0 $(node.operand0), subjectKind $(enumMatchDiagnosticSubjectKind!), subjectType $(enumMatchDiagnosticSubjectType!)/$(enumMatchDiagnosticSubjectTypeKind!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 22 -> if {
+                "; sollang compiler error S019: value-producing enum match has an arm without a canonical result value at ir $diagnosticIrIndex (firstArm $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 23 -> if {
+                "; sollang compiler error S020: enum match subject name has no parameter ABI value or concrete producer at ir $diagnosticIrIndex (subject $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 24 -> if {
+                "; sollang compiler error S021: enum match subject is a non-materialized control or declaration node at ir $diagnosticIrIndex (subject $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 25 -> if {
+                -1 => typedMatchDiagnosticArm!
+                -1 => typedMatchDiagnosticValue!
+                -1 => typedMatchDiagnosticType!
+                node.operand1 => typedMatchDiagnosticArmSearch!
+                (typedMatchDiagnosticArmSearch! >= 0
+                    and typedMatchDiagnosticArmSearch! < (context.ir -> len)
+                    and context.ir[typedMatchDiagnosticArmSearch!].parent == diagnosticIrIndex
+                    and typedMatchDiagnosticArm! < 0) -> while {
+                    context.ir[typedMatchDiagnosticArmSearch!] => typedMatchDiagnosticArmNode
+                    typedMatchDiagnosticArmSearch! => typedMatchDiagnosticRegion!
+                    (typedMatchDiagnosticArmNode.operand1 >= 0
+                        and typedMatchDiagnosticArmNode.operand1 < (context.ir -> len)
+                        and context.ir[typedMatchDiagnosticArmNode.operand1].kind == 19) -> if {
+                        typedMatchDiagnosticArmNode.operand1 => typedMatchDiagnosticRegion!
+                    }
+                    context.ir[typedMatchDiagnosticRegion!].operand1 => typedMatchDiagnosticCandidate
+                    (typedMatchDiagnosticCandidate >= 0
+                        and typedMatchDiagnosticCandidate < (context.ir -> len)
+                        and context.ir[typedMatchDiagnosticCandidate].typeId != node.typeId) -> if {
+                        typedMatchDiagnosticArmSearch! => typedMatchDiagnosticArm!
+                        typedMatchDiagnosticCandidate => typedMatchDiagnosticValue!
+                        context.ir[typedMatchDiagnosticCandidate].typeId => typedMatchDiagnosticType!
+                    }
+                    typedMatchDiagnosticArmNode.nextOperand => typedMatchDiagnosticArmSearch!
+                }
+                "; sollang compiler error S022: value-producing enum match arm result type disagrees with the match result type at ir $diagnosticIrIndex (matchType $(node.typeId), arm $(typedMatchDiagnosticArm!), value $(typedMatchDiagnosticValue!), valueType $(typedMatchDiagnosticType!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 26 -> if {
+                "; sollang compiler error S023: value-producing enum match arm retains a transparent non-SSA wrapper instead of its concrete producer at ir $diagnosticIrIndex (firstArm $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 27 -> if {
+                "; sollang compiler error S024: value-producing if has a branch without a concrete region result at ir $diagnosticIrIndex (then $(node.operand1), else $(node.nextOperand), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 28 -> if {
+                "; sollang compiler error S026: enum payload binding type disagrees with the matched variant payload type at ir $diagnosticIrIndex (type $(node.typeId), arm $(node.parent), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 29 -> if {
+                "; sollang compiler error S027: fixed or bounded array return literal does not use the function's canonical array type at ir $diagnosticIrIndex (type $(node.typeId), return $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 30 -> if {
+                node.operand0 => structFieldDiagnosticValue!
+                0 => structFieldDiagnosticOrdinal!
+                -1 => structFieldDiagnosticExpected!
+                -1 => structFieldDiagnosticActual!
+                -1 => structFieldDiagnosticMismatchOrdinal!
+                -1 => structFieldDiagnosticMismatchValue!
+                (structFieldDiagnosticValue! >= 0
+                    and structFieldDiagnosticValue! < (context.ir -> len)
+                    and structFieldDiagnosticExpected! < 0) -> while {
+                    -1 => structFieldDiagnosticCandidate!
+                    0 => structFieldDiagnosticSearch!
+                    (structFieldDiagnosticSearch! < (context.fields -> len)
+                        and structFieldDiagnosticCandidate! < 0) -> while {
+                        context.fields[structFieldDiagnosticSearch!] => structFieldDiagnosticField
+                        (structFieldDiagnosticField.ownerType == node.typeId
+                            and structFieldDiagnosticField.ordinal == structFieldDiagnosticOrdinal!) -> if {
+                            structFieldDiagnosticField.fieldType => structFieldDiagnosticCandidate!
+                        }
+                        structFieldDiagnosticSearch! + 1 => structFieldDiagnosticSearch!
+                    }
+                    (structFieldDiagnosticCandidate! >= 0
+                        and structFieldDiagnosticCandidate! < (context.types -> len)
+                        and (context.types[structFieldDiagnosticCandidate!].kind == 3
+                            or context.types[structFieldDiagnosticCandidate!].kind == 4
+                            or context.types[structFieldDiagnosticCandidate!].kind == 12)
+                        and context.ir[structFieldDiagnosticValue!].typeId != structFieldDiagnosticCandidate!) -> if {
+                        structFieldDiagnosticCandidate! => structFieldDiagnosticExpected!
+                        context.ir[structFieldDiagnosticValue!].typeId => structFieldDiagnosticActual!
+                        structFieldDiagnosticOrdinal! => structFieldDiagnosticMismatchOrdinal!
+                        structFieldDiagnosticValue! => structFieldDiagnosticMismatchValue!
+                    }
+                    context.ir[structFieldDiagnosticValue!].nextOperand => structFieldDiagnosticValue!
+                    structFieldDiagnosticOrdinal! + 1 => structFieldDiagnosticOrdinal!
+                }
+                -1 => structFieldDiagnosticExpectedKind!
+                -1 => structFieldDiagnosticExpectedElement!
+                -1 => structFieldDiagnosticExpectedLength!
+                -1 => structFieldDiagnosticExpectedOrigin!
+                -1 => structFieldDiagnosticExpectedModule!
+                -1 => structFieldDiagnosticExpectedSymbol!
+                -1 => structFieldDiagnosticActualKind!
+                -1 => structFieldDiagnosticActualElement!
+                -1 => structFieldDiagnosticActualLength!
+                -1 => structFieldDiagnosticActualOrigin!
+                -1 => structFieldDiagnosticActualModule!
+                -1 => structFieldDiagnosticActualSymbol!
+                -1 => structFieldDiagnosticValueKind!
+                -1 => structFieldDiagnosticValueOpcode!
+                -1 => structFieldDiagnosticValueOperand!
+                -1 => structFieldDiagnosticValueSymbol!
+                -1 => structFieldDiagnosticValueAst!
+                -1 => structFieldDiagnosticSourceKind!
+                -1 => structFieldDiagnosticSourceType!
+                -1 => structFieldDiagnosticSourceOperand!
+                -1 => structFieldDiagnosticSourceAst!
+                -1 => structFieldDiagnosticSourceTypeKind!
+                -1 => structFieldDiagnosticSourceTypeOrigin!
+                -1 => structFieldDiagnosticSourceTypeModule!
+                -1 => structFieldDiagnosticSourceTypeSymbol!
+                -1 => structFieldDiagnosticInitializerKind!
+                -1 => structFieldDiagnosticInitializerType!
+                -1 => structFieldDiagnosticInitializerAst!
+                0 => structFieldDiagnosticSourceFieldCount!
+                0 => structFieldDiagnosticEquivalentFieldCount!
+                -1 => structFieldDiagnosticValueStart!
+                -1 => structFieldDiagnosticValueLength!
+                -1 => structFieldDiagnosticSourceStart!
+                -1 => structFieldDiagnosticSourceLength!
+                0 => structFieldDiagnosticTryCount!
+                -1 => structFieldDiagnosticTryAst!
+                -1 => structFieldDiagnosticTryParent!
+                -1 => structFieldDiagnosticTryStart!
+                -1 => structFieldDiagnosticTryLength!
+                (structFieldDiagnosticExpected! >= 0 and structFieldDiagnosticExpected! < (context.types -> len)) -> if {
+                    context.types[structFieldDiagnosticExpected!] => structFieldDiagnosticExpectedType
+                    structFieldDiagnosticExpectedType.kind => structFieldDiagnosticExpectedKind!
+                    structFieldDiagnosticExpectedType.first => structFieldDiagnosticExpectedElement!
+                    structFieldDiagnosticExpectedType.length => structFieldDiagnosticExpectedLength!
+                    structFieldDiagnosticExpectedType.origin => structFieldDiagnosticExpectedOrigin!
+                    structFieldDiagnosticExpectedType.module => structFieldDiagnosticExpectedModule!
+                    structFieldDiagnosticExpectedType.symbol => structFieldDiagnosticExpectedSymbol!
+                }
+                (structFieldDiagnosticActual! >= 0 and structFieldDiagnosticActual! < (context.types -> len)) -> if {
+                    context.types[structFieldDiagnosticActual!] => structFieldDiagnosticActualType
+                    structFieldDiagnosticActualType.kind => structFieldDiagnosticActualKind!
+                    structFieldDiagnosticActualType.first => structFieldDiagnosticActualElement!
+                    structFieldDiagnosticActualType.length => structFieldDiagnosticActualLength!
+                    structFieldDiagnosticActualType.origin => structFieldDiagnosticActualOrigin!
+                    structFieldDiagnosticActualType.module => structFieldDiagnosticActualModule!
+                    structFieldDiagnosticActualType.symbol => structFieldDiagnosticActualSymbol!
+                }
+                (structFieldDiagnosticMismatchValue! >= 0 and structFieldDiagnosticMismatchValue! < (context.ir -> len)) -> if {
+                    context.ir[structFieldDiagnosticMismatchValue!] => structFieldDiagnosticValueNode
+                    structFieldDiagnosticValueNode.kind => structFieldDiagnosticValueKind!
+                    structFieldDiagnosticValueNode.opcode => structFieldDiagnosticValueOpcode!
+                    structFieldDiagnosticValueNode.operand0 => structFieldDiagnosticValueOperand!
+                    structFieldDiagnosticValueNode.symbol => structFieldDiagnosticValueSymbol!
+                    structFieldDiagnosticValueNode.astNode => structFieldDiagnosticValueAst!
+                    context.nodes[diagnosticRange.astStart + structFieldDiagnosticValueNode.astNode] => structFieldDiagnosticValueAstNode
+                    Int(structFieldDiagnosticValueAstNode.start) => structFieldDiagnosticValueStart!
+                    Int(structFieldDiagnosticValueAstNode.length) => structFieldDiagnosticValueLength!
+                    (structFieldDiagnosticValueNode.operand0 >= 0 and structFieldDiagnosticValueNode.operand0 < (context.ir -> len)) -> if {
+                        context.ir[structFieldDiagnosticValueNode.operand0] => structFieldDiagnosticSourceNode
+                        structFieldDiagnosticSourceNode.kind => structFieldDiagnosticSourceKind!
+                        structFieldDiagnosticSourceNode.typeId => structFieldDiagnosticSourceType!
+                        structFieldDiagnosticSourceNode.operand0 => structFieldDiagnosticSourceOperand!
+                        structFieldDiagnosticSourceNode.astNode => structFieldDiagnosticSourceAst!
+                        context.nodes[diagnosticRange.astStart + structFieldDiagnosticSourceNode.astNode] => structFieldDiagnosticSourceAstNode
+                        Int(structFieldDiagnosticSourceAstNode.start) => structFieldDiagnosticSourceStart!
+                        Int(structFieldDiagnosticSourceAstNode.length) => structFieldDiagnosticSourceLength!
+                        0 => structFieldDiagnosticTrySearch!
+                        structFieldDiagnosticTrySearch! < diagnosticRange.astCount -> while {
+                            context.nodes[diagnosticRange.astStart + structFieldDiagnosticTrySearch!] => structFieldDiagnosticTryCandidate
+                            structFieldDiagnosticTryCandidate.kind == 82 -> if {
+                                structFieldDiagnosticTryCount! + 1 => structFieldDiagnosticTryCount!
+                                structFieldDiagnosticTryAst! < 0 -> if {
+                                    structFieldDiagnosticTrySearch! => structFieldDiagnosticTryAst!
+                                    structFieldDiagnosticTryCandidate.parent => structFieldDiagnosticTryParent!
+                                    Int(structFieldDiagnosticTryCandidate.start) => structFieldDiagnosticTryStart!
+                                    Int(structFieldDiagnosticTryCandidate.length) => structFieldDiagnosticTryLength!
+                                }
+                            }
+                            structFieldDiagnosticTrySearch! + 1 => structFieldDiagnosticTrySearch!
+                        }
+                        (structFieldDiagnosticSourceNode.typeId >= 0 and structFieldDiagnosticSourceNode.typeId < (context.types -> len)) -> if {
+                            context.types[structFieldDiagnosticSourceNode.typeId] => structFieldDiagnosticSourceSemanticType
+                            structFieldDiagnosticSourceSemanticType.kind => structFieldDiagnosticSourceTypeKind!
+                            structFieldDiagnosticSourceSemanticType.origin => structFieldDiagnosticSourceTypeOrigin!
+                            structFieldDiagnosticSourceSemanticType.module => structFieldDiagnosticSourceTypeModule!
+                            structFieldDiagnosticSourceSemanticType.symbol => structFieldDiagnosticSourceTypeSymbol!
+                            0 => structFieldDiagnosticFieldCountSearch!
+                            structFieldDiagnosticFieldCountSearch! < (context.fields -> len) -> while {
+                                context.fields[structFieldDiagnosticFieldCountSearch!] => structFieldDiagnosticCountField
+                                structFieldDiagnosticCountField.ownerType == structFieldDiagnosticSourceNode.typeId -> if {
+                                    structFieldDiagnosticSourceFieldCount! + 1 => structFieldDiagnosticSourceFieldCount!
+                                }
+                                (structFieldDiagnosticCountField.ownerType >= 0
+                                    and context.types[structFieldDiagnosticCountField.ownerType].kind == structFieldDiagnosticSourceSemanticType.kind
+                                    and context.types[structFieldDiagnosticCountField.ownerType].origin == structFieldDiagnosticSourceSemanticType.origin
+                                    and context.types[structFieldDiagnosticCountField.ownerType].module == structFieldDiagnosticSourceSemanticType.module
+                                    and context.types[structFieldDiagnosticCountField.ownerType].symbol == structFieldDiagnosticSourceSemanticType.symbol) -> if {
+                                    structFieldDiagnosticEquivalentFieldCount! + 1 => structFieldDiagnosticEquivalentFieldCount!
+                                }
+                                structFieldDiagnosticFieldCountSearch! + 1 => structFieldDiagnosticFieldCountSearch!
+                            }
+                        }
+                        (structFieldDiagnosticSourceNode.operand0 >= 0 and structFieldDiagnosticSourceNode.operand0 < (context.ir -> len)) -> if {
+                            context.ir[structFieldDiagnosticSourceNode.operand0] => structFieldDiagnosticInitializerNode
+                            structFieldDiagnosticInitializerNode.kind => structFieldDiagnosticInitializerKind!
+                            structFieldDiagnosticInitializerNode.typeId => structFieldDiagnosticInitializerType!
+                            structFieldDiagnosticInitializerNode.astNode => structFieldDiagnosticInitializerAst!
+                        }
+                    }
+                }
+                "; sollang compiler error S028: array-valued struct field initializer disagrees with the declared canonical array shape at ir $diagnosticIrIndex (structType $(node.typeId), field $(structFieldDiagnosticMismatchOrdinal!), value $(structFieldDiagnosticMismatchValue!)/$(structFieldDiagnosticValueKind!)/$(structFieldDiagnosticValueOpcode!)/$(structFieldDiagnosticValueOperand!)/$(structFieldDiagnosticValueSymbol!)/$(structFieldDiagnosticValueAst!)/$(structFieldDiagnosticValueStart!)/$(structFieldDiagnosticValueLength!), sourceNode $(structFieldDiagnosticSourceKind!)/$(structFieldDiagnosticSourceType!)/$(structFieldDiagnosticSourceOperand!)/$(structFieldDiagnosticSourceAst!)/$(structFieldDiagnosticSourceStart!)/$(structFieldDiagnosticSourceLength!)/$(structFieldDiagnosticSourceTypeKind!)/$(structFieldDiagnosticSourceTypeOrigin!)/$(structFieldDiagnosticSourceTypeModule!)/$(structFieldDiagnosticSourceTypeSymbol!)/$(structFieldDiagnosticSourceFieldCount!)/$(structFieldDiagnosticEquivalentFieldCount!), try $(structFieldDiagnosticTryCount!)/$(structFieldDiagnosticTryAst!)/$(structFieldDiagnosticTryParent!)/$(structFieldDiagnosticTryStart!)/$(structFieldDiagnosticTryLength!), initializer $(structFieldDiagnosticInitializerKind!)/$(structFieldDiagnosticInitializerType!)/$(structFieldDiagnosticInitializerAst!), expected $(structFieldDiagnosticExpected!)/$(structFieldDiagnosticExpectedKind!)/$(structFieldDiagnosticExpectedElement!)/$(structFieldDiagnosticExpectedLength!)/$(structFieldDiagnosticExpectedOrigin!)/$(structFieldDiagnosticExpectedModule!)/$(structFieldDiagnosticExpectedSymbol!), actual $(structFieldDiagnosticActual!)/$(structFieldDiagnosticActualKind!)/$(structFieldDiagnosticActualElement!)/$(structFieldDiagnosticActualLength!)/$(structFieldDiagnosticActualOrigin!)/$(structFieldDiagnosticActualModule!)/$(structFieldDiagnosticActualSymbol!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 31 -> if {
+                "; sollang compiler error S029: fixed repeat literal type length disagrees with its static repeat count at ir $diagnosticIrIndex (type $(node.typeId), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 32 -> if {
+                "; sollang compiler error S030: try-result binding retained the enclosing Result type instead of its success payload at ir $diagnosticIrIndex (type $(node.typeId), initializer $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 33 -> if {
+                "; sollang compiler error S031: nominal member reached final Typed IR without its declared field type at ir $diagnosticIrIndex (base $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 35 -> if {
+                "; sollang compiler error S033: nominal struct literal does not use the canonical identity that owns its field table at ir $diagnosticIrIndex (type $(node.typeId), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 36 -> if {
+                "; sollang compiler error S040: subject when retained a self-referential subject at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 40 -> if {
+                context.ir[node.operand0] => invalidCapacityReceiver
+                "; sollang compiler error S044: capacity receiver resolved to a scalar value at ir $diagnosticIrIndex (receiver $(node.operand0), receiverKind $(invalidCapacityReceiver.kind), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 41 -> if {
+                -1 => invalidPartitionSourceType!
+                (node.operand0 >= 0 and node.operand0 < (context.ir -> len)) -> if { context.ir[node.operand0].typeId => invalidPartitionSourceType! }
+                "; sollang compiler error S045: partition route product does not preserve its canonical stream source type at ir $diagnosticIrIndex (productType $(node.typeId), sourceIr $(node.operand0), sourceType $(invalidPartitionSourceType!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 39 -> if {
+                context.ir[node.operand0] => invalidMemberBase
+                "; sollang compiler error S043: dotted member base is outside its structural source span at ir $diagnosticIrIndex (base $(node.operand0), baseKind $(invalidMemberBase.kind), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 38 -> if {
+                context.ir[node.operand0] => invalidLengthReceiver
+                "; sollang compiler error S042: len receiver resolved to a scalar value at ir $diagnosticIrIndex (receiver $(node.operand0), receiverKind $(invalidLengthReceiver.kind), receiverType $(invalidLengthReceiver.typeId)/$(invalidLengthReceiver.typeKind)/$(invalidLengthReceiver.typeOrigin)/$(invalidLengthReceiver.typeModule)/$(invalidLengthReceiver.typeSymbol), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+            invariantCode == 37 -> if {
+                -1 => bindingDiagnosticType!
+                -1 => bindingDiagnosticValue!
+                -1 => bindingDiagnosticValueType!
+                -1 => bindingDiagnosticElseValue!
+                -1 => bindingDiagnosticElseValueType!
+                node.kind == 17 -> if {
+                    node.typeId => bindingDiagnosticType!
+                    node.operand0 => bindingDiagnosticValue!
+                    (bindingDiagnosticValue! >= 0 and bindingDiagnosticValue! < (context.ir -> len)) -> if {
+                        context.ir[bindingDiagnosticValue!].typeId => bindingDiagnosticValueType!
+                    }
+                } else {
+                node.kind == 18 -> if {
+                    node.typeId => bindingDiagnosticType!
+                    (node.operand1 >= 0 and node.operand1 < (context.ir -> len)) -> if {
+                        context.ir[node.operand1].operand1 => bindingDiagnosticValue!
+                        (bindingDiagnosticValue! >= 0 and bindingDiagnosticValue! < (context.ir -> len)) -> if {
+                            context.ir[bindingDiagnosticValue!].typeId => bindingDiagnosticValueType!
+                        }
+                    }
+                    (node.nextOperand >= 0 and node.nextOperand < (context.ir -> len)) -> if {
+                        context.ir[node.nextOperand].operand1 => bindingDiagnosticElseValue!
+                        (bindingDiagnosticElseValue! >= 0 and bindingDiagnosticElseValue! < (context.ir -> len)) -> if {
+                            context.ir[bindingDiagnosticElseValue!].typeId => bindingDiagnosticElseValueType!
+                        }
+                    }
+                } else {
+                    (node.operand0 >= 0 and node.operand0 < (context.ir -> len)) -> if {
+                        context.ir[node.operand0].typeId => bindingDiagnosticType!
+                        context.ir[node.operand0].operand0 => bindingDiagnosticValue!
+                        (bindingDiagnosticValue! >= 0 and bindingDiagnosticValue! < (context.ir -> len)) -> if {
+                            context.ir[bindingDiagnosticValue!].typeId => bindingDiagnosticValueType!
+                        }
+                    }
+                }
+                }
+                -1 => bindingDiagnosticNodeTypeOrigin!
+                -1 => bindingDiagnosticNodeTypeModule!
+                -1 => bindingDiagnosticNodeTypeSymbol!
+                -1 => bindingDiagnosticValueTypeOrigin!
+                -1 => bindingDiagnosticValueTypeModule!
+                -1 => bindingDiagnosticValueTypeSymbol!
+                -1 => bindingDiagnosticValueSymbol!
+                (node.typeId >= 0 and node.typeId < (context.types -> len)) -> if {
+                    context.types[node.typeId] => bindingDiagnosticNodeType
+                    bindingDiagnosticNodeType.origin => bindingDiagnosticNodeTypeOrigin!
+                    bindingDiagnosticNodeType.module => bindingDiagnosticNodeTypeModule!
+                    bindingDiagnosticNodeType.symbol => bindingDiagnosticNodeTypeSymbol!
+                }
+                (bindingDiagnosticValueType! >= 0 and bindingDiagnosticValueType! < (context.types -> len)) -> if {
+                    context.types[bindingDiagnosticValueType!] => bindingDiagnosticValueSemanticType
+                    bindingDiagnosticValueSemanticType.origin => bindingDiagnosticValueTypeOrigin!
+                    bindingDiagnosticValueSemanticType.module => bindingDiagnosticValueTypeModule!
+                    bindingDiagnosticValueSemanticType.symbol => bindingDiagnosticValueTypeSymbol!
+                }
+                (bindingDiagnosticValue! >= 0 and bindingDiagnosticValue! < (context.ir -> len)) -> if {
+                    context.ir[bindingDiagnosticValue!].symbol => bindingDiagnosticValueSymbol!
+                }
+                "; sollang compiler error S041: value binding or control type disagrees with its canonical produced value at ir $diagnosticIrIndex (kind $(node.kind), symbol $(node.symbol), type $(node.typeId)/$(bindingDiagnosticNodeTypeOrigin!)/$(bindingDiagnosticNodeTypeModule!)/$(bindingDiagnosticNodeTypeSymbol!), canonicalType $(bindingDiagnosticType!), then/value $(bindingDiagnosticValue!)/$(bindingDiagnosticValueSymbol!)/$(bindingDiagnosticValueType!)/$(bindingDiagnosticValueTypeOrigin!)/$(bindingDiagnosticValueTypeModule!)/$(bindingDiagnosticValueTypeSymbol!), else $(bindingDiagnosticElseValue!)/$(bindingDiagnosticElseValueType!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            } else {
+                "; sollang ir error: invariant $invariantCode at ir $diagnosticIrIndex (kind $(node.kind), parent $(node.parent), operand0 $(node.operand0), operand1 $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
         }
         irIndex! + 1 => irIndex!
     }
@@ -814,24 +2076,24 @@ emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
 public emitChecked sources: move [Text; ~] -> Int uses Console {
     sources -> syntaxDiagnosticCount => syntaxCount
     llvmTarget.windowsX64() => target
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
-    prepareRequest! -> prepare => context!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    prepareRequest -> prepare => context
     syntaxCount => diagnosticCount!
     syntaxCount == 0 -> if {
-        context! -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
-        context! -> irInvariantDiagnosticCount => irDiagnosticCount
+        context -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+        context -> irInvariantDiagnosticCount => irDiagnosticCount
         semanticDiagnosticCount + irDiagnosticCount => diagnosticCount!
     }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
-        context! -> emitWindowsContext
+        context -> emitWindowsContext
     } else {
         syntaxCount > 0 -> if {
-            context!.sources -> emitSyntaxDiagnostics
+            context.sources -> emitSyntaxDiagnostics
         } else {
-            context! -> diagnostics.emitBlockingDiagnostics
-            context! -> emitIrInvariantDiagnostics
+            context -> diagnostics.emitBlockingDiagnostics
+            context -> emitIrInvariantDiagnostics
         }
     }
     diagnosticCount!
@@ -840,27 +2102,27 @@ public emitChecked sources: move [Text; ~] -> Int uses Console {
 public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
     sources -> syntaxDiagnosticCount => syntaxCount
     llvmTarget.linuxX64() => target
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepare => context!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepare => context
     syntaxCount => diagnosticCount!
     0 => comInteropCount!
     syntaxCount == 0 -> if {
-        context! -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
-        context! -> irInvariantDiagnosticCount => irDiagnosticCount
+        context -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+        context -> irInvariantDiagnosticCount => irDiagnosticCount
         semanticDiagnosticCount + irDiagnosticCount => diagnosticCount!
-        context! -> diagnostics.comInteropFunctionCount => comInteropCount!
+        context -> diagnostics.comInteropFunctionCount => comInteropCount!
         comInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
-        context! -> emitLinuxContext
+        context -> emitLinuxContext
     } else {
         syntaxCount > 0 -> if {
-            context!.sources -> emitSyntaxDiagnostics
+            context.sources -> emitSyntaxDiagnostics
         } else {
-            context! -> diagnostics.emitBlockingDiagnostics
-            context! -> emitIrInvariantDiagnostics
+            context -> diagnostics.emitBlockingDiagnostics
+            context -> emitIrInvariantDiagnostics
             comInteropCount! > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
         }
     }
@@ -870,44 +2132,48 @@ public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
 public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
     sources -> syntaxDiagnosticCount => syntaxCount
     llvmTarget.wasm32Browser() => target
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepare => context!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepare => context
     syntaxCount => diagnosticCount!
     false => usesUnsupportedMouseEvents!
     false => usesUnsupportedConcurrentStreamJoins!
     false => usesUnsupportedParallel!
+    false => usesUnsupportedSockets!
     0 => unsupportedNativeInteropCount!
     0 => unsupportedComInteropCount!
     syntaxCount == 0 -> if {
-        context! -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
-        context! -> irInvariantDiagnosticCount => irDiagnosticCount
+        context -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+        context -> irInvariantDiagnosticCount => irDiagnosticCount
         semanticDiagnosticCount + irDiagnosticCount => diagnosticCount!
-        context! -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents!
+        context -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents!
         usesUnsupportedMouseEvents! -> if { diagnosticCount! + 1 => diagnosticCount! }
-        context!.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins!
+        context.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins!
         usesUnsupportedConcurrentStreamJoins! -> if { diagnosticCount! + 1 => diagnosticCount! }
-        context! -> diagnostics.usesParallelBranches => usesUnsupportedParallel!
+        context -> diagnostics.usesParallelBranches => usesUnsupportedParallel!
         usesUnsupportedParallel! -> if { diagnosticCount! + 1 => diagnosticCount! }
-        context! -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount!
+        context -> diagnostics.usesSocketRuntime => usesUnsupportedSockets!
+        usesUnsupportedSockets! -> if { diagnosticCount! + 1 => diagnosticCount! }
+        context -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount!
         unsupportedNativeInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
-        context! -> diagnostics.comInteropFunctionCount => unsupportedComInteropCount!
+        context -> diagnostics.comInteropFunctionCount => unsupportedComInteropCount!
         unsupportedComInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
-        context! -> emitWasmContext
+        context -> emitWasmContext
     } else {
         syntaxCount > 0 -> if {
-            context!.sources -> emitSyntaxDiagnostics
+            context.sources -> emitSyntaxDiagnostics
         } else {
-            context! -> diagnostics.emitBlockingDiagnostics
-            context! -> emitIrInvariantDiagnostics
+            context -> diagnostics.emitBlockingDiagnostics
+            context -> emitIrInvariantDiagnostics
             usesUnsupportedMouseEvents! -> if {
                 "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
             }
             usesUnsupportedConcurrentStreamJoins! -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
             usesUnsupportedParallel! -> if { diagnostics.emitWasmParallelDiagnostic() }
+            usesUnsupportedSockets! -> if { "; sollang semantic error: network sockets are unavailable on wasm32-browser; use a host-provided networking adapter" -> println }
             unsupportedNativeInteropCount! > 0 -> if {
                 diagnostics.emitWasmNativeInteropDiagnostic()
             }
@@ -921,17 +2187,17 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
 
 
 prepareLibraryFiles request: ref PrepareRequest, paths: [Text; ~], targetName: Text, style: path.Style -> emitterContext.EmitContext uses File {
-    request.sources -> semanticContext.prepare => basePrepared!
-    basePrepared!.package -> libraryImports.load(paths, targetName, style) => libraries!
-    basePrepared!.package -> libraryImports.resolveQualified(libraries!) => libraryCalls!
-    request -> prepareSnapshot(basePrepared!, libraries!, libraryCalls!)
+    request.sources -> semanticContext.prepare => basePrepared
+    basePrepared.package -> libraryImports.load(paths, targetName, style) => libraries
+    basePrepared.package -> libraryImports.resolveQualified(libraries) => libraryCalls
+    request -> prepareSnapshot(basePrepared, libraries, libraryCalls)
 }
 
 prepareTestLibraryFiles request: ref PrepareRequest, paths: [Text; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~], targetName: Text, style: path.Style -> emitterContext.EmitContext uses File {
-    request.sources -> semanticContext.prepareTests(sourceIndices, symbolIndices) => basePrepared!
-    basePrepared!.package -> libraryImports.load(paths, targetName, style) => libraries!
-    basePrepared!.package -> libraryImports.resolveQualified(libraries!) => libraryCalls!
-    request -> prepareSnapshot(basePrepared!, libraries!, libraryCalls!)
+    request.sources -> semanticContext.prepareTests(sourceIndices, symbolIndices) => basePrepared
+    basePrepared.package -> libraryImports.load(paths, targetName, style) => libraries
+    basePrepared.package -> libraryImports.resolveQualified(libraries) => libraryCalls
+    request -> prepareSnapshot(basePrepared, libraries, libraryCalls)
 }
 
 public emitFiles paths: [Text; ~] -> Unit uses Console, File {
@@ -939,8 +2205,8 @@ public emitFiles paths: [Text; ~] -> Unit uses Console, File {
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
         paths[pathIndex!] => path
-        path -> file.mapText => owner!
-        owners! -> push(owner!)
+        path -> file.mapText => owner
+        owners! -> push(owner)
         pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
@@ -954,9 +2220,9 @@ public emitFiles paths: [Text; ~] -> Unit uses Console, File {
     llvmTarget.windowsX64() => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
-    prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context!
-    context! -> emitWindowsContext
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    prepareRequest -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context
+    context -> emitWindowsContext
     owners! -> len => ownerCount
 }
 
@@ -965,8 +2231,8 @@ public emitLinuxFiles paths: [Text; ~] -> Unit uses Console, File {
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
         paths[pathIndex!] => path
-        path -> file.mapText => owner!
-        owners! -> push(owner!)
+        path -> file.mapText => owner
+        owners! -> push(owner)
         pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
@@ -980,10 +2246,10 @@ public emitLinuxFiles paths: [Text; ~] -> Unit uses Console, File {
     llvmTarget.linuxX64() => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle()) => context!
-    context! -> diagnostics.comInteropFunctionCount => comInteropCount
-    comInteropCount == 0 -> if { context! -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle()) => context
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount == 0 -> if { context -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
     owners! -> len => ownerCount
 }
 
@@ -992,8 +2258,8 @@ public emitWasmFiles paths: [Text; ~] -> Unit uses Console, File {
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
         paths[pathIndex!] => path
-        path -> file.mapText => owner!
-        owners! -> push(owner!)
+        path -> file.mapText => owner
+        owners! -> push(owner)
         pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
@@ -1012,8 +2278,8 @@ public emitCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
-        paths[pathIndex!] -> file.mapText => owner!
-        owners! -> push(owner!)
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
         pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
@@ -1025,29 +2291,34 @@ public emitCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
         sourceIndex! + 1 => sourceIndex!
     }
     llvmTarget.windowsX64() => target
-    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
-    prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context!
-    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
-    context! -> irInvariantDiagnosticCount => irDiagnosticCount
-    diagnosticCount! + irDiagnosticCount => diagnosticCount!
-    diagnosticCount! == 0 -> if {
+    sources! -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        sources! -> emitSyntaxDiagnostics
+        syntaxCount -> return
+    }
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    prepareRequest -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context
+    context -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+    context -> irInvariantDiagnosticCount => irDiagnosticCount
+    semanticDiagnosticCount + irDiagnosticCount => diagnosticCount
+    diagnosticCount == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
-        context! -> emitWindowsContext
+        context -> emitWindowsContext
     } else {
-        context! -> diagnostics.emitBlockingDiagnostics
-        context! -> emitIrInvariantDiagnostics
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> emitIrInvariantDiagnostics
     }
     owners! -> len => ownerCount
-    diagnosticCount!
+    diagnosticCount
 }
 
 public emitLinuxCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
-        paths[pathIndex!] -> file.mapText => owner!
-        owners! -> push(owner!)
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
         pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
@@ -1059,20 +2330,25 @@ public emitLinuxCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
         sourceIndex! + 1 => sourceIndex!
     }
     llvmTarget.linuxX64() => target
-    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle()) => context!
-    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
-    context! -> irInvariantDiagnosticCount => irDiagnosticCount
-    diagnosticCount! + irDiagnosticCount => diagnosticCount!
-    context! -> diagnostics.comInteropFunctionCount => comInteropCount
+    sources! -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        sources! -> emitSyntaxDiagnostics
+        syntaxCount -> return
+    }
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle()) => context
+    context -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+    context -> irInvariantDiagnosticCount => irDiagnosticCount
+    semanticDiagnosticCount + irDiagnosticCount => diagnosticCount!
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
     comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
-        context! -> emitLinuxContext
+        context -> emitLinuxContext
     } else {
-        context! -> diagnostics.emitBlockingDiagnostics
-        context! -> emitIrInvariantDiagnostics
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> emitIrInvariantDiagnostics
         comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
     }
     owners! -> len => ownerCount
@@ -1083,8 +2359,8 @@ public emitCheckedTestFiles paths: [Text; ~], harness: ref [UInt8; ~], sourceInd
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
-        paths[pathIndex!] -> file.mapText => owner!
-        owners! -> push(owner!)
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
         pathIndex! + 1 => pathIndex!
     }
     harness -> file.borrowBytes => harnessOwner
@@ -1097,23 +2373,28 @@ public emitCheckedTestFiles paths: [Text; ~], harness: ref [UInt8; ~], sourceInd
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
+    sources! -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        sources! -> emitSyntaxDiagnostics
+        syntaxCount -> return
+    }
     targetKind == 0 -> if { llvmTarget.windowsX64() } else { llvmTarget.linuxX64() } => target
     targetKind == 0 -> if { 1 } else { 0 } => expectedStyle
-    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: expectedStyle } => prepareRequest!
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: expectedStyle } => prepareRequest
     targetKind == 0 -> if { "windows-x64" } else { "linux-x64" } => targetName
-    prepareRequest! -> prepareTestLibraryFiles(paths, sourceIndices, symbolIndices, targetName, path.nativeStyle()) => context!
-    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
-    context! -> irInvariantDiagnosticCount => irDiagnosticCount
-    diagnosticCount! + irDiagnosticCount => diagnosticCount!
-    context! -> diagnostics.comInteropFunctionCount => comInteropCount
+    prepareRequest -> prepareTestLibraryFiles(paths, sourceIndices, symbolIndices, targetName, path.nativeStyle()) => context
+    context -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+    context -> irInvariantDiagnosticCount => irDiagnosticCount
+    semanticDiagnosticCount + irDiagnosticCount => diagnosticCount!
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
     comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
-        targetKind == 0 -> if { context! -> emitWindowsContext } else { context! -> emitLinuxContext }
+        targetKind == 0 -> if { context -> emitWindowsContext } else { context -> emitLinuxContext }
     } else {
-        context! -> diagnostics.emitBlockingDiagnostics
-        context! -> emitIrInvariantDiagnostics
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> emitIrInvariantDiagnostics
     }
     owners! -> len => ownerCount
     diagnosticCount!
@@ -1123,8 +2404,8 @@ public emitWasmCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
-        paths[pathIndex!] -> file.mapText => owner!
-        owners! -> push(owner!)
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
         pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!

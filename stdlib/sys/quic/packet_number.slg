@@ -1,0 +1,68 @@
+namespace sys.quic.packet_number
+
+import sys.quic.error as errors
+
+public struct Truncated {
+    value: UInt32
+    byteCount: UIntSize
+}
+
+error code: UInt64 -> errors.Error {
+    errors.Error { kind: errors.Kind.Encoding, code: code }
+}
+
+window byteCount: UIntSize -> Result<UInt64, errors.Error> {
+    byteCount -> when {
+        == 1 { Result<UInt64, errors.Error>.Ok(256) }
+        == 2 { Result<UInt64, errors.Error>.Ok(65_536) }
+        == 3 { Result<UInt64, errors.Error>.Ok(16_777_216) }
+        == 4 { Result<UInt64, errors.Error>.Ok(4_294_967_296) }
+        else { Result<UInt64, errors.Error>.Err(error(UInt64(byteCount))) }
+    }
+}
+
+public selectLength packetNumber: UInt64, hasAcknowledged: Bool, largestAcknowledged: UInt64 -> UIntSize {
+    hasAcknowledged -> unless { 4 -> return }
+    packetNumber >= largestAcknowledged -> unless { 4 -> return }
+    packetNumber - largestAcknowledged => distance
+    distance -> when {
+        < 128 { 1 }
+        < 32_768 { 2 }
+        < 8_388_608 { 3 }
+        else { 4 }
+    }
+}
+
+public truncate packetNumber: UInt64, byteCount: UIntSize -> Result<Truncated, errors.Error> {
+    packetNumber >= 4_611_686_018_427_387_904 -> if {
+        Result<Truncated, errors.Error>.Err(error(packetNumber)) -> return
+    }
+    window(byteCount)? => packetWindow
+    Result<Truncated, errors.Error>.Ok(Truncated {
+        value: UInt32(packetNumber % packetWindow)
+        byteCount: byteCount
+    })
+}
+
+# `expectedPacketNumber` is one greater than the largest authenticated packet
+# number in this packet-number space, matching RFC 9000 Appendix A.3.
+public restore expectedPacketNumber: UInt64, truncatedPacketNumber: UInt32, byteCount: UIntSize -> Result<UInt64, errors.Error> {
+    expectedPacketNumber > 4_611_686_018_427_387_904 -> if {
+        Result<UInt64, errors.Error>.Err(error(expectedPacketNumber)) -> return
+    }
+    window(byteCount)? => packetWindow
+    packetWindow / 2 => halfWindow
+    expectedPacketNumber / packetWindow * packetWindow + UInt64(truncatedPacketNumber) => candidate
+    (candidate + halfWindow <= expectedPacketNumber
+        and candidate < 4_611_686_018_427_387_904 - packetWindow) -> if {
+        Result<UInt64, errors.Error>.Ok(candidate + packetWindow) -> return
+    }
+    (candidate > expectedPacketNumber + halfWindow and candidate >= packetWindow) -> if {
+        Result<UInt64, errors.Error>.Ok(candidate - packetWindow) -> return
+    }
+    candidate < 4_611_686_018_427_387_904 -> if {
+        Result<UInt64, errors.Error>.Ok(candidate)
+    } else {
+        Result<UInt64, errors.Error>.Err(error(candidate))
+    }
+}

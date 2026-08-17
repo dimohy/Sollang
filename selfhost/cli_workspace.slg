@@ -19,7 +19,7 @@ textEndsWith value: Text, suffix: Text -> Bool {
     UIntSize(0) => index!
     (matches! and index! < suffixLength) -> while {
         (value -> byte(start + index!)) != (suffix -> byte(index!)) -> if { false => matches! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
@@ -29,7 +29,7 @@ textEquals left: Text, right: Text -> Bool {
     UIntSize(0) => index!
     (matches! and index! < (left -> len)) -> while {
         (left -> byte(index!)) != (right -> byte(index!)) -> if { false => matches! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
@@ -40,11 +40,11 @@ directoryOf value: Text -> Text {
     UIntSize(0) => index!
     index! < (value -> len) -> while {
         value -> byte(index!) => current
-        (current == UInt8(47) or current == UInt8(92)) -> if {
+        (current == 47 or current == 92) -> if {
             index! => lastSeparator!
             true => found!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     found! -> if {
         value -> slice(UIntSize(0), lastSeparator!) => directory
@@ -68,14 +68,14 @@ memberMatches source: file.SourceText, member: workspace.WorkspaceMember, direct
     source -> memberText(member) => relative
     Arena(0) => projectPathStorage!
     "$directory/$relative/sollang.project" -> materialize(projectPathStorage!) => projectPath
-    projectPath -> path.fromText(path.nativeStyle()) => projectFile!
-    projectFile! -> file.mapPath => projectSource!
-    projectSource! -> len => projectSourceLength
-    projectSource! -> slice(UIntSize(0), projectSourceLength) => projectSourceView
-    projectSourceView -> project.parse => parsed!
-    parsed!.status == 0 => matches!
+    projectPath -> path.fromText(path.nativeStyle()) => projectFile
+    projectFile -> file.mapPath => projectSource
+    projectSource -> len => projectSourceLength
+    projectSource -> slice(UIntSize(0), projectSourceLength) => projectSourceView
+    projectSourceView -> project.parse => parsed
+    parsed.status == 0 => matches!
     matches! -> if {
-        projectSource! -> slice(parsed!.name.start, parsed!.name.length) => name
+        projectSource -> slice(parsed.name.start, parsed.name.length) => name
         name -> textEquals(requestedPackage) => matches!
     }
     matches!
@@ -90,41 +90,41 @@ emptyInput status: Int -> WorkspaceInput {
 public load option: Text, requestedPackage: Text, manifestStorage: mut Arena, projectStorage: mut Arena -> WorkspaceInput uses File {
     option -> workspacePath(manifestStorage) => manifest
     manifest -> directoryOf => directory
-    manifest -> path.fromText(path.nativeStyle()) => manifestFile!
-    manifestFile! -> file.mapPath => source!
-    source! -> len => sourceLength
-    source! -> slice(UIntSize(0), sourceLength) => sourceView
-    sourceView -> workspace.parse => parsed!
-    parsed!.status != 0 -> if {
-        parsed!.status + 100 => parseStatus
-        parseStatus -> emptyInput => failure!
-        failure! -> return
+    manifest -> path.fromText(path.nativeStyle()) => manifestFile
+    manifestFile -> file.mapPath => source
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => sourceView
+    sourceView -> workspace.parse => parsed
+    parsed.status != 0 -> if {
+        parsed.status + 100 => parseStatus
+        parseStatus -> emptyInput => failure
+        failure -> return
     }
 
     -1 => selectedIndex!
-    (requestedPackage -> len) > UIntSize(0) -> if {
+    (requestedPackage -> len) > 0 -> if {
         0 => index!
-        index! < (parsed!.members -> len) -> while {
-            source! -> memberMatches(parsed!.members[index!], directory, requestedPackage) -> if {
+        index! < (parsed.members -> len) -> while {
+            source -> memberMatches(parsed.members[index!], directory, requestedPackage) -> if {
                 index! => selectedIndex!
             }
             index! + 1 => index!
         }
         selectedIndex! < 0 -> if {
-            2 -> emptyInput => failure!
-            failure! -> return
+            2 -> emptyInput => failure
+            failure -> return
         }
     } else {
-        (parsed!.members -> len) == 1 -> if {
+        (parsed.members -> len) == 1 -> if {
             0 => selectedIndex!
         } else {
-            3 -> emptyInput => failure!
-            failure! -> return
+            3 -> emptyInput => failure
+            failure -> return
         }
     }
 
-    source! -> memberText(parsed!.members[selectedIndex!]) => relative
+    source -> memberText(parsed.members[selectedIndex!]) => relative
     "$directory/$relative" -> materialize(projectStorage) => projectOption
-    WorkspaceInput { status: 0, projectOption: projectOption, sourceDirectory: directory } => result!
-    result!
+    WorkspaceInput { status: 0, projectOption: projectOption, sourceDirectory: directory } => result
+    result
 }

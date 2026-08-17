@@ -29,10 +29,17 @@ internal sealed record SemanticSpecializationReuse(
     bool IsPublic,
     bool IsAsync);
 
+internal sealed record SemanticStaticArrayReuse(
+    int Id,
+    string ElementType,
+    int? Length);
+
 internal sealed record SemanticReusePlan(
     byte[] DeclarationFingerprint,
+    IReadOnlyList<SemanticStaticArrayReuse> StaticArrays,
     IReadOnlyDictionary<string, SemanticFunctionReuse> Functions,
     IReadOnlyDictionary<string, string> ResolvedCalls,
     IReadOnlyDictionary<string, SemanticSpecializationReuse> Specializations,
     string? MainModuleName,
-    IReadOnlyDictionary<string, string>? MainBindings);
+    IReadOnlyDictionary<string, string>? MainBindings,
+    IReadOnlyList<Diagnostics.SemanticWarning> Warnings);

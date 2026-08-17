@@ -1,0 +1,30 @@
+namespace sys.quic.traffic_keys
+
+import sys.crypto.tls13_keys as tls13
+import sys.crypto.tls13_hkdf as hkdf
+import sys.quic.keys as versions
+public struct Keys {
+    key: [UInt8; 16]
+    iv: [UInt8; 12]
+    headerProtection: [UInt8; 16]
+}
+
+empty: -> [UInt8] => []
+
+public derive version: UInt32, secret: [UInt8; 32] -> Keys {
+    version == versions.version2() -> if { "quicv2 key" } else { "quic key" } => keyLabel
+    version == versions.version2() -> if { "quicv2 iv" } else { "quic iv" } => ivLabel
+    version == versions.version2() -> if { "quicv2 hp" } else { "quic hp" } => headerProtectionLabel
+    secret -> hkdf.expandLabel16(keyLabel, empty()) => key
+    secret -> hkdf.expandLabel12(ivLabel, empty()) => iv
+    secret -> hkdf.expandLabel16(headerProtectionLabel, empty()) => headerProtection
+    Keys {
+        key: key
+        iv: iv
+        headerProtection: headerProtection
+    }
+}
+
+public nextSecret current: [UInt8] -> [UInt8; 32] {
+    current -> tls13.updateTrafficSecret
+}

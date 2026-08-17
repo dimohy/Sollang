@@ -25,6 +25,10 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsDirectoryTraversal => false;
 
+    public override bool SupportsNetwork => false;
+
+    public override bool SupportsSecureRandom => false;
+
     // A browser main thread cannot synchronously pull a future DOM event
     // without blocking the HTML event loop. EventStream requires a separate
     // host-driven callback lowering before it can be supported here.

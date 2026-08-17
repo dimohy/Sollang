@@ -1,0 +1,25 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        sum: -> UIntSize {
+            UIntSize(0) => cursor!
+            UIntSize(0) => nameIndex!
+            cursor! + nameIndex!
+        }
+        """; ~
+    ] -> typedIr.lower => ir
+    false => contract!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.kind == 8 and node.operand0 >= 0 and node.operand1 >= 0) -> if {
+            ir[node.operand0] => left
+            ir[node.operand1] => right
+            (node.typeId == left.typeId and node.typeId == right.typeId and node.typeSymbol == 13) -> if { true => contract! }
+        }
+        index! + 1 => index!
+    }
+    contract! -> if { "mutable-binary-result-contract=true" } else { "mutable-binary-result-contract=false" } -> println
+}

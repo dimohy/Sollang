@@ -102,6 +102,8 @@ line to each `readInt` call.
 - import discovery with the final path segment as the default alias, local
   packages, products, and explicit workspaces
 - a Sollang standard library under `stdlib/sys`
+- flat `Result`-based TCP, UDP, and QUIC networking under `sys.socket` and
+  `sys.quic`, with affine handles and an explicit `Network` capability
 - one compact lexer/grammar source set consumed by the C# bootstrap and the
   Sollang lexer/parser/CST/AST pipeline
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
@@ -296,6 +298,25 @@ valueOrZero result: Result<Int, Text> -> Int {
     }
 }
 ```
+
+Fallible network steps stay flat inside a `Result`-returning function. Postfix
+`?` propagates the first error, so only the outer application boundary needs a
+`when`:
+
+```sollang
+sendPing endpoint: socket.Endpoint -> Result<Bool, socket.SocketError> uses Network {
+    socket.connect(endpoint)? => connection
+    socket.sendText(connection, "ping")? => count
+    socket.shutdown(connection)?
+    Result<Bool, socket.SocketError>.Ok(count == UIntSize(4))
+}
+```
+
+`sys.socket` provides native TCP and UDP on Windows x64 and Linux x64.
+`sys.quic` provides certificate-pinned QUIC v1 and v2 streams and datagrams as
+reachable Sollang standard-library code. The compiler includes only the used
+protocol modules in the native executable; no Rust crate, QUIC DLL, shared
+object, or runtime adapter installation is required.
 
 Comments use `#`. Triple-quoted strings preserve readable embedded source, and
 their common indentation is removed:

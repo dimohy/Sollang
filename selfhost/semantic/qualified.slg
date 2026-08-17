@@ -22,12 +22,12 @@ public resolve sources: [Text; ~] -> [QualifiedResolution; ~] {
     package -> resolveAnalyzed
 }
 public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution; ~] {
-    package -> modules.identitiesAnalyzed => identities!
-    package -> modules.importsAnalyzed => imports!
-    package -> moduleResolve.resolveAnalyzed => resolvedImports!
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
     [QualifiedResolution; ~] => results!
     package.sources -> len => sourceCount
-    imports! -> len => importCount
+    imports -> len => importCount
     0 => sourceIndex!
     sourceIndex! < sourceCount -> while {
         package.sources[sourceIndex!] -> len => sourceLength
@@ -60,8 +60,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                     false => localVariantResolved!
                     -1 => currentModule!
                     0 => currentModuleSearch!
-                    currentModuleSearch! < (identities! -> len) -> while {
-                        identities![currentModuleSearch!].sourceIndex == sourceIndex! -> if { currentModuleSearch! => currentModule! }
+                    currentModuleSearch! < (identities -> len) -> while {
+                        identities[currentModuleSearch!].sourceIndex == sourceIndex! -> if { currentModuleSearch! => currentModule! }
                         currentModuleSearch! + 1 => currentModuleSearch!
                     }
                     (currentModule! >= 0 and previousIdentifier! >= 0) -> if {
@@ -85,7 +85,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             (source -> byte(nativeHandleAliasName.span.start + nativeHandleAliasByte!)) != (source -> byte(nativeHandleAliasReference.span.start + nativeHandleAliasByte!)) -> if {
                                                 false => nativeHandleAliasEqual!
                                             }
-                                            nativeHandleAliasByte! + UIntSize(1) => nativeHandleAliasByte!
+                                            nativeHandleAliasByte! + 1 => nativeHandleAliasByte!
                                         }
                                         package.tokens[sourceRange.tokenStart + nativeHandle.nameToken] => nativeHandleName
                                         package.tokens[sourceRange.tokenStart + lastIdentifier!] => nativeHandleReference
@@ -95,7 +95,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             (source -> byte(nativeHandleName.span.start + nativeHandleByte!)) != (source -> byte(nativeHandleReference.span.start + nativeHandleByte!)) -> if {
                                                 false => nativeHandleEqual!
                                             }
-                                            nativeHandleByte! + UIntSize(1) => nativeHandleByte!
+                                            nativeHandleByte! + 1 => nativeHandleByte!
                                         }
                                         (nativeHandleAliasEqual! and nativeHandleEqual!) -> if {
                                             results! -> push(QualifiedResolution {
@@ -128,7 +128,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                         UIntSize(0) => nativeAliasByte!
                                         (nativeAliasEqual! and nativeAliasByte! < nativeAliasName.span.length) -> while {
                                             (source -> byte(nativeAliasName.span.start + nativeAliasByte!)) != (source -> byte(nativeAliasReference.span.start + nativeAliasByte!)) -> if { false => nativeAliasEqual! }
-                                            nativeAliasByte! + UIntSize(1) => nativeAliasByte!
+                                            nativeAliasByte! + 1 => nativeAliasByte!
                                         }
                                         package.tokens[sourceRange.tokenStart + nativeFunction.nameToken] => nativeFunctionName
                                         package.tokens[sourceRange.tokenStart + lastIdentifier!] => nativeFunctionReference
@@ -136,7 +136,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                         UIntSize(0) => nativeFunctionByte!
                                         (nativeFunctionEqual! and nativeFunctionByte! < nativeFunctionName.span.length) -> while {
                                             (source -> byte(nativeFunctionName.span.start + nativeFunctionByte!)) != (source -> byte(nativeFunctionReference.span.start + nativeFunctionByte!)) -> if { false => nativeFunctionEqual! }
-                                            nativeFunctionByte! + UIntSize(1) => nativeFunctionByte!
+                                            nativeFunctionByte! + 1 => nativeFunctionByte!
                                         }
                                         (nativeAliasEqual! and nativeFunctionEqual!) -> if {
                                             QualifiedResolution { sourceModule: sourceIndex!, pathAst: pathAstIndex!, targetModule: currentModule!, targetSymbol: nativeFunctionSearch!, status: 0 } => nativeResult
@@ -166,7 +166,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                     UIntSize(0) => comAliasByte!
                                     (comAliasEqual! and comAliasByte! < comAliasName.span.length) -> while {
                                         (source -> byte(comAliasName.span.start + comAliasByte!)) != (source -> byte(comAliasReference.span.start + comAliasByte!)) -> if { false => comAliasEqual! }
-                                        comAliasByte! + UIntSize(1) => comAliasByte!
+                                        comAliasByte! + 1 => comAliasByte!
                                     }
                                     false => comFunctionEqual!
                                     package.tokens[sourceRange.tokenStart + lastIdentifier!] => comFunctionReference
@@ -175,52 +175,52 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                         package.symbols[sourceRange.symbolStart + comFunction.secondaryTypeNode] => comQueryTarget
                                         package.tokens[sourceRange.tokenStart + comQuerySource.nameToken] => comQuerySourceName
                                         package.tokens[sourceRange.tokenStart + comQueryTarget.nameToken] => comQueryTargetName
-                                        UIntSize(9) + comQuerySourceName.span.length + comQueryTargetName.span.length => comQueryLength
+                                        9 + comQuerySourceName.span.length + comQueryTargetName.span.length => comQueryLength
                                         comFunctionReference.span.length == comQueryLength -> if {
                                             true => comFunctionEqual!
                                             UIntSize(0) => comQueryByte!
                                             "query" => comQueryPrefix
-                                            (comFunctionEqual! and comQueryByte! < UIntSize(5)) -> while {
+                                            (comFunctionEqual! and comQueryByte! < 5) -> while {
                                                 (source -> byte(comFunctionReference.span.start + comQueryByte!)) != (comQueryPrefix -> byte(comQueryByte!)) -> if { false => comFunctionEqual! }
-                                                comQueryByte! + UIntSize(1) => comQueryByte!
+                                                comQueryByte! + 1 => comQueryByte!
                                             }
                                             UIntSize(0) => comQueryTargetByte!
                                             (comFunctionEqual! and comQueryTargetByte! < comQueryTargetName.span.length) -> while {
-                                                (source -> byte(comFunctionReference.span.start + UIntSize(5) + comQueryTargetByte!)) != (source -> byte(comQueryTargetName.span.start + comQueryTargetByte!)) -> if { false => comFunctionEqual! }
-                                                comQueryTargetByte! + UIntSize(1) => comQueryTargetByte!
+                                                (source -> byte(comFunctionReference.span.start + 5 + comQueryTargetByte!)) != (source -> byte(comQueryTargetName.span.start + comQueryTargetByte!)) -> if { false => comFunctionEqual! }
+                                                comQueryTargetByte! + 1 => comQueryTargetByte!
                                             }
                                             "From" => comQueryFrom
                                             UIntSize(0) => comQueryFromByte!
-                                            (comFunctionEqual! and comQueryFromByte! < UIntSize(4)) -> while {
-                                                (source -> byte(comFunctionReference.span.start + UIntSize(5) + comQueryTargetName.span.length + comQueryFromByte!)) != (comQueryFrom -> byte(comQueryFromByte!)) -> if { false => comFunctionEqual! }
-                                                comQueryFromByte! + UIntSize(1) => comQueryFromByte!
+                                            (comFunctionEqual! and comQueryFromByte! < 4) -> while {
+                                                (source -> byte(comFunctionReference.span.start + 5 + comQueryTargetName.span.length + comQueryFromByte!)) != (comQueryFrom -> byte(comQueryFromByte!)) -> if { false => comFunctionEqual! }
+                                                comQueryFromByte! + 1 => comQueryFromByte!
                                             }
                                             UIntSize(0) => comQuerySourceByte!
                                             (comFunctionEqual! and comQuerySourceByte! < comQuerySourceName.span.length) -> while {
-                                                (source -> byte(comFunctionReference.span.start + UIntSize(9) + comQueryTargetName.span.length + comQuerySourceByte!)) != (source -> byte(comQuerySourceName.span.start + comQuerySourceByte!)) -> if { false => comFunctionEqual! }
-                                                comQuerySourceByte! + UIntSize(1) => comQuerySourceByte!
+                                                (source -> byte(comFunctionReference.span.start + 9 + comQueryTargetName.span.length + comQuerySourceByte!)) != (source -> byte(comQuerySourceName.span.start + comQuerySourceByte!)) -> if { false => comFunctionEqual! }
+                                                comQuerySourceByte! + 1 => comQuerySourceByte!
                                             }
                                         }
                                     } else {
                                     comFunction.flags / 4096 % 2 == 1 -> if {
-                                        comFunctionReference.span.length == UIntSize(6) -> if {
+                                        comFunctionReference.span.length == 6 -> if {
                                             "create" => comCreateName
                                             true => comFunctionEqual!
                                             UIntSize(0) => comCreateByte!
                                             (comFunctionEqual! and comCreateByte! < comFunctionReference.span.length) -> while {
                                                 (source -> byte(comFunctionReference.span.start + comCreateByte!)) != (comCreateName -> byte(comCreateByte!)) -> if { false => comFunctionEqual! }
-                                                comCreateByte! + UIntSize(1) => comCreateByte!
+                                                comCreateByte! + 1 => comCreateByte!
                                             }
                                         }
                                     } else {
                                         comFunction.flags / 8192 % 2 == 1 -> if {
-                                            comFunctionReference.span.length == UIntSize(5) -> if {
+                                            comFunctionReference.span.length == 5 -> if {
                                                 "clone" => comCloneName
                                                 true => comFunctionEqual!
                                                 UIntSize(0) => comCloneByte!
                                                 (comFunctionEqual! and comCloneByte! < comFunctionReference.span.length) -> while {
                                                     (source -> byte(comFunctionReference.span.start + comCloneByte!)) != (comCloneName -> byte(comCloneByte!)) -> if { false => comFunctionEqual! }
-                                                    comCloneByte! + UIntSize(1) => comCloneByte!
+                                                    comCloneByte! + 1 => comCloneByte!
                                                 }
                                             }
                                         } else {
@@ -229,7 +229,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             UIntSize(0) => comMethodByte!
                                             (comFunctionEqual! and comMethodByte! < comMethodName.span.length) -> while {
                                                 (source -> byte(comMethodName.span.start + comMethodByte!)) != (source -> byte(comFunctionReference.span.start + comMethodByte!)) -> if { false => comFunctionEqual! }
-                                                comMethodByte! + UIntSize(1) => comMethodByte!
+                                                comMethodByte! + 1 => comMethodByte!
                                             }
                                         }
                                     }
@@ -265,7 +265,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 UIntSize(0) => localEnumByte!
                                 (localEnumEqual! and localEnumByte! < localEnumName.span.length) -> while {
                                     (source -> byte(localEnumName.span.start + localEnumByte!)) != (source -> byte(localEnumReference.span.start + localEnumByte!)) -> if { false => localEnumEqual! }
-                                    localEnumByte! + UIntSize(1) => localEnumByte!
+                                    localEnumByte! + 1 => localEnumByte!
                                 }
                                 localEnumEqual! -> if {
                                     0 => localVariantSearch!
@@ -278,7 +278,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             UIntSize(0) => localVariantByte!
                                             (localVariantEqual! and localVariantByte! < localVariantName.span.length) -> while {
                                                 (source -> byte(localVariantName.span.start + localVariantByte!)) != (source -> byte(localVariantReference.span.start + localVariantByte!)) -> if { false => localVariantEqual! }
-                                                localVariantByte! + UIntSize(1) => localVariantByte!
+                                                localVariantByte! + 1 => localVariantByte!
                                             }
                                             localVariantEqual! -> if {
                                                 QualifiedResolution { sourceModule: sourceIndex!, pathAst: pathAstIndex!, targetModule: currentModule!, targetSymbol: localVariantSearch!, status: 0 } => localResult
@@ -300,10 +300,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                     # function or handle against sibling fragments before
                     # consulting explicit imports.
                     (not localVariantResolved! and currentModule! >= 0) -> if {
-                        identities![currentModule!].pathHash => currentPathHash
+                        identities[currentModule!].pathHash => currentPathHash
                         0 => siblingModuleIndex!
-                        siblingModuleIndex! < (identities! -> len) -> while {
-                            identities![siblingModuleIndex!] => siblingIdentity
+                        siblingModuleIndex! < (identities -> len) -> while {
+                            identities[siblingModuleIndex!] => siblingIdentity
                             (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentPathHash) -> if {
                                 siblingIdentity.sourceIndex => siblingSourceIndex
                                 package.sources[siblingSourceIndex] -> len => siblingSourceLength
@@ -328,7 +328,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                     (siblingSource -> byte(siblingAliasName.span.start + siblingAliasByte!)) != (source -> byte(siblingAliasReference.span.start + siblingAliasByte!)) -> if {
                                                         false => siblingAliasEqual!
                                                     }
-                                                    siblingAliasByte! + UIntSize(1) => siblingAliasByte!
+                                                    siblingAliasByte! + 1 => siblingAliasByte!
                                                 }
                                                 package.tokens[siblingRange.tokenStart + siblingSymbol.nameToken] => siblingMemberName
                                                 package.tokens[sourceRange.tokenStart + lastIdentifier!] => siblingMemberReference
@@ -338,7 +338,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                     (siblingSource -> byte(siblingMemberName.span.start + siblingMemberByte!)) != (source -> byte(siblingMemberReference.span.start + siblingMemberByte!)) -> if {
                                                         false => siblingMemberEqual!
                                                     }
-                                                    siblingMemberByte! + UIntSize(1) => siblingMemberByte!
+                                                    siblingMemberByte! + 1 => siblingMemberByte!
                                                 }
                                                 (siblingAliasEqual! and siblingMemberEqual!) -> if {
                                                     results! -> push(QualifiedResolution {
@@ -350,7 +350,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                     })
                                                     true => localVariantResolved!
                                                     siblingRange.symbolCount => siblingSymbolIndex!
-                                                    identities! -> len => siblingModuleIndex!
+                                                    identities -> len => siblingModuleIndex!
                                                 }
                                             }
                                         }
@@ -370,16 +370,12 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                         firstIdentifier! => qualifiedModuleToken!
                         qualifiedModuleToken! <= previousIdentifier! -> while {
                             package.tokens[sourceRange.tokenStart + qualifiedModuleToken!] => qualifiedModulePathToken
-                            qualifiedModulePathToken.kind == grammar.triviaIdWhitespace() -> if {
-                            } else {
-                                qualifiedModulePathToken.kind == grammar.triviaIdComment() -> if {
-                                } else {
-                                    UIntSize(0) => qualifiedModuleByte!
-                                    qualifiedModuleByte! < qualifiedModulePathToken.span.length -> while {
-                                        source -> byte(qualifiedModulePathToken.span.start + qualifiedModuleByte!) => qualifiedModuleValue
-                                        qualifiedModuleHash! * UInt64(1099511628211) + UInt64(qualifiedModuleValue) => qualifiedModuleHash!
-                                        qualifiedModuleByte! + UIntSize(1) => qualifiedModuleByte!
-                                    }
+                            (qualifiedModulePathToken.kind != grammar.triviaIdWhitespace() and qualifiedModulePathToken.kind != grammar.triviaIdComment()) -> if {
+                                UIntSize(0) => qualifiedModuleByte!
+                                qualifiedModuleByte! < qualifiedModulePathToken.span.length -> while {
+                                    source -> byte(qualifiedModulePathToken.span.start + qualifiedModuleByte!) => qualifiedModuleValue
+                                    qualifiedModuleHash! * 1099511628211 + UInt64(qualifiedModuleValue) => qualifiedModuleHash!
+                                    qualifiedModuleByte! + 1 => qualifiedModuleByte!
                                 }
                             }
                             qualifiedModuleToken! + 1 => qualifiedModuleToken!
@@ -389,8 +385,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                         -1 => qualifiedModuleSymbol!
                         false => qualifiedModulePublic!
                         0 => qualifiedModuleSearch!
-                        qualifiedModuleSearch! < (identities! -> len) -> while {
-                            identities![qualifiedModuleSearch!] => qualifiedIdentity
+                        qualifiedModuleSearch! < (identities -> len) -> while {
+                            identities[qualifiedModuleSearch!] => qualifiedIdentity
                             qualifiedIdentity.pathHash == qualifiedModuleHash! -> if {
                                 true => qualifiedModuleFound!
                                 qualifiedIdentity.sourceIndex => qualifiedSourceIndex
@@ -409,14 +405,14 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             (qualifiedSource -> byte(qualifiedCandidateName.span.start + qualifiedMemberByte!)) != (source -> byte(qualifiedMemberName.span.start + qualifiedMemberByte!)) -> if {
                                                 false => qualifiedMemberEqual!
                                             }
-                                            qualifiedMemberByte! + UIntSize(1) => qualifiedMemberByte!
+                                            qualifiedMemberByte! + 1 => qualifiedMemberByte!
                                         }
                                         qualifiedMemberEqual! -> if {
                                             qualifiedModuleSearch! => qualifiedModuleTarget!
                                             qualifiedSymbolSearch! => qualifiedModuleSymbol!
                                             qualifiedCandidate.flags / 4 % 2 == 1 -> if { true => qualifiedModulePublic! }
                                             qualifiedRange.symbolCount => qualifiedSymbolSearch!
-                                            identities! -> len => qualifiedModuleSearch!
+                                            identities -> len => qualifiedModuleSearch!
                                         }
                                     }
                                     qualifiedSymbolSearch! + 1 => qualifiedSymbolSearch!
@@ -442,8 +438,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                     0 => edgeIndex!
                     localVariantResolved! -> if { importCount => edgeIndex! }
                     edgeIndex! < importCount -> while {
-                        imports![edgeIndex!] => edge
-                        resolvedImports![edgeIndex!] => resolvedImport
+                        imports[edgeIndex!] => edge
+                        resolvedImports[edgeIndex!] => resolvedImport
                         (edge.sourceModule == sourceIndex! and resolvedImport.status == 0) -> if {
                             package.tokens[sourceRange.tokenStart + edge.aliasToken] => aliasName
                             package.tokens[sourceRange.tokenStart + firstIdentifier!] => pathAlias
@@ -453,12 +449,12 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 source -> byte(aliasName.span.start + aliasByte!) => aliasLeftByte
                                 source -> byte(pathAlias.span.start + aliasByte!) => aliasRightByte
                                 aliasLeftByte != aliasRightByte -> if { false => aliasEqual! }
-                                aliasByte! + UIntSize(1) => aliasByte!
+                                aliasByte! + 1 => aliasByte!
                             }
                             aliasEqual! -> if {
                                 resolvedImport.targetModule => targetModule
                                 targetModule => selectedTargetModule!
-                                identities![targetModule].sourceIndex => targetSourceIndex
+                                identities[targetModule].sourceIndex => targetSourceIndex
                                 package.sources[targetSourceIndex] -> len => targetSourceLength
                                 package.sources[targetSourceIndex] -> slice(UIntSize(0), targetSourceLength) => targetSource
                                 package.ranges[targetSourceIndex] => targetRange
@@ -482,7 +478,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             targetSource -> byte(candidateName.span.start + memberByte!) => memberLeftByte
                                             source -> byte(memberName.span.start + memberByte!) => memberRightByte
                                             memberLeftByte != memberRightByte -> if { false => memberEqual! }
-                                            memberByte! + UIntSize(1) => memberByte!
+                                            memberByte! + 1 => memberByte!
                                         }
                                         memberEqual! -> if {
                                             identifierCount! >= 3 -> if {
@@ -499,7 +495,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                                 targetSource -> byte(nestedName.span.start + nestedByte!) => nestedLeftByte
                                                                 source -> byte(nestedMemberName.span.start + nestedByte!) => nestedRightByte
                                                                 nestedLeftByte != nestedRightByte -> if { false => nestedEqual! }
-                                                                nestedByte! + UIntSize(1) => nestedByte!
+                                                                nestedByte! + 1 => nestedByte!
                                                             }
                                                             nestedEqual! -> if {
                                                                 nestedSymbolIndex! => targetSymbol!
@@ -522,10 +518,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 # in another source fragment, continue the
                                 # lookup across identities with the same path.
                                 (targetSymbol! < 0 and identifierCount! < 3) -> if {
-                                    identities![targetModule].pathHash => targetPathHash
+                                    identities[targetModule].pathHash => targetPathHash
                                     0 => fragmentModuleIndex!
-                                    fragmentModuleIndex! < (identities! -> len) -> while {
-                                        identities![fragmentModuleIndex!] => fragmentIdentity
+                                    fragmentModuleIndex! < (identities -> len) -> while {
+                                        identities[fragmentModuleIndex!] => fragmentIdentity
                                         (fragmentIdentity.pathHash == targetPathHash and fragmentModuleIndex! != targetModule) -> if {
                                             fragmentIdentity.sourceIndex => fragmentSourceIndex
                                             package.sources[fragmentSourceIndex] -> len => fragmentSourceLength
@@ -543,7 +539,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                         (fragmentSource -> byte(fragmentCandidateName.span.start + fragmentMemberByte!)) != (source -> byte(fragmentMemberName.span.start + fragmentMemberByte!)) -> if {
                                                             false => fragmentMemberEqual!
                                                         }
-                                                        fragmentMemberByte! + UIntSize(1) => fragmentMemberByte!
+                                                        fragmentMemberByte! + 1 => fragmentMemberByte!
                                                     }
                                                     fragmentMemberEqual! -> if {
                                                         fragmentSymbolIndex! => targetSymbol!

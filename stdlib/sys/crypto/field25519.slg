@@ -1,0 +1,199 @@
+namespace sys.crypto.field25519
+
+# Shared arithmetic for X25519 and Ed25519. Field elements use sixteen
+# little-endian base-2^16 limbs. The top limb has fifteen significant bits
+# because p = 2^255 - 19. Products fit UInt64 before 2^256 == 38 reduction.
+public zeros: -> [UInt64; 16] => [0; 16]
+wideZeros: -> [UInt64; 32] => [0; 32]
+public byteZeros: -> [UInt8; 32] => [0; 32]
+public one: -> [UInt64; 16] => [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+public replace destination: mut [UInt64; 16], source: [UInt64] -> Unit {
+    0 => index!
+    index! < 16 -> while {
+        source[index!] => destination[index!]
+        index! + 1 => index!
+    }
+}
+
+public normalize value: mut [UInt64; 16] -> Unit {
+    0 => pass!
+    pass! < 4 -> while {
+        0 => index!
+        index! < 15 -> while {
+            value[index!] / 65_536 => carry
+            value[index!] % 65_536 => value[index!]
+            value[index! + 1] + carry => value[index! + 1]
+            index! + 1 => index!
+        }
+        value[15] / 32_768 => overflow
+        value[15] % 32_768 => value[15]
+        value[0] + overflow * 19 => value[0]
+        pass! + 1 => pass!
+    }
+
+    true => greaterOrEqual!
+    false => decided!
+    15 => compareIndex!
+    compareIndex! >= 0 -> while {
+        compareIndex! == 0 -> if { UInt64(65_517) } else {
+            compareIndex! == 15 -> if { UInt64(32_767) } else { UInt64(65_535) }
+        } => primeLimb
+        (not decided! and value[compareIndex!] != primeLimb) -> if {
+            value[compareIndex!] > primeLimb => greaterOrEqual!
+            true => decided!
+        }
+        compareIndex! - 1 => compareIndex!
+    }
+    greaterOrEqual! -> if {
+        UInt64(0) => borrow!
+        0 => subtractIndex!
+        subtractIndex! < 16 -> while {
+            subtractIndex! == 0 -> if { UInt64(65_517) } else {
+                subtractIndex! == 15 -> if { UInt64(32_767) } else { UInt64(65_535) }
+            } => primeLimb
+            primeLimb + borrow! => removed
+            value[subtractIndex!] >= removed -> if {
+                value[subtractIndex!] - removed => value[subtractIndex!]
+                0 => borrow!
+            } else {
+                value[subtractIndex!] + 65_536 - removed => value[subtractIndex!]
+                1 => borrow!
+            }
+            subtractIndex! + 1 => subtractIndex!
+        }
+    }
+}
+
+public add left: [UInt64], right: [UInt64] -> [UInt64; 16] {
+    zeros() => output!
+    0 => index!
+    index! < 16 -> while {
+        left[index!] + right[index!] => output![index!]
+        index! + 1 => index!
+    }
+    output! -> normalize
+    output!
+}
+
+public subtract left: [UInt64], right: [UInt64] -> [UInt64; 16] {
+    zeros() => output!
+    0 => index!
+    index! < 16 -> while {
+        index! == 0 -> if { UInt64(131_034) } else {
+            index! == 15 -> if { UInt64(65_534) } else { UInt64(131_070) }
+        } => twicePrimeLimb
+        left[index!] + twicePrimeLimb - right[index!] => output![index!]
+        index! + 1 => index!
+    }
+    output! -> normalize
+    output!
+}
+
+public multiply left: [UInt64], right: [UInt64] -> [UInt64; 16] {
+    wideZeros() => product!
+    0 => leftIndex!
+    leftIndex! < 16 -> while {
+        0 => rightIndex!
+        rightIndex! < 16 -> while {
+            leftIndex! + rightIndex! => productIndex
+            product![productIndex] + left[leftIndex!] * right[rightIndex!] => product![productIndex]
+            rightIndex! + 1 => rightIndex!
+        }
+        leftIndex! + 1 => leftIndex!
+    }
+    31 => foldIndex!
+    foldIndex! >= 16 -> while {
+        product![foldIndex! - 16] + product![foldIndex!] * 38 => product![foldIndex! - 16]
+        foldIndex! - 1 => foldIndex!
+    }
+    zeros() => output!
+    0 => copyIndex!
+    copyIndex! < 16 -> while {
+        product![copyIndex!] => output![copyIndex!]
+        copyIndex! + 1 => copyIndex!
+    }
+    output! -> normalize
+    output!
+}
+
+public square value: [UInt64] -> [UInt64; 16] => multiply(value, value)
+
+public multiplySmall value: [UInt64], scalar: UInt64 -> [UInt64; 16] {
+    zeros() => output!
+    0 => index!
+    index! < 16 -> while {
+        value[index!] * scalar => output![index!]
+        index! + 1 => index!
+    }
+    output! -> normalize
+    output!
+}
+
+exponentBit bitIndex: UInt64 -> UInt64 {
+    bitIndex == 0 -> if { 1 } else {
+        bitIndex == 1 -> if { 1 } else {
+            bitIndex == 2 -> if { 0 } else {
+                bitIndex == 3 -> if { 1 } else {
+                    bitIndex == 4 -> if { 0 } else { 1 }
+                }
+            }
+        }
+    }
+}
+
+public invert value: [UInt64] -> [UInt64; 16] {
+    one() => result!
+    254 => bitIndex!
+    bitIndex! >= 0 -> while {
+        result! -> square => squared
+        result! -> replace(squared)
+        (bitIndex! >= 5 or exponentBit(UInt64(bitIndex!)) == 1) -> if {
+            multiply(result!, value) => multiplied
+            result! -> replace(multiplied)
+        }
+        bitIndex! - 1 => bitIndex!
+    }
+    result!
+}
+
+public decode bytes: [UInt8] -> [UInt64; 16] {
+    zeros() => output!
+    0 => index!
+    index! < 16 -> while {
+        UInt64(bytes[index! * 2]) + UInt64(bytes[index! * 2 + 1]) * 256 => output![index!]
+        index! + 1 => index!
+    }
+    output![15] % 32_768 => output![15]
+    output!
+}
+
+public encode value: [UInt64] -> [UInt8; 32] {
+    zeros() => canonical!
+    0 => copyIndex!
+    copyIndex! < 16 -> while {
+        value[copyIndex!] => canonical![copyIndex!]
+        copyIndex! + 1 => copyIndex!
+    }
+    canonical! -> normalize
+    byteZeros() => output!
+    0 => index!
+    index! < 16 -> while {
+        UInt8(canonical![index!] % 256) => output![index! * 2]
+        UInt8(canonical![index!] / 256) => output![index! * 2 + 1]
+        index! + 1 => index!
+    }
+    output!
+}
+
+public equal left: [UInt64], right: [UInt64] -> Bool {
+    encode(left) => leftBytes
+    encode(right) => rightBytes
+    true => same!
+    0 => index!
+    index! < 32 -> while {
+        leftBytes[index!] == rightBytes[index!] -> unless { false => same! }
+        index! + 1 => index!
+    }
+    same!
+}

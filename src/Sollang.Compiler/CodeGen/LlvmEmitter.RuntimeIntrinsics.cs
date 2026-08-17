@@ -1130,6 +1130,74 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(narrowed);
     }
 
+    private RuntimeEnum EmitRuntimeSecureRandomBytes(
+        BoundFunction function,
+        RuntimeValue argument,
+        string path)
+    {
+        if (argument is not RuntimeInt { Type: BoundType.UIntSize } count)
+        {
+            throw new SollangException($"{path} expects UIntSize");
+        }
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || resultTypes.Ok != TypeId.DynamicUInt8Array
+            || !_program.Types.IsEnum(resultTypes.Error)
+            || _program.Types.GetEnum(resultTypes.Error).Name != "sys.crypto.random.Error")
+        {
+            throw new SollangException($"{path} has an invalid secure random result type");
+        }
+
+        var allocationSize = NextTemp("secure_random_allocation_size");
+        var empty = NextTemp("secure_random_empty");
+        EmitCompare(empty, "eq", "i64", count.ValueName, "0");
+        EmitSelect(allocationSize, empty, "i64 1", $"i64 {count.ValueName}");
+        var buffer = EmitHeapAllocate(allocationSize);
+        var filled = NextTemp("secure_random_filled");
+        EmitCall(
+            filled,
+            "i1",
+            "sollang_secure_random_fill",
+            $"ptr {buffer}, i64 {count.ValueName}");
+
+        var resultDefinition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = resultDefinition.Variants.First(variant => variant.Name == "Ok");
+        var errVariant = resultDefinition.Variants.First(variant => variant.Name == "Err");
+        var successLabel = NextLabel("secure_random_success");
+        var failureLabel = NextLabel("secure_random_failure");
+        var endLabel = NextLabel("secure_random_end");
+        EmitConditionalBranch(filled, successLabel, failureLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var bytes = new RuntimeDynamicInlineArray(
+            resultTypes.Ok,
+            BoundType.UInt8,
+            buffer,
+            count.ValueName,
+            count.ValueName);
+        var success = EmitEnumValue(function.ReturnType, okVariant, bytes);
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+
+        EmitLabel(failureLabel);
+        _currentBlockLabel = failureLabel;
+        EmitCall(target: null, "void", "sollang_free", $"ptr {buffer}");
+        var errorDefinition = _program.Types.GetEnum(resultTypes.Error);
+        var unavailableVariant = errorDefinition.Variants.First(
+            variant => variant.Name == "Unavailable");
+        var unavailable = EmitEnumValue(resultTypes.Error, unavailableVariant, payload: null);
+        var failure = EmitEnumValue(function.ReturnType, errVariant, unavailable);
+        EmitBranch(endLabel);
+        var failureExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi(
+            "secure_random_result",
+            function.ReturnType,
+            [(success, successExit), (failure, failureExit)]);
+    }
+
     private string EmitRuntimeIntegerAsI64(RuntimeInt integer, string prefix)
     {
         if (NumericBitWidth(integer.Type) == 64)

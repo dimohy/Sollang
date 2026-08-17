@@ -865,16 +865,24 @@ internal static class StoragePlacementAnalyzer
                     : PromotedOwnerKind.StaticArray;
                 payloadBytes = checked(array.Elements.Count * sizeof(int));
                 return true;
-            case ArrayRepeatExpression repeat:
-                if (repeat.Count is null)
-                {
-                    kind = default;
-                    payloadBytes = 0;
-                    return false;
-                }
+            case ArrayRepeatExpression
+            {
+                Value: NumberExpression number,
+                Count: { } count
+            } when !number.Text.Contains('.', StringComparison.Ordinal)
+                && !number.Text.Contains('e', StringComparison.OrdinalIgnoreCase):
+                // An unconstrained integral literal has the language-default Int
+                // layout. Contextual repeats are nested below their typed consumer
+                // and therefore do not enter this direct-binding candidate path.
                 kind = PromotedOwnerKind.StaticArray;
-                payloadBytes = checked(Math.Max(repeat.Count.Value, 1) * sizeof(int));
+                payloadBytes = checked(Math.Max(count, 1) * sizeof(int));
                 return true;
+            case ArrayRepeatExpression:
+                // Other element layouts require semantic type information. Keep
+                // them off this syntax-only path instead of under-sizing a slot.
+                kind = default;
+                payloadBytes = 0;
+                return false;
             case DictionaryLiteralExpression { Entries.Count: > 0 } dictionary:
                 kind = PromotedOwnerKind.Dictionary;
                 var capacity = IntDictionaryLayout.CapacityForLength(dictionary.Entries.Count);

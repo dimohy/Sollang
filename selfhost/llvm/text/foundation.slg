@@ -161,6 +161,11 @@ struct PrepareRequest {
     expectedPathStyle: Int
 }
 
+struct SocketCallRequest {
+    callIndex: Int
+    ownerIndex: Int
+}
+
 # LLVM allocas execute each time control reaches them. Fixed-size result and
 # scratch slots therefore belong to the owning function entry, never to a loop
 # or branch body.
@@ -169,8 +174,9 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, conte
     nodeIndex! < endIndex -> while {
         context.ir[nodeIndex!] => node
         node.kind == 18 -> if {
-            nodeIndex! -> irValueUsed(ownerIndex, context, state) => valueUsed
-            (valueUsed and not (node.typeOrigin == 1 and node.typeSymbol == 0) and node.nextOperand >= 0) -> if {
+            false => valueUsed!
+            nodeIndex! -> irValueUsed(ownerIndex, context, state) => valueUsed!
+            (valueUsed! and not (node.typeOrigin == 1 and node.typeSymbol == 0) and node.nextOperand >= 0) -> if {
                 "  %if$(nodeIndex!)_result = alloca " -> print
                 node -> writeIrType(context, state)
                 ", align " -> print
@@ -192,7 +198,9 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, conte
             subject -> writeIrType(context, state)
             ", align 8" -> println
             nodeIndex! -> irValueUsed(ownerIndex, context, state) => matchValueUsed
-            (matchValueUsed and not (node.typeOrigin == 1 and node.typeSymbol == 0)) -> if {
+            (matchValueUsed
+                and (nodeIndex! -> enumMatchHasConcreteArmValues(context, state))
+                and not (node.typeOrigin == 1 and node.typeSymbol == 0)) -> if {
                 "  %v$(nodeIndex!)_result = alloca " -> print
                 node -> writeIrType(context, state)
                 ", align " -> print
@@ -201,6 +209,11 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, conte
         }
         ((node.kind == 6 or node.kind == 9) and (node.opcode == -216 or node.opcode == -217)) -> if {
             "  %v$(nodeIndex!)_file_result_slot = alloca " -> print
+            node -> writeIrType(context, state)
+            ", align 8" -> println
+        }
+        ((node.kind == 6 or node.kind == 9) and node.opcode <= -258 and node.opcode >= -268) -> if {
+            "  %v$(nodeIndex!)_socket_result_slot = alloca " -> print
             node -> writeIrType(context, state)
             ", align 8" -> println
         }
@@ -250,6 +263,7 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, conte
 # introduced.
 struct CoreEmitterState {
     frozenFunctionEnds: [Int; ~]
+    frozenReachableFunctions: [Bool; ~]
     frozenCaptureFunctionsBySymbol: [Int; ~]
     frozenFunctionCaptureOffsets: [Int; ~]
     frozenFunctionCaptureCounts: [Int; ~]
@@ -352,11 +366,11 @@ isDirectEachRoleSymbol sourceModule: Int, symbolIndex: Int, context: ref emitter
                     context.nodes[roleRange.astStart + roleOwner.astNode] => roleAst
                     roleAst.payloadToken >= 0 -> if {
                         context.tokens[roleRange.tokenStart + roleAst.payloadToken] => roleName
-                        (roleName.span.length == UIntSize(4)
-                            and (context.sources[sourceModule] -> byte(roleName.span.start)) == UInt8(101)
-                            and (context.sources[sourceModule] -> byte(roleName.span.start + UIntSize(1))) == UInt8(97)
-                            and (context.sources[sourceModule] -> byte(roleName.span.start + UIntSize(2))) == UInt8(99)
-                            and (context.sources[sourceModule] -> byte(roleName.span.start + UIntSize(3))) == UInt8(104)) -> if {
+                        (roleName.span.length == 4
+                            and (context.sources[sourceModule] -> byte(roleName.span.start)) == 101
+                            and (context.sources[sourceModule] -> byte(roleName.span.start + 1)) == 97
+                            and (context.sources[sourceModule] -> byte(roleName.span.start + 2)) == 99
+                            and (context.sources[sourceModule] -> byte(roleName.span.start + 3)) == 104) -> if {
                             true => matched!
                         }
                     }
@@ -525,7 +539,7 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
         context.sources[sourceModule] -> slice(node.payloadStart, node.payloadLength) -> print
     } else {
         node.kind == 4 -> if {
-            (context.sources[sourceModule] -> byte(node.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+            (context.sources[sourceModule] -> byte(node.payloadStart)) == 116 -> if { "1" -> print } else { "0" -> print }
         } else {
             node.kind == 1 -> if {
                 node -> writeDirectEachRoleValue(sourceModule, context) => directEachRole
@@ -552,9 +566,9 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
                                 (interpolationBindingValue.kind == 3 or interpolationBindingValue.kind == 4) -> if {
                                     interpolationBindingValue -> sourceToken(context, state) => interpolationBindingToken
                                     interpolationBindingValue.kind == 4 -> if {
-                                        (context.sources[interpolationBindingValue.sourceModule] -> byte(interpolationBindingToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                        (context.sources[interpolationBindingValue.sourceModule] -> byte(interpolationBindingToken.span.start)) == 116 -> if { "1" -> print } else { "0" -> print }
                                     } else {
-                                        context.sources[interpolationBindingValue.sourceModule] -> slice(interpolationBindingToken.span.start, interpolationBindingToken.span.length) -> print
+                                        interpolationBindingValue -> writeIntegerLiteral(context, state)
                                     }
                                 } else {
                                     "%v$(interpolationBinding.operand0)" -> print
@@ -639,13 +653,13 @@ interpolationMemberFieldIndex nodeIndex: Int, nodes: ref [interpolation.Interpol
         node.payloadStart + node.payloadLength => memberEnd
         true => memberPathValid!
         (memberPathValid! and memberCursor! < memberEnd) -> while {
-            (memberCursor! < memberEnd and (context.sources[sourceModule] -> byte(memberCursor!)) != UInt8(46)) -> while {
-                memberCursor! + UIntSize(1) => memberCursor!
+            (memberCursor! < memberEnd and (context.sources[sourceModule] -> byte(memberCursor!)) != 46) -> while {
+                memberCursor! + 1 => memberCursor!
             }
-            memberCursor! + UIntSize(1) => memberNameStart
+            memberCursor! + 1 => memberNameStart
             memberNameStart => memberNameEnd!
-            (memberNameEnd! < memberEnd and (context.sources[sourceModule] -> byte(memberNameEnd!)) != UInt8(46)) -> while {
-                memberNameEnd! + UIntSize(1) => memberNameEnd!
+            (memberNameEnd! < memberEnd and (context.sources[sourceModule] -> byte(memberNameEnd!)) != 46) -> while {
+                memberNameEnd! + 1 => memberNameEnd!
             }
             memberNameEnd! - memberNameStart => memberNameLength
             (ownerTypeId! >= 0 and context.types[ownerTypeId!].kind == 8) -> if { context.types[ownerTypeId!].first => ownerTypeId! }
@@ -661,7 +675,7 @@ interpolationMemberFieldIndex nodeIndex: Int, nodes: ref [interpolation.Interpol
                     UIntSize(0) => fieldNameByte!
                     (fieldNameEqual! and fieldNameByte! < memberNameLength) -> while {
                         (context.sources[sourceModule] -> byte(memberNameStart + fieldNameByte!)) != (context.sources[field.sourceModule] -> byte(fieldName.span.start + fieldNameByte!)) -> if { false => fieldNameEqual! }
-                        fieldNameByte! + UIntSize(1) => fieldNameByte!
+                        fieldNameByte! + 1 => fieldNameByte!
                     }
                     fieldNameEqual! -> if { fieldSearch! => resolvedMemberField! }
                 }
@@ -701,7 +715,7 @@ canonicalMemberFieldIndex ownerTypeId: Int, sourceModule: Int, memberTokenIndex:
                 (context.sources[sourceModule] -> byte(memberName.span.start + nameByte!)) != (context.sources[field.sourceModule] -> byte(fieldName.span.start + nameByte!)) -> if {
                     false => equal!
                 }
-                nameByte! + UIntSize(1) => nameByte!
+                nameByte! + 1 => nameByte!
             }
             equal! -> if { fieldSearch! => fieldIndex! }
         }
@@ -723,8 +737,8 @@ canonicalMemberFieldOrdinalIndex ownerTypeId: Int, ordinal: Int, context: ref em
     fieldIndex!
 }
 
-canonicalMemberPathAvailable nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
-    false => available!
+canonicalMemberValueTypeId nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => valueTypeId!
     (nodeIndex >= 0 and nodeIndex < (context.ir -> len)) -> if {
         context.ir[nodeIndex] => node
         (node.kind == 13 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and context.ir[node.operand0].typeId >= 0) -> if {
@@ -757,10 +771,9 @@ canonicalMemberPathAvailable nodeIndex: Int, context: ref emitterContext.EmitCon
                         context.types[ownerTypeId!].first => ownerTypeId!
                     }
                     -1 => fieldIndex!
-                    memberOrdinal! == memberCount! - 1 -> if {
+                    ownerTypeId! -> canonicalMemberFieldIndex(node.sourceModule, memberTokenIndex!, context) => fieldIndex!
+                    (fieldIndex! < 0 and memberOrdinal! == memberCount! - 1) -> if {
                         ownerTypeId! -> canonicalMemberFieldOrdinalIndex(node.symbol, context) => fieldIndex!
-                    } else {
-                        ownerTypeId! -> canonicalMemberFieldIndex(node.sourceModule, memberTokenIndex!, context) => fieldIndex!
                     }
                     fieldIndex! >= 0 -> if {
                         context.fields[fieldIndex!].fieldType => ownerTypeId!
@@ -769,10 +782,14 @@ canonicalMemberPathAvailable nodeIndex: Int, context: ref emitterContext.EmitCon
                 }
                 memberTokenIndex! + 1 => memberTokenIndex!
             }
-            (pathValid! and memberCount! > 0 and memberOrdinal! == memberCount!) => available!
+            (pathValid! and memberCount! > 0 and memberOrdinal! == memberCount!) -> if { ownerTypeId! => valueTypeId! }
         }
     }
-    available!
+    valueTypeId!
+}
+
+canonicalMemberPathAvailable nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    (nodeIndex -> canonicalMemberValueTypeId(context, state)) >= 0
 }
 
 interpolationNodeIntegerWidth nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -930,13 +947,13 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
         0 => memberStep!
         true => memberPathValid!
         (memberPathValid! and memberCursor! < memberEnd) -> while {
-            (memberCursor! < memberEnd and (context.sources[sourceModule] -> byte(memberCursor!)) != UInt8(46)) -> while {
-                memberCursor! + UIntSize(1) => memberCursor!
+            (memberCursor! < memberEnd and (context.sources[sourceModule] -> byte(memberCursor!)) != 46) -> while {
+                memberCursor! + 1 => memberCursor!
             }
-            memberCursor! + UIntSize(1) => memberNameStart
+            memberCursor! + 1 => memberNameStart
             memberNameStart => memberNameEnd!
-            (memberNameEnd! < memberEnd and (context.sources[sourceModule] -> byte(memberNameEnd!)) != UInt8(46)) -> while {
-                memberNameEnd! + UIntSize(1) => memberNameEnd!
+            (memberNameEnd! < memberEnd and (context.sources[sourceModule] -> byte(memberNameEnd!)) != 46) -> while {
+                memberNameEnd! + 1 => memberNameEnd!
             }
             memberNameEnd! - memberNameStart => memberNameLength
             false => memberOwnerReference!
@@ -965,7 +982,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         (context.sources[sourceModule] -> byte(memberNameStart + memberFieldNameByte!)) != (context.sources[memberFieldCandidate.sourceModule] -> byte(memberFieldName.span.start + memberFieldNameByte!)) -> if {
                             false => memberFieldNameEqual!
                         }
-                        memberFieldNameByte! + UIntSize(1) => memberFieldNameByte!
+                        memberFieldNameByte! + 1 => memberFieldNameByte!
                     }
                     memberFieldNameEqual! -> if { memberFieldSearch! => memberFieldIndex! }
                 }
@@ -1035,7 +1052,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 nodes[callArgumentIndex!] => callArgument
                 (callArgument.kind == 0 or callArgument.kind == 4) -> if {
                     callArgument.kind == 4 -> if {
-                        (context.sources[sourceModule] -> byte(callArgument.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                        (context.sources[sourceModule] -> byte(callArgument.payloadStart)) == 116 -> if { "1" -> print } else { "0" -> print }
                     } else { context.sources[sourceModule] -> slice(callArgument.payloadStart, callArgument.payloadLength) -> print }
                 } else {
                     labelIndex -> writeInterpolationValue(callArgumentIndex!, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
@@ -1365,8 +1382,8 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
             typeIndex! + 1 => typeIndex!
         }
     }
-    TypeLayouts { sizes: sizes!, aligns: aligns!, statuses: statuses! } => result!
-    result!
+    TypeLayouts { sizes: sizes!, aligns: aligns!, statuses: statuses! } => result
+    result
 }
 
 public layoutOf request: TypeLayoutRequest -> TypeLayout {
@@ -1383,8 +1400,32 @@ isDynamicArrayType node: typedIr.TypedIrNode -> Bool {
     node -> typeQueries.isDynamicArray
 }
 
+isSliceArrayType node: typedIr.TypedIrNode -> Bool {
+    node -> typeQueries.isSliceArray
+}
+
 isFixedArrayType node: typedIr.TypedIrNode -> Bool {
     node -> typeQueries.isFixedArray
+}
+
+emptyArrayCallParameter nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => parameterIndex!
+    (nodeIndex >= 0 and nodeIndex < (context.ir -> len)) -> if {
+        context.ir[nodeIndex] => node
+        (node.kind == 14 and node.operand0 < 0 and node.parent >= 0 and node.parent < (context.ir -> len)) -> if {
+            context.ir[node.parent] => call
+            (call.kind == 6 or call.kind == 9) -> if {
+                call.operand0 => argumentIndex!
+                0 => argumentOrdinal!
+                (argumentIndex! >= 0 and argumentIndex! != nodeIndex) -> while {
+                    context.ir[argumentIndex!].nextOperand => argumentIndex!
+                    argumentOrdinal! + 1 => argumentOrdinal!
+                }
+                argumentIndex! == nodeIndex -> if { node.parent -> callTargetParameter(argumentOrdinal!, context, state) => parameterIndex! }
+            }
+        }
+    }
+    parameterIndex!
 }
 
 isDictionaryType node: typedIr.TypedIrNode -> Bool {

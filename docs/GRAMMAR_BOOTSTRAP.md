@@ -78,6 +78,11 @@ depending on the generic block-call fallback. Self-hosted regressions prevent
 the C# grammar builder and Sollang parser VM from drifting back to ambiguous order.
 Its rule and keyword descriptor are appended after existing grammar entries so
 previous stable rule ids and keyword operator codes do not move.
+Array items use the same ordered-choice discipline: the direct
+`Expression Semicolon (Number | Identifier)` fixed-repeat branch precedes the
+generic comma-separated alternatives. This keeps `[value; N]` deterministic in
+the self-host parser instead of backtracking from a partially consumed item
+list.
 
 ## Lexer Descriptor Kinds
 
@@ -608,3 +613,8 @@ Call checking also compares the signature's zero-or-one-input shape with call
 syntax. Missing required arguments and a bare reference to a zero-input
 function emit code 10 over the complete expression. Computed members with one
 input remain property-like and reject empty `()`.
+
+Qualified standard-enum patterns are parsed by the canonical `EnumPattern`
+rule before the general `Path` form. `Option<T>.Some/None` and
+`Result<T, E>.Ok/Err` therefore have the same grammar in the generated native
+parser and the C# bootstrap parser without introducing a second pattern AST.

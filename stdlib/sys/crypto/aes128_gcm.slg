@@ -1,0 +1,191 @@
+namespace sys.crypto.aes128_gcm
+
+import sys.crypto.aes128 as aes128
+import sys.crypto.aes128_gcm_result as results
+import sys.crypto.bits
+
+public struct Sealed {
+    ciphertext: [UInt8; ~]
+    tag: [UInt8; 16]
+}
+
+struct BlockValue {
+    bytes: [UInt8; 16]
+}
+
+zeroBlock: -> BlockValue {
+    BlockValue { bytes: [0; 16] }
+}
+
+xorByte left: UInt8, right: UInt8 -> UInt8 {
+    UInt8(bits.xor(UInt32(left), UInt32(right)))
+}
+
+xorBlock left: [UInt8; 16], right: [UInt8; 16] -> [UInt8; 16] {
+    zeroBlock().bytes => output!
+    0 => index!
+    index! < 16 -> while {
+        xorByte(left[index!], right[index!]) => output![index!]
+        index! + 1 => index!
+    }
+    output!
+}
+
+multiply left: [UInt8; 16], right: [UInt8; 16] -> [UInt8; 16] {
+    zeroBlock().bytes => product!
+    zeroBlock().bytes => multiplicand!
+    0 => copyIndex!
+    copyIndex! < 16 -> while {
+        right[copyIndex!] => multiplicand![copyIndex!]
+        copyIndex! + 1 => copyIndex!
+    }
+    0 => bitOffset!
+    bitOffset! < 128 -> while {
+        bitOffset! / 8 => byteIndex
+        7 - bitOffset! % 8 => shift
+        (UInt32(left[byteIndex]) / (UInt32(shift) -> bits.powerOfTwo)) % 2 == 1 -> if {
+            0 => xorIndex!
+            xorIndex! < 16 -> while {
+                xorByte(product![xorIndex!], multiplicand![xorIndex!]) => product![xorIndex!]
+                xorIndex! + 1 => xorIndex!
+            }
+        }
+        multiplicand![15] % 2 => leastSignificant
+        UInt8(0) => carry!
+        0 => shiftIndex!
+        shiftIndex! < 16 -> while {
+            multiplicand![shiftIndex!] => current
+            UInt8(UInt32(current) / 2 + UInt32(carry!) * 128) => multiplicand![shiftIndex!]
+            UInt8(UInt32(current) % 2) => carry!
+            shiftIndex! + 1 => shiftIndex!
+        }
+        leastSignificant == 1 -> if {
+            xorByte(multiplicand![0], 225) => multiplicand![0]
+        }
+        bitOffset! + 1 => bitOffset!
+    }
+    product!
+}
+
+absorb hashSubkey: [UInt8; 16], state: mut [UInt8; 16], bytes: [UInt8] -> Unit {
+    0 => offset!
+    offset! < (bytes -> len) -> while {
+        zeroBlock().bytes => block!
+        0 => blockIndex!
+        (blockIndex! < 16 and offset! + blockIndex! < (bytes -> len)) -> while {
+            bytes[offset! + blockIndex!] => block![blockIndex!]
+            blockIndex! + 1 => blockIndex!
+        }
+        xorBlock(state, block!) => mixed
+        multiply(mixed, hashSubkey) => next
+        0 => copyIndex!
+        copyIndex! < 16 -> while {
+            next[copyIndex!] => state[copyIndex!]
+            copyIndex! + 1 => copyIndex!
+        }
+        offset! + 16 => offset!
+    }
+}
+
+writeBitLength lengthBlock: mut [UInt8; 16], offset: Int, byteLength: UIntSize -> Unit {
+    UInt64(byteLength) * 8 => remaining!
+    7 => index!
+    index! >= 0 -> while {
+        UInt8(remaining! % 256) => lengthBlock[offset + index!]
+        remaining! / 256 => remaining!
+        index! - 1 => index!
+    }
+}
+
+ghash hashSubkey: [UInt8; 16], aad: [UInt8], ciphertext: [UInt8] -> [UInt8; 16] {
+    zeroBlock().bytes => state!
+    absorb(hashSubkey, state!, aad)
+    absorb(hashSubkey, state!, ciphertext)
+    zeroBlock().bytes => lengths!
+    writeBitLength(lengths!, 0, UIntSize(aad -> len))
+    writeBitLength(lengths!, 8, UIntSize(ciphertext -> len))
+    xorBlock(state!, lengths!) => mixed
+    multiply(mixed, hashSubkey)
+}
+
+incrementCounter counter: mut [UInt8; 16] -> Unit {
+    15 => index!
+    true => carry!
+    (carry! and index! >= 12) -> while {
+        counter[index!] == 255 -> if {
+            0 => counter[index!]
+        } else {
+            counter[index!] + 1 => counter[index!]
+            false => carry!
+        }
+        index! - 1 => index!
+    }
+}
+
+initialCounter iv: [UInt8; 12] -> [UInt8; 16] {
+    zeroBlock().bytes => initialBlock!
+    0 => index!
+    index! < 12 -> while {
+        iv[index!] => initialBlock![index!]
+        index! + 1 => index!
+    }
+    1 => initialBlock![15]
+    initialBlock!
+}
+
+public seal key: [UInt8; 16], iv: [UInt8; 12], aad: [UInt8], plaintext: [UInt8] -> Sealed {
+    initialCounter(iv) => counter!
+    [UInt8; ~] => ciphertext!
+    0 => offset!
+    offset! < (plaintext -> len) -> while {
+        incrementCounter(counter!)
+        aes128.encryptBlock(key, counter!) => encryptedCounter
+        0 => blockIndex!
+        (blockIndex! < 16 and offset! + blockIndex! < (plaintext -> len)) -> while {
+            ciphertext! -> push(xorByte(plaintext[offset! + blockIndex!], encryptedCounter[blockIndex!]))
+            blockIndex! + 1 => blockIndex!
+        }
+        offset! + 16 => offset!
+    }
+    aes128.encryptBlock(key, zeroBlock().bytes) => hashSubkey
+    ghash(hashSubkey, aad, ciphertext!) => authentication
+    initialCounter(iv) => firstCounter
+    aes128.encryptBlock(key, firstCounter) => encryptedFirstCounter
+    xorBlock(encryptedFirstCounter, authentication) => tag
+    Sealed { ciphertext: ciphertext!, tag: tag }
+}
+
+public verifyTag expected: [UInt8; 16], actual: [UInt8; 16] -> Bool {
+    UInt32(0) => difference!
+    0 => index!
+    index! < 16 -> while {
+        bits.xor(difference!, UInt32(xorByte(expected[index!], actual[index!]))) => difference!
+        index! + 1 => index!
+    }
+    difference! == 0
+}
+
+public open key: [UInt8; 16], iv: [UInt8; 12], aad: [UInt8], ciphertext: [UInt8], tag: [UInt8; 16] -> results.Open {
+    aes128.encryptBlock(key, zeroBlock().bytes) => hashSubkey
+    ghash(hashSubkey, aad, ciphertext) => authentication
+    initialCounter(iv) => firstCounter
+    aes128.encryptBlock(key, firstCounter) => encryptedFirstCounter
+    xorBlock(encryptedFirstCounter, authentication) => expectedTag
+    verifyTag(expectedTag, tag) -> unless {
+        results.Open.InvalidTag(0) -> return
+    }
+    initialCounter(iv) => counter!
+    [UInt8; ~] => plaintext!
+    0 => offset!
+    offset! < (ciphertext -> len) -> while {
+        incrementCounter(counter!)
+        aes128.encryptBlock(key, counter!) => encryptedCounter
+        0 => blockIndex!
+        (blockIndex! < 16 and offset! + blockIndex! < (ciphertext -> len)) -> while {
+            plaintext! -> push(xorByte(ciphertext[offset! + blockIndex!], encryptedCounter[blockIndex!]))
+            blockIndex! + 1 => blockIndex!
+        }
+        offset! + 16 => offset!
+    }
+    results.Open.Plaintext(plaintext!)
+}

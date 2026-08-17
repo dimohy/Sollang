@@ -1,0 +1,19 @@
+import sys.quic.error as errors
+import sys.quic.tls_handshake as handshake
+
+verify: -> Result<Bool, errors.Error> uses Console {
+    handshake.encode(handshake.clientHello(), [1, 2, 3, 4])? => encoded
+    handshake.decode(encoded, 0)? => decoded
+    handshake.encodeExtension(handshake.quicTransportParametersExtension(), [32, 4, 128, 0, 255, 255])? => extension
+    handshake.decodeExtension(extension, 0)? => decodedExtension
+    "$(decoded.messageType),$(decoded.body -> len),$(decoded.nextOffset),$(encoded[1]),$(encoded[3]),$(decoded.body[3])" -> println
+    "$(decodedExtension.extensionType),$(decodedExtension.data -> len),$(decodedExtension.nextOffset),$(extension[1]),$(extension[3]),$(decodedExtension.data[0])" -> println
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+main {
+    verify() -> when {
+        Ok(done) {}
+        Err(error) { "error=$(error.code)" -> println }
+    }
+}

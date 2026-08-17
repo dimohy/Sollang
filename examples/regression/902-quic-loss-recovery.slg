@@ -1,0 +1,34 @@
+import sys.quic.error as errors
+import sys.quic.loss_recovery as recovery
+
+boolText value: Bool -> Text => value -> if { "true" } else { "false" }
+
+verify: -> Result<Bool, errors.Error> uses Console {
+    recovery.updateRtt(recovery.initialRttState(), 100_000, 0, 25_000, false) => first
+    recovery.updateRtt(first, 120_000, 10_000, 25_000, true) => second
+    recovery.probeTimeout(second, 25_000, true, 2)? => timeout
+    second -> recovery.timeThresholdDelay => thresholdDelay
+    recovery.lostByPacketThreshold(10, 7) => packetLost
+    recovery.lostByTimeThreshold(second, 1_135_000, 1_000_000) => timeLost
+    packetLost -> boolText => packetLostText
+    timeLost -> boolText => timeLostText
+    "$(first.smoothed),$(second.latest),$(second.minimum),$(second.smoothed),$(second.variance)" -> println
+    "$thresholdDelay,$timeout,$packetLostText,$timeLostText" -> println
+
+    recovery.initialCongestionState(1_200) => initial
+    recovery.onPacketSent(initial, 3_000, true) => sent
+    recovery.onPacketsAcknowledged(sent, 1_200, 100, 1_200, true) => acknowledged
+    recovery.onPacketsLost(acknowledged, 1_200, 200, 250, 1_200) => lost
+    recovery.onPacketsAcknowledged(lost, 600, 150, 1_200, true) => recoveryAck
+    recovery.onPacketSent(recoveryAck, 1_200, false) => ackOnly
+    recovery.onPersistentCongestion(ackOnly, 1_200) => persistent
+    "$(initial.congestionWindow),$(sent.bytesInFlight),$(acknowledged.congestionWindow),$(acknowledged.bytesInFlight),$(lost.congestionWindow),$(lost.bytesInFlight),$(recoveryAck.congestionWindow),$(ackOnly.bytesInFlight),$(persistent.congestionWindow)" -> println
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+main {
+    verify() -> when {
+        Ok(done) {}
+        Err(error) { "error=$(error.code)" -> println }
+    }
+}

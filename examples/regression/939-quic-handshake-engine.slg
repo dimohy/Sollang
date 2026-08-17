@@ -1,0 +1,69 @@
+import sys.crypto.tls13_keys as tls13
+import sys.quic.error as errors
+import sys.quic.handshake_engine as handshake
+import sys.quic.keys
+
+sharedSecret: -> [UInt8; 32] => [68; 32]
+helloTranscript: -> [UInt8] => [1, 0, 0, 1, 7, 2, 0, 0, 1, 8]
+clientConnectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
+serverConnectionId: -> [UInt8] => [9, 10, 11, 12, 13, 14, 15, 16]
+serverHandshake: -> [UInt8] => [8, 0, 0, 2, 0, 0]
+clientHandshake: -> [UInt8] => [20, 0, 0, 3, 1, 2, 3]
+
+roundtrip version: UInt32 -> Result<Bool, errors.Error> {
+    tls13.deriveHandshake(sharedSecret(), helloTranscript()) => secrets
+    handshake.encode(
+        version,
+        clientConnectionId(),
+        serverConnectionId(),
+        5,
+        0,
+        serverHandshake(),
+        secrets.serverTrafficSecret)? => serverPacket
+    handshake.open(
+        serverPacket,
+        clientConnectionId(),
+        5,
+        secrets.serverTrafficSecret)? => openedServer
+    handshake.encode(
+        version,
+        serverConnectionId(),
+        clientConnectionId(),
+        9,
+        6,
+        clientHandshake(),
+        secrets.clientTrafficSecret)? => clientPacket
+    handshake.open(
+        clientPacket,
+        serverConnectionId(),
+        9,
+        secrets.clientTrafficSecret)? => openedClient
+    Result<Bool, errors.Error>.Ok(
+        openedServer.version == version
+            and openedServer.packetNumber == 5
+            and openedServer.cryptoOffset == 0
+            and openedServer.handshakeBytes[0] == 8
+            and openedServer.handshakeBytes[5] == 0
+            and openedClient.packetNumber == 9
+            and openedClient.cryptoOffset == 6
+            and openedClient.handshakeBytes[0] == 20
+            and openedClient.handshakeBytes[6] == 3)
+}
+
+verify version: UInt32, label: Text -> Unit uses Console {
+    roundtrip(version) -> when {
+        Ok(valid) {
+            valid -> if {
+                "handshake-engine-$label=ok" -> println
+            } else {
+                "handshake-engine-$label=failed" -> println
+            }
+        }
+        Err(error) { "handshake-engine-$label-error=$(error.code)" -> println }
+    }
+}
+
+main {
+    verify(keys.version1(), "v1")
+    verify(keys.version2(), "v2")
+}

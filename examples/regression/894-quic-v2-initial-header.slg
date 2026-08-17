@@ -1,0 +1,45 @@
+import sys.quic.error as errors
+import sys.quic.keys
+import sys.quic.packet
+
+destinationConnectionId: -> [UInt8] => [131, 148, 200, 240, 62, 81, 87, 8]
+empty: -> [UInt8] => []
+
+check: -> Result<Bool, errors.Error> {
+    packet.encodeInitialHeader(
+        keys.version2(),
+        destinationConnectionId(),
+        empty(),
+        empty(),
+        2,
+        4,
+        1_162)? => header
+    Result<Bool, errors.Error>.Ok((header -> len) == 22
+        and header[0] == 211
+        and header[1] == 107
+        and header[2] == 51
+        and header[3] == 67
+        and header[4] == 207
+        and header[5] == 8
+        and header[6] == 131
+        and header[13] == 8
+        and header[14] == 0
+        and header[15] == 0
+        and header[16] == 68
+        and header[17] == 158
+        and header[18] == 0
+        and header[19] == 0
+        and header[20] == 0
+        and header[21] == 2)
+}
+
+main {
+    check() -> when {
+        Ok(matches) { matches }
+        Err(failure) { false }
+    } -> if {
+        "quic-v2-initial-header=ok"
+    } else {
+        "quic-v2-initial-header=failed"
+    } -> println
+}

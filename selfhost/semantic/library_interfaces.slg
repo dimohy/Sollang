@@ -46,13 +46,13 @@ struct StringRead {
 }
 
 isWhitespace value: UInt8 -> Bool {
-    value == UInt8(32) or value == UInt8(9) or value == UInt8(10) or value == UInt8(13)
+    value == 32 or value == 9 or value == 10 or value == 13
 }
 
 isHex value: UInt8 -> Bool {
-    (value >= UInt8(48) and value <= UInt8(57))
-        or (value >= UInt8(65) and value <= UInt8(70))
-        or (value >= UInt8(97) and value <= UInt8(102))
+    (value >= 48 and value <= 57)
+        or (value >= 65 and value <= 70)
+        or (value >= 97 and value <= 102)
 }
 
 skipWhitespace source: Text, cursor: Cursor -> Cursor {
@@ -61,7 +61,7 @@ skipWhitespace source: Text, cursor: Cursor -> Cursor {
     (result!.status == 0
         and result!.index < sourceLength
         and ((source -> byte(result!.index)) -> isWhitespace)) -> while {
-        result!.index + UIntSize(1) => result!.index
+        result!.index + 1 => result!.index
     }
     result!
 }
@@ -71,7 +71,7 @@ expectByte source: Text, cursor: Cursor, expected: UInt8, code: Int -> Cursor {
     source -> len => sourceLength
     result!.status == 0 -> if {
         (result!.index < sourceLength and (source -> byte(result!.index)) == expected) -> if {
-            result!.index + UIntSize(1) => result!.index
+            result!.index + 1 => result!.index
         } else {
             code => result!.status
         }
@@ -81,48 +81,47 @@ expectByte source: Text, cursor: Cursor, expected: UInt8, code: Int -> Cursor {
 
 readString source: Text, cursor: Cursor, code: Int -> StringRead {
     source -> skipWhitespace(cursor) => next!
-    MetadataSpan { start: next!.index, length: UIntSize(0) } => value!
+    MetadataSpan { start: next!.index, length: 0 } => value!
     source -> len => sourceLength
     next!.status == 0 -> if {
-        (next!.index < sourceLength and (source -> byte(next!.index)) == UInt8(34)) -> if {
-            next!.index + UIntSize(1) => next!.index
+        (next!.index < sourceLength and (source -> byte(next!.index)) == 34) -> if {
+            next!.index + 1 => next!.index
             next!.index => value!.start
             false => closed!
             (next!.status == 0 and next!.index < sourceLength and not closed!) -> while {
                 source -> byte(next!.index) => current
-                current == UInt8(34) -> if {
+                current == 34 -> if {
                     next!.index - value!.start => value!.length
-                    next!.index + UIntSize(1) => next!.index
+                    next!.index + 1 => next!.index
                     true => closed!
                 } else {
-                    current < UInt8(32) -> if {
+                    current < 32 -> if {
                         code => next!.status
                     } else {
-                        current == UInt8(92) -> if {
-                            next!.index + UIntSize(1) => next!.index
+                        current == 92 -> if {
+                            next!.index + 1 => next!.index
                             next!.index < sourceLength -> if {
                                 source -> byte(next!.index) => escaped
-                                escaped == UInt8(117) -> if {
+                                escaped == 117 -> if {
                                     UIntSize(0) => hexIndex!
-                                    (next!.status == 0 and hexIndex! < UIntSize(4)) -> while {
-                                        next!.index + UIntSize(1) => next!.index
+                                    (next!.status == 0 and hexIndex! < 4) -> while {
+                                        next!.index + 1 => next!.index
                                         (next!.index < sourceLength
                                             and ((source -> byte(next!.index)) -> isHex)) -> if {
-                                            hexIndex! + UIntSize(1) => hexIndex!
+                                            hexIndex! + 1 => hexIndex!
                                         } else {
                                             code => next!.status
                                         }
                                     }
                                 } else {
-                                    (escaped == UInt8(34)
-                                        or escaped == UInt8(92)
-                                        or escaped == UInt8(47)
-                                        or escaped == UInt8(98)
-                                        or escaped == UInt8(102)
-                                        or escaped == UInt8(110)
-                                        or escaped == UInt8(114)
-                                        or escaped == UInt8(116)) -> if {
-                                    } else {
+                                    (escaped == 34
+                                        or escaped == 92
+                                        or escaped == 47
+                                        or escaped == 98
+                                        or escaped == 102
+                                        or escaped == 110
+                                        or escaped == 114
+                                        or escaped == 116) -> unless {
                                         code => next!.status
                                     }
                                 }
@@ -131,7 +130,7 @@ readString source: Text, cursor: Cursor, code: Int -> StringRead {
                             }
                         }
                         next!.status == 0 -> if {
-                            next!.index + UIntSize(1) => next!.index
+                            next!.index + 1 => next!.index
                         }
                     }
                 }
@@ -151,7 +150,7 @@ spanIs source: Text, span: MetadataSpan, expected: Text -> Bool {
         (source -> byte(span.start + index!)) != (expected -> byte(index!)) -> if {
             false => matches!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
@@ -188,7 +187,7 @@ sameSpan source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
         (source -> byte(left.start + index!)) != (source -> byte(right.start + index!)) -> if {
             false => matches!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
@@ -197,11 +196,10 @@ spanIsHex source: Text, span: MetadataSpan, length: UIntSize -> Bool {
     span.length == length => valid!
     UIntSize(0) => index!
     (valid! and index! < span.length) -> while {
-        (source -> byte(span.start + index!)) -> isHex -> if {
-        } else {
+        (source -> byte(span.start + index!)) -> isHex -> unless {
             false => valid!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     valid!
 }
@@ -211,7 +209,7 @@ expectKey source: Text, cursor: Cursor, expected: Text, code: Int -> Cursor {
     key.cursor => result!
     result!.status == 0 -> if {
         source -> spanIs(key.value, expected) -> if {
-            source -> expectByte(result!, UInt8(58), code) => result!
+            source -> expectByte(result!, 58, code) => result!
         } else {
             code => result!.status
         }
@@ -220,15 +218,15 @@ expectKey source: Text, cursor: Cursor, expected: Text, code: Int -> Cursor {
 }
 
 readParameter source: Text, cursor: Cursor, parameters: mut [LibraryParameter; ~] -> Cursor {
-    source -> expectByte(cursor, UInt8(123), 31) => next!
+    source -> expectByte(cursor, 123, 31) => next!
     source -> expectKey(next!, "name", 32) => next!
     source -> readString(next!, 33) => nameRead
     nameRead.cursor => next!
-    source -> expectByte(next!, UInt8(44), 34) => next!
+    source -> expectByte(next!, 44, 34) => next!
     source -> expectKey(next!, "type", 35) => next!
     source -> readString(next!, 36) => typeRead
     typeRead.cursor => next!
-    source -> expectByte(next!, UInt8(125), 37) => next!
+    source -> expectByte(next!, 125, 37) => next!
     next!.status == 0 -> if {
         parameters -> push(LibraryParameter {
             name: nameRead.value
@@ -239,37 +237,37 @@ readParameter source: Text, cursor: Cursor, parameters: mut [LibraryParameter; ~
 }
 
 readParameters source: Text, cursor: Cursor, parameters: mut [LibraryParameter; ~] -> Cursor {
-    source -> expectByte(cursor, UInt8(91), 38) => next!
+    source -> expectByte(cursor, 91, 38) => next!
     source -> skipWhitespace(next!) => next!
     source -> len => sourceLength
     (next!.status == 0
         and next!.index < sourceLength
-        and (source -> byte(next!.index)) != UInt8(93)) -> while {
+        and (source -> byte(next!.index)) != 93) -> while {
         source -> readParameter(next!, parameters) => next!
         source -> skipWhitespace(next!) => next!
         (next!.status == 0
             and next!.index < sourceLength
-            and (source -> byte(next!.index)) != UInt8(93)) -> if {
-            source -> expectByte(next!, UInt8(44), 39) => next!
+            and (source -> byte(next!.index)) != 93) -> if {
+            source -> expectByte(next!, 44, 39) => next!
         }
     }
-    source -> expectByte(next!, UInt8(93), 40)
+    source -> expectByte(next!, 93, 40)
 }
 
 readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parameters: mut [LibraryParameter; ~] -> Cursor {
-    source -> expectByte(cursor, UInt8(123), 41) => next!
+    source -> expectByte(cursor, 123, 41) => next!
     source -> expectKey(next!, "name", 42) => next!
     source -> readString(next!, 43) => nameRead
     nameRead.cursor => next!
-    source -> expectByte(next!, UInt8(44), 44) => next!
+    source -> expectByte(next!, 44, 44) => next!
     source -> expectKey(next!, "qualifiedName", 45) => next!
     source -> readString(next!, 46) => qualifiedRead
     qualifiedRead.cursor => next!
-    source -> expectByte(next!, UInt8(44), 47) => next!
+    source -> expectByte(next!, 44, 47) => next!
     source -> expectKey(next!, "symbol", 48) => next!
     source -> readString(next!, 49) => symbolRead
     symbolRead.cursor => next!
-    source -> expectByte(next!, UInt8(44), 50) => next!
+    source -> expectByte(next!, 44, 50) => next!
     source -> expectKey(next!, "parameters", 51) => next!
     parameters -> len => parameterStart
     source -> readParameters(next!, parameters) => next!
@@ -277,8 +275,8 @@ readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parame
     next!.status == 0 -> if {
         parameterStart => leftParameter!
         leftParameter! < Int(parameters -> len) -> while {
-            parameters[leftParameter!].name.length == UIntSize(0) -> if { 63 => next!.status }
-            parameters[leftParameter!].typeName.length == UIntSize(0) -> if { 63 => next!.status }
+            parameters[leftParameter!].name.length == 0 -> if { 63 => next!.status }
+            parameters[leftParameter!].typeName.length == 0 -> if { 63 => next!.status }
             leftParameter! + 1 => rightParameter!
             (next!.status == 0 and rightParameter! < Int(parameters -> len)) -> while {
                 source -> sameSpan(parameters[leftParameter!].name, parameters[rightParameter!].name) -> if {
@@ -289,25 +287,25 @@ readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parame
             leftParameter! + 1 => leftParameter!
         }
     }
-    source -> expectByte(next!, UInt8(44), 52) => next!
+    source -> expectByte(next!, 44, 52) => next!
     source -> expectKey(next!, "result", 53) => next!
     source -> readString(next!, 54) => resultRead
     resultRead.cursor => next!
-    source -> expectByte(next!, UInt8(44), 55) => next!
+    source -> expectByte(next!, 44, 55) => next!
     source -> expectKey(next!, "signatureHash", 56) => next!
     source -> readString(next!, 57) => signatureRead
     signatureRead.cursor => next!
-    source -> expectByte(next!, UInt8(125), 58) => next!
+    source -> expectByte(next!, 125, 58) => next!
 
     next!.status == 0 -> if {
-        (nameRead.value.length == UIntSize(0)
-            or qualifiedRead.value.length == UIntSize(0)
-            or symbolRead.value.length == UIntSize(0)
-            or resultRead.value.length == UIntSize(0)) -> if {
+        (nameRead.value.length == 0
+            or qualifiedRead.value.length == 0
+            or symbolRead.value.length == 0
+            or resultRead.value.length == 0) -> if {
             64 => next!.status
         }
         (next!.status == 0
-            and not (source -> spanIsHex(signatureRead.value, UIntSize(64)))) -> if {
+            and not (source -> spanIsHex(signatureRead.value, 64))) -> if {
             65 => next!.status
         }
     }
@@ -338,53 +336,53 @@ readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parame
 }
 
 readExports source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parameters: mut [LibraryParameter; ~] -> Cursor {
-    source -> expectByte(cursor, UInt8(91), 60) => next!
+    source -> expectByte(cursor, 91, 60) => next!
     source -> skipWhitespace(next!) => next!
     source -> len => sourceLength
     (next!.status == 0
         and next!.index < sourceLength
-        and (source -> byte(next!.index)) != UInt8(93)) -> while {
+        and (source -> byte(next!.index)) != 93) -> while {
         source -> readExport(next!, exports, parameters) => next!
         source -> skipWhitespace(next!) => next!
         (next!.status == 0
             and next!.index < sourceLength
-            and (source -> byte(next!.index)) != UInt8(93)) -> if {
-            source -> expectByte(next!, UInt8(44), 61) => next!
+            and (source -> byte(next!.index)) != 93) -> if {
+            source -> expectByte(next!, 44, 61) => next!
         }
     }
-    source -> expectByte(next!, UInt8(93), 62)
+    source -> expectByte(next!, 93, 62)
 }
 
 # Status 0 is valid. 11-17 cover the document header, 21-24 ABI validation,
 # 31-40 parameters, 41-62 exports, and 70 trailing input. The interface format
 # is canonical and ordered so decode is one forward pass with no key table.
 public parse source: Text -> LibraryInterface {
-    Cursor { index: UIntSize(0), status: 0 } => cursor!
+    Cursor { index: 0, status: 0 } => cursor!
     [LibraryExport; ~] => exports!
     [LibraryParameter; ~] => parameters!
-    MetadataSpan { start: UIntSize(0), length: UIntSize(0) } => target!
-    MetadataSpan { start: UIntSize(0), length: UIntSize(0) } => libraryFile!
-    MetadataSpan { start: UIntSize(0), length: UIntSize(0) } => abiHash!
+    MetadataSpan { start: 0, length: 0 } => target!
+    MetadataSpan { start: 0, length: 0 } => libraryFile!
+    MetadataSpan { start: 0, length: 0 } => abiHash!
 
-    source -> expectByte(cursor!, UInt8(123), 11) => cursor!
+    source -> expectByte(cursor!, 123, 11) => cursor!
     source -> expectKey(cursor!, "schema", 12) => cursor!
     source -> skipWhitespace(cursor!) => cursor!
     source -> len => sourceLength
     cursor!.status == 0 -> if {
-        (cursor!.index < sourceLength and (source -> byte(cursor!.index)) == UInt8(49)) -> if {
-            cursor!.index + UIntSize(1) => cursor!.index
+        (cursor!.index < sourceLength and (source -> byte(cursor!.index)) == 49) -> if {
+            cursor!.index + 1 => cursor!.index
         } else {
             21 => cursor!.status
         }
     }
-    source -> expectByte(cursor!, UInt8(44), 13) => cursor!
+    source -> expectByte(cursor!, 44, 13) => cursor!
     source -> expectKey(cursor!, "abi", 14) => cursor!
     source -> readString(cursor!, 15) => abiRead
     abiRead.cursor => cursor!
     (cursor!.status == 0 and not (source -> spanIs(abiRead.value, "sollang-c-v1"))) -> if {
         22 => cursor!.status
     }
-    source -> expectByte(cursor!, UInt8(44), 16) => cursor!
+    source -> expectByte(cursor!, 44, 16) => cursor!
     source -> expectKey(cursor!, "target", 17) => cursor!
     source -> readString(cursor!, 18) => targetRead
     targetRead.cursor => cursor!
@@ -394,24 +392,24 @@ public parse source: Text -> LibraryInterface {
         and not (source -> spanIs(target!, "linux-x64"))) -> if {
         23 => cursor!.status
     }
-    source -> expectByte(cursor!, UInt8(44), 19) => cursor!
+    source -> expectByte(cursor!, 44, 19) => cursor!
     source -> expectKey(cursor!, "libraryFile", 20) => cursor!
     source -> readString(cursor!, 24) => libraryRead
     libraryRead.cursor => cursor!
     libraryRead.value => libraryFile!
-    source -> expectByte(cursor!, UInt8(44), 25) => cursor!
+    source -> expectByte(cursor!, 44, 25) => cursor!
     source -> expectKey(cursor!, "abiHash", 26) => cursor!
     source -> readString(cursor!, 27) => hashRead
     hashRead.cursor => cursor!
     hashRead.value => abiHash!
     (cursor!.status == 0
-        and not (source -> spanIsHex(abiHash!, UIntSize(64)))) -> if {
+        and not (source -> spanIsHex(abiHash!, 64))) -> if {
         24 => cursor!.status
     }
-    source -> expectByte(cursor!, UInt8(44), 28) => cursor!
+    source -> expectByte(cursor!, 44, 28) => cursor!
     source -> expectKey(cursor!, "exports", 29) => cursor!
     source -> readExports(cursor!, exports!, parameters!) => cursor!
-    source -> expectByte(cursor!, UInt8(125), 30) => cursor!
+    source -> expectByte(cursor!, 125, 30) => cursor!
     source -> skipWhitespace(cursor!) => cursor!
     (cursor!.status == 0 and cursor!.index != sourceLength) -> if { 70 => cursor!.status }
 
@@ -423,8 +421,8 @@ public parse source: Text -> LibraryInterface {
         abiHash: abiHash!
         exports: exports!
         parameters: parameters!
-    } => result!
-    result!
+    } => result
+    result
 }
 
 public parseSource source: file.SourceText -> LibraryInterface {

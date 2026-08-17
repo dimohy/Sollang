@@ -4,71 +4,10 @@ declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)
 declare dllimport i32 @CloseHandle(ptr)
 %sollang.source_text = type { ptr, i64, ptr, i64 }
 %sollang.array.i32 = type { ptr, i64, i64 }
-%sollang.mutable_container = type { ptr, ptr, ptr }
 declare ptr @malloc(i64)
 declare void @free(ptr)
-define internal void @sollang_drop_t24(%sollang.source_text %value) {
-entry:
-  call void @sollang_runtime_unmap_text(%sollang.source_text %value)
-  ret void
-}
-define internal void @sollang_drop_t26(%sollang.array.i32 %value) {
-entry:
-  %data = extractvalue %sollang.array.i32 %value, 0
-  %length = extractvalue %sollang.array.i32 %value, 1
-  br label %loop
-loop:
-  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
-  %in_range = icmp ult i64 %index, %length
-  br i1 %in_range, label %item, label %done
-item:
-  %slot = getelementptr %sollang.source_text, ptr %data, i64 %index
-  %element = load %sollang.source_text, ptr %slot, align 8
-  call void @sollang_drop_t24(%sollang.source_text %element)
-  br label %continue
-continue:
-  %next = add i64 %index, 1
-  br label %loop
-done:
-  call void @free(ptr %data)
-  ret void
-}
 declare void @llvm.trap()
 %sollang.text = type { ptr, i64 }
-define i64 @sollang_m0_s0(%sollang.array.i32 %arg) {
-entry:
-  %slot3 = alloca i64, align 8
-  %slot4 = alloca i64, align 8
-  %v8 = add i64 0, 0
-  %v10 = add i64 0, 0
-  store i64 %v8, ptr %slot3, align 8
-  store i64 %v10, ptr %slot4, align 8
-  br label %while17_header
-while17_header:
-  %while17_v14 = load i64, ptr %slot4, align 8
-  %while17_v15_raw = extractvalue %sollang.array.i32 %arg, 1
-  %while17_v15 = trunc i64 %while17_v15_raw to i32
-  %while17_v13_right_wide = sext i32 %while17_v15 to i64
-  %while17_v13 = icmp ult i64 %while17_v14, %while17_v13_right_wide
-  br i1 %while17_v13, label %while17_body, label %while17_exit
-while17_body:
-  %v22 = load i64, ptr %slot4, align 8
-  %v20_data = extractvalue %sollang.array.i32 %arg, 0
-  %v20_ptr = getelementptr %sollang.source_text, ptr %v20_data, i64 %v22
-  %v20 = load %sollang.source_text, ptr %v20_ptr, align 8
-  %v19 = extractvalue %sollang.source_text %v20, 1
-  %v24 = load i64, ptr %slot3, align 8
-  %v25 = freeze i64 %v19
-  %v23 = add i64 %v24, %v25
-  store i64 %v23, ptr %slot3, align 8
-  %v27 = load i64, ptr %slot4, align 8
-  %v26 = add i64 %v27, 1
-  store i64 %v26, ptr %slot4, align 8
-  br label %while17_header
-while17_exit:
-  %v29 = load i64, ptr %slot3, align 8
-  ret i64 %v29
-}
 define i32 @main() {
 entry:
   ret i32 0

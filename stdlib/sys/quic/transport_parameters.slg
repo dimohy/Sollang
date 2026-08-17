@@ -1,0 +1,95 @@
+namespace sys.quic.transport_parameters
+
+import sys.quic.error as errors
+import sys.quic.varint
+
+public struct Decoded {
+    id: UInt64
+    value: [UInt8; ~]
+    nextOffset: UIntSize
+}
+
+public originalDestinationConnectionId: -> UInt64 => 0
+public maxIdleTimeout: -> UInt64 => 1
+public statelessResetToken: -> UInt64 => 2
+public maxUdpPayloadSize: -> UInt64 => 3
+public initialMaxData: -> UInt64 => 4
+public initialMaxStreamDataBidiLocal: -> UInt64 => 5
+public initialMaxStreamDataBidiRemote: -> UInt64 => 6
+public initialMaxStreamDataUni: -> UInt64 => 7
+public initialMaxStreamsBidi: -> UInt64 => 8
+public initialMaxStreamsUni: -> UInt64 => 9
+public ackDelayExponent: -> UInt64 => 10
+public maxAckDelay: -> UInt64 => 11
+public disableActiveMigration: -> UInt64 => 12
+public preferredAddress: -> UInt64 => 13
+public activeConnectionIdLimit: -> UInt64 => 14
+public initialSourceConnectionId: -> UInt64 => 15
+public retrySourceConnectionId: -> UInt64 => 16
+public versionInformation: -> UInt64 => 17
+public maxDatagramFrameSize: -> UInt64 => 32
+public greaseQuicBit: -> UInt64 => 10_930
+
+error kind: errors.Kind, code: UInt64 -> errors.Error {
+    errors.Error { kind: kind, code: code }
+}
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+copyRange bytes: [UInt8], offset: UIntSize, length: UIntSize -> Result<[UInt8; ~], errors.Error> {
+    offset + length <= UIntSize(bytes -> len) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Truncated, UInt64(offset))) -> return
+    }
+    [UInt8; ~] => output!
+    UIntSize(0) => index!
+    index! < length -> while {
+        output! -> push(bytes[Int(offset + index!)])
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+public encode id: UInt64, value: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    varint.encode(id)? => encodedId
+    varint.encode(UInt64(value -> len))? => encodedLength
+    [UInt8; ~] => output!
+    output! -> appendBytes(encodedId)
+    output! -> appendBytes(encodedLength)
+    output! -> appendBytes(value)
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+public encodeInteger id: UInt64, value: UInt64 -> Result<[UInt8; ~], errors.Error> {
+    varint.encode(value)? => encodedValue
+    encode(id, encodedValue)
+}
+
+public encodeEmpty id: UInt64 -> Result<[UInt8; ~], errors.Error> {
+    encode(id, [])
+}
+
+public decode bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => decodedId
+    varint.decode(bytes, decodedId.nextOffset)? => decodedLength
+    UIntSize(decodedLength.value) => length
+    copyRange(bytes, decodedLength.nextOffset, length)? => value
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        id: decodedId.value
+        value: value
+        nextOffset: decodedLength.nextOffset + length
+    })
+}
+
+public decodeInteger parameter: Decoded -> Result<UInt64, errors.Error> {
+    varint.decode(parameter.value, 0)? => decoded
+    decoded.nextOffset == UIntSize(parameter.value -> len) -> unless {
+        Result<UInt64, errors.Error>.Err(error(errors.Kind.Encoding, parameter.id)) -> return
+    }
+    Result<UInt64, errors.Error>.Ok(decoded.value)
+}

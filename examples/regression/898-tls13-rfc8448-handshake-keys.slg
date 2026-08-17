@@ -1,0 +1,33 @@
+import sys.crypto.tls13_keys as tls13
+
+sharedSecret: -> [UInt8; 32] => [
+    139, 212, 5, 79, 181, 91, 157, 99,
+    253, 251, 172, 249, 240, 75, 159, 13,
+    53, 230, 214, 63, 83, 117, 99, 239,
+    212, 98, 114, 144, 15, 137, 73, 45]
+
+helloTranscriptHash: -> [UInt8; 32] => [
+    134, 12, 6, 237, 192, 120, 88, 238,
+    142, 120, 240, 231, 66, 140, 88, 237,
+    214, 180, 63, 44, 163, 230, 233, 95,
+    2, 237, 6, 60, 240, 225, 202, 216]
+
+main {
+    tls13.deriveHandshakeFromHash(sharedSecret(), helloTranscriptHash()) => secrets
+    (secrets.handshakeSecret[0] == 29
+        and secrets.handshakeSecret[15] == 1
+        and secrets.handshakeSecret[31] == 172
+        and secrets.clientTrafficSecret[0] == 179
+        and secrets.clientTrafficSecret[15] == 143
+        and secrets.clientTrafficSecret[31] == 33
+        and secrets.serverTrafficSecret[0] == 182
+        and secrets.serverTrafficSecret[15] == 180
+        and secrets.serverTrafficSecret[31] == 56
+        and secrets.mainSecret[0] == 24
+        and secrets.mainSecret[15] == 71
+        and secrets.mainSecret[31] == 25) -> if {
+        "tls13-handshake-keys=ok"
+    } else {
+        "tls13-handshake-keys=failed"
+    } -> println
+}

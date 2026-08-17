@@ -23,7 +23,7 @@ internal sealed partial class LlvmEmitter
             ?? throw new SollangException($"enum '{definition.Name}' has no variant '{variantName}'");
         var payloadType = variant.PayloadType
             ?? throw new SollangException($"payload-free variant '{definition.Name}.{variant.Name}' uses member syntax without parentheses");
-        var payload = EmitExpression(expression.Arguments[0]);
+        var payload = EmitFunctionArgumentExpression(expression.Arguments[0], payloadType);
         EnsureRuntimeType(payload, payloadType, $"{definition.Name}.{variant.Name}");
         value = EmitEnumValue(type, variant, payload);
         if (_program.Types.ContainsOwnedStorage(payloadType)
@@ -47,12 +47,16 @@ internal sealed partial class LlvmEmitter
         var definition = _program.Types.GetEnum(type);
         var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == expression.FieldName)
             ?? throw new SollangException($"enum '{definition.Name}' has no variant '{expression.FieldName}'");
-        if (variant.PayloadType is not null)
+        if (variant.PayloadType is { } payloadType
+            && payloadType != BoundType.Unit)
         {
             throw new SollangException($"variant '{definition.Name}.{variant.Name}' requires a payload argument");
         }
 
-        value = EmitEnumValue(type, variant, payload: null);
+        value = EmitEnumValue(
+            type,
+            variant,
+            variant.PayloadType == BoundType.Unit ? RuntimeUnit.Instance : null);
         return true;
     }
 
@@ -66,7 +70,10 @@ internal sealed partial class LlvmEmitter
         EmitAssign(tagAddress, $"getelementptr inbounds {llvmType}, ptr {slot}, i32 0, i32 0");
         EmitStore("i32", variant.Tag.ToString(CultureInfo.InvariantCulture), tagAddress, 4);
 
-        if (payload is not null)
+        // Unit is a semantic payload but has no runtime storage. Treat it like
+        // the native try lowering does: the variant tag carries the complete
+        // value and no zero-width payload field is materialized.
+        if (payload is not null and not RuntimeUnit)
         {
             var payloadAddress = NextTemp("enum_payload_addr");
             EmitAssign(payloadAddress, $"getelementptr inbounds {llvmType}, ptr {slot}, i32 0, i32 1");
@@ -79,7 +86,9 @@ internal sealed partial class LlvmEmitter
         return new RuntimeEnum(type, aggregate);
     }
 
-    private RuntimeValue EmitEnumMatchExpression(EnumMatchExpression expression)
+    private RuntimeValue EmitEnumMatchExpression(
+        EnumMatchExpression expression,
+        BoundType? expectedResultType = null)
     {
         var subject = EmitExpression(expression.Subject) as RuntimeEnum
             ?? throw new SollangException("enum when expects a runtime enum subject");
@@ -94,15 +103,66 @@ internal sealed partial class LlvmEmitter
             arm => arm.Condition is EnumPatternExpression { BindingName: { } bindingName } pattern
                 && definition.Variants.First(candidate => candidate.Name == pattern.VariantName).PayloadType is { } payloadType
                 && _program.Types.ContainsOwnedStorage(payloadType)
-                && TransfersOwnerName(arm.Body, bindingName));
+                && TransfersOwnerName(arm.Body, bindingName, payloadType));
+        var subjectOwnerName = expression.Subject switch
+        {
+            NameExpression name => name.Name,
+            FieldAccessExpression { Source: NameExpression owner } => owner.Name,
+            _ => null
+        };
+        var outerOwnerTransfers = _locals
+            .Where(local => !string.Equals(local.Key, subjectOwnerName, StringComparison.Ordinal)
+                && local.Value != subject
+                && !_borrowedOwnedLocals.Contains(local.Key)
+                && !_mutableLocals.Contains(local.Key)
+                && _program.Types.ContainsOwnedStorage(local.Value.Type))
+            .Select(local => new
+            {
+                local.Key,
+                Value = local.Value,
+                ByArm = expression.Arms.ToDictionary(
+                    arm => arm,
+                    arm => TransfersOwnerName(arm.Body, local.Key, local.Value.Type))
+            })
+            .Where(owner => owner.ByArm.Values.Any(static transferred => transferred))
+            .ToArray();
         var transfersAnyPayload = armTransfers.Values.Any(static transfers => transfers);
         var removedNamedSubject = false;
+        RuntimeStruct? removedProjectedOwner = null;
+        BoundStructField? projectedSubjectField = null;
         if (ownsStorage
             && transfersAnyPayload
             && expression.Subject is NameExpression subjectName)
         {
-            RemoveLocal(subjectName.Name);
+            foreach (var alias in _locals
+                .Where(local => local.Value == subject)
+                .Select(static local => local.Key)
+                .Append(subjectName.Name)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray())
+            {
+                RemoveLocal(alias);
+            }
             removedNamedSubject = true;
+        }
+        else if (ownsStorage
+            && transfersAnyPayload
+            && expression.Subject is FieldAccessExpression
+            {
+                Source: NameExpression ownerName,
+                FieldName: var fieldName
+            }
+            && !_mutableLocals.Contains(ownerName.Name)
+            && _locals.TryGetValue(ownerName.Name, out var ownerValue)
+            && ownerValue is RuntimeStruct ownerStruct
+            && _program.Types.IsStruct(ownerStruct.Type)
+            && _program.Types.GetStruct(ownerStruct.Type).Fields.FirstOrDefault(
+                field => string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } ownerField
+            && ownerField.Type == subject.Type)
+        {
+            removedProjectedOwner = ownerStruct;
+            projectedSubjectField = ownerField;
+            RemoveLocal(ownerName.Name);
         }
 
         var entryScope = CaptureLocals();
@@ -131,7 +191,11 @@ internal sealed partial class LlvmEmitter
                 payload = ExtractEnumPayload(subject, payloadType);
             }
 
-            var armResult = EmitEnumArmBody(arm.Body, pattern.BindingName, payload);
+            var armResult = EmitEnumArmBody(
+                arm.Body,
+                pattern.BindingName,
+                payload,
+                expectedResultType);
             var armTerminated = _currentBlockTerminated;
             if (!armTerminated && armResult.Value is not null)
             {
@@ -139,9 +203,31 @@ internal sealed partial class LlvmEmitter
             }
             if (!armTerminated)
             {
-                scopeResults.Add((armResult.ExitScope, armResult.EndLabel));
+                foreach (var owner in outerOwnerTransfers.Where(owner => !owner.ByArm[arm]))
+                {
+                    DropOwnedRuntimeValue(owner.Value);
+                }
             }
-            if (!armTerminated
+            if (!armTerminated)
+            {
+                scopeResults.Add((
+                    RemoveLocalsFromScope(
+                        armResult.ExitScope,
+                        outerOwnerTransfers.Select(static owner => owner.Key)),
+                    armResult.EndLabel));
+            }
+            if (!armTerminated && removedProjectedOwner is not null)
+            {
+                if (armTransfers[arm])
+                {
+                    DropOwnedStructFieldsExcept(removedProjectedOwner, projectedSubjectField!.Name);
+                }
+                else
+                {
+                    DropOwnedRuntimeValue(removedProjectedOwner);
+                }
+            }
+            else if (!armTerminated
                 && ownsStorage
                 && (anonymousSubject || removedNamedSubject)
                 && !armTransfers[arm])
@@ -162,7 +248,7 @@ internal sealed partial class LlvmEmitter
         RestoreLocals(entryScope);
         if (expression.Else is not null)
         {
-            var elseResult = EmitScopedBlockBody(expression.Else);
+            var elseResult = EmitScopedBlockBody(expression.Else, expectedResultType);
             var elseTerminated = _currentBlockTerminated;
             if (!elseTerminated && elseResult.Value is not null)
             {
@@ -170,9 +256,24 @@ internal sealed partial class LlvmEmitter
             }
             if (!elseTerminated)
             {
-                scopeResults.Add((elseResult.ExitScope, elseResult.EndLabel));
+                foreach (var owner in outerOwnerTransfers)
+                {
+                    DropOwnedRuntimeValue(owner.Value);
+                }
             }
-            if (!elseTerminated && ownsStorage && (anonymousSubject || removedNamedSubject))
+            if (!elseTerminated)
+            {
+                scopeResults.Add((
+                    RemoveLocalsFromScope(
+                        elseResult.ExitScope,
+                        outerOwnerTransfers.Select(static owner => owner.Key)),
+                    elseResult.EndLabel));
+            }
+            if (!elseTerminated && removedProjectedOwner is not null)
+            {
+                DropOwnedRuntimeValue(removedProjectedOwner);
+            }
+            else if (!elseTerminated && ownsStorage && (anonymousSubject || removedNamedSubject))
             {
                 DropOwnedRuntimeValue(subject);
             }
@@ -208,7 +309,52 @@ internal sealed partial class LlvmEmitter
         return result;
     }
 
-    private BlockResult EmitEnumArmBody(BlockBody body, string? bindingName, RuntimeValue? payload)
+    private void DropOwnedStructFieldsExcept(RuntimeStruct owner, params string[] excludedFieldNames)
+    {
+        var definition = _program.Types.GetStruct(owner.Type);
+        var llvmType = LlvmStructType(owner.Type);
+        foreach (var field in definition.Fields.Where(field =>
+                     !excludedFieldNames.Contains(field.Name, StringComparer.Ordinal)
+                     && _program.Types.ContainsOwnedStorage(field.Type)))
+        {
+            var value = NextTemp("drop_remaining_field");
+            EmitAssign(
+                value,
+                $"extractvalue {llvmType} {owner.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            EmitOwnedDropCall(field.Type, value);
+        }
+    }
+
+    private static LocalScope RemoveLocalsFromScope(LocalScope scope, IEnumerable<string> names)
+    {
+        var removed = names.ToHashSet(StringComparer.Ordinal);
+        return new LocalScope(
+            scope.Locals
+                .Where(local => !removed.Contains(local.Key))
+                .ToDictionary(static local => local.Key, static local => local.Value, StringComparer.Ordinal),
+            scope.MutableLocals.Where(name => !removed.Contains(name)).ToHashSet(StringComparer.Ordinal),
+            scope.BorrowedMutableLocals.Where(name => !removed.Contains(name)).ToHashSet(StringComparer.Ordinal),
+            scope.BorrowedOwnedLocals.Where(name => !removed.Contains(name)).ToHashSet(StringComparer.Ordinal),
+            scope.MutableContainerSlots
+                .Where(slot => !removed.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.MutableStructSlots
+                .Where(slot => !removed.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.MutableScalarSlots
+                .Where(slot => !removed.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.ReadonlyCaptureBorrowPointers
+                .Where(pointer => !removed.Contains(pointer.Key))
+                .ToDictionary(static pointer => pointer.Key, static pointer => pointer.Value, StringComparer.Ordinal),
+            scope.ReadonlyValueSlots);
+    }
+
+    private BlockResult EmitEnumArmBody(
+        BlockBody body,
+        string? bindingName,
+        RuntimeValue? payload,
+        BoundType? expectedResultType = null)
     {
         var outerLocals = CaptureLocals();
         try
@@ -221,7 +367,7 @@ internal sealed partial class LlvmEmitter
                     _borrowedOwnedLocals.Add(bindingName);
                 }
             }
-            return EmitScopedBlockBody(body);
+            return EmitScopedBlockBody(body, expectedResultType);
         }
         finally
         {

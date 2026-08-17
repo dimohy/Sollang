@@ -372,7 +372,7 @@ internal sealed partial class LlvmEmitter
             && function.Body is not null
             ? GetFunctionResultTransferredOwnerName(function, function.Body)
             : null;
-        DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+        DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName, function.Body);
         StoreAsyncResult(function, value);
         EmitRet("i1", "true");
     }

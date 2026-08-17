@@ -30,7 +30,7 @@ internal sealed partial class LlvmEmitter
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, BoundType.Arena, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
-            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName, function.Body);
             var arena = (RuntimeArena)value;
             EmitRet("%sollang.dynamic_int_array", BuildDynamicArrayAggregate(
                 arena.PointerName, arena.UsedName, arena.CapacityName));

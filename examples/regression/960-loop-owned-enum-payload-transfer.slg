@@ -1,0 +1,49 @@
+import sys.quic.application_engine as application
+import sys.quic.frame_types as frames
+
+append output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+batch index: Int -> application.OpenedMany {
+    [frames.Value; ~] => values!
+    index == 0 -> if {
+        values! -> push(frames.Value.NewConnectionId(frames.NewConnectionId {
+            sequence: 1
+            retirePriorTo: 0
+            connectionId: [1, 2, 3, 4; ~]
+            statelessResetToken: [9; 16]
+        }))
+    } else {
+        values! -> push(frames.Value.Stream(frames.Stream {
+            id: 0
+            offset: 0
+            fin: true
+            data: [112, 105, 110, 103; ~]
+        }))
+    }
+    application.OpenedMany { packetNumber: UInt64(index), keyPhase: false, frames: values! }
+}
+
+main {
+    [UInt8; ~] => output!
+    0 => index!
+    index! < 2 -> while {
+        batch(index!) => opened!
+        opened!.frames -> take(0) -> when {
+            Stream(value) { output! -> append(value.data) }
+            NewConnectionId(value) {}
+            else {}
+        }
+        index! + 1 => index!
+    }
+    ((output! -> len) == 4 and output![0] == 112 and output![3] == 103) -> if {
+        "loop-owned-enum=ok"
+    } else {
+        "loop-owned-enum=failed"
+    } -> println
+}

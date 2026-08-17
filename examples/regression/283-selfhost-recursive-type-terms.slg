@@ -11,27 +11,27 @@ main {
 
     main { }
     """ => source
-    source -> typeTerms.lower => terms!
-    source -> lexer.lex => tokens!
+    source -> typeTerms.lower => terms
+    source -> lexer.lex => tokens
 
     -1 => root!
     -1 => parameter!
     -1 => replacement!
     0 => termIndex!
-    termIndex! < (terms! -> len) -> while {
-        terms![termIndex!] => term
+    termIndex! < (terms -> len) -> while {
+        terms[termIndex!] => term
         (root! < 0 and term.kind == 7) -> if { termIndex! => root! }
         term.nameToken >= 0 -> if {
-            tokens![term.nameToken] => name
-            name.span.length == UIntSize(1) -> if {
+            tokens[term.nameToken] => name
+            name.span.length == 1 -> if {
                 source -> byte(name.span.start) => nameByte
-                nameByte == UInt8(84) -> if { termIndex! => parameter! }
+                nameByte == 84 -> if { termIndex! => parameter! }
             }
-            name.span.length == UIntSize(3) -> if {
+            name.span.length == 3 -> if {
                 source -> byte(name.span.start) => byte0
-                source -> byte(name.span.start + UIntSize(1)) => byte1
-                source -> byte(name.span.start + UIntSize(2)) => byte2
-                (byte0 == UInt8(73) and byte1 == UInt8(110) and byte2 == UInt8(116)) -> if {
+                source -> byte(name.span.start + 1) => byte1
+                source -> byte(name.span.start + 2) => byte2
+                (byte0 == 73 and byte1 == 110 and byte2 == 116) -> if {
                     termIndex! => replacement!
                 }
             }
@@ -40,12 +40,12 @@ main {
     }
 
     typeTerms.SubstitutionRequest {
-        terms: terms!
+        terms: terms
         root: root!
         parameter: parameter!
         replacement: replacement!
-    } => request!
-    request! -> typeTerms.substitute => specialized
+    } => request
+    request -> typeTerms.substitute => specialized
 
     false => valid!
     specialized.status == 0 -> if {

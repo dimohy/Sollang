@@ -1,0 +1,49 @@
+import sys.quic.connection_state as connection
+import sys.quic.error as errors
+import sys.quic.frame_types as frames
+
+closeReason: -> [UInt8; ~] => [100, 111, 110, 101; ~]
+
+run: -> Result<Bool, errors.Error> {
+    connection.create(false, 1_000, 100, 2, 3) => state
+    connection.apply(state, frames.Value.MaxData(500))? => expanded
+    connection.apply(expanded, frames.Value.MaxData(400))? => monotonic
+    connection.apply(monotonic, frames.Value.MaxStreams(frames.MaxStreams {
+        bidirectional: true
+        maximum: 8
+    }))? => streamsExpanded
+    connection.apply(streamsExpanded, frames.Value.HandshakeDone)? => confirmed
+    connection.apply(confirmed, frames.Value.ConnectionClose(frames.ConnectionClose {
+        application: false
+        errorCode: 0
+        frameType: 0
+        reason: closeReason()
+    }))? => closed
+    Result<Bool, errors.Error>.Ok(
+        closed.flow.sendMaximum == 500
+            and closed.peerStreamLimits.bidirectional == 8
+            and closed.peerStreamLimits.unidirectional == 3
+            and closed.handshakeConfirmed
+            and closed.peerClosed)
+}
+
+serverRejectsHandshakeDone: -> Bool {
+    connection.create(true, 1_000, 100, 2, 3) => state
+    connection.apply(state, frames.Value.HandshakeDone) -> when {
+        Ok(next) { false }
+        Err(error) { error.code == errors.protocolViolation() }
+    }
+}
+
+main {
+    run() -> when {
+        Ok(valid) {
+            (valid and serverRejectsHandshakeDone()) -> if {
+                "connection-control=ok" -> println
+            } else {
+                "connection-control=failed" -> println
+            }
+        }
+        Err(error) { "connection-control-error=$(error.code)" -> println }
+    }
+}

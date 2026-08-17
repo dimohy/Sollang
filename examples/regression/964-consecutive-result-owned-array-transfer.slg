@@ -1,0 +1,36 @@
+enum Item {
+    Bytes([UInt8; ~])
+    Marker(Int)
+}
+
+struct Batch {
+    items: [Item; ~]
+}
+
+make value: UInt8 -> Result<Batch, Int> {
+    [Item; ~] => items!
+    items! -> push(Item.Bytes([value, 2, 3; ~]))
+    Result<Batch, Int>.Ok(Batch { items: items! })
+}
+
+run: -> Result<Bool, Int> {
+    make(7)? => first!
+    first!.items -> take(0) -> when {
+        Bytes(bytes) {}
+        Marker(value) {}
+    }
+    make(9)? => second!
+    false => valid!
+    second!.items -> take(0) -> when {
+        Bytes(bytes) { (bytes[0] == 9 and bytes[2] == 3) => valid! }
+        Marker(value) {}
+    }
+    Result<Bool, Int>.Ok(valid!)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "consecutive-result-transfer=ok" } else { "consecutive-result-transfer=failed" } -> println }
+        Err(value) { "consecutive-result-transfer-error" -> println }
+    }
+}

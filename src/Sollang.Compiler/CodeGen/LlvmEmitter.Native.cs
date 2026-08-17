@@ -7,41 +7,67 @@ namespace Sollang.Compiler.CodeGen;
 
 internal sealed partial class LlvmEmitter
 {
+    private const string EmbeddedNativeLibraryPrefix = "embedded:";
+
     private IReadOnlyList<BoundFunction> NativeFunctions() => _program.Functions.Values
-        .Where(static function => function.Kind == BoundFunctionKind.Native && function.Com is null)
+        .Where(function => function.Kind == BoundFunctionKind.Native
+            && function.Com is null
+            && _usedNativeFunctions.Contains(function))
         .GroupBy(static function => function.Name, StringComparer.Ordinal)
         .Select(static group => group.First())
         .OrderBy(static function => function.Name, StringComparer.Ordinal)
         .ToArray();
 
     private IReadOnlyList<BoundStructDefinition> NativeHandleTypes() => _program.Types.Structs
-        .Where(static structure => structure.NativeHandle is not null)
-        .OrderBy(static structure => structure.Name, StringComparer.Ordinal)
-        .ToArray();
+            .Where(static structure => structure.NativeHandle is not null)
+            .OrderBy(static structure => structure.Name, StringComparer.Ordinal)
+            .ToArray();
+
+    private IReadOnlyList<BoundStructDefinition> UsedNativeHandleTypes()
+    {
+        var libraries = NativeLibraries().ToHashSet(StringComparer.Ordinal);
+        return NativeHandleTypes()
+            .Where(structure => libraries.Contains(structure.NativeHandle!.Library))
+            .ToArray();
+    }
 
     private IReadOnlyList<string> NativeLibraries() => NativeFunctions()
         .Select(static function => function.NativeLibrary!)
-        .Concat(NativeHandleTypes().Select(static structure => structure.NativeHandle!.Library))
         .Distinct(StringComparer.Ordinal)
         .Order(StringComparer.Ordinal)
         .ToArray();
 
-    private bool UsesNativeInterop => _program.Functions.Values.Any(
-        static function => function.Kind == BoundFunctionKind.Native && function.Com is null)
-        || NativeHandleTypes().Count > 0;
+    private bool UsesNativeInterop => NativeFunctions().Count > 0;
+
+    private static bool IsEmbeddedNativeLibrary(string library) =>
+        library.StartsWith(EmbeddedNativeLibraryPrefix, StringComparison.Ordinal);
+
+    private IReadOnlyList<BoundFunction> DynamicNativeFunctions() => NativeFunctions()
+        .Where(function => !IsEmbeddedNativeLibrary(function.NativeLibrary!))
+        .ToArray();
+
+    private IReadOnlyList<string> DynamicNativeLibraries() => DynamicNativeFunctions()
+        .Select(static function => function.NativeLibrary!)
+        .Distinct(StringComparer.Ordinal)
+        .Order(StringComparer.Ordinal)
+        .ToArray();
+
+    private IReadOnlyList<BoundFunction> EmbeddedNativeFunctions() => NativeFunctions()
+        .Where(function => IsEmbeddedNativeLibrary(function.NativeLibrary!))
+        .ToArray();
 
     private void EmitNativeGlobals()
     {
-        if (!UsesNativeInterop)
+        if (!UsesNativeInterop && NativeHandleTypes().Count == 0)
         {
             return;
         }
-        if (_platform is WasmBrowserLlvmRuntimePlatform)
+        if (UsesNativeInterop && _platform is WasmBrowserLlvmRuntimePlatform)
         {
             throw new SollangException("native libraries are unavailable for wasm32-browser");
         }
 
-        foreach (var library in NativeLibraries())
+        foreach (var library in DynamicNativeLibraries())
         {
             var fileName = NativeLibraryFileName(library);
             var bytes = System.Text.Encoding.UTF8.GetBytes(fileName + "\0");
@@ -52,7 +78,7 @@ internal sealed partial class LlvmEmitter
             EmitGlobalLine($"{NativeLibraryHandleGlobal(library)} = internal global ptr null, align 8");
         }
 
-        foreach (var function in NativeFunctions())
+        foreach (var function in DynamicNativeFunctions())
         {
             var symbol = function.NativeSymbol
                 ?? throw new SollangException($"native function '{function.Name}' has no symbol");
@@ -63,7 +89,8 @@ internal sealed partial class LlvmEmitter
                 + $"c\"{EscapeLlvmBytes(bytes)}\", align 1");
             EmitGlobalLine($"{NativeFunctionPointerGlobal(function)} = internal global ptr null, align 8");
         }
-        foreach (var structure in NativeHandleTypes())
+        foreach (var structure in UsedNativeHandleTypes()
+                     .Where(structure => !IsEmbeddedNativeLibrary(structure.NativeHandle!.Library)))
         {
             var symbol = structure.NativeHandle!.DropSymbol;
             var bytes = System.Text.Encoding.UTF8.GetBytes(symbol + "\0");
@@ -83,21 +110,31 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        if (_platform is WindowsLlvmRuntimePlatform)
+        if (DynamicNativeFunctions().Count > 0 && _platform is WindowsLlvmRuntimePlatform)
         {
             EmitFunctionLine("declare dllimport ptr @LoadLibraryA(ptr)");
             EmitFunctionLine("declare dllimport ptr @GetProcAddress(ptr, ptr)");
             EmitFunctionLine("declare dllimport i32 @FreeLibrary(ptr)");
         }
-        else if (_platform is LinuxLlvmRuntimePlatform)
+        else if (DynamicNativeFunctions().Count > 0 && _platform is LinuxLlvmRuntimePlatform)
         {
             EmitFunctionLine("declare ptr @dlopen(ptr, i32)");
             EmitFunctionLine("declare ptr @dlsym(ptr, ptr)");
             EmitFunctionLine("declare i32 @dlclose(ptr)");
         }
-        else
+        else if (DynamicNativeFunctions().Count > 0)
         {
             throw new SollangException("native libraries are unavailable for this target");
+        }
+
+        foreach (var function in EmbeddedNativeFunctions())
+        {
+            EmitFunctionLine(EmbeddedNativeDeclaration(function));
+        }
+        foreach (var structure in UsedNativeHandleTypes()
+                     .Where(structure => IsEmbeddedNativeLibrary(structure.NativeHandle!.Library)))
+        {
+            EmitFunctionLine($"declare void @{structure.NativeHandle!.DropSymbol}(i64)");
         }
     }
 
@@ -108,7 +145,7 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        foreach (var library in NativeLibraries())
+        foreach (var library in DynamicNativeLibraries())
         {
             var handle = NextTemp("native_library");
             if (_platform is WindowsLlvmRuntimePlatform)
@@ -123,7 +160,7 @@ internal sealed partial class LlvmEmitter
             EmitStore("ptr", handle, NativeLibraryHandleGlobal(library), 8);
         }
 
-        foreach (var function in NativeFunctions())
+        foreach (var function in DynamicNativeFunctions())
         {
             var library = function.NativeLibrary!;
             var handle = NextTemp("native_library_handle");
@@ -148,7 +185,8 @@ internal sealed partial class LlvmEmitter
             EmitTrapIfNull(address, "native_symbol_load");
             EmitStore("ptr", address, NativeFunctionPointerGlobal(function), 8);
         }
-        foreach (var structure in NativeHandleTypes())
+        foreach (var structure in UsedNativeHandleTypes()
+                     .Where(structure => !IsEmbeddedNativeLibrary(structure.NativeHandle!.Library)))
         {
             var library = structure.NativeHandle!.Library;
             var handle = NextTemp("native_handle_library");
@@ -182,7 +220,7 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        foreach (var library in NativeLibraries().Reverse())
+        foreach (var library in DynamicNativeLibraries().Reverse())
         {
             var handle = NextTemp("native_library_close");
             EmitLoad(handle, "ptr", NativeLibraryHandleGlobal(library), 8);
@@ -206,19 +244,27 @@ internal sealed partial class LlvmEmitter
         {
             return EmitComFunctionCall(function, argument, additionalArguments);
         }
-        var address = NextTemp("native_target");
-        EmitLoad(address, "ptr", NativeFunctionPointerGlobal(function), 8);
+        var direct = IsEmbeddedNativeLibrary(function.NativeLibrary!);
+        var address = direct
+            ? function.NativeSymbol
+                ?? throw new SollangException($"native function '{function.Name}' has no symbol")
+            : NextTemp("native_target");
+        if (!direct)
+        {
+            EmitLoad(address, "ptr", NativeFunctionPointerGlobal(function), 8);
+        }
         if (function.NativeError == NativeErrorConvention.StatusOut)
         {
             return EmitNativeStatusOutFunctionCall(
                 function,
                 argument,
                 additionalArguments,
-                address);
+                address,
+                direct);
         }
         if (UsesNativeAggregateAbi(function))
         {
-            return EmitNativeAggregateFunctionCall(function, argument, additionalArguments, address);
+            return EmitNativeAggregateFunctionCall(function, argument, additionalArguments, address, direct);
         }
         var arguments = string.Join(
             ", ",
@@ -226,12 +272,12 @@ internal sealed partial class LlvmEmitter
         var returnType = NativeScalarReturnType(function.ReturnType);
         if (function.ReturnType == BoundType.Unit)
         {
-            EmitIndirectCall(target: null, "void", address, arguments);
+            EmitNativeCall(target: null, "void", address, arguments, direct);
             return RuntimeUnit.Instance;
         }
 
         var result = NextTemp("native_result");
-        EmitIndirectCall(result, returnType, address, arguments);
+        EmitNativeCall(result, returnType, address, arguments, direct);
         return IsIntegerType(function.ReturnType)
             ? new RuntimeInt(function.ReturnType, result)
             : IsFloatType(function.ReturnType)
@@ -246,7 +292,8 @@ internal sealed partial class LlvmEmitter
         BoundFunction function,
         RuntimeValue? argument,
         IReadOnlyList<RuntimeValue>? additionalArguments,
-        string address)
+        string address,
+        bool direct)
     {
         var successType = function.NativeSuccessType
             ?? throw new SollangException(
@@ -283,7 +330,7 @@ internal sealed partial class LlvmEmitter
         }
 
         var status = NextTemp("native_try_status");
-        EmitIndirectCall(status, "i32", address, string.Join(", ", arguments));
+        EmitNativeCall(status, "i32", address, string.Join(", ", arguments), direct);
         var succeeded = NextTemp("native_try_ok");
         EmitCompare(succeeded, "eq", "i32", status, "0");
 
@@ -353,7 +400,8 @@ internal sealed partial class LlvmEmitter
         BoundFunction function,
         RuntimeValue? argument,
         IReadOnlyList<RuntimeValue>? additionalArguments,
-        string address)
+        string address,
+        bool direct)
     {
         var resultPlan = _program.Types.IsStruct(function.ReturnType)
             ? NativeAggregatePlan(function.ReturnType)
@@ -368,12 +416,12 @@ internal sealed partial class LlvmEmitter
             var returnType = NativeScalarReturnType(function.ReturnType);
             if (function.ReturnType == BoundType.Unit)
             {
-                EmitIndirectCall(target: null, "void", address, string.Join(", ", arguments));
+                EmitNativeCall(target: null, "void", address, string.Join(", ", arguments), direct);
                 return RuntimeUnit.Instance;
             }
 
             var scalarResult = NextTemp("native_result");
-            EmitIndirectCall(scalarResult, returnType, address, string.Join(", ", arguments));
+            EmitNativeCall(scalarResult, returnType, address, string.Join(", ", arguments), direct);
             return IsIntegerType(function.ReturnType)
                 ? new RuntimeInt(function.ReturnType, scalarResult)
                 : new RuntimeFloat(function.ReturnType, scalarResult);
@@ -387,7 +435,7 @@ internal sealed partial class LlvmEmitter
             var alignment = RuntimeAlignment(function.ReturnType);
             EmitAlloca(resultPointer, structType, alignment);
             arguments.Insert(0, $"ptr sret({structType}) align {alignment.ToString(CultureInfo.InvariantCulture)} {resultPointer}");
-            EmitIndirectCall(target: null, "void", address, string.Join(", ", arguments));
+            EmitNativeCall(target: null, "void", address, string.Join(", ", arguments), direct);
             var loaded = NextTemp("native_result");
             EmitLoad(loaded, structType, resultPointer, alignment);
             return ValidateNativeHandleResult(
@@ -396,7 +444,7 @@ internal sealed partial class LlvmEmitter
 
         var coercionType = AggregateCoercionReturnType(resultPlan);
         var coercedResult = NextTemp("native_result");
-        EmitIndirectCall(coercedResult, coercionType, address, string.Join(", ", arguments));
+        EmitNativeCall(coercedResult, coercionType, address, string.Join(", ", arguments), direct);
         return ValidateNativeHandleResult(
             UnpackNativeAggregateResult(function.ReturnType, resultPlan, coercedResult));
     }
@@ -770,6 +818,90 @@ internal sealed partial class LlvmEmitter
         var found = NextTemp(prefix + "_found");
         EmitCompare(found, "ne", "ptr", pointer, "null");
         EmitTrapUnless(found, prefix);
+    }
+
+    private void EmitNativeCall(
+        string? target,
+        string returnType,
+        string address,
+        string arguments,
+        bool direct)
+    {
+        if (direct)
+        {
+            EmitCall(target, returnType, address, arguments);
+        }
+        else
+        {
+            EmitIndirectCall(target, returnType, address, arguments);
+        }
+    }
+
+    private string EmbeddedNativeDeclaration(BoundFunction function)
+    {
+        var symbol = function.NativeSymbol
+            ?? throw new SollangException($"native function '{function.Name}' has no symbol");
+        var parameters = new List<string>();
+        if (function.InputType is { } inputType)
+        {
+            AppendEmbeddedNativeDeclarationParameter(
+                parameters,
+                function,
+                inputType,
+                function.InputOwnership);
+        }
+        foreach (var parameter in function.AdditionalParameters ?? [])
+        {
+            AppendEmbeddedNativeDeclarationParameter(
+                parameters,
+                function,
+                parameter.Type,
+                parameter.Ownership);
+        }
+
+        string returnType;
+        if (function.NativeError == NativeErrorConvention.StatusOut)
+        {
+            returnType = "i32";
+            if (function.NativeSuccessType is { } successType && successType != BoundType.Unit)
+            {
+                parameters.Add("ptr");
+            }
+        }
+        else if (function.ReturnType == BoundType.Unit)
+        {
+            returnType = "void";
+        }
+        else if (_program.Types.IsStruct(function.ReturnType))
+        {
+            throw new SollangException(
+                $"embedded native function '{function.Name}' cannot return an ABI struct directly");
+        }
+        else
+        {
+            returnType = NativeScalarReturnType(function.ReturnType);
+        }
+        return $"declare {returnType} @{symbol}({string.Join(", ", parameters)})";
+    }
+
+    private void AppendEmbeddedNativeDeclarationParameter(
+        List<string> parameters,
+        BoundFunction function,
+        BoundType type,
+        BoundFunctionInputOwnership ownership)
+    {
+        if (ownership == BoundFunctionInputOwnership.MutableBorrow || _program.Types.IsReference(type))
+        {
+            parameters.Add("ptr");
+            return;
+        }
+        if (_program.Types.IsStruct(type))
+        {
+            throw new SollangException(
+                $"embedded native function '{function.Name}' cannot accept an ABI struct by value");
+        }
+        var extension = NativeScalarExtension(type);
+        parameters.Add(LlvmType(type) + (extension.Length == 0 ? "" : " " + extension));
     }
 
     private string NativeLibraryFileName(string library)

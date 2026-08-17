@@ -6,6 +6,131 @@ import sollang.compiler.llvm.emitter.type_queries as typeQueries
 import sollang.compiler.semantic.library_imports as libraryImports
 import sollang.compiler.semantic.modules as modules
 import syntax.generated.slg as grammar
+
+# Compute the executable call-graph closure once per consumer. Function bodies
+# are contiguous in typed IR; calls inside text interpolation live in the
+# interpolation IR and must participate in the same closure.
+public reachableFunctions context: ref emitterContext.EmitContext -> [Bool; ~] {
+    [Int; ~] => functionEnds!
+    [Int; ~] => functionBySymbol!
+    0 => initializeIndex!
+    initializeIndex! < (context.ir -> len) -> while {
+        functionEnds! -> push(-1)
+        initializeIndex! + 1 => initializeIndex!
+    }
+    0 => symbolInitializeIndex!
+    symbolInitializeIndex! < (context.symbols -> len) -> while {
+        functionBySymbol! -> push(-1)
+        symbolInitializeIndex! + 1 => symbolInitializeIndex!
+    }
+    0 => functionIndex!
+    functionIndex! < (context.ir -> len) -> while {
+        context.ir[functionIndex!] => function
+        (function.kind == 0 or function.kind == 11) -> if {
+            functionIndex! + 1 => functionEnd!
+            (functionEnd! < (context.ir -> len)
+                and context.ir[functionEnd!].kind != 0
+                and context.ir[functionEnd!].kind != 11) -> while {
+                functionEnd! + 1 => functionEnd!
+            }
+            functionEnd! => functionEnds![functionIndex!]
+            (function.kind == 0
+                and function.sourceModule >= 0
+                and function.sourceModule < (context.ranges -> len)
+                and function.symbol >= 0) -> if {
+                context.ranges[function.sourceModule].symbolStart + function.symbol => globalSymbol
+                (globalSymbol >= 0 and globalSymbol < (functionBySymbol! -> len)) -> if {
+                    functionIndex! => functionBySymbol![globalSymbol]
+                }
+            }
+        }
+        functionIndex! + 1 => functionIndex!
+    }
+    [Bool; ~] => reachable!
+    0 => reachableInitializeIndex!
+    reachableInitializeIndex! < (context.ir -> len) -> while {
+        context.ir[reachableInitializeIndex!] => reachableCandidate
+        reachableCandidate.kind == 11 => reachableCandidateIsRoot!
+        (reachableCandidate.kind == 0
+            and reachableCandidate.sourceModule >= 0
+            and reachableCandidate.sourceModule < (context.ranges -> len)
+            and reachableCandidate.symbol >= 0) -> if {
+            context.ranges[reachableCandidate.sourceModule].symbolStart + reachableCandidate.symbol => reachableCandidateGlobalSymbol
+            (reachableCandidateGlobalSymbol >= 0
+                and reachableCandidateGlobalSymbol < (context.symbols -> len)
+                and context.symbols[reachableCandidateGlobalSymbol].kind == 31) -> if {
+                true => reachableCandidateIsRoot!
+            }
+        }
+        reachable! -> push(reachableCandidateIsRoot!)
+        reachableInitializeIndex! + 1 => reachableInitializeIndex!
+    }
+    true => changed!
+    changed! -> while {
+        false => changed!
+        0 => ownerIndex!
+        ownerIndex! < (context.ir -> len) -> while {
+            (reachable![ownerIndex!]
+                and (context.ir[ownerIndex!].kind == 0 or context.ir[ownerIndex!].kind == 11)) -> if {
+                ownerIndex! + 1 => useIndex!
+                functionEnds![ownerIndex!] => ownerEnd
+                useIndex! < ownerEnd -> while {
+                    context.ir[useIndex!] => use
+                    (use.kind == 6
+                        and use.targetModule >= 0
+                        and use.targetModule < (context.ranges -> len)
+                        and use.symbol >= 0) -> if {
+                        context.ranges[use.targetModule].symbolStart + use.symbol => globalTargetSymbol
+                        (globalTargetSymbol >= 0 and globalTargetSymbol < (functionBySymbol! -> len)) -> if {
+                            functionBySymbol![globalTargetSymbol] => targetFunction
+                            (targetFunction >= 0 and not reachable![targetFunction]) -> if {
+                                true => reachable![targetFunction]
+                                true => changed!
+                            }
+                        }
+                    }
+                    (use.kind == 2
+                        and use.sourceModule >= 0
+                        and use.sourceModule < (context.interpolationRanges -> len)) -> if {
+                        context.interpolationRanges[use.sourceModule] => interpolationRange
+                        0 => interpolationOffset!
+                        interpolationOffset! < interpolationRange.nodeCount -> while {
+                            context.interpolations[interpolationRange.nodeStart + interpolationOffset!] => interpolation
+                            (interpolation.kind == 8
+                                and interpolation.sourceToken == use.payloadToken
+                                and interpolation.symbol >= 0) -> if {
+                                context.ranges[use.sourceModule].symbolStart + interpolation.symbol => interpolationGlobalSymbol
+                                (interpolationGlobalSymbol >= 0 and interpolationGlobalSymbol < (functionBySymbol! -> len)) -> if {
+                                    functionBySymbol![interpolationGlobalSymbol] => interpolationTarget
+                                    (interpolationTarget >= 0 and not reachable![interpolationTarget]) -> if {
+                                        true => reachable![interpolationTarget]
+                                        true => changed!
+                                    }
+                                }
+                            }
+                            interpolationOffset! + 1 => interpolationOffset!
+                        }
+                    }
+                    useIndex! + 1 => useIndex!
+                }
+            }
+            ownerIndex! + 1 => ownerIndex!
+        }
+    }
+    reachable!
+}
+
+nodeInReachableFunction nodeIndex: Int, reachable: ref [Bool; ~], context: ref emitterContext.EmitContext -> Bool {
+    nodeIndex => ownerIndex!
+    (ownerIndex! >= 0
+        and ownerIndex! < (context.ir -> len)
+        and context.ir[ownerIndex!].kind != 0
+        and context.ir[ownerIndex!].kind != 11) -> while {
+        context.ir[ownerIndex!].parent => ownerIndex!
+    }
+    ownerIndex! >= 0 and ownerIndex! < (reachable -> len) and reachable[ownerIndex!]
+}
+
 public usesTextRuntime context: ref emitterContext.EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
@@ -29,7 +154,7 @@ runtimeFunctionNamed sourceModule: Int, symbolIndex: Int, expectedName: Text, co
     0 => moduleIndex!
     moduleIndex! < (context.modules -> len) -> while {
         context.modules[moduleIndex!] => moduleIdentity
-        (moduleIdentity.sourceIndex == sourceModule and moduleIdentity.pathHash == UInt64(12254170256457402476)) -> if {
+        (moduleIdentity.sourceIndex == sourceModule and moduleIdentity.pathHash == 12254170256457402476) -> if {
             true => runtimeModule!
         }
         moduleIndex! + 1 => moduleIndex!
@@ -48,7 +173,7 @@ runtimeFunctionNamed sourceModule: Int, symbolIndex: Int, expectedName: Text, co
                     (context.sources[sourceModule] -> byte(nameToken.span.start + byteIndex!)) != (expectedName -> byte(byteIndex!)) -> if {
                         false => matches!
                     }
-                    byteIndex! + UIntSize(1) => byteIndex!
+                    byteIndex! + 1 => byteIndex!
                 }
             }
         }
@@ -61,7 +186,7 @@ public usesStandardError context: ref emitterContext.EmitContext -> Bool {
     0 => moduleIndex!
     moduleIndex! < (context.modules -> len) -> while {
         context.modules[moduleIndex!] => moduleIdentity
-        (moduleIdentity.pathHash == UInt64(12254170256457402476)
+        (moduleIdentity.pathHash == 12254170256457402476
             and moduleIdentity.sourceIndex >= 0
             and moduleIdentity.sourceIndex < (context.ranges -> len)) -> if {
             context.ranges[moduleIdentity.sourceIndex] => runtimeRange
@@ -189,6 +314,20 @@ public usesOwnedFileRuntime context: ref emitterContext.EmitContext -> Bool {
     usesRuntime!
 }
 
+public usesSocketRuntime context: ref emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    context -> reachableFunctions => reachable
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] => node
+        (node.opcode <= -258
+            and node.opcode >= -268
+            and (nodeIndex! -> nodeInReachableFunction(reachable, context))) -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
 public usesIntInterpolation context: ref emitterContext.EmitContext -> Bool {
     false => usesInterpolation!
     0 => nodeIndex!
@@ -214,14 +353,14 @@ public usesIntInterpolation context: ref emitterContext.EmitContext -> Bool {
         (node.kind == 6 and (node.symbol == -101 or node.symbol == -102 or node.symbol == -116) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
             context.ir[node.operand0] => argument
             context.tokens[context.ranges[argument.sourceModule].tokenStart + argument.payloadToken] => token
-            token.span.start + UIntSize(1) => byteIndex!
-            token.span.start + token.span.length - UIntSize(1) => byteEnd
+            token.span.start + 1 => byteIndex!
+            token.span.start + token.span.length - 1 => byteEnd
             byteIndex! < byteEnd -> while {
-                ((context.sources[argument.sourceModule] -> byte(byteIndex!)) == UInt8(36) and byteIndex! + UIntSize(1) < byteEnd) -> if {
-                    context.sources[argument.sourceModule] -> byte(byteIndex! + UIntSize(1)) => interpolationNextByte
-                    (interpolationNextByte != UInt8(40) and ((interpolationNextByte >= UInt8(65) and interpolationNextByte <= UInt8(90)) or (interpolationNextByte >= UInt8(97) and interpolationNextByte <= UInt8(122)) or interpolationNextByte == UInt8(95) or interpolationNextByte >= UInt8(128))) -> if { true => usesInterpolation! }
+                ((context.sources[argument.sourceModule] -> byte(byteIndex!)) == 36 and byteIndex! + 1 < byteEnd) -> if {
+                    context.sources[argument.sourceModule] -> byte(byteIndex! + 1) => interpolationNextByte
+                    (interpolationNextByte != 40 and ((interpolationNextByte >= 65 and interpolationNextByte <= 90) or (interpolationNextByte >= 97 and interpolationNextByte <= 122) or interpolationNextByte == 95 or interpolationNextByte >= 128)) -> if { true => usesInterpolation! }
                 }
-                byteIndex! + UIntSize(1) => byteIndex!
+                byteIndex! + 1 => byteIndex!
             }
             context.interpolationRanges[argument.sourceModule] => interpolationRange
             0 => interpolationIndex!
@@ -255,35 +394,40 @@ public usesIntMaterialization context: ref emitterContext.EmitContext -> Bool {
     0 => nodeIndex!
     (nodeIndex! < (context.ir -> len) and not usesMaterialization!) -> while {
         context.ir[nodeIndex!] => node
-        (node.opcode == -229
-            and node.sourceModule >= 0
-            and node.sourceModule < (context.interpolationRanges -> len)) -> if {
-            context.interpolationRanges[node.sourceModule] => interpolationRange
-            0 => interpolationIndex!
-            (interpolationIndex! < interpolationRange.nodeCount and not usesMaterialization!) -> while {
-                context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
-                (interpolationNode.parent < 0
-                    and interpolationNode.typeSymbol >= 2
-                    and interpolationNode.typeSymbol <= 14) -> if {
-                    true => usesMaterialization!
+        # Materialization resolves integer widths recursively during emission.
+        # Keep its formatter runtime paired with the operation so this earlier
+        # capability scan cannot disagree on member or compound expressions.
+        node.opcode == -229 -> if { true => usesMaterialization! }
+        (not usesMaterialization! and node.kind == 2) -> if {
+            node.parent => materializationAncestor!
+            -1 => materializationCall!
+            (materializationAncestor! >= 0 and materializationAncestor! < (context.ir -> len) and materializationCall! < 0) -> while {
+                context.ir[materializationAncestor!] => materializationOwner
+                (materializationOwner.kind == 6 or materializationOwner.kind == 9) -> if {
+                    materializationAncestor! => materializationCall!
+                } else {
+                    materializationOwner.parent => materializationAncestor!
                 }
-                (interpolationNode.parent < 0
-                    and interpolationNode.kind == 1
-                    and not usesMaterialization!) -> if {
-                    0 => valueSearch!
-                    (valueSearch! < (context.ir -> len) and not usesMaterialization!) -> while {
-                        context.ir[valueSearch!] => valueNode
-                        ((valueNode.kind == 10 or valueNode.kind == 17)
-                            and valueNode.sourceModule == node.sourceModule
-                            and valueNode.symbol == interpolationNode.symbol
-                            and valueNode.typeSymbol >= 2
-                            and valueNode.typeSymbol <= 14) -> if {
-                            true => usesMaterialization!
+            }
+            (materializationCall! >= 0 and context.ir[materializationCall!].symbol != -101 and context.ir[materializationCall!].symbol != -102 and context.ir[materializationCall!].symbol != -116) -> if {
+                context.interpolationRanges[node.sourceModule] => materializationInterpolationRange
+                0 => materializationInterpolationIndex!
+                (materializationInterpolationIndex! < materializationInterpolationRange.nodeCount and not usesMaterialization!) -> while {
+                    context.interpolations[materializationInterpolationRange.nodeStart + materializationInterpolationIndex!] => materializationInterpolation
+                    (materializationInterpolation.sourceToken == node.payloadToken and materializationInterpolation.parent < 0) -> if {
+                        (materializationInterpolation.typeSymbol >= 2 and materializationInterpolation.typeSymbol <= 14) -> if { true => usesMaterialization! }
+                        materializationInterpolation.kind == 5 -> if { true => usesMaterialization! }
+                        materializationInterpolation.kind == 1 -> if {
+                            0 => materializationValueSearch!
+                            (materializationValueSearch! < (context.ir -> len) and not usesMaterialization!) -> while {
+                                context.ir[materializationValueSearch!] => materializationValue
+                                ((materializationValue.kind == 10 or materializationValue.kind == 17) and materializationValue.sourceModule == node.sourceModule and materializationValue.symbol == materializationInterpolation.symbol and materializationValue.typeSymbol >= 2 and materializationValue.typeSymbol <= 14) -> if { true => usesMaterialization! }
+                                materializationValueSearch! + 1 => materializationValueSearch!
+                            }
                         }
-                        valueSearch! + 1 => valueSearch!
                     }
+                    materializationInterpolationIndex! + 1 => materializationInterpolationIndex!
                 }
-                interpolationIndex! + 1 => interpolationIndex!
             }
         }
         nodeIndex! + 1 => nodeIndex!
@@ -467,7 +611,7 @@ public isBlockingUnknownInterpolation context: ref emitterContext.EmitContext, n
                             (context.sources[sourceModule] -> byte(knownName.span.start + nameByte!)) != (context.sources[sourceModule] -> byte(candidate.payloadStart + nameByte!)) -> if {
                                 false => sameName!
                             }
-                            nameByte! + UIntSize(1) => nameByte!
+                            nameByte! + 1 => nameByte!
                         }
                         sameName! -> if { false => blocking! }
                     }
@@ -484,7 +628,7 @@ public isBlockingUnknownInterpolation context: ref emitterContext.EmitContext, n
                             (context.sources[sourceModule] -> byte(patternName.span.start + patternNameByte!)) != (context.sources[sourceModule] -> byte(candidate.payloadStart + patternNameByte!)) -> if {
                                 false => samePatternName!
                             }
-                            patternNameByte! + UIntSize(1) => patternNameByte!
+                            patternNameByte! + 1 => patternNameByte!
                         }
                         samePatternName! -> if { false => blocking! }
                     }
@@ -500,7 +644,7 @@ public isBlockingUnknownInterpolation context: ref emitterContext.EmitContext, n
                             (context.sources[sourceModule] -> byte(knownToken.span.start + tokenNameByte!)) != (context.sources[sourceModule] -> byte(candidate.payloadStart + tokenNameByte!)) -> if {
                                 false => sameTokenName!
                             }
-                            tokenNameByte! + UIntSize(1) => tokenNameByte!
+                            tokenNameByte! + 1 => tokenNameByte!
                         }
                         sameTokenName! -> if { false => blocking! }
                     }
@@ -555,24 +699,24 @@ public isBlockingUnresolvedCall context: ref emitterContext.EmitContext, callInd
             # authoritative unresolved function diagnostics here.
             false => qualifiedTarget!
             false => dynConversionTarget!
-            context -> unresolvedCallNameToken(callIndex) => candidateNameToken!
+            context -> unresolvedCallNameToken(callIndex) => candidateNameToken
             candidateNode.firstToken => qualifiedTokenSearch!
             qualifiedTokenSearch! < candidateNode.firstToken + candidateNode.tokenCount -> while {
                 context.tokens[candidateRange.tokenStart + qualifiedTokenSearch!] => qualifiedToken
                 qualifiedToken.kind == grammar.tokenIdDot() -> if { true => qualifiedTarget! }
                 (qualifiedToken.kind == grammar.tokenIdLess() and qualifiedTokenSearch! > candidateNode.firstToken) -> if {
                     context.tokens[candidateRange.tokenStart + qualifiedTokenSearch! - 1] => conversionToken
-                    conversionToken.span.length == UIntSize(3) -> if {
+                    conversionToken.span.length == 3 -> if {
                         context.sources[candidate.sourceModule] -> byte(conversionToken.span.start) => conversionByte0
-                        context.sources[candidate.sourceModule] -> byte(conversionToken.span.start + UIntSize(1)) => conversionByte1
-                        context.sources[candidate.sourceModule] -> byte(conversionToken.span.start + UIntSize(2)) => conversionByte2
-                        (conversionByte0 == UInt8(100) and conversionByte1 == UInt8(121) and conversionByte2 == UInt8(110)) -> if { true => dynConversionTarget! }
+                        context.sources[candidate.sourceModule] -> byte(conversionToken.span.start + 1) => conversionByte1
+                        context.sources[candidate.sourceModule] -> byte(conversionToken.span.start + 2) => conversionByte2
+                        (conversionByte0 == 100 and conversionByte1 == 121 and conversionByte2 == 110) -> if { true => dynConversionTarget! }
                     }
                 }
                 qualifiedTokenSearch! + 1 => qualifiedTokenSearch!
             }
-            candidateNameToken! > 0 -> if {
-                context.tokens[candidateRange.tokenStart + candidateNameToken! - 1] => previousToken
+            candidateNameToken > 0 -> if {
+                context.tokens[candidateRange.tokenStart + candidateNameToken - 1] => previousToken
                 previousToken.kind == grammar.tokenIdDot() -> if { true => qualifiedTarget! }
             }
             false => resultBindingTarget!
@@ -618,8 +762,8 @@ public emitCallDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
         context.calls[callIndex!] => call
         context -> isBlockingUnresolvedCall(callIndex!) -> if {
             context.ranges[call.sourceModule] => sourceRange
-            context -> unresolvedCallNameToken(callIndex!) => callNameToken!
-            context.tokens[sourceRange.tokenStart + callNameToken!] => nameToken
+            context -> unresolvedCallNameToken(callIndex!) => callNameToken
+            context.tokens[sourceRange.tokenStart + callNameToken] => nameToken
             nameToken.span.start => nameStart
             nameToken.span.length => nameLength
             context.sources[call.sourceModule] -> slice(nameStart, nameLength) => name
@@ -713,6 +857,9 @@ public nativeHandleForgeryCount context: ref emitterContext.EmitContext -> Int {
     nodeIndex! < (context.ir -> len) -> while {
         context.ir[nodeIndex!] => node
         (node.kind == 12
+            and node.typeId >= 0
+            and node.typeId < (context.types -> len)
+            and context.types[node.typeId].kind == 9
             and node.typeModule >= 0
             and node.typeModule < (context.ranges -> len)
             and node.typeSymbol >= 0) -> if {
@@ -732,6 +879,9 @@ public emitNativeHandleForgeryDiagnostics context: ref emitterContext.EmitContex
     nodeIndex! < (context.ir -> len) -> while {
         context.ir[nodeIndex!] => node
         (node.kind == 12
+            and node.typeId >= 0
+            and node.typeId < (context.types -> len)
+            and context.types[node.typeId].kind == 9
             and node.typeModule >= 0
             and node.typeModule < (context.ranges -> len)
             and node.typeSymbol >= 0) -> if {
@@ -950,12 +1100,12 @@ public mouseEventLiteralCapacity context: ref emitterContext.EmitContext, callIn
             call.symbol < targetRange.symbolCount -> if {
                 context.symbols[targetRange.symbolStart + call.symbol] => targetSymbol
                 context.tokens[targetRange.tokenStart + targetSymbol.nameToken] => targetName
-                targetName.span.length == UIntSize(11) => nameEqual!
+                targetName.span.length == 11 => nameEqual!
                 "mouseEvents" => expectedName
                 UIntSize(0) => nameByte!
                 (nameEqual! and nameByte! < targetName.span.length) -> while {
                     (context.sources[call.targetModule] -> byte(targetName.span.start + nameByte!)) != (expectedName -> byte(nameByte!)) -> if { false => nameEqual! }
-                    nameByte! + UIntSize(1) => nameByte!
+                    nameByte! + 1 => nameByte!
                 }
                 (nameEqual! and callType.kind == 7 and callType.origin == 4 and callType.symbol == 4) -> if {
                     context.ir[call.operand0] => capacityNode
@@ -966,8 +1116,8 @@ public mouseEventLiteralCapacity context: ref emitterContext.EmitContext, callIn
                         UIntSize(0) => capacityByte!
                         capacityByte! < capacityToken.span.length -> while {
                             context.sources[capacityNode.sourceModule] -> byte(capacityToken.span.start + capacityByte!) => digit
-                            capacity! * 10 + Int(digit - UInt8(48)) => capacity!
-                            capacityByte! + UIntSize(1) => capacityByte!
+                            capacity! * 10 + Int(digit - 48) => capacity!
+                            capacityByte! + 1 => capacityByte!
                         }
                     }
                 }
@@ -1004,7 +1154,7 @@ importPathEquals context: ref emitterContext.EmitContext, edge: modules.ImportEd
     UIntSize(0) => index!
     (equal! and index! < edge.pathLength) -> while {
         (context.sources[edge.sourceModule] -> byte(edge.pathStart + index!)) != (expected -> byte(index!)) -> if { false => equal! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     equal!
 }
@@ -1190,12 +1340,12 @@ public usesMouseEventsRuntime context: ref emitterContext.EmitContext -> Bool {
             call.symbol < targetRange.symbolCount -> if {
                 context.symbols[targetRange.symbolStart + call.symbol] => targetSymbol
                 context.tokens[targetRange.tokenStart + targetSymbol.nameToken] => targetName
-                targetName.span.length == UIntSize(11) => nameEqual!
+                targetName.span.length == 11 => nameEqual!
                 "mouseEvents" => expectedName
                 UIntSize(0) => nameByte!
                 (nameEqual! and nameByte! < targetName.span.length) -> while {
                     (context.sources[call.targetModule] -> byte(targetName.span.start + nameByte!)) != (expectedName -> byte(nameByte!)) -> if { false => nameEqual! }
-                    nameByte! + UIntSize(1) => nameByte!
+                    nameByte! + 1 => nameByte!
                 }
                 (nameEqual! and callType.kind == 7 and callType.origin == 4 and callType.symbol == 4) -> if { true => usesMouse! }
             }

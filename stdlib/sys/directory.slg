@@ -39,15 +39,15 @@ copyRaw raw: ref Raw -> Raw {
     UIntSize(0) => index!
     index! < UIntSize(raw.bytes -> len) -> while {
         bytes! -> push(raw.bytes[Int(index!)])
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
-    Raw { bytes: bytes!, count: raw.count } => copied!
-    copied!
+    Raw { bytes: bytes!, count: raw.count } => copied
+    copied
 }
 
 failedRaw: -> Raw {
-    Raw { bytes: [UInt8(255); ~], count: UIntSize(0) } => failed!
-    failed!
+    Raw { bytes: [255; ~], count: 0 } => failed
+    failed
 }
 
 # Bootstrap consumers that cannot yet retain an owned enum payload may flatten
@@ -55,8 +55,8 @@ failedRaw: -> Raw {
 # native directory encoding and therefore preserves the read-failure state.
 public readRawSnapshot directory: ref path.Path -> Raw {
     path.pathText(directory) => directoryText
-    path.fromText(directoryText, directory.style) => ownedDirectory!
-    readRaw(ownedDirectory!) -> when {
+    path.fromText(directoryText, directory.style) => ownedDirectory
+    readRaw(ownedDirectory) -> when {
         Ok(raw) { raw -> copyRaw }
         Err(error) { failedRaw() }
     }
@@ -67,13 +67,13 @@ readError message: Text -> ReadResult {
 }
 
 entryKind code: UInt8 -> kinds.Kind {
-    code == UInt8(0) -> if {
+    code == 0 -> if {
         kinds.Kind.File
     } else {
-        code == UInt8(1) -> if {
+        code == 1 -> if {
             kinds.Kind.Directory
         } else {
-            code == UInt8(2) -> if {
+            code == 2 -> if {
                 kinds.Kind.Symlink
             } else {
                 kinds.Kind.Other
@@ -86,36 +86,36 @@ entryKind code: UInt8 -> kinds.Kind {
 # raw UTF-8 name bytes, exclude `.` and `..`, and never retain an OS handle.
 public read directory: path.Path -> ReadResult {
     directory.style => style
-    readRawSnapshot(directory) => raw!
-    (raw!.count == UIntSize(0) and (raw!.bytes -> len) == 1) -> if {
-        "io" -> readError => failure!
-        failure! -> return
+    readRawSnapshot(directory) => raw
+    (raw.count == 0 and (raw.bytes -> len) == 1) -> if {
+        "io" -> readError => failure
+        failure -> return
     }
-    raw!.count => count
+    raw.count => count
     [Entry; ~] => entries!
     UIntSize(0) => cursor!
     UIntSize(0) => entryIndex!
     entryIndex! < count -> while {
-        raw! -> rawByte(Int(cursor!)) -> entryKind => kind
-        cursor! + UIntSize(1) => cursor!
-        UIntSize(raw! -> rawByte(Int(cursor!))) => length0
-        UIntSize(raw! -> rawByte(Int(cursor! + UIntSize(1)))) * UIntSize(256) => length1
-        UIntSize(raw! -> rawByte(Int(cursor! + UIntSize(2)))) * UIntSize(65536) => length2
-        UIntSize(raw! -> rawByte(Int(cursor! + UIntSize(3)))) * UIntSize(16777216) => length3
+        raw -> rawByte(Int(cursor!)) -> entryKind => kind
+        cursor! + 1 => cursor!
+        UIntSize(raw -> rawByte(Int(cursor!))) => length0
+        UIntSize(raw -> rawByte(Int(cursor! + 1))) * 256 => length1
+        UIntSize(raw -> rawByte(Int(cursor! + 2))) * 65536 => length2
+        UIntSize(raw -> rawByte(Int(cursor! + 3))) * 16777216 => length3
         length0 + length1 + length2 + length3 => nameLength
-        cursor! + UIntSize(4) => cursor!
+        cursor! + 4 => cursor!
         [UInt8; ~] => nameBytes!
         UIntSize(0) => nameIndex!
         nameIndex! < nameLength -> while {
-            nameBytes! -> push(raw! -> rawByte(Int(cursor! + nameIndex!)))
-            nameIndex! + UIntSize(1) => nameIndex!
+            nameBytes! -> push(raw -> rawByte(Int(cursor! + nameIndex!)))
+            nameIndex! + 1 => nameIndex!
         }
         cursor! + nameLength => cursor!
         entries! -> push(Entry {
             name: path.Path { bytes: nameBytes!, style: style }
             kind: kind
         })
-        entryIndex! + UIntSize(1) => entryIndex!
+        entryIndex! + 1 => entryIndex!
     }
     sys.directory.ReadResult.Ok(entries!)
 }

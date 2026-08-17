@@ -1,0 +1,106 @@
+namespace sys.quic.version_negotiation
+
+import sys.quic.error as errors
+
+public struct Information {
+    chosen: UInt32
+    available: [UInt32; ~]
+}
+
+error code: UInt64 -> errors.Error => errors.Error {
+    kind: errors.Kind.Transport
+    code: code
+}
+
+appendUInt32 output: mut [UInt8; ~], value: UInt32 -> Unit {
+    output -> push(UInt8(value / 16_777_216))
+    output -> push(UInt8(value / 65_536 % 256))
+    output -> push(UInt8(value / 256 % 256))
+    output -> push(UInt8(value % 256))
+}
+
+readUInt32 bytes: [UInt8], offset: UIntSize -> Result<UInt32, errors.Error> {
+    offset + 4 <= UIntSize(bytes -> len) -> unless {
+        Result<UInt32, errors.Error>.Err(error(errors.transportParameterError())) -> return
+    }
+    UInt32(bytes[Int(offset)]) * 16_777_216 + UInt32(bytes[Int(offset + 1)]) * 65_536 + UInt32(bytes[Int(offset + 2)]) * 256 + UInt32(bytes[Int(offset + 3)]) -> Result<UInt32, errors.Error>.Ok
+}
+
+public parameterId: -> UInt64 => 17
+
+# Reserved versions have the wire pattern 0x?a?a?a?a and are never selected.
+public isReserved version: UInt32 -> Bool {
+    (version / 16_777_216 % 16 == 10) and (version / 65_536 % 16 == 10) and (version / 256 % 16 == 10) and (version % 16 == 10)
+}
+
+public encode information: Information -> Result<[UInt8; ~], errors.Error> {
+    information.chosen != 0 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(errors.transportParameterError())) -> return
+    }
+    [UInt8; ~] => output!
+    output! -> appendUInt32(information.chosen)
+    0 => index!
+    index! < (information.available -> len) -> while {
+        information.available[index!] => version
+        version != 0 -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.transportParameterError())) -> return
+        }
+        output! -> appendUInt32(version)
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+public decode bytes: [UInt8] -> Result<Information, errors.Error> {
+    ((bytes -> len) >= 4 and (bytes -> len) % 4 == 0) -> unless {
+        Result<Information, errors.Error>.Err(error(errors.transportParameterError())) -> return
+    }
+    readUInt32(bytes, 0)? => chosen
+    chosen != 0 -> unless {
+        Result<Information, errors.Error>.Err(error(errors.transportParameterError())) -> return
+    }
+    [UInt32; ~] => available!
+    UIntSize(4) => offset!
+    offset! < UIntSize(bytes -> len) -> while {
+        readUInt32(bytes, offset!)? => version
+        version != 0 -> unless {
+            Result<Information, errors.Error>.Err(error(errors.transportParameterError())) -> return
+        }
+        available! -> push(version)
+        offset! + 4 => offset!
+    }
+    Result<Information, errors.Error>.Ok(Information { chosen: chosen, available: available! })
+}
+
+public validateClient information: Information -> Result<Bool, errors.Error> {
+    false => includesChosen!
+    0 => index!
+    index! < (information.available -> len) -> while {
+        information.available[index!] == information.chosen -> if { true => includesChosen! }
+        index! + 1 => index!
+    }
+    includesChosen! -> if {
+        Result<Bool, errors.Error>.Ok(true)
+    } else {
+        Result<Bool, errors.Error>.Err(error(errors.versionNegotiationError()))
+    }
+}
+
+# Local order is preference order. Reserved versions and zero are ignored.
+public choose local: [UInt32], peer: [UInt32] -> Result<UInt32, errors.Error> {
+    0 => localIndex!
+    localIndex! < (local -> len) -> while {
+        local[localIndex!] => candidate
+        (candidate != 0 and not (candidate -> isReserved)) -> if {
+            0 => peerIndex!
+            peerIndex! < (peer -> len) -> while {
+                peer[peerIndex!] == candidate -> if {
+                    Result<UInt32, errors.Error>.Ok(candidate) -> return
+                }
+                peerIndex! + 1 => peerIndex!
+            }
+        }
+        localIndex! + 1 => localIndex!
+    }
+    Result<UInt32, errors.Error>.Err(error(errors.versionNegotiationError()))
+}

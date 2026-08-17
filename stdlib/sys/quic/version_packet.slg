@@ -1,0 +1,134 @@
+namespace sys.quic.version_packet
+
+import sys.quic.error as errors
+
+public struct Packet {
+    destinationConnectionId: [UInt8; ~]
+    sourceConnectionId: [UInt8; ~]
+    versions: [UInt32; ~]
+}
+
+error code: UInt64 -> errors.Error => errors.Error {
+    kind: errors.Kind.Transport
+    code: code
+}
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+appendUInt32 output: mut [UInt8; ~], value: UInt32 -> Unit {
+    output -> push(UInt8(value / 16_777_216))
+    output -> push(UInt8(value / 65_536 % 256))
+    output -> push(UInt8(value / 256 % 256))
+    output -> push(UInt8(value % 256))
+}
+
+readUInt32 bytes: [UInt8], offset: UIntSize -> Result<UInt32, errors.Error> {
+    offset + 4 <= UIntSize(bytes -> len) -> unless {
+        Result<UInt32, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    UInt32(bytes[Int(offset)]) * 16_777_216 + UInt32(bytes[Int(offset + 1)]) * 65_536 + UInt32(bytes[Int(offset + 2)]) * 256 + UInt32(bytes[Int(offset + 3)]) -> Result<UInt32, errors.Error>.Ok
+}
+
+copyRange bytes: [UInt8], offset: UIntSize, length: UIntSize -> Result<[UInt8; ~], errors.Error> {
+    offset + length <= UIntSize(bytes -> len) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    [UInt8; ~] => output!
+    UIntSize(0) => index!
+    index! < length -> while {
+        output! -> push(bytes[Int(offset + index!)])
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+# The low seven bits are deliberately supplied by the caller so a transport
+# can fill them from cryptographic randomness. The long-header bit is required.
+public encode unusedFirstByte: UInt8, packet: Packet -> Result<[UInt8; ~], errors.Error> {
+    (unusedFirstByte >= 128
+        and (packet.destinationConnectionId -> len) <= 20
+        and (packet.sourceConnectionId -> len) <= 20
+        and (packet.versions -> len) > 0) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    [UInt8; ~] => output!
+    output! -> push(unusedFirstByte)
+    output! -> appendUInt32(0)
+    output! -> push(UInt8(packet.destinationConnectionId -> len))
+    output! -> appendBytes(packet.destinationConnectionId)
+    output! -> push(UInt8(packet.sourceConnectionId -> len))
+    output! -> appendBytes(packet.sourceConnectionId)
+    0 => index!
+    index! < (packet.versions -> len) -> while {
+        packet.versions[index!] => version
+        version != 0 -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+        }
+        output! -> appendUInt32(version)
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+public decode bytes: [UInt8] -> Result<Packet, errors.Error> {
+    (UIntSize(bytes -> len) >= 11 and bytes[0] >= 128) -> unless {
+        Result<Packet, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    readUInt32(bytes, 1)? => versionField
+    versionField == 0 -> unless {
+        Result<Packet, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    UIntSize(bytes[5]) => destinationLength
+    destinationLength <= 20 -> unless {
+        Result<Packet, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    6 + destinationLength => sourceLengthOffset
+    sourceLengthOffset < UIntSize(bytes -> len) -> unless {
+        Result<Packet, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    UIntSize(bytes[Int(sourceLengthOffset)]) => sourceLength
+    sourceLength <= 20 -> unless {
+        Result<Packet, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    sourceLengthOffset + 1 + sourceLength => versionsOffset
+    UIntSize(bytes -> len) - versionsOffset => versionsLength
+    (versionsLength > 0 and versionsLength % 4 == 0) -> unless {
+        Result<Packet, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+    }
+    copyRange(bytes, 6, destinationLength)? => destinationConnectionId
+    copyRange(bytes, sourceLengthOffset + 1, sourceLength)? => sourceConnectionId
+    [UInt32; ~] => versions!
+    versionsOffset => offset!
+    offset! < UIntSize(bytes -> len) -> while {
+        readUInt32(bytes, offset!)? => offered
+        offered != 0 -> unless {
+            Result<Packet, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+        }
+        versions! -> push(offered)
+        offset! + 4 => offset!
+    }
+    Result<Packet, errors.Error>.Ok(Packet {
+        destinationConnectionId: destinationConnectionId
+        sourceConnectionId: sourceConnectionId
+        versions: versions!
+    })
+}
+
+# RFC 9368 downgrade prevention requires ignoring a response that contains
+# the Original Version attempted by the client.
+public validateOriginal original: UInt32, packet: Packet -> Result<Bool, errors.Error> {
+    0 => index!
+    index! < (packet.versions -> len) -> while {
+        packet.versions[index!] == original -> if {
+            Result<Bool, errors.Error>.Err(error(errors.versionNegotiationError())) -> return
+        }
+        index! + 1 => index!
+    }
+    Result<Bool, errors.Error>.Ok(true)
+}

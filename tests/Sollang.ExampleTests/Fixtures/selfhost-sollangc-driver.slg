@@ -46,10 +46,10 @@ processFileCode result: Result<Int, Text> -> Int uses Console {
 }
 
 relayEmitterDiagnostics output: Text -> Unit uses Console, File {
-    output -> file.mapText => diagnostics!
-    diagnostics! -> len => length
-    length > UIntSize(0) -> if {
-        diagnostics! -> slice(UIntSize(0), length) -> print
+    output -> file.mapText => diagnostics
+    diagnostics -> len => length
+    length > 0 -> if {
+        diagnostics -> slice(UIntSize(0), length) -> print
     }
 }
 
@@ -60,7 +60,7 @@ textEquals left: Text, right: Text -> Bool {
         (left -> byte(index!)) != (right -> byte(index!)) -> if {
             false => matches!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
@@ -103,25 +103,25 @@ exitFailure: -> Unit uses Process {
 }
 
 isJobsOption value: Text -> Bool {
-    (value -> len) == UIntSize(6) => matches!
+    (value -> len) == 6 => matches!
     matches! -> if {
-        ((value -> byte(UIntSize(0))) == UInt8(45) and (value -> byte(UIntSize(1))) == UInt8(45) and (value -> byte(UIntSize(2))) == UInt8(106) and (value -> byte(UIntSize(3))) == UInt8(111) and (value -> byte(UIntSize(4))) == UInt8(98) and (value -> byte(UIntSize(5))) == UInt8(115)) => matches!
+        ((value -> byte(UIntSize(0))) == 45 and (value -> byte(UIntSize(1))) == 45 and (value -> byte(UIntSize(2))) == 106 and (value -> byte(UIntSize(3))) == 111 and (value -> byte(UIntSize(4))) == 98 and (value -> byte(UIntSize(5))) == 115) => matches!
     }
     matches!
 }
 
 parsePositiveInt value: Text -> Int {
     0 => parsed!
-    (value -> len) > UIntSize(0) => valid!
+    (value -> len) > 0 => valid!
     UIntSize(0) => index!
     (valid! and index! < (value -> len)) -> while {
         value -> byte(index!) => digit
-        (digit < UInt8(48) or digit > UInt8(57)) -> if {
+        (digit < 48 or digit > 57) -> if {
             false => valid!
         } else {
-            parsed! * 10 + Int(digit - UInt8(48)) => parsed!
+            parsed! * 10 + Int(digit - 48) => parsed!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     (valid! and parsed! > 0) -> if { parsed! } else { -1 }
 }
@@ -131,8 +131,8 @@ configureWorkerLimit optionStart: UIntSize -> Int uses Process {
     0 => workers!
     optionStart < (arguments -> len) -> if {
         arguments[optionStart] -> isJobsOption -> if {
-            optionStart + UIntSize(1) < (arguments -> len) -> if {
-                arguments[optionStart + UIntSize(1)] -> parsePositiveInt => requested
+            optionStart + 1 < (arguments -> len) -> if {
+                arguments[optionStart + 1] -> parsePositiveInt => requested
                 requested > 0 -> if {
                     requested -> limitParallelWorkers => workers!
                 } else { -1 => workers! }
@@ -146,7 +146,7 @@ sourceStart optionStart: UIntSize -> UIntSize uses Process {
     sys.process.arguments() => arguments
     optionStart => start!
     optionStart < (arguments -> len) -> if {
-        arguments[optionStart] -> isJobsOption -> if { optionStart + UIntSize(2) => start! }
+        arguments[optionStart] -> isJobsOption -> if { optionStart + 2 => start! }
     }
     start!
 }
@@ -159,7 +159,7 @@ collectPaths start: UIntSize -> [Text; ~] uses Process {
     index! < argumentCount -> while {
         arguments[index!] => path
         paths! -> push(path)
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     paths!
 }
@@ -172,43 +172,43 @@ collectBuildPaths start: UIntSize -> [Text; ~] uses Process {
     index! < argumentCount -> while {
         arguments[index!] => path
         paths! -> push(path)
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     paths!
 }
 
 emitLinuxFiles pathStart: UIntSize -> Unit uses Console, File, Process {
-    pathStart -> collectPaths => paths!
-    paths! -> llvm.emitLinuxCheckedFiles => diagnosticCount
+    pathStart -> collectPaths => paths
+    paths -> llvm.emitLinuxCheckedFiles => diagnosticCount
     diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitWasmFiles pathStart: UIntSize -> Unit uses Console, File, Process {
-    pathStart -> collectPaths => paths!
-    paths! -> llvm.emitWasmCheckedFiles => diagnosticCount
+    pathStart -> collectPaths => paths
+    paths -> llvm.emitWasmCheckedFiles => diagnosticCount
     diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitWindowsFiles pathStart: UIntSize -> Unit uses Console, File, Process {
-    pathStart -> collectPaths => paths!
-    paths! -> llvm.emitCheckedFiles => diagnosticCount
+    pathStart -> collectPaths => paths
+    paths -> llvm.emitCheckedFiles => diagnosticCount
     diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitTestFiles pathStart: UIntSize, target: Int -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
     arguments[pathStart] => filter
-    arguments[pathStart + UIntSize(1)] -> parsePositiveInt => candidateSourceCount
-    pathStart + UIntSize(2) -> collectPaths => paths!
-    paths! -> cliTest.build(candidateSourceCount, filter) => plan!
-    plan!.status != 0 -> if { exitFailure() }
+    arguments[pathStart + 1] -> parsePositiveInt => candidateSourceCount
+    pathStart + 2 -> collectPaths => paths
+    paths -> cliTest.build(candidateSourceCount, filter) => plan
+    plan.status != 0 -> if { exitFailure() }
     [UInt8; ~] => harness!
-    plan!.harness -> each current { harness! -> push(current) }
+    plan.harness -> each current { harness! -> push(current) }
     [Int; ~] => sourceIndices!
-    plan!.sourceIndices -> each current { sourceIndices! -> push(current) }
+    plan.sourceIndices -> each current { sourceIndices! -> push(current) }
     [Int; ~] => symbolIndices!
-    plan!.symbolIndices -> each current { symbolIndices! -> push(current) }
-    paths! -> llvm.emitCheckedTestFiles(harness!, sourceIndices!, symbolIndices!, target) => diagnosticCount
+    plan.symbolIndices -> each current { symbolIndices! -> push(current) }
+    paths -> llvm.emitCheckedTestFiles(harness!, sourceIndices!, symbolIndices!, target) => diagnosticCount
     diagnosticCount > 0 -> if { exitFailure() }
 }
 
@@ -216,45 +216,45 @@ emitLinuxRoot pathStart: UIntSize -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
     # Root discovery and source mapping run in this native Windows driver even
     # when the emitted program targets Linux.
-    arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
-    root! -> llvmRoot.emitLinuxCheckedRoot
+    arguments[pathStart] -> path.fromText(path.Style.Windows) => root
+    root -> llvmRoot.emitLinuxCheckedRoot
 }
 
 emitWasmRoot pathStart: UIntSize -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
-    arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
-    root! -> llvmRoot.emitWasmCheckedRoot
+    arguments[pathStart] -> path.fromText(path.Style.Windows) => root
+    root -> llvmRoot.emitWasmCheckedRoot
 }
 
 emitWindowsRoot pathStart: UIntSize -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
-    arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
+    arguments[pathStart] -> path.fromText(path.Style.Windows) => root
     arguments -> len => explicitStart
-    llvmRoot.emitCheckedRoot(root!, explicitStart, 0) => diagnosticCount
+    llvmRoot.emitCheckedRoot(root, explicitStart, 0) => diagnosticCount
     diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitRootAndFiles pathStart: UIntSize, target: Int -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
-    arguments[pathStart] -> path.fromText(path.nativeStyle()) => root!
-    pathStart + UIntSize(1) -> configureWorkerLimit => workers
+    arguments[pathStart] -> path.fromText(path.nativeStyle()) => root
+    pathStart + 1 -> configureWorkerLimit => workers
     workers < 0 -> if {
         "; sollang error: --jobs expects a positive integer" -> println
         exitFailure()
     }
     workers > 0 -> if { "; sollang workers = $workers" -> println }
-    pathStart + UIntSize(1) -> sourceStart => fileStart
-    llvmRoot.emitCheckedRoot(root!, fileStart, target) => diagnosticCount
+    pathStart + 1 -> sourceStart => fileStart
+    llvmRoot.emitCheckedRoot(root, fileStart, target) => diagnosticCount
     diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {
-    pathStart -> collectPaths => paths!
-    paths! -> semanticContext.prepareFiles => snapshot!
-    snapshot!.package -> moduleInterfaces.fingerprintAnalyzed => fingerprints!
+    pathStart -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot.package -> moduleInterfaces.fingerprintAnalyzed => fingerprints
     0 => fingerprintIndex!
-    fingerprintIndex! < (fingerprints! -> len) -> while {
-        fingerprints![fingerprintIndex!] => fingerprint
+    fingerprintIndex! < (fingerprints -> len) -> while {
+        fingerprints[fingerprintIndex!] => fingerprint
         "module fingerprint = $(fingerprint.moduleHash),$(fingerprint.sourceHash),$(fingerprint.interfaceHash),$(fingerprint.implementationHash),$(fingerprint.importHash),$(fingerprint.publicSymbolCount),$(fingerprint.importCount)" -> println
         fingerprintIndex! + 1 => fingerprintIndex!
     }
@@ -262,56 +262,56 @@ emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {
 
 runInterfaceCache: -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
-    UIntSize(4) -> collectPaths => paths!
-    paths! -> semanticContext.prepareFiles => snapshot!
-    snapshot!.package -> moduleCache.encodeAnalyzed(UInt64(1)) => current!
-    current! -> moduleCacheIo.publish(arguments[2], arguments[3]) => published
-    arguments[2] -> moduleCacheIo.load => loaded!
-    snapshot!.package -> moduleCache.reuseAnalyzed(loaded!, UInt64(1)) => reuse
+    UIntSize(4) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot.package -> moduleCache.encodeAnalyzed(1) => current
+    current -> moduleCacheIo.publish(arguments[2], arguments[3]) => published
+    arguments[2] -> moduleCacheIo.load => loaded
+    snapshot.package -> moduleCache.reuseAnalyzed(loaded, 1) => reuse
     (published and reuse.status == 0) -> if { 1 } else { 0 } => persistent
     "module cache = $(reuse.status),$(reuse.hits),$(reuse.misses),$(reuse.bodyOnlyConsumerHits),$persistent" -> println
 }
 
 runModuleArtifacts: -> Unit uses Console, File, Process {
-    UIntSize(2) -> collectPaths => paths!
-    paths! -> semanticContext.prepareFiles => snapshot!
-    snapshot! -> typedIr.lowerContext => ir!
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> typedIr.lowerContext => ir
     [typeIds.SemanticType; ~] => types!
-    snapshot!.semantic.types -> each currentType { types! -> push(currentType) }
+    snapshot.semantic.types -> each currentType { types! -> push(currentType) }
     [modules.ModuleIdentity; ~] => identities!
-    snapshot!.modules -> each identity { identities! -> push(identity) }
-    ir! -> moduleArtifacts.encode(identities!, types!) => words!
-    words! -> moduleArtifacts.validate => validation
-    words! -> moduleArtifacts.decode(identities!) => decoded!
+    snapshot.modules -> each identity { identities! -> push(identity) }
+    ir -> moduleArtifacts.encode(identities!, types!) => words
+    words -> moduleArtifacts.validate => validation
+    words -> moduleArtifacts.decode(identities!) => decoded
     [typedIr.TypedIrNode; ~] => decodedIr!
-    decoded!.ir -> each node { decodedIr! -> push(node) }
+    decoded.ir -> each node { decodedIr! -> push(node) }
     decodedIr! -> len => decodedNodeCount
-    (validation.nodeCount > 0 and decoded!.status == 0 and decodedNodeCount == validation.nodeCount) -> if { 1 } else { 0 } => hasNodes
+    (validation.nodeCount > 0 and decoded.status == 0 and decodedNodeCount == validation.nodeCount) -> if { 1 } else { 0 } => hasNodes
     "module artifacts = $(validation.status),$(validation.moduleCount),$hasNodes" -> println
 }
 
 runCodegenUnits: -> Unit uses Console {
     codegenUnits.CodegenUnits {
         kinds: [1, 2, 1, 0; ~]
-        moduleHashes: [UInt64(6012471128798655323), UInt64(0), UInt64(13501036247553511367), UInt64(0); ~]
-        interfaceHashes: [UInt64(220), UInt64(0), UInt64(210), UInt64(0); ~]
-        implementationHashes: [UInt64(320), UInt64(402), UInt64(310), UInt64(401); ~]
+        moduleHashes: [6012471128798655323, 0, 13501036247553511367, 0; ~]
+        interfaceHashes: [220, 0, 210, 0; ~]
+        implementationHashes: [320, 402, 310, 401; ~]
         identityStarts: [0, 4, 4, 9; ~]
         identityLengths: [4, 0, 5, 0; ~]
-        identityWords: [UInt64(122), UInt64(101), UInt64(116), UInt64(97), UInt64(97), UInt64(108), UInt64(112), UInt64(104), UInt64(97); ~]
+        identityWords: [122, 101, 116, 97, 97, 108, 112, 104, 97; ~]
         fragmentStarts: [0, 1, 2, 3; ~]
         fragmentWordLengths: [1, 1, 1, 1; ~]
         fragmentByteLengths: [2, 1, 2, 1; ~]
-        fragmentWords: [UInt64(14682), UInt64(84), UInt64(12609), UInt64(72); ~]
-    } => units!
+        fragmentWords: [14682, 84, 12609, 72; ~]
+    } => units
     UInt64(101) => compilerHash
     UInt64(202) => targetHash
     UInt64(303) => configurationHash
-    units! -> codegenUnits.encode(compilerHash, targetHash, configurationHash) => artifact!
-    artifact! -> codegenUnits.validate(compilerHash, targetHash, configurationHash) => validation
-    artifact! -> codegenUnits.merge(compilerHash, targetHash, configurationHash) => merged!
-    (validation.status == 0 and merged!.status == 0) -> if {
-        "codegen units = $(validation.status),$(validation.moduleCount),$(merged!.byteLength)" -> println
+    units -> codegenUnits.encode(compilerHash, targetHash, configurationHash) => artifact
+    artifact -> codegenUnits.validate(compilerHash, targetHash, configurationHash) => validation
+    artifact -> codegenUnits.merge(compilerHash, targetHash, configurationHash) => merged
+    (validation.status == 0 and merged.status == 0) -> if {
+        "codegen units = $(validation.status),$(validation.moduleCount),$(merged.byteLength)" -> println
     } else {
         "codegen units = $(validation.status),0,0" -> println
     }
@@ -319,21 +319,21 @@ runCodegenUnits: -> Unit uses Console {
 
 buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
-    pathStart -> collectBuildPaths => sourcePaths!
+    pathStart -> collectBuildPaths => sourcePaths
     [arguments[0], "windows"; ~] => emitArgv!
-    pathStart > UIntSize(5) -> if {
+    pathStart > 5 -> if {
         emitArgv! -> push(arguments[5])
         emitArgv! -> push(arguments[6])
     }
-    sourcePaths! -> each sourcePath { emitArgv! -> push(sourcePath) }
+    sourcePaths -> each sourcePath { emitArgv! -> push(sourcePath) }
     process.RunToFileRequest {
         argv: emitArgv!
         output: arguments[2]
     } -> process.runToFile -> processCode => emitCode
 
     emitCode == 0 -> if {
-        [arguments[4], arguments[2], "-O1", "-Wno-override-module", "-o", arguments[3]; ~] => clangArgv!
-        clangArgv! -> process.run -> processCode => clangCode
+        [arguments[4], arguments[2], "-O1", "-Wno-override-module", "-o", arguments[3]; ~] => clangArgv
+        clangArgv -> process.run -> processCode => clangCode
         clangCode >= 0 -> if {
             "native build = $(clangCode)" -> println
         } else {
@@ -394,15 +394,15 @@ portableNativeOutput stem: Text, storage: mut Arena -> Text {
 
 defaultNativeOutput source: Text, target: Int, storage: mut Arena -> Text {
     source -> len => sourceLength
-    sourceLength >= UIntSize(4) => validSuffix!
+    sourceLength >= 4 => validSuffix!
     validSuffix! -> if {
-        (validSuffix! and (source -> byte(sourceLength - UIntSize(4))) == UInt8(46)) => validSuffix!
-        (validSuffix! and (source -> byte(sourceLength - UIntSize(3))) == UInt8(115)) => validSuffix!
-        (validSuffix! and (source -> byte(sourceLength - UIntSize(2))) == UInt8(108)) => validSuffix!
-        (validSuffix! and (source -> byte(sourceLength - UIntSize(1))) == UInt8(103)) => validSuffix!
+        (validSuffix! and (source -> byte(sourceLength - 4)) == 46) => validSuffix!
+        (validSuffix! and (source -> byte(sourceLength - 3)) == 115) => validSuffix!
+        (validSuffix! and (source -> byte(sourceLength - 2)) == 108) => validSuffix!
+        (validSuffix! and (source -> byte(sourceLength - 1)) == 103) => validSuffix!
     }
     UIntSize(0) => stemLength!
-    validSuffix! -> if { sourceLength - UIntSize(4) => stemLength! } else { sourceLength => stemLength! }
+    validSuffix! -> if { sourceLength - 4 => stemLength! } else { sourceLength => stemLength! }
     source -> slice(UIntSize(0), stemLength!) => stem
     target == 0 -> if {
         stem -> windowsNativeOutput(storage)
@@ -416,7 +416,7 @@ defaultNativeOutput source: Text, target: Int, storage: mut Arena -> Text {
 }
 
 nativeClangPath llvmHome: Text, hostTarget: Int, storage: mut Arena -> Text {
-    (llvmHome -> len) == UIntSize(0) -> if {
+    (llvmHome -> len) == 0 -> if {
         "clang"
     } else {
         hostTarget == 0 -> if {
@@ -445,11 +445,11 @@ executableDirectory executable: Text -> Text {
     UIntSize(0) => index!
     index! < (executable -> len) -> while {
         executable -> byte(index!) => current
-        (current == UInt8(47) or current == UInt8(92)) -> if {
+        (current == 47 or current == 92) -> if {
             index! => lastSeparator!
             true => found!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     found! -> if {
         executable -> slice(UIntSize(0), lastSeparator!) => directory
@@ -474,7 +474,7 @@ executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOptio
     arguments[0] -> executableDirectory => compilerDirectory
     Arena(0) => stdlibRootStorage!
     "" => stdlibRoot!
-    (stdlibOption -> len) > UIntSize(0) -> if {
+    (stdlibOption -> len) > 0 -> if {
         stdlibOption -> portableNativeOutput(stdlibRootStorage!) => stdlibRoot!
     } else {
         compilerDirectory -> stdlibNativePath(stdlibRootStorage!) => stdlibRoot!
@@ -484,7 +484,7 @@ executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOptio
     emitArgv! -> push(emitterMode)
     emitterArguments -> each emitterArgument { emitArgv! -> push(emitterArgument) }
     includeStdlibRoot -> if { emitArgv! -> push(stdlibRoot!) }
-    (jobs -> len) > UIntSize(0) -> if {
+    (jobs -> len) > 0 -> if {
         emitArgv! -> push("--jobs")
         emitArgv! -> push(jobs)
     }
@@ -501,6 +501,7 @@ executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOptio
         clangArgv! -> push("-Xlinker")
         clangArgv! -> push("/subsystem:console")
         clangArgv! -> push("-lshell32")
+        clangArgv! -> push("-lws2_32")
     }
     clangArgv! -> process.run -> processCode => clangCode
     clangCode != 0 -> if {
@@ -528,13 +529,13 @@ executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, st
     arguments[0] -> executableDirectory => compilerDirectory
     Arena(0) => stdlibRootStorage!
     "" => stdlibRoot!
-    (stdlibOption -> len) > UIntSize(0) -> if {
+    (stdlibOption -> len) > 0 -> if {
         stdlibOption -> portableNativeOutput(stdlibRootStorage!) => stdlibRoot!
     } else {
         compilerDirectory -> stdlibNativePath(stdlibRootStorage!) => stdlibRoot!
     }
     [arguments[0], target -> nativeCliTargetMode, stdlibRoot!; ~] => emitArgv!
-    (jobs -> len) > UIntSize(0) -> if {
+    (jobs -> len) > 0 -> if {
         emitArgv! -> push("--jobs")
         emitArgv! -> push(jobs)
     }
@@ -556,6 +557,7 @@ executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, st
         clangArgv! -> push("-Xlinker")
         clangArgv! -> push("/subsystem:console")
         clangArgv! -> push("-lshell32")
+        clangArgv! -> push("-lws2_32")
     }
     clangArgv! -> process.run -> processCode => clangCode
     clangCode != 0 -> if {
@@ -576,7 +578,7 @@ executeNativeProgram output: Text, programArguments: [Text; ~] -> Int uses Proce
 
 runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
     Arena(0) => outputStorage!
-    (outputOption -> len) > UIntSize(0) -> if {
+    (outputOption -> len) > 0 -> if {
         sources -> executeNativePathBuild(outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild) => buildCode
         buildCode != 0 -> if {
             buildCode
@@ -622,8 +624,8 @@ runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectIn
 }
 
 runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectInput, sourceDirectory: Text, includeDependencies: Bool, locked: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
-    sourceDirectory -> path.fromText(path.nativeStyle()) => projectSourceRoot!
-    projectSourceRoot! -> sourceRoot.discoverDirect => projectSources!
+    sourceDirectory -> path.fromText(path.nativeStyle()) => projectSourceRoot
+    projectSourceRoot -> sourceRoot.discoverDirect => projectSources!
     [path.Path; ~] => packageManifests!
     [path.Path; ~] => packageNames!
     [path.Path; ~] => packageVersions!
@@ -660,8 +662,8 @@ runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
     UIntSize(2) => index!
     index! < argumentCount -> while {
         arguments[index!] -> textEquals("--project") -> if {
-            index! + UIntSize(1) < argumentCount -> if {
-                index! + UIntSize(1) => index!
+            index! + 1 < argumentCount -> if {
+                index! + 1 => index!
                 arguments[index!] => projectOption!
             } else { 1 => status! }
         } else {
@@ -672,7 +674,7 @@ runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
                 3 => status!
             }
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     status! != 0 -> if {
         status! == 3 -> if {
@@ -682,7 +684,7 @@ runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
         }
         1 -> return
     }
-    (projectOption! -> len) == UIntSize(0) -> if {
+    (projectOption! -> len) == 0 -> if {
         "sollang: resolve currently requires --project <path>" -> println
         1 -> return
     }
@@ -702,8 +704,8 @@ runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
         "sollang: native package lock failed (status $lockStatus)" -> println
         1 -> return
     }
-    packageManifests! -> cliLock.destination(hostStyle) => lockPath!
-    path.pathText(lockPath!) => lockPathText
+    packageManifests! -> cliLock.destination(hostStyle) => lockPath
+    path.pathText(lockPath) => lockPathText
     packageManifests! -> len => packageCount
     "Resolved $packageCount package(s) into $lockPathText" -> println
     0
@@ -712,15 +714,15 @@ runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
 ensureDirectory value: Text -> Bool uses File {
     Arena(0) => storage!
     "$value" -> materialize(storage!) => ownedValue
-    ownedValue -> path.fromText(path.nativeStyle()) => directoryPath!
-    directoryPath! -> directory.create
+    ownedValue -> path.fromText(path.nativeStyle()) => directoryPath
+    directoryPath -> directory.create
 }
 
 toNativePath value: Text -> path.Path {
     Arena(0) => storage!
     "$value" -> materialize(storage!) => ownedValue
-    ownedValue -> path.fromText(path.nativeStyle()) => result!
-    result!
+    ownedValue -> path.fromText(path.nativeStyle()) => result
+    result
 }
 
 testTargetName target: Int -> Text {
@@ -734,7 +736,7 @@ testEmitterMode target: Int -> Text {
 }
 
 testOutputRoot projectDirectory: Text, explicitSources: [Text; ~] -> Text {
-    (projectDirectory -> len) > UIntSize(0) -> if { projectDirectory -> return }
+    (projectDirectory -> len) > 0 -> if { projectDirectory -> return }
     explicitSources[0] -> executableDirectory
 }
 
@@ -744,23 +746,23 @@ testOutputSuffix target: Int -> Text {
 }
 
 testOutputName projectName: Text, explicitSources: [Text; ~] -> Text {
-    (projectName -> len) > UIntSize(0) -> if { projectName -> return }
+    (projectName -> len) > 0 -> if { projectName -> return }
     explicitSources[0] => source
     source -> len => sourceLength
     UIntSize(0) => nameStart!
     UIntSize(0) => index!
     index! < sourceLength -> while {
         source -> byte(index!) => current
-        (current == UInt8(47) or current == UInt8(92)) -> if { index! + UIntSize(1) => nameStart! }
-        index! + UIntSize(1) => index!
+        (current == 47 or current == 92) -> if { index! + 1 => nameStart! }
+        index! + 1 => index!
     }
     sourceLength => nameEnd!
-    sourceLength >= UIntSize(4) -> if {
-        ((source -> byte(sourceLength - UIntSize(4))) == UInt8(46)
-            and (source -> byte(sourceLength - UIntSize(3))) == UInt8(115)
-            and (source -> byte(sourceLength - UIntSize(2))) == UInt8(108)
-            and (source -> byte(sourceLength - UIntSize(1))) == UInt8(103)) -> if {
-            sourceLength - UIntSize(4) => nameEnd!
+    sourceLength >= 4 -> if {
+        ((source -> byte(sourceLength - 4)) == 46
+            and (source -> byte(sourceLength - 3)) == 115
+            and (source -> byte(sourceLength - 2)) == 108
+            and (source -> byte(sourceLength - 1)) == 103) -> if {
+            sourceLength - 4 => nameEnd!
         }
     }
     source -> slice(nameStart!, nameEnd! - nameStart!)
@@ -789,8 +791,8 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
                 "sollang: --filter may be specified only once" -> println
                 1 -> return
             }
-            index! + UIntSize(1) < (arguments -> len) -> if {
-                index! + UIntSize(1) => index!
+            index! + 1 < (arguments -> len) -> if {
+                index! + 1 => index!
                 argument -> textEquals("--project") -> if { arguments[index!] => projectOption! }
                 argument -> textEquals("--llvm") -> if { arguments[index!] => llvmHome! }
                 argument -> textEquals("--stdlib") -> if { arguments[index!] => stdlibOption! }
@@ -810,13 +812,13 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
             ((argument -> textEquals("-O0")) or (argument -> textEquals("-O1")) or (argument -> textEquals("-O2")) or (argument -> textEquals("-O3"))) -> if {
                 argument => optimization!
             } else {
-                (argument -> len) > UIntSize(0) and (argument -> byte(UIntSize(0))) == UInt8(45) -> if {
+                (argument -> len) > 0 and (argument -> byte(UIntSize(0))) == 45 -> if {
                     argument => invalidOption!
                     2 => status!
                 } else { explicitSources! -> push(argument) }
             }
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     status! != 0 -> if {
         status! == 2 -> if {
@@ -840,30 +842,30 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     Arena(0) => projectManifestStorage!
     Arena(0) => projectRootStorage!
     Arena(0) => projectNameStorage!
-    (projectOption! -> len) > UIntSize(0) -> if {
-        projectOption! -> cliProject.load("", projectManifestStorage!, projectRootStorage!, projectNameStorage!) => projectInput!
-        projectInput!.status != 0 -> if {
-            "sollang: invalid project manifest or product selection (status $(projectInput!.status))" -> println
+    (projectOption! -> len) > 0 -> if {
+        projectOption! -> cliProject.load("", projectManifestStorage!, projectRootStorage!, projectNameStorage!) => projectInput
+        projectInput.status != 0 -> if {
+            "sollang: invalid project manifest or product selection (status $(projectInput.status))" -> println
             1 -> return
         }
-        projectInput!.projectDirectory => projectDirectory!
-        projectInput!.productName => projectName!
+        projectInput.projectDirectory => projectDirectory!
+        projectInput.productName => projectName!
         Arena(0) => sourceDirectoryStorage!
-        projectInput!.sourceDirectory => projectSourceDirectory
+        projectInput.sourceDirectory => projectSourceDirectory
         "$projectSourceDirectory" -> materialize(sourceDirectoryStorage!) => ownedSourceDirectory
-        ownedSourceDirectory -> toNativePath => sourceRootPath!
-        sourceRootPath! -> sourceRoot.discoverDirect => projectSources!
+        ownedSourceDirectory -> toNativePath => sourceRootPath
+        sourceRootPath -> sourceRoot.discoverDirect => projectSources!
         (projectSources! -> len) > 0 -> while {
-            projectSources! -> take(0) => current!
-            sourcePaths! -> push(current!)
+            projectSources! -> take(0) => current
+            sourcePaths! -> push(current)
         }
         Arena(0) => testsRootStorage!
         "$(projectDirectory!)/tests" -> materialize(testsRootStorage!) => ownedTestsRoot
-        ownedTestsRoot -> toNativePath => testsRoot!
-        testsRoot! -> sourceRoot.discoverDirect => testSources!
+        ownedTestsRoot -> toNativePath => testsRoot
+        testsRoot -> sourceRoot.discoverDirect => testSources!
         (testSources! -> len) > 0 -> while {
-            testSources! -> take(0) => current!
-            sourcePaths! -> push(current!)
+            testSources! -> take(0) => current
+            sourcePaths! -> push(current)
         }
     }
     ((sourcePaths! -> len) == 0 and (explicitSources! -> len) == 0) -> if {
@@ -876,7 +878,7 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     arguments[0] -> executableDirectory => compilerDirectory
     Arena(0) => stdlibStorage!
     "" => stdlibRoot!
-    (stdlibOption! -> len) > UIntSize(0) -> if {
+    (stdlibOption! -> len) > 0 -> if {
         stdlibOption! => stdlibRoot!
     } else {
         compilerDirectory -> stdlibNativePath(stdlibStorage!) => stdlibRoot!
@@ -884,11 +886,11 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     Arena(0) => ownedStdlibStorage!
     stdlibRoot! => stdlibRootValue
     "$stdlibRootValue" -> materialize(ownedStdlibStorage!) => ownedStdlibRoot
-    ownedStdlibRoot -> toNativePath => stdlibPath!
-    stdlibPath! -> sourceRoot.discoverDirect => stdlibSources!
+    ownedStdlibRoot -> toNativePath => stdlibPath
+    stdlibPath -> sourceRoot.discoverDirect => stdlibSources!
     (stdlibSources! -> len) > 0 -> while {
-        stdlibSources! -> take(0) => current!
-        sourcePaths! -> push(current!)
+        stdlibSources! -> take(0) => current
+        sourcePaths! -> push(current)
     }
 
     Arena(0) => sollangDirectoryStorage!
@@ -900,7 +902,7 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     "$sollangDirectory/test" -> materialize(testDirectoryStorage!) => testDirectory
     target! -> testTargetName => targetName
     "$testDirectory/$targetName" -> materialize(targetDirectoryStorage!) => targetDirectory
-    ((sollangDirectory -> ensureDirectory) and (testDirectory -> ensureDirectory) and (targetDirectory -> ensureDirectory)) -> if {} else {
+    ((sollangDirectory -> ensureDirectory) and (testDirectory -> ensureDirectory) and (targetDirectory -> ensureDirectory)) -> unless {
         "sollang: failed to create native test output directory" -> println
         1 -> return
     }
@@ -925,11 +927,11 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     }
     Arena(0) => candidateCountStorage!
     "$candidateSourceCount" -> materialize(candidateCountStorage!) => candidateCountText
-    [filter!, candidateCountText; ~] => testEmitterArguments!
-    testBuildSources! -> executeNativeBuild(output, llvmHome!, stdlibOption!, optimization!, target!, hostTarget, jobs!, false, true, emitterMode, testEmitterArguments!, false) => buildCode
+    [filter!, candidateCountText; ~] => testEmitterArguments
+    testBuildSources! -> executeNativeBuild(output, llvmHome!, stdlibOption!, optimization!, target!, hostTarget, jobs!, false, true, emitterMode, testEmitterArguments, false) => buildCode
     buildCode != 0 -> if { buildCode -> return }
-    [Text; ~] => programArguments!
-    output -> executeNativeProgram(programArguments!)
+    [Text; ~] => programArguments
+    output -> executeNativeProgram(programArguments)
 }
 
 runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Process, Environment {
@@ -970,33 +972,33 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
                 true => parsingProgramArguments!
             } else {
                 ((argument -> textEquals("-o")) or (argument -> textEquals("--output"))) -> if {
-                    index! + UIntSize(1) < argumentCount -> if {
-                        index! + UIntSize(1) => index!
+                    index! + 1 < argumentCount -> if {
+                        index! + 1 => index!
                         arguments[index!] => outputOption!
                     } else { 1 => status! }
                 } else {
                     argument -> textEquals("--llvm") -> if {
-                        index! + UIntSize(1) < argumentCount -> if {
-                            index! + UIntSize(1) => index!
+                        index! + 1 < argumentCount -> if {
+                            index! + 1 => index!
                             arguments[index!] => llvmHome!
                         } else { 2 => status! }
                     } else {
                         argument -> textEquals("--stdlib") -> if {
-                            index! + UIntSize(1) < argumentCount -> if {
-                                index! + UIntSize(1) => index!
+                            index! + 1 < argumentCount -> if {
+                                index! + 1 => index!
                                 arguments[index!] => stdlibRoot!
                             } else { 3 => status! }
                         } else {
                             argument -> textEquals("--target") -> if {
-                                index! + UIntSize(1) < argumentCount -> if {
-                                    index! + UIntSize(1) => index!
+                                index! + 1 < argumentCount -> if {
+                                    index! + 1 => index!
                                     arguments[index!] -> parseNativeTarget => target!
                                     target! < 0 -> if { 4 => status! }
                                 } else { 5 => status! }
                             } else {
                                 argument -> textEquals("--jobs") -> if {
-                                    index! + UIntSize(1) < argumentCount -> if {
-                                        index! + UIntSize(1) => index!
+                                    index! + 1 < argumentCount -> if {
+                                        index! + 1 => index!
                                         (arguments[index!] -> parsePositiveInt) > 0 -> if {
                                             arguments[index!] => jobs!
                                         } else { 6 => status! }
@@ -1009,26 +1011,26 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
                                             argument => optimization!
                                         } else {
                                             argument -> textEquals("--project") -> if {
-                                                index! + UIntSize(1) < argumentCount -> if {
-                                                    index! + UIntSize(1) => index!
+                                                index! + 1 < argumentCount -> if {
+                                                    index! + 1 => index!
                                                     arguments[index!] => projectOption!
                                                 } else { 7 => status! }
                                             } else {
                                                 argument -> textEquals("--workspace") -> if {
-                                                    index! + UIntSize(1) < argumentCount -> if {
-                                                        index! + UIntSize(1) => index!
+                                                    index! + 1 < argumentCount -> if {
+                                                        index! + 1 => index!
                                                         arguments[index!] => workspaceOption!
                                                     } else { 7 => status! }
                                                 } else {
                                                     argument -> textEquals("--package") -> if {
-                                                        index! + UIntSize(1) < argumentCount -> if {
-                                                            index! + UIntSize(1) => index!
+                                                        index! + 1 < argumentCount -> if {
+                                                            index! + 1 => index!
                                                             arguments[index!] => packageOption!
                                                         } else { 7 => status! }
                                                     } else {
                                                         argument -> textEquals("--product") -> if {
-                                                            index! + UIntSize(1) < argumentCount -> if {
-                                                                index! + UIntSize(1) => index!
+                                                            index! + 1 < argumentCount -> if {
+                                                                index! + 1 => index!
                                                                 arguments[index!] => productOption!
                                                             } else { 7 => status! }
                                                         } else {
@@ -1038,7 +1040,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
                                                                 argument -> textEquals("--library") -> if {
                                                                     true => library!
                                                                 } else {
-                                                                    (argument -> len) > UIntSize(0) and (argument -> byte(UIntSize(0))) == UInt8(45) -> if {
+                                                                    (argument -> len) > 0 and (argument -> byte(UIntSize(0))) == 45 -> if {
                                                                         argument => invalidOption!
                                                                         8 => status!
                                                                     } else {
@@ -1059,7 +1061,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
                 }
             }
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
 
     status! != 0 -> if {
@@ -1071,23 +1073,23 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         1 -> return
     }
     llvmHome! -> toolchain.llvmHome => llvmHome!
-    ((projectOption! -> len) > UIntSize(0) and (workspaceOption! -> len) > UIntSize(0)) -> if {
+    ((projectOption! -> len) > 0 and (workspaceOption! -> len) > 0) -> if {
         "sollang: --project cannot be combined with --workspace" -> println
         1 -> return
     }
-    ((sources! -> len) > 0 and ((projectOption! -> len) > UIntSize(0) or (workspaceOption! -> len) > UIntSize(0))) -> if {
+    ((sources! -> len) > 0 and ((projectOption! -> len) > 0 or (workspaceOption! -> len) > 0)) -> if {
         "sollang: --project/--workspace cannot be combined with explicit source files" -> println
         1 -> return
     }
-    ((sources! -> len) > 0 and (productOption! -> len) > UIntSize(0)) -> if {
+    ((sources! -> len) > 0 and (productOption! -> len) > 0) -> if {
         "sollang: --product requires a project build" -> println
         1 -> return
     }
-    ((sources! -> len) > 0 and (packageOption! -> len) > UIntSize(0)) -> if {
+    ((sources! -> len) > 0 and (packageOption! -> len) > 0) -> if {
         "sollang: --package requires a workspace build" -> println
         1 -> return
     }
-    ((packageOption! -> len) > UIntSize(0) and (projectOption! -> len) > UIntSize(0)) -> if {
+    ((packageOption! -> len) > 0 and (projectOption! -> len) > 0) -> if {
         "sollang: --package cannot be combined with --project" -> println
         1 -> return
     }
@@ -1103,32 +1105,32 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         "sollang: build does not accept program arguments after --" -> println
         1 -> return
     }
-    (workspaceOption! -> len) > UIntSize(0) -> if {
-        workspaceOption! -> cliWorkspace.load(packageOption!, workspaceManifestStorage!, workspaceProjectStorage!) => workspaceInput!
-        workspaceInput!.status != 0 -> if {
-            "sollang: invalid workspace manifest or package selection (status $(workspaceInput!.status))" -> println
+    (workspaceOption! -> len) > 0 -> if {
+        workspaceOption! -> cliWorkspace.load(packageOption!, workspaceManifestStorage!, workspaceProjectStorage!) => workspaceInput
+        workspaceInput.status != 0 -> if {
+            "sollang: invalid workspace manifest or package selection (status $(workspaceInput.status))" -> println
             1 -> return
         }
-        workspaceInput!.projectOption => projectOption!
-        workspaceInput!.sourceDirectory => workspaceSourceDirectory!
+        workspaceInput.projectOption => projectOption!
+        workspaceInput.sourceDirectory => workspaceSourceDirectory!
     }
-    (projectOption! -> len) > UIntSize(0) -> if {
-        projectOption! -> cliProject.load(productOption!, projectManifestStorage!, projectRootStorage!, projectNameStorage!) => projectInput!
-        projectInput!.status != 0 -> if {
-            "sollang: invalid project manifest or product selection (status $(projectInput!.status))" -> println
+    (projectOption! -> len) > 0 -> if {
+        projectOption! -> cliProject.load(productOption!, projectManifestStorage!, projectRootStorage!, projectNameStorage!) => projectInput
+        projectInput.status != 0 -> if {
+            "sollang: invalid project manifest or product selection (status $(projectInput.status))" -> println
             1 -> return
         }
-        projectInput!.multiProduct -> if {
-            (workspaceSourceDirectory! -> len) == UIntSize(0) => includeDependencies
-            projectOption! -> runNativeSelectedProduct(projectInput!, includeDependencies, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+        projectInput.multiProduct -> if {
+            (workspaceSourceDirectory! -> len) == 0 => includeDependencies
+            projectOption! -> runNativeSelectedProduct(projectInput, includeDependencies, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
         } else {
-            (workspaceSourceDirectory! -> len) > UIntSize(0) -> if {
+            (workspaceSourceDirectory! -> len) > 0 -> if {
                 workspaceSourceDirectory!
             } else {
-                projectInput!.sourceDirectory
+                projectInput.sourceDirectory
             } => sourceDirectory
-            (workspaceSourceDirectory! -> len) == UIntSize(0) => includeDependencies
-            projectOption! -> runNativeProjectDirectory(projectInput!, sourceDirectory, includeDependencies, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+            (workspaceSourceDirectory! -> len) == 0 => includeDependencies
+            projectOption! -> runNativeProjectDirectory(projectInput, sourceDirectory, includeDependencies, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
         } => projectCode
         projectCode -> return
     }
@@ -1137,11 +1139,11 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         1 -> return
     }
     Arena(0) => outputStorage!
-    (outputOption! -> len) > UIntSize(0) -> if {
+    (outputOption! -> len) > 0 -> if {
         outputOption! => output
         target! -> nativeCliTargetMode => emitterMode
-        [Text; ~] => emitterArguments!
-        sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments!, true) => buildCode
+        [Text; ~] => emitterArguments
+        sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
         buildCode != 0 -> if { buildCode -> return }
         runAfterBuild -> if {
             output -> executeNativeProgram(programArguments!)
@@ -1149,8 +1151,8 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
     } else {
         sources![0] -> defaultNativeOutput(target!, outputStorage!) => output
         target! -> nativeCliTargetMode => emitterMode
-        [Text; ~] => emitterArguments!
-        sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments!, true) => buildCode
+        [Text; ~] => emitterArguments
+        sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
         buildCode != 0 -> if { buildCode -> return }
         runAfterBuild -> if {
             output -> executeNativeProgram(programArguments!)
@@ -1160,7 +1162,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
 
 dispatchArguments: -> Unit uses Console, File, Process, Environment {
     sys.process.arguments() => arguments
-    (arguments -> len) == UIntSize(2) -> if {
+    (arguments -> len) == 2 -> if {
         ((arguments[1] -> textEquals("--version")) or (arguments[1] -> textEquals("-v"))) -> if {
             printVersion()
             process.exit(0)
@@ -1171,7 +1173,7 @@ dispatchArguments: -> Unit uses Console, File, Process, Environment {
         }
     }
     arguments[1] -> textEquals("language-server") -> if {
-        (arguments -> len) != UIntSize(2) -> if {
+        (arguments -> len) != 2 -> if {
             "sollang: usage: sollang language-server" -> runtime.eprintln
             process.exit(1)
         }
@@ -1179,12 +1181,12 @@ dispatchArguments: -> Unit uses Console, File, Process, Environment {
         process.exit(0)
     }
     arguments[1] -> textEquals("bind-cpp") -> if {
-        cliCppBinding.run() => exitCode!
-        process.exit(exitCode!)
+        cliCppBinding.run() => exitCode
+        process.exit(exitCode)
     }
-    ((arguments -> len) >= UIntSize(3) and (arguments[1] -> textEquals("grammar")) and (arguments[2] -> textEquals("build"))) -> if {
-        cliGrammar.run() => exitCode!
-        process.exit(exitCode!)
+    ((arguments -> len) >= 3 and (arguments[1] -> textEquals("grammar")) and (arguments[2] -> textEquals("build"))) -> if {
+        cliGrammar.run() => exitCode
+        process.exit(exitCode)
     }
     path.nativeStyle() -> when {
         Windows { 0 }
@@ -1211,8 +1213,8 @@ dispatchArguments: -> Unit uses Console, File, Process, Environment {
         process.exit(exitCode!)
     }
     arguments[1] -> textEquals("format") -> if {
-        cliFormat.run() => exitCode!
-        process.exit(exitCode!)
+        cliFormat.run() => exitCode
+        process.exit(exitCode)
     }
     arguments[1] -> textEquals("test-windows") -> if {
         UIntSize(2) -> emitTestFiles(0)
@@ -1235,7 +1237,7 @@ dispatchArguments: -> Unit uses Console, File, Process, Environment {
         process.exit(0)
     }
     UIntSize(2) => optionStart!
-    arguments[1] -> textEquals("build-windows") -> if { UIntSize(5) => optionStart! }
+    arguments[1] -> textEquals("build-windows") -> if { 5 => optionStart! }
     optionStart! -> configureWorkerLimit => workers
     optionStart! -> sourceStart => pathStart
     workers < 0 -> if {
@@ -1293,7 +1295,7 @@ dispatchArguments: -> Unit uses Console, File, Process, Environment {
 
 main {
     sys.process.arguments() => arguments
-    (arguments -> len) == UIntSize(1) -> if {
+    (arguments -> len) == 1 -> if {
         printBuildUsage()
         process.exit(1)
     }

@@ -1,0 +1,44 @@
+import sys.quic.application_engine as application
+import sys.quic.error as errors
+import sys.quic.frame_types as frames
+import sys.quic.keys
+
+secret: -> [UInt8; 32] => [68; 32]
+connectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
+payload: -> [UInt8; ~] => [112, 105, 110, 103; ~]
+
+run: -> Result<Bool, errors.Error> {
+    application.create(secret()) => sender
+    application.create(secret()) => receiver!
+    [frames.Value; ~] => values!
+    values! -> push(frames.Value.MaxData(8_192))
+    values! -> push(frames.Value.Stream(frames.Stream {
+        id: 0
+        offset: 0
+        fin: true
+        data: payload()
+    }))
+    application.encodeMany(keys.version2(), connectionId(), 7, values!, sender)? => datagram
+    application.openMany(keys.version2(), datagram, connectionId(), 7, receiver!)? => opened!
+    (opened!.frames -> len) == 2 -> unless {
+        Result<Bool, errors.Error>.Ok(false) -> return
+    }
+    false => maximumValid!
+    false => streamValid!
+    opened!.frames -> take(0) -> when {
+        MaxData(maximum) { maximum == 8_192 => maximumValid! }
+        else {}
+    }
+    opened!.frames -> take(0) -> when {
+        Stream(streamFrame) { (streamFrame.fin and streamFrame.data[0] == 112 and streamFrame.data[3] == 103) => streamValid! }
+        else {}
+    }
+    Result<Bool, errors.Error>.Ok(maximumValid! and streamValid!)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "one-rtt-multiple=ok" } else { "one-rtt-multiple=failed" } -> println }
+        Err(error) { "one-rtt-multiple-error=$(error.code)" -> println }
+    }
+}

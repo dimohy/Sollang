@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using Sollang.Compiler.CodeGen;
+using Sollang.Compiler.Diagnostics;
 
 namespace Sollang.Compiler.Cli;
 
@@ -10,12 +11,13 @@ internal sealed record IncrementalFrontendCacheProbe(
     string Status,
     int SourceCount,
     LlvmCodegenOutput? Output,
-    byte[]? SourceGenerationKey);
+    byte[]? SourceGenerationKey,
+    IReadOnlyList<SemanticWarning> Warnings);
 
 internal static class IncrementalFrontendCache
 {
     private const ulong Magic = 6002245291164258120;
-    private const ulong Schema = 2;
+    private const ulong Schema = 3;
     private const int DigestLength = 32;
     private const int MaximumRecordCount = 1_000_000;
     private const int MaximumPathBytes = 1024 * 1024;
@@ -35,11 +37,11 @@ internal static class IncrementalFrontendCache
         var location = IncrementalCodegenCache.Locate(options);
         if (!File.Exists(location.SourceSnapshotPath))
         {
-            return new IncrementalFrontendCacheProbe(location, "cold", 0, null, null);
+            return new IncrementalFrontendCacheProbe(location, "cold", 0, null, null, []);
         }
         if (!File.Exists(location.CodegenPath))
         {
-            return new IncrementalFrontendCacheProbe(location, "miss: codegen generation is missing", 0, null, null);
+            return new IncrementalFrontendCacheProbe(location, "miss: codegen generation is missing", 0, null, null, []);
         }
 
         try
@@ -56,23 +58,25 @@ internal static class IncrementalFrontendCache
                 "exact hit",
                 validated.SourceCount,
                 output,
-                validated.SourceGenerationKey);
+                validated.SourceGenerationKey,
+                validated.Warnings);
         }
         catch (FrontendCacheMissException error)
         {
-            return new IncrementalFrontendCacheProbe(location, "miss: " + error.Message, 0, null, null);
+            return new IncrementalFrontendCacheProbe(location, "miss: " + error.Message, 0, null, null, []);
         }
         catch (Exception error) when (error is IOException
                                       or InvalidDataException
                                       or DecoderFallbackException
                                       or CryptographicException)
         {
-            return new IncrementalFrontendCacheProbe(location, "rejected: " + error.Message, 0, null, null);
+            return new IncrementalFrontendCacheProbe(location, "rejected: " + error.Message, 0, null, null, []);
         }
     }
 
     public static void Publish(
         LoadedCompilation compilation,
+        IReadOnlyList<SemanticWarning> warnings,
         CliOptions options,
         IncrementalCacheLocation location)
     {
@@ -117,6 +121,7 @@ internal static class IncrementalFrontendCache
                     stream,
                     checksum,
                     checked((ulong)sources.Count(static source => source.IsStandardLibrary)));
+                WriteUInt64(stream, checksum, checked((ulong)warnings.Count));
 
                 foreach (var root in roots)
                 {
@@ -144,6 +149,14 @@ internal static class IncrementalFrontendCache
                         Path.GetFullPath(source.Path),
                         source.SourceBytes);
                 }
+                foreach (var warning in warnings)
+                {
+                    WriteString(stream, checksum, warning.Code);
+                    WriteString(stream, checksum, warning.ModuleName);
+                    WriteUInt64(stream, checksum, checked((ulong)warning.Line));
+                    WriteUInt64(stream, checksum, checked((ulong)warning.Column));
+                    WriteString(stream, checksum, warning.Message);
+                }
 
                 stream.Write(checksum.GetHashAndReset());
                 stream.Flush(flushToDisk: true);
@@ -162,7 +175,7 @@ internal static class IncrementalFrontendCache
     private static ValidatedSnapshot ValidateSnapshot(IncrementalCacheLocation location, CliOptions options)
     {
         var fileLength = new FileInfo(location.SourceSnapshotPath).Length;
-        if (fileLength < 10 * sizeof(ulong) + 2 * DigestLength)
+        if (fileLength < 11 * sizeof(ulong) + 2 * DigestLength)
         {
             throw new InvalidDataException("source snapshot is truncated");
         }
@@ -196,6 +209,7 @@ internal static class IncrementalFrontendCache
         var additionalInputCount = CheckedCount(ReadUInt64(stream, checksum), "additional input");
         var sourceCount = CheckedCount(ReadUInt64(stream, checksum), "source");
         var standardLibraryCount = CheckedCount(ReadUInt64(stream, checksum), "standard-library source");
+        var warningCount = CheckedCount(ReadUInt64(stream, checksum), "warning");
         if (standardLibraryCount > sourceCount)
         {
             throw new InvalidDataException("source snapshot standard-library count is invalid");
@@ -276,6 +290,17 @@ internal static class IncrementalFrontendCache
             throw new FrontendCacheMissException("source set changed");
         }
 
+        var warnings = new SemanticWarning[warningCount];
+        for (var index = 0; index < warningCount; index++)
+        {
+            var code = ReadString(stream, checksum);
+            var moduleName = ReadString(stream, checksum);
+            var line = CheckedCount(ReadUInt64(stream, checksum), "warning line");
+            var column = CheckedCount(ReadUInt64(stream, checksum), "warning column");
+            var message = ReadString(stream, checksum);
+            warnings[index] = new SemanticWarning(code, moduleName, line, column, message);
+        }
+
         if (stream.Position != fileLength - DigestLength)
         {
             throw new InvalidDataException("source snapshot declared lengths do not reach the checksum");
@@ -287,7 +312,7 @@ internal static class IncrementalFrontendCache
         {
             throw new InvalidDataException("source snapshot checksum mismatch");
         }
-        return new ValidatedSnapshot(sourceCount, codegenDigest, declaredDigest.ToArray());
+        return new ValidatedSnapshot(sourceCount, codegenDigest, declaredDigest.ToArray(), warnings);
     }
 
     private static IEnumerable<string> ManifestPaths(CliOptions options)
@@ -419,6 +444,25 @@ internal static class IncrementalFrontendCache
         WriteBytes(stream, checksum, bytes);
     }
 
+    private static void WriteString(Stream stream, IncrementalHash checksum, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        if (bytes.Length > MaximumPathBytes)
+        {
+            throw new InvalidDataException("frontend diagnostic text is too large");
+        }
+        WriteUInt64(stream, checksum, checked((ulong)bytes.Length));
+        WriteBytes(stream, checksum, bytes);
+    }
+
+    private static string ReadString(Stream stream, IncrementalHash checksum)
+    {
+        var length = CheckedLength(ReadUInt64(stream, checksum), MaximumPathBytes, "diagnostic text");
+        var bytes = new byte[length];
+        ReadBytes(stream, checksum, bytes);
+        return new UTF8Encoding(false, true).GetString(bytes);
+    }
+
     private static ulong ReadUInt64(Stream stream, IncrementalHash checksum)
     {
         Span<byte> bytes = stackalloc byte[sizeof(ulong)];
@@ -468,7 +512,8 @@ internal static class IncrementalFrontendCache
     private sealed record ValidatedSnapshot(
         int SourceCount,
         byte[] CodegenDigest,
-        byte[] SourceGenerationKey);
+        byte[] SourceGenerationKey,
+        IReadOnlyList<SemanticWarning> Warnings);
 
     private sealed class FrontendCacheMissException(string message) : Exception(message);
 }

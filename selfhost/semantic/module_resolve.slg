@@ -19,14 +19,14 @@ public resolve sources: [Text; ~] -> [ResolvedImport; ~] {
     package -> resolveAnalyzed
 }
 public resolveAnalyzed package: analysis.PackageAnalysis -> [ResolvedImport; ~] {
-    package -> modules.identitiesAnalyzed => identities!
-    package -> modules.importsAnalyzed => imports!
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
     [ResolvedImport; ~] => resolved!
-    identities! -> len => moduleCount
-    imports! -> len => importCount
+    identities -> len => moduleCount
+    imports -> len => importCount
     0 => edgeIndex!
     edgeIndex! < importCount -> while {
-        imports![edgeIndex!] => edge
+        imports[edgeIndex!] => edge
         package.sources[edge.sourceModule] -> len => edgeSourceLength
         package.sources[edge.sourceModule] -> slice(UIntSize(0), edgeSourceLength) => edgeSource
         package.ranges[edge.sourceModule] => sourceRange
@@ -34,7 +34,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [ResolvedImport; ~] 
         false => duplicateAlias!
         0 => priorEdgeIndex!
         priorEdgeIndex! < edgeIndex! -> while {
-            imports![priorEdgeIndex!] => priorEdge
+            imports[priorEdgeIndex!] => priorEdge
             priorEdge.sourceModule == edge.sourceModule -> if {
                 package.tokens[sourceRange.tokenStart + priorEdge.aliasToken] => priorAlias
                 edgeAlias.span.length == priorAlias.span.length => aliasEqual!
@@ -43,7 +43,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [ResolvedImport; ~] 
                     edgeSource -> byte(edgeAlias.span.start + aliasByte!) => edgeByte
                     edgeSource -> byte(priorAlias.span.start + aliasByte!) => priorByte
                     edgeByte != priorByte -> if { false => aliasEqual! }
-                    aliasByte! + UIntSize(1) => aliasByte!
+                    aliasByte! + 1 => aliasByte!
                 }
                 aliasEqual! -> if { true => duplicateAlias! }
             }
@@ -53,7 +53,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [ResolvedImport; ~] 
         0 => matches!
         0 => moduleIndex!
         moduleIndex! < moduleCount -> while {
-            identities![moduleIndex!].pathHash == edge.targetHash -> if {
+            identities[moduleIndex!].pathHash == edge.targetHash -> if {
                 targetModule! < 0 -> if { moduleIndex! => targetModule! }
                 matches! + 1 => matches!
             }

@@ -1,0 +1,30 @@
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+
+run: -> Result<Bool, errors.Error> {
+    frame.encode(frames.Value.NewConnectionId(frames.NewConnectionId {
+        sequence: 1
+        retirePriorTo: 0
+        connectionId: [9, 8, 7, 6, 5, 4, 3, 2; ~]
+        statelessResetToken: [17; 16]
+    }))? => first
+    frame.encode(frames.Value.Stream(frames.Stream {
+        id: 0
+        offset: 0
+        fin: true
+        data: [112, 105, 110, 103; ~]
+    }))? => second
+    Result<Bool, errors.Error>.Ok(
+        (first -> len) == 28
+            and (second -> len) == 7
+            and first[0] == 24
+            and second[0] == 11)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "consecutive-frame-encode=ok" } else { "consecutive-frame-encode=failed" } -> println }
+        Err(value) { "consecutive-frame-encode-error=$(value.code)" -> println }
+    }
+}

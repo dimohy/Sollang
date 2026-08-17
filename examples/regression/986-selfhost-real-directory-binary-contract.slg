@@ -1,0 +1,26 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    ["stdlib/sys/directory.slg"; ~] => sourcePaths
+    sourcePaths -> semanticContext.prepareFiles => context
+    context -> typedIr.lowerContext => ir
+    0 => contracts!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        context.package.ranges[node.sourceModule] => range
+        context.package.nodes[range.astStart + node.astNode] => sourceNode
+        (node.sourceModule == 0 and node.kind == 8 and (sourceNode.start == 3339 or sourceNode.start == 3422)) -> if {
+            ir[node.operand0] => left
+            ir[node.operand1] => right
+            ir[left.operand0] => leftBinding
+            (node.typeSymbol == 13
+                and left.typeId == node.typeId
+                and right.typeId == node.typeId
+                and leftBinding.typeId == node.typeId) -> if { contracts! + 1 => contracts! }
+        }
+        index! + 1 => index!
+    }
+    "real-directory-binary-contracts=$(contracts!)" -> println
+}

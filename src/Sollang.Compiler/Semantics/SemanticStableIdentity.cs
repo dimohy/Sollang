@@ -247,7 +247,10 @@ internal static class SemanticStableIdentity
         }
         if (types.IsStaticArray(type))
         {
-            return "StaticArray<" + Type(types, types.GetStaticArray(type).ElementType) + ">";
+            var definition = types.GetStaticArray(type);
+            return definition.FixedLength is { } length
+                ? "FixedArray<" + Type(types, definition.ElementType) + "," + length + ">"
+                : "StaticArray<" + Type(types, definition.ElementType) + ">";
         }
         if (types.IsBinaryHeap(type))
         {
@@ -293,6 +296,10 @@ internal static class SemanticStableIdentity
         if (types.IsReference(type))
         {
             return "Ref<" + Type(types, types.GetReference(type).ElementType) + ">";
+        }
+        if (types.IsSlice(type))
+        {
+            return "Slice<" + Type(types, types.GetSliceElement(type)) + ">";
         }
         if (types.IsDynTrait(type))
         {
@@ -632,16 +639,46 @@ internal static class SemanticStableIdentity
         if (node is not (CallExpression
             or TypeApplicationExpression
             or FlowTarget
-            or BlockFunctionCallStatement))
+            or BlockFunctionCallStatement
+            or FieldAccessExpression))
         {
             return;
         }
-        if (!result.TryAdd(node, owner + "/call:" + ordinal.ToString(CultureInfo.InvariantCulture)))
+        var identity = owner
+            + "/call:"
+            + ordinal.ToString(CultureInfo.InvariantCulture)
+            + ":"
+            + CallSiteShape(node);
+        if (!result.TryAdd(node, identity))
         {
             throw new InvalidOperationException("syntax call site occurs more than once in syntax traversal");
         }
         ordinal++;
     }
+
+    private static string CallSiteShape(object node) => node switch
+    {
+        CallExpression call => "call:" + string.Join('.', call.Path),
+        TypeApplicationExpression application =>
+            "type:"
+            + string.Join('.', application.Path)
+            + "<"
+            + application.TypeArgument
+            + ";"
+            + string.Join(',', application.AdditionalTypeArguments ?? [])
+            + ">",
+        FlowTarget target =>
+            "flow:"
+            + string.Join('.', target.Path)
+            + "<"
+            + (target.TypeArgument ?? string.Empty)
+            + ";"
+            + (target.CompileTimeValueArgument?.ToString(CultureInfo.InvariantCulture) ?? string.Empty)
+            + ">",
+        BlockFunctionCallStatement block => "block:" + string.Join('.', block.Target),
+        FieldAccessExpression field => "field:" + field.FieldName,
+        _ => throw new InvalidOperationException("unsupported stable call-site node")
+    };
 
     private static void Append(StringBuilder builder, string value)
     {
@@ -666,6 +703,14 @@ internal static class SemanticStableIdentity
                 return Close(types.GetOrAddEventStream(Parse()));
             if (Take("StaticArray<"))
                 return Close(types.GetOrAddStaticArray(Parse()));
+            if (Take("FixedArray<"))
+            {
+                var element = Parse();
+                Expect(',');
+                var length = ParseNumber();
+                Expect('>');
+                return types.GetOrAddFixedStaticArray(element, length);
+            }
             if (Take("Array<"))
                 return Close(types.GetOrAddDynamicArray(Parse()));
             if (Take("BoundedArray<"))
@@ -686,6 +731,8 @@ internal static class SemanticStableIdentity
             }
             if (Take("Ref<"))
                 return Close(types.GetOrAddReference(Parse()));
+            if (Take("Slice<"))
+                return Close(types.GetOrAddSlice(Parse()));
             if (Take("Dyn<"))
             {
                 var traitName = Rest();

@@ -1,0 +1,36 @@
+struct Payload {
+    data: [UInt8; ~]
+}
+
+enum Value {
+    Bytes(Payload)
+    Empty
+}
+
+struct Wrapper {
+    value: Value
+    marker: UInt8
+}
+
+struct Output {
+    data: [UInt8; ~]
+}
+
+unwrap wrapper: move Wrapper -> Result<Output, UInt8> {
+    wrapper.value -> when {
+        Bytes(payload) {
+            Result<Output, UInt8>.Ok(Output { data: payload.data })
+        }
+        Empty { Result<Output, UInt8>.Err(1) }
+    }
+}
+
+main {
+    Wrapper {
+        value: Value.Bytes(Payload { data: [3, 5, 8; ~] })
+        marker: 13
+    } -> unwrap -> when {
+        Ok(output) { "owned-enum-field=$(output.data -> len),$(output.data[2])" -> println }
+        Err(error) { "owned-enum-field-error=$error" -> println }
+    }
+}

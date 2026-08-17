@@ -1,0 +1,51 @@
+namespace sys.crypto.tls13_hkdf
+
+import sys.crypto.hkdf_sha256 as hkdf
+
+append destination: mut [UInt8; ~], source: [UInt8] -> Unit {
+    0 => index!
+    index! < (source -> len) -> while {
+        destination -> push(source[index!])
+        index! + 1 => index!
+    }
+}
+
+encodeLabel label: Text, context: [UInt8], length: UIntSize -> [UInt8; ~] {
+    [UInt8; ~] => encoded!
+    encoded! -> push(UInt8(length / 256))
+    encoded! -> push(UInt8(length % 256))
+    encoded! -> push(UInt8(6 + (label -> len)))
+    encoded! -> push(116)
+    encoded! -> push(108)
+    encoded! -> push(115)
+    encoded! -> push(49)
+    encoded! -> push(51)
+    encoded! -> push(32)
+    UIntSize(0) => labelIndex!
+    labelIndex! < (label -> len) -> while {
+        encoded! -> push(label -> byte(labelIndex!))
+        labelIndex! + 1 => labelIndex!
+    }
+    encoded! -> push(UInt8(context -> len))
+    0 => contextIndex!
+    contextIndex! < (context -> len) -> while {
+        encoded! -> push(context[contextIndex!])
+        contextIndex! + 1 => contextIndex!
+    }
+    encoded!
+}
+
+public expandLabel12 secret: [UInt8], label: Text, context: [UInt8] -> [UInt8; 12] {
+    encodeLabel(label, context, 12) => encoded
+    secret -> hkdf.expand12(encoded)
+}
+
+public expandLabel16 secret: [UInt8], label: Text, context: [UInt8] -> [UInt8; 16] {
+    encodeLabel(label, context, 16) => encoded
+    secret -> hkdf.expand16(encoded)
+}
+
+public expandLabel32 secret: [UInt8], label: Text, context: [UInt8] -> [UInt8; 32] {
+    encodeLabel(label, context, 32) => encoded
+    secret -> hkdf.expand32(encoded)
+}

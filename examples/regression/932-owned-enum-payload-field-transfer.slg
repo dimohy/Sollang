@@ -1,0 +1,28 @@
+struct Payload {
+    data: [UInt8; ~]
+}
+
+enum Value {
+    Bytes(Payload)
+    Empty
+}
+
+struct Output {
+    data: [UInt8; ~]
+}
+
+unwrap value: move Value -> Result<Output, UInt8> {
+    value -> when {
+        Bytes(payload) {
+            Result<Output, UInt8>.Ok(Output { data: payload.data })
+        }
+        Empty { Result<Output, UInt8>.Err(1) }
+    }
+}
+
+main {
+    Value.Bytes(Payload { data: [3, 5, 8; ~] }) -> unwrap -> when {
+        Ok(output) { "owned-enum=$(output.data -> len),$(output.data[2])" -> println }
+        Err(error) { "owned-enum-error=$error" -> println }
+    }
+}

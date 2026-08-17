@@ -1,0 +1,106 @@
+namespace sys.socket
+
+# Numeric IP addresses keep name resolution outside the foundational socket
+# contract. IPv4 and IPv6 text are accepted; host names belong to a later DNS
+# layer with its own observable policy and errors.
+public struct Endpoint {
+    address: Text
+    port: UInt16
+}
+
+public struct ListenOptions {
+    endpoint: Endpoint
+    backlog: Int
+    reuseAddress: Bool
+}
+
+public struct DatagramBindOptions {
+    endpoint: Endpoint
+    reuseAddress: Bool
+}
+
+# TcpListener and TcpStream are affine native resources. Their private tokens
+# cannot be constructed or copied by user code, and scope exit closes the
+# underlying socket exactly once.
+public struct TcpListener {
+    token: UInt64
+}
+
+public struct TcpStream {
+    token: UInt64
+}
+
+public struct UdpSocket {
+    token: UInt64
+}
+
+# The source address is returned as owned UTF-8 bytes so receipt never hides a
+# text allocation or DNS policy. It is the canonical numeric IPv4/IPv6 text
+# emitted by the native platform.
+public struct Datagram {
+    sourceAddress: [UInt8; ~]
+    sourcePort: UInt16
+    bytes: [UInt8; ~]
+}
+
+public enum SocketErrorKind {
+    InvalidAddress
+    InvalidArgument
+    AddressInUse
+    ConnectionRefused
+    ConnectionReset
+    TimedOut
+    Interrupted
+    Unsupported
+    Other
+}
+
+public struct SocketError {
+    kind: SocketErrorKind
+    code: Int32
+}
+
+# Creates a blocking TCP listener. backlog must be positive. Address parsing,
+# socket creation, reuse-address setup, bind, and listen are one atomic
+# operation: failure leaves no live native handle.
+public listen options: ListenOptions -> Result<TcpListener, SocketError> uses Network = intrinsic
+
+# Accept keeps the listener owner live and returns a new affine stream owner.
+public accept listener: TcpListener -> Result<TcpStream, SocketError> uses Network = intrinsic
+
+# Connect accepts only a numeric IPv4 or IPv6 address. DNS is intentionally not
+# hidden inside this operation.
+public connect endpoint: Endpoint -> Result<TcpStream, SocketError> uses Network = intrinsic
+
+# Allocates one owned byte array with capacity maxBytes and publishes exactly
+# the number of bytes received. An empty successful array means orderly peer
+# shutdown. maxBytes must be positive.
+public receive connection: TcpStream, maxBytes: UIntSize -> Result<[UInt8; ~], SocketError> uses Network = intrinsic
+
+# Sends at most bytes.len bytes and reports the exact count. A successful short
+# send is observable so callers can implement an explicit retry policy.
+public send connection: TcpStream, bytes: ref [UInt8; ~] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+# Text is already UTF-8 storage, so this overload sends its bytes without
+# allocation or transcoding and reports the exact count.
+public sendText connection: TcpStream, text: Text -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+# Disables both directions while keeping deterministic owner close at scope
+# exit. Calling shutdown more than once reports the native error.
+public shutdown connection: TcpStream -> Result<Unit, SocketError> uses Network = intrinsic
+
+# Creates a blocking UDP socket and binds it atomically. The socket is affine
+# and closes exactly once at scope exit.
+public bindDatagram options: DatagramBindOptions -> Result<UdpSocket, SocketError> uses Network = intrinsic
+
+# Returns the port assigned to a bound UDP socket. This is especially useful
+# after binding port 0, where the kernel selects an ephemeral port.
+public localPort socket: UdpSocket -> Result<UInt16, SocketError> uses Network = intrinsic
+
+# Sends one complete datagram. A successful result is the native byte count;
+# callers must reject a short count if their protocol requires atomic delivery.
+public sendTo socket: UdpSocket, endpoint: Endpoint, bytes: ref [UInt8; ~] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+# Receives one datagram up to maxBytes and returns its numeric source endpoint.
+# maxBytes must be positive; larger datagrams follow the native truncation rule.
+public receiveFrom socket: UdpSocket, maxBytes: UIntSize -> Result<Datagram, SocketError> uses Network = intrinsic

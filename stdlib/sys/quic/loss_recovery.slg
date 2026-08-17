@@ -1,0 +1,184 @@
+namespace sys.quic.loss_recovery
+
+import sys.quic.error as errors
+
+public struct RttState {
+    initialized: Bool
+    latest: UInt64
+    minimum: UInt64
+    smoothed: UInt64
+    variance: UInt64
+}
+
+public struct CongestionState {
+    congestionWindow: UInt64
+    slowStartThreshold: UInt64
+    bytesInFlight: UInt64
+    recoveryStartTime: UInt64
+    inRecovery: Bool
+}
+
+public initialRtt: -> UInt64 => 333_000
+public timerGranularity: -> UInt64 => 1_000
+public packetThreshold: -> UInt64 => 3
+maximumDuration: -> UInt64 => 18_446_744_073_709_551_615
+
+maximum left: UInt64, right: UInt64 -> UInt64 {
+    left >= right -> if { left } else { right }
+}
+
+minimum left: UInt64, right: UInt64 -> UInt64 {
+    left <= right -> if { left } else { right }
+}
+
+absoluteDifference left: UInt64, right: UInt64 -> UInt64 {
+    left >= right -> if { left - right } else { right - left }
+}
+
+public initialRttState: -> RttState => RttState {
+    initialized: false
+    latest: initialRtt()
+    minimum: initialRtt()
+    smoothed: initialRtt()
+    variance: initialRtt() / 2
+}
+
+public updateRtt state: RttState, latest: UInt64, ackDelay: UInt64, maxAckDelay: UInt64, applicationData: Bool -> RttState {
+    state.initialized -> if {
+        minimum(state.minimum, latest) => nextMinimum
+        minimum(ackDelay, maxAckDelay) => boundedDelay
+        (applicationData and latest >= nextMinimum + boundedDelay) -> if {
+            latest - boundedDelay
+        } else {
+            latest
+        } => adjusted
+        absoluteDifference(state.smoothed, adjusted) => difference
+        RttState {
+            initialized: true
+            latest: latest
+            minimum: nextMinimum
+            smoothed: (state.smoothed * 7 + adjusted) / 8
+            variance: (state.variance * 3 + difference) / 4
+        }
+    } else {
+        RttState {
+            initialized: true
+            latest: latest
+            minimum: latest
+            smoothed: latest
+            variance: latest / 2
+        }
+    }
+}
+
+public timeThresholdDelay state: RttState -> UInt64 {
+    maximum(state.latest, state.smoothed) => base
+    maximum(base + base / 8, timerGranularity())
+}
+
+public lostByPacketThreshold largestAcknowledged: UInt64, packetNumber: UInt64 -> Bool {
+    largestAcknowledged > packetNumber -> if {
+        largestAcknowledged - packetNumber >= packetThreshold()
+    } else {
+        false
+    }
+}
+
+public lostByTimeThreshold state: RttState, now: UInt64, sentTime: UInt64 -> Bool {
+    now >= sentTime -> if { now - sentTime >= timeThresholdDelay(state) } else { false }
+}
+
+public probeTimeout state: RttState, maxAckDelay: UInt64, applicationData: Bool, ptoCount: UInt8 -> Result<UInt64, errors.Error> {
+    state.smoothed + maximum(state.variance * 4, timerGranularity()) => timer!
+    applicationData -> if { timer! + maxAckDelay => timer! }
+    ptoCount - ptoCount => index!
+    index! < ptoCount -> while {
+        timer! <= maximumDuration() / 2 -> if {
+            timer! * 2 => timer!
+        } else {
+            Result<UInt64, errors.Error>.Err(errors.Error { kind: errors.Kind.InvalidArgument, code: UInt64(ptoCount) }) -> return
+        }
+        index! + 1 => index!
+    }
+    Result<UInt64, errors.Error>.Ok(timer!)
+}
+
+public initialCongestionWindow maxDatagramSize: UInt64 -> UInt64 {
+    minimum(maxDatagramSize * 10, maximum(maxDatagramSize * 2, 14_720))
+}
+
+public minimumCongestionWindow maxDatagramSize: UInt64 -> UInt64 => maxDatagramSize * 2
+
+public initialCongestionState maxDatagramSize: UInt64 -> CongestionState => CongestionState {
+    congestionWindow: initialCongestionWindow(maxDatagramSize)
+    slowStartThreshold: maximumDuration()
+    bytesInFlight: 0
+    recoveryStartTime: 0
+    inRecovery: false
+}
+
+public onPacketSent state: CongestionState, sentBytes: UInt64, ackEliciting: Bool -> CongestionState => CongestionState {
+    congestionWindow: state.congestionWindow
+    slowStartThreshold: state.slowStartThreshold
+    bytesInFlight: state.bytesInFlight + (ackEliciting -> if { sentBytes } else { 0 })
+    recoveryStartTime: state.recoveryStartTime
+    inRecovery: state.inRecovery
+}
+
+public onPacketsAcknowledged state: CongestionState, acknowledgedBytes: UInt64, largestAcknowledgedSentTime: UInt64, maxDatagramSize: UInt64, congestionLimited: Bool -> CongestionState {
+    minimum(state.bytesInFlight, acknowledgedBytes) => removed
+    state.bytesInFlight - removed => nextInFlight
+    ((state.inRecovery and largestAcknowledgedSentTime <= state.recoveryStartTime) or not congestionLimited) -> if {
+        CongestionState {
+            congestionWindow: state.congestionWindow
+            slowStartThreshold: state.slowStartThreshold
+            bytesInFlight: nextInFlight
+            recoveryStartTime: state.recoveryStartTime
+            inRecovery: state.inRecovery
+        }
+    } else {
+        state.congestionWindow < state.slowStartThreshold -> if {
+            state.congestionWindow + acknowledgedBytes
+        } else {
+            state.congestionWindow + maxDatagramSize * acknowledgedBytes / state.congestionWindow
+        } => nextWindow
+        CongestionState {
+            congestionWindow: nextWindow
+            slowStartThreshold: state.slowStartThreshold
+            bytesInFlight: nextInFlight
+            recoveryStartTime: state.recoveryStartTime
+            inRecovery: state.inRecovery
+        }
+    }
+}
+
+public onPacketsLost state: CongestionState, lostBytes: UInt64, largestLostSentTime: UInt64, now: UInt64, maxDatagramSize: UInt64 -> CongestionState {
+    minimum(state.bytesInFlight, lostBytes) => removed
+    state.bytesInFlight - removed => nextInFlight
+    (state.inRecovery and largestLostSentTime <= state.recoveryStartTime) -> if {
+        CongestionState {
+            congestionWindow: state.congestionWindow
+            slowStartThreshold: state.slowStartThreshold
+            bytesInFlight: nextInFlight
+            recoveryStartTime: state.recoveryStartTime
+            inRecovery: state.inRecovery
+        }
+    } else {
+        maximum(state.congestionWindow / 2, minimumCongestionWindow(maxDatagramSize)) => nextWindow
+        CongestionState {
+            congestionWindow: nextWindow
+            slowStartThreshold: nextWindow
+            bytesInFlight: nextInFlight
+            recoveryStartTime: now
+            inRecovery: true
+        }
+    }
+}
+
+public onPersistentCongestion state: CongestionState, maxDatagramSize: UInt64 -> CongestionState => CongestionState {
+    congestionWindow: minimumCongestionWindow(maxDatagramSize)
+    slowStartThreshold: state.slowStartThreshold
+    bytesInFlight: state.bytesInFlight
+    recoveryStartTime: state.recoveryStartTime
+    inRecovery: state.inRecovery
+}

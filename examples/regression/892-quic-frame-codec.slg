@@ -1,0 +1,42 @@
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+
+run: -> Result<Bool, errors.Error> {
+    frames.Value.Stream(frames.Stream { id: 4, offset: 65, fin: true, data: [112, 105, 110, 103; ~] }) => source
+    frame.encode(source)? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        Stream(streamFrame) {
+            Result<Bool, errors.Error>.Ok(streamFrame.id == 4
+                and streamFrame.offset == 65
+                and streamFrame.fin
+                and (streamFrame.data -> len) == 4
+                and streamFrame.data[0] == 112
+                and streamFrame.data[3] == 103
+                and decoded.nextOffset == UIntSize(encoded -> len))
+        }
+        Padding(count) { Result<Bool, errors.Error>.Ok(false) }
+        Ping { Result<Bool, errors.Error>.Ok(false) }
+        Ack(ack) { Result<Bool, errors.Error>.Ok(false) }
+        Crypto(crypto) { Result<Bool, errors.Error>.Ok(false) }
+        Datagram(datagram) { Result<Bool, errors.Error>.Ok(false) }
+        MaxData(maximum) { Result<Bool, errors.Error>.Ok(false) }
+        MaxStreamData(limit) { Result<Bool, errors.Error>.Ok(false) }
+        MaxStreams(limit) { Result<Bool, errors.Error>.Ok(false) }
+        DataBlocked(limit) { Result<Bool, errors.Error>.Ok(false) }
+        StreamDataBlocked(blocked) { Result<Bool, errors.Error>.Ok(false) }
+        StreamsBlocked(blocked) { Result<Bool, errors.Error>.Ok(false) }
+        ConnectionClose(close) { Result<Bool, errors.Error>.Ok(false) }
+        HandshakeDone { Result<Bool, errors.Error>.Ok(false) }
+        NewConnectionId(value) { Result<Bool, errors.Error>.Ok(false) }
+        RetireConnectionId(sequence) { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+main {
+    run() -> when {
+        Ok(success) { success -> if { "quic-frame=ok" } else { "quic-frame=failed" } -> println }
+        Err(error) { "quic-frame=failed" -> println }
+    }
+}

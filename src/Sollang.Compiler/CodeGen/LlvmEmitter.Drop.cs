@@ -8,7 +8,11 @@ internal sealed partial class LlvmEmitter
 {
     private void EmitOwnedDropHelpers()
     {
-        var needsHelpers = _program.MainBindings.Values.Any(IsCustomOwnedType)
+        var needsHelpers = _usesNetwork
+            || _program.MainBindings.Values.Any(IsCustomOwnedType)
+            || _reachableFunctions.Any(function =>
+                IsCustomOwnedType(function.ReturnType)
+                || (function.InputType is { } input && IsCustomOwnedType(input)))
             || _program.MainStatements.Any(UsesBox)
             || _program.Functions.Values.Where(function =>
                 !function.IsStandardLibrary || _standaloneStandardLibraryFunctions.Contains(function)).Any(function =>
@@ -20,12 +24,13 @@ internal sealed partial class LlvmEmitter
                 (!item.Key.IsStandardLibrary || _standaloneStandardLibraryFunctions.Contains(item.Key))
                 && item.Value.Values.Any(IsCustomOwnedType))
             || _program.Types.StaticArrays.Any(definition =>
-                _program.Types.ContainsOwnedStorage(definition.ElementType))
+                IsDropTypeReachable(definition.Id)
+                && _program.Types.ContainsOwnedStorage(definition.ElementType))
             || _program.Types.DynamicArrays.Any(definition =>
-                ShouldEmitTypeDefinition(definition.Id)
+                IsDropTypeReachable(definition.Id)
                 && _program.Types.ContainsOwnedStorage(definition.ElementType))
             || _program.Types.Dictionaries.Any(definition =>
-                ShouldEmitTypeDefinition(definition.Id)
+                IsDropTypeReachable(definition.Id)
                 && (_program.Types.ContainsOwnedStorage(definition.KeyType)
                     || _program.Types.ContainsOwnedStorage(definition.ValueType)));
         if (!needsHelpers)
@@ -33,36 +38,60 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        foreach (var box in _program.Types.Boxes.OrderBy(static box => box.Id))
+        foreach (var box in _program.Types.Boxes
+                     .Where(box => IsDropTypeReachable(box.Id))
+                     .OrderBy(static box => box.Id))
         {
             EmitBoxDropHelper(box);
         }
-        foreach (var dyn in _program.Types.DynTraits.OrderBy(static dyn => dyn.Id))
+        foreach (var dyn in _program.Types.DynTraits
+                     .Where(dyn => IsDropTypeReachable(dyn.Id))
+                     .OrderBy(static dyn => dyn.Id))
         {
             EmitDynTraitDropHelper(dyn);
         }
-        EmitDynamicArrayDropHelper(BoundType.DynamicIntArray, BoundType.Int);
+        foreach (var array in _program.Types.StaticArrays
+                     .Where(array => array.FixedLength is not null
+                         && IsDropTypeReachable(array.Id))
+                     .OrderBy(static array => array.Id))
+        {
+            EmitFixedArrayDropHelper(array);
+        }
+        if (IsDropTypeReachable(BoundType.DynamicIntArray))
+        {
+            EmitDynamicArrayDropHelper(BoundType.DynamicIntArray, BoundType.Int);
+        }
         foreach (var array in _program.Types.DynamicArrays
-                     .Where(array => ShouldEmitTypeDefinition(array.Id))
+                     .Where(array => IsDropTypeReachable(array.Id))
                      .OrderBy(static array => array.Id))
         {
             EmitDynamicArrayDropHelper(array.Id, array.ElementType);
         }
-        foreach (var array in _program.Types.BoundedArrays.OrderBy(static array => array.Id))
+        foreach (var array in _program.Types.BoundedArrays
+                     .Where(array => IsDropTypeReachable(array.Id))
+                     .OrderBy(static array => array.Id))
         {
             EmitBoundedArrayDropHelper(array);
         }
-        EmitDictionaryDropHelper(BoundType.IntDictionary);
-        foreach (var dictionary in _program.Types.Dictionaries.OrderBy(static dictionary => dictionary.Id))
+        if (IsDropTypeReachable(BoundType.IntDictionary))
+        {
+            EmitDictionaryDropHelper(BoundType.IntDictionary);
+        }
+        foreach (var dictionary in _program.Types.Dictionaries
+                     .Where(dictionary => IsDropTypeReachable(dictionary.Id))
+                     .OrderBy(static dictionary => dictionary.Id))
         {
             EmitDictionaryDropHelper(dictionary.Id);
         }
-        foreach (var dictionary in _program.Types.BoundedDictionaries.OrderBy(static dictionary => dictionary.Id))
+        foreach (var dictionary in _program.Types.BoundedDictionaries
+                     .Where(dictionary => IsDropTypeReachable(dictionary.Id))
+                     .OrderBy(static dictionary => dictionary.Id))
         {
             EmitBoundedDictionaryDropHelper(dictionary);
         }
         foreach (var structure in _program.Types.Structs
                      .Where(definition => ShouldEmitTypeDefinition(definition.Id)
+                         && IsDropTypeReachable(definition.Id)
                          && _program.Types.ContainsOwnedStorage(definition.Id))
                      .OrderBy(static definition => definition.Id))
         {
@@ -70,6 +99,7 @@ internal sealed partial class LlvmEmitter
         }
         foreach (var enumeration in _program.Types.Enums
                      .Where(definition => ShouldEmitTypeDefinition(definition.Id)
+                         && IsDropTypeReachable(definition.Id)
                          && _program.Types.ContainsOwnedStorage(definition.Id))
                      .OrderBy(static definition => definition.Id))
         {
@@ -143,10 +173,125 @@ internal sealed partial class LlvmEmitter
     {
         return _program.Types.IsBox(type)
             || _program.Types.IsDynTrait(type)
+            || (_program.Types.IsStaticArray(type)
+                && _program.Types.GetStaticArray(type).FixedLength is not null)
             || ((_program.Types.IsBoundedArray(type) || _program.Types.IsBoundedDictionary(type))
                 && _program.Types.ContainsOwnedStorage(type))
             || ((_program.Types.IsStruct(type) || _program.Types.IsEnum(type))
                 && _program.Types.ContainsOwnedStorage(type));
+    }
+
+    private bool IsDropTypeReachable(BoundType target)
+    {
+        var roots = new List<BoundType>(_program.MainBindings.Values);
+        foreach (var function in _reachableFunctions)
+        {
+            roots.Add(function.ReturnType);
+            if (function.InputType is { } input)
+            {
+                roots.Add(input);
+            }
+            roots.AddRange((function.AdditionalParameters ?? []).Select(static parameter => parameter.Type));
+            roots.AddRange((function.AdditionalBlockParameters ?? []).Select(static parameter => parameter.Type));
+            if (function.BlockInputType is { } blockInput)
+            {
+                roots.Add(blockInput);
+            }
+            if (function.BlockResultType is { } blockResult)
+            {
+                roots.Add(blockResult);
+            }
+            if (function.StreamElementType is { } streamElement)
+            {
+                roots.Add(streamElement);
+            }
+        }
+        foreach (var (function, bindings) in _program.FunctionBindings)
+        {
+            if (_reachableFunctions.Contains(function)
+                || (!function.IsStandardLibrary || _standaloneStandardLibraryFunctions.Contains(function)))
+            {
+                roots.AddRange(bindings.Values);
+            }
+        }
+
+        return roots.Any(root => TypeContains(root, target, []));
+    }
+
+    private bool TypeContains(BoundType current, BoundType target, HashSet<BoundType> visited)
+    {
+        if (current == target)
+        {
+            return true;
+        }
+        if (!visited.Add(current))
+        {
+            return false;
+        }
+        if (_program.Types.IsStruct(current))
+        {
+            return _program.Types.GetStruct(current).Fields.Any(field => TypeContains(field.Type, target, visited));
+        }
+        if (_program.Types.IsEnum(current))
+        {
+            return _program.Types.GetEnum(current).Variants.Any(variant =>
+                variant.PayloadType is { } payload && TypeContains(payload, target, visited));
+        }
+        if (_program.Types.IsStaticArray(current))
+        {
+            return TypeContains(_program.Types.GetStaticArray(current).ElementType, target, visited);
+        }
+        if (_program.Types.IsDynamicArray(current))
+        {
+            return TypeContains(_program.Types.GetDynamicArray(current).ElementType, target, visited);
+        }
+        if (_program.Types.IsBoundedArray(current))
+        {
+            return TypeContains(_program.Types.GetBoundedArray(current).ElementType, target, visited);
+        }
+        if (_program.Types.IsDictionary(current))
+        {
+            var dictionary = _program.Types.GetDictionary(current);
+            return TypeContains(dictionary.KeyType, target, visited)
+                || TypeContains(dictionary.ValueType, target, visited);
+        }
+        if (_program.Types.IsBoundedDictionary(current))
+        {
+            var dictionary = _program.Types.GetBoundedDictionary(current);
+            return TypeContains(dictionary.KeyType, target, visited)
+                || TypeContains(dictionary.ValueType, target, visited);
+        }
+        if (_program.Types.IsBox(current))
+        {
+            return TypeContains(_program.Types.GetBox(current).ElementType, target, visited);
+        }
+        if (_program.Types.IsReference(current))
+        {
+            return TypeContains(_program.Types.GetReference(current).ElementType, target, visited);
+        }
+        if (_program.Types.IsSlice(current))
+        {
+            return TypeContains(_program.Types.GetSliceElement(current), target, visited);
+        }
+        if (_program.Types.TryGetStreamValue(current, out var streamValue))
+        {
+            return TypeContains(streamValue, target, visited);
+        }
+        return _program.Types.TryGetEventStreamValue(current, out var eventValue)
+            && TypeContains(eventValue, target, visited);
+    }
+
+    private void EmitFixedArrayDropHelper(BoundStaticArrayDefinition definition)
+    {
+        EmitFunctionLine($"define internal void {DropSymbol(definition.Id)}(%sollang.int_slice %value) #0 {{");
+        EmitFunctionLine("entry:");
+        _currentBlockLabel = "entry";
+        var array = (RuntimeStaticInlineArray)DematerializeAggregateValue(definition.Id, "%value");
+        DropStaticInlineArrayElements(array);
+        EmitCall(target: null, "void", "sollang_free", $"ptr {array.PointerName}");
+        EmitInstruction("ret void");
+        EmitFunctionLine("}");
+        EmitFunctionLine();
     }
 
     private void EmitBoundedArrayDropHelper(BoundBoundedArrayDefinition definition)
@@ -334,9 +479,21 @@ internal sealed partial class LlvmEmitter
         {
             var handleValue = NextTemp("drop_native_handle_value");
             EmitAssign(handleValue, $"extractvalue {llvmType} %value, 0");
-            var dropTarget = NextTemp("drop_native_handle_target");
-            EmitLoad(dropTarget, "ptr", NativeHandleDropPointerGlobal(structure), 8);
-            EmitIndirectCall(target: null, "void", dropTarget, $"i64 {handleValue}");
+            if (IsEmbeddedNativeLibrary(structure.NativeHandle.Library))
+            {
+                EmitCall(
+                    target: null,
+                    "void",
+                    structure.NativeHandle.DropSymbol,
+                    $"i64 {handleValue}");
+            }
+            else
+            {
+                var dropTarget = NextTemp("drop_native_handle_target");
+                EmitLoad(dropTarget, "ptr", NativeHandleDropPointerGlobal(structure), 8);
+                EmitTrapIfNull(dropTarget, "drop_native_handle");
+                EmitIndirectCall(target: null, "void", dropTarget, $"i64 {handleValue}");
+            }
             EmitInstruction("ret void");
             EmitFunctionLine("}");
             EmitFunctionLine();
@@ -350,6 +507,20 @@ internal sealed partial class LlvmEmitter
                 target: null,
                 "void",
                 "sollang_platform_close_owned_file",
+                $"i64 {handle}");
+            EmitInstruction("ret void");
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+            return;
+        }
+        if (_usesNetwork && structure.Name is ("sys.socket.TcpListener" or "sys.socket.TcpStream" or "sys.socket.UdpSocket"))
+        {
+            var handle = NextTemp("drop_socket_handle");
+            EmitAssign(handle, $"extractvalue {llvmType} %value, 0");
+            EmitCall(
+                target: null,
+                "void",
+                "sollang_platform_close_socket",
                 $"i64 {handle}");
             EmitInstruction("ret void");
             EmitFunctionLine("}");
@@ -416,6 +587,11 @@ internal sealed partial class LlvmEmitter
 
     private void EmitOwnedDropCall(BoundType type, string valueName)
     {
+        if (_program.Types.IsStream(type) || _program.Types.IsEventStream(type))
+        {
+            DropOwnedRuntimeValue(DematerializeAggregateValue(type, valueName));
+            return;
+        }
         if (type == BoundType.SourceText)
         {
             var basePointer = NextTemp("drop_source_text_base");

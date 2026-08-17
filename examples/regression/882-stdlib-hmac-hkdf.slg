@@ -1,0 +1,19 @@
+import sys.crypto.hmac_sha256 as hmac
+import sys.crypto.hkdf_sha256 as hkdf
+
+hmacKey: -> [UInt8; 20] => [11; 20]
+hmacMessage: -> [UInt8; 8] => [72, 105, 32, 84, 104, 101, 114, 101]
+inputKeyMaterial: -> [UInt8; 22] => [11; 22]
+salt: -> [UInt8; 13] => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+info: -> [UInt8; 10] => [240, 241, 242, 243, 244, 245, 246, 247, 248, 249]
+
+main {
+    hmac.digest(hmacKey(), hmacMessage()) => mac
+    hkdf.extract(salt(), inputKeyMaterial()) => pseudorandomKey
+    pseudorandomKey -> hkdf.expand42(info()) => output
+    (mac[0] == 176 and mac[31] == 247
+        and pseudorandomKey[0] == 7 and pseudorandomKey[31] == 229
+        and output[0] == 60 and output[41] == 101) -> if {
+        "hmac-hkdf=ok"
+    } else { "hmac-hkdf=failed" } -> println
+}

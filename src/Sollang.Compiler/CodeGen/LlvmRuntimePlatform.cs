@@ -31,6 +31,12 @@ internal abstract class LlvmRuntimePlatform
 
     public abstract void EmitProcessPrimitives(StringBuilder functions);
 
+    public virtual void EmitSocketPrimitives(StringBuilder functions) =>
+        throw new SollangException("network sockets are unavailable on the current target");
+
+    public virtual void EmitSecureRandomPrimitives(StringBuilder functions) =>
+        throw new SollangException("cryptographic random bytes are unavailable on the current target");
+
     public virtual void EmitEnvironmentPrimitives(StringBuilder functions)
     {
     }
@@ -57,6 +63,10 @@ internal abstract class LlvmRuntimePlatform
 
     public virtual bool SupportsDirectoryTraversal => true;
 
+    public virtual bool SupportsNetwork => true;
+
+    public virtual bool SupportsSecureRandom => true;
+
     public virtual bool SupportsAsync => false;
 
     public virtual bool SupportsComputePool => false;
@@ -70,6 +80,8 @@ internal abstract class LlvmRuntimePlatform
     public bool UsesProcessExit { get; set; }
     public bool UsesComputePool { get; set; }
     public bool UsesDirectoryTraversal { get; set; }
+    public bool UsesNetwork { get; set; }
+    public bool UsesSecureRandom { get; set; }
     public bool UsesMouseEvents { get; set; }
     public bool UsesConcurrentStreamJoins { get; set; }
     public bool UsesStandardError { get; set; }

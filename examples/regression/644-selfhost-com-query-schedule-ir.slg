@@ -41,15 +41,15 @@ main {
             probe.referencesAfter(value) -> println
         }
         """; ~
-    ] => sources!
-    sources! -> typedIr.lower => ir!
+    ] => sources
+    sources -> typedIr.lower => ir
 
     -1 => entry!
     -1 => outerBinding!
     -1 => nativeCall!
     0 => index!
-    index! < (ir! -> len) -> while {
-        ir![index!] => node
+    index! < (ir -> len) -> while {
+        ir[index!] => node
         node.kind == 11 -> if { index! => entry! }
         (node.kind == 17 and node.parent == entry!) -> if { index! => outerBinding! }
         (node.kind == 6 and node.targetModule == 0 and node.symbol == 7) -> if { index! => nativeCall! }
@@ -61,16 +61,16 @@ main {
     0 => producesInt32!
     0 => retainsControlDependency!
     nativeCall! >= 0 -> if {
-        ir![nativeCall!].operand0 => argument!
-        (argument! >= 0 and ir![argument!].kind == 5) -> if {
+        ir[nativeCall!].operand0 => argument
+        (argument >= 0 and ir[argument].kind == 5) -> if {
             1 => hasNameArgument!
-            ir![argument!].operand0 == outerBinding! -> if { 1 => resolvesOuterBinding! }
+            ir[argument].operand0 == outerBinding! -> if { 1 => resolvesOuterBinding! }
         }
     }
     outerBinding! >= 0 -> if {
-        ir![outerBinding!].operand0 => outerValue
-        (outerValue >= 0 and ir![outerValue].kind == 27) -> if { 1 => retainsControlDependency! }
-        (ir![outerBinding!].typeOrigin == 1 and ir![outerBinding!].typeSymbol == 5 and ir![outerValue].typeOrigin == 1 and ir![outerValue].typeSymbol == 5) -> if {
+        ir[outerBinding!].operand0 => outerValue
+        (outerValue >= 0 and ir[outerValue].kind == 27) -> if { 1 => retainsControlDependency! }
+        (ir[outerBinding!].typeOrigin == 1 and ir[outerBinding!].typeSymbol == 5 and ir[outerValue].typeOrigin == 1 and ir[outerValue].typeSymbol == 5) -> if {
             1 => producesInt32!
         }
     }

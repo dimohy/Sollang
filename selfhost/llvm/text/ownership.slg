@@ -88,7 +88,7 @@ regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterS
                 control.operand1 => armIndex!
                 armIndex! >= 0 -> while {
                     true => hasArm!
-                    armIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                    armIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
                         false => allArmsMove!
                     }
                     context.ir[armIndex!].nextOperand => armIndex!
@@ -110,18 +110,18 @@ regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterS
                         true => hasWhenArm!
                         (whenArm.operand0 >= 0 and whenArm.operand1 >= 0 and whenArm.operand0 != whenArm.operand1 and context.ir[whenArm.operand0].kind != 19) => conditionalWhenArm
                         conditionalWhenArm -> if {
-                            whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                            whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
                                 false => allWhenArmsMove!
                             }
                             whenArm.nextOperand => whenArmIndex!
                         } else {
                             true => hasWhenElse!
                             whenArm.operand1 >= 0 -> if {
-                                whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                                whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
                                     false => allWhenArmsMove!
                                 }
                             } else {
-                                whenArm.operand0 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                                whenArm.operand0 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
                                     false => allWhenArmsMove!
                                 }
                             }
@@ -147,13 +147,13 @@ regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterS
                         subjectWhenArm -> sourceNode(context, state) => subjectWhenArmSource
                         subjectWhenArmSource.kind == 58 => conditionalSubjectWhenArm
                         conditionalSubjectWhenArm -> if {
-                            subjectWhenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                            subjectWhenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
                                 false => allSubjectWhenArmsMove!
                             }
                             subjectWhenArm.nextOperand => subjectWhenArmIndex!
                         } else {
                             true => hasSubjectWhenElse!
-                            subjectWhenArmIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> if { } else {
+                            subjectWhenArmIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
                                 false => allSubjectWhenArmsMove!
                             }
                             false => subjectWhenArmOpen!
@@ -192,7 +192,7 @@ memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int, context: ref e
             UIntSize(0) => fieldByte!
             (matches! and fieldByte! < movedField.span.length) -> while {
                 (context.sources[candidateMember.sourceModule] -> byte(movedField.span.start + fieldByte!)) != (context.sources[candidateAssignment.sourceModule] -> byte(assignedField.span.start + fieldByte!)) -> if { false => matches! }
-                fieldByte! + UIntSize(1) => fieldByte!
+                fieldByte! + 1 => fieldByte!
             }
         }
     }
@@ -327,7 +327,7 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                                         context.sources[dropMoveMember.sourceModule] -> byte(dropMoveName.span.start + dropMoveNameByte!) => dropMoveByte
                                         context.sources[dropMoveOwnerSource!] -> byte(dropMoveFieldName.span.start + dropMoveNameByte!) => dropMoveFieldByte
                                         dropMoveByte != dropMoveFieldByte -> if { false => dropMoveEqual! }
-                                        dropMoveNameByte! + UIntSize(1) => dropMoveNameByte!
+                                        dropMoveNameByte! + 1 => dropMoveNameByte!
                                     }
                                     dropMoveEqual! -> if {
                                         dropMoveCandidateOrdinal! => dropMoveFieldOrdinal!
@@ -486,6 +486,32 @@ semanticTypeOwns typeId: Int, context: ref emitterContext.EmitContext, state: re
         context.typeTraits[typeId] % 2 == 1
     } else { false }
 }
+isOwnedSocketType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => owned!
+    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+        context.types[typeId] => candidate
+        (candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2) and candidate.module >= 0) -> if {
+            false => socketModule!
+            0 => moduleSearch!
+            moduleSearch! < (context.modules -> len) -> while {
+                context.modules[moduleSearch!] => moduleIdentity
+                (moduleIdentity.sourceIndex == candidate.module and moduleIdentity.pathHash == 2487526727054784715) -> if { true => socketModule! }
+                moduleSearch! + 1 => moduleSearch!
+            }
+            socketModule! -> if {
+                context.ranges[candidate.module] => candidateRange
+                (candidate.symbol >= 0 and candidate.symbol < candidateRange.symbolCount) -> if {
+                    context.symbols[candidateRange.symbolStart + candidate.symbol] => candidateSymbol
+                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "TcpListener", context, state) -> if { true => owned! }
+                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "TcpStream", context, state) -> if { true => owned! }
+                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "UdpSocket", context, state) -> if { true => owned! }
+                }
+            }
+        }
+    }
+    owned!
+}
+
 emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     0 => dropTypeIndex!
     dropTypeIndex! < (context.types -> len) -> while {
@@ -722,6 +748,10 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  ret void" -> println
             }
             ((dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2) and not (dropTypeIndex! -> isNominalEnumType(context, state))) or dropType.kind == 10) -> if {
+                (dropType.kind == 1 and (dropTypeIndex! -> isOwnedSocketType(context, state))) -> if {
+                    "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
+                    "  call void @sollang_platform_close_socket(i64 %handle)" -> println
+                } else {
                 (dropType.kind == 1 and (dropTypeIndex! -> isOwnedFileType(context, state))) -> if {
                     "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
                     "  call void @sollang_platform_close_owned_file(i64 %handle)" -> println
@@ -739,6 +769,7 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                         }
                         dropFieldIndex! + 1 => dropFieldIndex!
                     }
+                }
                 }
                 "  ret void" -> println
             }
@@ -800,7 +831,7 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  ret void" -> println
             }
             (dropTypeIndex! -> isNominalEnumType(context, state)) -> if {
-                dropTypeIndex! -> enumPayloadTypes(context, state) => nominalDropPayloads!
+                dropTypeIndex! -> enumPayloadTypes(context, state) => nominalDropPayloads
                 "  %slot = alloca %sollang.enum.t$(dropTypeIndex!), align 8" -> println
                 "  store %sollang.enum.t$(dropTypeIndex!) %value, ptr %slot, align 8" -> println
                 "  %tag = extractvalue %sollang.enum.t$(dropTypeIndex!) %value, 0" -> println
@@ -808,8 +839,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  %is0 = icmp eq i32 %tag, 0" -> println
                 "  br i1 %is0, label %tag0, label %tag1" -> println
                 "tag0:" -> println
-                (nominalDropPayloads! -> len) > 0 -> if {
-                    nominalDropPayloads![0] => nominalDropFirst
+                (nominalDropPayloads -> len) > 0 -> if {
+                    nominalDropPayloads[0] => nominalDropFirst
                     (nominalDropFirst >= 0 and context.typeTraits[nominalDropFirst] % 2 == 1) -> if {
                         "  %first = load " -> print
                         nominalDropFirst -> writeSemanticTypeId(context, state)
@@ -822,8 +853,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 }
                 "  br label %done" -> println
                 "tag1:" -> println
-                (nominalDropPayloads! -> len) > 1 -> if {
-                    nominalDropPayloads![1] => nominalDropSecond
+                (nominalDropPayloads -> len) > 1 -> if {
+                    nominalDropPayloads[1] => nominalDropSecond
                     (nominalDropSecond >= 0 and context.typeTraits[nominalDropSecond] % 2 == 1) -> if {
                         "  %second = load " -> print
                         nominalDropSecond -> writeSemanticTypeId(context, state)
@@ -1224,7 +1255,7 @@ memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.Em
                             context.sources[node.sourceModule] -> byte(memberName.span.start + fieldNameByte!) => memberByte
                             context.sources[ownerSourceModule!] -> byte(fieldName.span.start + fieldNameByte!) => fieldByte
                             memberByte != fieldByte -> if { false => fieldEqual! }
-                            fieldNameByte! + UIntSize(1) => fieldNameByte!
+                            fieldNameByte! + 1 => fieldNameByte!
                         }
                         fieldEqual! -> if {
                             true => memberFieldFound!
@@ -1372,37 +1403,42 @@ storageAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext,
     }
     }
 }
-enumVariantTag node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    node -> sourceToken(context, state) => variantToken
+enumVariantTag node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
     -1 => tag!
-    variantToken.span.length == UIntSize(2) -> if {
-        context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
-        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
-        (first == UInt8(79) and second == UInt8(107)) -> if { 0 => tag! }
-    }
-    variantToken.span.length == UIntSize(3) -> if {
-        context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
-        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
-        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(2)) => third
-        (first == UInt8(69) and second == UInt8(114) and third == UInt8(114)) -> if { 1 => tag! }
-    }
-    variantToken.span.length == UIntSize(4) -> if {
-        context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
-        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
-        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(2)) => third
-        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(3)) => fourth
-        (first == UInt8(78) and second == UInt8(111) and third == UInt8(110) and fourth == UInt8(101)) -> if { 0 => tag! }
-        (first == UInt8(83) and second == UInt8(111) and third == UInt8(109) and fourth == UInt8(101)) -> if { 1 => tag! }
+    (node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len)) -> if {
+        context.ranges[node.sourceModule] => variantRange
+        (node.payloadToken >= 0 and node.payloadToken < variantRange.tokenCount) -> if {
+            context.tokens[variantRange.tokenStart + node.payloadToken] => variantToken
+            variantToken.span.length == 2 -> if {
+                context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+                context.sources[node.sourceModule] -> byte(variantToken.span.start + 1) => second
+                (first == 79 and second == 107) -> if { 0 => tag! }
+            }
+            variantToken.span.length == 3 -> if {
+                context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+                context.sources[node.sourceModule] -> byte(variantToken.span.start + 1) => second
+                context.sources[node.sourceModule] -> byte(variantToken.span.start + 2) => third
+                (first == 69 and second == 114 and third == 114) -> if { 1 => tag! }
+            }
+            variantToken.span.length == 4 -> if {
+                context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+                context.sources[node.sourceModule] -> byte(variantToken.span.start + 1) => second
+                context.sources[node.sourceModule] -> byte(variantToken.span.start + 2) => third
+                context.sources[node.sourceModule] -> byte(variantToken.span.start + 3) => fourth
+                (first == 78 and second == 111 and third == 110 and fourth == 101) -> if { 0 => tag! }
+                (first == 83 and second == 111 and third == 109 and fourth == 101) -> if { 1 => tag! }
+            }
+        }
     }
     (tag! < 0 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len)) -> if {
-        context.ranges[node.targetModule] => variantRange
-        (node.symbol >= 0 and node.symbol < variantRange.symbolCount) -> if {
-            context.symbols[variantRange.symbolStart + node.symbol] => variantSymbol
+        context.ranges[node.targetModule] => targetVariantRange
+        (node.symbol >= 0 and node.symbol < targetVariantRange.symbolCount) -> if {
+            context.symbols[targetVariantRange.symbolStart + node.symbol] => variantSymbol
             (variantSymbol.kind == 27 and variantSymbol.parent >= 0) -> if {
                 0 => variantOrdinal!
                 0 => variantSymbolIndex!
                 variantSymbolIndex! < node.symbol -> while {
-                    context.symbols[variantRange.symbolStart + variantSymbolIndex!] => siblingVariant
+                    context.symbols[targetVariantRange.symbolStart + variantSymbolIndex!] => siblingVariant
                     (siblingVariant.kind == 27 and siblingVariant.parent == variantSymbol.parent) -> if { variantOrdinal! + 1 => variantOrdinal! }
                     variantSymbolIndex! + 1 => variantSymbolIndex!
                 }

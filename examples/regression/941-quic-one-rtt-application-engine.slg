@@ -1,0 +1,116 @@
+import sys.crypto.tls13_keys as tls13
+import sys.quic.application_engine as application
+import sys.quic.error as errors
+import sys.quic.frame_types as frames
+import sys.quic.keys
+
+mainSecret: -> [UInt8; 32] => [68; 32]
+finishedTranscript: -> [UInt8] => [20, 0, 0, 4, 1, 2, 3, 4]
+clientConnectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
+streamBytes: -> [UInt8; ~] => [112, 105, 110, 103; ~]
+datagramBytes: -> [UInt8; ~] => [112, 111, 110, 103; ~]
+
+roundtrip version: UInt32 -> Result<Bool, errors.Error> {
+    tls13.deriveApplication(mainSecret(), finishedTranscript()) => secrets
+    application.create(secrets.serverTrafficSecret) => sender!
+    application.create(secrets.serverTrafficSecret) => receiver!
+    application.encode(
+        version,
+        clientConnectionId(),
+        1,
+        frames.Value.Stream(frames.Stream {
+            id: 0
+            offset: 0
+            fin: true
+            data: streamBytes()
+        }),
+        sender!)? => streamPacket
+    application.open(
+        version,
+        streamPacket,
+        clientConnectionId(),
+        1,
+        receiver!)? => openedStream
+    false => streamValid!
+    openedStream.frame -> when {
+        Stream(streamFrame) {
+            (streamFrame.id == 0
+                and streamFrame.fin
+                and streamFrame.data[0] == 112
+                and streamFrame.data[3] == 103) => streamValid!
+        }
+        Padding(count) {}
+        Ping {}
+        Ack(ack) {}
+        Crypto(crypto) {}
+        Datagram(datagram) {}
+        MaxData(maximum) {}
+        MaxStreamData(limit) {}
+        MaxStreams(limit) {}
+        DataBlocked(limit) {}
+        StreamDataBlocked(blocked) {}
+        StreamsBlocked(blocked) {}
+        ConnectionClose(close) {}
+        HandshakeDone {}
+        NewConnectionId(value) {}
+        RetireConnectionId(sequence) {}
+    }
+    sender! -> application.update
+    application.encode(
+        version,
+        clientConnectionId(),
+        2,
+        frames.Value.Datagram(frames.Datagram { data: datagramBytes() }),
+        sender!)? => datagramPacket
+    application.open(
+        version,
+        datagramPacket,
+        clientConnectionId(),
+        2,
+        receiver!)? => openedDatagram
+    false => datagramValid!
+    openedDatagram.frame -> when {
+        Datagram(datagram) {
+            (datagram.data[0] == 112
+                and datagram.data[3] == 103) => datagramValid!
+        }
+        Padding(count) {}
+        Ping {}
+        Ack(ack) {}
+        Crypto(crypto) {}
+        Stream(streamFrame) {}
+        MaxData(maximum) {}
+        MaxStreamData(limit) {}
+        MaxStreams(limit) {}
+        DataBlocked(limit) {}
+        StreamDataBlocked(blocked) {}
+        StreamsBlocked(blocked) {}
+        ConnectionClose(close) {}
+        HandshakeDone {}
+        NewConnectionId(value) {}
+        RetireConnectionId(sequence) {}
+    }
+    Result<Bool, errors.Error>.Ok(
+        streamValid!
+            and datagramValid!
+            and sender!.phase
+            and receiver!.phase)
+}
+
+verify version: UInt32, label: Text -> Unit uses Console {
+    roundtrip(version) -> when {
+        Ok(valid) {
+            valid -> if {
+                "application-$label=ok" -> println
+            } else {
+                "application-$label=failed" -> println
+            }
+        }
+        Err(error) { "application-$label-error=$(error.code)" -> println }
+    }
+}
+
+main {
+    verify(keys.version1(), "v1")
+    verify(keys.version2(), "v2")
+}

@@ -35,7 +35,7 @@ import sys.file as file
 # reference, preserving the original direct-call and allocation behavior.
 emitEnumConstructor request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[request.nodeIndex] => constructor
-    constructor -> enumVariantTag(context, state) => variantTag
+    constructor -> enumVariantTag(context) => variantTag
     "  %v$(request.nodeIndex)_enum_slot = alloca " -> print
     constructor -> writeIrType(context, state)
     ", align 8" -> println
@@ -60,9 +60,9 @@ emitEnumConstructor request: WhileValueRequest, context: ref emitterContext.Emit
             (payload.kind == 3 or payload.kind == 4) -> if {
                 payload -> sourceToken(context, state) => payloadToken
                 payload.kind == 3 -> if {
-                    context.sources[payload.sourceModule] -> slice(payloadToken.span.start, payloadToken.span.length) -> print
+                    payload -> writeIntegerLiteral(context, state)
                 } else {
-                    ((context.sources[payload.sourceModule] -> byte(payloadToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                    ((context.sources[payload.sourceModule] -> byte(payloadToken.span.start)) == 116) -> if { "1" -> print } else { "0" -> print }
                 }
             } else {
                 (payload.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and payload.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(payloadIndex)" -> print }
@@ -245,11 +245,353 @@ emitExitCall callIndex: Int, context: ref emitterContext.EmitContext, state: ref
     context -> diagnostics.usesTextRuntime -> if { "  call void @sollang_runtime_flush_stdout()" -> println }
     context.expectedPathStyle == 1 -> if { "  call void @ExitProcess(i32 " -> print } else { "  call void @exit(i32 " -> print }
     argument.kind == 3 -> if {
-        argument -> sourceToken(context, state) => argumentToken
-        context.sources[argument.sourceModule] -> slice(argumentToken.span.start, argumentToken.span.length) -> print
+        argument -> writeIntegerLiteral(context, state)
     } else { "%v$(argumentIndex)" -> print }
     ")" -> println
 }
+
+emitSocketCall request: SocketCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[request.callIndex] => call
+    call.operand0 => firstArgumentIndex
+    firstArgumentIndex -> aggregateValueIndex(context, state) => firstValueIndex
+    context.ir[firstValueIndex] => firstValue
+    -1 => secondArgumentIndex!
+    firstArgumentIndex >= 0 -> if { context.ir[firstArgumentIndex].nextOperand => secondArgumentIndex! }
+    -1 => thirdArgumentIndex!
+    secondArgumentIndex! >= 0 -> if { context.ir[secondArgumentIndex!].nextOperand => thirdArgumentIndex! }
+    secondArgumentIndex! >= 0 -> if { secondArgumentIndex! -> aggregateValueIndex(context, state) => secondArgumentIndex! }
+    thirdArgumentIndex! >= 0 -> if { thirdArgumentIndex! -> aggregateValueIndex(context, state) => thirdArgumentIndex! }
+
+    # listen(ListenOptions)
+    call.opcode == -258 -> if {
+        "  %v$(request.callIndex)_socket_endpoint = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 0" -> println
+        nominalFieldType(firstValue.typeId, 0, context) => socketEndpointType
+        "  %v$(request.callIndex)_socket_address = extractvalue " -> print
+        socketEndpointType -> writeSemanticTypeId(context, state)
+        " %v$(request.callIndex)_socket_endpoint, 0" -> println
+        "  %v$(request.callIndex)_socket_address_data = extractvalue %sollang.text %v$(request.callIndex)_socket_address, 0" -> println
+        "  %v$(request.callIndex)_socket_address_length = extractvalue %sollang.text %v$(request.callIndex)_socket_address, 1" -> println
+        "  %v$(request.callIndex)_socket_port = extractvalue " -> print
+        socketEndpointType -> writeSemanticTypeId(context, state)
+        " %v$(request.callIndex)_socket_endpoint, 1" -> println
+        "  %v$(request.callIndex)_socket_backlog = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 1" -> println
+        "  %v$(request.callIndex)_socket_backlog64 = sext i32 %v$(request.callIndex)_socket_backlog to i64" -> println
+        "  %v$(request.callIndex)_socket_reuse = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 2" -> println
+        "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_listen(ptr %v$(request.callIndex)_socket_address_data, i64 %v$(request.callIndex)_socket_address_length, i16 %v$(request.callIndex)_socket_port, i64 %v$(request.callIndex)_socket_backlog64, i1 %v$(request.callIndex)_socket_reuse)" -> println
+    }
+    # bindDatagram(DatagramBindOptions)
+    call.opcode == -265 -> if {
+        "  %v$(request.callIndex)_socket_endpoint = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 0" -> println
+        nominalFieldType(firstValue.typeId, 0, context) => socketEndpointType
+        "  %v$(request.callIndex)_socket_address = extractvalue " -> print
+        socketEndpointType -> writeSemanticTypeId(context, state)
+        " %v$(request.callIndex)_socket_endpoint, 0" -> println
+        "  %v$(request.callIndex)_socket_address_data = extractvalue %sollang.text %v$(request.callIndex)_socket_address, 0" -> println
+        "  %v$(request.callIndex)_socket_address_length = extractvalue %sollang.text %v$(request.callIndex)_socket_address, 1" -> println
+        "  %v$(request.callIndex)_socket_port = extractvalue " -> print
+        socketEndpointType -> writeSemanticTypeId(context, state)
+        " %v$(request.callIndex)_socket_endpoint, 1" -> println
+        "  %v$(request.callIndex)_socket_reuse = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 1" -> println
+        "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_bind_datagram(ptr %v$(request.callIndex)_socket_address_data, i64 %v$(request.callIndex)_socket_address_length, i16 %v$(request.callIndex)_socket_port, i1 %v$(request.callIndex)_socket_reuse)" -> println
+    }
+    # accept(TcpListener), shutdown(TcpStream), localPort(UdpSocket)
+    (call.opcode == -259 or call.opcode == -264 or call.opcode == -268) -> if {
+        "  %v$(request.callIndex)_socket_handle = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 0" -> println
+        "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_" -> print
+        call.opcode == -259 -> if { "accept" -> print } else {
+            call.opcode == -264 -> if { "shutdown" -> print } else { "local_port" -> print }
+        }
+        "(i64 %v$(request.callIndex)_socket_handle)" -> println
+    }
+    # connect(Endpoint)
+    call.opcode == -260 -> if {
+        "  %v$(request.callIndex)_socket_address = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 0" -> println
+        "  %v$(request.callIndex)_socket_address_data = extractvalue %sollang.text %v$(request.callIndex)_socket_address, 0" -> println
+        "  %v$(request.callIndex)_socket_address_length = extractvalue %sollang.text %v$(request.callIndex)_socket_address, 1" -> println
+        "  %v$(request.callIndex)_socket_port = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 1" -> println
+        "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_connect(ptr %v$(request.callIndex)_socket_address_data, i64 %v$(request.callIndex)_socket_address_length, i16 %v$(request.callIndex)_socket_port)" -> println
+    }
+    # receive/send/sendText all begin with an owned stream handle.
+    ((call.opcode <= -261 and call.opcode >= -263) or call.opcode == -266 or call.opcode == -267) -> if {
+        "  %v$(request.callIndex)_socket_handle = extractvalue " -> print
+        firstValue -> writeIrType(context, state)
+        " " -> print
+        firstValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 0" -> println
+    }
+    call.opcode == -267 -> if {
+        "  %v$(request.callIndex)_socket_receive_zero = icmp eq i64 " -> print
+        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        ", 0" -> println
+        "  %v$(request.callIndex)_socket_receive_capacity = select i1 %v$(request.callIndex)_socket_receive_zero, i64 1, i64 " -> print
+        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        "" -> println
+        "  %v$(request.callIndex)_socket_receive_buffer = call ptr @malloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
+        "  %v$(request.callIndex)_socket_address_buffer = call ptr @malloc(i64 46)" -> println
+        "  %v$(request.callIndex)_socket_address_length_slot = alloca i64, align 8" -> println
+        "  store i64 0, ptr %v$(request.callIndex)_socket_address_length_slot, align 8" -> println
+        "  %v$(request.callIndex)_socket_port_slot = alloca i16, align 2" -> println
+        "  store i16 0, ptr %v$(request.callIndex)_socket_port_slot, align 2" -> println
+        "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_receive_from(i64 %v$(request.callIndex)_socket_handle, ptr %v$(request.callIndex)_socket_receive_buffer, i64 " -> print
+        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        ", ptr %v$(request.callIndex)_socket_address_buffer, ptr %v$(request.callIndex)_socket_address_length_slot, ptr %v$(request.callIndex)_socket_port_slot)" -> println
+        "  %v$(request.callIndex)_socket_address_length = load i64, ptr %v$(request.callIndex)_socket_address_length_slot, align 8" -> println
+        "  %v$(request.callIndex)_socket_port = load i16, ptr %v$(request.callIndex)_socket_port_slot, align 2" -> println
+    }
+    call.opcode == -261 -> if {
+        "  %v$(request.callIndex)_socket_receive_zero = icmp eq i64 " -> print
+        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        ", 0" -> println
+        "  %v$(request.callIndex)_socket_receive_capacity = select i1 %v$(request.callIndex)_socket_receive_zero, i64 1, i64 " -> print
+        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        "" -> println
+        "  %v$(request.callIndex)_socket_receive_buffer = call ptr @malloc(i64 %v$(request.callIndex)_socket_receive_capacity)" -> println
+        "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_receive(i64 %v$(request.callIndex)_socket_handle, ptr %v$(request.callIndex)_socket_receive_buffer, i64 " -> print
+        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        ")" -> println
+    }
+    (call.opcode == -262 or call.opcode == -263) -> if {
+        context.ir[secondArgumentIndex!] => socketPayload
+        socketPayload.typeId => socketPayloadType!
+        false => socketPayloadReference!
+        (socketPayloadType! >= 0 and context.types[socketPayloadType!].kind == 8) -> if {
+            context.types[socketPayloadType!].first => socketPayloadType!
+            true => socketPayloadReference!
+            "  %v$(request.callIndex)_socket_payload = load " -> print
+            socketPayloadType! -> writeSemanticTypeId(context, state)
+            ", ptr " -> print
+            secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+            ", align 8" -> println
+        }
+        call.opcode == -263 -> if {
+            "  %v$(request.callIndex)_socket_payload_data = extractvalue %sollang.text " -> print
+        } else {
+            "  %v$(request.callIndex)_socket_payload_data = extractvalue " -> print
+            socketPayloadType! -> writeSemanticTypeId(context, state)
+            " " -> print
+        }
+        socketPayloadReference! -> if { "%v$(request.callIndex)_socket_payload" -> print } else { secondArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+        ", 0" -> println
+        call.opcode == -263 -> if {
+            "  %v$(request.callIndex)_socket_payload_length = extractvalue %sollang.text " -> print
+        } else {
+            "  %v$(request.callIndex)_socket_payload_length = extractvalue " -> print
+            socketPayloadType! -> writeSemanticTypeId(context, state)
+            " " -> print
+        }
+        socketPayloadReference! -> if { "%v$(request.callIndex)_socket_payload" -> print } else { secondArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+        ", 1" -> println
+        "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_send(i64 %v$(request.callIndex)_socket_handle, ptr %v$(request.callIndex)_socket_payload_data, i64 %v$(request.callIndex)_socket_payload_length)" -> println
+    }
+    call.opcode == -266 -> if {
+        context.ir[secondArgumentIndex!] => socketEndpoint
+        "  %v$(request.callIndex)_socket_address = extractvalue " -> print
+        socketEndpoint -> writeIrType(context, state)
+        " " -> print
+        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        ", 0" -> println
+        "  %v$(request.callIndex)_socket_address_data = extractvalue %sollang.text %v$(request.callIndex)_socket_address, 0" -> println
+        "  %v$(request.callIndex)_socket_address_length = extractvalue %sollang.text %v$(request.callIndex)_socket_address, 1" -> println
+        "  %v$(request.callIndex)_socket_port = extractvalue " -> print
+        socketEndpoint -> writeIrType(context, state)
+        " " -> print
+        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        ", 1" -> println
+        context.ir[thirdArgumentIndex!] => socketPayload
+        socketPayload.typeId => socketPayloadType!
+        false => socketPayloadReference!
+        (socketPayloadType! >= 0 and context.types[socketPayloadType!].kind == 8) -> if {
+            context.types[socketPayloadType!].first => socketPayloadType!
+            true => socketPayloadReference!
+            "  %v$(request.callIndex)_socket_payload = load " -> print
+            socketPayloadType! -> writeSemanticTypeId(context, state)
+            ", ptr " -> print
+            thirdArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+            ", align 8" -> println
+        }
+        "  %v$(request.callIndex)_socket_payload_data = extractvalue " -> print
+        socketPayloadType! -> writeSemanticTypeId(context, state)
+        " " -> print
+        socketPayloadReference! -> if { "%v$(request.callIndex)_socket_payload" -> print } else { thirdArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+        ", 0" -> println
+        "  %v$(request.callIndex)_socket_payload_length = extractvalue " -> print
+        socketPayloadType! -> writeSemanticTypeId(context, state)
+        " " -> print
+        socketPayloadReference! -> if { "%v$(request.callIndex)_socket_payload" -> print } else { thirdArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+        ", 1" -> println
+        "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_send_to(i64 %v$(request.callIndex)_socket_handle, ptr %v$(request.callIndex)_socket_address_data, i64 %v$(request.callIndex)_socket_address_length, i16 %v$(request.callIndex)_socket_port, ptr %v$(request.callIndex)_socket_payload_data, i64 %v$(request.callIndex)_socket_payload_length)" -> println
+    }
+
+    "  %v$(request.callIndex)_socket_value = extractvalue %sollang.socket_result %v$(request.callIndex)_socket_raw, 0" -> println
+    "  %v$(request.callIndex)_socket_kind = extractvalue %sollang.socket_result %v$(request.callIndex)_socket_raw, 1" -> println
+    "  %v$(request.callIndex)_socket_code = extractvalue %sollang.socket_result %v$(request.callIndex)_socket_raw, 2" -> println
+    "  %v$(request.callIndex)_socket_ok = icmp slt i32 %v$(request.callIndex)_socket_kind, 0" -> println
+    "  store " -> print
+    call -> writeIrType(context, state)
+    " zeroinitializer, ptr %v$(request.callIndex)_socket_result_slot, align 8" -> println
+    "  br i1 %v$(request.callIndex)_socket_ok, label %socket$(request.callIndex)_ok, label %socket$(request.callIndex)_error" -> println
+    "socket$(request.callIndex)_ok:" -> println
+    "  %v$(request.callIndex)_socket_ok_tag = getelementptr inbounds " -> print
+    call -> writeIrType(context, state)
+    ", ptr %v$(request.callIndex)_socket_result_slot, i32 0, i32 0" -> println
+    "  store i32 0, ptr %v$(request.callIndex)_socket_ok_tag, align 4" -> println
+    context.types[call.typeId].first => socketOkTypeId
+    context.typeSizes[socketOkTypeId] > 0 -> if {
+        "  %v$(request.callIndex)_socket_ok_payload = getelementptr inbounds " -> print
+        call -> writeIrType(context, state)
+        ", ptr %v$(request.callIndex)_socket_result_slot, i32 0, i32 1" -> println
+        (call.opcode == -258 or call.opcode == -259 or call.opcode == -260 or call.opcode == -265) -> if {
+            "  %v$(request.callIndex)_socket_owner = insertvalue " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " poison, i64 %v$(request.callIndex)_socket_value, 0" -> println
+            "  store " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_owner, ptr %v$(request.callIndex)_socket_ok_payload, align 8" -> println
+        }
+        (call.opcode == -262 or call.opcode == -263 or call.opcode == -266) -> if {
+            "  store i64 %v$(request.callIndex)_socket_value, ptr %v$(request.callIndex)_socket_ok_payload, align 8" -> println
+        }
+        call.opcode == -268 -> if {
+            "  %v$(request.callIndex)_socket_port = trunc i64 %v$(request.callIndex)_socket_value to i16" -> println
+            "  store i16 %v$(request.callIndex)_socket_port, ptr %v$(request.callIndex)_socket_ok_payload, align 2" -> println
+        }
+        call.opcode == -261 -> if {
+            "  %v$(request.callIndex)_socket_bytes0 = insertvalue " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " poison, ptr %v$(request.callIndex)_socket_receive_buffer, 0" -> println
+            "  %v$(request.callIndex)_socket_bytes1 = insertvalue " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_bytes0, i64 %v$(request.callIndex)_socket_value, 1" -> println
+            "  %v$(request.callIndex)_socket_bytes = insertvalue " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_bytes1, i64 " -> print
+            secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+            ", 2" -> println
+            "  store " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_bytes, ptr %v$(request.callIndex)_socket_ok_payload, align 8" -> println
+        }
+        call.opcode == -267 -> if {
+            nominalFieldType(socketOkTypeId, 0, context) => socketAddressArrayType
+            nominalFieldType(socketOkTypeId, 1, context) => socketPortType
+            nominalFieldType(socketOkTypeId, 2, context) => socketBytesArrayType
+            "  %v$(request.callIndex)_socket_address0 = insertvalue " -> print
+            socketAddressArrayType -> writeSemanticTypeId(context, state)
+            " poison, ptr %v$(request.callIndex)_socket_address_buffer, 0" -> println
+            "  %v$(request.callIndex)_socket_address1 = insertvalue " -> print
+            socketAddressArrayType -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_address0, i64 %v$(request.callIndex)_socket_address_length, 1" -> println
+            "  %v$(request.callIndex)_socket_address2 = insertvalue " -> print
+            socketAddressArrayType -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_address1, i64 46, 2" -> println
+            "  %v$(request.callIndex)_socket_bytes0 = insertvalue " -> print
+            socketBytesArrayType -> writeSemanticTypeId(context, state)
+            " poison, ptr %v$(request.callIndex)_socket_receive_buffer, 0" -> println
+            "  %v$(request.callIndex)_socket_bytes1 = insertvalue " -> print
+            socketBytesArrayType -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_bytes0, i64 %v$(request.callIndex)_socket_value, 1" -> println
+            "  %v$(request.callIndex)_socket_bytes2 = insertvalue " -> print
+            socketBytesArrayType -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_bytes1, i64 " -> print
+            secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+            ", 2" -> println
+            "  %v$(request.callIndex)_socket_datagram0 = insertvalue " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " poison, " -> print
+            socketAddressArrayType -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_address2, 0" -> println
+            "  %v$(request.callIndex)_socket_datagram1 = insertvalue " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_datagram0, " -> print
+            socketPortType -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_port, 1" -> println
+            "  %v$(request.callIndex)_socket_datagram = insertvalue " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_datagram1, " -> print
+            socketBytesArrayType -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_bytes2, 2" -> println
+            "  store " -> print
+            socketOkTypeId -> writeSemanticTypeId(context, state)
+            " %v$(request.callIndex)_socket_datagram, ptr %v$(request.callIndex)_socket_ok_payload, align 8" -> println
+        }
+    }
+    "  br label %socket$(request.callIndex)_merge" -> println
+    "socket$(request.callIndex)_error:" -> println
+    (call.opcode == -261 or call.opcode == -267) -> if { "  call void @free(ptr %v$(request.callIndex)_socket_receive_buffer)" -> println }
+    call.opcode == -267 -> if { "  call void @free(ptr %v$(request.callIndex)_socket_address_buffer)" -> println }
+    "  %v$(request.callIndex)_socket_error_tag = getelementptr inbounds " -> print
+    call -> writeIrType(context, state)
+    ", ptr %v$(request.callIndex)_socket_result_slot, i32 0, i32 0" -> println
+    "  store i32 1, ptr %v$(request.callIndex)_socket_error_tag, align 4" -> println
+    context.types[call.typeId].second => socketErrorTypeId
+    nominalFieldType(socketErrorTypeId, 0, context) => socketKindTypeId
+    "  %v$(request.callIndex)_socket_error_kind = insertvalue " -> print
+    socketKindTypeId -> writeSemanticTypeId(context, state)
+    " zeroinitializer, i32 %v$(request.callIndex)_socket_kind, 0" -> println
+    "  %v$(request.callIndex)_socket_error0 = insertvalue " -> print
+    socketErrorTypeId -> writeSemanticTypeId(context, state)
+    " poison, " -> print
+    socketKindTypeId -> writeSemanticTypeId(context, state)
+    " %v$(request.callIndex)_socket_error_kind, 0" -> println
+    "  %v$(request.callIndex)_socket_error = insertvalue " -> print
+    socketErrorTypeId -> writeSemanticTypeId(context, state)
+    " %v$(request.callIndex)_socket_error0, i32 %v$(request.callIndex)_socket_code, 1" -> println
+    "  %v$(request.callIndex)_socket_error_payload = getelementptr inbounds " -> print
+    call -> writeIrType(context, state)
+    ", ptr %v$(request.callIndex)_socket_result_slot, i32 0, i32 1" -> println
+    "  store " -> print
+    socketErrorTypeId -> writeSemanticTypeId(context, state)
+    " %v$(request.callIndex)_socket_error, ptr %v$(request.callIndex)_socket_error_payload, align 8" -> println
+    "  br label %socket$(request.callIndex)_merge" -> println
+    "socket$(request.callIndex)_merge:" -> println
+    "  %v$(request.callIndex) = load " -> print
+    call -> writeIrType(context, state)
+    ", ptr %v$(request.callIndex)_socket_result_slot, align 8" -> println
+}
+
+nominalFieldType ownerType: Int, ordinal: Int, context: ref emitterContext.EmitContext -> Int {
+    -1 => fieldType!
+    0 => fieldIndex!
+    fieldIndex! < (context.fields -> len) -> while {
+        context.fields[fieldIndex!] => field
+        (field.status == 0 and field.ownerType == ownerType and field.ordinal == ordinal) -> if { field.fieldType => fieldType! }
+        fieldIndex! + 1 => fieldIndex!
+    }
+    fieldType!
+}
+
 emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[request.callIndex] => call
     -1 => enclosingFileMatch!
@@ -594,8 +936,8 @@ emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     context.types[call.typeId] => resultType
     resultType.first => rawTypeId!
     call.typeId -> isNominalEnumType(context, state) -> if {
-        call.typeId -> enumPayloadTypes(context, state) => resultPayloads!
-        (resultPayloads! -> len) > 0 -> if { resultPayloads![0] => rawTypeId! }
+        call.typeId -> enumPayloadTypes(context, state) => resultPayloads
+        (resultPayloads -> len) > 0 -> if { resultPayloads[0] => rawTypeId! }
     }
     -1 => rawBytesType!
     0 => rawFieldSearch!
@@ -743,8 +1085,8 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     context.types[call.typeId] => dispatchResultType
     dispatchResultType.first => dispatchRawTypeId!
     call.typeId -> isNominalEnumType(context, state) -> if {
-        call.typeId -> enumPayloadTypes(context, state) => dispatchPayloads!
-        (dispatchPayloads! -> len) > 0 -> if { dispatchPayloads![0] => dispatchRawTypeId! }
+        call.typeId -> enumPayloadTypes(context, state) => dispatchPayloads
+        (dispatchPayloads -> len) > 0 -> if { dispatchPayloads[0] => dispatchRawTypeId! }
     }
     0 => dispatchFieldCount!
     0 => dispatchFieldIndex!
@@ -802,8 +1144,8 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     context.types[call.typeId] => resultType
     resultType.first => rawTypeId!
     call.typeId -> isNominalEnumType(context, state) -> if {
-        call.typeId -> enumPayloadTypes(context, state) => directoryResultPayloads!
-        (directoryResultPayloads! -> len) > 0 -> if { directoryResultPayloads![0] => rawTypeId! }
+        call.typeId -> enumPayloadTypes(context, state) => directoryResultPayloads
+        (directoryResultPayloads -> len) > 0 -> if { directoryResultPayloads[0] => rawTypeId! }
     }
     -1 => rawBytesType!
     -1 => rawCountType!
@@ -1061,6 +1403,7 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
         node.typeId => arrayTypeId!
         context.types[arrayTypeId!].kind == 8 -> if { context.types[arrayTypeId!].first => arrayTypeId! }
         (context.types[arrayTypeId!].kind == 3
+            or context.types[arrayTypeId!].kind == 4
             or context.types[arrayTypeId!].kind == 12
             or (context.types[arrayTypeId!].kind == 7
                 and context.types[arrayTypeId!].origin == 4
@@ -1152,10 +1495,10 @@ emitNativeLibraryGlobals sourceModule: Int, libraryAst: Int, context: ref emitte
     TextLiteralRequest { sourceModule: sourceModule, token: nativeLibraryToken } => nativeLibraryRequest
     nativeLibraryRequest -> textLiteralLength(context, state) => nativeLibraryBaseLength
     context.expectedPathStyle == 1 -> if {
-        nativeLibraryBaseLength + UIntSize(5) => nativeLibraryLength
+        nativeLibraryBaseLength + 5 => nativeLibraryLength
         "@sollang_native_library_name_m$(sourceModule)_a$(nativeLibraryAstValue) = private unnamed_addr constant [$(nativeLibraryLength) x i8] " -> print
     } else {
-        nativeLibraryBaseLength + UIntSize(7) => nativeLibraryLength
+        nativeLibraryBaseLength + 7 => nativeLibraryLength
         "@sollang_native_library_name_m$(sourceModule)_a$(nativeLibraryAstValue) = private unnamed_addr constant [$(nativeLibraryLength) x i8] " -> print
     }
     "c" -> print
@@ -1166,16 +1509,16 @@ emitNativeLibraryGlobals sourceModule: Int, libraryAst: Int, context: ref emitte
     nativeLibraryByte! => nativeLibrarySlashSearch!
     nativeLibrarySlashSearch! < nativeLibraryEnd -> while {
         context.sources[sourceModule] -> byte(nativeLibrarySlashSearch!) => nativePathByte
-        (nativePathByte == UInt8(47) or nativePathByte == UInt8(92)) -> if {
-            nativeLibrarySlashSearch! + UIntSize(1) => nativeLibraryNameStart!
+        (nativePathByte == 47 or nativePathByte == 92) -> if {
+            nativeLibrarySlashSearch! + 1 => nativeLibraryNameStart!
         }
-        nativeLibrarySlashSearch! + UIntSize(1) => nativeLibrarySlashSearch!
+        nativeLibrarySlashSearch! + 1 => nativeLibrarySlashSearch!
     }
     (context.expectedPathStyle == 0 and nativeLibraryNameStart! == nativeLibraryByte!) -> if { "lib" -> print }
     nativeLibraryByte! < nativeLibraryEnd -> while {
         (context.expectedPathStyle == 0 and nativeLibraryByte! == nativeLibraryNameStart! and nativeLibraryNameStart! != (nativeLibraryRequest -> textLiteralStart(context, state))) -> if { "lib" -> print }
         sourceModule -> emitNativeSourceByte(nativeLibraryByte!, context, state)
-        nativeLibraryByte! + UIntSize(1) => nativeLibraryByte!
+        nativeLibraryByte! + 1 => nativeLibraryByte!
     }
     context.expectedPathStyle == 1 -> if { ".dll" -> print }
     context.expectedPathStyle != 1 -> if { ".so" -> print }
@@ -1194,7 +1537,7 @@ emitImportedLibraryGlobals interfaceIndex: Int, context: ref emitterContext.Emit
     (runtimeLibraryStyle == 1 and runtimeLibraryLength >= 3) -> if {
         context.libraries -> libraryImports.runtimeLibraryByte(interfaceIndex, 1) => driveColon
         context.libraries -> libraryImports.runtimeLibraryByte(interfaceIndex, 2) => driveSeparator
-        (driveColon == UInt8(58) and (driveSeparator == UInt8(47) or driveSeparator == UInt8(92))) -> if {
+        (driveColon == 58 and (driveSeparator == 47 or driveSeparator == 92)) -> if {
             true => windowsDrivePath!
         }
     }
@@ -1202,43 +1545,43 @@ emitImportedLibraryGlobals interfaceIndex: Int, context: ref emitterContext.Emit
     (context.expectedPathStyle == 0 and windowsDrivePath!) -> if { emittedLibraryLength! + 4 => emittedLibraryLength! }
     emittedLibraryLength! + 1 => libraryNameLength
     "@sollang_library_name_i$(interfaceIndex) = private unnamed_addr constant [$libraryNameLength x i8] c" -> print
-    manifest -> slice(libraryFileSpan.start - UIntSize(1), UIntSize(1)) -> print
+    manifest -> slice(libraryFileSpan.start - 1, UIntSize(1)) -> print
     0 => libraryByteIndex!
     (context.expectedPathStyle == 0 and windowsDrivePath!) -> if {
         "/mnt/" -> print
         context.libraries -> libraryImports.runtimeLibraryByte(interfaceIndex, 0) => driveLetter!
-        (driveLetter! >= UInt8(65) and driveLetter! <= UInt8(90)) -> if { driveLetter! + UInt8(32) => driveLetter! }
+        (driveLetter! >= 65 and driveLetter! <= 90) -> if { driveLetter! + 32 => driveLetter! }
         driveLetter! -> literalEmitEscapedByte
         "/" -> print
         3 => libraryByteIndex!
     }
     libraryByteIndex! < runtimeLibraryLength -> while {
         context.libraries -> libraryImports.runtimeLibraryByte(interfaceIndex, libraryByteIndex!) => libraryByte!
-        (context.expectedPathStyle == 0 and libraryByte! == UInt8(92)) -> if { UInt8(47) => libraryByte! }
-        (context.expectedPathStyle == 1 and libraryByte! == UInt8(47)) -> if { UInt8(92) => libraryByte! }
+        (context.expectedPathStyle == 0 and libraryByte! == 92) -> if { 47 => libraryByte! }
+        (context.expectedPathStyle == 1 and libraryByte! == 47) -> if { 92 => libraryByte! }
         libraryByte! -> literalEmitEscapedByte
         libraryByteIndex! + 1 => libraryByteIndex!
     }
     "\" -> print
     "00" -> print
-    manifest -> slice(libraryFileSpan.start - UIntSize(1), UIntSize(1)) -> println
+    manifest -> slice(libraryFileSpan.start - 1, UIntSize(1)) -> println
     "@sollang_library_handle_i$(interfaceIndex) = internal global ptr null, align 8" -> println
 
     0 => exportIndex!
     context.libraries -> libraryImports.interfaceExportCount(interfaceIndex) => exportCount
     exportIndex! < exportCount -> while {
         context.libraries -> libraryImports.exportSymbol(interfaceIndex, exportIndex!) => exportedSymbol
-        exportedSymbol.length + UIntSize(1) => symbolNameLength
+        exportedSymbol.length + 1 => symbolNameLength
         "@sollang_library_symbol_name_i$(interfaceIndex)_e$(exportIndex!) = private unnamed_addr constant [$symbolNameLength x i8] c" -> print
-        manifest -> slice(exportedSymbol.start - UIntSize(1), UIntSize(1)) -> print
+        manifest -> slice(exportedSymbol.start - 1, UIntSize(1)) -> print
         UIntSize(0) => symbolByte!
         symbolByte! < exportedSymbol.length -> while {
             manifest -> byte(exportedSymbol.start + symbolByte!) -> literalEmitEscapedByte
-            symbolByte! + UIntSize(1) => symbolByte!
+            symbolByte! + 1 => symbolByte!
         }
         "\" -> print
         "00" -> print
-        manifest -> slice(exportedSymbol.start - UIntSize(1), UIntSize(1)) -> println
+        manifest -> slice(exportedSymbol.start - 1, UIntSize(1)) -> println
         "@sollang_library_function_i$(interfaceIndex)_e$(exportIndex!) = internal global ptr null, align 8" -> println
         exportIndex! + 1 => exportIndex!
     }
@@ -1249,7 +1592,7 @@ emitComServerGlobals sourceModule: Int, classAst: Int, context: ref emitterConte
     context.tokens[comServerRange.tokenStart + comServerClass.tertiaryToken] => comServerToken
     TextLiteralRequest { sourceModule: sourceModule, token: comServerToken } => comServerRequest
     comServerRequest -> textLiteralLength(context, state) => comServerBaseLength
-    comServerBaseLength + UIntSize(5) => comServerLength
+    comServerBaseLength + 5 => comServerLength
     "@sollang_com_server_name_m$(sourceModule)_a$(classAst) = private unnamed_addr constant [$(comServerLength) x i8] " -> print
     "c" -> print
     context.sources[sourceModule] -> slice(comServerToken.span.start, UIntSize(1)) -> print
@@ -1257,7 +1600,7 @@ emitComServerGlobals sourceModule: Int, classAst: Int, context: ref emitterConte
     comServerRequest -> textLiteralEnd(context, state) => comServerEnd
     comServerByte! < comServerEnd -> while {
         sourceModule -> emitNativeSourceByte(comServerByte!, context, state)
-        comServerByte! + UIntSize(1) => comServerByte!
+        comServerByte! + 1 => comServerByte!
     }
     ".dll" -> print
     "\" -> print
@@ -1275,7 +1618,7 @@ emitNativeSymbolGlobals function: typedIr.TypedIrNode, context: ref emitterConte
     nativeNameToken.kind == grammar.tokenIdString() -> if {
         TextLiteralRequest { sourceModule: function.sourceModule, token: nativeNameToken } => nativeNameRequest
         nativeNameRequest -> textLiteralLength(context, state) => nativeNameContentLength
-        nativeNameContentLength + UIntSize(1) => nativeNameLength
+        nativeNameContentLength + 1 => nativeNameLength
         "@sollang_native_symbol_name_m$(nativeFunctionSourceModule)_s$(nativeFunctionSymbol) = private unnamed_addr constant [$nativeNameLength x i8] " -> print
         "c" -> print
         context.sources[function.sourceModule] -> slice(nativeNameToken.span.start, UIntSize(1)) -> print
@@ -1283,14 +1626,14 @@ emitNativeSymbolGlobals function: typedIr.TypedIrNode, context: ref emitterConte
         nativeNameRequest -> textLiteralEnd(context, state) => nativeNameEnd
         nativeNameByte! < nativeNameEnd -> while {
             function.sourceModule -> emitNativeSourceByte(nativeNameByte!, context, state)
-            nativeNameByte! + UIntSize(1) => nativeNameByte!
+            nativeNameByte! + 1 => nativeNameByte!
         }
         "\" -> print
         "00" -> print
         context.sources[function.sourceModule] -> slice(nativeNameToken.span.start, UIntSize(1)) -> println
     }
     nativeNameToken.kind != grammar.tokenIdString() -> if {
-        nativeNameToken.span.length + UIntSize(1) => nativeNameLength
+        nativeNameToken.span.length + 1 => nativeNameLength
         function -> nativeLibraryAst(context, state) => nativeNameLibraryAst
         context.nodes[nativeRange.astStart + nativeNameLibraryAst] => nativeNameLibrary
         context.tokens[nativeRange.tokenStart + nativeNameLibrary.secondaryToken] => nativeNameLibraryToken
@@ -1300,7 +1643,7 @@ emitNativeSymbolGlobals function: typedIr.TypedIrNode, context: ref emitterConte
         nativeNameToken.span.start + nativeNameToken.span.length => nativeNameEnd
         nativeIdentifierByte! < nativeNameEnd -> while {
             function.sourceModule -> emitNativeSourceByte(nativeIdentifierByte!, context, state)
-            nativeIdentifierByte! + UIntSize(1) => nativeIdentifierByte!
+            nativeIdentifierByte! + 1 => nativeIdentifierByte!
         }
         "\" -> print
         "00" -> print
@@ -1325,7 +1668,8 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
     0 => nativeGlobalFunctionIndex!
     nativeGlobalFunctionIndex! < (context.ir -> len) -> while {
         context.ir[nativeGlobalFunctionIndex!] => nativeGlobalFunction
-        (nativeGlobalFunction -> isNativeFunction(context, state)) and not (nativeGlobalFunction -> isImportedLibraryFunction(context, state)) -> if {
+        ((nativeGlobalFunction -> isNativeFunction(context, state))
+            and not (nativeGlobalFunction -> isImportedLibraryFunction(context, state))) -> if {
             nativeGlobalFunction -> emitNativeSymbolGlobals(context, state)
         }
         nativeGlobalFunctionIndex! + 1 => nativeGlobalFunctionIndex!
@@ -1354,7 +1698,8 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
         context.ranges[nativeInitLibrarySource!] => nativeInitLibraryRange
         0 => nativeInitLibraryAst!
         nativeInitLibraryAst! < nativeInitLibraryRange.astCount -> while {
-            context.nodes[nativeInitLibraryRange.astStart + nativeInitLibraryAst!].kind == 65 -> if {
+            (context.nodes[nativeInitLibraryRange.astStart + nativeInitLibraryAst!].kind == 65
+                and nativeLibraryReachable(nativeInitLibrarySource!, nativeInitLibraryAst!, context, state)) -> if {
                 context.expectedPathStyle == 1 -> if {
                     "  %native_library_raw_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!) = call ptr @LoadLibraryA(ptr @sollang_native_library_name_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!))" -> println
                 }
@@ -1383,7 +1728,9 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
     0 => nativeInitFunctionIndex!
     nativeInitFunctionIndex! < (context.ir -> len) -> while {
         context.ir[nativeInitFunctionIndex!] => nativeInitFunction
-        (nativeInitFunction -> isNativeFunction(context, state)) and not (nativeInitFunction -> isImportedLibraryFunction(context, state)) -> if {
+        ((nativeInitFunctionIndex! -> nativeFunctionReachable(state))
+            and (nativeInitFunction -> isNativeFunction(context, state))
+            and not (nativeInitFunction -> isImportedLibraryFunction(context, state))) -> if {
             nativeInitFunction -> nativeLibraryAst(context, state) => nativeInitLibrary
             nativeInitFunction.sourceModule => nativeInitSourceModule
             nativeInitFunction.symbol => nativeInitSymbol
@@ -1416,7 +1763,7 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
         }
         importedSymbolInterface! + 1 => importedSymbolInterface!
     }
-    context -> emitNativeHandleInitializers
+    context -> emitNativeHandleInitializers(state)
     """
       ret void
     }
@@ -1428,7 +1775,8 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
         context.ranges[nativeCleanupSource!] => nativeCleanupRange
         0 => nativeCleanupAst!
         nativeCleanupAst! < nativeCleanupRange.astCount -> while {
-            context.nodes[nativeCleanupRange.astStart + nativeCleanupAst!].kind == 65 -> if {
+            (context.nodes[nativeCleanupRange.astStart + nativeCleanupAst!].kind == 65
+                and nativeLibraryReachable(nativeCleanupSource!, nativeCleanupAst!, context, state)) -> if {
                 "  %native_close_handle_m$(nativeCleanupSource!)_a$(nativeCleanupAst!) = load ptr, ptr @sollang_native_library_m$(nativeCleanupSource!)_a$(nativeCleanupAst!), align 8" -> println
                 context.expectedPathStyle == 1 -> if {
                     "  %native_closed_m$(nativeCleanupSource!)_a$(nativeCleanupAst!) = call i32 @FreeLibrary(ptr %native_close_handle_m$(nativeCleanupSource!)_a$(nativeCleanupAst!))" -> println

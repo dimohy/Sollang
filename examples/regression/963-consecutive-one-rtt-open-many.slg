@@ -1,0 +1,52 @@
+import sys.quic.application_engine as application
+import sys.quic.error as errors
+import sys.quic.frame_types as frames
+import sys.quic.keys
+
+secret: -> [UInt8; 32] => [68; 32]
+connectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
+
+run: -> Result<Bool, errors.Error> {
+    application.create(secret()) => sender
+    application.create(secret()) => receiver!
+
+    [frames.Value; ~] => firstFrames!
+    firstFrames! -> push(frames.Value.NewConnectionId(frames.NewConnectionId {
+        sequence: 1
+        retirePriorTo: 0
+        connectionId: [9, 8, 7, 6, 5, 4, 3, 2; ~]
+        statelessResetToken: [17; 16]
+    }))
+    application.encodeMany(keys.version1(), connectionId(), 3, firstFrames!, sender)? => firstPacket
+
+    [frames.Value; ~] => secondFrames!
+    secondFrames! -> push(frames.Value.Stream(frames.Stream {
+        id: 0
+        offset: 0
+        fin: true
+        data: [112, 105, 110, 103; ~]
+    }))
+    application.encodeMany(keys.version1(), connectionId(), 4, secondFrames!, sender)? => secondPacket
+
+    application.openMany(keys.version1(), firstPacket, connectionId(), 0, receiver!)? => first!
+    application.openMany(keys.version1(), secondPacket, connectionId(), 4, receiver!)? => second!
+    first!.frames -> take(0) -> when {
+        NewConnectionId(value) {}
+        else { Result<Bool, errors.Error>.Ok(false) -> return }
+    }
+    false => valid!
+    second!.frames -> take(0) -> when {
+        Stream(value) {
+            (value.fin and value.data[0] == 112 and value.data[3] == 103) => valid!
+        }
+        else {}
+    }
+    Result<Bool, errors.Error>.Ok(valid!)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "consecutive-open-many=ok" } else { "consecutive-open-many=failed" } -> println }
+        Err(value) { "consecutive-open-many-error=$(value.code)" -> println }
+    }
+}

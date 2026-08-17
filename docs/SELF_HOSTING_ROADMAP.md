@@ -3503,3 +3503,20 @@ The next slice maps semantic type kind 9 to LLVM `ptr`, emits COM activation,
 vtable method calls, explicit clone, and deterministic release through
 `selfhost/llvm/emitter/com_runtime.slg`, then executes the real Windows COM
 fixture with both Stage1 and Stage2 products.
+
+### Native socket and QUIC foundation checkpoint
+
+The self-host LLVM emitter now recognizes socket intrinsics inside nested
+control regions as well as top-level calls and emits the same TCP/UDP platform
+runtime selected by the C# reference compiler. The native-handle ABI retains
+affine drop ownership through public structs and `Result` constructors, and
+owned aggregate transfers no longer leave a second cleanup obligation.
+
+The QUIC layer is implemented in Sollang standard-library modules over
+`sys.socket`; it does not add protocol-specific compiler opcodes or load a Rust
+adapter DLL. Cryptography, packet protection, TLS 1.3 handshake state, recovery,
+flow control, streams, datagrams, connection IDs, and key updates ship as
+Sollang source and are compiled into a program only when imported. Examples
+875-968 retain the flat `?` API, nested self-host intrinsic lowering,
+Windows/Linux TCP and UDP, protocol vectors, and native QUIC execution as the
+verification set.

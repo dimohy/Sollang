@@ -30,6 +30,38 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
+writeIfDirectBranchTargets expression: typedIr.TypedIrNode, expressionIndex: Int -> Unit uses Console {
+    expression.opcode == -28 -> if {
+        ", label %if$(expressionIndex)_merge, label %if$(expressionIndex)_then" -> println
+    } else {
+        expression.nextOperand >= 0 -> if {
+            ", label %if$(expressionIndex)_then, label %if$(expressionIndex)_else" -> println
+        } else {
+            ", label %if$(expressionIndex)_then, label %if$(expressionIndex)_merge" -> println
+        }
+    }
+}
+
+writeIfShortCircuitBodyTarget expression: typedIr.TypedIrNode, expressionIndex: Int -> Unit uses Console {
+    expression.opcode == -28 -> if {
+        "  br label %if$(expressionIndex)_merge" -> println
+    } else {
+        "  br label %if$(expressionIndex)_then" -> println
+    }
+}
+
+writeIfShortCircuitExitTarget expression: typedIr.TypedIrNode, expressionIndex: Int -> Unit uses Console {
+    expression.opcode == -28 -> if {
+        "  br label %if$(expressionIndex)_then" -> println
+    } else {
+        expression.nextOperand >= 0 -> if {
+            "  br label %if$(expressionIndex)_else" -> println
+        } else {
+            "  br label %if$(expressionIndex)_merge" -> println
+        }
+    }
+}
+
 # Responsibility fragment extracted from emitCore. State is passed by readonly
 # reference, preserving the original direct-call and allocation behavior.
 functionEnd functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -37,6 +69,36 @@ functionEnd functionIndex: Int, context: ref emitterContext.EmitContext, state: 
 }
 isNativeFunction node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     node.kind == 0 and node.flags / 128 % 2 == 1 and node.flags / 512 % 2 == 0
+}
+nativeFunctionReachable functionIndex: Int, state: ref CoreEmitterState -> Bool {
+    functionIndex >= 0
+        and functionIndex < (state.frozenReachableFunctions -> len)
+        and state.frozenReachableFunctions[functionIndex]
+}
+irNodeReachable nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    nodeIndex => ownerIndex!
+    (ownerIndex! >= 0
+        and ownerIndex! < (context.ir -> len)
+        and context.ir[ownerIndex!].kind != 0
+        and context.ir[ownerIndex!].kind != 11) -> while {
+        context.ir[ownerIndex!].parent => ownerIndex!
+    }
+    ownerIndex! -> nativeFunctionReachable(state)
+}
+nativeLibraryReachable sourceModule: Int, libraryAst: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => reachable!
+    0 => functionIndex!
+    (functionIndex! < (context.ir -> len) and not reachable!) -> while {
+        context.ir[functionIndex!] => function
+        ((functionIndex! -> nativeFunctionReachable(state))
+            and (function -> isNativeFunction(context, state))
+            and function.sourceModule == sourceModule
+            and (function -> nativeLibraryAst(context, state)) == libraryAst) -> if {
+            true => reachable!
+        }
+        functionIndex! + 1 => functionIndex!
+    }
+    reachable!
 }
 isComFunction node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     node.kind == 0 and node.flags / 512 % 2 == 1
@@ -161,6 +223,50 @@ nativeSymbolToken function: typedIr.TypedIrNode, context: ref emitterContext.Emi
     }
     symbolToken!
 }
+enumMatchHasConcreteArmValues matchIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => valid!
+    (matchIndex >= 0 and matchIndex < (context.ir -> len) and context.ir[matchIndex].kind == 27) -> if {
+        true => valid!
+        false => hasConcreteArm!
+        context.ir[matchIndex].operand1 => armIndex!
+        (armIndex! >= 0 and armIndex! < (context.ir -> len) and valid!) -> while {
+            context.ir[armIndex!] => arm
+            (arm.kind != 19 or arm.parent != matchIndex) -> if {
+                false => valid!
+            } else {
+                armIndex! -> regionReturns(context, state) -> unless {
+                    true => hasConcreteArm!
+                    arm.operand1 => valueIndex!
+                    (valueIndex! >= 0 and valueIndex! < (context.ir -> len) and context.ir[valueIndex!].kind == 19) -> if {
+                        context.ir[valueIndex!].operand1 => valueIndex!
+                    }
+                    (valueIndex! < 0 or valueIndex! >= (context.ir -> len)) -> if {
+                        false => valid!
+                    } else {
+                        context.ir[valueIndex!] => valueNode
+                        valueNode.kind == 18 -> if {
+                            (valueNode.operand1 < 0
+                                or valueNode.operand1 >= (context.ir -> len)
+                                or context.ir[valueNode.operand1].kind != 19
+                                or context.ir[valueNode.operand1].operand1 < 0
+                                or valueNode.nextOperand < 0
+                                or valueNode.nextOperand >= (context.ir -> len)
+                                or context.ir[valueNode.nextOperand].kind != 19
+                                or context.ir[valueNode.nextOperand].operand1 < 0) -> if { false => valid! }
+                        }
+                        valueNode.kind == 27 -> if {
+                            (valueIndex! -> enumMatchHasConcreteArmValues(context, state)) -> unless { false => valid! }
+                        }
+                        (valueNode.kind == 33 or valueNode.kind == 34) -> if { false => valid! }
+                    }
+                }
+                arm.nextOperand => armIndex!
+            }
+        }
+        not hasConcreteArm! -> if { false => valid! }
+    }
+    valid!
+}
 irValueUsed nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => used!
     context.ir[nodeIndex] => valueCandidate
@@ -191,15 +297,103 @@ irValueUsed nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCon
                 context.ir[useAncestor!].parent => useAncestor!
             }
         }
+        -1 => useOperand0Value!
+        -1 => useOperand1Value!
+        useNode.operand0 >= 0 -> if { useNode.operand0 -> aggregateValueIndex(context, state) => useOperand0Value! }
+        useNode.operand1 >= 0 -> if { useNode.operand1 -> aggregateValueIndex(context, state) => useOperand1Value! }
         (useIndex! != nodeIndex
-            and not internalUse!
+            and (not internalUse!
+                or useNode.operand0 == nodeIndex
+                or useNode.operand1 == nodeIndex
+                or useOperand0Value! == nodeIndex
+                or useOperand1Value! == nodeIndex)
             and (useNode.operand0 == nodeIndex
-                or useNode.operand1 == nodeIndex)) -> if {
-            true => used!
+                or useNode.operand1 == nodeIndex
+                or useOperand0Value! == nodeIndex
+                or useOperand1Value! == nodeIndex
+                or (useNode.kind == 18 and useNode.nextOperand == nodeIndex))) -> if {
+            false => structuralRegionUse!
+            useNode.kind == 19 -> if {
+                useNode -> sourceNode(context, state) => useSource
+                # A block region's operand1 forwards its last expression, but
+                # that value is only demanded when the region itself escapes.
+                # Arm-to-body links and sibling links are control structure,
+                # never value uses by themselves.
+                useSource.kind == 43 -> if {
+                    useNode.operand1 == nodeIndex -> if {
+                        useIndex! -> irValueUsed(ownerIndex, context, state) => used!
+                    }
+                }
+                useNode.operand1 == nodeIndex -> if {
+                    useIndex! => enumArmRegion!
+                    false => enumArmRegionFound!
+                    (enumArmRegion! >= 0 and context.ir[enumArmRegion!].kind == 19) -> while {
+                        context.ir[enumArmRegion!] -> sourceNode(context, state) => enumArmRegionSource
+                        (enumArmRegionSource.kind == 58 or enumArmRegionSource.kind == 70) -> if { true => enumArmRegionFound! }
+                        context.ir[enumArmRegion!].parent => enumArmRegion!
+                    }
+                    (enumArmRegionFound!
+                        and enumArmRegion! >= 0
+                        and context.ir[enumArmRegion!].kind == 27
+                        and not (context.ir[enumArmRegion!].typeOrigin == 1 and context.ir[enumArmRegion!].typeSymbol == 0)
+                        and (enumArmRegion! -> enumMatchHasConcreteArmValues(context, state))) -> if {
+                        true => used!
+                    }
+                    useIndex! => whenArmRegion!
+                    (whenArmRegion! >= 0 and context.ir[whenArmRegion!].kind == 19) -> while {
+                        context.ir[whenArmRegion!].parent => whenArmRegion!
+                    }
+                    (whenArmRegion! >= 0
+                        and context.ir[whenArmRegion!].kind == 34
+                        and not (context.ir[whenArmRegion!].typeOrigin == 1 and context.ir[whenArmRegion!].typeSymbol == 0)) -> if {
+                        whenArmRegion! -> irValueUsed(ownerIndex, context, state) => used!
+                    }
+                }
+                true => structuralRegionUse!
+            }
+            not structuralRegionUse! -> if { true => used! }
         }
         useIndex! + 1 => useIndex!
     }
     used!
+}
+callResultPropagationBindingIndex callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => bindingIndex!
+    (callIndex >= 0 and callIndex < (context.ir -> len)) -> if {
+        context.ir[callIndex] => call
+        call.parent >= 0 -> if {
+            context.ir[call.parent] => binding
+            (binding.kind == 17
+                and binding.operand0 == callIndex
+                and binding.typeId >= 0
+                and call.typeId >= 0
+                and call.typeId < (context.types -> len)
+                and context.types[call.typeId].kind == 7
+                and context.types[call.typeId].origin == 4
+                and context.types[call.typeId].symbol == 1
+                and context.types[call.typeId].first == binding.typeId
+                and binding.sourceModule >= 0
+                and binding.sourceModule < (context.ranges -> len)) -> if {
+                context.ranges[binding.sourceModule] => propagationBindingRange
+                context.nodes[propagationBindingRange.astStart + binding.astNode] => propagationBindingAst
+                -1 => propagationBindingLastFlow!
+                propagationBindingAst.firstToken => propagationBindingTokenIndex!
+                propagationBindingTokenIndex! < propagationBindingAst.firstToken + propagationBindingAst.tokenCount -> while {
+                    context.tokens[propagationBindingRange.tokenStart + propagationBindingTokenIndex!] => propagationBindingToken
+                    (propagationBindingToken.kind == grammar.tokenIdQuestion() or propagationBindingToken.kind == grammar.tokenIdArrow()) -> if {
+                        propagationBindingToken.kind => propagationBindingLastFlow!
+                    }
+                    propagationBindingToken.kind == grammar.tokenIdFatArrow() -> if {
+                        propagationBindingAst.firstToken + propagationBindingAst.tokenCount => propagationBindingTokenIndex!
+                    } else {
+                        propagationBindingTokenIndex! + 1 => propagationBindingTokenIndex!
+                    }
+                }
+                propagationBindingLastFlow! == grammar.tokenIdQuestion() -> if { call.parent => bindingIndex! }
+            }
+        }
+    }
+    bindingIndex!
 }
 plannedStreamPipeline terminalIr: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     -1 => found!
@@ -495,10 +689,10 @@ parallelBranchCaptures branchIndex: Int, context: ref emitterContext.EmitContext
             context.ir[stageIndex!] => stage
             CallEnvironmentRequest { callerIndex: -1, callIndex: stageIndex!, targetModule: stage.targetModule, targetSymbol: stage.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => targetFunction
             targetFunction >= 0 -> if {
-                targetFunction -> functionCaptures(context, state) => stageCaptures!
+                targetFunction -> functionCaptures(context, state) => stageCaptures
                 0 => stageCaptureIndex!
-                stageCaptureIndex! < (stageCaptures! -> len) -> while {
-                    stageCaptures![stageCaptureIndex!] => stageCapture
+                stageCaptureIndex! < (stageCaptures -> len) -> while {
+                    stageCaptures[stageCaptureIndex!] => stageCapture
                     false => alreadyCaptured!
                     0 => existingCaptureIndex!
                     existingCaptureIndex! < (captures! -> len) -> while {
@@ -558,11 +752,11 @@ writeParallelBranchEnvironmentType branchIndex: Int, captures: [Int; ~], context
         capture -> ownsType -> if { "ptr" -> print } else { capture -> writeIrType(context, state) }
         captureIndex! + 1 => captureIndex!
     }
-    branchIndex -> parallelBranchArguments(context) => arguments!
+    branchIndex -> parallelBranchArguments(context) => arguments
     0 => argumentIndex!
-    argumentIndex! < (arguments! -> len) -> while {
+    argumentIndex! < (arguments -> len) -> while {
         ", " -> print
-        arguments![argumentIndex!] -> writeParallelBranchArgumentType(context, state)
+        arguments[argumentIndex!] -> writeParallelBranchArgumentType(context, state)
         argumentIndex! + 1 => argumentIndex!
     }
     " }" -> print
@@ -626,9 +820,9 @@ callMutatesBinding callIndex: Int, bindingIndex: Int, ownerIndex: Int, context: 
             callIndex -> callTargetParameter(ordinal!, context, state) => parameterIndex
             (parameterIndex >= 0 and context.ir[parameterIndex].flags / 2 % 2 == 1) -> if {
                 argumentIndex! -> aggregateValueIndex(context, state) => argumentValueIndex
-                argumentValueIndex -> referencePlaceRootBindingForOwner(ownerIndex, context, state) => argumentRoot!
-                argumentRoot! >= 0 -> if {
-                    argumentRoot! -> mutableBindingRoot(context, state) => argumentMutableRoot
+                argumentValueIndex -> referencePlaceRootBindingForOwner(ownerIndex, context, state) => argumentRoot
+                argumentRoot >= 0 -> if {
+                    argumentRoot -> mutableBindingRoot(context, state) => argumentMutableRoot
                     bindingIndex -> mutableBindingRoot(context, state) => readMutableRoot
                     argumentMutableRoot == readMutableRoot -> if { true => mutates! }
                 }
@@ -648,7 +842,7 @@ sourceTokenIs sourceIndex: Int, tokenIndex: Int, expected: Text, context: ref em
         UIntSize(0) => tokenByte!
         (equal! and tokenByte! < actual.span.length) -> while {
             (context.sources[sourceIndex] -> byte(actual.span.start + tokenByte!)) != (expected -> byte(tokenByte!)) -> if { false => equal! }
-            tokenByte! + UIntSize(1) => tokenByte!
+            tokenByte! + 1 => tokenByte!
         }
     }
     equal!
@@ -664,7 +858,7 @@ sourceTokensEqual leftSource: Int, leftToken: Int, rightSource: Int, rightToken:
         UIntSize(0) => tokenByte!
         (equal! and tokenByte! < left.span.length) -> while {
             (context.sources[leftSource] -> byte(left.span.start + tokenByte!)) != (context.sources[rightSource] -> byte(right.span.start + tokenByte!)) -> if { false => equal! }
-            tokenByte! + UIntSize(1) => tokenByte!
+            tokenByte! + 1 => tokenByte!
         }
     }
     equal!
@@ -868,8 +1062,8 @@ parallelUsesComputePool expressionIndex: Int, context: ref emitterContext.EmitCo
         context.ir[parallelExpression.operand1] => parallelCall
         CallEnvironmentRequest { callerIndex: -1, callIndex: expressionIndex, targetModule: parallelCall.targetModule, targetSymbol: parallelCall.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => parallelTarget
         parallelTarget >= 0 -> if {
-            parallelTarget -> functionCaptures(context, state) => parallelTargetCaptures!
-            (parallelTargetCaptures! -> len) > 0 -> if { true => supported! } else {
+            parallelTarget -> functionCaptures(context, state) => parallelTargetCaptures
+            (parallelTargetCaptures -> len) > 0 -> if { true => supported! } else {
                 parallelExpression.operand0 -> hasWorkerScalarArrayElement(context, state) => scalarInput
                 false => scalarOutput!
                 parallelExpression.opcode == -207 -> if {
@@ -888,8 +1082,8 @@ parallelUsesComputePool expressionIndex: Int, context: ref emitterContext.EmitCo
                 (sourceTextInput and transferableOutput!) -> if { true => supported! }
             }
             0 => parallelTargetCaptureIndex!
-            parallelTargetCaptureIndex! < (parallelTargetCaptures! -> len) -> while {
-                not (context.ir[parallelTargetCaptures![parallelTargetCaptureIndex!]] -> ownsType) -> if { false => supported! }
+            parallelTargetCaptureIndex! < (parallelTargetCaptures -> len) -> while {
+                not (context.ir[parallelTargetCaptures[parallelTargetCaptureIndex!]] -> ownsType) -> if { false => supported! }
                 parallelTargetCaptureIndex! + 1 => parallelTargetCaptureIndex!
             }
         }
@@ -907,11 +1101,11 @@ emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.Emi
             "%capture_borrow_binding$(request.bindingIndex)" -> print
         }
     } else {
-        request.callerIndex -> functionCaptures(context, state) => callerCaptures!
+        request.callerIndex -> functionCaptures(context, state) => callerCaptures
         -1 => capturePosition!
         0 => callerCaptureIndex!
-        callerCaptureIndex! < (callerCaptures! -> len) -> while {
-            context.ir[callerCaptures![callerCaptureIndex!]].symbol == binding.symbol -> if { callerCaptureIndex! => capturePosition! }
+        callerCaptureIndex! < (callerCaptures -> len) -> while {
+            context.ir[callerCaptures[callerCaptureIndex!]].symbol == binding.symbol -> if { callerCaptureIndex! => capturePosition! }
             callerCaptureIndex! + 1 => callerCaptureIndex!
         }
         capturePosition! >= 0 -> if { "%capture_$(capturePosition!)" -> print } else { "null" -> print }
@@ -934,11 +1128,11 @@ emitCaptureValue request: CaptureValueRequest, context: ref emitterContext.EmitC
             binding.flags == 1 -> if { "%callenv$(request.callIndex)_capture$(request.captureIndex)" -> print } else { "%v$(binding.operand0)" -> print }
         }
     } else {
-        request.callerIndex -> functionCaptures(context, state) => callerCaptures!
+        request.callerIndex -> functionCaptures(context, state) => callerCaptures
         -1 => capturePosition!
         0 => callerCaptureIndex!
-        callerCaptureIndex! < (callerCaptures! -> len) -> while {
-            context.ir[callerCaptures![callerCaptureIndex!]].symbol == binding.symbol -> if { callerCaptureIndex! => capturePosition! }
+        callerCaptureIndex! < (callerCaptures -> len) -> while {
+            context.ir[callerCaptures[callerCaptureIndex!]].symbol == binding.symbol -> if { callerCaptureIndex! => capturePosition! }
             callerCaptureIndex! + 1 => callerCaptureIndex!
         }
         capturePosition! >= 0 -> if { "%capture_$(capturePosition!)" -> print } else {
@@ -947,7 +1141,7 @@ emitCaptureValue request: CaptureValueRequest, context: ref emitterContext.EmitC
     }
 }
 emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex) -> if {
+    (argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)) -> if {
         context.ir[argumentIndex] => callArgument
         argumentIndex -> aggregateValueIndex(context, state) => referenceArgumentIndex
         context.ir[referenceArgumentIndex] => referenceArgument
@@ -962,7 +1156,7 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                     ((context.ir[referenceRootBinding].kind == 10
                         and context.ir[referenceRootBinding].typeId >= 0
                         and context.types[context.ir[referenceRootBinding].typeId].kind == 8)
-                        or context.ir[referenceRootBinding].flags == 1) -> if { true => referenceUsesMutableSlot! }
+                        or (context.ir[referenceRootBinding].kind != 10 and context.ir[referenceRootBinding].flags == 1)) -> if { true => referenceUsesMutableSlot! }
                 }
                 referenceUsesMutableSlot! -> if {
                     referenceArgumentIndex -> emitMutableReferencePlace(referenceRootBinding, callIndex, ordinal, ownerIndex, context, state) => emittedReferenceProjectionDepth
@@ -997,7 +1191,7 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
     }
 }
 emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex) -> if {
+    (argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)) -> if {
         context.ir[argumentIndex] => callArgument
         argumentIndex -> aggregateValueIndex(context, state) => referenceArgumentIndex
         context.ir[referenceArgumentIndex] => referenceArgument
@@ -1012,7 +1206,7 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
                     ((context.ir[referenceRootBinding].kind == 10
                         and context.ir[referenceRootBinding].typeId >= 0
                         and context.types[context.ir[referenceRootBinding].typeId].kind == 8)
-                        or context.ir[referenceRootBinding].flags == 1) -> if { true => referenceUsesMutableSlot! }
+                        or (context.ir[referenceRootBinding].kind != 10 and context.ir[referenceRootBinding].flags == 1)) -> if { true => referenceUsesMutableSlot! }
                 }
                 referenceUsesMutableSlot! -> if {
                     referenceArgumentIndex -> emitMutableReferencePlace(referenceRootBinding, callIndex, ordinal, ownerIndex, context, state) => emittedReferenceProjectionDepth
@@ -1059,7 +1253,7 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
     }
 }
 emitMutableBorrowArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex) -> if {
+    (argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)) -> if {
         callIndex -> callTargetParameter(ordinal, context, state) => mutableParameterIndex
         (mutableParameterIndex >= 0
             and context.ir[mutableParameterIndex].flags / 2 % 2 == 1
@@ -1067,16 +1261,60 @@ emitMutableBorrowArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: 
             argumentIndex -> aggregateValueIndex(context, state) => mutableValueIndex
             mutableValueIndex -> referencePlaceRootBindingForOwner(ownerIndex, context, state) => mutableRootBinding
             mutableValueIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => forwardedOrdinal
+            mutableRootBinding -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => forwardedRootOrdinal
+            (mutableValueIndex >= 0
+                and context.ir[mutableValueIndex].kind == 13
+                and context.ir[mutableValueIndex].operand0 >= 0
+                and context.ir[mutableValueIndex].symbol >= 0
+                and forwardedRootOrdinal >= 0
+                and (context.ir[mutableRootBinding] -> mutableBorrowUsesStructPointer(context))) => forwardedStructMember
             context.ir[mutableParameterIndex] -> mutableBorrowUsesStructPointer(context) -> if {
-                "  %callmut$(callIndex)_arg$(ordinal) = getelementptr i8, ptr " -> print
-                forwardedOrdinal >= 0 -> if {
-                    forwardedOrdinal -> writeMutableStructParameterPointer
+                forwardedStructMember -> if {
+                    context.ir[context.ir[mutableValueIndex].operand0].typeId => mutableMemberOwnerType!
+                    (mutableMemberOwnerType! >= 0 and context.types[mutableMemberOwnerType!].kind == 8) -> if {
+                        context.types[mutableMemberOwnerType!].first => mutableMemberOwnerType!
+                    }
+                    "  %callmut$(callIndex)_arg$(ordinal) = getelementptr inbounds " -> print
+                    mutableMemberOwnerType! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    forwardedRootOrdinal -> writeMutableStructParameterPointer
+                    ", i32 0, i32 " -> print
+                    context.ir[mutableValueIndex].symbol -> writeDecimalLine
                 } else {
-                    mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
-                    "%slot$(mutableRoot)" -> print
+                    "  %callmut$(callIndex)_arg$(ordinal) = getelementptr i8, ptr " -> print
+                    forwardedOrdinal >= 0 -> if {
+                        forwardedOrdinal -> writeMutableStructParameterPointer
+                    } else {
+                        mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
+                        "%slot$(mutableRoot)" -> print
+                    }
+                    ", i64 0" -> println
                 }
-                ", i64 0" -> println
             } else {
+                forwardedStructMember -> if {
+                    context.ir[context.ir[mutableValueIndex].operand0].typeId => mutableMemberOwnerType!
+                    (mutableMemberOwnerType! >= 0 and context.types[mutableMemberOwnerType!].kind == 8) -> if {
+                        context.types[mutableMemberOwnerType!].first => mutableMemberOwnerType!
+                    }
+                    "  %callmut$(callIndex)_arg$(ordinal)_storage = getelementptr inbounds " -> print
+                    mutableMemberOwnerType! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    forwardedRootOrdinal -> writeMutableStructParameterPointer
+                    ", i32 0, i32 " -> print
+                    context.ir[mutableValueIndex].symbol -> writeDecimalLine
+                    "  %callmut$(callIndex)_arg$(ordinal)_ptr = getelementptr inbounds " -> print
+                    context.ir[mutableValueIndex] -> writeIrType(context, state)
+                    ", ptr %callmut$(callIndex)_arg$(ordinal)_storage, i32 0, i32 0" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal)_len = getelementptr inbounds " -> print
+                    context.ir[mutableValueIndex] -> writeIrType(context, state)
+                    ", ptr %callmut$(callIndex)_arg$(ordinal)_storage, i32 0, i32 1" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal)_capacity = getelementptr inbounds " -> print
+                    context.ir[mutableValueIndex] -> writeIrType(context, state)
+                    ", ptr %callmut$(callIndex)_arg$(ordinal)_storage, i32 0, i32 2" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %callmut$(callIndex)_arg$(ordinal)_ptr, 0" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal)_1 = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_0, ptr %callmut$(callIndex)_arg$(ordinal)_len, 1" -> println
+                    "  %callmut$(callIndex)_arg$(ordinal) = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_1, ptr %callmut$(callIndex)_arg$(ordinal)_capacity, 2" -> println
+                } else {
                 forwardedOrdinal >= 0 -> if {
                     forwardedOrdinal == 0 -> if {
                         "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %arg_mut_ptr_addr, 0" -> println
@@ -1101,6 +1339,7 @@ emitMutableBorrowArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: 
                     "  %callmut$(callIndex)_arg$(ordinal)_0 = insertvalue %sollang.mutable_container poison, ptr %callmut$(callIndex)_arg$(ordinal)_ptr, 0" -> println
                     "  %callmut$(callIndex)_arg$(ordinal)_1 = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_0, ptr %callmut$(callIndex)_arg$(ordinal)_len, 1" -> println
                     "  %callmut$(callIndex)_arg$(ordinal) = insertvalue %sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)_1, ptr %callmut$(callIndex)_arg$(ordinal)_capacity, 2" -> println
+                }
                 }
             }
         }
@@ -1141,10 +1380,10 @@ emitCurrentMutableParameterValue valueIndex: Int, parameterOrdinal: Int, ownerIn
 interpolatedTextRoots textIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] {
     [Int; ~] => roots!
     context.ir[textIndex] => textNode
-    textNode -> sourceInterpolations(context, state) => interpolations!
+    textNode -> sourceInterpolations(context, state) => interpolations
     0 => search!
-    search! < (interpolations! -> len) -> while {
-        interpolations![search!] => currentInterpolation
+    search! < (interpolations -> len) -> while {
+        interpolations[search!] => currentInterpolation
         (currentInterpolation.sourceToken == textNode.payloadToken and currentInterpolation.parent < 0) -> if {
             roots! -> push(search!)
         }
@@ -1159,8 +1398,8 @@ transientTextArgumentSource argumentIndex: Int, callIndex: Int, ordinal: Int, co
         argumentIndex -> aggregateValueIndex(context, state) => argumentValueIndex
         argumentValueIndex -> producerValueIndex(context, state) => producedValueIndex
         (producedValueIndex >= 0 and context.ir[producedValueIndex].kind == 2) -> if {
-            producedValueIndex -> interpolatedTextRoots(context, state) => roots!
-            (roots! -> len) > 0 -> if { producedValueIndex => textIndex! }
+            producedValueIndex -> interpolatedTextRoots(context, state) => roots
+            (roots -> len) > 0 -> if { producedValueIndex => textIndex! }
         }
     }
     textIndex!
@@ -1169,59 +1408,59 @@ emitTransientTextArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, o
     argumentIndex -> transientTextArgumentSource(callIndex, ordinal, context, state) => textIndex
     textIndex >= 0 -> if {
         context.ir[textIndex] => textNode
-        textNode -> sourceInterpolations(context, state) => interpolations!
-        textIndex -> interpolatedTextRoots(context, state) => roots!
-        Int(roots! -> len) => rootCount
+        textNode -> sourceInterpolations(context, state) => interpolations
+        textIndex -> interpolatedTextRoots(context, state) => roots
+        Int(roots -> len) => rootCount
         UIntSize(0) => staticLength!
         UIntSize(0) => suffixStart!
         0 => rootOrdinal!
         rootOrdinal! < rootCount -> while {
-            roots![rootOrdinal!] => interpolationIndex
-            interpolations![interpolationIndex] => interpolationRoot
-            interpolations! -> interpolationEmissionOrder(textNode.payloadToken, interpolationRoot.segment) => expressionOrder!
+            roots[rootOrdinal!] => interpolationIndex
+            interpolations[interpolationIndex] => interpolationRoot
+            interpolations -> interpolationEmissionOrder(textNode.payloadToken, interpolationRoot.segment) => expressionOrder
             0 => expressionOrderIndex!
-            expressionOrderIndex! < (expressionOrder! -> len) -> while {
-                expressionOrder![expressionOrderIndex!] => expressionNodeIndex
-                interpolations![expressionNodeIndex] => expressionNode
-                expressionNodeIndex -> interpolationHasLogicalAncestor(interpolations!) => insideLogical
+            expressionOrderIndex! < (expressionOrder -> len) -> while {
+                expressionOrder[expressionOrderIndex!] => expressionNodeIndex
+                interpolations[expressionNodeIndex] => expressionNode
+                expressionNodeIndex -> interpolationHasLogicalAncestor(interpolations) => insideLogical
                 not insideLogical -> if {
                     (expressionNode.kind == 3 and (expressionNode.opcode == -24 or expressionNode.opcode == -25)) -> if {
-                        callIndex -> emitInterpolationSubtree(expressionNodeIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, true, context, state)
+                        callIndex -> emitInterpolationSubtree(expressionNodeIndex, interpolations, textNode.sourceModule, ownerIndex, callIndex, true, context, state)
                     } else {
-                        callIndex -> emitInterpolationIntrinsic(expressionNodeIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, true, context, state)
-                        callIndex -> emitInterpolationOperation(expressionNodeIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                        callIndex -> emitInterpolationIntrinsic(expressionNodeIndex, interpolations, textNode.sourceModule, ownerIndex, callIndex, true, context, state)
+                        callIndex -> emitInterpolationOperation(expressionNodeIndex, interpolations, textNode.sourceModule, ownerIndex, callIndex, context, state)
                     }
                 }
                 expressionOrderIndex! + 1 => expressionOrderIndex!
             }
-            interpolationIndex -> interpolationNodeIntegerWidth(interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state) => integerWidth
+            interpolationIndex -> interpolationNodeIntegerWidth(interpolations, textNode.sourceModule, ownerIndex, callIndex, context, state) => integerWidth
             integerWidth > 0 -> if {
                 "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_buffer = alloca [21 x i8], align 1" -> println
                 integerWidth < 64 -> if {
                     "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_integer = " -> print
-                    interpolationIndex -> interpolationNodeSigned(interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state) -> if { "sext" -> print } else { "zext" -> print }
+                    interpolationIndex -> interpolationNodeSigned(interpolations, textNode.sourceModule, ownerIndex, callIndex, context, state) -> if { "sext" -> print } else { "zext" -> print }
                     " i$(integerWidth) " -> print
-                    callIndex -> writeInterpolationValue(interpolationIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                    callIndex -> writeInterpolationValue(interpolationIndex, interpolations, textNode.sourceModule, ownerIndex, callIndex, context, state)
                     " to i64" -> println
                 }
                 "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_length = call i64 @" -> print
-                interpolationIndex -> interpolationNodeSigned(interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state) -> if { "sollang_format_i64" -> print } else { "sollang_format_u64" -> print }
+                interpolationIndex -> interpolationNodeSigned(interpolations, textNode.sourceModule, ownerIndex, callIndex, context, state) -> if { "sollang_format_i64" -> print } else { "sollang_format_u64" -> print }
                 "(ptr %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_buffer, i64 " -> print
                 integerWidth < 64 -> if { "%calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_integer" -> print } else {
-                    callIndex -> writeInterpolationValue(interpolationIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                    callIndex -> writeInterpolationValue(interpolationIndex, interpolations, textNode.sourceModule, ownerIndex, callIndex, context, state)
                 }
                 ")" -> println
                 "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_ptr = getelementptr [21 x i8], ptr %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_buffer, i64 0, i64 0" -> println
             } else {
                 "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_ptr = extractvalue %sollang.text " -> print
-                callIndex -> writeInterpolationValue(interpolationIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                callIndex -> writeInterpolationValue(interpolationIndex, interpolations, textNode.sourceModule, ownerIndex, callIndex, context, state)
                 ", 0" -> println
                 "  %calltext$(callIndex)_arg$(ordinal)_root$(rootOrdinal!)_length = extractvalue %sollang.text " -> print
-                callIndex -> writeInterpolationValue(interpolationIndex, interpolations!, textNode.sourceModule, ownerIndex, callIndex, context, state)
+                callIndex -> writeInterpolationValue(interpolationIndex, interpolations, textNode.sourceModule, ownerIndex, callIndex, context, state)
                 ", 1" -> println
             }
             staticLength! + interpolationRoot.literalLength => staticLength!
-            interpolationRoot.expressionStart + interpolationRoot.expressionLength + UIntSize(1) => suffixStart!
+            interpolationRoot.expressionStart + interpolationRoot.expressionLength + 1 => suffixStart!
             rootOrdinal! + 1 => rootOrdinal!
         }
         textNode -> sourceToken(context, state) => textToken
@@ -1250,8 +1489,8 @@ emitTransientTextArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, o
         "  %calltext$(callIndex)_arg$(ordinal)_offset0 = add i64 0, 0" -> println
         0 => copyOrdinal!
         copyOrdinal! < rootCount -> while {
-            roots![copyOrdinal!] => copyIndex
-            interpolations![copyIndex] => copyRoot
+            roots[copyOrdinal!] => copyIndex
+            interpolations[copyIndex] => copyRoot
             "  %calltext$(callIndex)_arg$(ordinal)_literal$(copyOrdinal!)_target = getelementptr i8, ptr %calltext$(callIndex)_arg$(ordinal)_buffer, i64 %calltext$(callIndex)_arg$(ordinal)_offset$(copyOrdinal! * 2)" -> println
             "  %calltext$(callIndex)_arg$(ordinal)_literal$(copyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(textIndex), i64 $(copyRoot.literalStart)" -> println
             "  call void @llvm.memcpy.p0.p0.i64(ptr %calltext$(callIndex)_arg$(ordinal)_literal$(copyOrdinal!)_target, ptr %calltext$(callIndex)_arg$(ordinal)_literal$(copyOrdinal!)_source, i64 $(copyRoot.literalLength), i1 false)" -> println
@@ -1296,10 +1535,10 @@ emitCallCaptureEnvironmentValues request: CallEnvironmentRequest, context: ref e
     }
     [Int; ~] => callCaptures!
     targetFunctionIr! >= 0 -> if {
-        targetFunctionIr! -> functionCaptures(context, state) => resolvedCallCaptures!
+        targetFunctionIr! -> functionCaptures(context, state) => resolvedCallCaptures
         0 => resolvedCaptureIndex!
-        resolvedCaptureIndex! < (resolvedCallCaptures! -> len) -> while {
-            callCaptures! -> push(resolvedCallCaptures![resolvedCaptureIndex!])
+        resolvedCaptureIndex! < (resolvedCallCaptures -> len) -> while {
+            callCaptures! -> push(resolvedCallCaptures[resolvedCaptureIndex!])
             resolvedCaptureIndex! + 1 => resolvedCaptureIndex!
         }
     }
@@ -1336,10 +1575,10 @@ emitCallEnvironment request: CallEnvironmentRequest, context: ref emitterContext
     }
     [Int; ~] => callCaptures!
     targetFunctionIr! >= 0 -> if {
-        targetFunctionIr! -> functionCaptures(context, state) => resolvedCallCaptures!
+        targetFunctionIr! -> functionCaptures(context, state) => resolvedCallCaptures
         0 => resolvedCaptureIndex!
-        resolvedCaptureIndex! < (resolvedCallCaptures! -> len) -> while {
-            callCaptures! -> push(resolvedCallCaptures![resolvedCaptureIndex!])
+        resolvedCaptureIndex! < (resolvedCallCaptures -> len) -> while {
+            callCaptures! -> push(resolvedCallCaptures[resolvedCaptureIndex!])
             resolvedCaptureIndex! + 1 => resolvedCaptureIndex!
         }
     }
@@ -1358,11 +1597,11 @@ emitCallEnvironment request: CallEnvironmentRequest, context: ref emitterContext
                     "%capture_borrow_binding$(bindingIndex)" -> print
                 }
             } else {
-                request.callerIndex -> functionCaptures(context, state) => callerCaptures!
+                request.callerIndex -> functionCaptures(context, state) => callerCaptures
                 -1 => capturePosition!
                 0 => callerCaptureIndex!
-                callerCaptureIndex! < (callerCaptures! -> len) -> while {
-                    context.ir[callerCaptures![callerCaptureIndex!]].symbol == binding.symbol -> if { callerCaptureIndex! => capturePosition! }
+                callerCaptureIndex! < (callerCaptures -> len) -> while {
+                    context.ir[callerCaptures[callerCaptureIndex!]].symbol == binding.symbol -> if { callerCaptureIndex! => capturePosition! }
                     callerCaptureIndex! + 1 => callerCaptureIndex!
                 }
                 capturePosition! >= 0 -> if { "%capture_$(capturePosition!)" -> print } else { "null" -> print }
@@ -1382,14 +1621,29 @@ sourceToken node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
     tokenRange.tokenStart + node.payloadToken => tokenIndex
     context.tokens[tokenIndex]
 }
+writeIntegerLiteral node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    node -> sourceToken(context, state) => token
+    context.sources[node.sourceModule] => source
+    token.span.start => segmentStart!
+    token.span.start => byteIndex!
+    token.span.start + token.span.length => tokenEnd
+    byteIndex! < tokenEnd -> while {
+        (source -> byte(byteIndex!)) == 95 -> if {
+            byteIndex! > segmentStart! -> if { source -> slice(segmentStart!, byteIndex! - segmentStart!) -> print }
+            byteIndex! + 1 => segmentStart!
+        }
+        byteIndex! + 1 => byteIndex!
+    }
+    tokenEnd > segmentStart! -> if { source -> slice(segmentStart!, tokenEnd - segmentStart!) -> print }
+}
 writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[nodeIndex] => value
     (value.kind == 3 or value.kind == 4) -> if {
         value -> sourceToken(context, state) => valueToken
         value.kind == 3 -> if {
-            context.sources[value.sourceModule] -> slice(valueToken.span.start, valueToken.span.length) -> print
+            value -> writeIntegerLiteral(context, state)
         } else {
-            ((context.sources[value.sourceModule] -> byte(valueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+            ((context.sources[value.sourceModule] -> byte(valueToken.span.start)) == 116) -> if { "1" -> print } else { "0" -> print }
         }
     } else {
         (value.kind == 5 and value.operand0 >= 0 and context.ir[value.operand0].kind == 29) -> if {
@@ -1411,6 +1665,10 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
 emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[callIndex] => call
     context.ir[call.operand0] => base
+    base -> integerNodeWidth(context, state) => lengthReceiverIntegerWidth
+    lengthReceiverIntegerWidth > 0 -> if {
+        "; sollang compiler error S042: len receiver resolves to scalar i$lengthReceiverIntegerWidth at ir $callIndex (receiver $(call.operand0), receiverKind $(base.kind), receiverType $(base.typeId)/$(base.typeKind)/$(base.typeOrigin)/$(base.typeModule)/$(base.typeSymbol), source $(call.sourceModule), ast $(call.astNode))" -> println
+    }
     call -> integerNodeWidth(context, state) => resultWidth
     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableLengthParameterOrdinal
     mutableLengthParameterOrdinal >= 0 -> if {
@@ -1489,6 +1747,10 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
 emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[callIndex] => call
     context.ir[call.operand0] => base
+    base -> integerNodeWidth(context, state) => capacityReceiverIntegerWidth
+    capacityReceiverIntegerWidth > 0 -> if {
+        "; sollang compiler error S044: capacity receiver resolves to scalar i$capacityReceiverIntegerWidth at ir $callIndex (receiver $(call.operand0), source $(call.sourceModule), ast $(call.astNode))" -> println
+    }
     call -> integerNodeWidth(context, state) => resultWidth
     call.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableCapacityParameterOrdinal
     mutableCapacityParameterOrdinal >= 0 -> if {
@@ -1514,11 +1776,11 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
             context.types[valueTypeId!].first => valueTypeId!
             true => readonlyReference!
         }
-        call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
-        mutableRoot! >= 0 -> if {
+        call.operand0 -> mutableStorageRoot(context, state) => mutableRoot
+        mutableRoot >= 0 -> if {
             "  %v$(callIndex)_capacity_source = load " -> print
             readonlyReference! -> if { valueTypeId! -> writeSemanticTypeId(context, state) } else { base -> writeIrType(context, state) }
-            ", ptr %slot$(mutableRoot!), align 8" -> println
+            ", ptr %slot$(mutableRoot), align 8" -> println
         }
         readonlyReference! -> if {
             "  %v$(callIndex)_capacity_source = load " -> print
@@ -1532,7 +1794,7 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
         " = extractvalue " -> print
         readonlyReference! -> if { valueTypeId! -> writeSemanticTypeId(context, state) } else { base -> writeIrType(context, state) }
         " " -> print
-        (mutableRoot! >= 0 or readonlyReference!) -> if { "%v$(callIndex)_capacity_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
+        (mutableRoot >= 0 or readonlyReference!) -> if { "%v$(callIndex)_capacity_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
         ", " -> print
         ((readonlyReference! and (context.types[valueTypeId!].kind == 5 or context.types[valueTypeId!].kind == 13)) or (not readonlyReference! and (base -> isDictionaryType))) -> if { "3" -> println } else { "2" -> println }
         resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
@@ -1666,6 +1928,7 @@ emitStandardErrorCall callIndex: Int, ownerIndex: Int, context: ref emitterConte
     "  call void @sollang_runtime_eprintln(ptr %v$(callIndex)_stderr_data, i64 %v$(callIndex)_stderr_length)" -> println
 }
 emitIfResultStore resultNode: typedIr.TypedIrNode, valueIndex: Int, ownerIndex: Int, ifIndex: Int, branchOrdinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    (valueIndex >= 0 and valueIndex < (context.ir -> len)) -> if {
     context.ir[valueIndex] => valueNode
     resultNode -> integerNodeWidth(context, state) => resultWidth
     valueNode -> integerNodeWidth(context, state) => valueWidth
@@ -1700,6 +1963,9 @@ emitIfResultStore resultNode: typedIr.TypedIrNode, valueIndex: Int, ownerIndex: 
     ifIndex -> writeDecimal
     "_result, align " -> print
     resultNode -> storageAlign(context, state) -> writeDecimalLine
+    } else {
+        "; sollang compiler error S025: value-producing control result store has no concrete source value (control $ifIndex, kind $(resultNode.kind), branch $branchOrdinal, value $valueIndex, source $(resultNode.sourceModule), ast $(resultNode.astNode))" -> println
+    }
 }
 isOwnedFileType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => owned!
@@ -1710,7 +1976,7 @@ isOwnedFileType typeId: Int, context: ref emitterContext.EmitContext, state: ref
             0 => moduleSearch!
             moduleSearch! < (context.modules -> len) -> while {
                 context.modules[moduleSearch!] => moduleIdentity
-                (moduleIdentity.sourceIndex == candidate.module and moduleIdentity.pathHash == UInt64(1560534979202565016)) -> if { true => fileModule! }
+                (moduleIdentity.sourceIndex == candidate.module and moduleIdentity.pathHash == 1560534979202565016) -> if { true => fileModule! }
                 moduleSearch! + 1 => moduleSearch!
             }
             fileModule! -> if {
@@ -1718,11 +1984,11 @@ isOwnedFileType typeId: Int, context: ref emitterContext.EmitContext, state: ref
                 (candidate.symbol >= 0 and candidate.symbol < candidateRange.symbolCount) -> if {
                     context.symbols[candidateRange.symbolStart + candidate.symbol] => candidateSymbol
                     context.tokens[candidateRange.tokenStart + candidateSymbol.nameToken] => candidateName
-                    candidateName.span.length == UIntSize(4) -> if {
-                        ((context.sources[candidate.module] -> byte(candidateName.span.start)) == UInt8(70) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(1))) == UInt8(105) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(2))) == UInt8(108) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(3))) == UInt8(101)) -> if { true => owned! }
+                    candidateName.span.length == 4 -> if {
+                        ((context.sources[candidate.module] -> byte(candidateName.span.start)) == 70 and (context.sources[candidate.module] -> byte(candidateName.span.start + 1)) == 105 and (context.sources[candidate.module] -> byte(candidateName.span.start + 2)) == 108 and (context.sources[candidate.module] -> byte(candidateName.span.start + 3)) == 101) -> if { true => owned! }
                     }
-                    candidateName.span.length == UIntSize(10) -> if {
-                        ((context.sources[candidate.module] -> byte(candidateName.span.start)) == UInt8(70) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(1))) == UInt8(105) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(2))) == UInt8(108) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(3))) == UInt8(101) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(4))) == UInt8(87) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(5))) == UInt8(114) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(6))) == UInt8(105) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(7))) == UInt8(116) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(8))) == UInt8(101) and (context.sources[candidate.module] -> byte(candidateName.span.start + UIntSize(9))) == UInt8(114)) -> if { true => owned! }
+                    candidateName.span.length == 10 -> if {
+                        ((context.sources[candidate.module] -> byte(candidateName.span.start)) == 70 and (context.sources[candidate.module] -> byte(candidateName.span.start + 1)) == 105 and (context.sources[candidate.module] -> byte(candidateName.span.start + 2)) == 108 and (context.sources[candidate.module] -> byte(candidateName.span.start + 3)) == 101 and (context.sources[candidate.module] -> byte(candidateName.span.start + 4)) == 87 and (context.sources[candidate.module] -> byte(candidateName.span.start + 5)) == 114 and (context.sources[candidate.module] -> byte(candidateName.span.start + 6)) == 105 and (context.sources[candidate.module] -> byte(candidateName.span.start + 7)) == 116 and (context.sources[candidate.module] -> byte(candidateName.span.start + 8)) == 101 and (context.sources[candidate.module] -> byte(candidateName.span.start + 9)) == 114) -> if { true => owned! }
                     }
                 }
             }
@@ -1776,18 +2042,22 @@ isMutablePlaceRead placeIndex: Int, ownerStart: Int, ownerEnd: Int, context: ref
     }
     (root! >= ownerStart and root! < ownerEnd and context.ir[root!].kind == 5) -> if {
         context.ir[root!] => rootName
-        (rootName.operand0 >= ownerStart and rootName.operand0 < ownerEnd and context.ir[rootName.operand0].kind == 17 and context.ir[rootName.operand0].flags == 1) -> if {
-            true => mutable!
+        false => exactMutableReadBinding!
+        (rootName.operand0 >= ownerStart and rootName.operand0 < ownerEnd and context.ir[rootName.operand0].kind == 17) -> if {
+            true => exactMutableReadBinding!
+            context.ir[rootName.operand0].flags == 1 -> if { true => mutable! }
         }
-        ownerStart => mutableBindingSearch!
-        (not mutable! and mutableBindingSearch! < ownerEnd) -> while {
-            context.ir[mutableBindingSearch!] => mutableBinding
-            (mutableBinding.kind == 17 and mutableBinding.flags == 1 and rootName.payloadToken >= 0 and mutableBinding.payloadToken >= 0) -> if {
-                rootName.sourceModule -> sourceTokensEqual(rootName.payloadToken, mutableBinding.sourceModule, mutableBinding.payloadToken, context, state) -> if {
-                    true => mutable!
+        not exactMutableReadBinding! -> if {
+            ownerStart => mutableBindingSearch!
+            (not mutable! and mutableBindingSearch! < ownerEnd) -> while {
+                context.ir[mutableBindingSearch!] => mutableBinding
+                (mutableBinding.kind == 17 and mutableBinding.flags == 1 and rootName.payloadToken >= 0 and mutableBinding.payloadToken >= 0) -> if {
+                    rootName.sourceModule -> sourceTokensEqual(rootName.payloadToken, mutableBinding.sourceModule, mutableBinding.payloadToken, context, state) -> if {
+                        true => mutable!
+                    }
                 }
+                mutableBindingSearch! + 1 => mutableBindingSearch!
             }
-            mutableBindingSearch! + 1 => mutableBindingSearch!
         }
     }
     mutable!
@@ -1814,6 +2084,73 @@ aggregateValueIndex wrapperIndex: Int, context: ref emitterContext.EmitContext, 
     }
     resolved! => result
     result
+}
+
+# Follow value-preserving wrappers and readonly bindings to the aggregate that
+# owns the storage. Aggregate constructors transfer that storage into their
+# result; cleanup must therefore reason about the source aggregate rather than
+# the final freeze/name wrapper used by LLVM emission.
+ownedValueSourceIndex valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    valueIndex -> aggregateValueIndex(context, state) => resolved!
+    true => searching!
+    searching! -> while {
+        false => searching!
+        context.ir[resolved!] => candidate
+        -1 => next!
+        (candidate.kind == 36 and candidate.operand0 >= 0) -> if {
+            candidate.operand0 => next!
+        }
+        (candidate.kind == 5 and candidate.operand0 >= 0 and context.ir[candidate.operand0].kind == 17 and context.ir[candidate.operand0].operand0 >= 0) -> if {
+            context.ir[candidate.operand0].operand0 => next!
+        }
+        (candidate.kind == 17 and candidate.operand0 >= 0) -> if {
+            candidate.operand0 => next!
+        }
+        next! >= 0 -> if {
+            next! -> aggregateValueIndex(context, state) => canonicalNext
+            canonicalNext != resolved! -> if {
+                canonicalNext => resolved!
+                true => searching!
+            }
+        }
+    }
+    resolved!
+}
+
+# Resolve the owning local carried by a returned value. Enum constructors and
+# value-preserving wrappers transfer their payload into the returned aggregate,
+# so cleanup on that return edge must exclude the original binding.
+returnedOwnedBindingIndex valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    valueIndex => resolved!
+    -1 => bindingIndex!
+    true => searching!
+    (searching! and resolved! >= 0) -> while {
+        false => searching!
+        resolved! -> aggregateValueIndex(context, state) => aggregateIndex
+        aggregateIndex != resolved! -> if {
+            aggregateIndex => resolved!
+            true => searching!
+        } else {
+            context.ir[resolved!] => candidate
+            (candidate.kind == 26 and candidate.operand0 >= 0) -> if {
+                candidate.operand0 => resolved!
+                true => searching!
+            } else {
+                (candidate.kind == 36 and candidate.operand0 >= 0) -> if {
+                    candidate.operand0 => resolved!
+                    true => searching!
+                } else {
+                    (candidate.kind == 5 and candidate.operand0 >= 0 and context.ir[candidate.operand0].kind == 17) -> if {
+                        candidate.operand0 -> mutableBindingRoot(context, state) => bindingIndex!
+                    }
+                    candidate.kind == 17 -> if {
+                        resolved! -> mutableBindingRoot(context, state) => bindingIndex!
+                    }
+                }
+            }
+        }
+    }
+    bindingIndex!
 }
 producerValueIndex sourceIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     sourceIndex => resolved!
@@ -1855,11 +2192,45 @@ regionResultValueIndex regionIndex: Int, context: ref emitterContext.EmitContext
     resolved!
 }
 matchRegionResultValueIndex regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    regionIndex -> regionResultValueIndex(context, state) => resolved!
-    (resolved! >= 0 and context.ir[resolved!].kind == 19 and context.ir[resolved!].operand1 >= 0) -> if {
-        context.ir[resolved!].operand1 -> aggregateValueIndex(context, state) => resolved!
+    context.ir[regionIndex] => matchArm
+    matchArm.operand1 => resolved!
+    (matchArm.operand1 >= 0 and context.ir[matchArm.operand1].kind == 19) -> if {
+        matchArm.operand1 -> regionResultValueIndex(context, state) => resolved!
+    } else {
+        # Expression-bodied enum arms store the matched payload binding in
+        # operand1. The computed arm value is the final direct child after the
+        # pattern and payload, not the payload itself.
+        regionIndex + 1 => armChildSearch!
+        regionIndex => armOwner!
+        (armOwner! >= 0 and context.ir[armOwner!].kind != 0 and context.ir[armOwner!].kind != 11) -> while {
+            context.ir[armOwner!].parent => armOwner!
+        }
+        context.ir -> len => armChildEnd!
+        armOwner! >= 0 -> if { armOwner! -> functionEnd(context, state) => armChildEnd! }
+        armChildSearch! < armChildEnd! -> while {
+            context.ir[armChildSearch!] => armChild
+            false => armChildMatchesResultType!
+            (matchArm.typeId >= 0 and armChild.typeId == matchArm.typeId) -> if {
+                true => armChildMatchesResultType!
+            }
+            (matchArm.typeId < 0
+                and armChild.typeId < 0
+                and armChild.typeKind == matchArm.typeKind
+                and armChild.typeOrigin == matchArm.typeOrigin
+                and armChild.typeModule == matchArm.typeModule
+                and armChild.typeSymbol == matchArm.typeSymbol) -> if {
+                true => armChildMatchesResultType!
+            }
+            (armChild.parent == regionIndex
+                and armChildSearch! != matchArm.operand0
+                and armChildSearch! != matchArm.operand1
+                and armChildMatchesResultType!) -> if {
+                armChildSearch! => resolved!
+            }
+            armChildSearch! + 1 => armChildSearch!
+        }
     }
-    resolved!
+    resolved! -> aggregateValueIndex(context, state)
 }
 textLiteralIsRaw request: TextLiteralRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     context -> literalIsRaw(request.sourceModule, request.token)
@@ -1886,57 +2257,57 @@ decimalTokenValue sourceModule: Int, tokenIndex: Int, context: ref emitterContex
     UIntSize(0) => digit!
     digit! < decimalToken.span.length -> while {
         context.sources[sourceModule] -> byte(decimalToken.span.start + digit!) => character
-        value! * 10 + Int(character - UInt8(48)) => value!
-        digit! + UIntSize(1) => digit!
+        value! * 10 + Int(character - 48) => value!
+        digit! + 1 => digit!
     }
     value!
 }
 emitGuidConstant sourceModule: Int, tokenIndex: Int, interfaceGuid: Bool, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ranges[sourceModule] => guidRange
-    TextLiteralRequest { sourceModule: sourceModule, token: context.tokens[guidRange.tokenStart + tokenIndex] } => guid!
-    guid! -> textLiteralStart(context, state) => guidStart
-    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(0), UIntSize(8)) => part0
-    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(9), UIntSize(4)) => part1
-    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(14), UIntSize(4)) => part2
+    TextLiteralRequest { sourceModule: sourceModule, token: context.tokens[guidRange.tokenStart + tokenIndex] } => guid
+    guid -> textLiteralStart(context, state) => guidStart
+    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 0, 8) => part0
+    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 9, 4) => part1
+    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 14, 4) => part2
     interfaceGuid -> if {
         "@sollang_com_iid_m$(sourceModule)_s$(ownerIndex)" -> print
     } else {
         "@sollang_com_clsid_m$(sourceModule)_a$(ownerIndex)" -> print
     }
     " = private constant { i32, i16, i16, [8 x i8] } { i32 $part0, i16 $part1, i16 $part2, [8 x i8] [i8 " -> print
-    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(19), UIntSize(2))) -> writeDecimal
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 19, 2)) -> writeDecimal
     ", i8 " -> print
-    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(21), UIntSize(2))) -> writeDecimal
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 21, 2)) -> writeDecimal
     ", i8 " -> print
-    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(24), UIntSize(2))) -> writeDecimal
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 24, 2)) -> writeDecimal
     ", i8 " -> print
-    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(26), UIntSize(2))) -> writeDecimal
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 26, 2)) -> writeDecimal
     ", i8 " -> print
-    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(28), UIntSize(2))) -> writeDecimal
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 28, 2)) -> writeDecimal
     ", i8 " -> print
-    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(30), UIntSize(2))) -> writeDecimal
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 30, 2)) -> writeDecimal
     ", i8 " -> print
-    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(32), UIntSize(2))) -> writeDecimal
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 32, 2)) -> writeDecimal
     ", i8 " -> print
-    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, UIntSize(34), UIntSize(2))) -> writeDecimal
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 34, 2)) -> writeDecimal
     "] }" -> println
 }
 emitIntegerPromotion request: IntegerPromotionRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
     context.ir[request.operandIndex] => operand
-    operand -> integerNodeWidth(context, state) => operandWidth!
-    (operandWidth! > 0 and operandWidth! < request.targetWidth and operand.kind != 3 and operand.kind != 4) => promoted!
-    promoted! -> if {
+    operand -> integerNodeWidth(context, state) => operandWidth
+    (operandWidth > 0 and operandWidth < request.targetWidth and operand.kind != 3 and operand.kind != 4) => promoted
+    promoted -> if {
         "  %v$(request.expressionIndex)_" -> print
         request.right -> if { "right" -> print } else { "left" -> print }
         "_wide = " -> print
         operand -> integerNodeSigned(context, state) -> if { "sext" -> print } else { "zext" -> print }
-        " i$(operandWidth!) " -> print
+        " i$(operandWidth) " -> print
         false => parameterOperand!
         (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and operand.kind == 5 and operand.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { true => parameterOperand! }
         parameterOperand! -> if { "%arg" -> print } else { "%v$(request.operandIndex)" -> print }
         " to i$(request.targetWidth)" -> println
     }
-    promoted!
+    promoted
 }
 sourceNode node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> ast.AstNode {
     context.nodes[context.ranges[node.sourceModule].astStart + node.astNode]
@@ -2045,8 +2416,7 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
     }
     "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_in_bounds = icmp ult i64 " -> print
     referenceIndex.kind == 3 -> if {
-        referenceIndex -> sourceToken(context, state) => referenceIndexToken
-        context.sources[referenceIndex.sourceModule] -> slice(referenceIndexToken.span.start, referenceIndexToken.span.length) -> print
+        referenceIndex -> writeIntegerLiteral(context, state)
     } else {
         (referenceIndexWidth > 0 and referenceIndexWidth < 64) -> if { "%callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index" -> print } else {
             (referenceOwnerIndex >= 0 and context.ir[referenceOwnerIndex].kind == 0 and context.ir[referenceOwnerIndex].operand1 >= 0 and referenceIndex.kind == 5 and referenceIndex.symbol == context.ir[context.ir[referenceOwnerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(indexedPlace.operand1)" -> print }
@@ -2062,8 +2432,8 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
     indexedPlace -> writeIrType(context, state)
     ", ptr %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data, i64 " -> print
     referenceIndex.kind == 3 -> if {
-        referenceIndex -> sourceToken(context, state) => referencePlaceIndexToken
-        context.sources[referenceIndex.sourceModule] -> slice(referencePlaceIndexToken.span.start, referencePlaceIndexToken.span.length) -> println
+        referenceIndex -> writeIntegerLiteral(context, state)
+        "" -> println
     } else {
         (referenceIndexWidth > 0 and referenceIndexWidth < 64) -> if { "%callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index" -> println } else {
             (referenceOwnerIndex >= 0 and context.ir[referenceOwnerIndex].kind == 0 and context.ir[referenceOwnerIndex].operand1 >= 0 and referenceIndex.kind == 5 and referenceIndex.symbol == context.ir[context.ir[referenceOwnerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(indexedPlace.operand1)" -> println }
@@ -2075,6 +2445,20 @@ emitMutableReferenceMemberPlace placeIndex: Int, rootBinding: Int, callIndex: In
     context.ir[placeIndex] => memberPlace
     placeIndex -> referenceMemberPathDepth(context, state) => memberDepth
     memberDepth == 0 -> if { 0 } else {
+        (memberDepth == 1
+            and memberPlace.symbol >= 0
+            and memberPlace.operand0 >= 0
+            and context.ir[memberPlace.operand0].kind != 15) -> if {
+            context.ir[rootBinding].typeId => directOwnerType!
+            (directOwnerType! >= 0 and context.types[directOwnerType!].kind == 8) -> if { context.types[directOwnerType!].first => directOwnerType! }
+            "  %callref$(callIndex)_arg$(ordinal)_place0 = getelementptr inbounds " -> print
+            directOwnerType! -> writeSemanticTypeId(context, state)
+            ", ptr " -> print
+            rootBinding -> writeReferenceRootAddress(ownerIndex, context, state)
+            ", i32 0, i32 " -> print
+            memberPlace.symbol -> writeDecimalLine
+            1
+        } else {
         memberPlace.operand0 => memberBaseIndex!
         (memberBaseIndex! >= 0 and context.ir[memberBaseIndex!].kind == 13) -> while {
             context.ir[memberBaseIndex!].operand0 => memberBaseIndex!
@@ -2110,7 +2494,7 @@ emitMutableReferenceMemberPlace placeIndex: Int, rootBinding: Int, callIndex: In
                             (context.sources[memberPlace.sourceModule] -> byte(memberToken.span.start + memberFieldByte!)) != (context.sources[memberField.sourceModule] -> byte(memberFieldNameToken.span.start + memberFieldByte!)) -> if {
                                 false => memberFieldMatches!
                             }
-                            memberFieldByte! + UIntSize(1) => memberFieldByte!
+                            memberFieldByte! + 1 => memberFieldByte!
                         }
                         memberFieldMatches! -> if {
                             memberField.ordinal => memberFieldOrdinal!
@@ -2148,6 +2532,7 @@ emitMutableReferenceMemberPlace placeIndex: Int, rootBinding: Int, callIndex: In
             memberTokenIndex! + 1 => memberTokenIndex!
         }
         memberProjectionOrdinal!
+        }
     }
 }
 additionalParameterOrdinal functionIndex: Int, symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -2181,6 +2566,103 @@ writeReferencePlaceValue functionIndex: Int, valueIndex: Int, context: ref emitt
     not wroteParameter! -> if {
         "%v" -> print
         valueIndex -> writeDecimal
+    }
+}
+callArgumentNeedsIntegerPromotion argumentIndex: Int, callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    false => needsPromotion!
+    parameterIndex >= 0 -> if {
+        argumentIndex -> aggregateValueIndex(context, state) => valueIndex
+        context.ir[valueIndex] => value
+        context.ir[parameterIndex] => parameter
+        value -> integerNodeWidth(context, state) => valueWidth
+        parameter -> integerNodeWidth(context, state) => parameterWidth
+        (value.kind != 3
+            and value.kind != 4
+            and valueWidth > 0
+            and parameterWidth > 0
+            and valueWidth != parameterWidth) -> if { true => needsPromotion! }
+    }
+    needsPromotion!
+}
+callArgumentNeedsSliceProjection argumentIndex: Int, callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => needsProjection!
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    (parameterIndex >= 0 and argumentIndex >= 0) -> if {
+        argumentIndex -> aggregateValueIndex(context, state) => valueIndex
+        context.ir[valueIndex] => value
+        context.ir[parameterIndex] => parameter
+        value.typeId => valueTypeId!
+        valueIndex -> canonicalMemberValueTypeId(context, state) => canonicalValueTypeId
+        canonicalValueTypeId >= 0 -> if { canonicalValueTypeId => valueTypeId! }
+        false => fixedMemberUsesInlineAbi!
+        (value.kind == 13 and valueTypeId! >= 0 and context.types[valueTypeId!].kind == 4) -> if {
+            value.parent => fixedMemberAncestor!
+            (fixedMemberAncestor! >= 0 and not fixedMemberUsesInlineAbi!) -> while {
+                context.ir[fixedMemberAncestor!] => fixedMemberAncestorNode
+                (fixedMemberAncestorNode.kind == 19 or fixedMemberAncestorNode.kind == 20) -> if {
+                    true => fixedMemberUsesInlineAbi!
+                } else {
+                    (fixedMemberAncestorNode.kind == 0 or fixedMemberAncestorNode.kind == 11) -> if {
+                        -1 => fixedMemberAncestor!
+                    } else {
+                        fixedMemberAncestorNode.parent => fixedMemberAncestor!
+                    }
+                }
+            }
+        }
+        (valueTypeId! >= 0
+            and valueTypeId! < (context.types -> len)
+            and parameter.typeId >= 0
+            and parameter.typeId < (context.types -> len)
+            and (context.types[valueTypeId!].kind == 3 or fixedMemberUsesInlineAbi!)
+            and context.types[parameter.typeId].kind == 2) -> if { true => needsProjection! }
+    }
+    needsProjection!
+}
+emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    (argumentIndex >= 0
+        and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)
+        and (callIndex -> callTargetParameter(ordinal, context, state)) >= 0) -> if {
+        argumentIndex -> callArgumentNeedsIntegerPromotion(callIndex, ordinal, context, state) -> if {
+            argumentIndex -> aggregateValueIndex(context, state) => valueIndex
+            callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+            context.ir[valueIndex] => value
+            context.ir[parameterIndex] => parameter
+            value -> integerNodeWidth(context, state) => valueWidth
+            parameter -> integerNodeWidth(context, state) => parameterWidth
+            "  %call$(callIndex)_arg$(ordinal)_integer = " -> print
+            parameterWidth < valueWidth -> if { "trunc " -> print } else { value -> integerNodeSigned(context, state) -> if { "sext " -> print } else { "zext " -> print } }
+            value -> writeIrType(context, state)
+            " " -> print
+            valueIndex -> writeValue(ownerIndex, context, state)
+            " to " -> print
+            parameter -> writeIrType(context, state)
+            "" -> println
+        }
+        argumentIndex -> callArgumentNeedsSliceProjection(callIndex, ordinal, context, state) -> if {
+            argumentIndex -> aggregateValueIndex(context, state) => sliceValueIndex
+            context.ir[sliceValueIndex] => sliceValue
+            sliceValue.typeId => sliceValueTypeId!
+            sliceValueIndex -> canonicalMemberValueTypeId(context, state) => canonicalSliceValueTypeId
+            canonicalSliceValueTypeId >= 0 -> if { canonicalSliceValueTypeId => sliceValueTypeId! }
+            context.types[sliceValueTypeId!].kind == 4 -> if {
+                "  %call$(callIndex)_arg$(ordinal)_slice_storage = alloca " -> print
+                sliceValueTypeId! -> writeSemanticTypeId(context, state)
+                ", align $(context.typeAligns[sliceValueTypeId!])" -> println
+                "  store " -> print
+                sliceValueTypeId! -> writeSemanticTypeId(context, state)
+                " %v$(sliceValueIndex), ptr %call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[sliceValueTypeId!])" -> println
+                "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
+                "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[sliceValueTypeId!].length), 1" -> println
+            } else {
+                "  %call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 %v$(sliceValueIndex), 0" -> println
+                "  %call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 %v$(sliceValueIndex), 1" -> println
+                "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_data, 0" -> println
+                "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 %call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
+            }
+        }
+        context.ir[argumentIndex].nextOperand -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
     }
 }
 writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -2217,7 +2699,7 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
             ((context.ir[referenceValueRoot].kind == 10
                 and context.ir[referenceValueRoot].typeId >= 0
                 and context.types[context.ir[referenceValueRoot].typeId].kind == 8)
-                or context.ir[referenceValueRoot].flags == 1) -> if { true => referenceValueUsesMutableSlot! }
+                or (context.ir[referenceValueRoot].kind != 10 and context.ir[referenceValueRoot].flags == 1)) -> if { true => referenceValueUsesMutableSlot! }
         }
         referenceValueUsesMutableSlot! -> if {
             referenceValueIndex -> referencePlaceAddressDepth(context, state) => referenceValueProjectionDepth
@@ -2262,6 +2744,12 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
             (nativeScalarParameterType.kind == 1 and nativeScalarParameterType.origin == 1 and (nativeScalarParameterType.symbol == 8 or nativeScalarParameterType.symbol == 9)) -> if { "zeroext " -> print }
         }
     }
+    argumentIndex -> callArgumentNeedsIntegerPromotion(callIndex, ordinal, context, state) -> if {
+        "%call$(callIndex)_arg$(ordinal)_integer" -> print
+    } else {
+    argumentIndex -> callArgumentNeedsSliceProjection(callIndex, ordinal, context, state) -> if {
+        "%call$(callIndex)_arg$(ordinal)_slice" -> print
+    } else {
     argumentIndex -> transientTextArgumentSource(callIndex, ordinal, context, state) => transientTextSource
     transientTextSource >= 0 -> if {
         "%calltext$(callIndex)_arg$(ordinal)" -> print
@@ -2278,19 +2766,19 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
         (argument.kind == 3 or argument.kind == 4) -> if {
             argument -> sourceToken(context, state) => literalArgumentToken
             argument.kind == 3 -> if {
-                context.sources[argument.sourceModule] -> slice(literalArgumentToken.span.start, literalArgumentToken.span.length) -> print
+                argument -> writeIntegerLiteral(context, state)
                 (argument.typeSymbol == 19 or argument.typeSymbol == 20 or argument.typeSymbol == 21 or argument.typeSymbol == 22) -> if {
                     false => nativeFloatSeparator!
                     literalArgumentToken.span.start => nativeFloatByte!
                     nativeFloatByte! < literalArgumentToken.span.start + literalArgumentToken.span.length -> while {
                         context.sources[argument.sourceModule] -> byte(nativeFloatByte!) => nativeFloatCharacter
-                        (nativeFloatCharacter == UInt8(46) or nativeFloatCharacter == UInt8(69) or nativeFloatCharacter == UInt8(101)) -> if { true => nativeFloatSeparator! }
-                        nativeFloatByte! + UIntSize(1) => nativeFloatByte!
+                        (nativeFloatCharacter == 46 or nativeFloatCharacter == 69 or nativeFloatCharacter == 101) -> if { true => nativeFloatSeparator! }
+                        nativeFloatByte! + 1 => nativeFloatByte!
                     }
                     not nativeFloatSeparator! -> if { ".0" -> print }
                 }
             } else {
-                ((context.sources[argument.sourceModule] -> byte(literalArgumentToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                ((context.sources[argument.sourceModule] -> byte(literalArgumentToken.span.start)) == 116) -> if { "1" -> print } else { "0" -> print }
             }
         } else {
             false => primaryParameterArgument!
@@ -2302,6 +2790,8 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: 
                 primaryParameterArgument! -> if { "%arg" -> print } else { "%v$(argumentValueIndex)" -> print }
             }
         }
+    }
+    }
     }
     }
     }
@@ -2352,6 +2842,65 @@ branchStageFlowIndex callIndex: Int, context: ref emitterContext.EmitContext, st
     }
     flowIndex!
 }
+emitCompileTimeValueArguments callIndex: Int, hasRuntimeArgument: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => genericCall
+    CallEnvironmentRequest { callerIndex: -1, callIndex: callIndex, targetModule: genericCall.targetModule, targetSymbol: genericCall.symbol, hasArgument: genericCall.operand0 >= 0 } -> targetFunctionIndex(context, state) => genericTargetFunction
+    genericTargetFunction >= 0 -> if {
+        context.ranges[genericCall.sourceModule] => genericCallRange
+        context.nodes[genericCallRange.astStart + genericCall.astNode] => genericCallAst
+        genericCallAst.firstToken => genericTokenIndex!
+        genericCallAst.firstToken + genericCallAst.tokenCount => genericTokenEnd
+        false => inGenericArguments!
+        false => emittedGenericArgument!
+        context.ir[genericTargetFunction].operand1 => genericParameterIndex!
+        0 => genericParameterOrdinal!
+        genericParameterIndex! >= 0 -> while {
+            context.ir[genericParameterIndex!] => genericParameter
+            false => valueGenericParameter!
+            (genericParameter.symbol >= 0
+                and genericParameter.sourceModule >= 0
+                and genericParameter.sourceModule < (context.ranges -> len)) -> if {
+                context.ranges[genericParameter.sourceModule] => genericParameterRange
+                (genericParameter.symbol < genericParameterRange.symbolCount
+                    and context.symbols[genericParameterRange.symbolStart + genericParameter.symbol].kind == 32) -> if {
+                    true => valueGenericParameter!
+                }
+            }
+            valueGenericParameter! -> if {
+                -1 => genericNumberToken!
+                (genericTokenIndex! < genericTokenEnd and genericNumberToken! < 0) -> while {
+                    context.tokens[genericCallRange.tokenStart + genericTokenIndex!] => genericToken
+                    genericToken.kind == grammar.tokenIdLess() -> if { true => inGenericArguments! }
+                    (inGenericArguments! and genericToken.kind == grammar.tokenIdNumber()) -> if { genericTokenIndex! => genericNumberToken! }
+                    genericToken.kind == grammar.tokenIdGreater() -> if { false => inGenericArguments! }
+                    genericTokenIndex! + 1 => genericTokenIndex!
+                }
+                genericNumberToken! >= 0 -> if {
+                    (hasRuntimeArgument or emittedGenericArgument!) -> if { ", " -> print }
+                    genericParameter -> writeIrType(context, state)
+                    " " -> print
+                    context.tokens[genericCallRange.tokenStart + genericNumberToken!] => genericNumber
+                    genericNumber.span.start => genericNumberByte!
+                    genericNumber.span.start + genericNumber.span.length => genericNumberEnd
+                    genericNumberByte! < genericNumberEnd -> while {
+                        context.sources[genericCall.sourceModule] -> byte(genericNumberByte!) => genericNumberCharacter
+                        genericNumberCharacter != 95 -> if {
+                            context.sources[genericCall.sourceModule] -> slice(genericNumberByte!, 1) -> print
+                        }
+                        genericNumberByte! + 1 => genericNumberByte!
+                    }
+                    true => emittedGenericArgument!
+                }
+            }
+            genericParameterOrdinal! == 0 -> if {
+                context.ir[genericTargetFunction].nextOperand => genericParameterIndex!
+            } else {
+                genericParameter.nextOperand => genericParameterIndex!
+            }
+            genericParameterOrdinal! + 1 => genericParameterOrdinal!
+        }
+    }
+}
 emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[callIndex] => call
     false => hasLeadingArgument!
@@ -2369,6 +2918,8 @@ emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.E
     } else {
         call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 0, hasLeadingArgument!, context, state)
     }
+    (hasLeadingArgument! or branchFlowIndex >= 0 or call.operand0 >= 0) => hasRuntimeArgument
+    callIndex -> emitCompileTimeValueArguments(hasRuntimeArgument, context, state)
     call -> nativeTrySuccessTypeId(context, state) => nativeTryOutputType
     nativeTryOutputType > 0 -> if {
         (callIndex -> callTargetParameter(0, context, state)) >= 0 -> if { ", " -> print }

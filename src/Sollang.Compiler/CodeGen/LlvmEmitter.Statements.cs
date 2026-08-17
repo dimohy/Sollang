@@ -119,8 +119,16 @@ internal sealed partial class LlvmEmitter
         switch (statement)
         {
             case BindingStatement binding:
-                var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
-                var value = EmitExpression(binding.Value);
+                var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value)
+                    ?? (binding.Value is NameExpression directOwnedSource
+                        && _locals.TryGetValue(directOwnedSource.Name, out var directOwnedValue)
+                        && IsOwnedContainerRuntimeValue(directOwnedValue)
+                            ? directOwnedSource.Name
+                            : null);
+                var value = binding.IsMutable
+                    && _locals.TryGetValue(binding.Name, out var reboundLocal)
+                        ? EmitFunctionArgumentExpression(binding.Value, reboundLocal.Type)
+                        : EmitExpression(binding.Value);
                 var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, value);
                 if (binding.IsMutable
                     && _mutableScalarSlots.TryGetValue(binding.Name, out var reboundPointer))
@@ -157,10 +165,7 @@ internal sealed partial class LlvmEmitter
                 }
                 RemoveOwnedLiteralSources(binding.Value, value.Type);
 
-                _mutableContainerSlots.Remove(binding.Name);
-                _mutableStructSlots.Remove(binding.Name);
-                _borrowedMutableLocals.Remove(binding.Name);
-                _borrowedOwnedLocals.Remove(binding.Name);
+                ClearShadowedLocalBinding(binding.Name);
                 _locals.Add(binding.Name, value);
                 if (binding.IsMutable)
                 {
@@ -251,12 +256,12 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        var value = EmitExpression(statement.Value);
+        var value = EmitFunctionArgumentExpression(statement.Value, function.ReturnType);
         EnsureRuntimeType(value, function.ReturnType, function.Name);
         var transferredOwnerName = IsOwnedContainerRuntimeValue(value)
             ? GetFunctionResultTransferredOwnerName(function, statement.Value)
             : null;
-        DropOwnedLocals(transferredOwnerName);
+        DropOwnedLocals(transferredOwnerName, statement.Value);
         var materialized = MaterializeAggregateValue(value);
         EmitRet(materialized.TypeName, materialized.ValueName);
     }
@@ -397,7 +402,8 @@ internal sealed partial class LlvmEmitter
         var target = ResolveLocal(assignment.Name);
         if (target is RuntimeMappedBytes mapped)
         {
-            var mappedValue = EmitIntExpression(assignment.Value);
+            var mappedValue = EmitFunctionArgumentExpression(assignment.Value, BoundType.UInt8) as RuntimeInt
+                ?? throw new SollangException("mapped byte assignment expects an integer runtime value");
             EnsureRuntimeType(mappedValue, BoundType.UInt8, "mapped byte assignment");
             EmitMappedStore(mapped, assignment.Index, mappedValue);
             return;
@@ -406,6 +412,7 @@ internal sealed partial class LlvmEmitter
         var structFieldSourceNames = GetOwnedStructFieldSourceNames(assignment.Value);
         var expectedValueType = target switch
         {
+            RuntimeStaticInlineArray array => array.ElementType,
             RuntimeDynamicInlineArray array => array.ElementType,
             RuntimeInlineDictionary dictionary => dictionary.ValueType,
             _ => (BoundType?)null
@@ -416,16 +423,34 @@ internal sealed partial class LlvmEmitter
             && _program.Types.ContainsOwnedStorage(sourceValue.Type)
                 ? sourceName.Name
                 : null;
-        var value = assignment.Value is DictionaryLiteralExpression contextualValue
-            && expectedValueType is { } contextualValueType
-            && _program.Types.IsStruct(contextualValueType)
-                ? EmitContextualStructLiteral(contextualValue, contextualValueType)
-                : EmitExpression(assignment.Value);
+        var value = expectedValueType is { } contextualValueType
+            ? EmitFunctionArgumentExpression(assignment.Value, contextualValueType)
+            : EmitExpression(assignment.Value);
         switch (target)
         {
             case RuntimeStaticIntArray array:
                 var staticIndex = EmitIntExpression(assignment.Index);
                 EmitStaticArrayAssign(array, EmitIntAsSize(staticIndex, "assignment_index"), ((RuntimeInt)value).ValueName);
+                return;
+            case RuntimeStaticInlineArray array:
+                var staticInlineIndex = EmitIntExpression(assignment.Index);
+                EnsureRuntimeType(value, array.ElementType, "array indexed assignment");
+                EmitStaticInlineArrayAssign(
+                    array,
+                    EmitIntAsSize(staticInlineIndex, "assignment_index"),
+                    value);
+                if (movedSourceName is not null)
+                {
+                    RemoveLocal(movedSourceName);
+                }
+                if (directOwnedSourceName is not null)
+                {
+                    RemoveLocal(directOwnedSourceName);
+                }
+                foreach (var transferredName in structFieldSourceNames)
+                {
+                    RemoveLocal(transferredName);
+                }
                 return;
             case RuntimeDynamicIntArray array:
                 var dynamicIndex = EmitIntExpression(assignment.Index);
@@ -474,7 +499,13 @@ internal sealed partial class LlvmEmitter
                 }
                 return;
             default:
-                throw new SollangException("indexed assignment expects an array or dictionary owner");
+                throw new SollangException(
+                    $"indexed assignment to '{assignment.Name}' expects an array or dictionary owner, " +
+                    $"but code generation resolved '{target.GetType().Name}' for type id {(int)target.Type} " +
+                    $"(static-array={_program.Types.IsStaticArray(target.Type)}, function={_currentFunction?.Name}, " +
+                    $"struct={(_program.Types.IsStruct(target.Type) ? _program.Types.GetStruct(target.Type).Name : "none")}, " +
+                    $"input={_currentFunction?.InputName}, ownership={_currentFunction?.InputOwnership}) " +
+                    $"at {assignment.Line}:{assignment.Column}");
         }
     }
 
@@ -1332,7 +1363,8 @@ internal sealed partial class LlvmEmitter
                 new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
-                new Dictionary<string, string>(StringComparer.Ordinal));
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                new Dictionary<RuntimeValue, string>());
             var parameters = function.AdditionalParameters ?? [];
             if (parameters.Count != arguments.Count)
             {
@@ -1440,6 +1472,7 @@ internal sealed partial class LlvmEmitter
         var length = source switch
         {
             RuntimeIntSlice slice => slice.LengthName,
+            RuntimeInlineSlice slice => slice.LengthName,
             RuntimeStaticIntArray array => array.LengthName,
             RuntimeStaticTextArray array => array.LengthName,
             RuntimeStaticInlineArray array => array.LengthName,
@@ -1468,6 +1501,7 @@ internal sealed partial class LlvmEmitter
         RuntimeValue item = source switch
         {
             RuntimeIntSlice slice => EmitIntSliceLoad(slice, index),
+            RuntimeInlineSlice slice => EmitInlineSliceLoad(slice, index),
             RuntimeStaticIntArray array => EmitStaticArrayLoad(array, index),
             RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, index),
             RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index),
@@ -1554,7 +1588,8 @@ internal sealed partial class LlvmEmitter
             new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
-            new Dictionary<string, string>(StringComparer.Ordinal));
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new Dictionary<RuntimeValue, string>());
         for (var index = 0; index < additionalParameters.Count; index++)
         {
             var parameter = additionalParameters[index];
@@ -1599,7 +1634,7 @@ internal sealed partial class LlvmEmitter
                 && IsOwnedContainerRuntimeValue(result)
                     ? GetFunctionResultTransferredOwnerName(function, function.Body)
                     : null;
-            DropOwnedLocalsCreatedSince(blockLocals, transferredOwnerName);
+            DropOwnedLocalsCreatedSince(blockLocals, transferredOwnerName, function.Body);
             if (function.ReturnType == BoundType.Unit)
             {
                 foreach (var parameter in additionalParameters.Where(parameter =>
@@ -1794,7 +1829,7 @@ internal sealed partial class LlvmEmitter
             var transferred = IsOwnedContainerRuntimeValue(mapped)
                 ? GetMoveConsumingContainerSourceName(callbackResult.Expression)
                 : null;
-            DropOwnedLocalsCreatedSince(callbackLocals, transferred);
+            DropOwnedLocalsCreatedSince(callbackLocals, transferred, callbackResult.Expression);
         }
         finally
         {

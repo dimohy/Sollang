@@ -49,7 +49,7 @@ tokenNameIs request: TokenNameRequest -> Bool {
     UIntSize(0) => index!
     (equal! and index! < request.token.span.length) -> while {
         (request.source -> byte(request.token.span.start + index!)) != (request.expected -> byte(index!)) -> if { false => equal! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     equal!
 }
@@ -123,29 +123,29 @@ intrinsicFlowTarget request: RuntimeNameRequest -> Bool {
 
 # Status 0 is a resolved local function and 2 is an unresolved call target.
 public resolve source: Text -> [CallResolution; ~] {
-    source -> ast.lower => nodes!
-    source -> lexer.lex => tokens!
-    nodes! -> symbols.collectPrepared => table!
+    source -> ast.lower => nodes
+    source -> lexer.lex => tokens
+    nodes -> symbols.collectPrepared => table
     [CallResolution; ~] => resolved!
     0 => astIndex!
-    astIndex! < (nodes! -> len) -> while {
-        nodes![astIndex!] => node
+    astIndex! < (nodes -> len) -> while {
+        nodes[astIndex!] => node
         false => hasControlTarget!
         false => hasFlowCallTarget!
         false => hasQualifiedFlowTarget!
         0 => controlTargetSearch!
-        controlTargetSearch! < (nodes! -> len) -> while {
-            (nodes![controlTargetSearch!].parent == astIndex! and (nodes![controlTargetSearch!].kind == 42 or nodes![controlTargetSearch!].kind == 44)) -> if { true => hasControlTarget! }
+        controlTargetSearch! < (nodes -> len) -> while {
+            (nodes[controlTargetSearch!].parent == astIndex! and (nodes[controlTargetSearch!].kind == 42 or nodes[controlTargetSearch!].kind == 44)) -> if { true => hasControlTarget! }
             controlTargetSearch! + 1 => controlTargetSearch!
         }
         0 => flowTargetSearch!
-        flowTargetSearch! < (nodes! -> len) -> while {
-            (nodes![flowTargetSearch!].parent == astIndex! and nodes![flowTargetSearch!].kind == 16) -> if { true => hasFlowCallTarget! }
+        flowTargetSearch! < (nodes -> len) -> while {
+            (nodes[flowTargetSearch!].parent == astIndex! and nodes[flowTargetSearch!].kind == 16) -> if { true => hasFlowCallTarget! }
             flowTargetSearch! + 1 => flowTargetSearch!
         }
         node.firstToken => flowTokenIndex!
         (node.kind == 10 and flowTokenIndex! < node.firstToken + node.tokenCount) -> while {
-            tokens![flowTokenIndex!].kind == grammar.tokenIdDot() -> if { true => hasQualifiedFlowTarget! }
+            tokens[flowTokenIndex!].kind == grammar.tokenIdDot() -> if { true => hasQualifiedFlowTarget! }
             flowTokenIndex! + 1 => flowTokenIndex!
         }
         ((node.kind == 10 and hasFlowCallTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression() or node.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or node.kind == 48 or node.kind == 77) -> if {
@@ -153,8 +153,12 @@ public resolve source: Text -> [CallResolution; ~] {
             (node.kind == 48 or node.kind == 77) -> if { node.payloadToken => callNameToken! }
             node.kind == 10 -> if {
                 0 => flowNameSearch!
-                flowNameSearch! < (nodes! -> len) -> while {
-                    (nodes![flowNameSearch!].parent == astIndex! and nodes![flowNameSearch!].kind == 16) -> if { nodes![flowNameSearch!].payloadToken => callNameToken! }
+                flowNameSearch! < (nodes -> len) -> while {
+                    (nodes[flowNameSearch!].parent == astIndex!
+                        and nodes[flowNameSearch!].kind == 16
+                        and nodes[flowNameSearch!].payloadToken > callNameToken!) -> if {
+                        nodes[flowNameSearch!].payloadToken => callNameToken!
+                    }
                     flowNameSearch! + 1 => flowNameSearch!
                 }
             }
@@ -162,11 +166,11 @@ public resolve source: Text -> [CallResolution; ~] {
             false => inFlowTypeArgument!
             false => inFlowCallArguments!
             (tokenIndex! < node.firstToken + node.tokenCount and node.kind != 48 and node.kind != 77 and callNameToken! < 0) -> while {
-                tokens![tokenIndex!].kind == grammar.tokenIdLess() -> if { true => inFlowTypeArgument! }
-                tokens![tokenIndex!].kind == grammar.tokenIdGreater() -> if { false => inFlowTypeArgument! }
-                tokens![tokenIndex!].kind == grammar.tokenIdLeftParen() -> if { true => inFlowCallArguments! }
-                tokens![tokenIndex!].kind == grammar.tokenIdRightParen() -> if { false => inFlowCallArguments! }
-                (tokens![tokenIndex!].kind == grammar.tokenIdIdentifier() and not inFlowTypeArgument! and not inFlowCallArguments!) -> if { tokenIndex! => callNameToken! }
+                tokens[tokenIndex!].kind == grammar.tokenIdLess() -> if { true => inFlowTypeArgument! }
+                tokens[tokenIndex!].kind == grammar.tokenIdGreater() -> if { false => inFlowTypeArgument! }
+                tokens[tokenIndex!].kind == grammar.tokenIdLeftParen() -> if { true => inFlowCallArguments! }
+                tokens[tokenIndex!].kind == grammar.tokenIdRightParen() -> if { false => inFlowCallArguments! }
+                (tokens[tokenIndex!].kind == grammar.tokenIdIdentifier() and not inFlowTypeArgument! and not inFlowCallArguments!) -> if { tokenIndex! => callNameToken! }
                 tokenIndex! + 1 => tokenIndex!
             }
             callNameToken! >= 0 -> if {
@@ -174,39 +178,39 @@ public resolve source: Text -> [CallResolution; ~] {
             node.parent => callerAst!
             -1 => callerFunctionAst!
             (callerAst! >= 0 and callerFunctionAst! < 0) -> while {
-                nodes![callerAst!] => callerNode
+                nodes[callerAst!] => callerNode
                 (callerNode.kind == 7 or callerNode.kind == 31) -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
             }
             -1 => callerFunctionSymbol!
             0 => callerSymbolSearch!
-            (callerSymbolSearch! < (table! -> len) and callerFunctionSymbol! < 0) -> while {
-                ((table![callerSymbolSearch!].kind == 7 or table![callerSymbolSearch!].kind == 31) and table![callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
+            (callerSymbolSearch! < (table -> len) and callerFunctionSymbol! < 0) -> while {
+                ((table[callerSymbolSearch!].kind == 7 or table[callerSymbolSearch!].kind == 31) and table[callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
                 callerSymbolSearch! + 1 => callerSymbolSearch!
             }
             -1 => localOwnerSymbol!
             callerFunctionSymbol! >= 0 -> if {
-                table![callerFunctionSymbol!].parent >= 0 -> if { table![callerFunctionSymbol!].parent => localOwnerSymbol! } else { callerFunctionSymbol! => localOwnerSymbol! }
+                table[callerFunctionSymbol!].parent >= 0 -> if { table[callerFunctionSymbol!].parent => localOwnerSymbol! } else { callerFunctionSymbol! => localOwnerSymbol! }
             }
             0 => symbolIndex!
-            (symbolIndex! < (table! -> len) and functionSymbol! < 0) -> while {
-                table![symbolIndex!] => candidate
+            (symbolIndex! < (table -> len) and functionSymbol! < 0) -> while {
+                table[symbolIndex!] => candidate
                 ((candidate.kind == 7 or candidate.kind == 31) and (candidate.parent < 0 or candidate.parent == localOwnerSymbol!)) -> if {
-                    tokens![callNameToken!] => callName
-                    tokens![candidate.nameToken] => functionName
+                    tokens[callNameToken!] => callName
+                    tokens[candidate.nameToken] => functionName
                     callName.span.length == functionName.span.length => equal!
                     UIntSize(0) => nameByte!
                     (equal! and nameByte! < callName.span.length) -> while {
                         source -> byte(callName.span.start + nameByte!) => callByte
                         source -> byte(functionName.span.start + nameByte!) => functionByte
                         callByte != functionByte -> if { false => equal! }
-                        nameByte! + UIntSize(1) => nameByte!
+                        nameByte! + 1 => nameByte!
                     }
                     (equal! and (node.kind == 10 or node.kind == 11 or node.kind == 48 or node.kind == 77 or candidate.secondaryTypeNode < 0)) -> if { symbolIndex! => functionSymbol! }
                 }
                 symbolIndex! + 1 => symbolIndex!
             }
-            RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
-            (callNameToken! > node.firstToken and tokens![callNameToken! - 1].kind == grammar.tokenIdDot()) -> if { false => intrinsicFlow! }
+            RuntimeNameRequest { source: source, token: tokens[callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
+            (callNameToken! > node.firstToken and tokens[callNameToken! - 1].kind == grammar.tokenIdDot()) -> if { false => intrinsicFlow! }
             (functionSymbol! >= 0 or (not intrinsicFlow! and (node.kind == 10 or node.kind == 11 or node.kind == 48 or node.kind == 77))) -> if {
                 2 => callStatus!
                 functionSymbol! >= 0 -> if { 0 => callStatus! }
@@ -245,29 +249,29 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
     0 => sourceIndex!
     sourceIndex! < (request.sources -> len) -> while {
         request.sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        nodes! -> symbols.collectPrepared => table!
+        source -> ast.lower => nodes
+        source -> lexer.lex => tokens
+        nodes -> symbols.collectPrepared => table
         [CallResolution; ~] => localCalls!
         0 => callAstIndex!
-        callAstIndex! < (nodes! -> len) -> while {
-            nodes![callAstIndex!] => callNode
+        callAstIndex! < (nodes -> len) -> while {
+            nodes[callAstIndex!] => callNode
             false => moduleHasControlTarget!
             false => moduleHasFlowCallTarget!
             false => moduleHasQualifiedFlowTarget!
             0 => moduleControlTargetSearch!
-            moduleControlTargetSearch! < (nodes! -> len) -> while {
-                (nodes![moduleControlTargetSearch!].parent == callAstIndex! and (nodes![moduleControlTargetSearch!].kind == 42 or nodes![moduleControlTargetSearch!].kind == 44)) -> if { true => moduleHasControlTarget! }
+            moduleControlTargetSearch! < (nodes -> len) -> while {
+                (nodes[moduleControlTargetSearch!].parent == callAstIndex! and (nodes[moduleControlTargetSearch!].kind == 42 or nodes[moduleControlTargetSearch!].kind == 44)) -> if { true => moduleHasControlTarget! }
                 moduleControlTargetSearch! + 1 => moduleControlTargetSearch!
             }
             0 => moduleFlowTargetSearch!
-            moduleFlowTargetSearch! < (nodes! -> len) -> while {
-                (nodes![moduleFlowTargetSearch!].parent == callAstIndex! and nodes![moduleFlowTargetSearch!].kind == 16) -> if { true => moduleHasFlowCallTarget! }
+            moduleFlowTargetSearch! < (nodes -> len) -> while {
+                (nodes[moduleFlowTargetSearch!].parent == callAstIndex! and nodes[moduleFlowTargetSearch!].kind == 16) -> if { true => moduleHasFlowCallTarget! }
                 moduleFlowTargetSearch! + 1 => moduleFlowTargetSearch!
             }
             callNode.firstToken => moduleFlowTokenIndex!
             (callNode.kind == 10 and moduleFlowTokenIndex! < callNode.firstToken + callNode.tokenCount) -> while {
-                tokens![moduleFlowTokenIndex!].kind == grammar.tokenIdDot() -> if { true => moduleHasQualifiedFlowTarget! }
+                tokens[moduleFlowTokenIndex!].kind == grammar.tokenIdDot() -> if { true => moduleHasQualifiedFlowTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
             false => moduleHasQualifiedCallTarget!
@@ -276,15 +280,15 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 qualifiedResults![moduleQualifiedCallSearch!] => moduleQualifiedCall
                 (moduleQualifiedCall.sourceModule == sourceIndex!
                     and moduleQualifiedCall.pathAst >= 0
-                    and moduleQualifiedCall.pathAst < (nodes! -> len)
-                    and nodes![moduleQualifiedCall.pathAst].parent == callAstIndex!
-                    and nodes![moduleQualifiedCall.pathAst].kind == 36) -> if {
+                    and moduleQualifiedCall.pathAst < (nodes -> len)
+                    and nodes[moduleQualifiedCall.pathAst].parent == callAstIndex!
+                    and nodes[moduleQualifiedCall.pathAst].kind == 36) -> if {
                     false => moduleQualifiedPathHasCallOwner!
                     0 => moduleQualifiedPathChildSearch!
-                    moduleQualifiedPathChildSearch! < (nodes! -> len) -> while {
-                        (nodes![moduleQualifiedPathChildSearch!].parent == moduleQualifiedCall.pathAst
-                            and nodes![moduleQualifiedPathChildSearch!].kind == 11
-                            and nodes![moduleQualifiedPathChildSearch!].cstRuleId == grammar.ruleIdCallExpression()) -> if {
+                    moduleQualifiedPathChildSearch! < (nodes -> len) -> while {
+                        (nodes[moduleQualifiedPathChildSearch!].parent == moduleQualifiedCall.pathAst
+                            and nodes[moduleQualifiedPathChildSearch!].kind == 11
+                            and nodes[moduleQualifiedPathChildSearch!].cstRuleId == grammar.ruleIdCallExpression()) -> if {
                             true => moduleQualifiedPathHasCallOwner!
                         }
                         moduleQualifiedPathChildSearch! + 1 => moduleQualifiedPathChildSearch!
@@ -295,9 +299,9 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                         and moduleQualifiedCall.targetModule < (identities! -> len)) -> if {
                         identities![moduleQualifiedCall.targetModule].sourceIndex => moduleQualifiedTargetSource
                         (moduleQualifiedTargetSource >= 0 and moduleQualifiedTargetSource < (request.sources -> len)) -> if {
-                            request.sources[moduleQualifiedTargetSource] -> symbols.collect => moduleQualifiedTargetSymbols!
-                            (moduleQualifiedCall.targetSymbol >= 0 and moduleQualifiedCall.targetSymbol < (moduleQualifiedTargetSymbols! -> len)) -> if {
-                                moduleQualifiedTargetSymbols![moduleQualifiedCall.targetSymbol].kind => moduleQualifiedTargetKind
+                            request.sources[moduleQualifiedTargetSource] -> symbols.collect => moduleQualifiedTargetSymbols
+                            (moduleQualifiedCall.targetSymbol >= 0 and moduleQualifiedCall.targetSymbol < (moduleQualifiedTargetSymbols -> len)) -> if {
+                                moduleQualifiedTargetSymbols[moduleQualifiedCall.targetSymbol].kind => moduleQualifiedTargetKind
                                 (moduleQualifiedTargetKind == 7 or moduleQualifiedTargetKind == 31 or moduleQualifiedTargetKind == 36) -> if {
                                     true => moduleQualifiedTargetCallable!
                                 }
@@ -312,14 +316,14 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
             0 => moduleComQualifiedSearch!
             moduleComQualifiedSearch! < (qualifiedResults! -> len) -> while {
                 qualifiedResults![moduleComQualifiedSearch!] => moduleComQualified
-                (moduleComQualified.sourceModule == sourceIndex! and moduleComQualified.pathAst == callAstIndex! and moduleComQualified.targetSymbol >= 0 and moduleComQualified.targetSymbol < (table! -> len)) -> if {
-                    table![moduleComQualified.targetSymbol].kind == 36 -> if { true => moduleHasGeneratedComTarget! }
+                (moduleComQualified.sourceModule == sourceIndex! and moduleComQualified.pathAst == callAstIndex! and moduleComQualified.targetSymbol >= 0 and moduleComQualified.targetSymbol < (table -> len)) -> if {
+                    table[moduleComQualified.targetSymbol].kind == 36 -> if { true => moduleHasGeneratedComTarget! }
                 }
                 moduleComQualifiedSearch! + 1 => moduleComQualifiedSearch!
             }
             false => moduleGeneratedComHasCallOwner!
             (callNode.kind == 36 and callNode.parent >= 0) -> if {
-                nodes![callNode.parent] => generatedComParent
+                nodes[callNode.parent] => generatedComParent
                 (generatedComParent.kind == 10
                     or generatedComParent.kind == 11
                     or generatedComParent.kind == 48) -> if {
@@ -332,14 +336,18 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 callNode.kind == 36 -> if {
                     callNode.firstToken => comCallNameSearch!
                     comCallNameSearch! < callNode.firstToken + callNode.tokenCount -> while {
-                        tokens![comCallNameSearch!].kind == grammar.tokenIdIdentifier() -> if { comCallNameSearch! => callNameToken! }
+                        tokens[comCallNameSearch!].kind == grammar.tokenIdIdentifier() -> if { comCallNameSearch! => callNameToken! }
                         comCallNameSearch! + 1 => comCallNameSearch!
                     }
                 }
                 callNode.kind == 10 -> if {
                     0 => moduleFlowNameSearch!
-                    moduleFlowNameSearch! < (nodes! -> len) -> while {
-                        (nodes![moduleFlowNameSearch!].parent == callAstIndex! and nodes![moduleFlowNameSearch!].kind == 16) -> if { nodes![moduleFlowNameSearch!].payloadToken => callNameToken! }
+                    moduleFlowNameSearch! < (nodes -> len) -> while {
+                        (nodes[moduleFlowNameSearch!].parent == callAstIndex!
+                            and nodes[moduleFlowNameSearch!].kind == 16
+                            and nodes[moduleFlowNameSearch!].payloadToken > callNameToken!) -> if {
+                            nodes[moduleFlowNameSearch!].payloadToken => callNameToken!
+                        }
                         moduleFlowNameSearch! + 1 => moduleFlowNameSearch!
                     }
                 }
@@ -347,11 +355,11 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 false => moduleInFlowTypeArgument!
                 false => moduleInFlowCallArguments!
                 (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and callNode.kind != 77 and callNameToken! < 0) -> while {
-                    tokens![callTokenIndex!].kind == grammar.tokenIdLess() -> if { true => moduleInFlowTypeArgument! }
-                    tokens![callTokenIndex!].kind == grammar.tokenIdGreater() -> if { false => moduleInFlowTypeArgument! }
-                    tokens![callTokenIndex!].kind == grammar.tokenIdLeftParen() -> if { true => moduleInFlowCallArguments! }
-                    tokens![callTokenIndex!].kind == grammar.tokenIdRightParen() -> if { false => moduleInFlowCallArguments! }
-                    (tokens![callTokenIndex!].kind == grammar.tokenIdIdentifier() and not moduleInFlowTypeArgument! and not moduleInFlowCallArguments!) -> if { callTokenIndex! => callNameToken! }
+                    tokens[callTokenIndex!].kind == grammar.tokenIdLess() -> if { true => moduleInFlowTypeArgument! }
+                    tokens[callTokenIndex!].kind == grammar.tokenIdGreater() -> if { false => moduleInFlowTypeArgument! }
+                    tokens[callTokenIndex!].kind == grammar.tokenIdLeftParen() -> if { true => moduleInFlowCallArguments! }
+                    tokens[callTokenIndex!].kind == grammar.tokenIdRightParen() -> if { false => moduleInFlowCallArguments! }
+                    (tokens[callTokenIndex!].kind == grammar.tokenIdIdentifier() and not moduleInFlowTypeArgument! and not moduleInFlowCallArguments!) -> if { callTokenIndex! => callNameToken! }
                     callTokenIndex! + 1 => callTokenIndex!
                 }
                 callNameToken! >= 0 -> if {
@@ -359,32 +367,32 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 callNode.parent => callerAst!
                 -1 => callerFunctionAst!
                 (callerAst! >= 0 and callerFunctionAst! < 0) -> while {
-                    nodes![callerAst!] => callerNode
+                    nodes[callerAst!] => callerNode
                     (callerNode.kind == 7 or callerNode.kind == 31) -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
                 }
                 -1 => callerFunctionSymbol!
                 0 => callerSymbolSearch!
-                (callerSymbolSearch! < (table! -> len) and callerFunctionSymbol! < 0) -> while {
-                    ((table![callerSymbolSearch!].kind == 7 or table![callerSymbolSearch!].kind == 31) and table![callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
+                (callerSymbolSearch! < (table -> len) and callerFunctionSymbol! < 0) -> while {
+                    ((table[callerSymbolSearch!].kind == 7 or table[callerSymbolSearch!].kind == 31) and table[callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
                     callerSymbolSearch! + 1 => callerSymbolSearch!
                 }
                 -1 => localOwnerSymbol!
                 callerFunctionSymbol! >= 0 -> if {
-                    table![callerFunctionSymbol!].parent >= 0 -> if { table![callerFunctionSymbol!].parent => localOwnerSymbol! } else { callerFunctionSymbol! => localOwnerSymbol! }
+                    table[callerFunctionSymbol!].parent >= 0 -> if { table[callerFunctionSymbol!].parent => localOwnerSymbol! } else { callerFunctionSymbol! => localOwnerSymbol! }
                 }
                 0 => localSymbolIndex!
-                (localSymbolIndex! < (table! -> len) and localFunctionSymbol! < 0) -> while {
-                    table![localSymbolIndex!] => localCandidate
+                (localSymbolIndex! < (table -> len) and localFunctionSymbol! < 0) -> while {
+                    table[localSymbolIndex!] => localCandidate
                     ((localCandidate.kind == 7 or localCandidate.kind == 31) and (localCandidate.parent < 0 or localCandidate.parent == localOwnerSymbol!)) -> if {
-                        tokens![callNameToken!] => callName
-                        tokens![localCandidate.nameToken] => functionName
+                        tokens[callNameToken!] => callName
+                        tokens[localCandidate.nameToken] => functionName
                         callName.span.length == functionName.span.length => localEqual!
                         UIntSize(0) => localNameByte!
                         (localEqual! and localNameByte! < callName.span.length) -> while {
                             source -> byte(callName.span.start + localNameByte!) => callByte
                             source -> byte(functionName.span.start + localNameByte!) => functionByte
                             callByte != functionByte -> if { false => localEqual! }
-                            localNameByte! + UIntSize(1) => localNameByte!
+                            localNameByte! + 1 => localNameByte!
                         }
                         (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
                     }
@@ -393,15 +401,15 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 # Direct println calls use the stable runtime symbol so the
                 # explicit empty form println() does not inherit wrapper arity.
                 callNode.kind == 11 -> if {
-                    RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> runtimeFunctionSymbol => directRuntimeSymbol
+                    RuntimeNameRequest { source: source, token: tokens[callNameToken!] } -> runtimeFunctionSymbol => directRuntimeSymbol
                     directRuntimeSymbol == -102 -> if { directRuntimeSymbol => localFunctionSymbol! }
                 }
-                ((callNode.kind == 10 or callNode.kind == 11) and localFunctionSymbol! < 0) -> if {
-                    RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> runtimeFunctionSymbol => runtimeSymbol
+                ((callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77) and localFunctionSymbol! < 0) -> if {
+                    RuntimeNameRequest { source: source, token: tokens[callNameToken!] } -> runtimeFunctionSymbol => runtimeSymbol
                     runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
                 }
-                RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
-                (callNameToken! > callNode.firstToken and tokens![callNameToken! - 1].kind == grammar.tokenIdDot()) -> if { false => intrinsicFlow! }
+                RuntimeNameRequest { source: source, token: tokens[callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
+                (callNameToken! > callNode.firstToken and tokens[callNameToken! - 1].kind == grammar.tokenIdDot()) -> if { false => intrinsicFlow! }
                 (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)))) -> if {
                     2 => localCallStatus!
                     localFunctionSymbol! != -1 -> if { 0 => localCallStatus! }
@@ -419,11 +427,11 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
         0 => localIndex!
         localIndex! < (localCalls! -> len) -> while {
             localCalls![localIndex!] => local
-            nodes![local.callAst] => localCallNode
+            nodes[local.callAst] => localCallNode
             localCallNode.firstToken + localCallNode.tokenCount => callLeftParenToken!
             localCallNode.firstToken => callScanToken!
             callScanToken! < localCallNode.firstToken + localCallNode.tokenCount -> while {
-                tokens![callScanToken!].kind == grammar.tokenIdLeftParen() -> if {
+                tokens[callScanToken!].kind == grammar.tokenIdLeftParen() -> if {
                     callScanToken! => callLeftParenToken!
                     localCallNode.firstToken + localCallNode.tokenCount => callScanToken!
                 } else {
@@ -442,11 +450,11 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                         ancestor! == local.callAst -> if {
                             true => belongsToCall!
                         } else {
-                            nodes![ancestor!].parent => ancestor!
+                            nodes[ancestor!].parent => ancestor!
                             callPathDistance! + 1 => callPathDistance!
                         }
                     }
-                    nodes![candidate.pathAst] => candidatePath
+                    nodes[candidate.pathAst] => candidatePath
                     (local.functionSymbol >= -1 and belongsToCall! and candidatePath.firstToken <= local.nameToken and local.nameToken < candidatePath.firstToken + candidatePath.tokenCount and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
                 }
                 qualifiedIndex! + 1 => qualifiedIndex!
@@ -462,12 +470,12 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 imported.targetModule >= 0 -> if {
                     identities![imported.targetModule].sourceIndex => targetSourceModule!
                 }
-                imported.targetModule => importedResolvedModule!
-                targetSourceModule! => importedResolvedSource!
+                imported.targetModule => importedResolvedModule
+                targetSourceModule! => importedResolvedSource
                 imported.status => importedStatus!
                 imported.status == 0 -> if {
-                    request.sources[targetSourceModule!] -> symbols.collect => targetSymbols!
-                    (targetSymbols![imported.targetSymbol].kind != 7 and targetSymbols![imported.targetSymbol].kind != 31 and targetSymbols![imported.targetSymbol].kind != 36) -> if { 2 => importedStatus! }
+                    request.sources[targetSourceModule!] -> symbols.collect => targetSymbols
+                    (targetSymbols[imported.targetSymbol].kind != 7 and targetSymbols[imported.targetSymbol].kind != 31 and targetSymbols[imported.targetSymbol].kind != 36) -> if { 2 => importedStatus! }
                 }
                 1 => resolvedOrigin!
                 imported.targetModule => resolvedTargetModule!
@@ -485,21 +493,21 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                         (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
                             siblingIdentity.sourceIndex => siblingSource
                             request.sources[siblingSource] => siblingText
-                            siblingText -> lexer.lex => siblingTokens!
-                            siblingText -> symbols.collect => siblingSymbols!
+                            siblingText -> lexer.lex => siblingTokens
+                            siblingText -> symbols.collect => siblingSymbols
                             0 => siblingSymbolIndex!
-                            siblingSymbolIndex! < (siblingSymbols! -> len) -> while {
-                                siblingSymbols![siblingSymbolIndex!] => siblingCandidate
+                            siblingSymbolIndex! < (siblingSymbols -> len) -> while {
+                                siblingSymbols[siblingSymbolIndex!] => siblingCandidate
                                 (siblingCandidate.kind == 7 or siblingCandidate.kind == 31) -> if {
-                                    tokens![local.nameToken] => siblingCallName
-                                    siblingTokens![siblingCandidate.nameToken] => siblingFunctionName
+                                    tokens[local.nameToken] => siblingCallName
+                                    siblingTokens[siblingCandidate.nameToken] => siblingFunctionName
                                     siblingCallName.span.length == siblingFunctionName.span.length => siblingNameEqual!
                                     UIntSize(0) => siblingNameByte!
                                     (siblingNameEqual! and siblingNameByte! < siblingCallName.span.length) -> while {
                                         (source -> byte(siblingCallName.span.start + siblingNameByte!)) != (siblingText -> byte(siblingFunctionName.span.start + siblingNameByte!)) -> if {
                                             false => siblingNameEqual!
                                         }
-                                        siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                        siblingNameByte! + 1 => siblingNameByte!
                                     }
                                     siblingNameEqual! -> if {
                                         siblingFound! -> if {
@@ -550,8 +558,8 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
 }
 
 public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
-    sources -> modules.identities => identities!
-    sources -> qualified.resolve => qualifiedResults!
+    sources -> modules.identities => identities
+    sources -> qualified.resolve => qualifiedResults
     [Text; ~] => preparedSources!
     0 => preparedSourceCopyIndex367!
     preparedSourceCopyIndex367! < (sources -> len) -> while {
@@ -561,17 +569,17 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
     }
     ModuleCallRequest {
         sources: preparedSources!
-        modules: identities!
-        qualified: qualifiedResults!
-    } => request!
-    request! -> resolveModulesPrepared => results!
-    results!
+        modules: identities
+        qualified: qualifiedResults
+    } => request
+    request -> resolveModulesPrepared => results
+    results
 }
 
 public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallResolution; ~] {
-    package -> modules.identitiesAnalyzed => identities!
-    package -> moduleResolve.resolveAnalyzed => resolvedImports!
-    package -> qualified.resolveAnalyzed => qualifiedResults!
+    package -> modules.identitiesAnalyzed => identities
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
+    package -> qualified.resolveAnalyzed => qualifiedResults
     [ModuleCallResolution; ~] => results!
     0 => bareSourceIndex!
     bareSourceIndex! < (package.ranges -> len) -> while {
@@ -657,7 +665,9 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     }
                     indexedFlowPathToken! + 1 => indexedFlowPathToken!
                 }
-                indexedFlowNameToken! => moduleFlowNameTokens![moduleFlowChild.parent]
+                indexedFlowNameToken! > moduleFlowNameTokens![moduleFlowChild.parent] -> if {
+                    indexedFlowNameToken! => moduleFlowNameTokens![moduleFlowChild.parent]
+                }
             }
             moduleFlowChildIndex! + 1 => moduleFlowChildIndex!
         }
@@ -667,8 +677,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
             moduleFlowNameTokens![callAstIndex!] >= 0 => moduleHasFlowCallTarget
             false => moduleHasQualifiedCallTarget!
             0 => moduleQualifiedCallSearch!
-            moduleQualifiedCallSearch! < (qualifiedResults! -> len) -> while {
-                qualifiedResults![moduleQualifiedCallSearch!] => moduleQualifiedCall
+            moduleQualifiedCallSearch! < (qualifiedResults -> len) -> while {
+                qualifiedResults[moduleQualifiedCallSearch!] => moduleQualifiedCall
                 (moduleQualifiedCall.sourceModule == sourceIndex!
                     and moduleQualifiedCall.pathAst >= 0
                     and moduleQualifiedCall.pathAst < sourceRange.astCount
@@ -687,8 +697,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     false => moduleQualifiedTargetCallable!
                     (moduleQualifiedCall.status == 0
                         and moduleQualifiedCall.targetModule >= 0
-                        and moduleQualifiedCall.targetModule < (identities! -> len)) -> if {
-                        identities![moduleQualifiedCall.targetModule].sourceIndex => moduleQualifiedTargetSource
+                        and moduleQualifiedCall.targetModule < (identities -> len)) -> if {
+                        identities[moduleQualifiedCall.targetModule].sourceIndex => moduleQualifiedTargetSource
                         (moduleQualifiedTargetSource >= 0 and moduleQualifiedTargetSource < (package.ranges -> len)) -> if {
                             package.ranges[moduleQualifiedTargetSource] => moduleQualifiedTargetRange
                             (moduleQualifiedCall.targetSymbol >= 0 and moduleQualifiedCall.targetSymbol < moduleQualifiedTargetRange.symbolCount) -> if {
@@ -705,8 +715,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
             }
             false => moduleHasGeneratedComTarget!
             0 => moduleComQualifiedSearch!
-            moduleComQualifiedSearch! < (qualifiedResults! -> len) -> while {
-                qualifiedResults![moduleComQualifiedSearch!] => moduleComQualified
+            moduleComQualifiedSearch! < (qualifiedResults -> len) -> while {
+                qualifiedResults[moduleComQualifiedSearch!] => moduleComQualified
                 (moduleComQualified.sourceModule == sourceIndex! and moduleComQualified.pathAst == callAstIndex! and moduleComQualified.targetSymbol >= 0 and moduleComQualified.targetSymbol < sourceRange.symbolCount) -> if {
                     package.symbols[sourceRange.symbolStart + moduleComQualified.targetSymbol].kind == 36 -> if { true => moduleHasGeneratedComTarget! }
                 }
@@ -775,7 +785,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                             source -> byte(callName.span.start + localNameByte!) => callByte
                             source -> byte(functionName.span.start + localNameByte!) => functionByte
                             callByte != functionByte -> if { false => localEqual! }
-                            localNameByte! + UIntSize(1) => localNameByte!
+                            localNameByte! + 1 => localNameByte!
                         }
                         (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
                     }
@@ -786,7 +796,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     RuntimeNameRequest { source: source, token: package.tokens[sourceRange.tokenStart + callNameToken!] } -> runtimeFunctionSymbol => directRuntimeSymbol
                     directRuntimeSymbol == -102 -> if { directRuntimeSymbol => localFunctionSymbol! }
                 }
-                ((callNode.kind == 10 or callNode.kind == 11) and localFunctionSymbol! < 0) -> if {
+                ((callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77) and localFunctionSymbol! < 0) -> if {
                     RuntimeNameRequest { source: source, token: package.tokens[sourceRange.tokenStart + callNameToken!] } -> runtimeFunctionSymbol => runtimeSymbol
                     runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
                 }
@@ -822,8 +832,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
             }
             -1 => importedIndex!
             0 => qualifiedIndex!
-            qualifiedIndex! < (qualifiedResults! -> len) -> while {
-                qualifiedResults![qualifiedIndex!] => candidate
+            qualifiedIndex! < (qualifiedResults -> len) -> while {
+                qualifiedResults[qualifiedIndex!] => candidate
                 candidate.sourceModule == sourceIndex! -> if {
                     candidate.pathAst => ancestor!
                     0 => callPathDistance!
@@ -847,10 +857,10 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
             local.functionSymbol => resolvedFunctionSymbol!
             local.status => resolvedStatus!
             importedIndex! >= 0 -> if {
-                qualifiedResults![importedIndex!] => imported
+                qualifiedResults[importedIndex!] => imported
                 -1 => targetSourceModule!
                 imported.targetModule >= 0 -> if {
-                    identities![imported.targetModule].sourceIndex => targetSourceModule!
+                    identities[imported.targetModule].sourceIndex => targetSourceModule!
                 }
                 imported.targetModule => importedResolvedModule!
                 targetSourceModule! => importedResolvedSource!
@@ -877,7 +887,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                                 (source -> byte(importedCallName.span.start + importedFunctionByte!)) != (importedTargetSource -> byte(importedFunctionName.span.start + importedFunctionByte!)) -> if {
                                     false => importedFunctionEqual!
                                 }
-                                importedFunctionByte! + UIntSize(1) => importedFunctionByte!
+                                importedFunctionByte! + 1 => importedFunctionByte!
                             }
                             importedFunctionEqual! -> if {
                                 importedFunctionSearch! => importedFunctionSymbol!
@@ -888,12 +898,12 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     }
                 }
                 (importedStatus! != 0 and targetSourceModule! >= 0) -> if {
-                    identities![imported.targetModule] => importedIdentity
+                    identities[imported.targetModule] => importedIdentity
                     false => importedSiblingFound!
                     false => importedSiblingAmbiguous!
                     0 => importedSiblingModuleIndex!
-                    importedSiblingModuleIndex! < (identities! -> len) -> while {
-                        identities![importedSiblingModuleIndex!] => importedSiblingIdentity
+                    importedSiblingModuleIndex! < (identities -> len) -> while {
+                        identities[importedSiblingModuleIndex!] => importedSiblingIdentity
                         (importedSiblingIdentity.sourceIndex != targetSourceModule! and importedSiblingIdentity.pathHash == importedIdentity.pathHash) -> if {
                             importedSiblingIdentity.sourceIndex => importedSiblingSource
                             package.ranges[importedSiblingSource] => importedSiblingRange
@@ -911,7 +921,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                                         (source -> byte(importedSiblingCallName.span.start + importedSiblingFunctionByte!)) != (importedSiblingText -> byte(importedSiblingFunctionName.span.start + importedSiblingFunctionByte!)) -> if {
                                             false => importedSiblingFunctionEqual!
                                         }
-                                        importedSiblingFunctionByte! + UIntSize(1) => importedSiblingFunctionByte!
+                                        importedSiblingFunctionByte! + 1 => importedSiblingFunctionByte!
                                     }
                                     importedSiblingFunctionEqual! -> if {
                                         importedSiblingFound! -> if {
@@ -944,10 +954,10 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 false => siblingFound!
                 false => siblingAmbiguous!
                 (local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48 or localCallNode.kind == 77)) -> if {
-                    identities![sourceIndex!] => currentIdentity
+                    identities[sourceIndex!] => currentIdentity
                     0 => siblingModuleIndex!
-                    siblingModuleIndex! < (identities! -> len) -> while {
-                        identities![siblingModuleIndex!] => siblingIdentity
+                    siblingModuleIndex! < (identities -> len) -> while {
+                        identities[siblingModuleIndex!] => siblingIdentity
                         (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
                             siblingIdentity.sourceIndex => siblingSource
                             package.ranges[siblingSource] => siblingRange
@@ -965,7 +975,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                                         (source -> byte(siblingCallName.span.start + siblingNameByte!)) != (siblingText -> byte(siblingFunctionName.span.start + siblingNameByte!)) -> if {
                                             false => siblingNameEqual!
                                         }
-                                        siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                        siblingNameByte! + 1 => siblingNameByte!
                                     }
                                     siblingNameEqual! -> if {
                                         siblingFound! -> if {
@@ -1023,8 +1033,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     receiverSymbol! >= 0 -> if {
                         package.symbols[sourceRange.symbolStart + receiverSymbol!] => receiverBinding
                         0 => receiverQualifiedIndex!
-                        receiverQualifiedIndex! < (qualifiedResults! -> len) -> while {
-                            qualifiedResults![receiverQualifiedIndex!] => receiverQualified
+                        receiverQualifiedIndex! < (qualifiedResults -> len) -> while {
+                            qualifiedResults[receiverQualifiedIndex!] => receiverQualified
                             (receiverQualified.sourceModule == sourceIndex! and receiverQualified.status == 0) -> if {
                                 receiverQualified.pathAst => receiverQualifiedAncestor!
                                 false => receiverQualifiedBelongs!
@@ -1044,8 +1054,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                         }
                     }
                     (receiverTypeModule! >= 0 and receiverTypeSymbol! >= 0) -> if {
-                        identities![receiverTypeModule!] => receiverTypeIdentity
-                        identities![receiverTypeModule!].sourceIndex => receiverTypeSource
+                        identities[receiverTypeModule!] => receiverTypeIdentity
+                        identities[receiverTypeModule!].sourceIndex => receiverTypeSource
                         package.ranges[receiverTypeSource] => receiverTypeRange
                         package.symbols[receiverTypeRange.symbolStart + receiverTypeSymbol!] => receiverType
                         package.tokens[receiverTypeRange.tokenStart + receiverType.nameToken] => receiverTypeName
@@ -1054,8 +1064,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                         false => receiverMethodFound!
                         false => receiverMethodAmbiguous!
                         0 => receiverMethodModule!
-                        receiverMethodModule! < (identities! -> len) -> while {
-                            identities![receiverMethodModule!] => receiverMethodIdentity
+                        receiverMethodModule! < (identities -> len) -> while {
+                            identities[receiverMethodModule!] => receiverMethodIdentity
                             receiverMethodIdentity.pathHash == receiverTypeIdentity.pathHash -> if {
                                 receiverMethodIdentity.sourceIndex => receiverMethodSource
                                 package.ranges[receiverMethodSource] => receiverMethodRange
@@ -1074,7 +1084,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                                             (receiverMethodText -> byte(receiverImplName.span.start + receiverOwnerByte!)) != (receiverTypeText -> byte(receiverTypeName.span.start + receiverOwnerByte!)) -> if {
                                                 false => receiverOwnerEqual!
                                             }
-                                            receiverOwnerByte! + UIntSize(1) => receiverOwnerByte!
+                                            receiverOwnerByte! + 1 => receiverOwnerByte!
                                         }
                                         receiverMethodName.span.length == receiverCallName.span.length => receiverMethodEqual!
                                         UIntSize(0) => receiverMethodByte!
@@ -1082,7 +1092,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                                             (receiverMethodText -> byte(receiverMethodName.span.start + receiverMethodByte!)) != (source -> byte(receiverCallName.span.start + receiverMethodByte!)) -> if {
                                                 false => receiverMethodEqual!
                                             }
-                                            receiverMethodByte! + UIntSize(1) => receiverMethodByte!
+                                            receiverMethodByte! + 1 => receiverMethodByte!
                                         }
                                         (receiverOwnerEqual! and receiverMethodEqual!) -> if {
                                             receiverMethodFound! -> if {
@@ -1120,10 +1130,10 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 false => openImportAmbiguous!
                 (not siblingFound! and local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48 or localCallNode.kind == 77)) -> if {
                     0 => openImportIndex!
-                    openImportIndex! < (resolvedImports! -> len) -> while {
-                        resolvedImports![openImportIndex!] => openImport
+                    openImportIndex! < (resolvedImports -> len) -> while {
+                        resolvedImports[openImportIndex!] => openImport
                         (openImport.sourceModule == sourceIndex! and openImport.status == 0) -> if {
-                            identities![openImport.targetModule].sourceIndex => openTargetSource
+                            identities[openImport.targetModule].sourceIndex => openTargetSource
                             package.ranges[openTargetSource] => openTargetRange
                             package.sources[openTargetSource] -> len => openTargetLength
                             package.sources[openTargetSource] -> slice(UIntSize(0), openTargetLength) => openTargetText
@@ -1139,7 +1149,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                                         (source -> byte(openCallName.span.start + openNameByte!)) != (openTargetText -> byte(openFunctionName.span.start + openNameByte!)) -> if {
                                             false => openNameEqual!
                                         }
-                                        openNameByte! + UIntSize(1) => openNameByte!
+                                        openNameByte! + 1 => openNameByte!
                                     }
                                     openNameEqual! -> if {
                                         openImportFound! -> if {

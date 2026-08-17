@@ -34,7 +34,24 @@ internal sealed record LlvmCodegenUnit(
     }
 }
 
-internal readonly record struct LlvmCodegenKey(ulong InterfaceHash, ulong ImplementationHash);
+internal readonly record struct LlvmCodegenKey(ulong InterfaceHash, ulong ImplementationHash)
+{
+    public LlvmCodegenKey WithEmissionSet(IEnumerable<string> identities)
+    {
+        const ulong prime = 1099511628211;
+        var hash = unchecked(ImplementationHash * prime + 101);
+        foreach (var identity in identities.Order(StringComparer.Ordinal))
+        {
+            var bytes = Encoding.UTF8.GetBytes(identity);
+            hash = unchecked(hash * prime + (ulong)bytes.Length);
+            foreach (var value in bytes)
+            {
+                hash = unchecked(hash * prime + value);
+            }
+        }
+        return new LlvmCodegenKey(InterfaceHash, hash);
+    }
+}
 
 internal sealed class LlvmCodegenOutput(IReadOnlyList<LlvmCodegenUnit> units)
 {

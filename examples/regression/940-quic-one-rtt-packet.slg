@@ -1,0 +1,51 @@
+import sys.quic.error as errors
+import sys.quic.packet
+
+key: -> [UInt8; 16] => [17; 16]
+iv: -> [UInt8; 12] => [34; 12]
+headerProtection: -> [UInt8; 16] => [51; 16]
+destinationConnectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
+plaintext: -> [UInt8] => [49, 4, 112, 105, 110, 103, 0, 0, 0, 0, 0, 0]
+
+roundtrip keyPhase: Bool -> Result<Bool, errors.Error> {
+    packet.sealOneRtt(
+        destinationConnectionId(),
+        keyPhase,
+        513,
+        2,
+        plaintext(),
+        key(),
+        iv(),
+        headerProtection())? => protected
+    packet.openOneRtt(
+        protected,
+        destinationConnectionId(),
+        513,
+        key(),
+        iv(),
+        headerProtection())? => opened
+    Result<Bool, errors.Error>.Ok(
+        ((opened.keyPhase and keyPhase) or (not (opened.keyPhase) and not keyPhase))
+            and opened.packetNumber == 513
+            and opened.plaintext[0] == 49
+            and opened.plaintext[2] == 112
+            and opened.plaintext[5] == 103)
+}
+
+verify keyPhase: Bool, label: Text -> Unit uses Console {
+    roundtrip(keyPhase) -> when {
+        Ok(valid) {
+            valid -> if {
+                "one-rtt-$label=ok" -> println
+            } else {
+                "one-rtt-$label=failed" -> println
+            }
+        }
+        Err(error) { "one-rtt-$label-error=$(error.code)" -> println }
+    }
+}
+
+main {
+    verify(false, "phase0")
+    verify(true, "phase1")
+}

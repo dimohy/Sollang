@@ -51,6 +51,7 @@ public effectClock: -> Int => 4
 public effectRandom: -> Int => 8
 public effectProcess: -> Int => 16
 public effectEnvironment: -> Int => 32
+public effectNetwork: -> Int => 64
 
 tokenTextIs request: TokenTextRequest -> Bool {
     request.token.span.length == (request.expected -> len) => equal!
@@ -59,7 +60,7 @@ tokenTextIs request: TokenTextRequest -> Bool {
         (request.source -> byte(request.token.span.start + index!)) != (request.expected -> byte(index!)) -> if {
             false => equal!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     equal!
 }
@@ -70,7 +71,9 @@ effectMask request: EffectMaskRequest -> Int {
     TokenTextRequest { source: request.source, token: request.token, expected: "Clock" } -> tokenTextIs -> if { 4 } else {
     TokenTextRequest { source: request.source, token: request.token, expected: "Random" } -> tokenTextIs -> if { 8 } else {
     TokenTextRequest { source: request.source, token: request.token, expected: "Process" } -> tokenTextIs -> if { 16 } else {
-    TokenTextRequest { source: request.source, token: request.token, expected: "Environment" } -> tokenTextIs -> if { 32 } else { 0 }
+    TokenTextRequest { source: request.source, token: request.token, expected: "Environment" } -> tokenTextIs -> if { 32 } else {
+    TokenTextRequest { source: request.source, token: request.token, expected: "Network" } -> tokenTextIs -> if { 64 } else { 0 }
+    }
     }
     }
     }
@@ -90,7 +93,7 @@ public analyze sources: [Text; ~] -> EffectAnalysis {
 public analyzeContext prepared: semanticContext.SemanticSnapshot -> EffectAnalysis {
     [FunctionEffect; ~] => functions!
     [EffectDiagnostic; ~] => diagnostics!
-    [1, 2, 4, 8, 16, 32] => effectBits
+    [1, 2, 4, 8, 16, 32, 64] => effectBits
 
     # First build one source-qualified effect fact for every function symbol.
     0 => sourceIndex!
@@ -122,8 +125,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> EffectAnalys
                             true => afterUses!
                         } else {
                             (afterUses! and token.kind == grammar.tokenIdIdentifier()) -> if {
-                                EffectMaskRequest { source: source, token: token } -> effectMask => effect!
-                                effect! == 0 -> if {
+                                EffectMaskRequest { source: source, token: token } -> effectMask => effect
+                                effect == 0 -> if {
                                     -1 => effectReferenceAst!
                                     0 => effectReferenceSearch!
                                     (effectReferenceSearch! < sourceRange.astCount and effectReferenceAst! < 0) -> while {
@@ -155,7 +158,7 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> EffectAnalys
                                                 UIntSize(0) => effectNameByte!
                                                 (sameEffectName! and effectNameByte! < token.span.length) -> while {
                                                     (source -> byte(token.span.start + effectNameByte!)) != (source -> byte(localEffectName.span.start + effectNameByte!)) -> if { false => sameEffectName! }
-                                                    effectNameByte! + UIntSize(1) => effectNameByte!
+                                                    effectNameByte! + 1 => effectNameByte!
                                                 }
                                                 sameEffectName! -> if { true => knownUserEffect! }
                                             }
@@ -199,19 +202,19 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> EffectAnalys
                                         }
                                     }
                                 } else {
-                                    HasEffectRequest { mask: mask!, effect: effect! } -> hasEffect -> if {
+                                    HasEffectRequest { mask: mask!, effect: effect } -> hasEffect -> if {
                                         diagnostics! -> push(EffectDiagnostic {
                                             code: 3
                                             sourceModule: sourceIndex!
                                             functionSymbol: symbolIndex!
                                             targetSourceModule: -1
                                             targetFunctionSymbol: -1
-                                            effectMask: effect!
+                                            effectMask: effect
                                             astNode: symbol.astNode
                                             span: token.span
                                         })
                                     } else {
-                                        mask! + effect! => mask!
+                                        mask! + effect => mask!
                                     }
                                 }
                             }
@@ -305,7 +308,7 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> EffectAnalys
                 }
 
                 0 => effectBitIndex!
-                effectBitIndex! < 6 -> while {
+                effectBitIndex! < 7 -> while {
                     effectBits[effectBitIndex!] => requiredEffect
                     HasEffectRequest { mask: requiredMask!, effect: requiredEffect } => requiredEffectRequest
                     requiredEffectRequest -> hasEffect => requiresEffect
@@ -400,6 +403,6 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> EffectAnalys
         mapSourceIndex! + 1 => mapSourceIndex!
     }
 
-    EffectAnalysis { functions: functions!, diagnostics: diagnostics! } => result!
-    result!
+    EffectAnalysis { functions: functions!, diagnostics: diagnostics! } => result
+    result
 }

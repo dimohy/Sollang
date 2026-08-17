@@ -12,24 +12,24 @@ appendText bytes: mut [UInt8; ~], value: Text -> Unit {
     UIntSize(0) => index!
     index! < (value -> len) -> while {
         bytes -> push(value -> byte(index!))
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
 }
 
 appendLine bytes: mut [UInt8; ~], value: Text -> Unit {
     bytes -> appendText(value)
-    bytes -> push(UInt8(10))
+    bytes -> push(10)
 }
 
 appendPath bytes: mut [UInt8; ~], value: ref path.Path -> Unit {
     0 => index!
     index! < (value.bytes -> len) -> while {
-        value.bytes[index!] == UInt8(34) -> if {
-            bytes -> push(UInt8(92))
-            bytes -> push(UInt8(34))
+        value.bytes[index!] == 34 -> if {
+            bytes -> push(92)
+            bytes -> push(34)
         } else {
-            value.bytes[index!] == UInt8(92) -> if {
-                bytes -> push(UInt8(47))
+            value.bytes[index!] == 92 -> if {
+                bytes -> push(47)
             } else {
                 bytes -> push(value.bytes[index!])
             }
@@ -41,13 +41,13 @@ appendPath bytes: mut [UInt8; ~], value: ref path.Path -> Unit {
 directoryOf value: Text -> Text {
     value -> len => length
     length => index!
-    (index! > UIntSize(0)) -> while {
-        value -> byte(index! - UIntSize(1)) => current
-        (current == UInt8(47) or current == UInt8(92)) -> if {
-            value -> slice(UIntSize(0), index! - UIntSize(1)) => directory
+    (index! > 0) -> while {
+        value -> byte(index! - 1) => current
+        (current == 47 or current == 92) -> if {
+            value -> slice(UIntSize(0), index! - 1) => directory
             directory -> return
         }
-        index! - UIntSize(1) => index!
+        index! - 1 => index!
     }
     "."
 }
@@ -56,11 +56,11 @@ separator value: UInt8, style: path.Style -> Bool {
     false => separated!
     style -> when {
         Windows {
-            value == UInt8(47) or value == UInt8(92) => separated!
+            value == 47 or value == 92 => separated!
             unitValue()
         }
         Posix {
-            value == UInt8(47) => separated!
+            value == 47 => separated!
             unitValue()
         }
     }
@@ -74,7 +74,7 @@ sameComponent left: Text, leftStart: UIntSize, leftLength: UIntSize, right: Text
         (left -> byte(leftStart + index!)) != (right -> byte(rightStart + index!)) -> if {
             false => same!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     same!
 }
@@ -88,27 +88,27 @@ relativeDirectory root: Text, target: Text, style: path.Style -> path.Path {
     UIntSize(0) => index!
     index! < (root -> len) -> while {
         (index! < (root -> len) and ((root -> byte(index!)) -> separator(style))) -> while {
-            index! + UIntSize(1) => index!
+            index! + 1 => index!
         }
         index! < (root -> len) -> if {
             index! => start
             (index! < (root -> len) and not ((root -> byte(index!)) -> separator(style))) -> while {
-                index! + UIntSize(1) => index!
+                index! + 1 => index!
             }
             rootStarts! -> push(start)
             rootLengths! -> push(index! - start)
         }
     }
 
-    UIntSize(0) => index!
+    0 => index!
     index! < (target -> len) -> while {
         (index! < (target -> len) and ((target -> byte(index!)) -> separator(style))) -> while {
-            index! + UIntSize(1) => index!
+            index! + 1 => index!
         }
         index! < (target -> len) -> if {
             index! => start
             (index! < (target -> len) and not ((target -> byte(index!)) -> separator(style))) -> while {
-                index! + UIntSize(1) => index!
+                index! + 1 => index!
             }
             targetStarts! -> push(start)
             targetLengths! -> push(index! - start)
@@ -123,26 +123,26 @@ relativeDirectory root: Text, target: Text, style: path.Style -> path.Path {
     [UInt8; ~] => bytes!
     common! => rootIndex!
     rootIndex! < (rootStarts! -> len) -> while {
-        (bytes! -> len) > 0 -> if { bytes! -> push(UInt8(47)) }
-        bytes! -> push(UInt8(46))
-        bytes! -> push(UInt8(46))
+        (bytes! -> len) > 0 -> if { bytes! -> push(47) }
+        bytes! -> push(46)
+        bytes! -> push(46)
         rootIndex! + 1 => rootIndex!
     }
     common! => targetIndex!
     targetIndex! < (targetStarts! -> len) -> while {
-        (bytes! -> len) > 0 -> if { bytes! -> push(UInt8(47)) }
+        (bytes! -> len) > 0 -> if { bytes! -> push(47) }
         targetStarts![targetIndex!] => byteIndex!
         byteIndex! < targetStarts![targetIndex!] + targetLengths![targetIndex!] -> while {
             target -> byte(byteIndex!) => current
-            current == UInt8(92) -> if { UInt8(47) } else { current } => portable
+            current == 92 -> if { UInt8(47) } else { current } => portable
             bytes! -> push(portable)
-            byteIndex! + UIntSize(1) => byteIndex!
+            byteIndex! + 1 => byteIndex!
         }
         targetIndex! + 1 => targetIndex!
     }
-    (bytes! -> len) == 0 -> if { bytes! -> push(UInt8(46)) }
-    path.Path { bytes: bytes!, style: path.Style.Posix } => result!
-    result!
+    (bytes! -> len) == 0 -> if { bytes! -> push(46) }
+    path.Path { bytes: bytes!, style: path.Style.Posix } => result
+    result
 }
 
 comparePath left: ref path.Path, right: ref path.Path -> Int {
@@ -184,40 +184,40 @@ public render packageManifests: [path.Path; ~], packageNames: [path.Path; ~], pa
     bytes! -> appendLine("lock {")
     bytes! -> appendLine("    format: 2")
     bytes! -> appendLine("    packages: [")
-    packageNames -> sortedIndexes => order!
+    packageNames -> sortedIndexes => order
     path.pathText(packageManifests[0]) => rootManifestText
     rootManifestText -> directoryOf => rootDirectory
 
     0 => orderIndex!
-    orderIndex! < (order! -> len) -> while {
-        order![orderIndex!] => packageIndex
+    orderIndex! < (order -> len) -> while {
+        order[orderIndex!] => packageIndex
         path.pathText(packageManifests[packageIndex]) => manifestText
         manifestText -> directoryOf => packageDirectory
-        rootDirectory -> relativeDirectory(packageDirectory, style) => relative!
+        rootDirectory -> relativeDirectory(packageDirectory, style) => relative
 
         bytes! -> appendLine("        {")
         bytes! -> appendText("            id: ")
-        bytes! -> push(UInt8(34))
+        bytes! -> push(34)
         bytes! -> appendPath(packageNames[packageIndex])
         bytes! -> appendText("@")
         bytes! -> appendPath(packageVersions[packageIndex])
-        bytes! -> push(UInt8(34))
-        bytes! -> push(UInt8(10))
+        bytes! -> push(34)
+        bytes! -> push(10)
         bytes! -> appendText("            source: ")
-        bytes! -> push(UInt8(34))
+        bytes! -> push(34)
         bytes! -> appendText("path:")
-        bytes! -> appendPath(relative!)
-        bytes! -> push(UInt8(34))
-        bytes! -> push(UInt8(10))
+        bytes! -> appendPath(relative)
+        bytes! -> push(34)
+        bytes! -> push(10)
 
-        manifestText -> file.mapText => source!
-        source! -> len => sourceLength
-        source! -> slice(UIntSize(0), sourceLength) => sourceView
-        sourceView -> project.parse => parsed!
+        manifestText -> file.mapText => source
+        source -> len => sourceLength
+        source -> slice(UIntSize(0), sourceLength) => sourceView
+        sourceView -> project.parse => parsed
         [Int; ~] => dependencyPackages!
         0 => dependencyIndex!
-        dependencyIndex! < (parsed!.dependencies -> len) -> while {
-            source! -> slice(parsed!.dependencies[dependencyIndex!].name.start, parsed!.dependencies[dependencyIndex!].name.length) => dependencyName
+        dependencyIndex! < (parsed.dependencies -> len) -> while {
+            source -> slice(parsed.dependencies[dependencyIndex!].name.start, parsed.dependencies[dependencyIndex!].name.length) => dependencyName
             0 => candidate!
             false => found!
             (not found! and candidate! < (packageNames -> len)) -> while {
@@ -244,17 +244,17 @@ public render packageManifests: [path.Path; ~], packageNames: [path.Path; ~], pa
 
         bytes! -> appendText("            dependencies: [")
         (dependencyPackages! -> len) > 0 -> if {
-            bytes! -> push(UInt8(10))
+            bytes! -> push(10)
             0 => dependencyPackageIndex!
             dependencyPackageIndex! < (dependencyPackages! -> len) -> while {
                 dependencyPackages![dependencyPackageIndex!] => dependencyPackage
                 bytes! -> appendText("                ")
-                bytes! -> push(UInt8(34))
+                bytes! -> push(34)
                 bytes! -> appendPath(packageNames[dependencyPackage])
                 bytes! -> appendText("@")
                 bytes! -> appendPath(packageVersions[dependencyPackage])
-                bytes! -> push(UInt8(34))
-                bytes! -> push(UInt8(10))
+                bytes! -> push(34)
+                bytes! -> push(10)
                 dependencyPackageIndex! + 1 => dependencyPackageIndex!
             }
             bytes! -> appendText("            ")
@@ -272,12 +272,12 @@ sameFile pathValue: Text, expected: [UInt8; ~] -> Bool uses File {
     false => same!
     pathValue -> file.openRead -> when {
         Ok(_) {
-            pathValue -> file.mapText => source!
-            (source! -> len) == UIntSize(expected -> len) => same!
+            pathValue -> file.mapText => source
+            (source -> len) == UIntSize(expected -> len) => same!
             UIntSize(0) => index!
-            (same! and index! < (source! -> len)) -> while {
-                (source! -> byte(index!)) != expected[Int(index!)] -> if { false => same! }
-                index! + UIntSize(1) => index!
+            (same! and index! < (source -> len)) -> while {
+                (source -> byte(index!)) != expected[Int(index!)] -> if { false => same! }
+                index! + 1 => index!
             }
         }
         Err(_) {}
@@ -331,13 +331,13 @@ lockPath manifest: ref path.Path, style: path.Style -> path.Path {
     bytes! -> appendText(directory)
     (bytes! -> len) > 0 -> if {
         style -> when {
-            Windows { bytes! -> push(UInt8(92)) }
-            Posix { bytes! -> push(UInt8(47)) }
+            Windows { bytes! -> push(92) }
+            Posix { bytes! -> push(47) }
         }
     }
     bytes! -> appendText("sollang.lock")
-    path.Path { bytes: bytes!, style: style } => result!
-    result!
+    path.Path { bytes: bytes!, style: style } => result
+    result
 }
 
 temporaryPath destination: ref path.Path -> path.Path {
@@ -347,12 +347,12 @@ temporaryPath destination: ref path.Path -> path.Path {
         bytes! -> push(destination.bytes[index!])
         index! + 1 => index!
     }
-    bytes! -> push(UInt8(46))
-    bytes! -> push(UInt8(116))
-    bytes! -> push(UInt8(109))
-    bytes! -> push(UInt8(112))
-    path.Path { bytes: bytes!, style: destination.style } => result!
-    result!
+    bytes! -> push(46)
+    bytes! -> push(116)
+    bytes! -> push(109)
+    bytes! -> push(112)
+    path.Path { bytes: bytes!, style: destination.style } => result
+    result
 }
 
 public destination packageManifests: [path.Path; ~], style: path.Style -> path.Path {
@@ -363,14 +363,14 @@ public destination packageManifests: [path.Path; ~], style: path.Style -> path.P
 # 3 write failure. writeMissing is true for explicit resolve/workspaces.
 public ensure packageManifests: [path.Path; ~], packageNames: [path.Path; ~], packageVersions: [path.Path; ~], locked: Bool, writeMissing: Bool, style: path.Style -> Int uses File {
     (packageManifests -> len) == 0 -> if { 1 -> return }
-    packageManifests -> render(packageNames, packageVersions, style) => expected!
-    packageManifests[0] -> lockPath(style) => destination!
-    path.pathText(destination!) => destinationText
-    destinationText -> sameFile(expected!) -> if { 0 -> return }
+    packageManifests -> render(packageNames, packageVersions, style) => expected
+    packageManifests[0] -> lockPath(style) => destination
+    path.pathText(destination) => destinationText
+    destinationText -> sameFile(expected) -> if { 0 -> return }
     destinationText -> fileExists => exists
     (not exists and not locked and not writeMissing) -> if { 0 -> return }
     locked -> if { 2 -> return }
-    destination! -> temporaryPath => temporary!
-    path.pathText(temporary!) => temporaryText
-    destinationText -> writeBytes(temporaryText, expected!) -> if { 0 } else { 3 }
+    destination -> temporaryPath => temporary
+    path.pathText(temporary) => temporaryText
+    destinationText -> writeBytes(temporaryText, expected) -> if { 0 } else { 3 }
 }

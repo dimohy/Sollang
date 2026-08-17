@@ -1,0 +1,40 @@
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+declare i64 @write(i32, ptr, i64)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %written = call i64 @write(i32 1, ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_written = call i64 @write(i32 1, ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+%sollang.text = type { ptr, i64 }
+@sollang_str_6 = private unnamed_addr constant [16 x i8] c"stage2-unless-ok"
+@sollang_str_12 = private unnamed_addr constant [20 x i8] c"stage2-unless-failed"
+define i32 @main() {
+entry:
+  br i1 0, label %if3_merge, label %if3_then
+if3_then:
+  %v6_ptr = insertvalue %sollang.text poison, ptr @sollang_str_6, 0
+  %v6 = insertvalue %sollang.text %v6_ptr, i64 16, 1
+  call void @sollang_runtime_print(ptr @sollang_str_6, i64 16, i1 true)
+  br label %if3_merge
+if3_merge:
+  br i1 1, label %if9_merge, label %if9_then
+if9_then:
+  %v12_ptr = insertvalue %sollang.text poison, ptr @sollang_str_12, 0
+  %v12 = insertvalue %sollang.text %v12_ptr, i64 20, 1
+  call void @sollang_runtime_print(ptr @sollang_str_12, i64 20, i1 true)
+  br label %if9_merge
+if9_merge:
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

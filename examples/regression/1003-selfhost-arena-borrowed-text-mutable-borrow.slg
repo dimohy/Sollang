@@ -1,0 +1,28 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+main {
+    [
+        """
+        copyText value: Text, storage: mut Arena -> Text {
+            value -> materialize(storage)
+        }
+
+        main {
+            Arena(0) => storage!
+            "first" -> copyText(storage!) => first
+            "second" -> copyText(storage!) => second
+            "$first,$second" -> println
+        }
+        """; ~
+    ] => sources
+    sources -> semanticContext.prepare => snapshot
+    snapshot -> ownershipCheck.analyzeContext => errors
+    0 => conflicts!
+    0 => index!
+    index! < (errors -> len) -> while {
+        errors[index!].code == 21 -> if { conflicts! + 1 => conflicts! }
+        index! + 1 => index!
+    }
+    "borrowed arena conflicts=$(conflicts!)" -> println
+}

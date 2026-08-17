@@ -1,0 +1,42 @@
+import sys.quic.error as errors
+import sys.quic.frame_types as frames
+import sys.quic.loss_recovery as recovery
+import sys.quic.packet_recovery as journal
+
+verify: -> Result<Bool, errors.Error> uses Console {
+    [journal.SentPacket; ~] => packets!
+    packets! -> journal.recordSent(6, 90_000, 1_200, true, true)
+    packets! -> journal.recordSent(7, 100_000, 1_200, true, true)
+    packets! -> journal.recordSent(8, 110_000, 1_200, true, true)
+    packets! -> journal.recordSent(10, 130_000, 1_200, true, true)
+    recovery.initialCongestionState(1_200) => congestion0
+    recovery.onPacketSent(congestion0, 1_200, true) => congestion1
+    recovery.onPacketSent(congestion1, 1_200, true) => congestion2
+    recovery.onPacketSent(congestion2, 1_200, true) => congestion3
+    recovery.onPacketSent(congestion3, 1_200, true) => congestion4
+    frames.Ack {
+        largestAcknowledged: 10
+        ackDelay: 5_000
+        firstRange: 0
+        ranges: [frames.AckRange { gap: 1, rangeLength: 0 }; ~]
+    } => ack
+    packets! -> journal.processAck(
+        ack,
+        recovery.initialRttState(),
+        congestion4,
+        200_000,
+        25_000,
+        true,
+        1_200,
+        true)? => updated
+    "$(updated.acknowledgedPackets),$(updated.lostPackets),$(updated.acknowledgedBytes),$(updated.lostBytes),$(packets! -> len),$(packets![0].number)" -> println
+    "$(updated.rtt.latest),$(updated.rtt.smoothed),$(updated.rtt.variance),$(updated.congestion.congestionWindow),$(updated.congestion.bytesInFlight)" -> println
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+main {
+    verify() -> when {
+        Ok(done) {}
+        Err(error) { "unexpected=$(error.code)" -> println }
+    }
+}

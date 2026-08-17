@@ -25,26 +25,26 @@ main {
             Point { values: [1, 2; ~] } -> keep => point
         }
         """; ~
-    ] => sources!
+    ] => sources
 
-    sources! -> typeIds.resolve => semantic
-    sources! -> nominalTypes.resolve => nominal!
-    sources! -> compositeTypes.resolve => composite!
-    sources! -> modules.identities => moduleIdentities!
-    sources! -> qualified.resolve => qualifiedResults!
+    sources -> typeIds.resolve => semantic
+    sources -> nominalTypes.resolve => nominal
+    sources -> compositeTypes.resolve => composite
+    sources -> modules.identities => moduleIdentities
+    sources -> qualified.resolve => qualifiedResults
     [Text; ~] => callSources!
-    sources! -> each callSource { callSources! -> push(callSource) }
+    sources -> each callSource { callSources! -> push(callSource) }
     [modules.ModuleIdentity; ~] => callModules!
-    moduleIdentities! -> each callModule { callModules! -> push(callModule) }
+    moduleIdentities -> each callModule { callModules! -> push(callModule) }
     [qualified.QualifiedResolution; ~] => callQualified!
-    qualifiedResults! -> each callQualifiedResult { callQualified! -> push(callQualifiedResult) }
+    qualifiedResults -> each callQualifiedResult { callQualified! -> push(callQualifiedResult) }
     calls.ModuleCallRequest {
         sources: callSources!
         modules: callModules!
         qualified: callQualified!
-    } => callRequest!
-    callRequest! -> calls.resolveModulesPrepared => resolvedCalls!
-    sources! -> analysis.analyze => packageAnalysis
+    } => callRequest
+    callRequest -> calls.resolveModulesPrepared => resolvedCalls
+    sources -> analysis.analyze => packageAnalysis
     [analysis.SourceAnalysisRange; ~] => analysisRanges!
     packageAnalysis.ranges -> each sourceRange { analysisRanges! -> push(sourceRange) }
     [ast.AstNode; ~] => analysisNodes!
@@ -56,7 +56,7 @@ main {
     [resolution.ResolvedName; ~] => analysisNames!
     packageAnalysis.names -> each analysisName { analysisNames! -> push(analysisName) }
     [Text; ~] => preparedSources!
-    sources! -> each preparedSource { preparedSources! -> push(preparedSource) }
+    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
     [typeIds.SemanticType; ~] => preparedTypes!
     semantic.types -> each preparedType { preparedTypes! -> push(preparedType) }
     [typeIds.TypeReference; ~] => preparedReferences!
@@ -68,33 +68,33 @@ main {
         types: preparedTypes!
         references: preparedReferences!
         fields: preparedFields!
-        nominal: nominal!
-        composite: composite!
-        modules: moduleIdentities!
-        qualified: qualifiedResults!
-        calls: resolvedCalls!
+        nominal: nominal
+        composite: composite
+        modules: moduleIdentities
+        qualified: qualifiedResults
+        calls: resolvedCalls
         analysisRanges: analysisRanges!
         analysisNodes: analysisNodes!
         analysisTokens: analysisTokens!
         analysisSymbols: analysisSymbols!
         analysisNames: analysisNames!
-    } => request!
-    request! -> typedIr.lowerPrepared => prepared!
-    sources! -> typedIr.lower => baseline!
-    sources! -> semanticContext.prepare => sharedContext
-    sharedContext -> typedIr.lowerContext => shared!
+    } => request
+    request -> typedIr.lowerPrepared => prepared
+    sources -> typedIr.lower => baseline
+    sources -> semanticContext.prepare => sharedContext
+    sharedContext -> typedIr.lowerContext => shared
 
-    ((prepared! -> len) == (baseline! -> len) and (prepared! -> len) == (shared! -> len)) => equal!
+    ((prepared -> len) == (baseline -> len) and (prepared -> len) == (shared -> len)) => equal!
     0 => canonical!
     0 => nodeIndex!
-    (equal! and nodeIndex! < (prepared! -> len)) -> while {
-        prepared![nodeIndex!] => left
-        baseline![nodeIndex!] => right
-        shared![nodeIndex!] => sharedNode
+    (equal! and nodeIndex! < (prepared -> len)) -> while {
+        prepared[nodeIndex!] => left
+        baseline[nodeIndex!] => right
+        shared[nodeIndex!] => sharedNode
         (left.kind != right.kind or left.typeId != right.typeId or left.typeKind != right.typeKind or left.typeFlags != right.typeFlags or left.kind != sharedNode.kind or left.typeId != sharedNode.typeId or left.typeKind != sharedNode.typeKind or left.typeFlags != sharedNode.typeFlags) -> if { false => equal! }
         left.typeId >= 0 -> if { canonical! + 1 => canonical! }
         nodeIndex! + 1 => nodeIndex!
     }
     equal! -> if { "true" } else { "false" } => equalText
-    "prepared=$equalText, nodes=$(prepared! -> len), canonical=$(canonical!)" -> println
+    "prepared=$equalText, nodes=$(prepared -> len), canonical=$(canonical!)" -> println
 }

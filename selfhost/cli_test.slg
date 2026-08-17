@@ -15,7 +15,7 @@ appendText bytes: mut [UInt8; ~], value: Text -> Unit {
     UIntSize(0) => index!
     index! < (value -> len) -> while {
         bytes -> push(value -> byte(index!))
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
 }
 
@@ -23,13 +23,13 @@ appendSourceTo source: file.SourceText, bytes: mut [UInt8; ~], start: UIntSize, 
     UIntSize(0) => index!
     index! < length -> while {
         bytes -> push(source -> byte(start + index!))
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
 }
 
 appendInt bytes: mut [UInt8; ~], value: Int -> Unit {
     value == 0 -> if {
-        bytes -> push(UInt8(48))
+        bytes -> push(48)
         return
     }
     [UInt8; ~] => reversed!
@@ -47,11 +47,11 @@ appendInt bytes: mut [UInt8; ~], value: Int -> Unit {
 }
 
 appendNewline bytes: mut [UInt8; ~] -> Unit {
-    bytes -> push(UInt8(10))
+    bytes -> push(10)
 }
 
 appendQuote bytes: mut [UInt8; ~] -> Unit {
-    bytes -> push(UInt8(34))
+    bytes -> push(34)
 }
 
 matchesText source: file.SourceText, start: UIntSize, length: UIntSize, expected: Text -> Bool {
@@ -59,13 +59,13 @@ matchesText source: file.SourceText, start: UIntSize, length: UIntSize, expected
     UIntSize(0) => index!
     (matches! and index! < length) -> while {
         (source -> byte(start + index!)) != (expected -> byte(index!)) -> if { false => matches! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
 
 containsText source: file.SourceText, start: UIntSize, length: UIntSize, filter: Text -> Bool {
-    (filter -> len) == UIntSize(0) -> if { true -> return }
+    (filter -> len) == 0 -> if { true -> return }
     false => found!
     UIntSize(0) => offset!
     (not found! and offset! + (filter -> len) <= length) -> while {
@@ -73,32 +73,32 @@ containsText source: file.SourceText, start: UIntSize, length: UIntSize, filter:
         UIntSize(0) => index!
         (equal! and index! < (filter -> len)) -> while {
             (source -> byte(start + offset! + index!)) != (filter -> byte(index!)) -> if { false => equal! }
-            index! + UIntSize(1) => index!
+            index! + 1 => index!
         }
         equal! -> if { true => found! }
-        offset! + UIntSize(1) => offset!
+        offset! + 1 => offset!
     }
     found!
 }
 
 isTestName source: file.SourceText, start: UIntSize, length: UIntSize -> Bool {
-    length >= UIntSize(5) -> if {
-        ((source -> byte(start)) == UInt8(116)
-            and (source -> byte(start + UIntSize(1))) == UInt8(101)
-            and (source -> byte(start + UIntSize(2))) == UInt8(115)
-            and (source -> byte(start + UIntSize(3))) == UInt8(116)
-            and (source -> byte(start + UIntSize(4))) == UInt8(95))
+    length >= 5 -> if {
+        ((source -> byte(start)) == 116
+            and (source -> byte(start + 1)) == 101
+            and (source -> byte(start + 2)) == 115
+            and (source -> byte(start + 3)) == 116
+            and (source -> byte(start + 4)) == 95)
     } else { false }
 }
 
 qualifiedContains source: file.SourceText, moduleStart: UIntSize, moduleLength: UIntSize, nameStart: UIntSize, nameLength: UIntSize, filter: Text -> Bool {
     [UInt8; ~] => bytes!
     source -> appendSourceTo(bytes!, moduleStart, moduleLength)
-    moduleLength > UIntSize(0) -> if { bytes! -> push(UInt8(46)) }
+    moduleLength > 0 -> if { bytes! -> push(46) }
     source -> appendSourceTo(bytes!, nameStart, nameLength)
     UIntSize(bytes! -> len) => qualifiedLength
-    bytes! -> file.borrowBytes => qualified!
-    qualified! -> containsText(UIntSize(0), qualifiedLength, filter)
+    bytes! -> file.borrowBytes => qualified
+    qualified -> containsText(0, qualifiedLength, filter)
 }
 
 qualifiedLengthAt prepared: ref semanticContext.SemanticSnapshot, moduleIndex: Int, nameTokenIndex: Int -> UIntSize {
@@ -106,7 +106,7 @@ qualifiedLengthAt prepared: ref semanticContext.SemanticSnapshot, moduleIndex: I
     prepared.package.ranges[moduleIdentity.sourceIndex] => range
     prepared.package.tokens[range.tokenStart + nameTokenIndex] => nameToken
     moduleIdentity.pathLength + nameToken.span.length => length!
-    moduleIdentity.pathLength > UIntSize(0) -> if { length! + UIntSize(1) => length! }
+    moduleIdentity.pathLength > 0 -> if { length! + 1 => length! }
     length!
 }
 
@@ -114,13 +114,13 @@ qualifiedByteAt prepared: ref semanticContext.SemanticSnapshot, moduleIndex: Int
     prepared.modules[moduleIndex] => moduleIdentity
     prepared.package.ranges[moduleIdentity.sourceIndex] => range
     prepared.package.tokens[range.tokenStart + nameTokenIndex] => nameToken
-    moduleIdentity.pathLength > UIntSize(0) -> if {
+    moduleIdentity.pathLength > 0 -> if {
         offset < moduleIdentity.pathLength -> if {
             prepared.package.sources[moduleIdentity.sourceIndex] -> byte(moduleIdentity.pathStart + offset) => value
             value -> return
         }
-        offset == moduleIdentity.pathLength -> if { UInt8(46) -> return }
-        prepared.package.sources[moduleIdentity.sourceIndex] -> byte(nameToken.span.start + offset - moduleIdentity.pathLength - UIntSize(1)) => value
+        offset == moduleIdentity.pathLength -> if { 46 -> return }
+        prepared.package.sources[moduleIdentity.sourceIndex] -> byte(nameToken.span.start + offset - moduleIdentity.pathLength - 1) => value
         value -> return
     }
     prepared.package.sources[moduleIdentity.sourceIndex] -> byte(nameToken.span.start + offset)
@@ -137,7 +137,7 @@ compareQualified prepared: ref semanticContext.SemanticSnapshot, leftModule: Int
         prepared -> qualifiedByteAt(rightModule, rightNameToken, index!) => right
         left < right -> if { -1 -> return }
         left > right -> if { 1 -> return }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     leftLength < rightLength -> if { -1 -> return }
     leftLength > rightLength -> if { 1 -> return }
@@ -178,7 +178,7 @@ printQualified prepared: ref semanticContext.SemanticSnapshot, moduleIndex: Int,
     prepared.modules[moduleIndex] => moduleIdentity
     prepared.package.ranges[moduleIdentity.sourceIndex] => range
     prepared.package.tokens[range.tokenStart + nameTokenIndex] => nameToken
-    moduleIdentity.pathLength > UIntSize(0) -> if {
+    moduleIdentity.pathLength > 0 -> if {
         prepared.package.sources[moduleIdentity.sourceIndex] -> slice(moduleIdentity.pathStart, moduleIdentity.pathLength) -> print
         "." -> print
     }
@@ -186,7 +186,7 @@ printQualified prepared: ref semanticContext.SemanticSnapshot, moduleIndex: Int,
 }
 
 public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPlan uses Console, File {
-    paths -> semanticContext.prepareFiles => prepared!
+    paths -> semanticContext.prepareFiles => prepared
     [Int; ~] => sourceIndices!
     [Int; ~] => symbolIndices!
     [Int; ~] => moduleIndices!
@@ -198,50 +198,50 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
     0 => status!
     0 => sourceIndex!
     sourceIndex! < candidateSourceCount -> while {
-        prepared!.package.ranges[sourceIndex!] => range
+        prepared.package.ranges[sourceIndex!] => range
         0 => moduleIndex!
         0 => moduleSearch!
-        moduleSearch! < (prepared!.modules -> len) -> while {
-            prepared!.modules[moduleSearch!].sourceIndex == sourceIndex! -> if { moduleSearch! => moduleIndex! }
+        moduleSearch! < (prepared.modules -> len) -> while {
+            prepared.modules[moduleSearch!].sourceIndex == sourceIndex! -> if { moduleSearch! => moduleIndex! }
             moduleSearch! + 1 => moduleSearch!
         }
         0 => symbolIndex!
         symbolIndex! < range.symbolCount -> while {
-            prepared!.package.symbols[range.symbolStart + symbolIndex!] => function
+            prepared.package.symbols[range.symbolStart + symbolIndex!] => function
             (function.kind == 7 and function.parent < 0 and function.nameToken >= 0) -> if {
                 availableSourceIndices! -> push(sourceIndex!)
                 availableSymbolIndices! -> push(symbolIndex!)
                 availableModuleIndices! -> push(moduleIndex!)
                 availableNameTokenIndices! -> push(function.nameToken)
-                prepared!.package.tokens[range.tokenStart + function.nameToken] => nameToken
-                prepared!.package.sources[sourceIndex!] -> isTestName(nameToken.span.start, nameToken.span.length) -> if {
+                prepared.package.tokens[range.tokenStart + function.nameToken] => nameToken
+                prepared.package.sources[sourceIndex!] -> isTestName(nameToken.span.start, nameToken.span.length) -> if {
                     false => generic!
                     false => parameter!
                     0 => childIndex!
                     childIndex! < range.symbolCount -> while {
-                        prepared!.package.symbols[range.symbolStart + childIndex!] => child
+                        prepared.package.symbols[range.symbolStart + childIndex!] => child
                         (child.parent == symbolIndex! and child.kind == 32) -> if { true => generic! }
                         (child.parent == symbolIndex! and child.kind == 35) -> if { true => parameter! }
                         childIndex! + 1 => childIndex!
                     }
                     function.typeNode => resultNode!
                     function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => resultNode! }
-                    prepared!.package.nodes[range.astStart + resultNode!] => resultType
-                    prepared!.package.sources[sourceIndex!] -> matchesText(resultType.start, resultType.length, "Bool") => returnsBool
+                    prepared.package.nodes[range.astStart + resultNode!] => resultType
+                    prepared.package.sources[sourceIndex!] -> matchesText(resultType.start, resultType.length, "Bool") => returnsBool
                     (generic! or parameter! or function.secondaryTypeNode >= 0 or function.blockNameToken >= 0 or not returnsBool or (function.flags / 128 % 2) == 1) -> if {
                         "sollang: test function '" -> print
-                        prepared!.modules[moduleIndex!] => moduleIdentity
-                        moduleIdentity.pathLength > UIntSize(0) -> if {
-                            prepared!.package.sources[sourceIndex!] -> slice(moduleIdentity.pathStart, moduleIdentity.pathLength) -> print
+                        prepared.modules[moduleIndex!] => moduleIdentity
+                        moduleIdentity.pathLength > 0 -> if {
+                            prepared.package.sources[sourceIndex!] -> slice(moduleIdentity.pathStart, moduleIdentity.pathLength) -> print
                             "." -> print
                         }
-                        prepared!.package.sources[sourceIndex!] -> slice(nameToken.span.start, nameToken.span.length) -> print
+                        prepared.package.sources[sourceIndex!] -> slice(nameToken.span.start, nameToken.span.length) -> print
                         "' must be a non-generic, zero-input, non-intrinsic function returning Bool" -> println
                         1 => status!
                     } else {
-                        prepared!.modules[moduleIndex!] => moduleIdentity
-                        prepared!.package.sources[sourceIndex!] -> qualifiedContains(moduleIdentity.pathStart, moduleIdentity.pathLength, nameToken.span.start, nameToken.span.length, filter) => selected!
-                        (filter -> len) == UIntSize(0) -> if { true => selected! }
+                        prepared.modules[moduleIndex!] => moduleIdentity
+                        prepared.package.sources[sourceIndex!] -> qualifiedContains(moduleIdentity.pathStart, moduleIdentity.pathLength, nameToken.span.start, nameToken.span.length, filter) => selected!
+                        (filter -> len) == 0 -> if { true => selected! }
                         selected! -> if {
                             sourceIndices! -> push(sourceIndex!)
                             symbolIndices! -> push(symbolIndex!)
@@ -256,12 +256,12 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         sourceIndex! + 1 => sourceIndex!
     }
 
-    prepared! -> sortQualified(availableSourceIndices!, availableSymbolIndices!, availableModuleIndices!, availableNameTokenIndices!)
-    prepared! -> sortQualified(sourceIndices!, symbolIndices!, moduleIndices!, nameTokenIndices!)
+    prepared -> sortQualified(availableSourceIndices!, availableSymbolIndices!, availableModuleIndices!, availableNameTokenIndices!)
+    prepared -> sortQualified(sourceIndices!, symbolIndices!, moduleIndices!, nameTokenIndices!)
     (status! == 0 and (sourceIndices! -> len) > 1) -> if {
         1 => selectedIndex!
         selectedIndex! < (sourceIndices! -> len) -> while {
-            prepared! -> compareQualified(moduleIndices![selectedIndex! - 1], nameTokenIndices![selectedIndex! - 1], moduleIndices![selectedIndex!], nameTokenIndices![selectedIndex!]) => ordering
+            prepared -> compareQualified(moduleIndices![selectedIndex! - 1], nameTokenIndices![selectedIndex! - 1], moduleIndices![selectedIndex!], nameTokenIndices![selectedIndex!]) => ordering
             ordering == 0 -> if {
                 "sollang: test names must be unique after module qualification" -> println
                 1 => status!
@@ -271,7 +271,7 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
     }
 
     (status! == 0 and (sourceIndices! -> len) == 0) -> if {
-        (filter -> len) > UIntSize(0) -> if {
+        (filter -> len) > 0 -> if {
             "sollang: no tests matched filter '$filter'" -> println
         } else {
             "sollang: no tests found; declare a zero-input Bool function whose name starts with 'test_'" -> print
@@ -280,7 +280,7 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
                 0 => availableIndex!
                 availableIndex! < (availableModuleIndices! -> len) -> while {
                     availableIndex! > 0 -> if { ", " -> print }
-                    prepared! -> printQualified(availableModuleIndices![availableIndex!], availableNameTokenIndices![availableIndex!])
+                    prepared -> printQualified(availableModuleIndices![availableIndex!], availableNameTokenIndices![availableIndex!])
                     availableIndex! + 1 => availableIndex!
                 }
             }
@@ -295,21 +295,21 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         [Int; ~] => testAliasIndices!
         0 => aliasTestIndex!
         aliasTestIndex! < (moduleIndices! -> len) -> while {
-            prepared!.modules[moduleIndices![aliasTestIndex!]] => moduleIdentity
+            prepared.modules[moduleIndices![aliasTestIndex!]] => moduleIdentity
             -1 => aliasIndex!
-            moduleIdentity.pathLength > UIntSize(0) -> if {
+            moduleIdentity.pathLength > 0 -> if {
                 0 => uniqueIndex!
                 uniqueIndex! < (uniqueModuleIndices! -> len) -> while {
-                    prepared!.modules[uniqueModuleIndices![uniqueIndex!]] => uniqueModule
+                    prepared.modules[uniqueModuleIndices![uniqueIndex!]] => uniqueModule
                     moduleIdentity.pathLength == uniqueModule.pathLength => sameModule!
                     UIntSize(0) => moduleByte!
                     (sameModule! and moduleByte! < moduleIdentity.pathLength) -> while {
-                        prepared!.package.sources[moduleIdentity.sourceIndex] -> byte(moduleIdentity.pathStart + moduleByte!) => modulePathByte
-                        prepared!.package.sources[uniqueModule.sourceIndex] -> byte(uniqueModule.pathStart + moduleByte!) => uniqueModulePathByte
+                        prepared.package.sources[moduleIdentity.sourceIndex] -> byte(moduleIdentity.pathStart + moduleByte!) => modulePathByte
+                        prepared.package.sources[uniqueModule.sourceIndex] -> byte(uniqueModule.pathStart + moduleByte!) => uniqueModulePathByte
                         modulePathByte != uniqueModulePathByte -> if {
                             false => sameModule!
                         }
-                        moduleByte! + UIntSize(1) => moduleByte!
+                        moduleByte! + 1 => moduleByte!
                     }
                     sameModule! -> if { uniqueIndex! => aliasIndex! }
                     uniqueIndex! + 1 => uniqueIndex!
@@ -327,9 +327,9 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         harness! -> appendNewline
         0 => importIndex!
         importIndex! < (uniqueModuleIndices! -> len) -> while {
-            prepared!.modules[uniqueModuleIndices![importIndex!]] => moduleIdentity
+            prepared.modules[uniqueModuleIndices![importIndex!]] => moduleIdentity
             harness! -> appendText("import ")
-            prepared!.package.sources[moduleIdentity.sourceIndex] -> appendSourceTo(harness!, moduleIdentity.pathStart, moduleIdentity.pathLength)
+            prepared.package.sources[moduleIdentity.sourceIndex] -> appendSourceTo(harness!, moduleIdentity.pathStart, moduleIdentity.pathLength)
             harness! -> appendText(" as test_module_")
             harness! -> appendInt(importIndex!)
             harness! -> appendNewline
@@ -350,26 +350,26 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         harness! -> appendNewline
         0 => harnessTestIndex!
         harnessTestIndex! < (sourceIndices! -> len) -> while {
-            prepared!.package.ranges[sourceIndices![harnessTestIndex!]] => range
-            prepared!.package.tokens[range.tokenStart + nameTokenIndices![harnessTestIndex!]] => nameToken
-            prepared!.modules[moduleIndices![harnessTestIndex!]] => moduleIdentity
+            prepared.package.ranges[sourceIndices![harnessTestIndex!]] => range
+            prepared.package.tokens[range.tokenStart + nameTokenIndices![harnessTestIndex!]] => nameToken
+            prepared.modules[moduleIndices![harnessTestIndex!]] => moduleIdentity
             harness! -> appendText("    ")
             testAliasIndices![harnessTestIndex!] >= 0 -> if {
                 harness! -> appendText("test_module_")
                 harness! -> appendInt(testAliasIndices![harnessTestIndex!])
                 harness! -> appendText(".")
             }
-            prepared!.package.sources[sourceIndices![harnessTestIndex!]] -> appendSourceTo(harness!, nameToken.span.start, nameToken.span.length)
+            prepared.package.sources[sourceIndices![harnessTestIndex!]] -> appendSourceTo(harness!, nameToken.span.start, nameToken.span.length)
             harness! -> appendText("() -> if {")
             harness! -> appendNewline
             harness! -> appendText("        ")
             harness! -> appendQuote
             harness! -> appendText("test ")
-            moduleIdentity.pathLength > UIntSize(0) -> if {
-                prepared!.package.sources[moduleIdentity.sourceIndex] -> appendSourceTo(harness!, moduleIdentity.pathStart, moduleIdentity.pathLength)
+            moduleIdentity.pathLength > 0 -> if {
+                prepared.package.sources[moduleIdentity.sourceIndex] -> appendSourceTo(harness!, moduleIdentity.pathStart, moduleIdentity.pathLength)
                 harness! -> appendText(".")
             }
-            prepared!.package.sources[sourceIndices![harnessTestIndex!]] -> appendSourceTo(harness!, nameToken.span.start, nameToken.span.length)
+            prepared.package.sources[sourceIndices![harnessTestIndex!]] -> appendSourceTo(harness!, nameToken.span.start, nameToken.span.length)
             harness! -> appendText(" ... ok")
             harness! -> appendQuote
             harness! -> appendText(" -> println")
@@ -379,11 +379,11 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
             harness! -> appendText("        ")
             harness! -> appendQuote
             harness! -> appendText("test ")
-            moduleIdentity.pathLength > UIntSize(0) -> if {
-                prepared!.package.sources[moduleIdentity.sourceIndex] -> appendSourceTo(harness!, moduleIdentity.pathStart, moduleIdentity.pathLength)
+            moduleIdentity.pathLength > 0 -> if {
+                prepared.package.sources[moduleIdentity.sourceIndex] -> appendSourceTo(harness!, moduleIdentity.pathStart, moduleIdentity.pathLength)
                 harness! -> appendText(".")
             }
-            prepared!.package.sources[sourceIndices![harnessTestIndex!]] -> appendSourceTo(harness!, nameToken.span.start, nameToken.span.length)
+            prepared.package.sources[sourceIndices![harnessTestIndex!]] -> appendSourceTo(harness!, nameToken.span.start, nameToken.span.length)
             harness! -> appendText(" ... FAILED")
             harness! -> appendQuote
             harness! -> appendText(" -> println")
@@ -397,11 +397,11 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         harness! -> appendText("    ")
         harness! -> appendQuote
         harness! -> appendText("test result: ")
-        harness! -> push(UInt8(36))
+        harness! -> push(36)
         harness! -> appendText("(")
         harness! -> appendInt(sourceIndices! -> len)
         harness! -> appendText(" - failures!) passed; ")
-        harness! -> push(UInt8(36))
+        harness! -> push(36)
         harness! -> appendText("(failures!) failed")
         harness! -> appendQuote
         harness! -> appendText(" -> println")
@@ -417,6 +417,6 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         sourceIndices: sourceIndices!
         symbolIndices: symbolIndices!
         harness: harness!
-    } => plan!
-    plan!
+    } => plan
+    plan
 }

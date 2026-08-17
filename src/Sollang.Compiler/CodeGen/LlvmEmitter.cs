@@ -18,6 +18,8 @@ internal sealed partial class LlvmEmitter
     private readonly bool _usesAsync;
     private readonly bool _usesAsyncFile;
     private bool _usesDirectoryTraversal;
+    private readonly bool _usesNetwork;
+    private readonly bool _usesSecureRandom;
     private readonly bool _usesParallel;
     private readonly bool _usesMouseEvents;
     private readonly bool _usesConcurrentStreamJoins;
@@ -72,6 +74,10 @@ internal sealed partial class LlvmEmitter
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _standaloneStandardLibraryFunctions =
         new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundFunction> _reachableFunctions =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundFunction> _usedNativeFunctions =
+        new(ReferenceEqualityComparer.Instance);
     private readonly List<BoundFunction> _inlineFunctionStack = [];
     private StackFramePlan _currentStackFramePlan = StackFramePlan.Empty;
     private RuntimeBlockInvocation? _currentBlockInvocation;
@@ -80,6 +86,7 @@ internal sealed partial class LlvmEmitter
     private BoundFunction? _currentFunction;
     private IReadOnlyDictionary<string, BoundFunction> _currentFunctions;
     private int _stringId;
+    private int _staticDataId;
     private int _tempId;
     private int _labelId;
     private string _activeUnitToken = "prefix";
@@ -102,25 +109,25 @@ internal sealed partial class LlvmEmitter
         _currentFunctions = program.Functions;
         RecordFunctionScopes(program.Functions.Values, program.Functions);
         CollectStandaloneStandardLibraryFunctions();
+        CollectReachableDictionaryTraitFunctions();
         _usesProcessArguments = program.MainStatements.Any(UsesProcessArguments)
-            || EnumerateEmittableFunctions(program.Functions.Values)
-                .Where(function => !function.IsStandardLibrary)
+            || _reachableFunctions
                 .Any(function =>
                     (function.Body is not null && UsesProcessArguments(function.Body))
                     || function.BlockBody.Any(UsesProcessArguments));
         _usesProcessEnvironment = program.MainStatements.Any(UsesProcessEnvironment)
-            || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
+            || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesProcessEnvironment(function.Body))
                 || function.BlockBody.Any(UsesProcessEnvironment));
         _usesChildProcesses = program.MainStatements.Any(UsesChildProcess)
-            || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
+            || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesChildProcess(function.Body))
                 || function.BlockBody.Any(UsesChildProcess));
         _usesProcessExit = program.MainStatements.Any(UsesProcessExit)
-            || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
+            || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesProcessExit(function.Body))
                 || function.BlockBody.Any(UsesProcessExit));
-        _usesAsyncFile = program.ResolvedGenericCalls.Values.Any(function =>
+        _usesAsyncFile = _reachableFunctions.Any(function =>
             function.Kind is BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
                 or BoundFunctionKind.RuntimeSyncFileAsync
@@ -139,15 +146,29 @@ internal sealed partial class LlvmEmitter
             join.Policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Latest
             && join.Inputs.Any(static input => input.IsEvent));
         _usesRangeStreams = program.MainStatements.Any(UsesRangeStream)
-            || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
+            || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesRangeStream(function.Body))
                 || function.BlockBody.Any(UsesRangeStream));
-        _usesStandardError = program.ResolvedGenericCalls.Values.Any(
+        _usesStandardError = _reachableFunctions.Any(
             static function => function.Kind == BoundFunctionKind.RuntimePrintErrorLine);
-        _usesAsync = program.Functions.Values.Any(function => function.IsAsync && !function.IsStandardLibrary)
+        _usesNetwork = _reachableFunctions.Any(static function =>
+            function.Kind is BoundFunctionKind.RuntimeSocketListen
+                or BoundFunctionKind.RuntimeSocketAccept
+                or BoundFunctionKind.RuntimeSocketConnect
+                or BoundFunctionKind.RuntimeSocketReceive
+                or BoundFunctionKind.RuntimeSocketSend
+                or BoundFunctionKind.RuntimeSocketSendText
+                or BoundFunctionKind.RuntimeSocketShutdown
+                or BoundFunctionKind.RuntimeSocketBindDatagram
+                or BoundFunctionKind.RuntimeSocketLocalPort
+                or BoundFunctionKind.RuntimeSocketSendTo
+                or BoundFunctionKind.RuntimeSocketReceiveFrom);
+        _usesSecureRandom = _reachableFunctions.Any(static function =>
+            function.Kind == BoundFunctionKind.RuntimeSecureRandomBytes);
+        _usesAsync = _reachableFunctions.Any(function => function.IsAsync)
             || _usesAsyncFile
             || program.MainStatements.Any(UsesRuntimeSleep)
-            || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
+            || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesRuntimeSleep(function.Body))
                 || function.BlockBody.Any(UsesRuntimeSleep));
         _platform.UsesAsyncFile = _usesAsyncFile;
@@ -155,6 +176,8 @@ internal sealed partial class LlvmEmitter
         _platform.UsesProcessExit = _usesProcessExit;
         _platform.UsesComputePool = _usesParallel;
         _platform.UsesDirectoryTraversal = _usesDirectoryTraversal;
+        _platform.UsesNetwork = _usesNetwork;
+        _platform.UsesSecureRandom = _usesSecureRandom;
         _platform.UsesMouseEvents = _usesMouseEvents;
         _platform.UsesConcurrentStreamJoins = _usesConcurrentStreamJoins;
         _platform.UsesStandardError = _usesStandardError;
@@ -635,6 +658,16 @@ internal sealed partial class LlvmEmitter
         {
             throw new SollangException("directory traversal is unavailable on the current target");
         }
+        if (_usesNetwork && !_platform.SupportsNetwork)
+        {
+            throw new SollangException(
+                "network sockets are unavailable on wasm32-browser; use a host-provided networking adapter");
+        }
+        if (_usesSecureRandom && !_platform.SupportsSecureRandom)
+        {
+            throw new SollangException(
+                "cryptographic random bytes are unavailable on wasm32-browser; use a host-provided cryptographic random source");
+        }
         if (_usesConcurrentStreamJoins && !_platform.SupportsConcurrentStreamJoins)
         {
             throw new SollangException(
@@ -678,6 +711,7 @@ internal sealed partial class LlvmEmitter
             %sollang.file_int_result = type { i64, i32 }
             %sollang.file_count_result = type { i64, i32 }
             %sollang.file_handle_result = type { i64, i32 }
+            %sollang.socket_result = type { i64, i32, i32 }
             %sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
             %sollang.environment_result = type { ptr, i64, i1, i1 }
             %sollang.process_result = type { i32, i32 }
@@ -746,6 +780,14 @@ internal sealed partial class LlvmEmitter
         EmitNativeDeclarations();
         EmitComDeclarations();
         EmitPlatformFunctionBlock(_platform.EmitMemoryDeclarations);
+        if (_usesNetwork)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitSocketPrimitives);
+        }
+        if (_usesSecureRandom)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitSecureRandomPrimitives);
+        }
         if (_usesConcurrentStreamJoins)
         {
             EmitPlatformFunctionBlock(_platform.EmitConcurrentStreamJoinPrimitives);
@@ -788,7 +830,7 @@ internal sealed partial class LlvmEmitter
         {
             var identity = group.Identity;
             var cacheKey = reuse is not null && reuse.ModuleKeys.TryGetValue(identity, out var plannedKey)
-                ? plannedKey
+                ? RefineModuleCacheKey(plannedKey, group)
                 : default;
             if (reuse is not null
                 && reuse.TryGet(LlvmCodegenUnitKind.Module, identity, cacheKey, out var reusedModule))
@@ -836,7 +878,7 @@ internal sealed partial class LlvmEmitter
         return new LlvmCodegenOutput(units);
     }
 
-    private static bool TryCreateFullyReusedOutput(
+    private bool TryCreateFullyReusedOutput(
         LlvmCodegenReuse reuse,
         IReadOnlyList<ModuleFunctionGroup> moduleGroups,
         out LlvmCodegenOutput output)
@@ -859,8 +901,13 @@ internal sealed partial class LlvmEmitter
             Reused: true));
         foreach (var group in moduleGroups)
         {
-            if (!reuse.ModuleKeys.TryGetValue(group.Identity, out var cacheKey)
-                || !reuse.TryGet(
+            if (!reuse.ModuleKeys.TryGetValue(group.Identity, out var plannedKey))
+            {
+                output = null!;
+                return false;
+            }
+            var cacheKey = RefineModuleCacheKey(plannedKey, group);
+            if (!reuse.TryGet(
                     LlvmCodegenUnitKind.Module,
                     group.Identity,
                     cacheKey,
@@ -895,12 +942,18 @@ internal sealed partial class LlvmEmitter
         return true;
     }
 
+    private LlvmCodegenKey RefineModuleCacheKey(
+        LlvmCodegenKey plannedKey,
+        ModuleFunctionGroup group) => plannedKey.WithEmissionSet(
+        group.Functions.Select(function => _program.StableFunctionIdentities[function]));
+
     private void BeginUnit(string token)
     {
         _activeGlobals = new MemoryOutputSink();
         _activeFunctions = new MemoryOutputSink();
         _activeUnitToken = token;
         _stringId = 0;
+        _staticDataId = 0;
         _tempId = 0;
         _labelId = 0;
     }

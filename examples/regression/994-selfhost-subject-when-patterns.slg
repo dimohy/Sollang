@@ -1,0 +1,112 @@
+import regression.imported_frame as imported
+
+choose: -> Result<Bool, Text> => Result<Bool, Text>.Ok(true)
+
+enum Frame {
+    Ping
+    Padding(Int)
+}
+
+struct Holder {
+    id: UInt64
+}
+
+enum Outer {
+    Value(Holder)
+}
+
+check frame: Frame -> Text {
+    "0" => value!
+    frame -> when {
+        Ping { "1" => value! }
+        Padding(count) {}
+    }
+    value!
+}
+
+consumeFrames frames: mut [Frame; ~] -> Bool {
+    0 => total!
+    (frames -> len) > 0 -> while {
+        frames -> take(0) -> when {
+            Ping { total! + 1 => total! }
+            Padding(count) { total! + count => total! }
+        }
+    }
+    total! == 5
+}
+
+three: -> Int => 3
+three64: -> UInt64 => 3
+
+classify value: Int -> Text {
+    value -> when {
+        == three() { "30" }
+        < 3 { "20" }
+        else { "10" }
+    }
+}
+
+classifyMember holder: Holder -> Text {
+    holder.id -> when {
+        == three64() { "member" }
+        else { "other" }
+    }
+}
+
+classifyNested outer: Outer -> Text {
+    "none" => value!
+    outer -> when {
+        Value(holder) {
+            holder.id -> when {
+                == three64() { "nested" => value! }
+                else {}
+            }
+        }
+    }
+    value!
+}
+
+classifyImported frame: imported.Frame -> Text {
+    "none" => value!
+    frame -> when {
+        Stream(payload) {
+            payload.id == 3 -> if { "imported" => value! }
+        }
+    }
+    value!
+}
+
+consumeImported frames: mut [imported.Frame; ~] -> Text {
+    "none" => value!
+    frames -> take(0) -> when {
+        Stream(payload) {
+            payload.id == 3 -> if { "taken" => value! }
+        }
+    }
+    value!
+}
+
+main {
+    choose() -> when {
+        Ok(valid) {
+            valid -> if { "7" } else { "0" } -> println
+        }
+        Err(error) { error -> println }
+    }
+    Frame.Ping -> check -> println
+    Frame.Padding(3) -> check -> println
+    [Frame; ~] => frames!
+    frames! -> push(Frame.Ping)
+    frames! -> push(Frame.Padding(4))
+    consumeFrames(frames!) => drained
+    drained -> if { "5" } else { "0" } -> println
+    3 -> classify -> println
+    2 -> classify -> println
+    4 -> classify -> println
+    Holder { id: 3 } -> classifyMember -> println
+    Outer.Value(Holder { id: 3 }) -> classifyNested -> println
+    imported.Frame.Stream(imported.Payload { id: 3 }) -> classifyImported -> println
+    [imported.Frame; ~] => importedFrames!
+    importedFrames! -> push(imported.Frame.Stream(imported.Payload { id: 3 }))
+    consumeImported(importedFrames!) -> println
+}

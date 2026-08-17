@@ -1,0 +1,27 @@
+import sys.quic.packet_number as packetNumber
+import sys.quic.error as errors
+
+check: -> Result<Bool, errors.Error> {
+    packetNumber.restore(2_821_665_003, 39_730, 2)? => restored
+    packetNumber.selectLength(1_001, true, 1_000) => oneByte
+    packetNumber.selectLength(33_768, true, 1_000) => threeBytes
+    packetNumber.selectLength(1_001, false, 0) => firstFlight
+    packetNumber.truncate(2_821_692_210, 2)? => truncated
+    Result<Bool, errors.Error>.Ok(restored == 2_821_692_210
+        and oneByte == 1
+        and threeBytes == 3
+        and firstFlight == 4
+        and truncated.value == 39_730
+        and truncated.byteCount == 2)
+}
+
+main {
+    check() -> when {
+        Ok(matches) { matches }
+        Err(failure) { false }
+    } -> if {
+        "quic-packet-number=ok"
+    } else {
+        "quic-packet-number=failed"
+    } -> println
+}

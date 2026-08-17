@@ -1,0 +1,31 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        highNibble value: UInt8 -> UInt16 => UInt16(value) / 16
+
+        main {
+            255 -> highNibble -> println
+        }
+        """; ~
+    ] -> typedIr.lower => ir
+    -1 => functionTypeId!
+    -1 => callTypeId!
+    false => binaryWidthContract!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.kind == 0 and node.symbol == 0) -> if { node.typeId => functionTypeId! }
+        (node.kind == 6 and node.symbol == 0) -> if { node.typeId => callTypeId! }
+        (node.kind == 8 and node.operand0 >= 0 and node.operand1 >= 0) -> if {
+            (node.typeId == ir[node.operand0].typeId and node.typeId == ir[node.operand1].typeId) -> if { true => binaryWidthContract! }
+        }
+        index! + 1 => index!
+    }
+    (functionTypeId! >= 0 and functionTypeId! == callTypeId! and binaryWidthContract!) -> if {
+        "call-result-type-contract=true"
+    } else {
+        "call-result-type-contract=false"
+    } -> println
+}

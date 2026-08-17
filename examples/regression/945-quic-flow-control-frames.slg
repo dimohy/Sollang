@@ -1,0 +1,76 @@
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+
+verifyMaxData: -> Result<Bool, errors.Error> {
+    frames.Value.MaxData(65_537) -> frame.encode? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        MaxData(maximum) { Result<Bool, errors.Error>.Ok(maximum == 65_537 and decoded.nextOffset == UIntSize(encoded -> len)) }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+verifyMaxStreamData: -> Result<Bool, errors.Error> {
+    frames.Value.MaxStreamData(frames.MaxStreamData { id: 4, maximum: 90_000 }) -> frame.encode? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        MaxStreamData(limit) { Result<Bool, errors.Error>.Ok(limit.id == 4 and limit.maximum == 90_000) }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+verifyMaxStreams: -> Result<Bool, errors.Error> {
+    frames.Value.MaxStreams(frames.MaxStreams { bidirectional: false, maximum: 17 }) -> frame.encode? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        MaxStreams(limit) { Result<Bool, errors.Error>.Ok(not limit.bidirectional and limit.maximum == 17) }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+verifyDataBlocked: -> Result<Bool, errors.Error> {
+    frames.Value.DataBlocked(70_000) -> frame.encode? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        DataBlocked(limit) { Result<Bool, errors.Error>.Ok(limit == 70_000) }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+verifyStreamDataBlocked: -> Result<Bool, errors.Error> {
+    frames.Value.StreamDataBlocked(frames.StreamDataBlocked { id: 8, limit: 80_000 }) -> frame.encode? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        StreamDataBlocked(blocked) { Result<Bool, errors.Error>.Ok(blocked.id == 8 and blocked.limit == 80_000) }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+verifyStreamsBlocked: -> Result<Bool, errors.Error> {
+    frames.Value.StreamsBlocked(frames.StreamsBlocked { bidirectional: true, limit: 33 }) -> frame.encode? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        StreamsBlocked(blocked) { Result<Bool, errors.Error>.Ok(blocked.bidirectional and blocked.limit == 33) }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+run: -> Result<Bool, errors.Error> {
+    verifyMaxData()? => maxData
+    verifyMaxStreamData()? => maxStreamData
+    verifyMaxStreams()? => maxStreams
+    verifyDataBlocked()? => dataBlocked
+    verifyStreamDataBlocked()? => streamDataBlocked
+    verifyStreamsBlocked()? => streamsBlocked
+    Result<Bool, errors.Error>.Ok(
+        maxData and maxStreamData and maxStreams
+            and dataBlocked and streamDataBlocked and streamsBlocked)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "flow-control-frames=ok" } else { "flow-control-frames=failed" } -> println }
+        Err(error) { "flow-control-frames-error=$(error.code)" -> println }
+    }
+}

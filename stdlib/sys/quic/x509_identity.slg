@@ -1,0 +1,62 @@
+namespace sys.quic.x509_identity
+
+import sys.crypto.ed25519
+import sys.quic.error as errors
+
+error code: UInt64 -> errors.Error => errors.Error { kind: errors.Kind.Tls, code: code }
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+# The certificate is a compact self-signed Ed25519 leaf for the pinned peer
+# name used by the native QUIC API. Its fixed-width public key and signature
+# keep the DER lengths static; only the two cryptographic fields are generated.
+tbsBeforePublicKey: -> [UInt8] => [
+    48, 129, 203, 160, 3, 2, 1, 2, 2, 1, 1, 48, 5, 6, 3, 43, 101, 112,
+    48, 23, 49, 21, 48, 19, 6, 3, 85, 4, 3, 12, 12,
+    115, 111, 108, 108, 97, 110, 103, 45, 112, 101, 101, 114,
+    48, 30, 23, 13, 50, 48, 48, 49, 48, 49, 48, 48, 48, 48, 48, 48, 90,
+    23, 13, 52, 57, 49, 50, 51, 49, 50, 51, 53, 57, 53, 57, 90,
+    48, 23, 49, 21, 48, 19, 6, 3, 85, 4, 3, 12, 12,
+    115, 111, 108, 108, 97, 110, 103, 45, 112, 101, 101, 114,
+    48, 42, 48, 5, 6, 3, 43, 101, 112, 3, 33, 0
+]
+
+tbsAfterPublicKey: -> [UInt8] => [
+    163, 60, 48, 58,
+    48, 23, 6, 3, 85, 29, 17, 4, 16, 48, 14, 130, 12,
+    115, 111, 108, 108, 97, 110, 103, 45, 112, 101, 101, 114,
+    48, 15, 6, 3, 85, 29, 19, 1, 1, 255, 4, 5, 48, 3, 1, 1, 255,
+    48, 14, 6, 3, 85, 29, 15, 1, 1, 255, 4, 4, 3, 2, 2, 132
+]
+
+signatureAlgorithm: -> [UInt8] => [48, 5, 6, 3, 43, 101, 112]
+
+public certificate seed: [UInt8; 32] -> Result<[UInt8; ~], errors.Error> {
+    ed25519.publicKey(seed) -> when {
+        Ok(publicKey) {
+            [UInt8; ~] => tbs!
+            tbs! -> appendBytes(tbsBeforePublicKey())
+            tbs! -> appendBytes(publicKey)
+            tbs! -> appendBytes(tbsAfterPublicKey())
+            ed25519.sign(seed, tbs!) -> when {
+                Ok(signature) {
+                    [UInt8; ~] => der!
+                    der! -> appendBytes([48, 130, 1, 24])
+                    der! -> appendBytes(tbs!)
+                    der! -> appendBytes(signatureAlgorithm())
+                    der! -> appendBytes([3, 65, 0])
+                    der! -> appendBytes(signature)
+                    Result<[UInt8; ~], errors.Error>.Ok(der!)
+                }
+                Err(signError) { Result<[UInt8; ~], errors.Error>.Err(error(80)) }
+            }
+        }
+        Err(keyError) { Result<[UInt8; ~], errors.Error>.Err(error(80)) }
+    }
+}

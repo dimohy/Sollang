@@ -1,0 +1,122 @@
+namespace sys.crypto.bits
+
+# Crypto code keeps bit manipulation explicit in Sollang until bitwise numeric
+# operators become part of the language contract. These functions intentionally
+# operate on fixed-width UInt32 values, whose arithmetic wraps modulo 2^32.
+public powerOfTwo exponent: UInt32 -> UInt32 {
+    UInt32(1) => value!
+    UInt32(0) => powerIndex!
+    powerIndex! < exponent -> while {
+        value! * 2 => value!
+        powerIndex! + 1 => powerIndex!
+    }
+    value!
+}
+
+public xor left: UInt32, right: UInt32 -> UInt32 {
+    UInt32(0) => result!
+    UInt32(1) => place!
+    UInt32(0) => bitIndex!
+    bitIndex! < 32 -> while {
+        (left / place!) % 2 => leftBit
+        (right / place!) % 2 => rightBit
+        leftBit != rightBit -> if { result! + place! => result! }
+        bitIndex! + 1 => bitIndex!
+        bitIndex! < 32 -> if { place! * 2 => place! }
+    }
+    result!
+}
+
+public and left: UInt32, right: UInt32 -> UInt32 {
+    UInt32(0) => result!
+    UInt32(1) => place!
+    UInt32(0) => bitIndex!
+    bitIndex! < 32 -> while {
+        ((left / place!) % 2 == 1
+            and (right / place!) % 2 == 1) -> if {
+            result! + place! => result!
+        }
+        bitIndex! + 1 => bitIndex!
+        bitIndex! < 32 -> if { place! * 2 => place! }
+    }
+    result!
+}
+
+public not value: UInt32 -> UInt32 {
+    4_294_967_295 - value
+}
+
+public shiftRight value: UInt32, count: UInt32 -> UInt32 {
+    value / (count -> powerOfTwo)
+}
+
+public rotateRight value: UInt32, count: UInt32 -> UInt32 {
+    count % 32 => normalized
+    normalized == 0 -> if { value } else {
+        normalized -> powerOfTwo => lowDivisor
+        32 - normalized -> powerOfTwo => highPlace
+        value / lowDivisor + (value % lowDivisor) * highPlace
+    }
+}
+
+# SHA-512 and signature algorithms operate on full UInt64 words. Keeping these
+# operations here gives crypto modules one auditable implementation until
+# native bitwise operators become part of the language surface.
+zero64: -> UInt64 => 0
+one64: -> UInt64 => 1
+
+public powerOfTwo64 exponent: UInt64 -> UInt64 {
+    one64() => value!
+    zero64() => powerIndex!
+    powerIndex! < exponent -> while {
+        value! * 2 => value!
+        powerIndex! + 1 => powerIndex!
+    }
+    value!
+}
+
+public xor64 left: UInt64, right: UInt64 -> UInt64 {
+    zero64() => result!
+    one64() => place!
+    zero64() => bitIndex!
+    bitIndex! < 64 -> while {
+        (left / place!) % 2 => leftBit
+        (right / place!) % 2 => rightBit
+        leftBit != rightBit -> if { result! + place! => result! }
+        bitIndex! + 1 => bitIndex!
+        bitIndex! < 64 -> if { place! * 2 => place! }
+    }
+    result!
+}
+
+public and64 left: UInt64, right: UInt64 -> UInt64 {
+    zero64() => result!
+    one64() => place!
+    zero64() => bitIndex!
+    bitIndex! < 64 -> while {
+        ((left / place!) % 2 == 1
+            and (right / place!) % 2 == 1) -> if {
+            result! + place! => result!
+        }
+        bitIndex! + 1 => bitIndex!
+        bitIndex! < 64 -> if { place! * 2 => place! }
+    }
+    result!
+}
+
+public not64 value: UInt64 -> UInt64 {
+    18_446_744_073_709_551_615 - value
+}
+
+public shiftRight64 value: UInt64, count: UInt64 -> UInt64 {
+    value / (count -> powerOfTwo64)
+}
+
+public rotateRight64 value: UInt64, count: UInt64 -> UInt64 {
+    count % 64 => normalized
+    normalized == 0 -> if { value } else {
+        normalized -> powerOfTwo64 => lowDivisor
+        64 - normalized -> powerOfTwo64 => highPlace
+        value / lowDivisor + (value % lowDivisor) * highPlace
+    }
+}

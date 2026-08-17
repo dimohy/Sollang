@@ -1,0 +1,99 @@
+namespace sys.crypto.x25519
+
+import sys.crypto.field25519 as field
+import sys.crypto.random as random
+
+scalarBit scalar: [UInt8], bitIndex: Int -> UInt64 {
+    bitIndex % 8 => withinByte
+    1 => divisor!
+    0 => index!
+    index! < withinByte -> while {
+        divisor! * 2 => divisor!
+        index! + 1 => index!
+    }
+    UInt64(scalar[bitIndex / 8]) / UInt64(divisor!) % 2
+}
+
+swapIf swap: UInt64, left: mut [UInt64; 16], right: mut [UInt64; 16] -> Unit {
+    1 - swap => keep
+    0 => index!
+    index! < 16 -> while {
+        left[index!] => leftValue
+        right[index!] => rightValue
+        leftValue * keep + rightValue * swap => left[index!]
+        rightValue * keep + leftValue * swap => right[index!]
+        index! + 1 => index!
+    }
+}
+
+public scalarMultiply privateScalar: [UInt8], coordinate: [UInt8] -> [UInt8; 32] {
+    field.byteZeros() => scalar!
+    0 => scalarIndex!
+    scalarIndex! < 32 -> while {
+        privateScalar[scalarIndex!] => scalar![scalarIndex!]
+        scalarIndex! + 1 => scalarIndex!
+    }
+    scalar![0] - scalar![0] % 8 => scalar![0]
+    scalar![31] % 64 + 64 => scalar![31]
+
+    coordinate -> field.decode => x1
+    field.one() => x2!
+    field.zeros() => z2!
+    coordinate -> field.decode => x3!
+    field.one() => z3!
+    UInt64(0) => swap!
+    254 => bitIndex!
+    bitIndex! >= 0 -> while {
+        scalarBit(scalar!, bitIndex!) => scalarValue
+        (swap! + scalarValue) % 2 => shouldSwap
+        swapIf(shouldSwap, x2!, x3!)
+        swapIf(shouldSwap, z2!, z3!)
+        scalarValue => swap!
+
+        field.add(x2!, z2!) => a
+        field.square(a) => aa
+        field.subtract(x2!, z2!) => b
+        field.square(b) => bb
+        field.subtract(aa, bb) => e
+        field.add(x3!, z3!) => c
+        field.subtract(x3!, z3!) => d
+        field.multiply(d, a) => da
+        field.multiply(c, b) => cb
+        field.add(da, cb) -> field.square => nextX3
+        field.subtract(da, cb) -> field.square -> field.multiply(x1) => nextZ3
+        field.multiply(aa, bb) => nextX2
+        e -> field.multiplySmall(121_665) -> field.add(aa) -> field.multiply(e) => nextZ2
+        x3! -> field.replace(nextX3)
+        z3! -> field.replace(nextZ3)
+        x2! -> field.replace(nextX2)
+        z2! -> field.replace(nextZ2)
+        bitIndex! - 1 => bitIndex!
+    }
+    swapIf(swap!, x2!, x3!)
+    swapIf(swap!, z2!, z3!)
+    z2! -> field.invert -> field.multiply(x2!) -> field.encode
+}
+
+public publicKey privateScalar: [UInt8] -> [UInt8; 32] {
+    field.byteZeros() => basePoint!
+    9 => basePoint![0]
+    scalarMultiply(privateScalar, basePoint!)
+}
+
+# Generates an independently owned scalar from the operating system
+# cryptographic random source. scalarMultiply applies the RFC 7748 clamp at
+# use time, so the stored private bytes retain their full random input.
+public generatePrivateKey: -> Result<[UInt8; 32], random.Error> uses Random {
+    32 -> random.bytes -> when {
+        Ok(bytes) {
+            field.byteZeros() => privateKey!
+            0 => index!
+            index! < 32 -> while {
+                bytes[index!] => privateKey![index!]
+                index! + 1 => index!
+            }
+            Result<[UInt8; 32], random.Error>.Ok(privateKey!)
+        }
+        Err(error) { Result<[UInt8; 32], random.Error>.Err(error) }
+    }
+}

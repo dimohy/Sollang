@@ -1,0 +1,260 @@
+namespace sys.quic.x509_ed25519
+
+import sys.crypto.bits
+import sys.quic.error as errors
+
+struct Element {
+    tag: UInt8
+    contentOffset: UIntSize
+    contentLength: UIntSize
+    nextOffset: UIntSize
+}
+
+error code: UInt64 -> errors.Error {
+    errors.Error { kind: errors.Kind.Tls, code: code }
+}
+
+publicKeyZeros: -> [UInt8; 32] => [0; 32]
+
+readElement bytes: [UInt8], offset: UIntSize -> Result<Element, errors.Error> {
+    offset + 2 <= UIntSize(bytes -> len) -> unless {
+        Result<Element, errors.Error>.Err(error(42)) -> return
+    }
+    bytes[Int(offset)] => tag
+    bytes[Int(offset + 1)] => firstLength
+    offset + 2 => contentOffset!
+    UIntSize(0) => contentLength!
+    firstLength < 128 -> if {
+        UIntSize(firstLength) => contentLength!
+    } else {
+        UIntSize(firstLength - 128) => lengthOctets
+        (lengthOctets > 0 and lengthOctets <= 4 and contentOffset! + lengthOctets <= UIntSize(bytes -> len)) -> unless {
+            Result<Element, errors.Error>.Err(error(42)) -> return
+        }
+        bytes[Int(contentOffset!)] != 0 -> unless {
+            Result<Element, errors.Error>.Err(error(42)) -> return
+        }
+        UIntSize(0) => index!
+        index! < lengthOctets -> while {
+            contentLength! * 256 + UIntSize(bytes[Int(contentOffset! + index!)]) => contentLength!
+            index! + 1 => index!
+        }
+        contentLength! >= 128 -> unless {
+            Result<Element, errors.Error>.Err(error(42)) -> return
+        }
+        contentOffset! + lengthOctets => contentOffset!
+    }
+    contentOffset! + contentLength! => nextOffset
+    nextOffset <= UIntSize(bytes -> len) -> unless {
+        Result<Element, errors.Error>.Err(error(42)) -> return
+    }
+    Result<Element, errors.Error>.Ok(Element {
+        tag: tag
+        contentOffset: contentOffset!
+        contentLength: contentLength!
+        nextOffset: nextOffset
+    })
+}
+
+isEd25519Algorithm bytes: [UInt8], element: Element -> Bool {
+    element.tag == 48 -> unless { false -> return }
+    readElement(bytes, element.contentOffset) -> when {
+        Ok(oid) {
+            (oid.tag == 6
+                and oid.contentLength == 3
+                and oid.nextOffset == element.nextOffset
+                and bytes[Int(oid.contentOffset)] == 43
+                and bytes[Int(oid.contentOffset + 1)] == 101
+                and bytes[Int(oid.contentOffset + 2)] == 112)
+        }
+        Err(parseError) { false }
+    }
+}
+
+parseSubjectPublicKeyInfo bytes: [UInt8], element: Element -> Result<[UInt8; 32], errors.Error> {
+    element.tag == 48 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(43)) -> return
+    }
+    readElement(bytes, element.contentOffset)? => algorithm
+    isEd25519Algorithm(bytes, algorithm) -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(43)) -> return
+    }
+    readElement(bytes, algorithm.nextOffset)? => publicKeyBits
+    (publicKeyBits.tag == 3
+        and publicKeyBits.contentLength == 33
+        and publicKeyBits.nextOffset == element.nextOffset
+        and bytes[Int(publicKeyBits.contentOffset)] == 0) -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    publicKeyZeros() => publicKey!
+    0 => index!
+    index! < 32 -> while {
+        bytes[Int(publicKeyBits.contentOffset + UIntSize(1 + index!))] => publicKey![index!]
+        index! + 1 => index!
+    }
+    Result<[UInt8; 32], errors.Error>.Ok(publicKey!)
+}
+
+lowerAscii value: UInt8 -> UInt8 {
+    (value >= 65 and value <= 90) -> if { value + 32 } else { value }
+}
+
+isSubjectAlternativeNameOid bytes: [UInt8], element: Element -> Bool {
+    element.tag == 6
+        and element.contentLength == 3
+        and bytes[Int(element.contentOffset)] == 85
+        and bytes[Int(element.contentOffset + 1)] == 29
+        and bytes[Int(element.contentOffset + 2)] == 17
+}
+
+matchesDnsName bytes: [UInt8], element: Element, serverName: [UInt8] -> Bool {
+    (element.tag == 130 and element.contentLength == UIntSize(serverName -> len)) -> unless {
+        false -> return
+    }
+    true => matches!
+    0 => index!
+    index! < (serverName -> len) -> while {
+        lowerAscii(bytes[Int(element.contentOffset) + index!]) == lowerAscii(serverName[index!]) -> unless {
+            false => matches!
+        }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+matchesGeneralNames bytes: [UInt8], value: Element, serverName: [UInt8] -> Result<Bool, errors.Error> {
+    readElement(bytes, value.contentOffset)? => names
+    (names.tag == 48 and names.nextOffset == value.nextOffset) -> unless {
+        Result<Bool, errors.Error>.Err(error(42)) -> return
+    }
+    false => matches!
+    names.contentOffset => nameOffset!
+    nameOffset! < names.nextOffset -> while {
+        readElement(bytes, nameOffset!)? => name
+        matchesDnsName(bytes, name, serverName) -> if { true => matches! }
+        name.nextOffset => nameOffset!
+    }
+    Result<Bool, errors.Error>.Ok(matches!)
+}
+
+matchesServerName bytes: [UInt8], fieldsOffset: UIntSize, fieldsEnd: UIntSize, serverName: [UInt8] -> Result<Bool, errors.Error> {
+    (serverName -> len) > 0 -> unless {
+        Result<Bool, errors.Error>.Err(error(112)) -> return
+    }
+    false => foundExtensions!
+    false => foundSubjectAlternativeName!
+    false => matches!
+    fieldsOffset => fieldOffset!
+    fieldOffset! < fieldsEnd -> while {
+        readElement(bytes, fieldOffset!)? => field
+        field.tag == 163 -> if {
+            foundExtensions! -> if {
+                Result<Bool, errors.Error>.Err(error(42)) -> return
+            }
+            true => foundExtensions!
+            readElement(bytes, field.contentOffset)? => extensions
+            (extensions.tag == 48 and extensions.nextOffset == field.nextOffset) -> unless {
+                Result<Bool, errors.Error>.Err(error(42)) -> return
+            }
+            extensions.contentOffset => extensionOffset!
+            extensionOffset! < extensions.nextOffset -> while {
+                readElement(bytes, extensionOffset!)? => extension
+                extension.tag == 48 -> unless {
+                    Result<Bool, errors.Error>.Err(error(42)) -> return
+                }
+                readElement(bytes, extension.contentOffset)? => oid
+                oid.nextOffset => valueOffset!
+                readElement(bytes, valueOffset!)? => possibleCritical
+                possibleCritical.tag == 1 -> if {
+                    (possibleCritical.contentLength == 1
+                        and (bytes[Int(possibleCritical.contentOffset)] == 0
+                            or bytes[Int(possibleCritical.contentOffset)] == 255)) -> unless {
+                        Result<Bool, errors.Error>.Err(error(42)) -> return
+                    }
+                    possibleCritical.nextOffset => valueOffset!
+                }
+                readElement(bytes, valueOffset!)? => value
+                (value.tag == 4 and value.nextOffset == extension.nextOffset) -> unless {
+                    Result<Bool, errors.Error>.Err(error(42)) -> return
+                }
+                isSubjectAlternativeNameOid(bytes, oid) -> if {
+                    foundSubjectAlternativeName! -> if {
+                        Result<Bool, errors.Error>.Err(error(42)) -> return
+                    }
+                    true => foundSubjectAlternativeName!
+                    matchesGeneralNames(bytes, value, serverName)? => matches!
+                }
+                extension.nextOffset => extensionOffset!
+            }
+        }
+        field.nextOffset => fieldOffset!
+    }
+    (foundSubjectAlternativeName! and matches!) -> Result<Bool, errors.Error>.Ok
+}
+
+public parsePinnedServer der: [UInt8], pinnedDer: [UInt8], serverName: [UInt8] -> Result<[UInt8; 32], errors.Error> {
+    (der -> len) == (pinnedDer -> len) -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    UInt32(0) => difference!
+    0 => pinIndex!
+    pinIndex! < (der -> len) -> while {
+        difference! + bits.xor(UInt32(der[pinIndex!]), UInt32(pinnedDer[pinIndex!])) => difference!
+        pinIndex! + 1 => pinIndex!
+    }
+    difference! == 0 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+
+    readElement(der, 0)? => outer
+    (outer.tag == 48 and outer.nextOffset == UIntSize(der -> len)) -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    readElement(der, outer.contentOffset)? => tbs
+    tbs.tag == 48 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    readElement(der, tbs.nextOffset)? => signatureAlgorithm
+    signatureAlgorithm.tag == 48 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    readElement(der, signatureAlgorithm.nextOffset)? => signatureBits
+    (signatureBits.tag == 3
+        and signatureBits.contentLength > 1
+        and signatureBits.nextOffset == outer.nextOffset
+        and der[Int(signatureBits.contentOffset)] == 0) -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+
+    tbs.contentOffset => fieldOffset!
+    readElement(der, fieldOffset!)? => firstField
+    firstField.tag == 160 -> if {
+        firstField.nextOffset => fieldOffset!
+    }
+    readElement(der, fieldOffset!)? => serialNumber
+    serialNumber.tag == 2 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    readElement(der, serialNumber.nextOffset)? => tbsSignatureAlgorithm
+    tbsSignatureAlgorithm.tag == 48 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    readElement(der, tbsSignatureAlgorithm.nextOffset)? => issuer
+    issuer.tag == 48 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    readElement(der, issuer.nextOffset)? => validity
+    validity.tag == 48 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    readElement(der, validity.nextOffset)? => subject
+    subject.tag == 48 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
+    }
+    readElement(der, subject.nextOffset)? => subjectPublicKeyInfo
+    parseSubjectPublicKeyInfo(der, subjectPublicKeyInfo)? => publicKey
+    matchesServerName(der, subjectPublicKeyInfo.nextOffset, tbs.nextOffset, serverName)? -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(112)) -> return
+    }
+    Result<[UInt8; 32], errors.Error>.Ok(publicKey)
+}

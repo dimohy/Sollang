@@ -69,6 +69,17 @@ internal sealed partial class LlvmEmitter
             return _mainOk;
         }
 
+        if (expression is TryExpression attempt)
+        {
+            var value = EmitTryExpression(attempt);
+            if (value.Type != BoundType.Unit)
+            {
+                throw new SollangException("a propagated expression statement must produce Unit");
+            }
+
+            return _mainOk;
+        }
+
         throw new SollangException($"unsupported runtime expression statement {expression.GetType().Name}");
     }
 
@@ -472,13 +483,18 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitNameExpression(NameExpression expression)
     {
+        if (_currentFunction is { GenericParameterName: { } parameterName, SpecializedValue: { } specializedValue }
+            && expression.Name == parameterName)
+        {
+            return new RuntimeInt(specializedValue.ToString(CultureInfo.InvariantCulture));
+        }
         if (_locals.ContainsKey(expression.Name))
         {
             var value = ResolveLocal(expression.Name);
             return value is RuntimeReference reference ? LoadReference(reference) : value;
         }
         throw new SollangException(
-            $"unknown runtime binding '{expression.Name}' "
+            $"codegen error at {expression.Line}:{expression.Column}: unknown runtime binding '{expression.Name}' "
             + $"while emitting '{_currentFunction?.Name ?? "main"}'");
     }
 
@@ -669,11 +685,9 @@ internal sealed partial class LlvmEmitter
         for (var index = 0; index < expression.Elements.Count; index++)
         {
             var element = expression.Elements[index];
-            elements[index] = element is DictionaryLiteralExpression contextual
-                && elementType is { } contextualElementType
-                && _program.Types.IsStruct(contextualElementType)
-                    ? EmitContextualStructLiteral(contextual, contextualElementType)
-                    : EmitExpression(element);
+            elements[index] = elementType is { } contextualElementType
+                ? EmitFunctionArgumentExpression(element, contextualElementType)
+                : EmitExpression(element);
             elementType ??= elements[index].Type;
         }
         return elements;
@@ -732,7 +746,10 @@ internal sealed partial class LlvmEmitter
             storage);
     }
 
-    private RuntimeStaticIntArray EmitArrayRepeat(ArrayRepeatExpression expression)
+    private RuntimeValue EmitArrayRepeat(
+        ArrayRepeatExpression expression,
+        BoundType? contextualElementType = null,
+        BoundType? contextualArrayType = null)
     {
         int? specializedCount = null;
         if (_currentFunction is { GenericParameterName: { } parameterName, SpecializedValue: { } specializedValue }
@@ -745,31 +762,53 @@ internal sealed partial class LlvmEmitter
             ?? specializedCount
             ?? throw new SollangException(
                 $"array repeat count '{expression.CountParameterName}' was not specialized");
-        var allocatedLength = Math.Max(count, 1);
-        string pointer;
-        RuntimeContainerStorage storage;
-        if (_currentStackFramePlan.TryGetAllocation(expression, out _))
+        var value = contextualElementType is { } expectedElement
+            ? EmitFunctionArgumentExpression(expression.Value, expectedElement)
+            : EmitExpression(expression.Value);
+        var useStackStorage = _currentStackFramePlan.TryGetAllocation(expression, out _);
+        if (value.Type == BoundType.Int)
         {
-            pointer = EmitStackLifetimeStart(expression);
-            storage = RuntimeContainerStorage.Stack;
-        }
-        else
-        {
-            pointer = EmitHeapAllocate(((long)allocatedLength * sizeof(int)).ToString(CultureInfo.InvariantCulture));
-            storage = RuntimeContainerStorage.Heap;
+            var allocatedLength = Math.Max(count, 1);
+            var pointer = useStackStorage
+                ? EmitStackLifetimeStart(expression)
+                : EmitHeapAllocate(
+                    ((long)allocatedLength * sizeof(int)).ToString(CultureInfo.InvariantCulture));
+            for (var i = 0; i < count; i++)
+            {
+                StoreStaticArrayElement(pointer, allocatedLength, i, ((RuntimeInt)value).ValueName);
+            }
+
+            return new RuntimeStaticIntArray(
+                pointer,
+                count.ToString(CultureInfo.InvariantCulture),
+                allocatedLength,
+                useStackStorage ? RuntimeContainerStorage.Stack : RuntimeContainerStorage.Heap);
         }
 
-        var value = EmitIntExpression(expression.Value);
+        var arrayType = contextualArrayType is { } expectedArray
+            && _program.Types.GetStaticArray(expectedArray).FixedLength == count
+                ? expectedArray
+                : _program.Types.GetOrAddFixedStaticArray(value.Type, count);
+
+        var definition = _program.Types.GetStaticArray(arrayType);
+        var inlineAllocatedLength = Math.Max(count, 1);
+        var inlinePointer = useStackStorage
+            ? EmitStackLifetimeStart(expression)
+            : EmitHeapAllocate(
+                ((long)inlineAllocatedLength * definition.ElementSize).ToString(CultureInfo.InvariantCulture));
         for (var i = 0; i < count; i++)
         {
-            StoreStaticArrayElement(pointer, allocatedLength, i, value.ValueName);
+            StoreStaticInlineArrayElement(inlinePointer, definition, i, value);
         }
 
-        return new RuntimeStaticIntArray(
-            pointer,
+        return new RuntimeStaticInlineArray(
+            arrayType,
+            definition.ElementType,
+            inlinePointer,
             count.ToString(CultureInfo.InvariantCulture),
-            allocatedLength,
-            storage);
+            count,
+            inlineAllocatedLength,
+            useStackStorage ? RuntimeContainerStorage.Stack : RuntimeContainerStorage.Heap);
     }
 
     private RuntimeValue EmitDynamicArrayLiteral(ArrayLiteralExpression expression)
@@ -908,6 +947,11 @@ internal sealed partial class LlvmEmitter
         IReadOnlyList<RuntimeValue> elements)
     {
         var definition = _program.Types.GetStaticArray(arrayType);
+        if (definition.FixedLength is { } fixedLength && fixedLength != elements.Count)
+        {
+            throw new SollangException(
+                $"fixed array expects {fixedLength} elements but received {elements.Count}");
+        }
         var allocatedLength = Math.Max(elements.Count, 1);
         var pointer = EmitHeapAllocate(
             ((long)allocatedLength * definition.ElementSize).ToString(CultureInfo.InvariantCulture));
@@ -1099,6 +1143,7 @@ internal sealed partial class LlvmEmitter
         return source switch
         {
             RuntimeIntSlice slice => EmitIntSliceLoad(slice, indexSize),
+            RuntimeInlineSlice slice => EmitInlineSliceLoad(slice, indexSize),
             RuntimeStaticIntArray array => EmitStaticArrayLoad(array, indexSize),
             RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, indexSize),
             RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, indexSize),

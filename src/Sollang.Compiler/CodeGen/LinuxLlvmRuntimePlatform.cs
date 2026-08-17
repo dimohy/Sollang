@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Sollang.Compiler.CodeGen;
 
-internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
+internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 {
     public override string TargetTriple => "x86_64-unknown-linux-gnu";
 

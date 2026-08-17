@@ -19,12 +19,8 @@ internal sealed partial class LlvmEmitter
         try
         {
             CollectParallelCallbacks(_program.MainStatements);
-            foreach (var function in EnumerateEmittableFunctions(_program.Functions.Values))
+            foreach (var function in GetEmittableUserFunctions())
             {
-                if (function.IsStandardLibrary)
-                {
-                    continue;
-                }
                 _currentFunction = function;
                 _currentFunctions = FunctionScope(function);
                 CollectParallelCallbacks(function.BlockBody);

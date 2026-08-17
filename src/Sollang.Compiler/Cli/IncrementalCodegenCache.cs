@@ -744,7 +744,7 @@ internal sealed class IncrementalCodegenCache
         {
             fields.Add(
                 $"static-array:{(int)definition.Id}:{(int)definition.ElementType}:"
-                + $"{definition.ElementSize}:{definition.ElementAlignment}");
+                + $"{definition.ElementSize}:{definition.ElementAlignment}:{definition.FixedLength}");
         }
         foreach (var definition in types.DynamicArrays.OrderBy(static value => (int)value.Id))
         {

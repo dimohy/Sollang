@@ -14,11 +14,11 @@ callHasDeclaredEffects node: typedIr.TypedIrNode, context: ref emitterContext.Em
                 targetDeclaration.firstToken => tokenIndex!
                 tokenIndex! < targetDeclaration.firstToken + targetDeclaration.tokenCount -> while {
                     context.tokens[targetRange.tokenStart + tokenIndex!] => token
-                    (token.span.length == UIntSize(4)
-                        and (context.sources[node.targetModule] -> byte(token.span.start)) == UInt8(117)
-                        and (context.sources[node.targetModule] -> byte(token.span.start + UIntSize(1))) == UInt8(115)
-                        and (context.sources[node.targetModule] -> byte(token.span.start + UIntSize(2))) == UInt8(101)
-                        and (context.sources[node.targetModule] -> byte(token.span.start + UIntSize(3))) == UInt8(115)) -> if {
+                    (token.span.length == 4
+                        and (context.sources[node.targetModule] -> byte(token.span.start)) == 117
+                        and (context.sources[node.targetModule] -> byte(token.span.start + 1)) == 115
+                        and (context.sources[node.targetModule] -> byte(token.span.start + 2)) == 101
+                        and (context.sources[node.targetModule] -> byte(token.span.start + 3)) == 115) -> if {
                         true => hasEffects!
                     }
                     tokenIndex! + 1 => tokenIndex!
@@ -236,10 +236,10 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                 }
                 (scheduleReady! and scheduleNode.kind == 39 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd and not expressionScheduled![scheduleNode.operand1 - expressionStart]) -> if { false => scheduleReady! }
                 (scheduleReady! and scheduleNode.kind == 38) -> if {
-                    scheduleCandidate! -> parallelBranchArguments(context) => scheduleParallelBranchArguments!
+                    scheduleCandidate! -> parallelBranchArguments(context) => scheduleParallelBranchArguments
                     0 => scheduleParallelBranchArgumentIndex!
-                    scheduleParallelBranchArgumentIndex! < (scheduleParallelBranchArguments! -> len) -> while {
-                        scheduleParallelBranchArguments![scheduleParallelBranchArgumentIndex!] -> aggregateValueIndex(context, state) => scheduleParallelBranchArgumentValue
+                    scheduleParallelBranchArgumentIndex! < (scheduleParallelBranchArguments -> len) -> while {
+                        scheduleParallelBranchArguments[scheduleParallelBranchArgumentIndex!] -> aggregateValueIndex(context, state) => scheduleParallelBranchArgumentValue
                         (scheduleParallelBranchArgumentValue >= expressionStart and scheduleParallelBranchArgumentValue < functionEnd and not expressionScheduled![scheduleParallelBranchArgumentValue - expressionStart]) -> if { false => scheduleReady! }
                         scheduleParallelBranchArgumentIndex! + 1 => scheduleParallelBranchArgumentIndex!
                     }
@@ -254,14 +254,14 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                             (controlDependencyAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDependencyAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyAncestor! == scheduleNode.nextOperand)) -> if { true => controlDependencyInside! } else { context.ir[controlDependencyAncestor!].parent => controlDependencyAncestor! }
                         }
                         (controlDependencyInside! and controlDependencyUse.kind == 5 and controlDependencyUse.operand0 >= expressionStart and controlDependencyUse.operand0 < functionEnd and context.ir[controlDependencyUse.operand0].kind == 17 and context.ir[controlDependencyUse.operand0].flags != 1) -> if {
-                            context.ir[controlDependencyUse.operand0].operand0 => controlDependencyValue!
-                            (controlDependencyValue! >= expressionStart and controlDependencyValue! < functionEnd) -> if {
-                                context.ir[controlDependencyValue!].parent => controlDependencyValueAncestor!
+                            context.ir[controlDependencyUse.operand0].operand0 => controlDependencyValue
+                            (controlDependencyValue >= expressionStart and controlDependencyValue < functionEnd) -> if {
+                                context.ir[controlDependencyValue].parent => controlDependencyValueAncestor!
                                 false => controlDependencyValueInside!
                                 (controlDependencyValueAncestor! >= expressionStart and not controlDependencyValueInside!) -> while {
                                     (controlDependencyValueAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDependencyValueAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyValueAncestor! == scheduleNode.nextOperand)) -> if { true => controlDependencyValueInside! } else { context.ir[controlDependencyValueAncestor!].parent => controlDependencyValueAncestor! }
                                 }
-                                (not controlDependencyValueInside! and not expressionScheduled![controlDependencyValue! - expressionStart]) -> if { false => scheduleReady! }
+                                (not controlDependencyValueInside! and not expressionScheduled![controlDependencyValue - expressionStart]) -> if { false => scheduleReady! }
                             }
                         }
                         controlDependencyInside! -> if {
@@ -318,20 +318,29 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                     -1 => mutableReadRoot!
                     scheduleCandidate! -> isMutablePlaceRead(expressionStart, functionEnd, context, state) -> if { true => mutableRead! }
                     scheduleNode.kind == 5 -> if {
+                        false => exactReadBinding!
                         (scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and context.ir[scheduleNode.operand0].kind == 17 and context.ir[scheduleNode.operand0].flags == 1) -> if {
+                            true => exactReadBinding!
                             true => mutableRead!
                             scheduleNode.operand0 => mutableReadRoot!
                         }
-                        expressionStart => mutableReadBindingSearch!
-                        mutableReadBindingSearch! < functionEnd -> while {
-                            (context.ir[mutableReadBindingSearch!].kind == 17 and context.ir[mutableReadBindingSearch!].symbol == scheduleNode.symbol and context.ir[mutableReadBindingSearch!].flags == 1) -> if {
-                                true => mutableRead!
-                                mutableReadBindingSearch! => mutableReadRoot!
-                            }
-                            mutableReadBindingSearch! + 1 => mutableReadBindingSearch!
+                        (scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and context.ir[scheduleNode.operand0].kind == 17) -> if {
+                            true => exactReadBinding!
                         }
-                        scheduleCandidate! -> mutableBorrowParameterOrdinal(functionIndex, context, state) => mutableReadParameterOrdinal
-                        mutableReadParameterOrdinal >= 0 -> if { true => mutableRead! }
+                        not exactReadBinding! -> if {
+                            expressionStart => mutableReadBindingSearch!
+                            mutableReadBindingSearch! < functionEnd -> while {
+                                (context.ir[mutableReadBindingSearch!].kind == 17 and context.ir[mutableReadBindingSearch!].symbol == scheduleNode.symbol and context.ir[mutableReadBindingSearch!].flags == 1) -> if {
+                                    true => mutableRead!
+                                    mutableReadBindingSearch! => mutableReadRoot!
+                                }
+                                mutableReadBindingSearch! + 1 => mutableReadBindingSearch!
+                            }
+                        }
+                        not exactReadBinding! -> if {
+                            scheduleCandidate! -> mutableBorrowParameterOrdinal(functionIndex, context, state) => mutableReadParameterOrdinal
+                            mutableReadParameterOrdinal >= 0 -> if { true => mutableRead! }
+                        }
                     } else {
                         scheduleNode.kind == 9 -> if {
                             scheduleNode.operand0 -> mutableStorageRoot(context, state) => mutableReadRoot!
@@ -427,6 +436,22 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                             earlierEffectSearch! + 1 => earlierEffectSearch!
                         }
                     }
+                }
+                (not insideControlRegion!
+                    and scheduleNode.kind == 5
+                    and scheduleNode.operand0 >= expressionStart
+                    and scheduleNode.operand0 < functionEnd
+                    and context.ir[scheduleNode.operand0].kind == 17
+                    and context.ir[scheduleNode.operand0].flags != 1
+                    and scheduleNode.parent >= expressionStart
+                    and scheduleNode.parent < functionEnd
+                    and (context.ir[scheduleNode.parent].kind == 12
+                        or context.ir[scheduleNode.parent].kind == 14
+                        or context.ir[scheduleNode.parent].kind == 16
+                        or context.ir[scheduleNode.parent].kind == 26
+                        or context.ir[scheduleNode.parent].kind == 35)
+                    and expressionScheduled![scheduleNode.operand0 - expressionStart]) -> if {
+                    true => scheduleReady!
                 }
                 scheduleReady! -> if {
                     not insideLogicalValue! -> if { expressionOrder! -> push(scheduleCandidate!) }

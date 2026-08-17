@@ -1,0 +1,503 @@
+namespace sys.quic.tls_hello
+
+import sys.quic.error as errors
+import sys.quic.tls_handshake as handshake
+
+public tls13: -> UInt16 => 772
+public aes128GcmSha256: -> UInt16 => 4_865
+public x25519Group: -> UInt16 => 29
+public ed25519Signature: -> UInt16 => 2_055
+public ecdsaP256Sha256Signature: -> UInt16 => 1_027
+public rsaPssRsaeSha256Signature: -> UInt16 => 2_052
+
+public struct ClientHello {
+    random: [UInt8; 32]
+    legacySessionId: [UInt8; ~]
+    serverName: [UInt8; ~]
+    alpn: [UInt8; ~]
+    keyShare: [UInt8; 32]
+    transportParameters: [UInt8; ~]
+}
+
+public struct ServerHello {
+    random: [UInt8; 32]
+    legacySessionId: [UInt8; ~]
+    keyShare: [UInt8; 32]
+}
+
+public struct EncryptedExtensions {
+    alpn: [UInt8; ~]
+    transportParameters: [UInt8; ~]
+}
+
+error code: UInt64 -> errors.Error {
+    errors.Error { kind: errors.Kind.Tls, code: code }
+}
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+appendUInt16 output: mut [UInt8; ~], value: UInt16 -> Unit {
+    output -> push(UInt8(value / 256))
+    output -> push(UInt8(value % 256))
+}
+
+byteZeros: -> [UInt8; 32] => [0; 32]
+
+readUInt16 bytes: [UInt8], offset: UIntSize -> Result<UInt16, errors.Error> {
+    offset + 2 <= UIntSize(bytes -> len) -> unless {
+        Result<UInt16, errors.Error>.Err(error(50)) -> return
+    }
+    UInt16(bytes[Int(offset)]) * 256 + UInt16(bytes[Int(offset + 1)]) -> Result<UInt16, errors.Error>.Ok
+}
+
+copyRange bytes: [UInt8], offset: UIntSize, length: UIntSize -> Result<[UInt8; ~], errors.Error> {
+    offset + length <= UIntSize(bytes -> len) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    [UInt8; ~] => output!
+    UIntSize(0) => index!
+    index! < length -> while {
+        output! -> push(bytes[Int(offset + index!)])
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+copy32 bytes: [UInt8], offset: UIntSize -> Result<[UInt8; 32], errors.Error> {
+    offset + 32 <= UIntSize(bytes -> len) -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(50)) -> return
+    }
+    byteZeros() => output!
+    0 => index!
+    index! < 32 -> while {
+        bytes[Int(offset) + index!] => output![index!]
+        index! + 1 => index!
+    }
+    Result<[UInt8; 32], errors.Error>.Ok(output!)
+}
+
+findExtension bytes: [UInt8], start: UIntSize, end: UIntSize, extensionType: UInt16, required: Bool -> Result<[UInt8; ~], errors.Error> {
+    start <= end -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    start => offset!
+    false => found!
+    UIntSize(0) => valueOffset!
+    UIntSize(0) => valueLength!
+    offset! < end -> while {
+        offset! + 4 <= end -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+        }
+        readUInt16(bytes, offset!)? => currentType
+        readUInt16(bytes, offset! + 2)? => encodedLength
+        UIntSize(encodedLength) => length
+        offset! + 4 + length <= end -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+        }
+        currentType == extensionType -> if {
+            found! -> if {
+                Result<[UInt8; ~], errors.Error>.Err(error(47)) -> return
+            }
+            offset! + 4 => valueOffset!
+            length => valueLength!
+            true => found!
+        }
+        offset! + 4 + length => offset!
+    }
+    offset! == end -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    found! -> unless {
+        required -> if {
+            Result<[UInt8; ~], errors.Error>.Err(error(109)) -> return
+        }
+        Result<[UInt8; ~], errors.Error>.Ok([]) -> return
+    }
+    copyRange(bytes, valueOffset!, valueLength!)
+}
+
+decodeOptionalServerName data: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    (data -> len) == 0 -> if {
+        Result<[UInt8; ~], errors.Error>.Ok([]) -> return
+    }
+    decodeServerName(data)
+}
+
+decodeAlpn data: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    (data -> len) >= 3 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(data, 0)? => listLength
+    UIntSize(listLength) + 2 == UIntSize(data -> len) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    UIntSize(data[2]) => protocolLength
+    (protocolLength > 0 and protocolLength + 3 == UIntSize(data -> len)) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(120)) -> return
+    }
+    copyRange(data, 3, protocolLength)
+}
+
+decodeServerName data: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    (data -> len) >= 5 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(data, 0)? => listLength
+    UIntSize(listLength) + 2 == UIntSize(data -> len) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    data[2] == 0 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(47)) -> return
+    }
+    readUInt16(data, 3)? => nameLength
+    UIntSize(nameLength) + 5 == UIntSize(data -> len) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    copyRange(data, 5, UIntSize(nameLength))
+}
+
+decodeClientKeyShare data: [UInt8] -> Result<[UInt8; 32], errors.Error> {
+    (data -> len) >= 2 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(47)) -> return
+    }
+    readUInt16(data, 0)? => listLength
+    UIntSize(listLength) + 2 == UIntSize(data -> len) -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(47)) -> return
+    }
+    [UInt8(0); 32] => selected!
+    false => found!
+    UIntSize(2) => offset!
+    offset! < UIntSize(data -> len) -> while {
+        offset! + 4 <= UIntSize(data -> len) -> unless {
+            Result<[UInt8; 32], errors.Error>.Err(error(50)) -> return
+        }
+        readUInt16(data, offset!)? => group
+        readUInt16(data, offset! + 2)? => keyLength
+        offset! + 4 + UIntSize(keyLength) <= UIntSize(data -> len) -> unless {
+            Result<[UInt8; 32], errors.Error>.Err(error(50)) -> return
+        }
+        (group == x25519Group() and keyLength == 32) -> if {
+            found! -> if {
+                Result<[UInt8; 32], errors.Error>.Err(error(47)) -> return
+            }
+            copy32(data, offset! + 4)? => candidate
+            0 => keyIndex!
+            keyIndex! < 32 -> while {
+                candidate[keyIndex!] => selected![keyIndex!]
+                keyIndex! + 1 => keyIndex!
+            }
+            true => found!
+        }
+        offset! + 4 + UIntSize(keyLength) => offset!
+    }
+    found! -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(40)) -> return
+    }
+    Result<[UInt8; 32], errors.Error>.Ok(selected!)
+}
+
+decodeServerKeyShare data: [UInt8] -> Result<[UInt8; 32], errors.Error> {
+    (data -> len) == 36 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(47)) -> return
+    }
+    readUInt16(data, 0)? == x25519Group() -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(47)) -> return
+    }
+    readUInt16(data, 2)? == 32 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(47)) -> return
+    }
+    copy32(data, 4)
+}
+
+appendExtension output: mut [UInt8; ~], extensionType: UInt16, data: [UInt8] -> Result<Unit, errors.Error> {
+    handshake.encodeExtension(extensionType, data)? => encoded
+    output -> appendBytes(encoded)
+    Result<Unit, errors.Error>.Ok
+}
+
+validateRandomKeyShare random: [UInt8], keyShare: [UInt8] -> Result<Unit, errors.Error> {
+    (random -> len) == 32 -> unless {
+        Result<Unit, errors.Error>.Err(error(47)) -> return
+    }
+    (keyShare -> len) == 32 -> unless {
+        Result<Unit, errors.Error>.Err(error(47)) -> return
+    }
+    Result<Unit, errors.Error>.Ok
+}
+
+validateAlpn alpn: [UInt8] -> Result<Unit, errors.Error> {
+    ((alpn -> len) > 0 and (alpn -> len) <= 255) -> unless {
+        Result<Unit, errors.Error>.Err(error(120)) -> return
+    }
+    Result<Unit, errors.Error>.Ok
+}
+
+supportedVersionsClient: -> [UInt8; 3] => [2, 3, 4]
+supportedVersionsServer: -> [UInt8; 2] => [3, 4]
+
+signatureAlgorithms: -> [UInt8; 8] => [
+    0, 6,
+    8, 7,
+    4, 3,
+    8, 4
+]
+
+clientKeyShare keyShare: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => data!
+    data! -> appendUInt16(36)
+    data! -> appendUInt16(x25519Group())
+    data! -> appendUInt16(32)
+    data! -> appendBytes(keyShare)
+    data!
+}
+
+serverKeyShare keyShare: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => data!
+    data! -> appendUInt16(x25519Group())
+    data! -> appendUInt16(32)
+    data! -> appendBytes(keyShare)
+    data!
+}
+
+serverNameData serverName: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    ((serverName -> len) > 0 and (serverName -> len) <= 65_532) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(112)) -> return
+    }
+    [UInt8; ~] => data!
+    data! -> appendUInt16(UInt16((serverName -> len) + 3))
+    data! -> push(0)
+    data! -> appendUInt16(UInt16(serverName -> len))
+    data! -> appendBytes(serverName)
+    Result<[UInt8; ~], errors.Error>.Ok(data!)
+}
+
+alpnData alpn: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => data!
+    data! -> appendUInt16(UInt16((alpn -> len) + 1))
+    data! -> push(UInt8(alpn -> len))
+    data! -> appendBytes(alpn)
+    data!
+}
+
+public encodeClientHello random: [UInt8], serverName: [UInt8], alpn: [UInt8], keyShare: [UInt8], transportParameters: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    validateRandomKeyShare(random, keyShare)?
+    validateAlpn(alpn)?
+    serverName -> serverNameData? => encodedServerName
+    alpn -> alpnData => encodedAlpn
+    keyShare -> clientKeyShare => encodedKeyShare
+
+    [UInt8; ~] => extensions!
+    extensions! -> appendExtension(handshake.serverNameExtension(), encodedServerName)?
+    extensions! -> appendExtension(handshake.supportedVersionsExtension(), supportedVersionsClient())?
+    extensions! -> appendExtension(handshake.signatureAlgorithmsExtension(), signatureAlgorithms())?
+    extensions! -> appendExtension(handshake.alpnExtension(), encodedAlpn)?
+    extensions! -> appendExtension(handshake.keyShareExtension(), encodedKeyShare)?
+    extensions! -> appendExtension(handshake.quicTransportParametersExtension(), transportParameters)?
+
+    (extensions! -> len) <= 65_535 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(80)) -> return
+    }
+    [UInt8; ~] => body!
+    body! -> appendUInt16(771)
+    body! -> appendBytes(random)
+    body! -> push(0)
+    body! -> appendUInt16(2)
+    body! -> appendUInt16(aes128GcmSha256())
+    body! -> push(1)
+    body! -> push(0)
+    body! -> appendUInt16(UInt16(extensions! -> len))
+    body! -> appendBytes(extensions!)
+    handshake.encode(handshake.clientHello(), body!)
+}
+
+public encodeServerHelloWithSession random: [UInt8], keyShare: [UInt8], legacySessionId: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    validateRandomKeyShare(random, keyShare)?
+    (legacySessionId -> len) <= 32 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(47)) -> return
+    }
+    keyShare -> serverKeyShare => encodedKeyShare
+    [UInt8; ~] => extensions!
+    extensions! -> appendExtension(handshake.supportedVersionsExtension(), supportedVersionsServer())?
+    extensions! -> appendExtension(handshake.keyShareExtension(), encodedKeyShare)?
+
+    [UInt8; ~] => body!
+    body! -> appendUInt16(771)
+    body! -> appendBytes(random)
+    body! -> push(UInt8(legacySessionId -> len))
+    body! -> appendBytes(legacySessionId)
+    body! -> appendUInt16(aes128GcmSha256())
+    body! -> push(0)
+    body! -> appendUInt16(UInt16(extensions! -> len))
+    body! -> appendBytes(extensions!)
+    handshake.encode(handshake.serverHello(), body!)
+}
+
+public encodeServerHello random: [UInt8], keyShare: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    encodeServerHelloWithSession(random, keyShare, [])
+}
+
+public encodeEncryptedExtensions alpn: [UInt8], transportParameters: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    validateAlpn(alpn)?
+    alpn -> alpnData => encodedAlpn
+    [UInt8; ~] => extensions!
+    extensions! -> appendExtension(handshake.alpnExtension(), encodedAlpn)?
+    extensions! -> appendExtension(handshake.quicTransportParametersExtension(), transportParameters)?
+    (extensions! -> len) <= 65_535 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(80)) -> return
+    }
+    [UInt8; ~] => body!
+    body! -> appendUInt16(UInt16(extensions! -> len))
+    body! -> appendBytes(extensions!)
+    handshake.encode(handshake.encryptedExtensions(), body!)
+}
+
+public decodeClientHello bytes: [UInt8] -> Result<ClientHello, errors.Error> {
+    handshake.decode(bytes, 0)? => decoded
+    (decoded.messageType == handshake.clientHello() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+        Result<ClientHello, errors.Error>.Err(error(50)) -> return
+    }
+    copyRange(decoded.body, 0, UIntSize(decoded.body -> len))? => body
+    (body -> len) >= 41 -> unless {
+        Result<ClientHello, errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(body, 0)? => legacyVersion
+    legacyVersion == 771 -> unless {
+        Result<ClientHello, errors.Error>.Err(error(47)) -> return
+    }
+    copy32(body, 2)? => random
+
+    UIntSize(body[34]) => sessionLength
+    copyRange(body, 35, sessionLength)? => legacySessionId
+    35 + sessionLength => offset!
+    offset! + 2 <= UIntSize(body -> len) -> unless {
+        Result<ClientHello, errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(body, offset!)? => suitesLength
+    (suitesLength >= 2 and suitesLength % 2 == 0) -> unless {
+        Result<ClientHello, errors.Error>.Err(error(40)) -> return
+    }
+    offset! + 2 + UIntSize(suitesLength) <= UIntSize(body -> len) -> unless {
+        Result<ClientHello, errors.Error>.Err(error(50)) -> return
+    }
+    false => supportsSuite!
+    offset! + 2 => suiteOffset!
+    suiteOffset! < offset! + 2 + UIntSize(suitesLength) -> while {
+        readUInt16(body, suiteOffset!)? == aes128GcmSha256() -> if { true => supportsSuite! }
+        suiteOffset! + 2 => suiteOffset!
+    }
+    supportsSuite! -> unless {
+        Result<ClientHello, errors.Error>.Err(error(40)) -> return
+    }
+    offset! + 2 + UIntSize(suitesLength) => offset!
+    offset! < UIntSize(body -> len) -> unless {
+        Result<ClientHello, errors.Error>.Err(error(50)) -> return
+    }
+    UIntSize(body[Int(offset!)]) => compressionLength
+    (compressionLength == 1 and offset! + 1 + compressionLength <= UIntSize(body -> len)) -> unless {
+        Result<ClientHello, errors.Error>.Err(error(47)) -> return
+    }
+    body[Int(offset! + 1)] == 0 -> unless {
+        Result<ClientHello, errors.Error>.Err(error(47)) -> return
+    }
+    offset! + 1 + compressionLength => offset!
+    readUInt16(body, offset!)? => extensionsLength
+    offset! + 2 => extensionsStart
+    extensionsStart + UIntSize(extensionsLength) == UIntSize(body -> len) -> unless {
+        Result<ClientHello, errors.Error>.Err(error(50)) -> return
+    }
+    UIntSize(body -> len) => extensionsEnd
+
+    findExtension(body, extensionsStart, extensionsEnd, handshake.supportedVersionsExtension(), true)? => versions
+    ((versions -> len) == 3 and versions[0] == 2 and versions[1] == 3 and versions[2] == 4) -> unless {
+        Result<ClientHello, errors.Error>.Err(error(70)) -> return
+    }
+    findExtension(body, extensionsStart, extensionsEnd, handshake.signatureAlgorithmsExtension(), true)? => signatures
+    (signatures -> len) >= 4 -> unless {
+        Result<ClientHello, errors.Error>.Err(error(47)) -> return
+    }
+    findExtension(body, extensionsStart, extensionsEnd, handshake.serverNameExtension(), false)? -> decodeOptionalServerName? => serverName
+    findExtension(body, extensionsStart, extensionsEnd, handshake.alpnExtension(), true)? -> decodeAlpn? => alpn
+    findExtension(body, extensionsStart, extensionsEnd, handshake.keyShareExtension(), true)? -> decodeClientKeyShare? => keyShare
+    findExtension(body, extensionsStart, extensionsEnd, handshake.quicTransportParametersExtension(), true)? => transportParameters
+    Result<ClientHello, errors.Error>.Ok(ClientHello {
+        random: random
+        legacySessionId: legacySessionId
+        serverName: serverName
+        alpn: alpn
+        keyShare: keyShare
+        transportParameters: transportParameters
+    })
+}
+
+public decodeServerHello bytes: [UInt8] -> Result<ServerHello, errors.Error> {
+    handshake.decode(bytes, 0)? => decoded
+    (decoded.messageType == handshake.serverHello() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+        Result<ServerHello, errors.Error>.Err(error(50)) -> return
+    }
+    copyRange(decoded.body, 0, UIntSize(decoded.body -> len))? => body
+    (body -> len) >= 40 -> unless {
+        Result<ServerHello, errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(body, 0)? => legacyVersion
+    legacyVersion == 771 -> unless {
+        Result<ServerHello, errors.Error>.Err(error(47)) -> return
+    }
+    copy32(body, 2)? => random
+    UIntSize(body[34]) => sessionLength
+    copyRange(body, 35, sessionLength)? => legacySessionId
+    35 + sessionLength => offset
+    offset + 5 <= UIntSize(body -> len) -> unless {
+        Result<ServerHello, errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(body, offset)? => selectedSuite
+    selectedSuite == aes128GcmSha256() -> unless {
+        Result<ServerHello, errors.Error>.Err(error(40)) -> return
+    }
+    body[Int(offset + 2)] == 0 -> unless {
+        Result<ServerHello, errors.Error>.Err(error(47)) -> return
+    }
+    readUInt16(body, offset + 3)? => extensionsLength
+    offset + 5 => extensionsStart
+    extensionsStart + UIntSize(extensionsLength) == UIntSize(body -> len) -> unless {
+        Result<ServerHello, errors.Error>.Err(error(50)) -> return
+    }
+    UIntSize(body -> len) => extensionsEnd
+    findExtension(body, extensionsStart, extensionsEnd, handshake.supportedVersionsExtension(), true)? => versions
+    ((versions -> len) == 2 and versions[0] == 3 and versions[1] == 4) -> unless {
+        Result<ServerHello, errors.Error>.Err(error(70)) -> return
+    }
+    findExtension(body, extensionsStart, extensionsEnd, handshake.keyShareExtension(), true)? -> decodeServerKeyShare? => keyShare
+    Result<ServerHello, errors.Error>.Ok(ServerHello {
+        random: random
+        legacySessionId: legacySessionId
+        keyShare: keyShare
+    })
+}
+
+public decodeEncryptedExtensions bytes: [UInt8] -> Result<EncryptedExtensions, errors.Error> {
+    handshake.decode(bytes, 0)? => decoded
+    (decoded.messageType == handshake.encryptedExtensions() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+        Result<EncryptedExtensions, errors.Error>.Err(error(50)) -> return
+    }
+    copyRange(decoded.body, 0, UIntSize(decoded.body -> len))? => body
+    (body -> len) >= 2 -> unless {
+        Result<EncryptedExtensions, errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(body, 0)? => extensionsLength
+    UIntSize(extensionsLength) + 2 == UIntSize(body -> len) -> unless {
+        Result<EncryptedExtensions, errors.Error>.Err(error(50)) -> return
+    }
+    UIntSize(body -> len) => extensionsEnd
+    findExtension(body, 2, extensionsEnd, handshake.alpnExtension(), true)? -> decodeAlpn? => alpn
+    findExtension(body, 2, extensionsEnd, handshake.quicTransportParametersExtension(), true)? => transportParameters
+    Result<EncryptedExtensions, errors.Error>.Ok(EncryptedExtensions {
+        alpn: alpn
+        transportParameters: transportParameters
+    })
+}

@@ -1,0 +1,42 @@
+import sollang.compiler.ir.typed as typedIr
+
+# A nested literal inside an element flow must not become the array's type
+# anchor. The lowered direct element and the array identity must agree.
+main {
+    [
+        """
+        namespace sys.process
+
+        public arguments: -> Arguments uses Process = intrinsic
+        """,
+        """
+        import sys.process as process
+
+        targetMode target: Int -> Text => target == 0 -> if { "windows" } else { "linux" }
+
+        collect root: Text -> [Text; ~] uses Process {
+            process.arguments() => arguments
+            "" => selectedRoot!
+            (root -> len) > 0 -> if { root => selectedRoot! }
+            [arguments[0], 0 -> targetMode, selectedRoot!; ~]
+        }
+        """; ~
+    ] -> typedIr.lower => ir
+    false => checked!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.kind == 14 and node.operand0 >= 0) -> if {
+            ir[node.operand0] => first
+            (node.typeId >= 0
+                and first.typeId >= 0
+                and node.typeKind == 3
+                and node.typeOrigin == 13
+                and node.typeSymbol == first.typeSymbol
+                and first.typeOrigin == 1
+                and first.typeSymbol == 1) -> if { true => checked! }
+        }
+        index! + 1 => index!
+    }
+    checked! -> if { "array-direct-element-type=true" } else { "array-direct-element-type=false" } -> println
+}

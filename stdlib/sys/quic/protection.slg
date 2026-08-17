@@ -1,0 +1,58 @@
+namespace sys.quic.protection
+
+import sys.crypto.aes128 as aes128
+import sys.crypto.aes128_gcm as gcm
+import sys.crypto.aes128_gcm_result as results
+import sys.crypto.bits
+
+struct MaskValue {
+    bytes: [UInt8; 5]
+}
+
+struct NonceValue {
+    bytes: [UInt8; 12]
+}
+
+public struct PacketKey {
+    key: [UInt8; 16]
+    iv: [UInt8; 12]
+}
+
+public headerMask headerProtectionKey: [UInt8; 16], sample: [UInt8; 16] -> [UInt8; 5] {
+    aes128.encryptBlock(headerProtectionKey, sample) => encrypted
+    MaskValue { bytes: [0; 5] }.bytes => mask!
+    0 => index!
+    index! < 5 -> while {
+        encrypted[index!] => mask![index!]
+        index! + 1 => index!
+    }
+    mask!
+}
+
+public nonce iv: [UInt8; 12], packetNumber: UInt64 -> [UInt8; 12] {
+    NonceValue { bytes: [0; 12] }.bytes => value!
+    0 => copyIndex!
+    copyIndex! < 12 -> while {
+        iv[copyIndex!] => value![copyIndex!]
+        copyIndex! + 1 => copyIndex!
+    }
+    packetNumber => remaining!
+    11 => nonceIndex!
+    nonceIndex! >= 4 -> while {
+        UInt8(remaining! % 256) => packetByte
+        UInt8(bits.xor(UInt32(value![nonceIndex!]), UInt32(packetByte))) => value![nonceIndex!]
+        remaining! / 256 => remaining!
+        nonceIndex! - 1 => nonceIndex!
+    }
+    value!
+}
+
+public seal packetKey: PacketKey, packetNumber: UInt64, header: [UInt8], plaintext: [UInt8] -> gcm.Sealed {
+    nonce(packetKey.iv, packetNumber) => packetNonce
+    gcm.seal(packetKey.key, packetNonce, header, plaintext)
+}
+
+public open packetKey: PacketKey, packetNumber: UInt64, header: [UInt8], ciphertext: [UInt8], tag: [UInt8; 16] -> results.Open {
+    nonce(packetKey.iv, packetNumber) => packetNonce
+    gcm.open(packetKey.key, packetNonce, header, ciphertext, tag)
+}

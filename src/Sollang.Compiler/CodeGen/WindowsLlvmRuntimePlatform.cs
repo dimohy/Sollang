@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Sollang.Compiler.CodeGen;
 
-internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
+internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 {
     public override string TargetTriple => "x86_64-pc-windows-msvc";
 
@@ -26,6 +26,10 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine("@sollang_stdout_buffer = internal global [1048576 x i8] zeroinitializer, align 16");
         globals.AppendLine("@sollang_stdout_buffer_count = internal global i64 0");
         globals.AppendLine("@sollang_stdout_line_buffered = internal global i1 false");
+        if (UsesNetwork)
+        {
+            globals.AppendLine("@sollang_winsock_state = internal global i32 0");
+        }
         if (UsesAsyncFile)
         {
             globals.AppendLine("@sollang_file_request_event = internal global ptr null");
@@ -2985,6 +2989,10 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitExitHandles(StringBuilder functions)
     {
+        if (UsesNetwork)
+        {
+            functions.AppendLine("  call void @sollang_platform_socket_cleanup()");
+        }
         functions.AppendLine("  %stdout_flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)");
     }
 

@@ -1,0 +1,45 @@
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+
+payload: -> [UInt8; ~] => [112, 105, 110, 103; ~]
+
+run: -> Result<Bool, errors.Error> {
+    [frames.Value; ~] => source!
+    source! -> push(frames.Value.MaxData(4_096))
+    source! -> push(frames.Value.Stream(frames.Stream {
+        id: 0
+        offset: 0
+        fin: true
+        data: payload()
+    }))
+    source! -> push(frames.Value.DataBlocked(4_096))
+    frame.encodeAll(source!)? => encoded
+    frame.decodeAll(encoded)? => decoded!
+    (decoded! -> len) == 3 -> unless {
+        Result<Bool, errors.Error>.Ok(false) -> return
+    }
+    false => maxData!
+    false => stream!
+    false => blocked!
+    decoded! -> take(0) -> when {
+        MaxData(maximum) { maximum == 4_096 => maxData! }
+        else {}
+    }
+    decoded! -> take(0) -> when {
+        Stream(value) { (value.fin and value.data[0] == 112 and value.data[3] == 103) => stream! }
+        else {}
+    }
+    decoded! -> take(0) -> when {
+        DataBlocked(limit) { limit == 4_096 => blocked! }
+        else {}
+    }
+    Result<Bool, errors.Error>.Ok(maxData! and stream! and blocked!)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "multiple-frames=ok" } else { "multiple-frames=failed" } -> println }
+        Err(error) { "multiple-frames-error=$(error.code)" -> println }
+    }
+}

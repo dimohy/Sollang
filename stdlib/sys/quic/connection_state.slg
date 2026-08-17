@@ -1,0 +1,84 @@
+namespace sys.quic.connection_state
+
+import sys.quic.error as errors
+import sys.quic.frame_types as frames
+import sys.quic.stream_state
+import sys.quic.stream_types as streams
+
+public struct State {
+    localIsServer: Bool
+    handshakeConfirmed: Bool
+    peerClosed: Bool
+    flow: streams.ConnectionFlow
+    peerStreamLimits: streams.StreamLimits
+}
+
+transportError code: UInt64 -> errors.Error => errors.Error { kind: errors.Kind.Transport, code: code }
+
+public create localIsServer: Bool, receiveMaximum: UInt64, sendMaximum: UInt64, peerBidirectionalStreams: UInt64, peerUnidirectionalStreams: UInt64 -> State => State {
+    localIsServer: localIsServer
+    handshakeConfirmed: false
+    peerClosed: false
+    flow: stream_state.initialConnectionFlow(receiveMaximum, sendMaximum)
+    peerStreamLimits: stream_state.initialStreamLimits(peerBidirectionalStreams, peerUnidirectionalStreams)
+}
+
+public apply state: State, value: move frames.Value -> Result<State, errors.Error> {
+    value -> when {
+        MaxData(maximum) {
+            State {
+                localIsServer: state.localIsServer
+                handshakeConfirmed: state.handshakeConfirmed
+                peerClosed: state.peerClosed
+                flow: stream_state.onMaxData(state.flow, maximum)
+                peerStreamLimits: state.peerStreamLimits
+            } -> Result<State, errors.Error>.Ok
+        }
+        MaxStreams(limit) {
+            State {
+                localIsServer: state.localIsServer
+                handshakeConfirmed: state.handshakeConfirmed
+                peerClosed: state.peerClosed
+                flow: state.flow
+                peerStreamLimits: stream_state.onMaxStreams(
+                    state.peerStreamLimits,
+                    limit.bidirectional,
+                    limit.maximum)
+            } -> Result<State, errors.Error>.Ok
+        }
+        HandshakeDone {
+            state.localIsServer -> if {
+                Result<State, errors.Error>.Err(transportError(errors.protocolViolation()))
+            } else {
+                Result<State, errors.Error>.Ok(State {
+                    localIsServer: false
+                    handshakeConfirmed: true
+                    peerClosed: state.peerClosed
+                    flow: state.flow
+                    peerStreamLimits: state.peerStreamLimits
+                })
+            }
+        }
+        ConnectionClose(close) {
+            Result<State, errors.Error>.Ok(State {
+                localIsServer: state.localIsServer
+                handshakeConfirmed: state.handshakeConfirmed
+                peerClosed: true
+                flow: state.flow
+                peerStreamLimits: state.peerStreamLimits
+            })
+        }
+        Padding(count) { Result<State, errors.Error>.Ok(state) }
+        Ping { Result<State, errors.Error>.Ok(state) }
+        Ack(ack) { Result<State, errors.Error>.Ok(state) }
+        Crypto(crypto) { Result<State, errors.Error>.Ok(state) }
+        Stream(streamFrame) { Result<State, errors.Error>.Ok(state) }
+        Datagram(datagram) { Result<State, errors.Error>.Ok(state) }
+        MaxStreamData(limit) { Result<State, errors.Error>.Ok(state) }
+        DataBlocked(limit) { Result<State, errors.Error>.Ok(state) }
+        StreamDataBlocked(blocked) { Result<State, errors.Error>.Ok(state) }
+        StreamsBlocked(blocked) { Result<State, errors.Error>.Ok(state) }
+        NewConnectionId(value) { Result<State, errors.Error>.Ok(state) }
+        RetireConnectionId(sequence) { Result<State, errors.Error>.Ok(state) }
+    }
+}

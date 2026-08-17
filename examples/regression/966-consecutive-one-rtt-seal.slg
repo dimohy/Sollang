@@ -1,0 +1,20 @@
+import sys.quic.error as errors
+import sys.quic.packet
+
+key: -> [UInt8; 16] => [17; 16]
+iv: -> [UInt8; 12] => [34; 12]
+headerProtection: -> [UInt8; 16] => [51; 16]
+connectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
+
+run: -> Result<Bool, errors.Error> {
+    packet.sealOneRtt(connectionId(), false, 3, 4, [24; 28], key(), iv(), headerProtection())? => first
+    packet.sealOneRtt(connectionId(), false, 4, 4, [11; 7], key(), iv(), headerProtection())? => second
+    Result<Bool, errors.Error>.Ok((first -> len) == 57 and (second -> len) == 36)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "consecutive-one-rtt-seal=ok" } else { "consecutive-one-rtt-seal=failed" } -> println }
+        Err(value) { "consecutive-one-rtt-seal-error=$(value.code)" -> println }
+    }
+}

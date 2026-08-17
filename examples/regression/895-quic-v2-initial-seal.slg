@@ -1,0 +1,53 @@
+import sys.quic.error as errors
+import sys.quic.keys
+import sys.quic.packet
+
+destinationConnectionId: -> [UInt8] => [131, 148, 200, 240, 62, 81, 87, 8]
+empty: -> [UInt8] => []
+payload: -> [UInt8] => [1, 2, 3, 4]
+
+check: -> Result<Bool, errors.Error> {
+    keys.deriveInitial(keys.version2(), destinationConnectionId()) => initial
+    packet.sealInitial(
+        keys.version2(),
+        destinationConnectionId(),
+        empty(),
+        empty(),
+        2,
+        4,
+        payload(),
+        initial.clientKey,
+        initial.clientIv,
+        initial.clientHeaderProtection)? => protected
+    packet.openInitial(
+        protected,
+        2,
+        initial.clientKey,
+        initial.clientIv,
+        initial.clientHeaderProtection)? => opened
+    Result<Bool, errors.Error>.Ok((protected -> len) == 41
+        and protected[0] / 64 == 3
+        and protected[1] == 107
+        and protected[2] == 51
+        and protected[3] == 67
+        and protected[4] == 207
+        and protected[22] != 1
+        and protected[23] != 2
+        and opened.version == keys.version2()
+        and opened.packetNumber == 2
+        and opened.nextOffset == UIntSize(protected -> len)
+        and (opened.plaintext -> len) == 4
+        and opened.plaintext[0] == 1
+        and opened.plaintext[3] == 4)
+}
+
+main {
+    check() -> when {
+        Ok(matches) { matches }
+        Err(failure) { false }
+    } -> if {
+        "quic-v2-initial-seal=ok"
+    } else {
+        "quic-v2-initial-seal=failed"
+    } -> println
+}

@@ -45,7 +45,14 @@ internal sealed partial class LlvmEmitter
                 Ok: ok);
         }
 
-        var current = EmitFlowSource(expression.Source);
+        var current = expression.Targets.Count > 0
+            && TryResolveFunction(expression.Targets[0].Path, out var contextualFirstFunction)
+            && contextualFirstFunction.InputType is { } contextualFirstInput
+            && expression.Source is (ArrayLiteralExpression
+                or ArrayRepeatExpression
+                or DictionaryLiteralExpression)
+                ? EmitFunctionArgumentExpression(expression.Source, contextualFirstInput)
+                : EmitFlowSource(expression.Source);
         for (var i = 0; i < expression.Targets.Count; i++)
         {
             var target = expression.Targets[i];
@@ -116,14 +123,20 @@ internal sealed partial class LlvmEmitter
                 return new RuntimeFlowResult(Value: null, Binding: null, Ok: ok);
             }
 
-            if (_program.ResolvedGenericCalls.TryGetValue(target, out var function)
-                || TryResolveFunction(target.Path, out function)
-                || TryResolveInstanceMethod(current.Type, path, out function))
+            if (TryResolveInstanceMethod(current.Type, path, out var function)
+                || _program.ResolvedGenericCalls.TryGetValue(target, out function)
+                || TryResolveFunction(target.Path, out function))
             {
                 if (function.Kind is not (
                         BoundFunctionKind.User
                         or BoundFunctionKind.Native
-                        or BoundFunctionKind.RuntimeMouseEvents)
+                        or BoundFunctionKind.RuntimeMouseEvents
+                        or BoundFunctionKind.RuntimeSocketReceive
+                        or BoundFunctionKind.RuntimeSocketSend
+                        or BoundFunctionKind.RuntimeSocketSendText
+                        or BoundFunctionKind.RuntimeSocketLocalPort
+                        or BoundFunctionKind.RuntimeSocketSendTo
+                        or BoundFunctionKind.RuntimeSocketReceiveFrom)
                     && target.Arguments.Count != 0)
                 {
                     throw new SollangException($"function value-flow target '{path}' does not accept additional arguments in this slice");
@@ -193,6 +206,9 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeClosestInt:
                         current = EmitRuntimeIntIntrinsic(function, current, path);
                         ok = _mainOk;
+                        continue;
+                    case BoundFunctionKind.RuntimeSecureRandomBytes:
+                        current = EmitRuntimeSecureRandomBytes(function, current, path);
                         continue;
                     case BoundFunctionKind.RuntimeLimitParallelWorkers:
                         current = EmitRuntimeLimitParallelWorkersIntrinsic(current, path);
@@ -275,6 +291,19 @@ internal sealed partial class LlvmEmitter
                             current,
                             EmitExpression(target.Arguments[0]),
                             path);
+                        continue;
+                    case BoundFunctionKind.RuntimeSocketListen:
+                    case BoundFunctionKind.RuntimeSocketAccept:
+                    case BoundFunctionKind.RuntimeSocketConnect:
+                    case BoundFunctionKind.RuntimeSocketReceive:
+                    case BoundFunctionKind.RuntimeSocketSend:
+                    case BoundFunctionKind.RuntimeSocketSendText:
+                    case BoundFunctionKind.RuntimeSocketShutdown:
+                    case BoundFunctionKind.RuntimeSocketBindDatagram:
+                    case BoundFunctionKind.RuntimeSocketLocalPort:
+                    case BoundFunctionKind.RuntimeSocketSendTo:
+                    case BoundFunctionKind.RuntimeSocketReceiveFrom:
+                        current = EmitFlowFunctionCall(function, current, expression.Source, target.Arguments);
                         continue;
                     case BoundFunctionKind.RuntimeOpenFileAsync:
                     case BoundFunctionKind.RuntimeOpenWriteFileAsync:
@@ -482,6 +511,7 @@ internal sealed partial class LlvmEmitter
                     RuntimeText text => new RuntimeFlowResult(
                         new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(text.LengthName)), null, _mainOk),
                     RuntimeIntSlice slice => new RuntimeFlowResult(EmitSizeAsInt(slice.LengthName, "slice_len_value"), null, _mainOk),
+                    RuntimeInlineSlice slice => new RuntimeFlowResult(EmitSizeAsInt(slice.LengthName, "slice_len_value"), null, _mainOk),
                     RuntimeStaticIntArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
                     RuntimeStaticTextArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
                     RuntimeStaticInlineArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
@@ -703,7 +733,11 @@ internal sealed partial class LlvmEmitter
                     && target.Arguments[0] is DictionaryLiteralExpression contextualElement
                     && _program.Types.IsStruct(contextualArray.ElementType)
                         ? EmitContextualStructLiteral(contextualElement, contextualArray.ElementType)
-                        : EmitExpression(target.Arguments[0]);
+                        : EmitFunctionArgumentExpression(
+                            target.Arguments[0],
+                            current is RuntimeDynamicInlineArray contextualPushArray
+                                ? contextualPushArray.ElementType
+                                : BoundType.Int);
                 var pushedArray = current switch
                 {
                     RuntimeDynamicIntArray array when pushed is RuntimeInt integer =>
@@ -733,7 +767,7 @@ internal sealed partial class LlvmEmitter
                 var item = target.Arguments[0] is DictionaryLiteralExpression contextualDequeElement
                     && _program.Types.IsStruct(deque.ElementType)
                         ? EmitContextualStructLiteral(contextualDequeElement, deque.ElementType)
-                        : EmitExpression(target.Arguments[0]);
+                        : EmitFunctionArgumentExpression(target.Arguments[0], deque.ElementType);
                 var pushedDeque = EmitDequePush(deque, item, front: path == "pushFront");
                 StoreMutableContainer(dequeName, pushedDeque);
                 _locals[dequeName] = pushedDeque;
@@ -795,7 +829,9 @@ internal sealed partial class LlvmEmitter
                     throw new SollangException("take expects exactly one index or key argument");
                 }
 
-                var takeName = RequireMutableContainerSource(source, "take");
+                var takeName = source is NameExpression
+                    ? RequireMutableContainerSource(source, "take")
+                    : RequireMutableContainerProjection(source, "take");
                 RuntimeValue takenValue;
                 RuntimeValue remainingContainer;
                 switch (current)
@@ -839,8 +875,15 @@ internal sealed partial class LlvmEmitter
                         throw new SollangException("take expects a dynamic array or dictionary owner");
                 }
 
-                StoreMutableContainer(takeName, remainingContainer);
-                _locals[takeName] = remainingContainer;
+                if (takeName is not null)
+                {
+                    StoreMutableContainer(takeName, remainingContainer);
+                    _locals[takeName] = remainingContainer;
+                }
+                else
+                {
+                    StoreMutableContainerProjection(source, remainingContainer, "take");
+                }
                 result = new RuntimeFlowResult(takenValue, null, _mainOk);
                 return true;
             }
@@ -1008,6 +1051,32 @@ internal sealed partial class LlvmEmitter
         }
 
         return name.Name;
+    }
+
+    private string? RequireMutableContainerProjection(Expression source, string operation)
+    {
+        if (source is not FieldAccessExpression { Source: NameExpression owner }
+            || !_mutableLocals.Contains(owner.Name)
+            || !_mutableStructSlots.ContainsKey(owner.Name))
+        {
+            throw new SollangException($"{operation} requires a mutable container owner or mutable struct-field place");
+        }
+        return null;
+    }
+
+    private void StoreMutableContainerProjection(Expression source, RuntimeValue value, string operation)
+    {
+        var place = EmitReferencePlace(source);
+        if (place.ElementType != value.Type)
+        {
+            throw new SollangException($"{operation} projected container type changed from {place.ElementType} to {value.Type}");
+        }
+        var materialized = MaterializeAggregateValue(value);
+        EmitStore(
+            materialized.TypeName,
+            materialized.ValueName,
+            place.PointerName,
+            RuntimeAlignment(value.Type));
     }
 
     private string RequireMoveContainerSource(Expression source, string operation)

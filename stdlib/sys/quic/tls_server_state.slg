@@ -1,0 +1,176 @@
+namespace sys.quic.tls_server_state
+
+import sys.quic.error as errors
+import sys.quic.tls_auth as auth
+import sys.quic.tls_handshake as handshake
+import sys.quic.tls_server_phase as phases
+import sys.quic.tls_transcript as transcripts
+
+public struct State {
+    phase: phases.Phase
+    transcript: transcripts.Transcript
+}
+
+error code: UInt64 -> errors.Error {
+    errors.Error { kind: errors.Kind.Tls, code: code }
+}
+
+public create clientHelloMessage: [UInt8] -> Result<State, errors.Error> {
+    handshake.decode(clientHelloMessage, 0)? => decoded
+    (decoded.messageType == handshake.clientHello()
+        and decoded.nextOffset == UIntSize(clientHelloMessage -> len)) -> unless {
+        Result<State, errors.Error>.Err(error(10)) -> return
+    }
+    transcripts.create() => transcript!
+    transcript! -> transcripts.append(clientHelloMessage)
+    Result<State, errors.Error>.Ok(State {
+        phase: phases.Phase.SendServerHello
+        transcript: transcript!
+    })
+}
+
+expectedMessage phase: phases.Phase -> UInt8 {
+    phase -> when {
+        SendServerHello { handshake.serverHello() }
+        SendEncryptedExtensions { handshake.encryptedExtensions() }
+        SendCertificate { handshake.certificate() }
+        SendCertificateVerify { handshake.certificateVerify() }
+        SendServerFinished { handshake.finished() }
+        AwaitClientFinished { 0 }
+        Connected { 0 }
+        Failed { 0 }
+    }
+}
+
+nextPhase phase: phases.Phase -> phases.Phase {
+    phase -> when {
+        SendServerHello { phases.Phase.SendEncryptedExtensions }
+        SendEncryptedExtensions { phases.Phase.SendCertificate }
+        SendCertificate { phases.Phase.SendCertificateVerify }
+        SendCertificateVerify { phases.Phase.SendServerFinished }
+        SendServerFinished { phases.Phase.AwaitClientFinished }
+        AwaitClientFinished { phases.Phase.Failed }
+        Connected { phases.Phase.Failed }
+        Failed { phases.Phase.Failed }
+    }
+}
+
+canSendGenericServerMessage phase: phases.Phase -> Bool {
+    phase -> when {
+        SendServerHello { true }
+        SendEncryptedExtensions { true }
+        SendCertificate { true }
+        SendCertificateVerify { false }
+        SendServerFinished { true }
+        AwaitClientFinished { false }
+        Connected { false }
+        Failed { false }
+    }
+}
+
+isAwaitClientFinished phase: phases.Phase -> Bool {
+    phase -> when {
+        AwaitClientFinished { true }
+        SendServerHello { false }
+        SendEncryptedExtensions { false }
+        SendCertificate { false }
+        SendCertificateVerify { false }
+        SendServerFinished { false }
+        Connected { false }
+        Failed { false }
+    }
+}
+
+public markServerMessage state: mut State, message: [UInt8] -> Result<Unit, errors.Error> {
+    state.phase -> canSendGenericServerMessage -> unless {
+        phases.Phase.Failed => state.phase
+        Result<Unit, errors.Error>.Err(error(10)) -> return
+    }
+    handshake.decode(message, 0) -> when {
+        Ok(decoded) {
+            (decoded.nextOffset == UIntSize(message -> len)
+                and decoded.messageType == expectedMessage(state.phase)) -> unless {
+                phases.Phase.Failed => state.phase
+                Result<Unit, errors.Error>.Err(error(10)) -> return
+            }
+        }
+        Err(decodeError) {
+            phases.Phase.Failed => state.phase
+            Result<Unit, errors.Error>.Err(decodeError) -> return
+        }
+    }
+    state.phase -> nextPhase => state.phase
+    state.transcript -> transcripts.append(message)
+    Result<Unit, errors.Error>.Ok
+}
+
+isSendCertificateVerify phase: phases.Phase -> Bool {
+    phase -> when {
+        SendCertificateVerify { true }
+        SendServerHello { false }
+        SendEncryptedExtensions { false }
+        SendCertificate { false }
+        SendServerFinished { false }
+        AwaitClientFinished { false }
+        Connected { false }
+        Failed { false }
+    }
+}
+
+public signServerCertificateVerify state: mut State, seed: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    state.phase -> isSendCertificateVerify -> unless {
+        phases.Phase.Failed => state.phase
+        Result<[UInt8; ~], errors.Error>.Err(error(10)) -> return
+    }
+    transcripts.hash(state.transcript) => transcriptHash
+    auth.signCertificateVerify(seed, true, transcriptHash) -> when {
+        Ok(message) {
+            state.transcript -> transcripts.append(message)
+            phases.Phase.SendServerFinished => state.phase
+            Result<[UInt8; ~], errors.Error>.Ok(message)
+        }
+        Err(signError) {
+            phases.Phase.Failed => state.phase
+            Result<[UInt8; ~], errors.Error>.Err(signError)
+        }
+    }
+}
+
+public acceptClientFinished state: mut State, message: [UInt8], expectedVerifyData: [UInt8; 32] -> Result<Unit, errors.Error> {
+    state.phase -> isAwaitClientFinished -> unless {
+        phases.Phase.Failed => state.phase
+        Result<Unit, errors.Error>.Err(error(10)) -> return
+    }
+    auth.decodeFinished(message) -> when {
+        Ok(actualVerifyData) {
+            auth.verifyFinished(expectedVerifyData, actualVerifyData) -> unless {
+                phases.Phase.Failed => state.phase
+                Result<Unit, errors.Error>.Err(error(51)) -> return
+            }
+        }
+        Err(decodeError) {
+            phases.Phase.Failed => state.phase
+            Result<Unit, errors.Error>.Err(decodeError) -> return
+        }
+    }
+    state.transcript -> transcripts.append(message)
+    phases.Phase.Connected => state.phase
+    Result<Unit, errors.Error>.Ok
+}
+
+public transcriptHash state: ref State -> [UInt8; 32] {
+    state.transcript -> transcripts.hash
+}
+
+public isConnected state: ref State -> Bool {
+    state.phase -> when {
+        Connected { true }
+        SendServerHello { false }
+        SendEncryptedExtensions { false }
+        SendCertificate { false }
+        SendCertificateVerify { false }
+        SendServerFinished { false }
+        AwaitClientFinished { false }
+        Failed { false }
+    }
+}

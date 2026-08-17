@@ -98,6 +98,25 @@ internal sealed partial class LlvmEmitter
         return DematerializeAggregateValue(definition.ElementType, value);
     }
 
+    private void EmitStaticInlineArrayAssign(RuntimeStaticInlineArray array, string index, RuntimeValue value)
+    {
+        var inBounds = NextTemp("inline_array_assign_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
+        EmitTrapUnless(inBounds, "inline_array_assign_bounds");
+        var definition = _program.Types.GetStaticArray(array.ArrayType);
+        var llvmType = LlvmType(definition.ElementType);
+        var slot = NextTemp("inline_array_assign_slot");
+        EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
+        if (_program.Types.ContainsOwnedStorage(definition.ElementType))
+        {
+            var previous = NextTemp("inline_array_assign_previous");
+            EmitLoad(previous, llvmType, slot, definition.ElementAlignment);
+            DropOwnedRuntimeValue(DematerializeAggregateValue(definition.ElementType, previous));
+        }
+        var materialized = MaterializeAggregateValue(value);
+        EmitStore(llvmType, materialized.ValueName, slot, definition.ElementAlignment);
+    }
+
     private void EmitStaticArrayAssign(RuntimeStaticIntArray array, string index, string value)
     {
         var inBounds = NextTemp("array_assign_in_bounds");
@@ -106,7 +125,7 @@ internal sealed partial class LlvmEmitter
 
         var slot = NextTemp("array_slot");
         EmitAssign(slot, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i32], ptr {array.PointerName}, i64 0, i64 {index}");
-        EmitStore("i64", value, slot, 8);
+        EmitStore("i32", value, slot, 4);
     }
 
     private RuntimeInt EmitDynamicArrayLoad(RuntimeDynamicIntArray array, string index)
@@ -194,6 +213,19 @@ internal sealed partial class LlvmEmitter
         var slot = NextTemp("slice_slot");
         EmitAssign(slot, $"getelementptr i32, ptr {slice.PointerName}, i64 {index}");
         return LoadInt(slot, "slice_item");
+    }
+
+    private RuntimeValue EmitInlineSliceLoad(RuntimeInlineSlice slice, string index)
+    {
+        var inBounds = NextTemp("slice_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, slice.LengthName);
+        EmitTrapUnless(inBounds, "slice_bounds");
+        var llvmType = LlvmType(slice.ElementType);
+        var slot = NextTemp("slice_slot");
+        EmitAssign(slot, $"getelementptr {llvmType}, ptr {slice.PointerName}, i64 {index}");
+        var value = NextTemp("slice_item");
+        EmitLoad(value, llvmType, slot, RuntimeAlignment(slice.ElementType));
+        return DematerializeAggregateValue(slice.ElementType, value);
     }
 
     private void EmitDynamicArrayAssign(RuntimeDynamicIntArray array, string index, string value)

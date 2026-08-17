@@ -208,6 +208,7 @@ internal static class CompilerApp
                 }
                 else
                 {
+                    PrintWarnings(frontendCache.Warnings);
                     if (libraryInterfacePath is not null)
                     {
                         SollangLibraryManifest.RestoreCache(
@@ -253,6 +254,7 @@ internal static class CompilerApp
         var semanticProbe = IncrementalSemanticCache.Probe(frontendCache.Location, loaded);
         var boundProgram = new SemanticCompiler(loaded.Program, pointerBitWidth)
             .Compile(semanticProbe.ReusePlan);
+        PrintWarnings(boundProgram.Warnings);
         var semanticCache = IncrementalSemanticCache.Create(
             frontendCache.Location,
             loaded,
@@ -284,7 +286,7 @@ internal static class CompilerApp
         }
         codegenCache.Publish(codegenOutput);
         semanticCache.Publish();
-        IncrementalFrontendCache.Publish(loaded, options, codegenCache.Location);
+        IncrementalFrontendCache.Publish(loaded, boundProgram.Warnings, options, codegenCache.Location);
         IncrementalProductCache.Publish(
             codegenCache.Location,
             options.OutputPath,
@@ -375,6 +377,7 @@ internal static class CompilerApp
             ?? Directory.GetCurrentDirectory());
         var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
         var boundProgram = new SemanticCompiler(program, pointerBitWidth).Compile();
+        PrintWarnings(boundProgram.Warnings);
         WriteAndLinkStandalone(options, toolchain, boundProgram);
         PrintOutput(options.OutputPath);
     }
@@ -429,6 +432,17 @@ internal static class CompilerApp
     {
         var exeInfo = new FileInfo(outputPath);
         Console.WriteLine($"Wrote {exeInfo.FullName} ({exeInfo.Length.ToString("N0", CultureInfo.InvariantCulture)} bytes)");
+    }
+
+    private static void PrintWarnings(IReadOnlyList<SemanticWarning> warnings)
+    {
+        foreach (var warning in warnings.OrderBy(static warning => warning.Line)
+                     .ThenBy(static warning => warning.Column)
+                     .ThenBy(static warning => warning.Code, StringComparer.Ordinal))
+        {
+            Console.Error.WriteLine(
+                $"warning {warning.Code} in module '{warning.ModuleName}' at {warning.Line}:{warning.Column}: {warning.Message}");
+        }
     }
 
     private static void LinkLlvmIr(CliOptions options, LlvmToolchain toolchain, string llPath, string workDir)

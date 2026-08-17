@@ -66,6 +66,12 @@ internal sealed partial class LlvmEmitter
         return _currentFunctions.TryGetValue(name, out function!);
     }
 
+    private bool TryResolveCalledFunction(CallExpression call, out BoundFunction function)
+    {
+        return _program.ResolvedGenericCalls.TryGetValue(call, out function!)
+            || TryResolveFunction(call.Path, out function);
+    }
+
     private static IReadOnlyDictionary<string, BoundFunction> CreateFunctionScope(
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundFunction> localFunctions)
@@ -171,7 +177,10 @@ internal sealed partial class LlvmEmitter
                 var transferredOwnerName = IsOwnedContainerRuntimeValue(result)
                     ? GetBlockResultTransferredOwnerName(callbackResult.Expression)
                     : null;
-                DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName);
+                DropOwnedLocalsCreatedSince(
+                    yieldedBlockLocals,
+                    transferredOwnerName,
+                    callbackResult.Expression);
             }
         }
         finally
@@ -284,7 +293,8 @@ internal sealed partial class LlvmEmitter
             new Dictionary<string, MutableContainerSlot>(_mutableContainerSlots, StringComparer.Ordinal),
             new Dictionary<string, string>(_mutableStructSlots, StringComparer.Ordinal),
             new Dictionary<string, string>(_mutableScalarSlots, StringComparer.Ordinal),
-            new Dictionary<string, string>(_readonlyCaptureBorrowPointers, StringComparer.Ordinal));
+            new Dictionary<string, string>(_readonlyCaptureBorrowPointers, StringComparer.Ordinal),
+            new Dictionary<RuntimeValue, string>(_readonlyValueSlots));
     }
 
     private void ClearLocalState()
@@ -335,6 +345,14 @@ internal sealed partial class LlvmEmitter
 
     private void EmitStackLifetimeEndsAfter(object unit)
     {
+        // Lifetime intrinsics are ordinary LLVM instructions and therefore
+        // cannot be appended after ret, br, unreachable, or another terminator.
+        // Omitting the hint on a terminating path is semantically harmless;
+        // emitting it would make every following label part of invalid IR.
+        if (_currentBlockTerminated)
+        {
+            return;
+        }
         foreach (var allocation in _currentStackFramePlan.GetLifetimesEndingAfter(unit))
         {
             EmitStackLifetimeEnd(allocation);
@@ -402,14 +420,54 @@ internal sealed partial class LlvmEmitter
             _readonlyCaptureBorrowPointers.Add(name, pointer);
         }
 
+        _readonlyValueSlots.Clear();
+        foreach (var (value, pointer) in scope.ReadonlyValueSlots)
+        {
+            _readonlyValueSlots.Add(value, pointer);
+        }
     }
 
-    private void DropOwnedLocals(string? transferredOwnerName = null)
+    private static LocalScope KeepLocalsInScope(LocalScope scope, IEnumerable<string> names)
+    {
+        var retainedNames = names.ToHashSet(StringComparer.Ordinal);
+        var retainedLocals = scope.Locals
+            .Where(local => retainedNames.Contains(local.Key))
+            .ToDictionary(static local => local.Key, static local => local.Value, StringComparer.Ordinal);
+        var retainedValues = retainedLocals.Values.ToHashSet();
+        return new LocalScope(
+            retainedLocals,
+            scope.MutableLocals.Where(retainedNames.Contains).ToHashSet(StringComparer.Ordinal),
+            scope.BorrowedMutableLocals.Where(retainedNames.Contains).ToHashSet(StringComparer.Ordinal),
+            scope.BorrowedOwnedLocals.Where(retainedNames.Contains).ToHashSet(StringComparer.Ordinal),
+            scope.MutableContainerSlots
+                .Where(slot => retainedNames.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.MutableStructSlots
+                .Where(slot => retainedNames.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.MutableScalarSlots
+                .Where(slot => retainedNames.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.ReadonlyCaptureBorrowPointers
+                .Where(pointer => retainedNames.Contains(pointer.Key))
+                .ToDictionary(static pointer => pointer.Key, static pointer => pointer.Value, StringComparer.Ordinal),
+            scope.ReadonlyValueSlots
+                .Where(slot => retainedValues.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value));
+    }
+
+    private void DropOwnedLocals(
+        string? transferredOwnerName = null,
+        Expression? transferredExpression = null)
     {
         foreach (var (name, storedValue) in _locals.Reverse())
         {
             if (string.Equals(name, transferredOwnerName, StringComparison.Ordinal))
             {
+                if (TryDropTransferredOwnerSiblings(name, storedValue, transferredExpression))
+                {
+                    continue;
+                }
                 EndMutableContainerSlotLifetime(name);
                 continue;
             }
@@ -417,7 +475,10 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private void DropOwnedLocalsCreatedSince(LocalScope outerScope, string? transferredOwnerName)
+    private void DropOwnedLocalsCreatedSince(
+        LocalScope outerScope,
+        string? transferredOwnerName,
+        Expression? transferredExpression = null)
     {
         foreach (var (name, storedValue) in _locals.Reverse())
         {
@@ -428,12 +489,39 @@ internal sealed partial class LlvmEmitter
 
             if (string.Equals(name, transferredOwnerName, StringComparison.Ordinal))
             {
+                if (TryDropTransferredOwnerSiblings(name, storedValue, transferredExpression))
+                {
+                    continue;
+                }
                 EndMutableContainerSlotLifetime(name);
                 continue;
             }
 
             DropOwnedLocal(name, storedValue);
         }
+    }
+
+    private bool TryDropTransferredOwnerSiblings(
+        string ownerName,
+        RuntimeValue storedValue,
+        Expression? transferredExpression)
+    {
+        if (transferredExpression is null
+            || !_program.Types.IsStruct(storedValue.Type)
+            || GetTransferredOwnedStructFieldName(
+                transferredExpression,
+                ownerName,
+                storedValue.Type) is not { } transferredFieldName)
+        {
+            return false;
+        }
+
+        var owner = _mutableStructSlots.TryGetValue(ownerName, out var structPointer)
+            ? LoadMutableStruct(storedValue, structPointer)
+            : storedValue;
+        DropOwnedStructFieldsExcept((RuntimeStruct)owner, transferredFieldName);
+        EndMutableContainerSlotLifetime(ownerName);
+        return true;
     }
 
     private void DropOwnedLocal(string name, RuntimeValue storedValue)
@@ -764,7 +852,7 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private static string? GetMoveConsumingContainerSourceName(Expression expression)
+    private string? GetMoveConsumingContainerSourceName(Expression expression)
     {
         if (expression is EnumMatchExpression match)
         {
@@ -789,6 +877,11 @@ internal sealed partial class LlvmEmitter
         }
 
         var lastTarget = flow.Targets[^1];
+        if (_program.ResolvedGenericCalls.ContainsKey(lastTarget))
+        {
+            return null;
+        }
+
         if (lastTarget.Path.Count != 1
             || lastTarget.Path[0] is not ("append" or "updated"))
         {
@@ -844,6 +937,22 @@ internal sealed partial class LlvmEmitter
             return name.Name;
         }
 
+        var transferredLocalNames = _locals
+            .Where(local => _program.Types.ContainsOwnedStorage(local.Value.Type)
+                && TransfersOwnerName(
+                    expression,
+                    local.Key,
+                    isResult: true,
+                    ownerType: local.Value.Type))
+            .Select(static local => local.Key)
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .ToArray();
+        if (transferredLocalNames.Length == 1)
+        {
+            return transferredLocalNames[0];
+        }
+
         var movedSourceName = GetMoveConsumingContainerSourceName(expression);
         if (movedSourceName is not null)
         {
@@ -851,7 +960,7 @@ internal sealed partial class LlvmEmitter
         }
 
         if (expression is CallExpression call
-            && TryResolveFunction(call.Path, out var callFunction)
+            && TryResolveCalledFunction(call, out var callFunction)
             && FunctionConsumesOwnedHeapInput(callFunction)
             && call.Arguments.Count == 1
             && call.Arguments[0] is NameExpression argumentName)
@@ -895,6 +1004,99 @@ internal sealed partial class LlvmEmitter
         return null;
     }
 
+    private string? GetTransferredOwnedStructFieldName(
+        Expression expression,
+        string ownerName,
+        BoundType ownerType)
+    {
+        if (expression is FieldAccessExpression
+            {
+                Source: NameExpression fieldOwner,
+                FieldName: var fieldName
+            }
+            && string.Equals(fieldOwner.Name, ownerName, StringComparison.Ordinal)
+            && _program.Types.GetStruct(ownerType).Fields.FirstOrDefault(field =>
+                string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } field
+            && _program.Types.ContainsOwnedStorage(field.Type))
+        {
+            return fieldName;
+        }
+
+        if (expression is CallExpression enumConstructor
+            && enumConstructor.Path.Count >= 2
+            && _program.Types.TryResolve(
+                string.Join('.', enumConstructor.Path.Take(enumConstructor.Path.Count - 1)),
+                out var enumType)
+            && _program.Types.IsEnum(enumType))
+        {
+            return CommonTransferredFieldName(enumConstructor.Arguments, ownerName, ownerType);
+        }
+
+        if (expression is StructLiteralExpression structure)
+        {
+            return CommonTransferredFieldName(
+                structure.Fields.Select(static initializer => initializer.Value),
+                ownerName,
+                ownerType);
+        }
+
+        if (expression is IfExpression conditional && conditional.Else is not null)
+        {
+            var thenField = conditional.Then.Value is { } thenValue
+                ? GetTransferredOwnedStructFieldName(thenValue, ownerName, ownerType)
+                : null;
+            var elseField = conditional.Else.Value is { } elseValue
+                ? GetTransferredOwnedStructFieldName(elseValue, ownerName, ownerType)
+                : null;
+            return thenField is not null
+                && string.Equals(thenField, elseField, StringComparison.Ordinal)
+                    ? thenField
+                    : null;
+        }
+
+        if (expression is WhenExpression whenExpression)
+        {
+            var branches = whenExpression.Arms.Select(static arm => arm.Body)
+                .Append(whenExpression.Else)
+                .ToArray();
+            if (branches.Any(static branch => branch.Value is null))
+            {
+                return null;
+            }
+            var fields = branches.Select(branch =>
+                    GetTransferredOwnedStructFieldName(branch.Value!, ownerName, ownerType))
+                .ToArray();
+            return fields[0] is { } firstField
+                && fields.All(field => string.Equals(field, firstField, StringComparison.Ordinal))
+                    ? firstField
+                    : null;
+        }
+
+        return null;
+    }
+
+    private string? CommonTransferredFieldName(
+        IEnumerable<Expression> expressions,
+        string ownerName,
+        BoundType ownerType)
+    {
+        string? common = null;
+        foreach (var expression in expressions)
+        {
+            var fieldName = GetTransferredOwnedStructFieldName(expression, ownerName, ownerType);
+            if (fieldName is null)
+            {
+                continue;
+            }
+            if (common is not null && !string.Equals(common, fieldName, StringComparison.Ordinal))
+            {
+                return null;
+            }
+            common = fieldName;
+        }
+        return common;
+    }
+
     private string? GetFunctionResultTransferredOwnerName(
         BoundFunction function,
         Expression expression)
@@ -921,9 +1123,29 @@ internal sealed partial class LlvmEmitter
         return GetBlockResultTransferredOwnerName(expression);
     }
 
-    private bool TransfersOwnerName(Expression expression, string ownerName, bool isResult)
+    private bool TransfersOwnerName(
+        Expression expression,
+        string ownerName,
+        bool isResult,
+        BoundType? ownerType = null)
     {
         if (isResult && expression is NameExpression name && name.Name == ownerName)
+        {
+            return true;
+        }
+
+        if (isResult
+            && expression is FieldAccessExpression
+            {
+                Source: NameExpression fieldOwner,
+                FieldName: var fieldName
+            }
+            && string.Equals(fieldOwner.Name, ownerName, StringComparison.Ordinal)
+            && ownerType is { } knownOwnerType
+            && _program.Types.IsStruct(knownOwnerType)
+            && _program.Types.GetStruct(knownOwnerType).Fields.FirstOrDefault(
+                field => string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } transferredField
+            && _program.Types.ContainsOwnedStorage(transferredField.Type))
         {
             return true;
         }
@@ -936,8 +1158,39 @@ internal sealed partial class LlvmEmitter
             return true;
         }
 
+        if (isResult
+            && expression is StructLiteralExpression structure
+            && _program.Types.TryResolve(structure.TypeName, out var structureType)
+            && _program.Types.IsStruct(structureType))
+        {
+            var definition = _program.Types.GetStruct(structureType);
+            if (structure.Fields.Any(initializer =>
+                definition.Fields.First(field => field.Name == initializer.Name) is { Type: var fieldType }
+                && _program.Types.ContainsOwnedStorage(fieldType)
+                && TransfersOwnerName(initializer.Value, ownerName, isResult: true, ownerType: ownerType)))
+            {
+                return true;
+            }
+        }
+
+        if (isResult
+            && expression is CallExpression enumConstructor
+            && enumConstructor.Path.Count >= 2
+            && _program.Types.TryResolve(
+                string.Join('.', enumConstructor.Path.Take(enumConstructor.Path.Count - 1)),
+                out var enumType)
+            && _program.Types.IsEnum(enumType)
+            && _program.Types.GetEnum(enumType).Variants.FirstOrDefault(
+                variant => variant.Name == enumConstructor.Path[^1])?.PayloadType is { } payloadType
+            && _program.Types.ContainsOwnedStorage(payloadType)
+            && enumConstructor.Arguments.Any(argument =>
+                TransfersOwnerName(argument, ownerName, isResult: true, ownerType: ownerType)))
+        {
+            return true;
+        }
+
         if (expression is CallExpression call
-            && TryResolveFunction(call.Path, out var callFunction)
+            && TryResolveCalledFunction(call, out var callFunction)
             && FunctionConsumesOwnedHeapInput(callFunction)
             && call.Arguments.Count == 1
             && call.Arguments[0] is NameExpression argumentName
@@ -958,32 +1211,41 @@ internal sealed partial class LlvmEmitter
 
         if (expression is IfExpression conditional && conditional.Else is not null)
         {
-            return TransfersOwnerName(conditional.Then, ownerName)
-                && TransfersOwnerName(conditional.Else, ownerName);
+            return TransfersOwnerName(conditional.Then, ownerName, ownerType)
+                && TransfersOwnerName(conditional.Else, ownerName, ownerType);
         }
 
         return expression is WhenExpression whenExpression
-            && TransfersOwnerName(whenExpression.Else, ownerName)
-            && whenExpression.Arms.All(arm => TransfersOwnerName(arm.Body, ownerName));
+            && TransfersOwnerName(whenExpression.Else, ownerName, ownerType)
+            && whenExpression.Arms.All(arm => TransfersOwnerName(arm.Body, ownerName, ownerType));
     }
 
-    private bool TransfersOwnerName(BlockBody body, string ownerName)
+    private bool TransfersOwnerName(BlockBody body, string ownerName, BoundType? ownerType = null)
     {
         foreach (var statement in body.Statements)
         {
-            var expression = statement switch
+            var (expression, isTransferDestination) = statement switch
             {
-                BindingStatement binding => binding.Value,
-                ExpressionStatement expressionStatement => expressionStatement.Expression,
-                _ => null
+                BindingStatement binding => (binding.Value, true),
+                FieldAssignmentStatement assignment => (assignment.Value, true),
+                IndexAssignmentStatement assignment => (assignment.Value, true),
+                ReturnStatement { Value: { } value } => (value, true),
+                ExpressionStatement expressionStatement => (expressionStatement.Expression, false),
+                _ => (null, false)
             };
-            if (expression is not null && TransfersOwnerName(expression, ownerName, isResult: false))
+            if (expression is not null
+                && TransfersOwnerName(
+                    expression,
+                    ownerName,
+                    isResult: isTransferDestination,
+                    ownerType: ownerType))
             {
                 return true;
             }
         }
 
-        return body.Value is not null && TransfersOwnerName(body.Value, ownerName, isResult: true);
+        return body.Value is not null
+            && TransfersOwnerName(body.Value, ownerName, isResult: true, ownerType: ownerType);
     }
 
     private string? GetBlockTransferredOwnerName(BlockBody body)
@@ -1072,13 +1334,19 @@ internal sealed partial class LlvmEmitter
 
     private static string SymbolForFunction(BoundFunction function)
     {
-        var baseSymbol = SymbolForFunction(function.Name);
+        var baseSymbol = SymbolForFunction(CanonicalFunctionName(function));
         var module = string.Concat(function.ModuleName.Select(
             static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
         return function.IsLocal
             ? $"{baseSymbol}_local_m{module}_{function.Line.ToString(CultureInfo.InvariantCulture)}_{function.Column.ToString(CultureInfo.InvariantCulture)}"
             : baseSymbol;
     }
+
+    private static string CanonicalFunctionName(BoundFunction function) =>
+        function.ModuleName.Length == 0
+        || function.Name.StartsWith(function.ModuleName + ".", StringComparison.Ordinal)
+            ? function.Name
+            : function.ModuleName + "." + function.Name;
 
     private string NextTemp(string prefix)
     {
@@ -1169,6 +1437,13 @@ internal sealed partial class LlvmEmitter
         : RuntimeValue(DynType);
 
     private sealed record RuntimeIntSlice(string PointerName, string LengthName) : RuntimeValue(BoundType.IntSlice);
+
+    private sealed record RuntimeInlineSlice(
+        BoundType SliceType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName)
+        : RuntimeValue(SliceType);
 
     private sealed record RuntimeStaticIntArray(
         string PointerName,
@@ -1297,7 +1572,8 @@ internal sealed partial class LlvmEmitter
         Dictionary<string, MutableContainerSlot> MutableContainerSlots,
         Dictionary<string, string> MutableStructSlots,
         Dictionary<string, string> MutableScalarSlots,
-        Dictionary<string, string> ReadonlyCaptureBorrowPointers);
+        Dictionary<string, string> ReadonlyCaptureBorrowPointers,
+        Dictionary<RuntimeValue, string> ReadonlyValueSlots);
 
     private sealed record LoopContext(
         string ContinueLabel,

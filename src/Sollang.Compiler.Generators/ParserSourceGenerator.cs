@@ -80,6 +80,7 @@ internal sealed record GrammarSpec(
         "FlowExpression",
         "RangeOrLogicalExpression",
         "IfFlowTarget",
+        "UnlessFlowTarget",
         "WhenFlowTarget",
         "FoldFlowTarget",
         "WhenExpression",
@@ -1242,6 +1243,15 @@ internal static class ParserEmitter
         builder.AppendLine("                Expect(TokenKind.RightBracket);");
         builder.AppendLine("                return $\"[{resolvedElementType}; <={parsedCapacity}]\";");
         builder.AppendLine("            }");
+        builder.AppendLine("            if (Match(TokenKind.Number, out var concreteFixedLength))");
+        builder.AppendLine("            {");
+        builder.AppendLine("                if (!int.TryParse(concreteFixedLength.Text, out var parsedLength) || parsedLength < 0)");
+        builder.AppendLine("                {");
+        builder.AppendLine("                    throw Error(concreteFixedLength, \"fixed array length must be a nonnegative integer literal\");");
+        builder.AppendLine("                }");
+        builder.AppendLine("                Expect(TokenKind.RightBracket);");
+        builder.AppendLine("                return $\"[{resolvedElementType}; {parsedLength}]\";");
+        builder.AppendLine("            }");
         builder.AppendLine("            if (Match(TokenKind.Identifier, out var fixedLength))");
         builder.AppendLine("            {");
         builder.AppendLine("                Expect(TokenKind.RightBracket);");
@@ -1560,7 +1570,7 @@ internal static class ParserEmitter
         builder.AppendLine("        while (true)");
         builder.AppendLine("        {");
         builder.AppendLine("            var targetToken = ExpectIdentifier();");
-        builder.AppendLine("            if (targetToken.Text is \"if\" or \"when\" or \"fold\" or \"branch\" or \"partition\"");
+        builder.AppendLine("            if (targetToken.Text is \"if\" or \"unless\" or \"when\" or \"fold\" or \"branch\" or \"partition\"");
         builder.AppendLine("                || (targetToken.Text == \"tap\" && Check(TokenKind.LeftBrace) && CheckAheadAfterNewLines(1, TokenKind.Arrow))");
         builder.AppendLine("                || (targetToken.Text == \"parallel\" && CheckIdentifier(\"branch\")))");
         builder.AppendLine("            {");
@@ -1645,9 +1655,9 @@ internal static class ParserEmitter
         builder.AppendLine("                }");
         builder.AppendLine("            }");
         builder.AppendLine("            var isBlockStage = !isBlocklessStage && Check(TokenKind.LeftBrace)");
-        builder.AppendLine("                && nextTarget.Text is not \"if\" and not \"when\" and not \"fold\" and not \"branch\" and not \"partition\"");
+        builder.AppendLine("                && nextTarget.Text is not \"if\" and not \"unless\" and not \"when\" and not \"fold\" and not \"branch\" and not \"partition\"");
         builder.AppendLine("                && !(nextTarget.Text == \"tap\" && CheckAheadAfterNewLines(1, TokenKind.Arrow));");
-        builder.AppendLine("            if ((!isBlockStage && !isBlocklessStage) || nextTarget.Text is \"if\" or \"when\" or \"fold\" or \"branch\" or \"partition\")");
+        builder.AppendLine("            if ((!isBlockStage && !isBlocklessStage) || nextTarget.Text is \"if\" or \"unless\" or \"when\" or \"fold\" or \"branch\" or \"partition\")");
         builder.AppendLine("            {");
         builder.AppendLine("                _index = continuation;");
         builder.AppendLine("                break;");
@@ -1814,19 +1824,22 @@ internal static class ParserEmitter
         builder.AppendLine("        while (MatchAfterOptionalNewLines(TokenKind.Arrow, out _))");
         builder.AppendLine("        {");
         builder.AppendLine("            var target = ExpectIdentifier();");
-        builder.AppendLine("            if (target.Text == \"if\")");
+        builder.AppendLine("            if (target.Text is \"if\" or \"unless\")");
         builder.AppendLine("            {");
         builder.AppendLine("                expression = BuildFlowExpression(expression, targets);");
         builder.AppendLine("                targets = null;");
         builder.AppendLine("                var thenBody = ParseBlockBody();");
         builder.AppendLine("                BlockBody? elseBody = null;");
-        builder.AppendLine("                if (CheckIdentifier(\"else\"))");
+        builder.AppendLine("                if (target.Text == \"if\" && CheckIdentifier(\"else\"))");
         builder.AppendLine("                {");
         builder.AppendLine("                    ExpectIdentifier(\"else\");");
         builder.AppendLine("                    elseBody = ParseBlockBody();");
         builder.AppendLine("                }");
         builder.AppendLine();
-                builder.AppendLine("                expression = new IfExpression(expression, thenBody, elseBody, target.Line, target.Column);");
+                builder.AppendLine("                var condition = target.Text == \"unless\"");
+                builder.AppendLine("                    ? new NotExpression(expression, target.Line, target.Column)");
+                builder.AppendLine("                    : expression;");
+                builder.AppendLine("                expression = new IfExpression(condition, thenBody, elseBody, target.Line, target.Column);");
                 builder.AppendLine("                continue;");
                 builder.AppendLine("            }");
                 builder.AppendLine();
@@ -1914,6 +1927,14 @@ internal static class ParserEmitter
         builder.AppendLine("                continue;");
         builder.AppendLine("            }");
         builder.AppendLine();
+        builder.AppendLine("            if ((target.Text == \"Option\" || target.Text == \"Result\") && Check(TokenKind.Less))");
+        builder.AppendLine("            {");
+        builder.AppendLine("                expression = BuildFlowExpression(expression, targets);");
+        builder.AppendLine("                targets = null;");
+        builder.AppendLine("                expression = ParseStandardGenericEnumFlowTarget(expression, target);");
+        builder.AppendLine("                continue;");
+        builder.AppendLine("            }");
+        builder.AppendLine();
         builder.AppendLine("            var path = ResolveImportedPath(ParsePathAfterFirstIdentifier(target));");
         builder.AppendLine("            string? typeArgument = null;");
         builder.AppendLine("            int? compileTimeValueArgument = null;");
@@ -1948,7 +1969,40 @@ internal static class ParserEmitter
                 builder.AppendLine("            targets.Add(new FlowTarget(path, [], usesCallSyntax, typeArgument, compileTimeValueArgument, target.Line, target.Column));");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        return BuildFlowExpression(expression, targets);");
+        builder.AppendLine("        expression = BuildFlowExpression(expression, targets);");
+        builder.AppendLine("        while (Match(TokenKind.Question, out var question))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            expression = new TryExpression(expression, question.Line, question.Column);");
+        builder.AppendLine("        }");
+        builder.AppendLine("        return expression;");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private Expression ParseStandardGenericEnumFlowTarget(Expression source, Token typeName)");
+        builder.AppendLine("    {");
+        builder.AppendLine("        Expect(TokenKind.Less);");
+        builder.AppendLine("        var first = ParseTypeAnnotation();");
+        builder.AppendLine("        string specialized;");
+        builder.AppendLine("        if (typeName.Text == \"Option\")");
+        builder.AppendLine("        {");
+        builder.AppendLine("            Expect(TokenKind.Greater);");
+        builder.AppendLine("            specialized = $\"Option<{first}>\";");
+        builder.AppendLine("        }");
+        builder.AppendLine("        else");
+        builder.AppendLine("        {");
+        builder.AppendLine("            Expect(TokenKind.Comma);");
+        builder.AppendLine("            var second = ParseTypeAnnotation();");
+        builder.AppendLine("            Expect(TokenKind.Greater);");
+        builder.AppendLine("            specialized = $\"Result<{first}, {second}>\";");
+        builder.AppendLine("        }");
+        builder.AppendLine("        Expect(TokenKind.Dot);");
+        builder.AppendLine("        var variant = ExpectIdentifier();");
+        builder.AppendLine("        var arguments = new List<Expression> { source };");
+        builder.AppendLine("        if (Match(TokenKind.LeftParen, out _))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            if (!Check(TokenKind.RightParen)) ParseArgumentList(arguments);");
+        builder.AppendLine("            Expect(TokenKind.RightParen);");
+        builder.AppendLine("        }");
+        builder.AppendLine("        return new CallExpression(new[] { specialized, variant.Text }, arguments, typeName.Line, typeName.Column);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private Expression ParseBranchExpression(Expression source, Token keyword, bool isParallel)");
@@ -2573,7 +2627,8 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("        if (Check(TokenKind.RightBracket))");
         builder.AppendLine("        {");
-        builder.AppendLine("            throw Error(Peek(), \"empty growable array literals require an element type, for example '[Int; ~]'\");");
+        builder.AppendLine("            Expect(TokenKind.RightBracket);");
+        builder.AppendLine("            return new ArrayLiteralExpression([], false, start.Line, start.Column);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        if (Check(TokenKind.Identifier) && CheckNext(TokenKind.Semicolon) && CheckAhead(2, TokenKind.Range))");
@@ -3404,10 +3459,12 @@ internal static class ParserEmitter
         builder.AppendLine("    private IReadOnlyList<Expression> ParseOptionalArgumentList()");
         builder.AppendLine("    {");
         builder.AppendLine("        var arguments = new List<Expression>();");
+        builder.AppendLine("        SkipNewLines();");
         builder.AppendLine("        if (!Check(TokenKind.RightParen))");
         builder.AppendLine("        {");
         builder.AppendLine("            ParseArgumentList(arguments);");
         builder.AppendLine("        }");
+        builder.AppendLine("        SkipNewLines();");
         builder.AppendLine();
         builder.AppendLine("        return arguments;");
         builder.AppendLine("    }");
@@ -3415,11 +3472,13 @@ internal static class ParserEmitter
         builder.AppendLine("    private void ParseArgumentList(List<Expression> arguments)");
         builder.AppendLine("    {");
         builder.AppendLine("        // ArgumentList = Expression (Comma Expression)*");
-        builder.AppendLine("        do");
+        builder.AppendLine("        while (true)");
         builder.AppendLine("        {");
+        builder.AppendLine("            SkipNewLines();");
         builder.AppendLine("            arguments.Add(ParseExpression());");
+        builder.AppendLine("            SkipNewLines();");
+        builder.AppendLine("            if (!Match(TokenKind.Comma, out _)) break;");
         builder.AppendLine("        }");
-        builder.AppendLine("        while (Match(TokenKind.Comma, out _));");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private void ExpectStatementEnd()");

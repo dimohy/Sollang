@@ -36,18 +36,18 @@ main {
 
         main { }
         """; ~
-    ] => sources!
-    sources! -> expressionTypeIds.resolve => resolved
-    sources! -> typedIr.lower => ir!
-    sources! -> typeCheck.analyze => diagnostics!
+    ] => sources
+    sources -> expressionTypeIds.resolve => resolved
+    sources -> typedIr.lower => ir
+    sources -> typeCheck.analyze => diagnostics
     0 => argumentErrors!
-    diagnostics! -> each diagnostic {
+    diagnostics -> each diagnostic {
         diagnostic.code == 6 -> if { argumentErrors! + 1 => argumentErrors! }
     }
     0 => validCalls!
     resolved.expressions -> each expression {
-        sources![expression.sourceModule] -> ast.lower => nodes!
-        nodes![expression.astNode].kind == 11 -> if {
+        sources[expression.sourceModule] -> ast.lower => nodes
+        nodes[expression.astNode].kind == 11 -> if {
             resolved.types[expression.typeId] => result
             false => valid!
             (expression.status == 0 and result.kind == 7 and result.symbol == 1 and not result.containsParameter) -> if {
@@ -65,11 +65,11 @@ main {
         }
     }
     0 => typedCalls!
-    ir! -> each node {
+    ir -> each node {
         (node.kind == 6 and node.typeId >= 0) -> if {
             resolved.types[node.typeId] => result
             not result.containsParameter -> if { typedCalls! + 1 => typedCalls! }
         }
     }
-    "recursive generic calls = $(validCalls!), typed calls = $(typedCalls!), argument errors = $(argumentErrors!), total = $(diagnostics! -> len)" -> println
+    "recursive generic calls = $(validCalls!), typed calls = $(typedCalls!), argument errors = $(argumentErrors!), total = $(diagnostics -> len)" -> println
 }

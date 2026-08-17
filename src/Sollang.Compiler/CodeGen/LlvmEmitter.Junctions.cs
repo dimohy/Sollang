@@ -178,7 +178,8 @@ internal sealed partial class LlvmEmitter
                 new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
-                new Dictionary<string, string>(StringComparer.Ordinal)));
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                new Dictionary<RuntimeValue, string>()));
             _currentFunction = null;
             var callbackFunctions = new Dictionary<string, BoundFunction>(_program.Functions, StringComparer.Ordinal);
             foreach (var target in info.Branch.ArmTargets.SelectMany(static targets => targets))

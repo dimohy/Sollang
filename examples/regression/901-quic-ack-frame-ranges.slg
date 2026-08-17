@@ -1,0 +1,38 @@
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as types
+
+wire: -> [UInt8; 10] => [2, 64, 100, 25, 2, 4, 1, 2, 0, 1]
+boolText value: Bool -> Text => value -> if { "true" } else { "false" }
+
+ackFrame: -> types.Value => types.Value.Ack(types.Ack {
+    largestAcknowledged: 100
+    ackDelay: 25
+    firstRange: 4
+    ranges: [types.AckRange { gap: 1, rangeLength: 2 }, types.AckRange { gap: 0, rangeLength: 1 }; ~]
+})
+
+verify: -> Result<Bool, errors.Error> uses Console {
+    frame.decode(wire(), 0)? => decoded
+    decoded.frame -> when {
+        Ack(ack) {
+            "$(ack.largestAcknowledged),$(ack.ackDelay),$(ack.firstRange),$(ack.ranges -> len),$(ack.ranges[0].gap),$(ack.ranges[1].rangeLength),$(decoded.nextOffset)" -> println
+            frame.acknowledges(ack, 92)? -> boolText => acknowledged92
+            frame.acknowledges(ack, 94)? -> boolText => acknowledged94
+            frame.acknowledges(ack, 88)? -> boolText => acknowledged88
+            "$acknowledged92,$acknowledged94,$acknowledged88" -> println
+            ackFrame() => frameValue
+            frameValue -> frame.encode? => encoded
+            "$(encoded -> len),$(encoded[0]),$(encoded[1]),$(encoded[9])" -> println
+        }
+        else { "wrong-frame" -> println }
+    }
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+main {
+    verify() -> when {
+        Ok(done) {}
+        Err(error) { "error=$(error.code)" -> println }
+    }
+}

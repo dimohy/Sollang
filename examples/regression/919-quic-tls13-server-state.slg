@@ -1,0 +1,42 @@
+import sys.quic.error as errors
+import sys.quic.tls_auth as auth
+import sys.quic.tls_hello as hello
+import sys.quic.tls_server_state as serverState
+import sys.quic.tls_transcript as transcripts
+
+randomBytes: -> [UInt8; 32] => [0; 32]
+keyShare: -> [UInt8; 32] => [1; 32]
+finishedData: -> [UInt8; 32] => [9; 32]
+serverSeed: -> [UInt8; 32] => [
+    157, 97, 177, 157, 239, 253, 90, 96,
+    186, 132, 74, 244, 146, 236, 44, 196,
+    68, 73, 197, 105, 123, 50, 105, 25,
+    112, 59, 172, 3, 28, 174, 127, 96
+]
+
+run: -> Result<Unit, errors.Error> uses Console {
+    hello.encodeClientHello(randomBytes(), [97], [104, 51], keyShare(), [1])? => clientHello
+    clientHello -> serverState.create? => state!
+    hello.encodeServerHello(randomBytes(), keyShare())? => serverHello
+    hello.encodeEncryptedExtensions([104, 51], [2])? => encryptedExtensions
+    auth.encodeCertificate([48, 3, 2, 1, 1])? => certificate
+    auth.encodeFinished(finishedData())? => serverFinished
+    auth.encodeFinished(finishedData())? => clientFinished
+    state! -> serverState.markServerMessage(serverHello)?
+    state! -> serverState.markServerMessage(encryptedExtensions)?
+    state! -> serverState.markServerMessage(certificate)?
+    state! -> serverState.signServerCertificateVerify(serverSeed())? => certificateVerify
+    state! -> serverState.markServerMessage(serverFinished)?
+    state! -> serverState.acceptClientFinished(clientFinished, finishedData())?
+    state! -> serverState.isConnected -> if { "true" } else { "false" } => connected
+    transcripts.byteCount(state!.transcript) => bytes
+    "tls-server=$connected,$bytes" -> println
+    Result<Unit, errors.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) {}
+        Err(error) { "tls-server-error=$(error.code)" -> println }
+    }
+}

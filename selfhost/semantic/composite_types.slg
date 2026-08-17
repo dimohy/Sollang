@@ -36,14 +36,14 @@ public resolve sources: [Text; ~] -> [CompositeType; ~] {
 }
 
 public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeIds.SemanticTypeSet -> [CompositeType; ~] {
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"; ~] => builtinNames!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => builtinNames
     [CompositeType; ~] => results!
-    package -> typeResolve.resolveAnalyzed => importedTypes!
+    package -> typeResolve.resolveAnalyzed => importedTypes
     # Use the canonical recursive type arena as the authoritative component
     # identity source. Token ordinals remain below only as a compatibility
     # projection for older unresolved forms; qualified names such as
     # `{keys.OwnedKey: Int; ...}` cannot be decoded from identifier position.
-    package -> modules.identitiesAnalyzed => identities!
+    package -> modules.identitiesAnalyzed => identities
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
         package.sources[sourceIndex!] -> len => sourceLength
@@ -96,15 +96,15 @@ public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeI
                         package.tokens[sourceRange.tokenStart + componentTokens![componentSlot!]] => componentName
                         -1 => builtinIndex!
                         0 => builtinSearch!
-                        (builtinSearch! < (builtinNames! -> len) and builtinIndex! < 0) -> while {
-                            builtinNames![builtinSearch!] => builtinName
+                        (builtinSearch! < (builtinNames -> len) and builtinIndex! < 0) -> while {
+                            builtinNames[builtinSearch!] => builtinName
                             componentName.span.length == (builtinName -> len) => equal!
                             UIntSize(0) => nameByte!
                             (equal! and nameByte! < componentName.span.length) -> while {
                                 source -> byte(componentName.span.start + nameByte!) => leftByte
                                 builtinName -> byte(nameByte!) => rightByte
                                 leftByte != rightByte -> if { false => equal! }
-                                nameByte! + UIntSize(1) => nameByte!
+                                nameByte! + 1 => nameByte!
                             }
                             equal! -> if { builtinSearch! => builtinIndex! }
                             builtinSearch! + 1 => builtinSearch!
@@ -126,7 +126,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeI
                                         source -> byte(componentName.span.start + nameByte!) => leftByte
                                         source -> byte(candidateName.span.start + nameByte!) => rightByte
                                         leftByte != rightByte -> if { false => equal! }
-                                        nameByte! + UIntSize(1) => nameByte!
+                                        nameByte! + 1 => nameByte!
                                     }
                                     equal! -> if { symbolIndex! => componentSymbol! }
                                 }
@@ -134,10 +134,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeI
                             }
                             sourceIndex! => componentSourceModule!
                             componentSymbol! < 0 -> if {
-                                identities![sourceIndex!] => currentIdentity
+                                identities[sourceIndex!] => currentIdentity
                                 0 => siblingModuleIndex!
-                                siblingModuleIndex! < (identities! -> len) -> while {
-                                    identities![siblingModuleIndex!] => siblingIdentity
+                                siblingModuleIndex! < (identities -> len) -> while {
+                                    identities[siblingModuleIndex!] => siblingIdentity
                                     (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
                                         siblingIdentity.sourceIndex => siblingSourceIndex
                                         package.sources[siblingSourceIndex] -> len => siblingSourceLength
@@ -154,7 +154,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeI
                                                     (source -> byte(componentName.span.start + siblingNameByte!)) != (siblingSource -> byte(siblingName.span.start + siblingNameByte!)) -> if {
                                                         false => siblingEqual!
                                                     }
-                                                    siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                                    siblingNameByte! + 1 => siblingNameByte!
                                                 }
                                                 siblingEqual! -> if {
                                                     siblingSymbolIndex! => componentSymbol!
@@ -185,10 +185,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeI
                 }
                 (typeUse.kind != 5 and typeUse.kind != 13 and componentOrigins![0] < 0) -> if {
                     0 => importedTypeIndex!
-                    importedTypeIndex! < (importedTypes! -> len) -> while {
-                        importedTypes![importedTypeIndex!] => importedType
+                    importedTypeIndex! < (importedTypes -> len) -> while {
+                        importedTypes[importedTypeIndex!] => importedType
                         (importedType.sourceModule == sourceIndex! and importedType.typeAst == typeUse.astNode and importedType.status == 0) -> if {
-                            typeIds.IntrinsicNominalRequest { package: package, identities: identities!, targetModule: importedType.targetModule, targetSymbol: importedType.targetSymbol } -> typeIds.intrinsicNominalSymbol => intrinsicSymbol
+                            package -> typeIds.intrinsicNominalSymbol(identities, importedType.targetModule, importedType.targetSymbol) => intrinsicSymbol
                             intrinsicSymbol >= 0 -> if {
                                 1 => componentOrigins![0]
                                 -1 => componentModules![0]

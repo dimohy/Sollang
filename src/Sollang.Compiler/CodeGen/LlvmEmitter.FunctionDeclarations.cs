@@ -8,8 +8,21 @@ namespace Sollang.Compiler.CodeGen;
 
 internal sealed partial class LlvmEmitter
 {
-    private bool FinishTerminatedFunction()
+    private bool FinishTerminatedFunction(Expression? remainingBody = null)
     {
+        remainingBody ??= _currentFunction?.Body;
+        if (!_currentBlockTerminated
+            && remainingBody is not null
+            && FunctionControlFlowFacts.AllPathsReturn(remainingBody))
+        {
+            _ = EmitExpression(remainingBody);
+            if (!_currentBlockTerminated)
+            {
+                throw new SollangException(
+                    "an expression proven to return on every path reached its continuation");
+            }
+        }
+
         if (!_currentBlockTerminated)
         {
             return false;
@@ -28,12 +41,13 @@ internal sealed partial class LlvmEmitter
         foreach (var function in EnumerateEmittableFunctions(_program.Functions.Values))
         {
             if (function.Kind != BoundFunctionKind.User
+                || !_reachableFunctions.Contains(function)
                 || (function.IsStandardLibrary && !_standaloneStandardLibraryFunctions.Contains(function))
                 || (function.GenericParameterName is not null
                     && function.SpecializedType is null
                     && function.SpecializedValue is null)
                 || !emittedFunctions.Add(function)
-                || (!function.IsLocal && !emitted.Add(function.Name)))
+                || (!function.IsLocal && !emitted.Add(CanonicalFunctionName(function))))
             {
                 continue;
             }
@@ -65,6 +79,11 @@ internal sealed partial class LlvmEmitter
                 EmitReferenceFunction(function);
                 continue;
             }
+            if (_program.Types.IsSlice(function.ReturnType))
+            {
+                EmitSliceFunction(function);
+                continue;
+            }
             switch (function.ReturnType)
             {
                 case BoundType.Unit:
@@ -89,7 +108,8 @@ internal sealed partial class LlvmEmitter
                     EmitArenaFunction(function);
                     break;
                 default:
-                    if (_program.Types.IsBoundedArray(function.ReturnType)
+                    if (_program.Types.IsStaticArray(function.ReturnType)
+                        || _program.Types.IsBoundedArray(function.ReturnType)
                         || _program.Types.IsBoundedDictionary(function.ReturnType)
                         || _program.Types.IsBitSet(function.ReturnType))
                     {
@@ -116,7 +136,8 @@ internal sealed partial class LlvmEmitter
                         break;
                     }
 
-                    throw new SollangException($"unsupported function return type {function.ReturnType}");
+                    throw new SollangException(
+                        $"unsupported function return type {function.ReturnType} for '{function.ModuleName}.{function.Name}'");
             }
         }
 
@@ -160,12 +181,12 @@ internal sealed partial class LlvmEmitter
 
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
-            var value = EmitExpression(function.Body);
+            var value = EmitFunctionArgumentExpression(function.Body, function.ReturnType);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             var transferredOwnerName = IsOwnedContainerRuntimeValue(value)
                 ? GetFunctionResultTransferredOwnerName(function, function.Body)
                 : null;
-            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName, function.Body);
             var aggregate = MaterializeAggregateValue(value);
             EmitRet(aggregate.TypeName, aggregate.ValueName);
             EmitFunctionLine("}");
@@ -175,6 +196,76 @@ internal sealed partial class LlvmEmitter
         {
             _currentFunctions = previousFunctions;
         }
+    }
+
+    private void EmitSliceFunction(BoundFunction function)
+    {
+        if (function.Body is null)
+        {
+            throw new SollangException($"function '{function.Name}' has no body");
+        }
+
+        var previousFunctions = _currentFunctions;
+        _currentFunctions = FunctionScope(function);
+        ClearLocalState();
+        SelectStackFrame(function);
+        try
+        {
+            EmitFunctionLine($"define internal %sollang.int_slice {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine("entry:");
+            EmitStackFrameAllocations();
+            _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
+            BindAllFunctionParameters(function);
+            EmitStatements(function.BlockBody);
+            if (FinishTerminatedFunction()) return;
+
+            var slice = function.Body is ArrayLiteralExpression literal
+                ? EmitReadonlyStaticArrayLiteral(literal, function.ReturnType)
+                : EmitExpression(function.Body);
+            EnsureRuntimeType(slice, function.ReturnType, function.Name);
+            var aggregate = MaterializeAggregateValue(slice);
+            EmitRet(aggregate.TypeName, aggregate.ValueName);
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+        }
+        finally
+        {
+            _currentFunctions = previousFunctions;
+        }
+    }
+
+    private RuntimeValue EmitReadonlyStaticArrayLiteral(
+        ArrayLiteralExpression literal,
+        BoundType sliceType)
+    {
+        var elementType = _program.Types.GetSliceElement(sliceType);
+        if (!IsIntegerType(elementType))
+        {
+            throw new SollangException("static readonly array literals currently require integer elements");
+        }
+
+        var llvmType = LlvmType(elementType);
+        var values = literal.Elements.Select(element => element switch
+        {
+            NumberExpression number => number.Text.Replace("_", "", StringComparison.Ordinal),
+            NegateExpression { Value: NumberExpression number } =>
+                "-" + number.Text.Replace("_", "", StringComparison.Ordinal),
+            _ => throw new SollangException(
+                "static readonly array literals require compile-time numeric elements")
+        }).ToArray();
+        var name = "@.slg.data." + _activeUnitToken + "." +
+            _staticDataId.ToString(CultureInfo.InvariantCulture);
+        _staticDataId++;
+        var length = values.Length.ToString(CultureInfo.InvariantCulture);
+        var initializer = values.Length == 0
+            ? "zeroinitializer"
+            : "[" + string.Join(", ", values.Select(value => $"{llvmType} {value}")) + "]";
+        EmitGlobalLine(
+            $"{name} = private unnamed_addr constant [{length} x {llvmType}] {initializer}, align {RuntimeAlignment(elementType)}");
+        return sliceType == BoundType.IntSlice
+            ? new RuntimeIntSlice(name, length)
+            : new RuntimeInlineSlice(sliceType, elementType, name, length);
     }
 
     private void EmitReferenceFunction(BoundFunction function)
@@ -377,7 +468,7 @@ internal sealed partial class LlvmEmitter
             BindAllFunctionParameters(function);
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
-            var value = EmitExpression(function.Body);
+            var value = EmitFunctionArgumentExpression(function.Body, function.ReturnType);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
             var valueName = value switch
@@ -422,7 +513,7 @@ internal sealed partial class LlvmEmitter
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, BoundType.DynamicIntArray, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
-            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName, function.Body);
             var array = (RuntimeDynamicIntArray)value;
             var aggregate0 = NextTemp("array_ret");
             EmitAssign(aggregate0, $"insertvalue %sollang.dynamic_int_array poison, ptr {array.PointerName}, 0");
@@ -461,10 +552,10 @@ internal sealed partial class LlvmEmitter
             BindAllFunctionParameters(function);
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
-            var value = EmitExpression(function.Body);
+            var value = EmitFunctionArgumentExpression(function.Body, function.ReturnType);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
-            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName, function.Body);
             var array = (RuntimeDynamicInlineArray)value;
             EmitRet("%sollang.dynamic_int_array", BuildDynamicArrayAggregate(
                 array.PointerName, array.LengthName, array.CapacityName));
@@ -503,7 +594,7 @@ internal sealed partial class LlvmEmitter
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, BoundType.IntDictionary, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
-            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName, function.Body);
             var dictionary = (RuntimeIntDictionary)value;
             var aggregate0 = NextTemp("dict_ret");
             EmitAssign(aggregate0, $"insertvalue %sollang.int_dictionary poison, ptr {dictionary.PointerName}, 0");
@@ -545,7 +636,7 @@ internal sealed partial class LlvmEmitter
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
-            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName, function.Body);
             var dictionary = (RuntimeInlineDictionary)value;
             EmitRet("%sollang.int_dictionary", BuildDictionaryAggregate(
                 dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName));
@@ -608,6 +699,8 @@ internal sealed partial class LlvmEmitter
             {
                 parts.Add(_program.Types.IsStruct(parameter.Type)
                     ? $"ptr {name}"
+                    : _program.Types.IsStaticArray(parameter.Type)
+                        ? $"%sollang.int_slice {name}"
                     : $"%sollang.mutable_container {name}");
             }
             else if (_program.Types.IsReference(parameter.Type))
@@ -635,6 +728,11 @@ internal sealed partial class LlvmEmitter
                 return "ptr %it";
             }
 
+            if (function.InputType is { } fixedType && _program.Types.IsStaticArray(fixedType))
+            {
+                return "%sollang.int_slice %it";
+            }
+
             return function.InputType switch
             {
                 BoundType.DynamicIntArray => "%sollang.mutable_container %it",
@@ -648,6 +746,15 @@ internal sealed partial class LlvmEmitter
         }
 
         if (function.HasValueGenericFixedArrayInput)
+        {
+            return "%sollang.int_slice %it";
+        }
+        if (function.InputType is { } sliceType && _program.Types.IsSlice(sliceType))
+        {
+            return "%sollang.int_slice %it";
+        }
+        if (function.InputType is { } concreteStaticArrayType
+            && _program.Types.IsStaticArray(concreteStaticArrayType))
         {
             return "%sollang.int_slice %it";
         }
@@ -848,6 +955,23 @@ internal sealed partial class LlvmEmitter
                     : RuntimeContainerStorage.Heap));
             return;
         }
+        if (function.InputType is { } concreteFixedArrayType
+            && _program.Types.IsStaticArray(concreteFixedArrayType))
+        {
+            var definition = _program.Types.GetStaticArray(concreteFixedArrayType);
+            var pointer = NextTemp("param_fixed_ptr");
+            EmitAssign(pointer, "extractvalue %sollang.int_slice %it, 0");
+            var length = NextTemp("param_fixed_len");
+            EmitAssign(length, "extractvalue %sollang.int_slice %it, 1");
+            _locals.Add(
+                function.InputName ?? "it",
+                CreateBorrowedStaticInlineArray(
+                    concreteFixedArrayType,
+                    pointer,
+                    length,
+                    definition.FixedLength ?? 0));
+            return;
+        }
 
         if (function.InputType is { } numericInput && IsIntegerType(numericInput))
         {
@@ -866,6 +990,23 @@ internal sealed partial class LlvmEmitter
             var length = NextTemp("param_text_len");
             EmitAssign(length, "extractvalue %sollang.text %it, 1");
             _locals.Add(function.InputName ?? "it", new RuntimeText(pointer, length));
+            return;
+        }
+        if (function.InputType is { } sliceType && _program.Types.IsSlice(sliceType))
+        {
+            var pointer = NextTemp("param_slice_ptr");
+            EmitAssign(pointer, "extractvalue %sollang.int_slice %it, 0");
+            var length = NextTemp("param_slice_len");
+            EmitAssign(length, "extractvalue %sollang.int_slice %it, 1");
+            _locals.Add(
+                function.InputName ?? "it",
+                sliceType == BoundType.IntSlice
+                    ? new RuntimeIntSlice(pointer, length)
+                    : new RuntimeInlineSlice(
+                        sliceType,
+                        _program.Types.GetSliceElement(sliceType),
+                        pointer,
+                        length));
             return;
         }
 
@@ -990,8 +1131,37 @@ internal sealed partial class LlvmEmitter
 
     private void BindMutableBorrowFunctionParameter(string name, BoundType type, string argumentName)
     {
+        // Generic fixed arrays have an aggregate LLVM representation, but their
+        // language-level container identity must win over the broad struct test.
+        // Otherwise `mut [T; N]` is rebound as RuntimeStruct and indexed writes
+        // fail during code generation.
+        if (_program.Types.IsStaticArray(type))
+        {
+            var definition = _program.Types.GetStaticArray(type);
+            var pointer = NextTemp("param_mut_fixed_ptr");
+            EmitAssign(pointer, $"extractvalue %sollang.int_slice {argumentName}, 0");
+            var length = NextTemp("param_mut_fixed_len");
+            EmitAssign(length, $"extractvalue %sollang.int_slice {argumentName}, 1");
+            _locals.Add(name, new RuntimeStaticInlineArray(
+                type,
+                definition.ElementType,
+                pointer,
+                length,
+                definition.FixedLength ?? 0,
+                definition.FixedLength ?? 0));
+            _mutableLocals.Add(name);
+            _borrowedMutableLocals.Add(name);
+            _borrowedOwnedLocals.Add(name);
+            return;
+        }
+
         if (_program.Types.IsStruct(type))
         {
+            if (_program.Types.IsStaticArray(type))
+            {
+                throw new SollangException(
+                    $"internal type classification error: mutable fixed array '{name}' reached struct ABI binding");
+            }
             _locals.Add(name, new RuntimeStruct(type, ""));
             _mutableLocals.Add(name);
             _borrowedMutableLocals.Add(name);

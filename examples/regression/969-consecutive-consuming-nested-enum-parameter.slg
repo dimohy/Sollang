@@ -1,0 +1,50 @@
+struct Complex {
+    bytes: [UInt8; ~]
+    token: [UInt8; 16]
+}
+
+enum Item {
+    ComplexValue(Complex)
+    Bytes([UInt8; ~])
+}
+
+append output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+consume items: mut [Item; ~] -> Result<[UInt8; ~], Int> {
+    [UInt8; ~] => output!
+    (items -> len) > 0 -> while {
+        items -> take(0) -> when {
+            ComplexValue(value) {
+                output! -> append(value.bytes)
+                output! -> append(value.token)
+            }
+            Bytes(bytes) { output! -> append(bytes) }
+        }
+    }
+    Result<[UInt8; ~], Int>.Ok(output!)
+}
+
+run: -> Result<Bool, Int> {
+    [Item; ~] => firstItems!
+    firstItems! -> push(Item.ComplexValue(Complex { bytes: [1, 2, 3; ~], token: [7; 16] }))
+    consume(firstItems!)? => first
+
+    [Item; ~] => secondItems!
+    secondItems! -> push(Item.Bytes([4, 5, 6; ~]))
+    consume(secondItems!)? => second
+
+    Result<Bool, Int>.Ok(first[0] == 1 and first[18] == 7 and second[2] == 6)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "consecutive-nested-enum=ok" } else { "consecutive-nested-enum=failed" } -> println }
+        Err(value) { "consecutive-nested-enum-error" -> println }
+    }
+}

@@ -28,9 +28,9 @@ public resolve sources: [Text; ~] -> [NominalType; ~] {
 }
 
 public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"; ~] => builtinNames!
-    package -> typeResolve.resolveAnalyzed => importedTypes!
-    package -> modules.identitiesAnalyzed => identities!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => builtinNames
+    package -> typeResolve.resolveAnalyzed => importedTypes
+    package -> modules.identitiesAnalyzed => identities
     [NominalType; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
@@ -43,18 +43,18 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
             typeUse.kind == 1 -> if {
                 -1 => importedIndex!
                 0 => importedSearch!
-                importedSearch! < (importedTypes! -> len) -> while {
-                    importedTypes![importedSearch!] => imported
+                importedSearch! < (importedTypes -> len) -> while {
+                    importedTypes[importedSearch!] => imported
                     (imported.sourceModule == sourceIndex! and imported.typeAst == typeUse.astNode) -> if {
                         importedSearch! => importedIndex!
                     }
                     importedSearch! + 1 => importedSearch!
                 }
                 importedIndex! >= 0 -> if {
-                    importedTypes![importedIndex!] => imported
+                    importedTypes[importedIndex!] => imported
                     -1 => intrinsicSymbol!
                     imported.status == 0 -> if {
-                        typeIds.IntrinsicNominalRequest { package: package, identities: identities!, targetModule: imported.targetModule, targetSymbol: imported.targetSymbol } -> typeIds.intrinsicNominalSymbol => intrinsicSymbol!
+                        package -> typeIds.intrinsicNominalSymbol(identities, imported.targetModule, imported.targetSymbol) => intrinsicSymbol!
                     }
                     2 => importedOrigin!
                     imported.targetModule => importedTargetModule!
@@ -87,15 +87,15 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                     package.tokens[sourceRange.tokenStart + nameToken!] => name
                     -1 => builtinIndex!
                     0 => builtinSearch!
-                    (builtinSearch! < (builtinNames! -> len) and builtinIndex! < 0) -> while {
-                        builtinNames![builtinSearch!] => builtinName
+                    (builtinSearch! < (builtinNames -> len) and builtinIndex! < 0) -> while {
+                        builtinNames[builtinSearch!] => builtinName
                         name.span.length == (builtinName -> len) => equal!
                         UIntSize(0) => nameByte!
                         (equal! and nameByte! < name.span.length) -> while {
                             source -> byte(name.span.start + nameByte!) => leftByte
                             builtinName -> byte(nameByte!) => rightByte
                             leftByte != rightByte -> if { false => equal! }
-                            nameByte! + UIntSize(1) => nameByte!
+                            nameByte! + 1 => nameByte!
                         }
                         equal! -> if { builtinSearch! => builtinIndex! }
                         builtinSearch! + 1 => builtinSearch!
@@ -137,7 +137,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                                     source -> byte(name.span.start + nameByte!) => leftByte
                                     source -> byte(candidateName.span.start + nameByte!) => rightByte
                                     leftByte != rightByte -> if { false => equal! }
-                                    nameByte! + UIntSize(1) => nameByte!
+                                    nameByte! + 1 => nameByte!
                                 }
                                 equal! -> if { symbolIndex! => localSymbol! }
                             }
@@ -149,10 +149,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                         sourceIndex! => localTargetModule!
                         false => siblingTypeAmbiguous!
                         localSymbol! < 0 -> if {
-                            identities![sourceIndex!] => currentIdentity
+                            identities[sourceIndex!] => currentIdentity
                             0 => siblingModuleIndex!
-                            siblingModuleIndex! < (identities! -> len) -> while {
-                                identities![siblingModuleIndex!] => siblingIdentity
+                            siblingModuleIndex! < (identities -> len) -> while {
+                                identities[siblingModuleIndex!] => siblingIdentity
                                 (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
                                     siblingIdentity.sourceIndex => siblingSourceIndex
                                     package.sources[siblingSourceIndex] -> len => siblingSourceLength
@@ -169,7 +169,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                                                 (source -> byte(name.span.start + siblingNameByte!)) != (siblingSource -> byte(siblingName.span.start + siblingNameByte!)) -> if {
                                                     false => siblingEqual!
                                                 }
-                                                siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                                siblingNameByte! + 1 => siblingNameByte!
                                             }
                                             siblingEqual! -> if {
                                                 localSymbol! >= 0 -> if {

@@ -1,0 +1,50 @@
+import sys.io
+import sys.quic.keys
+import sys.quic.error as errors
+import sys.quic.version_negotiation as versionNegotiation
+
+struct Verified {
+    chosen: UInt32
+    length: UIntSize
+    checksum: UInt32
+    valid: Bool
+}
+
+checksum bytes: [UInt8] -> UInt32 {
+    UInt32(0) => total!
+    0 => index!
+    index! < (bytes -> len) -> while {
+        total! + UInt32(bytes[index!]) => total!
+        index! + 1 => index!
+    }
+    total!
+}
+
+verify: -> Result<Verified, errors.Error> {
+    versionNegotiation.Information {
+        chosen: keys.version1()
+        available: [keys.version1(), keys.version2(); ~]
+    } => information
+    versionNegotiation.encode(information)? => encoded
+    versionNegotiation.decode(encoded)? => decoded
+    versionNegotiation.validateClient(decoded)? => valid
+    versionNegotiation.choose(
+        [keys.version2(), keys.version1()],
+        [keys.version1(), keys.version2()])? => chosen
+    Result<Verified, errors.Error>.Ok(Verified {
+        chosen: chosen
+        length: UIntSize(encoded -> len)
+        checksum: encoded -> checksum
+        valid: valid
+    })
+}
+
+main {
+    verify() -> when {
+        Ok(value) {
+            value.valid -> if { "true" } else { "false" } => validText
+            "version=$(value.chosen),$(value.length),$(value.checksum),$validText" -> println
+        }
+        Err(error) { "version-error=$(error.code)" -> println }
+    }
+}

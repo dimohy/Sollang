@@ -1,0 +1,128 @@
+namespace sys.quic.handshake_engine
+
+import sys.crypto.bits
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+import sys.quic.packet
+import sys.quic.traffic_keys
+
+public struct Opened {
+    version: UInt32
+    packetNumber: UInt64
+    cryptoOffset: UInt64
+    handshakeBytes: [UInt8; ~]
+    nextOffset: UIntSize
+}
+
+error kind: errors.Kind, code: UInt64 -> errors.Error {
+    errors.Error { kind: kind, code: code }
+}
+
+copyBytes source: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => output!
+    0 => index!
+    index! < (source -> len) -> while {
+        output! -> push(source[index!])
+        index! + 1 => index!
+    }
+    output!
+}
+
+appendHandshakeBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+sameBytes left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    UInt32(0) => difference!
+    0 => index!
+    index! < (left -> len) -> while {
+        bits.xor(UInt32(left[index!]), UInt32(right[index!])) => different
+        difference! + different => difference!
+        index! + 1 => index!
+    }
+    difference! == 0
+}
+
+public encode version: UInt32, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], packetNumber: UInt64, cryptoOffset: UInt64, handshakeBytes: [UInt8], trafficSecret: [UInt8; 32] -> Result<[UInt8; ~], errors.Error> {
+    handshakeBytes -> copyBytes => data
+    frames.Value.Crypto(frames.Crypto { offset: cryptoOffset, data: data }) -> frame.encode? => plaintext
+    traffic_keys.derive(version, trafficSecret) => keys
+    packet.sealHandshake(
+        version,
+        destinationConnectionId,
+        sourceConnectionId,
+        packetNumber,
+        4,
+        plaintext,
+        keys.key,
+        keys.iv,
+        keys.headerProtection)
+}
+
+public open datagram: [UInt8], expectedDestinationConnectionId: [UInt8], expectedPacketNumber: UInt64, trafficSecret: [UInt8; 32] -> Result<Opened, errors.Error> {
+    packet.parseHandshakeHeader(datagram)? => header
+    sameBytes(header.destinationConnectionId, expectedDestinationConnectionId) -> unless {
+        Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(header.destinationConnectionId -> len))) -> return
+    }
+    traffic_keys.derive(header.version, trafficSecret) => keys
+    packet.openHandshake(
+        datagram,
+        expectedPacketNumber,
+        keys.key,
+        keys.iv,
+        keys.headerProtection)? => opened
+    frame.decodeAll(opened.plaintext)? => decoded!
+    [UInt8; ~] => handshakeBytes!
+    false => hasCrypto!
+    UInt64(0) => cryptoOffset!
+    UInt64(0) => nextCryptoOffset!
+    (decoded! -> len) > 0 -> while {
+        decoded! -> take(0) -> when {
+            Crypto(crypto) {
+                hasCrypto! -> unless {
+                    crypto.offset => cryptoOffset!
+                    crypto.offset => nextCryptoOffset!
+                    true => hasCrypto!
+                }
+                crypto.offset == nextCryptoOffset! -> unless {
+                    Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, crypto.offset)) -> return
+                }
+                handshakeBytes! -> appendHandshakeBytes(crypto.data)
+                nextCryptoOffset! + UInt64(crypto.data -> len) => nextCryptoOffset!
+            }
+            Padding(count) {}
+            Ack(ack) {}
+            ConnectionClose(close) {
+                Result<Opened, errors.Error>.Err(error(errors.Kind.Transport, close.errorCode)) -> return
+            }
+            Ping { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 1)) -> return }
+            Stream(streamFrame) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 8)) -> return }
+            Datagram(datagramFrame) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 48)) -> return }
+            MaxData(maximum) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 16)) -> return }
+            MaxStreamData(limit) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 17)) -> return }
+            MaxStreams(limit) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 18)) -> return }
+            DataBlocked(limit) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 20)) -> return }
+            StreamDataBlocked(blocked) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 21)) -> return }
+            StreamsBlocked(blocked) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 22)) -> return }
+            NewConnectionId(value) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 24)) -> return }
+            RetireConnectionId(sequence) { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 25)) -> return }
+            HandshakeDone { Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 30)) -> return }
+        }
+    }
+    hasCrypto! -> unless {
+        Result<Opened, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 2)) -> return
+    }
+    Result<Opened, errors.Error>.Ok(Opened {
+        version: header.version
+        packetNumber: opened.packetNumber
+        cryptoOffset: cryptoOffset!
+        handshakeBytes: handshakeBytes!
+        nextOffset: opened.nextOffset
+    })
+}

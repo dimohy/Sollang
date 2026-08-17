@@ -1,0 +1,216 @@
+namespace sys.crypto.sha256
+
+powerOfTwo exponent: Int -> UInt64 {
+    UInt64(1) => power!
+    0 => powerIndex!
+    powerIndex! < exponent -> while {
+        power! * 2 => power!
+        powerIndex! + 1 => powerIndex!
+    }
+    power!
+}
+
+rotateRight word: UInt64, count: Int -> UInt64 {
+    count -> powerOfTwo => lowDivisor
+    (32 - count) -> powerOfTwo => highMultiplier
+    word / lowDivisor + (word % lowDivisor) * highMultiplier
+}
+
+xor3 xorLeft: UInt64, xorMiddle: UInt64, xorRight: UInt64 -> UInt64 {
+    UInt64(0) => result!
+    UInt64(1) => place!
+    xorLeft => left!
+    xorMiddle => middle!
+    xorRight => right!
+    0 => bit!
+    bit! < 32 -> while {
+        ((left! % 2) + (middle! % 2) + (right! % 2)) % 2 => parity
+        result! + parity * place! => result!
+        left! / 2 => left!
+        middle! / 2 => middle!
+        right! / 2 => right!
+        place! * 2 => place!
+        bit! + 1 => bit!
+    }
+    result!
+}
+
+choose selector: UInt64, whenSet: UInt64, whenClear: UInt64 -> UInt64 {
+    UInt64(0) => result!
+    UInt64(1) => place!
+    selector => selectBits!
+    whenSet => setBits!
+    whenClear => clearBits!
+    0 => bit!
+    bit! < 32 -> while {
+        selectBits! % 2 => selected
+        selected == 1 -> if { setBits! % 2 } else { clearBits! % 2 } => chosenBit
+        result! + chosenBit * place! => result!
+        selectBits! / 2 => selectBits!
+        setBits! / 2 => setBits!
+        clearBits! / 2 => clearBits!
+        place! * 2 => place!
+        bit! + 1 => bit!
+    }
+    result!
+}
+
+majority first: UInt64, second: UInt64, third: UInt64 -> UInt64 {
+    UInt64(0) => result!
+    UInt64(1) => place!
+    first => left!
+    second => middle!
+    third => right!
+    0 => bit!
+    bit! < 32 -> while {
+        (left! % 2) + (middle! % 2) + (right! % 2) => count
+        count >= 2 -> if { result! + place! => result! }
+        left! / 2 => left!
+        middle! / 2 => middle!
+        right! / 2 => right!
+        place! * 2 => place!
+        bit! + 1 => bit!
+    }
+    result!
+}
+
+largeSigma0 value: UInt64 -> UInt64 {
+    value -> rotateRight(2) => first
+    value -> rotateRight(13) => second
+    value -> rotateRight(22) => third
+    xor3(first, second, third)
+}
+
+largeSigma1 value: UInt64 -> UInt64 {
+    value -> rotateRight(6) => first
+    value -> rotateRight(11) => second
+    value -> rotateRight(25) => third
+    xor3(first, second, third)
+}
+
+smallSigma0 value: UInt64 -> UInt64 {
+    value -> rotateRight(7) => first
+    value -> rotateRight(18) => second
+    value / 8 => third
+    xor3(first, second, third)
+}
+
+smallSigma1 value: UInt64 -> UInt64 {
+    value -> rotateRight(17) => first
+    value -> rotateRight(19) => second
+    value / 1_024 => third
+    xor3(first, second, third)
+}
+
+roundConstants: -> [UInt64] => [
+    1_116_352_408, 1_899_447_441, 3_049_323_471, 3_921_009_573,
+    961_987_163, 1_508_970_993, 2_453_635_748, 2_870_763_221,
+    3_624_381_080, 310_598_401, 607_225_278, 1_426_881_987,
+    1_925_078_388, 2_162_078_206, 2_614_888_103, 3_248_222_580,
+    3_835_390_401, 4_022_224_774, 264_347_078, 604_807_628,
+    770_255_983, 1_249_150_122, 1_555_081_692, 1_996_064_986,
+    2_554_220_882, 2_821_834_349, 2_952_996_808, 3_210_313_671,
+    3_336_571_891, 3_584_528_711, 113_926_993, 338_241_895,
+    666_307_205, 773_529_912, 1_294_757_372, 1_396_182_291,
+    1_695_183_700, 1_986_661_051, 2_177_026_350, 2_456_956_037,
+    2_730_485_921, 2_820_302_411, 3_259_730_800, 3_345_764_771,
+    3_516_065_817, 3_600_352_804, 4_094_571_909, 275_423_344,
+    430_227_734, 506_948_616, 659_060_556, 883_997_877,
+    958_139_571, 1_322_822_218, 1_537_002_063, 1_747_873_779,
+    1_955_562_222, 2_024_104_815, 2_227_730_452, 2_361_852_424,
+    2_428_436_474, 2_756_734_187, 3_204_031_479, 3_329_325_298]
+
+public digest source: [UInt8] -> [UInt8; 32] {
+    roundConstants() => constants
+    [UInt64(1_779_033_703), 3_144_134_277, 1_013_904_242, 2_773_480_762,
+        1_359_893_119, 2_600_822_924, 528_734_635, 1_541_459_225] => hash!
+    UInt64(source -> len) * 8 => bitLength
+    UIntSize(source -> len) + 1 => paddedWithoutLength
+    ((paddedWithoutLength + 8 + 63) / 64) * 64 => paddedLength
+    UIntSize(0) => blockStart!
+    blockStart! < paddedLength -> while {
+        [UInt64(0); 64] => words!
+        0 => wordIndex!
+        wordIndex! < 16 -> while {
+            UInt64(0) => word!
+            0 => byteIndex!
+            byteIndex! < 4 -> while {
+                blockStart! + UIntSize(wordIndex! * 4 + byteIndex!) => sourceIndex
+                UInt64(0) => byteValue!
+                sourceIndex < UIntSize(source -> len) -> if {
+                    UInt64(source[Int(sourceIndex)]) => byteValue!
+                } else {
+                    sourceIndex == UIntSize(source -> len) -> if {
+                        128 => byteValue!
+                    } else {
+                        sourceIndex >= paddedLength - 8 -> if {
+                            Int(paddedLength - 1 - sourceIndex) * 8 => shift
+                            (bitLength / (shift -> powerOfTwo)) % 256 => byteValue!
+                        }
+                    }
+                }
+                word! * 256 + byteValue! => word!
+                byteIndex! + 1 => byteIndex!
+            }
+            word! => words![wordIndex!]
+            wordIndex! + 1 => wordIndex!
+        }
+        16 => scheduleIndex!
+        scheduleIndex! < 64 -> while {
+            words![scheduleIndex! - 2] -> smallSigma1 => sigma1
+            words![scheduleIndex! - 15] -> smallSigma0 => sigma0
+            sigma1 + words![scheduleIndex! - 7] + sigma0 + words![scheduleIndex! - 16] => sum
+            sum % 4_294_967_296 => words![scheduleIndex!]
+            scheduleIndex! + 1 => scheduleIndex!
+        }
+        hash![0] => a!
+        hash![1] => b!
+        hash![2] => c!
+        hash![3] => d!
+        hash![4] => e!
+        hash![5] => f!
+        hash![6] => g!
+        hash![7] => h!
+        0 => round!
+        round! < 64 -> while {
+            e! -> largeSigma1 => sigma1
+            choose(e!, f!, g!) => selected
+            (h! + sigma1 + selected + constants[round!] + words![round!]) % 4_294_967_296 => temporary1
+            a! -> largeSigma0 => sigma0
+            majority(a!, b!, c!) => common
+            (sigma0 + common) % 4_294_967_296 => temporary2
+            g! => h!
+            f! => g!
+            e! => f!
+            (d! + temporary1) % 4_294_967_296 => e!
+            c! => d!
+            b! => c!
+            a! => b!
+            (temporary1 + temporary2) % 4_294_967_296 => a!
+            round! + 1 => round!
+        }
+        (hash![0] + a!) % 4_294_967_296 => hash![0]
+        (hash![1] + b!) % 4_294_967_296 => hash![1]
+        (hash![2] + c!) % 4_294_967_296 => hash![2]
+        (hash![3] + d!) % 4_294_967_296 => hash![3]
+        (hash![4] + e!) % 4_294_967_296 => hash![4]
+        (hash![5] + f!) % 4_294_967_296 => hash![5]
+        (hash![6] + g!) % 4_294_967_296 => hash![6]
+        (hash![7] + h!) % 4_294_967_296 => hash![7]
+        blockStart! + 64 => blockStart!
+    }
+    [UInt8(0); 32] => output!
+    0 => outputIndex!
+    0 => hashIndex!
+    hashIndex! < 8 -> while {
+        3 => byteIndex!
+        byteIndex! >= 0 -> while {
+            UInt8(hash![hashIndex!] / ((byteIndex! * 8) -> powerOfTwo) % 256) => byte
+            byte => output![outputIndex!]
+            outputIndex! + 1 => outputIndex!
+            byteIndex! - 1 => byteIndex!
+        }
+        hashIndex! + 1 => hashIndex!
+    }
+    output!
+}

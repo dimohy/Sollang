@@ -33,7 +33,7 @@ public struct ModuleInterfaces {
 }
 
 mix hash: UInt64, value: UInt64 -> UInt64 {
-    hash * UInt64(1099511628211) + value + UInt64(97)
+    hash * 1099511628211 + value + 97
 }
 
 # Raw source identity is deliberately available before lexing or semantic
@@ -49,7 +49,7 @@ public sourceIdentity source: Text -> UInt64 {
         source -> byte(index!) => sourceByte
         UInt64(sourceByte) => sourceByteWord
         hash! -> mix(sourceByteWord) => hash!
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     UInt64(0) => result!
     true -> if { hash! => result! }
@@ -66,7 +66,7 @@ mappedSourceIdentity source: file.SourceText -> UInt64 {
         source -> byte(index!) => sourceByte
         UInt64(sourceByte) => sourceByteWord
         hash! -> mix(sourceByteWord) => hash!
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     UInt64(0) => result!
     true -> if { hash! => result! }
@@ -87,18 +87,16 @@ hashToken package: analysis.PackageAnalysis, sourceIndex: Int, tokenIndex: Int, 
     package.ranges[sourceIndex] => sourceRange
     package.tokens[sourceRange.tokenStart + tokenIndex] => token
     seed => hash!
-    token.kind == grammar.triviaIdWhitespace() -> if {
-    } else {
-        token.kind == grammar.triviaIdComment() -> if {
-        } else {
+    token.kind == grammar.triviaIdWhitespace() -> unless {
+        token.kind == grammar.triviaIdComment() -> unless {
             hash! -> mix(UInt64(token.kind + 1)) => hash!
             UIntSize(0) => byteIndex!
             byteIndex! < token.span.length -> while {
                 package.sources[sourceIndex] -> byte(token.span.start + byteIndex!) => value
                 hash! -> mix(UInt64(value)) => hash!
-                byteIndex! + UIntSize(1) => byteIndex!
+                byteIndex! + 1 => byteIndex!
             }
-            hash! -> mix(UInt64(0)) => hash!
+            hash! -> mix(0) => hash!
         }
     }
     hash!
@@ -129,7 +127,7 @@ hashSymbol package: analysis.PackageAnalysis, sourceIndex: Int, symbolIndex: Int
 # signature as kind, flags, token count-delimited records, and a symbol marker.
 # Source-local AST/symbol indices are deliberately absent.
 public interfacesAnalyzed package: analysis.PackageAnalysis -> ModuleInterfaces {
-    package -> modules.identitiesAnalyzed => identities!
+    package -> modules.identitiesAnalyzed => identities
     [UInt64; ~] => interfaceHashes!
     [Int; ~] => wordStarts!
     [Int; ~] => wordLengths!
@@ -138,9 +136,9 @@ public interfacesAnalyzed package: analysis.PackageAnalysis -> ModuleInterfaces 
     sourceIndex! < (package.ranges -> len) -> while {
         package.ranges[sourceIndex!] => sourceRange
         [UInt64; ~] => words!
-        words! -> push(UInt64(4991188231678313299))
-        words! -> push(UInt64(1))
-        words! -> push(identities![sourceIndex!].pathHash)
+        words! -> push(4991188231678313299)
+        words! -> push(1)
+        words! -> push(identities[sourceIndex!].pathHash)
 
         0 => publicSymbolCount!
         0 => symbolIndex!
@@ -199,21 +197,20 @@ public interfacesAnalyzed package: analysis.PackageAnalysis -> ModuleInterfaces 
                     (token.kind == grammar.tokenIdLeftBrace() or token.kind == grammar.tokenIdFatArrow()) -> if {
                         tokenIndex! => tokenEnd!
                     } else {
-                        (token.kind == grammar.triviaIdWhitespace() or token.kind == grammar.triviaIdComment()) -> if {
-                        } else {
+                        (token.kind == grammar.triviaIdWhitespace() or token.kind == grammar.triviaIdComment()) -> unless {
                             words! -> push(UInt64(token.kind + 1))
                             words! -> push(UInt64(token.span.length))
                             UIntSize(0) => tokenByteIndex!
                             tokenByteIndex! < token.span.length -> while {
                                 package.sources[sourceIndex!] -> byte(token.span.start + tokenByteIndex!) => tokenByte
                                 words! -> push(UInt64(tokenByte))
-                                tokenByteIndex! + UIntSize(1) => tokenByteIndex!
+                                tokenByteIndex! + 1 => tokenByteIndex!
                             }
                         }
                         tokenIndex! + 1 => tokenIndex!
                     }
                 }
-                words! -> push(UInt64(18446744073709551615))
+                words! -> push(18446744073709551615)
                 publicOrdinal! + 1 => publicOrdinal!
             }
             canonicalSymbolIndex! + 1 => canonicalSymbolIndex!
@@ -237,22 +234,21 @@ public interfacesAnalyzed package: analysis.PackageAnalysis -> ModuleInterfaces 
         wordStarts: wordStarts!
         wordLengths: wordLengths!
         words: allWords!
-    } => result!
-    result!
+    } => result
+    result
 }
 
 public interfaces sources: [Text; ~] -> ModuleInterfaces {
     sources -> analysis.analyze => package
-    package -> interfacesAnalyzed => result!
-    result!
+    package -> interfacesAnalyzed => result
+    result
 }
 
 # Hashes are lookup accelerators only. Reuse is valid only when the complete
 # canonical interface stream is equal as well.
 public sameInterface left: ModuleInterfaces, leftIndex: Int, right: ModuleInterfaces, rightIndex: Int -> Bool {
     left.interfaceHashes[leftIndex] == right.interfaceHashes[rightIndex] => matches!
-    left.wordLengths[leftIndex] == right.wordLengths[rightIndex] -> if {
-    } else {
+    left.wordLengths[leftIndex] == right.wordLengths[rightIndex] -> unless {
         false => matches!
     }
     matches! -> if {
@@ -261,8 +257,7 @@ public sameInterface left: ModuleInterfaces, leftIndex: Int, right: ModuleInterf
         left.wordLengths[leftIndex] => length
         0 => index!
         (matches! and index! < length) -> while {
-            left.words[leftStart + index!] == right.words[rightStart + index!] -> if {
-            } else {
+            left.words[leftStart + index!] == right.words[rightStart + index!] -> unless {
                 false => matches!
             }
             index! + 1 => index!
@@ -272,9 +267,9 @@ public sameInterface left: ModuleInterfaces, leftIndex: Int, right: ModuleInterf
 }
 
 public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerprint; ~] {
-    package -> modules.identitiesAnalyzed => identities!
-    package -> modules.importsAnalyzed => imports!
-    package -> interfacesAnalyzed => interfaces!
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> interfacesAnalyzed => interfaces
     [ModuleFingerprint; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (package.ranges -> len) -> while {
@@ -323,8 +318,8 @@ public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerpri
         UInt64(12379813812177893520) => importHash!
         0 => importCount!
         0 => importIndex!
-        importIndex! < (imports! -> len) -> while {
-            imports![importIndex!] => edge
+        importIndex! < (imports -> len) -> while {
+            imports[importIndex!] => edge
             edge.sourceModule == sourceIndex! -> if {
                 importHash! -> mix(edge.targetHash) => importHash!
                 importCount! + 1 => importCount!
@@ -332,10 +327,10 @@ public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerpri
             importIndex! + 1 => importIndex!
         }
 
-        interfaces.interfaceHashes![sourceIndex!] => interfaceHash
+        interfaces.interfaceHashes[sourceIndex!] => interfaceHash
         ModuleFingerprint {
             sourceIndex: sourceIndex!
-            moduleHash: identities![sourceIndex!].pathHash
+            moduleHash: identities[sourceIndex!].pathHash
             sourceHash: package.sources[sourceIndex!] -> mappedSourceIdentity
             interfaceHash: interfaceHash
             implementationHash: implementationHash!

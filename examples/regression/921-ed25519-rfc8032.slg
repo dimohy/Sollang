@@ -1,0 +1,87 @@
+import sys.crypto.ed25519
+
+seed: -> [UInt8] => [
+    157, 97, 177, 157, 239, 253, 90, 96,
+    186, 132, 74, 244, 146, 236, 44, 196,
+    68, 73, 197, 105, 123, 50, 105, 25,
+    112, 59, 172, 3, 28, 174, 127, 96]
+
+expectedPublicKey: -> [UInt8] => [
+    215, 90, 152, 1, 130, 177, 10, 183,
+    213, 75, 254, 211, 201, 100, 7, 58,
+    14, 225, 114, 243, 218, 166, 35, 37,
+    175, 2, 26, 104, 247, 7, 81, 26]
+
+expectedSignature: -> [UInt8] => [
+    229, 86, 67, 0, 195, 96, 172, 114, 144, 134, 226, 204, 128, 110, 130, 138,
+    132, 135, 127, 30, 184, 229, 217, 116, 216, 115, 224, 101, 34, 73, 1, 85,
+    95, 184, 130, 21, 144, 163, 59, 172, 198, 30, 57, 112, 28, 249, 180, 107,
+    210, 91, 245, 240, 89, 91, 190, 36, 101, 81, 65, 67, 142, 122, 16, 11]
+
+seed2: -> [UInt8] => [
+    76, 205, 8, 155, 40, 255, 150, 218,
+    157, 182, 195, 70, 236, 17, 78, 15,
+    91, 138, 49, 159, 53, 171, 166, 36,
+    218, 140, 246, 237, 79, 184, 166, 251]
+
+expectedPublicKey2: -> [UInt8] => [
+    61, 64, 23, 195, 232, 67, 137, 90,
+    146, 183, 10, 167, 77, 27, 126, 188,
+    156, 152, 44, 207, 46, 196, 150, 140,
+    192, 205, 85, 241, 42, 244, 102, 12]
+
+expectedSignature2: -> [UInt8] => [
+    146, 160, 9, 169, 240, 212, 202, 184, 114, 14, 130, 11, 95, 100, 37, 64,
+    162, 178, 123, 84, 22, 80, 63, 143, 179, 118, 34, 35, 235, 219, 105, 218,
+    8, 90, 193, 228, 62, 21, 153, 110, 69, 143, 54, 19, 208, 241, 29, 140,
+    56, 123, 46, 174, 180, 48, 42, 238, 176, 13, 41, 22, 18, 187, 12, 0]
+
+same left: [UInt8], right: [UInt8] -> Bool {
+    true => equal!
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false => equal! }
+        index! + 1 => index!
+    }
+    equal!
+}
+
+identityKey: -> [UInt8; 32] => [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+identityForgery: -> [UInt8; 64] => [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+rejectsIdentityForgery: -> Bool {
+    ed25519.verify(identityKey(), [], identityForgery()) -> when {
+        Ok(valid) { not valid }
+        Err(error) { true }
+    }
+}
+
+run: -> Result<Bool, ed25519.Error> {
+    ed25519.publicKey(seed())? => publicKey
+    ed25519.sign(seed(), [])? => signature
+    ed25519.verify(publicKey, [], signature)? => verified
+    ed25519.verify(publicKey, [1], signature)? => alteredMessageVerified
+    ed25519.publicKey(seed2())? => publicKey2
+    ed25519.sign(seed2(), [114])? => signature2
+    ed25519.verify(publicKey2, [114], signature2)? => verified2
+    Result<Bool, ed25519.Error>.Ok(
+        verified and not alteredMessageVerified and rejectsIdentityForgery()
+            and same(publicKey, expectedPublicKey()) and same(signature, expectedSignature())
+            and verified2 and same(publicKey2, expectedPublicKey2())
+            and same(signature2, expectedSignature2()))
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "ed25519=true" } else { "ed25519=false" } -> println }
+        Err(error) { "ed25519-error" -> println }
+    }
+}

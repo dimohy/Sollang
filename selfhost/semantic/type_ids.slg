@@ -61,13 +61,6 @@ struct SpanNameRequest {
     expected: Text
 }
 
-public struct IntrinsicNominalRequest {
-    package: analysis.PackageAnalysis
-    identities: [modules.ModuleIdentity; ~]
-    targetModule: Int
-    targetSymbol: Int
-}
-
 public struct SpecializationRequest {
     types: [SemanticType; ~]
     inputTemplate: Int
@@ -86,30 +79,25 @@ public struct SpecializationRoot {
     status: Int
 }
 
-public struct TypeClassificationRequest {
-    types: [SemanticType; ~]
-    fields: [NominalField; ~]
-}
-
 spanNameIs request: SpanNameRequest -> Bool {
     request.length == (request.expected -> len) => equal!
     UIntSize(0) => byteIndex!
     (equal! and byteIndex! < request.length) -> while {
         (request.source -> byte(request.start + byteIndex!)) != (request.expected -> byte(byteIndex!)) -> if { false => equal! }
-        byteIndex! + UIntSize(1) => byteIndex!
+        byteIndex! + 1 => byteIndex!
     }
     equal!
 }
 
-public intrinsicNominalSymbol request: IntrinsicNominalRequest -> Int {
+public intrinsicNominalSymbol package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], targetModule: Int, targetSymbol: Int -> Int {
     "sys.file" => fileNamespace
     "SourceText" => sourceTextName
-    request.identities[request.targetModule] => identity
-    request.package.sources[identity.sourceIndex] -> len => sourceLength
-    request.package.sources[identity.sourceIndex] -> slice(UIntSize(0), sourceLength) => source
-    request.package.ranges[identity.sourceIndex] => sourceRange
-    request.package.symbols[sourceRange.symbolStart + request.targetSymbol] => symbol
-    request.package.tokens[sourceRange.tokenStart + symbol.nameToken] => name
+    identities[targetModule] => identity
+    package.sources[identity.sourceIndex] -> len => sourceLength
+    package.sources[identity.sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    package.ranges[identity.sourceIndex] => sourceRange
+    package.symbols[sourceRange.symbolStart + targetSymbol] => symbol
+    package.tokens[sourceRange.tokenStart + symbol.nameToken] => name
     (SpanNameRequest { source: source, start: identity.pathStart, length: identity.pathLength, expected: fileNamespace } -> spanNameIs) -> if {
         (SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: sourceTextName } -> spanNameIs) -> if { 24 } else { -1 }
     } else { -1 }
@@ -119,17 +107,17 @@ public intrinsicNominalSymbol request: IntrinsicNominalRequest -> Int {
 # Bit 0 means the value owns destruction responsibility. Bit 1 means that
 # responsibility reaches heap-backed storage. Child IDs always precede their
 # parents, so fixed arrays and nominal applications are classified bottom-up.
-public classify request: TypeClassificationRequest -> [Int; ~] {
+public classify sourceTypes: [SemanticType; ~], sourceFields: [NominalField; ~] -> [Int; ~] {
     [SemanticType; ~] => types!
     0 => copyTypeIndex!
-    copyTypeIndex! < (request.types -> len) -> while {
-        types! -> push(request.types[copyTypeIndex!])
+    copyTypeIndex! < (sourceTypes -> len) -> while {
+        types! -> push(sourceTypes[copyTypeIndex!])
         copyTypeIndex! + 1 => copyTypeIndex!
     }
     [NominalField; ~] => fields!
     0 => copyFieldIndex!
-    copyFieldIndex! < (request.fields -> len) -> while {
-        fields! -> push(request.fields[copyFieldIndex!])
+    copyFieldIndex! < (sourceFields -> len) -> while {
+        fields! -> push(sourceFields[copyFieldIndex!])
         copyFieldIndex! + 1 => copyFieldIndex!
     }
     [Int; ~] => traits!
@@ -183,9 +171,9 @@ public classify request: TypeClassificationRequest -> [Int; ~] {
         0 => typeIndex!
         typeIndex! < (types! -> len) -> while {
             types![typeIndex!] => current
-            traits![typeIndex!] => value!
-            value! % 2 == 1 => owns!
-            (value! / 2) % 2 == 1 => reachesHeap!
+            traits![typeIndex!] => value
+            value % 2 == 1 => owns!
+            (value / 2) % 2 == 1 => reachesHeap!
             (current.kind == 4 or current.kind == 7 or current.kind == 12 or current.kind == 13) -> if {
                 current.first >= 0 -> if {
                     traits![current.first] % 2 == 1 -> if { true => owns! }
@@ -208,7 +196,7 @@ public classify request: TypeClassificationRequest -> [Int; ~] {
             0 => nextValue!
             owns! -> if { nextValue! + 1 => nextValue! }
             reachesHeap! -> if { nextValue! + 2 => nextValue! }
-            nextValue! != value! -> if {
+            nextValue! != value -> if {
                 nextValue! => traits![typeIndex!]
                 true => changed!
             }
@@ -226,11 +214,11 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
 }
 
 public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"; ~] => builtinNames!
-    package -> modules.identitiesAnalyzed => identities!
-    package -> modules.importsAnalyzed => imports!
-    package -> moduleResolve.resolveAnalyzed => resolvedImports!
-    package -> qualified.resolveAnalyzed => qualifiedResults!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => builtinNames
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
+    package -> qualified.resolveAnalyzed => qualifiedResults
     [SemanticType; ~] => semanticTypes!
     [TypeReference; ~] => references!
     [NominalField; ~] => fields!
@@ -238,7 +226,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
     # Seed builtins in their stable nominal-symbol order. Expression inference
     # can therefore use the same id without an adapter or encounter-order map.
     0 => builtinSeed!
-    builtinSeed! < (builtinNames! -> len) -> while {
+    builtinSeed! < (builtinNames -> len) -> while {
         semanticTypes! -> push(SemanticType {
             kind: 1
             origin: 1
@@ -247,7 +235,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
             first: -1
             second: -1
             length: -1
-            lengthHash: UInt64(0)
+            lengthHash: 0
             containsParameter: false
             status: 0
         })
@@ -273,7 +261,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                     first: -1
                     second: -1
                     length: -1
-                    lengthHash: UInt64(0)
+                    lengthHash: 0
                     containsParameter: false
                     status: 0
                 })
@@ -286,7 +274,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                         first: comInterfaceTypeId
                         second: 5
                         length: -1
-                        lengthHash: UInt64(0)
+                        lengthHash: 0
                         containsParameter: false
                         status: 0
                     })
@@ -339,8 +327,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                         term.kind == 1 -> if {
                             -1 => qualifiedIndex!
                             0 => qualifiedSearch!
-                            qualifiedSearch! < (qualifiedResults! -> len) -> while {
-                                qualifiedResults![qualifiedSearch!] => candidate
+                            qualifiedSearch! < (qualifiedResults -> len) -> while {
+                                qualifiedResults[qualifiedSearch!] => candidate
                                 candidate.sourceModule == sourceIndex! -> if {
                                     package.nodes[sourceRange.astStart + candidate.pathAst] => candidatePath
                                     (term.nameToken >= candidatePath.firstToken and term.nameToken < candidatePath.firstToken + candidatePath.tokenCount) -> if {
@@ -350,13 +338,13 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 qualifiedSearch! + 1 => qualifiedSearch!
                             }
                             qualifiedIndex! >= 0 -> if {
-                                qualifiedResults![qualifiedIndex!] => imported
+                                qualifiedResults[qualifiedIndex!] => imported
                                 2 => origin!
-                                identities![imported.targetModule].sourceIndex => targetModule!
+                                identities[imported.targetModule].sourceIndex => targetModule!
                                 imported.targetSymbol => targetSymbol!
                                 imported.status => status!
                                 imported.status == 0 -> if {
-                                    IntrinsicNominalRequest { package: package, identities: identities!, targetModule: imported.targetModule, targetSymbol: imported.targetSymbol } -> intrinsicNominalSymbol => intrinsicSymbol
+                                    package -> intrinsicNominalSymbol(identities, imported.targetModule, imported.targetSymbol) => intrinsicSymbol
                                     intrinsicSymbol >= 0 -> if {
                                         1 => origin!
                                         -1 => targetModule!
@@ -367,15 +355,15 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 package.tokens[sourceRange.tokenStart + term.nameToken] => name
                                 -1 => builtinIndex!
                                 0 => builtinSearch!
-                                (builtinSearch! < (builtinNames! -> len) and builtinIndex! < 0) -> while {
-                                    builtinNames![builtinSearch!] => builtinName
+                                (builtinSearch! < (builtinNames -> len) and builtinIndex! < 0) -> while {
+                                    builtinNames[builtinSearch!] => builtinName
                                     name.span.length == (builtinName -> len) => equal!
                                     UIntSize(0) => nameByte!
                                     (equal! and nameByte! < name.span.length) -> while {
                                         source -> byte(name.span.start + nameByte!) => leftByte
                                         builtinName -> byte(nameByte!) => rightByte
                                         leftByte != rightByte -> if { false => equal! }
-                                        nameByte! + UIntSize(1) => nameByte!
+                                        nameByte! + 1 => nameByte!
                                     }
                                     equal! -> if { builtinSearch! => builtinIndex! }
                                     builtinSearch! + 1 => builtinSearch!
@@ -410,7 +398,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                                 source -> byte(name.span.start + localByte!) => leftByte
                                                 source -> byte(candidateName.span.start + localByte!) => rightByte
                                                 leftByte != rightByte -> if { false => equal! }
-                                                localByte! + UIntSize(1) => localByte!
+                                                localByte! + 1 => localByte!
                                             }
                                             equal! -> if { symbolIndex! => localSymbol! }
                                         }
@@ -419,10 +407,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                     sourceIndex! => localTypeSource!
                                     false => siblingTypeAmbiguous!
                                     localSymbol! < 0 -> if {
-                                        identities![sourceIndex!] => currentIdentity
+                                        identities[sourceIndex!] => currentIdentity
                                         0 => siblingModuleIndex!
-                                        siblingModuleIndex! < (identities! -> len) -> while {
-                                            identities![siblingModuleIndex!] => siblingIdentity
+                                        siblingModuleIndex! < (identities -> len) -> while {
+                                            identities[siblingModuleIndex!] => siblingIdentity
                                             (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
                                                 siblingIdentity.sourceIndex => siblingSourceIndex
                                                 package.sources[siblingSourceIndex] -> len => siblingSourceLength
@@ -439,7 +427,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                                             (source -> byte(name.span.start + siblingByte!)) != (siblingSource -> byte(siblingName.span.start + siblingByte!)) -> if {
                                                                 false => siblingEqual!
                                                             }
-                                                            siblingByte! + UIntSize(1) => siblingByte!
+                                                            siblingByte! + 1 => siblingByte!
                                                         }
                                                         siblingEqual! -> if {
                                                             localSymbol! >= 0 -> if {
@@ -466,26 +454,26 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                         -1 => importedTypeSymbol!
                                         0 => importedTypeMatches!
                                         false => searchImportedType!
-                                        name.span.length == UIntSize(10) -> if {
-                                            ((source -> byte(name.span.start)) == UInt8(77)
-                                                and (source -> byte(name.span.start + UIntSize(1))) == UInt8(111)
-                                                and (source -> byte(name.span.start + UIntSize(2))) == UInt8(117)
-                                                and (source -> byte(name.span.start + UIntSize(3))) == UInt8(115)
-                                                and (source -> byte(name.span.start + UIntSize(4))) == UInt8(101)
-                                                and (source -> byte(name.span.start + UIntSize(5))) == UInt8(69)
-                                                and (source -> byte(name.span.start + UIntSize(6))) == UInt8(118)
-                                                and (source -> byte(name.span.start + UIntSize(7))) == UInt8(101)
-                                                and (source -> byte(name.span.start + UIntSize(8))) == UInt8(110)
-                                                and (source -> byte(name.span.start + UIntSize(9))) == UInt8(116)) -> if {
+                                        name.span.length == 10 -> if {
+                                            ((source -> byte(name.span.start)) == 77
+                                                and (source -> byte(name.span.start + 1)) == 111
+                                                and (source -> byte(name.span.start + 2)) == 117
+                                                and (source -> byte(name.span.start + 3)) == 115
+                                                and (source -> byte(name.span.start + 4)) == 101
+                                                and (source -> byte(name.span.start + 5)) == 69
+                                                and (source -> byte(name.span.start + 6)) == 118
+                                                and (source -> byte(name.span.start + 7)) == 101
+                                                and (source -> byte(name.span.start + 8)) == 110
+                                                and (source -> byte(name.span.start + 9)) == 116) -> if {
                                                 true => searchImportedType!
                                             }
                                         }
                                         0 => importedTypeEdgeIndex!
-                                        (searchImportedType! and importedTypeEdgeIndex! < (imports! -> len)) -> while {
-                                            imports![importedTypeEdgeIndex!] => importedTypeEdge
-                                            resolvedImports![importedTypeEdgeIndex!] => importedTypeResolution
+                                        (searchImportedType! and importedTypeEdgeIndex! < (imports -> len)) -> while {
+                                            imports[importedTypeEdgeIndex!] => importedTypeEdge
+                                            resolvedImports[importedTypeEdgeIndex!] => importedTypeResolution
                                             (importedTypeEdge.sourceModule == sourceIndex! and importedTypeResolution.status == 0) -> if {
-                                                identities![importedTypeResolution.targetModule].sourceIndex => importedTypeSourceModule
+                                                identities[importedTypeResolution.targetModule].sourceIndex => importedTypeSourceModule
                                                 package.sources[importedTypeSourceModule] -> len => importedTypeSourceLength
                                                 package.sources[importedTypeSourceModule] -> slice(UIntSize(0), importedTypeSourceLength) => importedTypeSource
                                                 package.ranges[importedTypeSourceModule] => importedTypeRange
@@ -500,7 +488,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                                             (source -> byte(name.span.start + importedTypeNameByte!)) != (importedTypeSource -> byte(importedTypeCandidateName.span.start + importedTypeNameByte!)) -> if {
                                                                 false => importedTypeNameEqual!
                                                             }
-                                                            importedTypeNameByte! + UIntSize(1) => importedTypeNameByte!
+                                                            importedTypeNameByte! + 1 => importedTypeNameByte!
                                                         }
                                                         importedTypeNameEqual! -> if {
                                                             importedTypeSourceModule => importedTypeModule!
@@ -528,64 +516,64 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                             4 => origin!
                             -1 => targetModule!
                             package.tokens[sourceRange.tokenStart + term.nameToken] => constructorName
-                            constructorName.span.length == UIntSize(6) -> if {
+                            constructorName.span.length == 6 -> if {
                                 source -> byte(constructorName.span.start) => byte0
-                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
-                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
-                                source -> byte(constructorName.span.start + UIntSize(3)) => byte3
-                                source -> byte(constructorName.span.start + UIntSize(4)) => byte4
-                                source -> byte(constructorName.span.start + UIntSize(5)) => byte5
-                                (byte0 == UInt8(82) and byte1 == UInt8(101) and byte2 == UInt8(115) and byte3 == UInt8(117) and byte4 == UInt8(108) and byte5 == UInt8(116)) -> if { 1 => targetSymbol! }
-                                (byte0 == UInt8(79) and byte1 == UInt8(112) and byte2 == UInt8(116) and byte3 == UInt8(105) and byte4 == UInt8(111) and byte5 == UInt8(110)) -> if { 0 => targetSymbol! }
-                                (byte0 == UInt8(83) and byte1 == UInt8(116) and byte2 == UInt8(114) and byte3 == UInt8(101) and byte4 == UInt8(97) and byte5 == UInt8(109)) -> if { 3 => targetSymbol! }
+                                source -> byte(constructorName.span.start + 1) => byte1
+                                source -> byte(constructorName.span.start + 2) => byte2
+                                source -> byte(constructorName.span.start + 3) => byte3
+                                source -> byte(constructorName.span.start + 4) => byte4
+                                source -> byte(constructorName.span.start + 5) => byte5
+                                (byte0 == 82 and byte1 == 101 and byte2 == 115 and byte3 == 117 and byte4 == 108 and byte5 == 116) -> if { 1 => targetSymbol! }
+                                (byte0 == 79 and byte1 == 112 and byte2 == 116 and byte3 == 105 and byte4 == 111 and byte5 == 110) -> if { 0 => targetSymbol! }
+                                (byte0 == 83 and byte1 == 116 and byte2 == 114 and byte3 == 101 and byte4 == 97 and byte5 == 109) -> if { 3 => targetSymbol! }
                             }
-                            constructorName.span.length == UIntSize(4) -> if {
+                            constructorName.span.length == 4 -> if {
                                 source -> byte(constructorName.span.start) => byte0
-                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
-                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
-                                source -> byte(constructorName.span.start + UIntSize(3)) => byte3
-                                (byte0 == UInt8(84) and byte1 == UInt8(97) and byte2 == UInt8(115) and byte3 == UInt8(107)) -> if { 2 => targetSymbol! }
+                                source -> byte(constructorName.span.start + 1) => byte1
+                                source -> byte(constructorName.span.start + 2) => byte2
+                                source -> byte(constructorName.span.start + 3) => byte3
+                                (byte0 == 84 and byte1 == 97 and byte2 == 115 and byte3 == 107) -> if { 2 => targetSymbol! }
                             }
-                            constructorName.span.length == UIntSize(3) -> if {
+                            constructorName.span.length == 3 -> if {
                                 source -> byte(constructorName.span.start) => byte0
-                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
-                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
-                                (byte0 == UInt8(83) and byte1 == UInt8(101) and byte2 == UInt8(116)) -> if { 5 => targetSymbol! }
+                                source -> byte(constructorName.span.start + 1) => byte1
+                                source -> byte(constructorName.span.start + 2) => byte2
+                                (byte0 == 83 and byte1 == 101 and byte2 == 116) -> if { 5 => targetSymbol! }
                             }
-                            constructorName.span.length == UIntSize(5) -> if {
+                            constructorName.span.length == 5 -> if {
                                 source -> byte(constructorName.span.start) => byte0
-                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
-                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
-                                source -> byte(constructorName.span.start + UIntSize(3)) => byte3
-                                source -> byte(constructorName.span.start + UIntSize(4)) => byte4
-                                (byte0 == UInt8(68) and byte1 == UInt8(101) and byte2 == UInt8(113) and byte3 == UInt8(117) and byte4 == UInt8(101)) -> if { 6 => targetSymbol! }
+                                source -> byte(constructorName.span.start + 1) => byte1
+                                source -> byte(constructorName.span.start + 2) => byte2
+                                source -> byte(constructorName.span.start + 3) => byte3
+                                source -> byte(constructorName.span.start + 4) => byte4
+                                (byte0 == 68 and byte1 == 101 and byte2 == 113 and byte3 == 117 and byte4 == 101) -> if { 6 => targetSymbol! }
                             }
-                            constructorName.span.length == UIntSize(10) -> if {
+                            constructorName.span.length == 10 -> if {
                                 source -> byte(constructorName.span.start) => byte0
-                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
-                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
-                                source -> byte(constructorName.span.start + UIntSize(3)) => byte3
-                                source -> byte(constructorName.span.start + UIntSize(4)) => byte4
-                                source -> byte(constructorName.span.start + UIntSize(5)) => byte5
-                                source -> byte(constructorName.span.start + UIntSize(6)) => byte6
-                                source -> byte(constructorName.span.start + UIntSize(7)) => byte7
-                                source -> byte(constructorName.span.start + UIntSize(8)) => byte8
-                                source -> byte(constructorName.span.start + UIntSize(9)) => byte9
-                                (byte0 == UInt8(66) and byte1 == UInt8(105) and byte2 == UInt8(110) and byte3 == UInt8(97) and byte4 == UInt8(114) and byte5 == UInt8(121) and byte6 == UInt8(72) and byte7 == UInt8(101) and byte8 == UInt8(97) and byte9 == UInt8(112)) -> if { 7 => targetSymbol! }
+                                source -> byte(constructorName.span.start + 1) => byte1
+                                source -> byte(constructorName.span.start + 2) => byte2
+                                source -> byte(constructorName.span.start + 3) => byte3
+                                source -> byte(constructorName.span.start + 4) => byte4
+                                source -> byte(constructorName.span.start + 5) => byte5
+                                source -> byte(constructorName.span.start + 6) => byte6
+                                source -> byte(constructorName.span.start + 7) => byte7
+                                source -> byte(constructorName.span.start + 8) => byte8
+                                source -> byte(constructorName.span.start + 9) => byte9
+                                (byte0 == 66 and byte1 == 105 and byte2 == 110 and byte3 == 97 and byte4 == 114 and byte5 == 121 and byte6 == 72 and byte7 == 101 and byte8 == 97 and byte9 == 112) -> if { 7 => targetSymbol! }
                             }
-                            constructorName.span.length == UIntSize(11) -> if {
+                            constructorName.span.length == 11 -> if {
                                 source -> byte(constructorName.span.start) => byte0
-                                source -> byte(constructorName.span.start + UIntSize(1)) => byte1
-                                source -> byte(constructorName.span.start + UIntSize(2)) => byte2
-                                source -> byte(constructorName.span.start + UIntSize(3)) => byte3
-                                source -> byte(constructorName.span.start + UIntSize(4)) => byte4
-                                source -> byte(constructorName.span.start + UIntSize(5)) => byte5
-                                source -> byte(constructorName.span.start + UIntSize(6)) => byte6
-                                source -> byte(constructorName.span.start + UIntSize(7)) => byte7
-                                source -> byte(constructorName.span.start + UIntSize(8)) => byte8
-                                source -> byte(constructorName.span.start + UIntSize(9)) => byte9
-                                source -> byte(constructorName.span.start + UIntSize(10)) => byte10
-                                (byte0 == UInt8(69) and byte1 == UInt8(118) and byte2 == UInt8(101) and byte3 == UInt8(110) and byte4 == UInt8(116) and byte5 == UInt8(83) and byte6 == UInt8(116) and byte7 == UInt8(114) and byte8 == UInt8(101) and byte9 == UInt8(97) and byte10 == UInt8(109)) -> if { 4 => targetSymbol! }
+                                source -> byte(constructorName.span.start + 1) => byte1
+                                source -> byte(constructorName.span.start + 2) => byte2
+                                source -> byte(constructorName.span.start + 3) => byte3
+                                source -> byte(constructorName.span.start + 4) => byte4
+                                source -> byte(constructorName.span.start + 5) => byte5
+                                source -> byte(constructorName.span.start + 6) => byte6
+                                source -> byte(constructorName.span.start + 7) => byte7
+                                source -> byte(constructorName.span.start + 8) => byte8
+                                source -> byte(constructorName.span.start + 9) => byte9
+                                source -> byte(constructorName.span.start + 10) => byte10
+                                (byte0 == 69 and byte1 == 118 and byte2 == 101 and byte3 == 110 and byte4 == 116 and byte5 == 83 and byte6 == 116 and byte7 == 114 and byte8 == 101 and byte9 == 97 and byte10 == 109) -> if { 4 => targetSymbol! }
                             }
                             targetSymbol! < 0 -> if { 2 => status! }
                         }
@@ -609,28 +597,28 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                         UInt64(0) => lengthHash!
                         -1 => lengthValue!
                         term.lengthToken >= 0 -> if {
-                            UInt64(1469598103934665603) => lengthHash!
+                            1469598103934665603 => lengthHash!
                             package.tokens[sourceRange.tokenStart + term.lengthToken] => length
                             length.kind == grammar.tokenIdNumber() -> if { 0 => lengthValue! }
                             UIntSize(0) => lengthByte!
                             lengthByte! < length.span.length -> while {
                                 source -> byte(length.span.start + lengthByte!) => value
-                                lengthHash! * UInt64(1099511628211) + UInt64(value) => lengthHash!
-                                lengthValue! >= 0 -> if { lengthValue! * 10 + Int(value - UInt8(48)) => lengthValue! }
-                                lengthByte! + UIntSize(1) => lengthByte!
+                                lengthHash! * 1099511628211 + UInt64(value) => lengthHash!
+                                lengthValue! >= 0 -> if { lengthValue! * 10 + Int(value - 48) => lengthValue! }
+                                lengthByte! + 1 => lengthByte!
                             }
                         }
                         term.kind == 11 -> if {
                             -1 => lengthValue!
                             term.nameToken >= 0 -> if {
-                                UInt64(1469598103934665603) => lengthHash!
+                                1469598103934665603 => lengthHash!
                                 package.tokens[sourceRange.tokenStart + term.nameToken] => productFieldName
                                 Int(productFieldName.span.length) => lengthValue!
                                 UIntSize(0) => productFieldNameByte!
                                 productFieldNameByte! < productFieldName.span.length -> while {
                                     source -> byte(productFieldName.span.start + productFieldNameByte!) => productFieldNameValue
-                                    lengthHash! * UInt64(1099511628211) + UInt64(productFieldNameValue) => lengthHash!
-                                    productFieldNameByte! + UIntSize(1) => productFieldNameByte!
+                                    lengthHash! * 1099511628211 + UInt64(productFieldNameValue) => lengthHash!
+                                    productFieldNameByte! + 1 => productFieldNameByte!
                                 }
                             }
                         }
@@ -699,7 +687,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                                     (source -> byte(currentProductLabel.span.start + productLabelByte!)) != (candidateProductSource -> byte(candidateProductLabel.span.start + productLabelByte!)) -> if {
                                                         false => productLabelEqual!
                                                     }
-                                                    productLabelByte! + UIntSize(1) => productLabelByte!
+                                                    productLabelByte! + 1 => productLabelByte!
                                                 }
                                                 not productLabelEqual! -> if { false => productCandidateEqual! }
                                             }
@@ -786,7 +774,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                         first: -1
                         second: -1
                         length: -1
-                        lengthHash: UInt64(0)
+                        lengthHash: 0
                         containsParameter: false
                         status: 0
                     })
@@ -874,7 +862,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                             first: nativeTrySuccessType!
                             second: 5
                             length: -1
-                            lengthHash: UInt64(0)
+                            lengthHash: 0
                             containsParameter: false
                             status: 0
                         })
@@ -885,8 +873,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
         }
         nativeTrySource! + 1 => nativeTrySource!
     }
-    SemanticTypeSet { types: semanticTypes!, references: references!, fields: fields! } => result!
-    result!
+    SemanticTypeSet { types: semanticTypes!, references: references!, fields: fields! } => result
+    result
 }
 
 # Structurally unifies a generic input template with one concrete argument,
@@ -1083,8 +1071,8 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
         }
     }
 
-    SpecializationRoot { root: specializedRoot!, status: status! } => result!
-    result!
+    SpecializationRoot { root: specializedRoot!, status: status! } => result
+    result
 }
 
 # Compatibility value API for callers that intentionally want an independent
@@ -1100,6 +1088,6 @@ public specialize request: SpecializationRequest -> SpecializationResult {
         compatibilityTypeIndex! + 1 => compatibilityTypeIndex!
     }
     types! -> specializeInto(inputTemplate, actualInput, resultTemplate) => specialized
-    SpecializationResult { types: types!, root: specialized.root, status: specialized.status } => result!
-    result!
+    SpecializationResult { types: types!, root: specialized.root, status: specialized.status } => result
+    result
 }

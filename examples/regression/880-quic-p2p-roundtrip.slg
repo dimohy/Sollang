@@ -1,0 +1,69 @@
+import sys.io
+import sys.quic as quic
+
+struct Roundtrip {
+    streamCount: Int
+    streamFirst: UInt8
+    streamLast: UInt8
+    streamFinished: Bool
+    datagramCount: Int
+}
+
+ping: -> [UInt8] => [112, 105, 110, 103]
+
+runQuic version: UInt32 -> Result<Roundtrip, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identityA
+    quic.generateIdentity()? => identityB
+    quic.certificate(identityA)? => certificateA
+    quic.certificate(identityB)? => certificateB
+
+    quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 0 } => localA
+    quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 0 } => localB
+    quic.bind(localA, identityA, certificateB)? => endpointA
+    quic.bind(localB, identityB, certificateA)? => endpointB
+
+    quic.Ipv4Endpoint {
+        a: 127
+        b: 0
+        c: 0
+        d: 1
+        port: quic.localPort(endpointB)
+    } => peerB
+    quic.connectVersion(endpointA, peerB, version)? => connectionA!
+    quic.accept(endpointB)? => connectionB!
+
+    quic.openBi(connectionA!)? => channelA!
+    ping() => pingBytes
+    quic.send(connectionA!, channelA!, pingBytes)? => sent
+    quic.finish(connectionA!, channelA!)?
+    quic.acceptBi(connectionB!)? => channelB!
+    quic.receive(connectionB!, channelB!, 16)? => received
+    quic.receive(connectionB!, channelB!, 16)? => endOfStream
+
+    quic.sendDatagram(connectionA!, pingBytes)?
+    quic.receiveDatagram(connectionB!)? => datagram
+    quic.close(connectionA!, 0)?
+
+    Result<Roundtrip, quic.QuicError>.Ok(Roundtrip {
+        streamCount: received -> len
+        streamFirst: received[0]
+        streamLast: received[3]
+        streamFinished: channelB!.finished and (endOfStream -> len) == 0
+        datagramCount: datagram -> len
+    })
+}
+
+runVersion version: UInt32 -> Unit uses Network, Random, Clock, Console {
+    runQuic(version) -> when {
+        Ok(value) {
+            value.streamFinished -> if { "true" } else { "false" } => finishedText
+            "quic=$version,$(value.streamCount),$(value.streamFirst),$(value.streamLast),$finishedText,$(value.datagramCount)" -> println
+        }
+        Err(error) { "quic-error=$version,$(error.code)" -> println }
+    }
+}
+
+main {
+    quic.version1() -> runVersion
+    quic.version2() -> runVersion
+}

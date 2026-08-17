@@ -1,0 +1,88 @@
+import sys.crypto.tls13_keys as tls13
+import sys.quic.application_engine as application
+import sys.quic.error as errors
+import sys.quic.frame_types as frames
+import sys.quic.keys
+
+secret: -> [UInt8; 32] => [68; 32]
+connectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
+data: -> [UInt8; ~] => [112, 105, 110, 103; ~]
+
+run: -> Result<Bool, errors.Error> {
+    application.create(secret()) => sender
+    application.create(secret()) => receiver!
+    application.encode(
+        keys.version1(),
+        connectionId(),
+        1,
+        frames.Value.Stream(frames.Stream {
+            id: 0
+            offset: 0
+            fin: true
+            data: data()
+        }),
+        sender)? => protected
+    application.open(
+        keys.version1(),
+        protected,
+        connectionId(),
+        1,
+        receiver!)? => opened
+    false => valid!
+    opened.frame -> when {
+        Stream(streamFrame) { streamFrame.data[0] == 112 => valid! }
+        Padding(count) {}
+        Ping {}
+        Ack(ack) {}
+        Crypto(crypto) {}
+        Datagram(datagram) {}
+        MaxData(maximum) {}
+        MaxStreamData(limit) {}
+        MaxStreams(limit) {}
+        DataBlocked(limit) {}
+        StreamDataBlocked(blocked) {}
+        StreamsBlocked(blocked) {}
+        ConnectionClose(close) {}
+        HandshakeDone {}
+        NewConnectionId(value) {}
+        RetireConnectionId(sequence) {}
+    }
+    application.encode(
+        keys.version1(),
+        connectionId(),
+        2,
+        frames.Value.Datagram(frames.Datagram { data: data() }),
+        sender)? => protectedAgain
+    application.open(
+        keys.version1(),
+        protectedAgain,
+        connectionId(),
+        2,
+        receiver!)? => openedAgain
+    openedAgain.frame -> when {
+        Datagram(datagram) { (valid! and datagram.data[3] == 103) => valid! }
+        Padding(count) {}
+        Ping {}
+        Ack(ack) {}
+        Crypto(crypto) {}
+        Stream(streamFrame) {}
+        MaxData(maximum) {}
+        MaxStreamData(limit) {}
+        MaxStreams(limit) {}
+        DataBlocked(limit) {}
+        StreamDataBlocked(blocked) {}
+        StreamsBlocked(blocked) {}
+        ConnectionClose(close) {}
+        HandshakeDone {}
+        NewConnectionId(value) {}
+        RetireConnectionId(sequence) {}
+    }
+    Result<Bool, errors.Error>.Ok(valid!)
+}
+
+main {
+    run() -> when {
+        Ok(valid) { valid -> if { "owned-frame=ok" } else { "owned-frame=failed" } -> println }
+        Err(error) { "owned-frame-error=$(error.code)" -> println }
+    }
+}

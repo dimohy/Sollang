@@ -21,25 +21,25 @@ struct NumberPart {
 }
 
 digit value: UInt8 -> Bool {
-    value >= UInt8(48) and value <= UInt8(57)
+    value >= 48 and value <= 57
 }
 
 digitValue value: UInt8 -> Int {
     0 => result!
-    value == UInt8(49) -> if { 1 => result! }
-    value == UInt8(50) -> if { 2 => result! }
-    value == UInt8(51) -> if { 3 => result! }
-    value == UInt8(52) -> if { 4 => result! }
-    value == UInt8(53) -> if { 5 => result! }
-    value == UInt8(54) -> if { 6 => result! }
-    value == UInt8(55) -> if { 7 => result! }
-    value == UInt8(56) -> if { 8 => result! }
-    value == UInt8(57) -> if { 9 => result! }
+    value == 49 -> if { 1 => result! }
+    value == 50 -> if { 2 => result! }
+    value == 51 -> if { 3 => result! }
+    value == 52 -> if { 4 => result! }
+    value == 53 -> if { 5 => result! }
+    value == 54 -> if { 6 => result! }
+    value == 55 -> if { 7 => result! }
+    value == 56 -> if { 8 => result! }
+    value == 57 -> if { 9 => result! }
     result!
 }
 
 identifierByte value: UInt8 -> Bool {
-    (value -> digit) or (value >= UInt8(65) and value <= UInt8(90)) or (value >= UInt8(97) and value <= UInt8(122)) or value == UInt8(45)
+    (value -> digit) or (value >= 65 and value <= 90) or (value >= 97 and value <= 122) or value == 45
 }
 
 parseNumber source: Text, start: UIntSize -> NumberPart {
@@ -48,14 +48,14 @@ parseNumber source: Text, start: UIntSize -> NumberPart {
     0 => status!
     0 => value!
     (index! >= length or not ((source -> byte(index!)) -> digit)) -> if { 1 => status! }
-    (status! == 0 and (source -> byte(index!)) == UInt8(48) and index! + UIntSize(1) < length and ((source -> byte(index! + UIntSize(1))) -> digit)) -> if { 2 => status! }
+    (status! == 0 and (source -> byte(index!)) == 48 and index! + 1 < length and ((source -> byte(index! + 1)) -> digit)) -> if { 2 => status! }
     (status! == 0 and index! < length and ((source -> byte(index!)) -> digit)) -> while {
         source -> byte(index!) -> digitValue => current
         (value! > 214748364 or (value! == 214748364 and current > 7)) -> if {
             3 => status!
         } else {
             value! * 10 + current => value!
-            index! + UIntSize(1) => index!
+            index! + 1 => index!
         }
     }
     NumberPart { status: status!, value: value!, next: index! }
@@ -68,19 +68,19 @@ validIdentifiers source: Text, start: UIntSize, end: UIntSize, prerelease: Bool 
     true => numeric!
     (valid! and index! < end) -> while {
         source -> byte(index!) => current
-        current == UInt8(46) -> if {
+        current == 46 -> if {
             index! == identifierStart! -> if { false => valid! }
-            (valid! and prerelease and numeric! and index! - identifierStart! > UIntSize(1) and (source -> byte(identifierStart!)) == UInt8(48)) -> if { false => valid! }
-            index! + UIntSize(1) => identifierStart!
+            (valid! and prerelease and numeric! and index! - identifierStart! > 1 and (source -> byte(identifierStart!)) == 48) -> if { false => valid! }
+            index! + 1 => identifierStart!
             true => numeric!
         } else {
             not (current -> identifierByte) -> if { false => valid! }
             not (current -> digit) -> if { false => numeric! }
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     (valid! and identifierStart! == end) -> if { false => valid! }
-    (valid! and prerelease and numeric! and end - identifierStart! > UIntSize(1) and (source -> byte(identifierStart!)) == UInt8(48)) -> if { false => valid! }
+    (valid! and prerelease and numeric! and end - identifierStart! > 1 and (source -> byte(identifierStart!)) == 48) -> if { false => valid! }
     valid!
 }
 
@@ -88,7 +88,7 @@ validIdentifiers source: Text, start: UIntSize, end: UIntSize, prerelease: Bool 
 # 5 patch, 6 prerelease, 7 build metadata, 8 trailing input.
 public parse source: Text -> SemanticVersion {
     source -> len => length
-    source -> parseNumber(UIntSize(0)) => majorPart
+    source -> parseNumber(0) => majorPart
     majorPart.status => status!
     majorPart.next => index!
     0 => major!
@@ -98,7 +98,7 @@ public parse source: Text -> SemanticVersion {
     UIntSize(0) => preLength!
     status! == 0 -> if { majorPart.value => major! } else { 1 => status! }
     status! == 0 -> if {
-        (index! < length and (source -> byte(index!)) == UInt8(46)) -> if { index! + UIntSize(1) => index! } else { 2 => status! }
+        (index! < length and (source -> byte(index!)) == 46) -> if { index! + 1 => index! } else { 2 => status! }
     }
     status! == 0 -> if {
         source -> parseNumber(index!) => minorPart
@@ -108,7 +108,7 @@ public parse source: Text -> SemanticVersion {
         } else { 3 => status! }
     }
     status! == 0 -> if {
-        (index! < length and (source -> byte(index!)) == UInt8(46)) -> if { index! + UIntSize(1) => index! } else { 4 => status! }
+        (index! < length and (source -> byte(index!)) == 46) -> if { index! + 1 => index! } else { 4 => status! }
     }
     status! == 0 -> if {
         source -> parseNumber(index!) => patchPart
@@ -117,15 +117,15 @@ public parse source: Text -> SemanticVersion {
             patchPart.next => index!
         } else { 5 => status! }
     }
-    (status! == 0 and index! < length and (source -> byte(index!)) == UInt8(45)) -> if {
-        index! + UIntSize(1) => preStart!
+    (status! == 0 and index! < length and (source -> byte(index!)) == 45) -> if {
+        index! + 1 => preStart!
         preStart! => index!
-        (index! < length and (source -> byte(index!)) != UInt8(43)) -> while { index! + UIntSize(1) => index! }
+        (index! < length and (source -> byte(index!)) != 43) -> while { index! + 1 => index! }
         index! - preStart! => preLength!
         not (source -> validIdentifiers(preStart!, index!, true)) -> if { 6 => status! }
     }
-    (status! == 0 and index! < length and (source -> byte(index!)) == UInt8(43)) -> if {
-        index! + UIntSize(1) => buildStart
+    (status! == 0 and index! < length and (source -> byte(index!)) == 43) -> if {
+        index! + 1 => buildStart
         length => index!
         not (source -> validIdentifiers(buildStart, length, false)) -> if { 7 => status! }
     }
@@ -139,12 +139,12 @@ compareIdentifier left: Text, leftStart: UIntSize, leftLength: UIntSize, right: 
     UIntSize(0) => index!
     (leftNumeric! and index! < leftLength) -> while {
         not ((left -> byte(leftStart + index!)) -> digit) -> if { false => leftNumeric! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
-    UIntSize(0) => index!
+    0 => index!
     (rightNumeric! and index! < rightLength) -> while {
         not ((right -> byte(rightStart + index!)) -> digit) -> if { false => rightNumeric! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     0 => result!
     (leftNumeric! and not rightNumeric!) -> if { -1 => result! }
@@ -160,7 +160,7 @@ compareIdentifier left: Text, leftStart: UIntSize, leftLength: UIntSize, right: 
         right -> byte(rightStart + byteIndex!) => rightByte
         leftByte < rightByte -> if { -1 => result! }
         leftByte > rightByte -> if { 1 => result! }
-        byteIndex! + UIntSize(1) => byteIndex!
+        byteIndex! + 1 => byteIndex!
     }
     (result! == 0 and leftLength < rightLength) -> if { -1 => result! }
     (result! == 0 and leftLength > rightLength) -> if { 1 => result! }
@@ -175,9 +175,9 @@ public compare leftSource: Text, left: SemanticVersion, rightSource: Text, right
     (result! == 0 and left.minor > right.minor) -> if { 1 => result! }
     (result! == 0 and left.patch < right.patch) -> if { -1 => result! }
     (result! == 0 and left.patch > right.patch) -> if { 1 => result! }
-    (result! == 0 and left.preLength == UIntSize(0) and right.preLength > UIntSize(0)) -> if { 1 => result! }
-    (result! == 0 and left.preLength > UIntSize(0) and right.preLength == UIntSize(0)) -> if { -1 => result! }
-    (result! == 0 and left.preLength > UIntSize(0) and right.preLength > UIntSize(0)) -> if {
+    (result! == 0 and left.preLength == 0 and right.preLength > 0) -> if { 1 => result! }
+    (result! == 0 and left.preLength > 0 and right.preLength == 0) -> if { -1 => result! }
+    (result! == 0 and left.preLength > 0 and right.preLength > 0) -> if {
         left.preStart => leftIndex!
         right.preStart => rightIndex!
         left.preStart + left.preLength => leftEnd
@@ -185,13 +185,13 @@ public compare leftSource: Text, left: SemanticVersion, rightSource: Text, right
         (result! == 0 and leftIndex! < leftEnd and rightIndex! < rightEnd) -> while {
             leftIndex! => leftIdentifierStart
             rightIndex! => rightIdentifierStart
-            (leftIndex! < leftEnd and (leftSource -> byte(leftIndex!)) != UInt8(46)) -> while { leftIndex! + UIntSize(1) => leftIndex! }
-            (rightIndex! < rightEnd and (rightSource -> byte(rightIndex!)) != UInt8(46)) -> while { rightIndex! + UIntSize(1) => rightIndex! }
+            (leftIndex! < leftEnd and (leftSource -> byte(leftIndex!)) != 46) -> while { leftIndex! + 1 => leftIndex! }
+            (rightIndex! < rightEnd and (rightSource -> byte(rightIndex!)) != 46) -> while { rightIndex! + 1 => rightIndex! }
             leftIndex! - leftIdentifierStart => leftIdentifierLength
             rightIndex! - rightIdentifierStart => rightIdentifierLength
             leftSource -> compareIdentifier(leftIdentifierStart, leftIdentifierLength, rightSource, rightIdentifierStart, rightIdentifierLength) => result!
-            (leftIndex! < leftEnd) -> if { leftIndex! + UIntSize(1) => leftIndex! }
-            (rightIndex! < rightEnd) -> if { rightIndex! + UIntSize(1) => rightIndex! }
+            (leftIndex! < leftEnd) -> if { leftIndex! + 1 => leftIndex! }
+            (rightIndex! < rightEnd) -> if { rightIndex! + 1 => rightIndex! }
         }
         (result! == 0 and leftIndex! < leftEnd) -> if { 1 => result! }
         (result! == 0 and rightIndex! < rightEnd) -> if { -1 => result! }
@@ -203,36 +203,36 @@ acceptTerm term: Text, candidateSource: Text, candidate: SemanticVersion -> Requ
     term -> len => length
     UIntSize(0) => versionStart!
     0 => operation!
-    (length == UIntSize(1) and (term -> byte(UIntSize(0))) == UInt8(42)) -> if {
+    (length == 1 and (term -> byte(UIntSize(0))) == 42) -> if {
         1 => operation!
         length => versionStart!
     }
-    (operation! == 0 and length > UIntSize(0) and (term -> byte(UIntSize(0))) == UInt8(94)) -> if {
+    (operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 94) -> if {
         2 => operation!
-        UIntSize(1) => versionStart!
+        1 => versionStart!
     }
-    (operation! == 0 and length > UIntSize(0) and (term -> byte(UIntSize(0))) == UInt8(126)) -> if {
+    (operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 126) -> if {
         3 => operation!
-        UIntSize(1) => versionStart!
+        1 => versionStart!
     }
-    (operation! == 0 and length > UIntSize(0) and (term -> byte(UIntSize(0))) == UInt8(61)) -> if {
+    (operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 61) -> if {
         4 => operation!
-        UIntSize(1) => versionStart!
+        1 => versionStart!
     }
-    (operation! == 0 and length > UIntSize(0) and (term -> byte(UIntSize(0))) == UInt8(62)) -> if {
+    (operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 62) -> if {
         5 => operation!
-        UIntSize(1) => versionStart!
-        (length > UIntSize(1) and (term -> byte(UIntSize(1))) == UInt8(61)) -> if {
+        1 => versionStart!
+        (length > 1 and (term -> byte(UIntSize(1))) == 61) -> if {
             6 => operation!
-            UIntSize(2) => versionStart!
+            2 => versionStart!
         }
     }
-    (operation! == 0 and length > UIntSize(0) and (term -> byte(UIntSize(0))) == UInt8(60)) -> if {
+    (operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 60) -> if {
         7 => operation!
-        UIntSize(1) => versionStart!
-        (length > UIntSize(1) and (term -> byte(UIntSize(1))) == UInt8(61)) -> if {
+        1 => versionStart!
+        (length > 1 and (term -> byte(UIntSize(1))) == 61) -> if {
             8 => operation!
-            UIntSize(2) => versionStart!
+            2 => versionStart!
         }
     }
     operation! == 0 -> if { 4 => operation! }
@@ -268,10 +268,10 @@ public accepts requirement: Text, candidateSource: Text -> RequirementResult {
     UIntSize(0) => index!
     false => termSeen!
     (status! == 0 and accepted! and index! < length) -> while {
-        (index! < length and (requirement -> byte(index!)) == UInt8(32)) -> while { index! + UIntSize(1) => index! }
+        (index! < length and (requirement -> byte(index!)) == 32) -> while { index! + 1 => index! }
         index! < length -> if {
             index! => start
-            (index! < length and (requirement -> byte(index!)) != UInt8(32)) -> while { index! + UIntSize(1) => index! }
+            (index! < length and (requirement -> byte(index!)) != 32) -> while { index! + 1 => index! }
             requirement -> slice(start, index! - start) => term
             term -> acceptTerm(candidateSource, candidate) => termResult
             termResult.status != 0 -> if {

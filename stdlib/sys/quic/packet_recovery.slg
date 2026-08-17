@@ -1,0 +1,140 @@
+namespace sys.quic.packet_recovery
+
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+import sys.quic.loss_recovery as recovery
+
+public struct SentPacket {
+    number: UInt64
+    sentTime: UInt64
+    size: UInt64
+    ackEliciting: Bool
+    inFlight: Bool
+}
+
+public struct Update {
+    rtt: recovery.RttState
+    congestion: recovery.CongestionState
+    acknowledgedBytes: UInt64
+    lostBytes: UInt64
+    acknowledgedPackets: UInt64
+    lostPackets: UInt64
+}
+
+public recordSent packets: mut [SentPacket; ~], number: UInt64, sentTime: UInt64, size: UInt64, ackEliciting: Bool, inFlight: Bool -> Unit {
+    packets -> push(SentPacket {
+        number: number
+        sentTime: sentTime
+        size: size
+        ackEliciting: ackEliciting
+        inFlight: inFlight
+    })
+}
+
+scaleAckDelay value: UInt64, exponent: UInt8 -> Result<UInt64, errors.Error> {
+    value => scaled!
+    UInt8(0) => shift!
+    shift! < exponent -> while {
+        scaled! <= 9_223_372_036_854_775_807 -> unless {
+            Result<UInt64, errors.Error>.Err(errors.Error {
+                kind: errors.Kind.ProtocolViolation
+                code: value
+            }) -> return
+        }
+        scaled! * 2 => scaled!
+        shift! + 1 => shift!
+    }
+    Result<UInt64, errors.Error>.Ok(scaled!)
+}
+
+public processAckScaled packets: mut [SentPacket; ~], ack: ref frames.Ack, rtt: recovery.RttState, congestion: recovery.CongestionState, now: UInt64, ackDelayExponent: UInt8, maxAckDelay: UInt64, applicationData: Bool, maxDatagramSize: UInt64, congestionLimited: Bool -> Result<Update, errors.Error> {
+    scaleAckDelay(ack.ackDelay, ackDelayExponent)? => ackDelay
+    now - now => acknowledgedBytes!
+    now - now => lostBytes!
+    now - now => acknowledgedPackets!
+    now - now => lostPackets!
+    now - now => largestAcknowledgedSentTime!
+    now - now => largestLostSentTime!
+    now - now => latestRtt!
+    false => hasAcknowledgedSentTime!
+    false => hasLostSentTime!
+    false => hasRttSample!
+    packets -> len => remaining!
+    remaining! > 0 -> while {
+        packets -> take(0) => packet
+        frame.acknowledges(ack, packet.number)? => acknowledged
+        acknowledged -> if {
+            acknowledgedPackets! + 1 => acknowledgedPackets!
+            packet.inFlight -> if { acknowledgedBytes! + packet.size => acknowledgedBytes! }
+            (not hasAcknowledgedSentTime! or packet.sentTime > largestAcknowledgedSentTime!) -> if {
+                packet.sentTime => largestAcknowledgedSentTime!
+                true => hasAcknowledgedSentTime!
+            }
+            (packet.number == ack.largestAcknowledged and packet.ackEliciting and now >= packet.sentTime) -> if {
+                now - packet.sentTime => latestRtt!
+                true => hasRttSample!
+            }
+        } else {
+            (recovery.lostByPacketThreshold(ack.largestAcknowledged, packet.number)
+                or recovery.lostByTimeThreshold(rtt, now, packet.sentTime)) -> if {
+                lostPackets! + 1 => lostPackets!
+                packet.inFlight -> if { lostBytes! + packet.size => lostBytes! }
+                (not hasLostSentTime! or packet.sentTime > largestLostSentTime!) -> if {
+                    packet.sentTime => largestLostSentTime!
+                    true => hasLostSentTime!
+                }
+            } else {
+                packets -> push(packet)
+            }
+        }
+        remaining! - 1 => remaining!
+    }
+
+    hasRttSample! -> if {
+        recovery.updateRtt(rtt, latestRtt!, ackDelay, maxAckDelay, applicationData)
+    } else {
+        rtt
+    } => nextRtt
+    hasAcknowledgedSentTime! -> if {
+        recovery.onPacketsAcknowledged(
+            congestion,
+            acknowledgedBytes!,
+            largestAcknowledgedSentTime!,
+            maxDatagramSize,
+            congestionLimited)
+    } else {
+        congestion
+    } => acknowledgedCongestion
+    hasLostSentTime! -> if {
+        recovery.onPacketsLost(
+            acknowledgedCongestion,
+            lostBytes!,
+            largestLostSentTime!,
+            now,
+            maxDatagramSize)
+    } else {
+        acknowledgedCongestion
+    } => nextCongestion
+    Update {
+        rtt: nextRtt
+        congestion: nextCongestion
+        acknowledgedBytes: acknowledgedBytes!
+        lostBytes: lostBytes!
+        acknowledgedPackets: acknowledgedPackets!
+        lostPackets: lostPackets!
+    } -> Result<Update, errors.Error>.Ok
+}
+
+public processAck packets: mut [SentPacket; ~], ack: ref frames.Ack, rtt: recovery.RttState, congestion: recovery.CongestionState, now: UInt64, maxAckDelay: UInt64, applicationData: Bool, maxDatagramSize: UInt64, congestionLimited: Bool -> Result<Update, errors.Error> {
+    packets -> processAckScaled(
+        ack,
+        rtt,
+        congestion,
+        now,
+        0,
+        maxAckDelay,
+        applicationData,
+        maxDatagramSize,
+        congestionLimited)
+}

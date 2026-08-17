@@ -1,0 +1,49 @@
+import sys.io
+import sys.socket as socket
+
+# Connects before accept so the kernel listen backlog provides the rendezvous.
+# An unused sys.quic declaration must not make this program load its adapter.
+sendPing endpoint: socket.Endpoint -> Result<Bool, socket.SocketError> uses Network {
+    socket.connect(endpoint)? => connection
+    [UInt8; ~] => empty
+    socket.send(connection, empty)? => emptyCount
+    socket.sendText(connection, "ping")? => count
+    socket.shutdown(connection)?
+    Result<Bool, socket.SocketError>.Ok(emptyCount == 0 and count == 4)
+}
+
+struct Roundtrip {
+    sent: Bool
+    count: Int
+    first: UInt32
+    last: UInt32
+}
+
+runRoundtrip endpoint: socket.Endpoint -> Result<Roundtrip, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: endpoint
+        backlog: 8
+        reuseAddress: true
+    } => options
+    socket.listen(options)? => listener
+    sendPing(endpoint)? => sent
+    socket.accept(listener)? => connection
+    socket.receive(connection, 16)? => bytes
+    Result<Roundtrip, socket.SocketError>.Ok(Roundtrip {
+        sent: sent
+        count: bytes -> len
+        first: UInt32(bytes[0])
+        last: UInt32(bytes[3])
+    })
+}
+
+main {
+    socket.Endpoint { address: "127.0.0.1", port: 43175 } => endpoint
+    endpoint -> runRoundtrip -> when {
+        Ok(roundtrip) {
+            roundtrip.sent -> if { "true" } else { "false" } => sentText
+            "roundtrip=$sentText,$(roundtrip.count),$(roundtrip.first),$(roundtrip.last)" -> println
+        }
+        Err(error) { "socket-error=$(error.code)" -> println }
+    }
+}

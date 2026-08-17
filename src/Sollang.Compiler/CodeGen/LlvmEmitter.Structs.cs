@@ -90,6 +90,7 @@ internal sealed partial class LlvmEmitter
 
         var definition = _program.Types.GetStruct(type);
         var initializers = expression.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
+        var projectedTransfers = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var aggregate = "poison";
         foreach (var field in definition.Fields)
         {
@@ -101,9 +102,53 @@ internal sealed partial class LlvmEmitter
                 next,
                 $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
             aggregate = next;
+            if (!RegisterOwnedFieldProjectionTransfer(
+                    initializers[field.Name].Value,
+                    field.Type,
+                    projectedTransfers))
+            {
+                RemoveOwnedLiteralSources(initializers[field.Name].Value, field.Type);
+            }
+        }
+        foreach (var (ownerName, transferredFields) in projectedTransfers)
+        {
+            var owner = (RuntimeStruct)_locals[ownerName];
+            DropOwnedStructFieldsExcept(owner, transferredFields.ToArray());
+            RemoveLocal(ownerName);
         }
 
         return new RuntimeStruct(type, aggregate);
+    }
+
+    private bool RegisterOwnedFieldProjectionTransfer(
+        Expression expression,
+        BoundType expectedType,
+        IDictionary<string, HashSet<string>> projectedTransfers)
+    {
+        if (!_program.Types.ContainsOwnedStorage(expectedType)
+            || expression is not FieldAccessExpression
+            {
+                Source: NameExpression ownerName,
+                FieldName: var fieldName
+            }
+            || _mutableLocals.Contains(ownerName.Name)
+            || !_locals.TryGetValue(ownerName.Name, out var ownerValue)
+            || ownerValue is not RuntimeStruct owner
+            || !_program.Types.IsStruct(owner.Type)
+            || _program.Types.GetStruct(owner.Type).Fields.FirstOrDefault(field =>
+                string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is not { } sourceField
+            || sourceField.Type != expectedType)
+        {
+            return false;
+        }
+
+        if (!projectedTransfers.TryGetValue(ownerName.Name, out var fields))
+        {
+            fields = new HashSet<string>(StringComparer.Ordinal);
+            projectedTransfers.Add(ownerName.Name, fields);
+        }
+        fields.Add(fieldName);
+        return true;
     }
 
     private RuntimeStruct EmitProductExpression(ProductExpression expression)
@@ -147,13 +192,15 @@ internal sealed partial class LlvmEmitter
         var aggregate = "poison";
         foreach (var field in definition.Fields)
         {
-            var value = EmitFunctionArgumentExpression(initializers[field.Name].Value, field.Type);
+            var initializer = initializers[field.Name].Value;
+            var value = EmitFunctionArgumentExpression(initializer, field.Type);
             EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
             var materialized = MaterializeAggregateValue(value);
             var next = NextTemp("contextual_struct_init");
             EmitAssign(next,
                 $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
             aggregate = next;
+            RemoveOwnedLiteralSources(initializer, field.Type);
         }
         return new RuntimeStruct(type, aggregate);
     }
@@ -168,6 +215,11 @@ internal sealed partial class LlvmEmitter
         if (expression is NameExpression name)
         {
             RemoveLocal(name.Name);
+            return;
+        }
+
+        if (ConsumeOwnedFieldProjection(expression, expectedType))
+        {
             return;
         }
 
@@ -236,6 +288,23 @@ internal sealed partial class LlvmEmitter
                 RemoveOwnedLiteralSources(value, field.Type);
             }
         }
+    }
+
+    private bool ConsumeOwnedFieldProjection(Expression expression, BoundType expectedType)
+    {
+        var projectedTransfers = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (!RegisterOwnedFieldProjectionTransfer(expression, expectedType, projectedTransfers))
+        {
+            return false;
+        }
+
+        foreach (var (ownerName, transferredFields) in projectedTransfers)
+        {
+            var owner = (RuntimeStruct)_locals[ownerName];
+            DropOwnedStructFieldsExcept(owner, transferredFields.ToArray());
+            RemoveLocal(ownerName);
+        }
+        return true;
     }
 
     private RuntimeValue EmitFieldAccessExpression(FieldAccessExpression expression)
@@ -411,6 +480,15 @@ internal sealed partial class LlvmEmitter
                     indexSize,
                     "ref_slice");
                 break;
+            case RuntimeInlineSlice slice:
+                elementType = slice.ElementType;
+                pointer = EmitReferenceElementPointer(
+                    slice.PointerName,
+                    slice.LengthName,
+                    LlvmType(slice.ElementType),
+                    indexSize,
+                    "ref_slice");
+                break;
             case RuntimeStaticIntArray array:
                 elementType = BoundType.Int;
                 pointer = EmitReferenceStaticIntElementPointer(array, indexSize);
@@ -532,7 +610,19 @@ internal sealed partial class LlvmEmitter
             RuntimeDynamicInlineArray array => (
                 "%sollang.dynamic_int_array",
                 BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
+            RuntimeStaticIntArray array => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(array.PointerName, array.LengthName)),
+            RuntimeStaticTextArray array => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(array.PointerName, array.LengthName)),
+            RuntimeStaticInlineArray array => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(array.PointerName, array.LengthName)),
             RuntimeIntSlice slice => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(slice.PointerName, slice.LengthName)),
+            RuntimeInlineSlice slice => (
                 "%sollang.int_slice",
                 BuildIntSliceAggregate(slice.PointerName, slice.LengthName)),
             RuntimeIntDictionaryView dictionary => (
@@ -648,6 +738,24 @@ internal sealed partial class LlvmEmitter
             var (pointer, length, capacity) = ExtractDynamicArrayAggregate(valueName);
             return new RuntimeDynamicInlineArray(type, definition.ElementType, pointer, length, capacity);
         }
+        if (_program.Types.IsStaticArray(type))
+        {
+            var definition = _program.Types.GetStaticArray(type);
+            var pointer = NextTemp("fixed_array_ptr");
+            EmitAssign(pointer, $"extractvalue %sollang.int_slice {valueName}, 0");
+            var length = NextTemp("fixed_array_len");
+            EmitAssign(length, $"extractvalue %sollang.int_slice {valueName}, 1");
+            var fixedLength = definition.FixedLength
+                ?? throw new SollangException("an inline struct field requires a concrete fixed array length");
+            return new RuntimeStaticInlineArray(
+                type,
+                definition.ElementType,
+                pointer,
+                length,
+                fixedLength,
+                Math.Max(fixedLength, 1),
+                RuntimeContainerStorage.Heap);
+        }
         if (_program.Types.IsBoundedArray(type))
         {
             var definition = _program.Types.GetBoundedArray(type);
@@ -679,6 +787,14 @@ internal sealed partial class LlvmEmitter
             var length = NextTemp("slice_len");
             EmitAssign(length, $"extractvalue %sollang.int_slice {valueName}, 1");
             return new RuntimeIntSlice(pointer, length);
+        }
+        if (_program.Types.IsSlice(type))
+        {
+            var pointer = NextTemp("slice_ptr");
+            EmitAssign(pointer, $"extractvalue %sollang.int_slice {valueName}, 0");
+            var length = NextTemp("slice_len");
+            EmitAssign(length, $"extractvalue %sollang.int_slice {valueName}, 1");
+            return new RuntimeInlineSlice(type, _program.Types.GetSliceElement(type), pointer, length);
         }
         if (_program.Types.IsBoundedDictionary(type))
         {
@@ -920,6 +1036,10 @@ internal sealed partial class LlvmEmitter
         {
             return "%sollang.dynamic_int_array";
         }
+        if (_program.Types.IsStaticArray(type))
+        {
+            return "%sollang.int_slice";
+        }
         if (_program.Types.IsTask(type))
         {
             return "%sollang.task";
@@ -931,6 +1051,10 @@ internal sealed partial class LlvmEmitter
         if (_program.Types.IsEventStream(type))
         {
             return "%sollang.event_stream";
+        }
+        if (_program.Types.IsSlice(type))
+        {
+            return "%sollang.int_slice";
         }
 
         return type switch

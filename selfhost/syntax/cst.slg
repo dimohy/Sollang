@@ -23,26 +23,26 @@ public struct BuildRequest {
 
 public buildRule request: BuildRequest -> [GreenNode; ~] {
     request.source => source
-    source -> lexer.lex => tokens!
+    source -> lexer.lex => tokens
     parser.ParseRequest {
         source: source
         startRule: request.startRule
-    } -> parser.parseRuleEvents => events!
+    } -> parser.parseRuleEvents => events
     [GreenNode; ~] => nodes!
     [Int; ~] => nodeStack!
     0 => stackDepth!
 
     0 => eventIndex!
-    eventIndex! < (events! -> len) -> while {
-        events![eventIndex!] => event
+    eventIndex! < (events -> len) -> while {
+        events[eventIndex!] => event
         event.kind == 0 -> if {
             -1 => parent!
             stackDepth! > 0 -> if {
                 nodeStack![stackDepth! - 1] => parent!
             }
             source -> len => nodeStart!
-            event.tokenIndex < (tokens! -> len) -> if {
-                tokens![event.tokenIndex].span.start => nodeStart!
+            event.tokenIndex < (tokens -> len) -> if {
+                tokens[event.tokenIndex].span.start => nodeStart!
             }
             GreenNode {
                 ruleId: event.value
@@ -50,7 +50,7 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
                 firstToken: -1
                 tokenCount: 0
                 start: nodeStart!
-                length: UIntSize(0)
+                length: 0
             } => node
             nodes! -> len => nodeIndex
             nodes! -> push(node)
@@ -66,7 +66,7 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
                 stackDepth! - 1 => stackDepth!
             } else {
                 event.kind == 2 -> if {
-                    tokens![event.tokenIndex] => token
+                    tokens[event.tokenIndex] => token
                     0 => ancestor!
                     ancestor! < stackDepth! -> while {
                         nodeStack![ancestor!] => nodeIndex
@@ -84,11 +84,11 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
                         event.value - event.tokenIndex => errorTokenCount
                         source -> len => errorStart!
                         UIntSize(0) => errorLength!
-                        event.tokenIndex < (tokens! -> len) -> if {
-                            tokens![event.tokenIndex].span.start => errorStart!
+                        event.tokenIndex < (tokens -> len) -> if {
+                            tokens[event.tokenIndex].span.start => errorStart!
                         }
                         errorTokenCount > 0 -> if {
-                            tokens![event.value - 1] => lastErrorToken
+                            tokens[event.value - 1] => lastErrorToken
                             lastErrorToken.span.start + lastErrorToken.span.length - errorStart! => errorLength!
                         }
                         -1 => errorParent!
@@ -111,7 +111,7 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
 
                         false => rangeAlreadyCounted!
                         errorTokenCount > 0 -> if {
-                            tokens![event.tokenIndex].kind == grammar.tokenIdInvalid() -> if {
+                            tokens[event.tokenIndex].kind == grammar.tokenIdInvalid() -> if {
                                 true => rangeAlreadyCounted!
                             }
                         }
@@ -138,7 +138,7 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
     (nodes! -> len) > 0 -> if {
         nodes![0] => root!
         0 => root!.firstToken
-        tokens! -> len => root!.tokenCount
+        tokens -> len => root!.tokenCount
         UIntSize(0) => root!.start
         source -> len => root!.length
         root! => nodes![0]

@@ -35,14 +35,14 @@ emitNativeHandleGlobals context: ref emitterContext.EmitContext -> Unit uses Con
                 context.nodes[sourceRange.astStart + typeSymbol.astNode] => handleAst
                 context.tokens[sourceRange.tokenStart + handleAst.secondaryToken] => dropToken
                 context -> literalLength(sourceModule!, dropToken) => dropContentLength
-                dropContentLength + UIntSize(1) => dropLength
+                dropContentLength + 1 => dropLength
                 "@sollang_native_handle_drop_name_m$(sourceModule!)_s$(symbolIndex!) = private unnamed_addr constant [$dropLength x i8] c" -> print
                 context.sources[sourceModule!] -> slice(dropToken.span.start, UIntSize(1)) -> print
                 context -> literalStart(sourceModule!, dropToken) => dropByte!
                 context -> literalEnd(sourceModule!, dropToken) => dropEnd
                 dropByte! < dropEnd -> while {
                     context -> literalEmitSourceByte(sourceModule!, dropByte!)
-                    dropByte! + UIntSize(1) => dropByte!
+                    dropByte! + 1 => dropByte!
                 }
                 "\" -> print
                 "00" -> print
@@ -55,7 +55,7 @@ emitNativeHandleGlobals context: ref emitterContext.EmitContext -> Unit uses Con
     }
 }
 
-emitNativeHandleInitializers context: ref emitterContext.EmitContext -> Unit uses Console {
+emitNativeHandleInitializers context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     0 => sourceModule!
     sourceModule! < (context.ranges -> len) -> while {
         context.ranges[sourceModule!] => sourceRange
@@ -67,6 +67,7 @@ emitNativeHandleInitializers context: ref emitterContext.EmitContext -> Unit use
                 and typeSymbol.astNode >= 0) -> if {
                 context.nodes[sourceRange.astStart + typeSymbol.astNode] => handleAst
                 handleAst.parent => libraryAst
+                nativeLibraryReachable(sourceModule!, libraryAst, context, state) -> if {
                 "  %native_handle_library_m$(sourceModule!)_s$(symbolIndex!) = load ptr, ptr @sollang_native_library_m$(sourceModule!)_a$(libraryAst), align 8" -> println
                 context.expectedPathStyle == 1 -> if {
                     "  %native_handle_drop_raw_m$(sourceModule!)_s$(symbolIndex!) = call ptr @GetProcAddress(ptr %native_handle_library_m$(sourceModule!)_s$(symbolIndex!), ptr @sollang_native_handle_drop_name_m$(sourceModule!)_s$(symbolIndex!))" -> println
@@ -76,6 +77,7 @@ emitNativeHandleInitializers context: ref emitterContext.EmitContext -> Unit use
                 }
                 "  %native_handle_drop_checked_m$(sourceModule!)_s$(symbolIndex!) = call ptr @sollang_native_require(ptr %native_handle_drop_raw_m$(sourceModule!)_s$(symbolIndex!))" -> println
                 "  store ptr %native_handle_drop_checked_m$(sourceModule!)_s$(symbolIndex!), ptr @sollang_native_handle_drop_m$(sourceModule!)_s$(symbolIndex!), align 8" -> println
+                }
             }
             symbolIndex! + 1 => symbolIndex!
         }

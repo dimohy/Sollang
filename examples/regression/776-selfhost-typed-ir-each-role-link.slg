@@ -11,24 +11,24 @@ main {
             values -> each value { value -> println }
         }
         """; ~
-    ] => sources!
-    sources! -> semanticContext.prepare => prepared!
-    prepared! -> typedIr.lowerContext => ir!
+    ] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> typedIr.lowerContext => ir
     0 => eachNodes!
     -1 => eachIndex!
     0 => roleUses!
     0 => directUses!
     0 => index!
-    index! < (ir! -> len) -> while {
-        ir![index!] => node
+    index! < (ir -> len) -> while {
+        ir[index!] => node
         (node.kind == 6 and node.opcode == -208) -> if {
             eachNodes! + 1 => eachNodes!
             index! => eachIndex!
         }
         (node.kind == 5 and node.sourceModule >= 0 and node.symbol >= 0) -> if {
-            prepared!.package.ranges[node.sourceModule] => range
+            prepared.package.ranges[node.sourceModule] => range
             node.symbol < range.symbolCount -> if {
-                prepared!.package.symbols[range.symbolStart + node.symbol] => symbol
+                prepared.package.symbols[range.symbolStart + node.symbol] => symbol
                 symbol.kind == 35 -> if {
                     roleUses! + 1 => roleUses!
                     node.operand0 < 0 -> if { directUses! + 1 => directUses! }
@@ -41,25 +41,25 @@ main {
     0 => descendantUses!
     0 => astDescendantUses!
     0 => roleIndex!
-    roleIndex! < (ir! -> len) -> while {
-        ir![roleIndex!] => role
+    roleIndex! < (ir -> len) -> while {
+        ir[roleIndex!] => role
         (eachIndex! >= 0 and role.kind == 5 and role.sourceModule >= 0 and role.symbol >= 0) -> if {
-            prepared!.package.ranges[role.sourceModule] => roleRange
+            prepared.package.ranges[role.sourceModule] => roleRange
             role.symbol < roleRange.symbolCount -> if {
-                prepared!.package.symbols[roleRange.symbolStart + role.symbol] => roleSymbol
-                (roleSymbol.kind == 35 and roleSymbol.astNode == ir![eachIndex!].astNode) -> if {
+                prepared.package.symbols[roleRange.symbolStart + role.symbol] => roleSymbol
+                (roleSymbol.kind == 35 and roleSymbol.astNode == ir[eachIndex!].astNode) -> if {
                     matchedUses! + 1 => matchedUses!
                     role.parent => ancestor!
                     false => descends!
                     (ancestor! >= 0 and not descends!) -> while {
-                        ancestor! == eachIndex! -> if { true => descends! } else { ir![ancestor!].parent => ancestor! }
+                        ancestor! == eachIndex! -> if { true => descends! } else { ir[ancestor!].parent => ancestor! }
                     }
                     descends! -> if { descendantUses! + 1 => descendantUses! }
-                    prepared!.package.nodes[roleRange.astStart + role.astNode].parent => astAncestor!
+                    prepared.package.nodes[roleRange.astStart + role.astNode].parent => astAncestor!
                     false => astDescends!
                     (astAncestor! >= 0 and not astDescends!) -> while {
-                        astAncestor! == ir![eachIndex!].astNode -> if { true => astDescends! } else {
-                            prepared!.package.nodes[roleRange.astStart + astAncestor!].parent => astAncestor!
+                        astAncestor! == ir[eachIndex!].astNode -> if { true => astDescends! } else {
+                            prepared.package.nodes[roleRange.astStart + astAncestor!].parent => astAncestor!
                         }
                     }
                     astDescends! -> if { astDescendantUses! + 1 => astDescendantUses! }

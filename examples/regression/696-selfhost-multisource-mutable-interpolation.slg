@@ -18,8 +18,7 @@ main {
 
     main {
         0 => failures!
-        test_module_0.test_failure -> if {
-        } else {
+        test_module_0.test_failure -> unless {
             failures! + 1 => failures!
         }
         "test result: $(1 - failures!) passed; $(failures!) failed" -> println
@@ -30,7 +29,7 @@ main {
     UIntSize(0) => harnessByteIndex!
     harnessByteIndex! < (harnessSource -> len) -> while {
         harnessBytes! -> push(harnessSource -> byte(harnessByteIndex!))
-        harnessByteIndex! + UIntSize(1) => harnessByteIndex!
+        harnessByteIndex! + 1 => harnessByteIndex!
     }
     [file.SourceText; ~] => sourceOwners!
     sourceOwners! -> push(testSource -> file.borrowText)
@@ -38,26 +37,26 @@ main {
     harnessBytes! -> file.borrowBytes => harnessOwnerForText
     harnessOwnerForText -> len => borrowedHarnessLength
     harnessOwnerForText -> slice(UIntSize(0), borrowedHarnessLength) => borrowedHarness
-    [0; ~] => selectedSources!
-    [0; ~] => selectedSymbols!
-    sourceOwners! -> semanticContext.prepareTestSources(selectedSources!, selectedSymbols!) => prepared!
-    prepared!.package.ranges[1] => range
+    [0; ~] => selectedSources
+    [0; ~] => selectedSymbols
+    sourceOwners! -> semanticContext.prepareTestSources(selectedSources, selectedSymbols) => prepared
+    prepared.package.ranges[1] => range
     [ast.AstNode; ~] => nodes!
     0 => astIndex!
     astIndex! < range.astCount -> while {
-        nodes! -> push(prepared!.package.nodes[range.astStart + astIndex!])
+        nodes! -> push(prepared.package.nodes[range.astStart + astIndex!])
         astIndex! + 1 => astIndex!
     }
     [syntax.SyntaxToken; ~] => tokens!
     0 => tokenIndex!
     tokenIndex! < range.tokenCount -> while {
-        tokens! -> push(prepared!.package.tokens[range.tokenStart + tokenIndex!])
+        tokens! -> push(prepared.package.tokens[range.tokenStart + tokenIndex!])
         tokenIndex! + 1 => tokenIndex!
     }
     [symbols.Symbol; ~] => symbolTable!
     0 => symbolIndex!
     symbolIndex! < range.symbolCount -> while {
-        symbolTable! -> push(prepared!.package.symbols[range.symbolStart + symbolIndex!])
+        symbolTable! -> push(prepared.package.symbols[range.symbolStart + symbolIndex!])
         symbolIndex! + 1 => symbolIndex!
     }
     interpolation.PreparedInterpolationRequest {
@@ -65,11 +64,11 @@ main {
         nodes: nodes!
         tokens: tokens!
         symbols: symbolTable!
-    } => request!
-    request! -> interpolation.lowerPrepared => interpolations!
+    } => request
+    request -> interpolation.lowerPrepared => interpolations
     0 => names!
     0 => resolved!
-    interpolations! -> each node {
+    interpolations -> each node {
         node.kind == 1 -> if {
             names! + 1 => names!
             node.symbol >= 0 -> if { resolved! + 1 => resolved! }

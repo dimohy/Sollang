@@ -28,6 +28,7 @@ $outputPath = Join-Path $caseRoot "build\app.exe"
 
 @'
 import cache.consumer as consumer
+import cache.provider as provider
 import sys.file as file
 
 rootValue value: Int -> Int {
@@ -38,11 +39,18 @@ rootIdentity<T> value: T -> T {
     value
 }
 
-rootRepeat<N: Int> value: Int -> Int {
+rootRepeat<N> value: Int -> Int where N: Int {
     [value; N] => values
     values -> fold 0 total, item {
         total + item
     }
+}
+
+# This fixed type exists only inside the body. Semantic reuse must restore it
+# before codegen emits the shared drop-helper prefix.
+fixedState: -> UInt64 {
+    [UInt64(0); 64] => words
+    words[0]
 }
 
 cachedRead reader: file.File -> Result<Option<UInt16>, Text> uses File {
@@ -51,6 +59,8 @@ cachedRead reader: file.File -> Result<Option<UInt16>, Text> uses File {
 
 main {
     21 -> consumer.compute -> rootIdentity -> rootRepeat<1> -> rootValue => result
+    0 -> provider.cacheAnchorOne => anchor
+    fixedState() => ignored
     "$result" -> println
 }
 '@ | Set-Content -LiteralPath $mainSource -Encoding utf8NoBOM
@@ -103,8 +113,31 @@ $private
 public scale value: Int -> Int {
     value * $Factor
 }
+
+public cacheAnchorOne value: Int -> Int {
+    value + 1
+}
+
+public cacheAnchorTwo value: Int -> Int {
+    value + 2
+}
 $extra
 "@ | Set-Content -LiteralPath $providerSource -Encoding utf8NoBOM
+}
+
+function Switch-ReachabilityAnchor {
+    $source = Get-Content -LiteralPath $mainSource -Raw
+    $changed = $source.Replace('provider.cacheAnchorOne', 'provider.cacheAnchorTwo')
+    if ($changed -eq $source) {
+        throw "main reachability anchor was not found"
+    }
+    $changed | Set-Content -LiteralPath $mainSource -Encoding utf8NoBOM -NoNewline
+}
+
+function Reset-ReachabilityAnchor {
+    $source = Get-Content -LiteralPath $mainSource -Raw
+    $source.Replace('provider.cacheAnchorTwo', 'provider.cacheAnchorOne') |
+        Set-Content -LiteralPath $mainSource -Encoding utf8NoBOM -NoNewline
 }
 
 function Invoke-Build {
@@ -313,7 +346,8 @@ function Verify-Target {
         [Parameter(Mandatory)] [int]$ChangedInterfaceRevision
     )
 
-    Write-Host "[$Target 1/10] Cold build."
+    Reset-ReachabilityAnchor
+    Write-Host "[$Target 1/12] Cold build."
     Write-Provider $InitialFactor $InitialInterfaceRevision
     $cold = Invoke-Build $Target
     Assert-Reused $cold 0 "$Target cold build"
@@ -322,7 +356,7 @@ function Verify-Target {
     Assert-SemanticStatus $cold "cold" "$Target cold build"
     Assert-Product $Target ([string](21 * $InitialFactor))
 
-    Write-Host "[$Target 2/10] Exact warm build skips the frontend and linker."
+    Write-Host "[$Target 2/12] Exact warm build skips the frontend and linker."
     $warm = Invoke-Build $Target
     Assert-Reused $warm 5 "$Target warm build"
     Assert-FrontendStatus $warm "exact hit" "$Target warm build"
@@ -332,7 +366,7 @@ function Verify-Target {
         throw "$Target clean and cached LLVM differed"
     }
 
-    Write-Host "[$Target 3/10] Body-only dependency edit reuses unchanged semantic bodies."
+    Write-Host "[$Target 3/12] Body-only dependency edit reuses unchanged semantic bodies."
     Write-Provider $BodyFactor $InitialInterfaceRevision
     $body = Invoke-Build $Target
     Assert-Reused $body 2 "$Target body-only build"
@@ -348,7 +382,7 @@ function Verify-Target {
     if ($body.CallTotal -lt 5 -or $body.MappedCalls -ne $body.CallTotal) {
         throw "$Target body-only build did not restore all stable generic call sites"
     }
-    Write-Host "[$Target 3/10] Semantic reuse $($body.ReusedSemanticFunctions)/$($body.SemanticFunctionTotal) functions, main reused, generic calls $($body.MappedCalls)/$($body.CallTotal)."
+    Write-Host "[$Target 3/12] Semantic reuse $($body.ReusedSemanticFunctions)/$($body.SemanticFunctionTotal) functions, main reused, generic calls $($body.MappedCalls)/$($body.CallTotal)."
     Assert-Product $Target ([string](21 * $BodyFactor))
     $bodyWarm = Invoke-Build $Target
     Assert-Reused $bodyWarm 5 "$Target body-only warm build"
@@ -359,7 +393,7 @@ function Verify-Target {
         throw "$Target body-only clean and cached LLVM differed"
     }
 
-    Write-Host "[$Target 4/10] A private type-universe edit invalidates numeric LLVM type identities."
+    Write-Host "[$Target 4/12] A private type-universe edit invalidates numeric LLVM type identities."
     Corrupt-SemanticCache $Target
     Write-Provider $BodyFactor $InitialInterfaceRevision 1
     $private = Invoke-Build $Target
@@ -369,7 +403,7 @@ function Verify-Target {
     Assert-SemanticStatus $private "rejected:" "$Target private-declaration build"
     Assert-Product $Target ([string](21 * $BodyFactor))
 
-    Write-Host "[$Target 5/10] Removing a private type also invalidates numeric LLVM type identities."
+    Write-Host "[$Target 5/12] Removing a private type also invalidates numeric LLVM type identities."
     Write-Provider $BodyFactor $InitialInterfaceRevision
     $privateRemoval = Invoke-Build $Target
     Assert-Reused $privateRemoval 0 "$Target private-removal build"
@@ -389,7 +423,7 @@ function Verify-Target {
         throw "$Target private-removal build did not preserve generic call mappings"
     }
 
-    Write-Host "[$Target 6/10] Public-interface edit invalidates transitive consumers."
+    Write-Host "[$Target 6/12] Public-interface edit invalidates transitive consumers."
     Write-Provider $BodyFactor $ChangedInterfaceRevision
     $interface = Invoke-Build $Target
     Assert-Reused $interface 0 "$Target interface-change build"
@@ -404,7 +438,7 @@ function Verify-Target {
     }
     Assert-Product $Target ([string](21 * $BodyFactor))
 
-    Write-Host "[$Target 7/10] Frontend snapshot corruption falls back to validated codegen units."
+    Write-Host "[$Target 7/12] Frontend snapshot corruption falls back to validated codegen units."
     Corrupt-FrontendCache $Target
     $frontendCorrupt = Invoke-Build $Target
     Assert-Reused $frontendCorrupt 5 "$Target frontend-corruption build"
@@ -412,7 +446,7 @@ function Verify-Target {
     Assert-ProductStatus $frontendCorrupt "rebuilt" "$Target frontend-corruption build"
     Assert-SemanticStatus $frontendCorrupt "loaded" "$Target frontend-corruption build"
 
-    Write-Host "[$Target 8/10] Codegen corruption is rejected and rebuilt."
+    Write-Host "[$Target 8/12] Codegen corruption is rejected and rebuilt."
     Corrupt-Cache $Target
     $corrupt = Invoke-Build $Target
     Assert-Reused $corrupt 0 "$Target corruption build"
@@ -423,7 +457,7 @@ function Verify-Target {
     Assert-ProductStatus $corrupt "rebuilt" "$Target codegen-corruption build"
     Assert-SemanticStatus $corrupt "loaded" "$Target codegen-corruption build"
 
-    Write-Host "[$Target 9/10] Output corruption relinks without rebuilding the frontend."
+    Write-Host "[$Target 9/12] Output corruption relinks without rebuilding the frontend."
     Corrupt-Product $Target
     $productCorrupt = Invoke-Build $Target
     Assert-Reused $productCorrupt 5 "$Target product-corruption build"
@@ -431,7 +465,7 @@ function Verify-Target {
     Assert-ProductStatus $productCorrupt "miss: output changed" "$Target product-corruption build"
     Assert-SemanticStatus $productCorrupt "exact via frontend" "$Target product-corruption build"
 
-    Write-Host "[$Target 10/10] Rebuilt generation is exact-warm and byte-identical."
+    Write-Host "[$Target 10/12] Rebuilt generation is exact-warm and byte-identical."
     $repaired = Invoke-Build $Target
     Assert-Reused $repaired 5 "$Target repaired warm build"
     Assert-FrontendStatus $repaired "exact hit" "$Target repaired warm build"
@@ -440,7 +474,36 @@ function Verify-Target {
     if ($repaired.LlvmHash -ne $corrupt.LlvmHash) {
         throw "$Target rebuilt and cached LLVM differed"
     }
-    Write-Host "[$Target 10/10] PASS LLVM $($repaired.LlvmHash)"
+    Write-Host "[$Target 10/12] PASS LLVM $($repaired.LlvmHash)"
+
+    Write-Host "[$Target 11/12] A same-ordinal call-target edit invalidates the emitted function set."
+    Switch-ReachabilityAnchor
+    $reachability = Invoke-Build $Target
+    Assert-FrontendStatus $reachability "miss: source changed:" "$Target reachability-change build"
+    Assert-ProductStatus $reachability "rebuilt" "$Target reachability-change build"
+    Assert-SemanticStatus $reachability "loaded" "$Target reachability-change build"
+    if ($reachability.Reused -ge $reachability.Total) {
+        throw "$Target reachability-change build reused every codegen unit despite an emitted function-set change"
+    }
+    if ($reachability.ReusedMainSemantics) {
+        throw "$Target reachability-change build unexpectedly reused main semantics"
+    }
+    if (($reachability.CallTotal -le 0) -or
+        ($reachability.MappedCalls -ne ($reachability.CallTotal - 1))) {
+        throw "$Target same-ordinal target edit did not invalidate exactly its stable call mapping"
+    }
+    Assert-Product $Target ([string](21 * $BodyFactor))
+
+    Write-Host "[$Target 12/12] The changed reachability generation is exact-warm."
+    $reachabilityWarm = Invoke-Build $Target
+    Assert-Reused $reachabilityWarm 5 "$Target reachability warm build"
+    Assert-FrontendStatus $reachabilityWarm "exact hit" "$Target reachability warm build"
+    Assert-ProductStatus $reachabilityWarm "exact hit" "$Target reachability warm build"
+    Assert-SemanticStatus $reachabilityWarm "exact via frontend" "$Target reachability warm build"
+    if ($reachabilityWarm.LlvmHash -ne $reachability.LlvmHash) {
+        throw "$Target changed reachability clean and cached LLVM differed"
+    }
+    Write-Host "[$Target 12/12] PASS LLVM $($reachabilityWarm.LlvmHash)"
 }
 
 Write-Host "[cache 1/3] Build the Release compiler once."

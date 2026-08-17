@@ -1,0 +1,58 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.syntax as syntax
+
+# Exercise the same source-local preparation path used by the Stage 3 LLVM
+# emitter against the real grammar compiler source. A mutable binding in a
+# parenthesized interpolation must keep its declaration symbol.
+main {
+    ["selfhost/cli_grammar.slg"; ~] => sourcePaths
+    sourcePaths -> semanticContext.prepareFiles => prepared
+    prepared.package.ranges[0] => range
+    [ast.AstNode; ~] => nodes!
+    0 => astIndex!
+    astIndex! < range.astCount -> while {
+        nodes! -> push(prepared.package.nodes[range.astStart + astIndex!])
+        astIndex! + 1 => astIndex!
+    }
+    [syntax.SyntaxToken; ~] => tokens!
+    0 => tokenIndex!
+    tokenIndex! < range.tokenCount -> while {
+        tokens! -> push(prepared.package.tokens[range.tokenStart + tokenIndex!])
+        tokenIndex! + 1 => tokenIndex!
+    }
+    [symbols.Symbol; ~] => symbolTable!
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        symbolTable! -> push(prepared.package.symbols[range.symbolStart + symbolIndex!])
+        symbolIndex! + 1 => symbolIndex!
+    }
+    prepared.package.sources[0] -> len => sourceLength
+    prepared.package.sources[0] -> slice(UIntSize(0), sourceLength) => source
+    interpolation.PreparedInterpolationRequest {
+        source: source
+        nodes: nodes!
+        tokens: tokens!
+        symbols: symbolTable!
+    } -> interpolation.lowerPrepared => interpolations
+    0 => mutableProgramReferences!
+    0 => resolvedProgramReferences!
+    interpolations -> each node {
+        (node.kind == 1 and node.payloadLength == 8) -> if {
+            ((source -> byte(node.payloadStart)) == 112
+                and (source -> byte(node.payloadStart + 1)) == 114
+                and (source -> byte(node.payloadStart + 2)) == 111
+                and (source -> byte(node.payloadStart + 3)) == 103
+                and (source -> byte(node.payloadStart + 4)) == 114
+                and (source -> byte(node.payloadStart + 5)) == 97
+                and (source -> byte(node.payloadStart + 6)) == 109
+                and (source -> byte(node.payloadStart + 7)) == 33) -> if {
+                mutableProgramReferences! + 1 => mutableProgramReferences!
+                node.symbol >= 0 -> if { resolvedProgramReferences! + 1 => resolvedProgramReferences! }
+            }
+        }
+    }
+    "real-source mutable interpolation = $(mutableProgramReferences!),$(resolvedProgramReferences!)" -> println
+}

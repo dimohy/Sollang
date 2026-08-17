@@ -1,0 +1,56 @@
+import sys.crypto.aes128_gcm as gcm
+
+zero16: -> [UInt8; 16] => [0; 16]
+
+zero12: -> [UInt8; 12] => [0; 12]
+
+empty: -> [UInt8] => []
+
+main {
+    zero16() => key
+    zero12() => iv
+    zero16() => plaintext
+    gcm.seal(key, iv, empty(), plaintext) => sealed
+    gcm.open(key, iv, empty(), sealed.ciphertext, sealed.tag) => opened
+    opened -> when {
+        Plaintext(decoded) { (decoded -> len) == 16 and decoded[0] == 0 and decoded[15] == 0 }
+        InvalidTag(code) { false }
+    } => openedMatches
+    (openedMatches
+        and sealed.ciphertext[0] == 3
+        and sealed.ciphertext[1] == 136
+        and sealed.ciphertext[2] == 218
+        and sealed.ciphertext[3] == 206
+        and sealed.ciphertext[4] == 96
+        and sealed.ciphertext[5] == 182
+        and sealed.ciphertext[6] == 163
+        and sealed.ciphertext[7] == 146
+        and sealed.ciphertext[8] == 243
+        and sealed.ciphertext[9] == 40
+        and sealed.ciphertext[10] == 194
+        and sealed.ciphertext[11] == 185
+        and sealed.ciphertext[12] == 113
+        and sealed.ciphertext[13] == 178
+        and sealed.ciphertext[14] == 254
+        and sealed.ciphertext[15] == 120
+        and sealed.tag[0] == 171
+        and sealed.tag[1] == 110
+        and sealed.tag[2] == 71
+        and sealed.tag[3] == 212
+        and sealed.tag[4] == 44
+        and sealed.tag[5] == 236
+        and sealed.tag[6] == 19
+        and sealed.tag[7] == 189
+        and sealed.tag[8] == 245
+        and sealed.tag[9] == 58
+        and sealed.tag[10] == 103
+        and sealed.tag[11] == 178
+        and sealed.tag[12] == 18
+        and sealed.tag[13] == 87
+        and sealed.tag[14] == 189
+        and sealed.tag[15] == 223) -> if {
+        "aes128-gcm=ok"
+    } else {
+        "aes128-gcm=failed"
+    } -> println
+}

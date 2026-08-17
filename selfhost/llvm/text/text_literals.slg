@@ -7,25 +7,25 @@ import sollang.compiler.syntax as syntax
 # logical LLVM text module avoids an aggregate adapter while giving it an
 # independently navigable file and no runtime allocation.
 literalIsRaw context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> Bool {
-    token.span.length >= UIntSize(6)
-        and (context.sources[sourceModule] -> byte(token.span.start)) == UInt8(34)
-        and (context.sources[sourceModule] -> byte(token.span.start + UIntSize(1))) == UInt8(34)
-        and (context.sources[sourceModule] -> byte(token.span.start + UIntSize(2))) == UInt8(34)
+    token.span.length >= 6
+        and (context.sources[sourceModule] -> byte(token.span.start)) == 34
+        and (context.sources[sourceModule] -> byte(token.span.start + 1)) == 34
+        and (context.sources[sourceModule] -> byte(token.span.start + 2)) == 34
 }
 
 literalStart context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> UIntSize {
-    token.span.start + UIntSize(1) => start!
+    token.span.start + 1 => start!
     context -> literalIsRaw(sourceModule, token) -> if {
-        token.span.start + UIntSize(3) => start!
+        token.span.start + 3 => start!
         start! < token.span.start + token.span.length -> if {
             context.sources[sourceModule] -> byte(start!) => first
-            first == UInt8(13) -> if {
-                start! + UIntSize(1) => start!
-                (start! < token.span.start + token.span.length and (context.sources[sourceModule] -> byte(start!)) == UInt8(10)) -> if {
-                    start! + UIntSize(1) => start!
+            first == 13 -> if {
+                start! + 1 => start!
+                (start! < token.span.start + token.span.length and (context.sources[sourceModule] -> byte(start!)) == 10) -> if {
+                    start! + 1 => start!
                 }
             } else {
-                first == UInt8(10) -> if { start! + UIntSize(1) => start! }
+                first == 10 -> if { start! + 1 => start! }
             }
         }
     }
@@ -33,11 +33,11 @@ literalStart context: ref emitterContext.EmitContext, sourceModule: Int, token: 
 }
 
 literalClosingLineStart context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> UIntSize {
-    token.span.start + token.span.length - UIntSize(3) => closing!
+    token.span.start + token.span.length - 3 => closing!
     context -> literalIsRaw(sourceModule, token) -> if {
         closing! => cursor!
-        (cursor! > token.span.start and (context.sources[sourceModule] -> byte(cursor! - UIntSize(1))) != UInt8(10)) -> while {
-            cursor! - UIntSize(1) => cursor!
+        (cursor! > token.span.start and (context.sources[sourceModule] -> byte(cursor! - 1)) != 10) -> while {
+            cursor! - 1 => cursor!
         }
         cursor! => closing!
     }
@@ -45,26 +45,26 @@ literalClosingLineStart context: ref emitterContext.EmitContext, sourceModule: I
 }
 
 literalEnd context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> UIntSize {
-    token.span.start + token.span.length - UIntSize(1) => end!
+    token.span.start + token.span.length - 1 => end!
     context -> literalIsRaw(sourceModule, token) -> if {
-        token.span.start + token.span.length - UIntSize(3) => rawEnd
+        token.span.start + token.span.length - 3 => rawEnd
         context -> literalClosingLineStart(sourceModule, token) => closingLineStart
         false => rawClosingOwnLine!
-        closingLineStart > token.span.start + UIntSize(3) -> if {
+        closingLineStart > token.span.start + 3 -> if {
             true => rawClosingOwnLine!
             closingLineStart => rawClosingByte!
             (rawClosingOwnLine! and rawClosingByte! < rawEnd) -> while {
                 context.sources[sourceModule] -> byte(rawClosingByte!) => rawClosingCharacter
-                (rawClosingCharacter != UInt8(32) and rawClosingCharacter != UInt8(9)) -> if {
+                (rawClosingCharacter != 32 and rawClosingCharacter != 9) -> if {
                     false => rawClosingOwnLine!
                 }
-                rawClosingByte! + UIntSize(1) => rawClosingByte!
+                rawClosingByte! + 1 => rawClosingByte!
             }
         }
         rawClosingOwnLine! -> if {
-            closingLineStart - UIntSize(1) => end!
-            (end! > token.span.start and (context.sources[sourceModule] -> byte(end! - UIntSize(1))) == UInt8(13)) -> if {
-                end! - UIntSize(1) => end!
+            closingLineStart - 1 => end!
+            (end! > token.span.start and (context.sources[sourceModule] -> byte(end! - 1)) == 13) -> if {
+                end! - 1 => end!
             }
         } else {
             rawEnd => end!
@@ -76,18 +76,18 @@ literalEnd context: ref emitterContext.EmitContext, sourceModule: Int, token: sy
 literalIndent context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> UIntSize {
     UIntSize(0) => indentation!
     context -> literalIsRaw(sourceModule, token) -> if {
-        token.span.start + token.span.length - UIntSize(3) => rawEnd
+        token.span.start + token.span.length - 3 => rawEnd
         context -> literalClosingLineStart(sourceModule, token) => closingLineStart
         false => rawIndentOwnLine!
-        closingLineStart > token.span.start + UIntSize(3) -> if {
+        closingLineStart > token.span.start + 3 -> if {
             true => rawIndentOwnLine!
             closingLineStart => rawIndentByte!
             (rawIndentOwnLine! and rawIndentByte! < rawEnd) -> while {
                 context.sources[sourceModule] -> byte(rawIndentByte!) => rawIndentCharacter
-                (rawIndentCharacter != UInt8(32) and rawIndentCharacter != UInt8(9)) -> if {
+                (rawIndentCharacter != 32 and rawIndentCharacter != 9) -> if {
                     false => rawIndentOwnLine!
                 }
-                rawIndentByte! + UIntSize(1) => rawIndentByte!
+                rawIndentByte! + 1 => rawIndentByte!
             }
         }
         rawIndentOwnLine! -> if { rawEnd - closingLineStart => indentation! }
@@ -101,13 +101,13 @@ literalIndent context: ref emitterContext.EmitContext, sourceModule: Int, token:
 literalDecodedEscape context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken, byteIndex: UIntSize, byteEnd: UIntSize -> Int {
     -1 => decoded!
     (not (context -> literalIsRaw(sourceModule, token))
-        and byteIndex + UIntSize(1) < byteEnd
-        and (context.sources[sourceModule] -> byte(byteIndex)) == UInt8(92)) -> if {
-        context.sources[sourceModule] -> byte(byteIndex + UIntSize(1)) => escaped
-        escaped == UInt8(110) -> if { 10 => decoded! }
-        escaped == UInt8(114) -> if { 13 => decoded! }
-        escaped == UInt8(116) -> if { 9 => decoded! }
-        escaped == UInt8(92) -> if { 92 => decoded! }
+        and byteIndex + 1 < byteEnd
+        and (context.sources[sourceModule] -> byte(byteIndex)) == 92) -> if {
+        context.sources[sourceModule] -> byte(byteIndex + 1) => escaped
+        escaped == 110 -> if { 10 => decoded! }
+        escaped == 114 -> if { 13 => decoded! }
+        escaped == 116 -> if { 9 => decoded! }
+        escaped == 92 -> if { 92 => decoded! }
     }
     decoded!
 }
@@ -123,9 +123,9 @@ literalLength context: ref emitterContext.EmitContext, sourceModule: Int, token:
             UIntSize(0) => skipped!
             (skipped! < indentation and byteIndex! < byteEnd) -> while {
                 context.sources[sourceModule] -> byte(byteIndex!) => indentByte
-                (indentByte == UInt8(32) or indentByte == UInt8(9)) -> if {
-                    byteIndex! + UIntSize(1) => byteIndex!
-                    skipped! + UIntSize(1) => skipped!
+                (indentByte == 32 or indentByte == 9) -> if {
+                    byteIndex! + 1 => byteIndex!
+                    skipped! + 1 => skipped!
                 } else {
                     indentation => skipped!
                 }
@@ -136,22 +136,22 @@ literalLength context: ref emitterContext.EmitContext, sourceModule: Int, token:
             context.sources[sourceModule] -> byte(byteIndex!) => currentByte
             context -> literalDecodedEscape(sourceModule, token, byteIndex!, byteEnd) => decodedEscape
             decodedEscape >= 0 -> if {
-                length! + UIntSize(1) => length!
+                length! + 1 => length!
                 decodedEscape == 10 -> if { true => lineStart! }
-                byteIndex! + UIntSize(1) => byteIndex!
+                byteIndex! + 1 => byteIndex!
             } else {
-                (currentByte == UInt8(13)
-                    and byteIndex! + UIntSize(1) < byteEnd
-                    and (context.sources[sourceModule] -> byte(byteIndex! + UIntSize(1))) == UInt8(10)) -> if {
-                    length! + UIntSize(1) => length!
+                (currentByte == 13
+                    and byteIndex! + 1 < byteEnd
+                    and (context.sources[sourceModule] -> byte(byteIndex! + 1)) == 10) -> if {
+                    length! + 1 => length!
                     true => lineStart!
-                    byteIndex! + UIntSize(1) => byteIndex!
+                    byteIndex! + 1 => byteIndex!
                 } else {
-                    length! + UIntSize(1) => length!
-                    currentByte == UInt8(10) -> if { true => lineStart! }
+                    length! + 1 => length!
+                    currentByte == 10 -> if { true => lineStart! }
                 }
             }
-            byteIndex! + UIntSize(1) => byteIndex!
+            byteIndex! + 1 => byteIndex!
         }
     }
     length!
@@ -159,28 +159,28 @@ literalLength context: ref emitterContext.EmitContext, sourceModule: Int, token:
 
 literalHexDigit value: UInt16 -> Text {
     "F" => result!
-    value == UInt16(0) -> if { "0" => result! }
-    value == UInt16(1) -> if { "1" => result! }
-    value == UInt16(2) -> if { "2" => result! }
-    value == UInt16(3) -> if { "3" => result! }
-    value == UInt16(4) -> if { "4" => result! }
-    value == UInt16(5) -> if { "5" => result! }
-    value == UInt16(6) -> if { "6" => result! }
-    value == UInt16(7) -> if { "7" => result! }
-    value == UInt16(8) -> if { "8" => result! }
-    value == UInt16(9) -> if { "9" => result! }
-    value == UInt16(10) -> if { "A" => result! }
-    value == UInt16(11) -> if { "B" => result! }
-    value == UInt16(12) -> if { "C" => result! }
-    value == UInt16(13) -> if { "D" => result! }
-    value == UInt16(14) -> if { "E" => result! }
+    value == 0 -> if { "0" => result! }
+    value == 1 -> if { "1" => result! }
+    value == 2 -> if { "2" => result! }
+    value == 3 -> if { "3" => result! }
+    value == 4 -> if { "4" => result! }
+    value == 5 -> if { "5" => result! }
+    value == 6 -> if { "6" => result! }
+    value == 7 -> if { "7" => result! }
+    value == 8 -> if { "8" => result! }
+    value == 9 -> if { "9" => result! }
+    value == 10 -> if { "A" => result! }
+    value == 11 -> if { "B" => result! }
+    value == 12 -> if { "C" => result! }
+    value == 13 -> if { "D" => result! }
+    value == 14 -> if { "E" => result! }
     result!
 }
 
 literalEmitEscapedByte value: UInt8 -> Unit uses Console {
     "\" -> print
-    UInt16(value) / UInt16(16) -> literalHexDigit -> print
-    UInt16(value) % UInt16(16) -> literalHexDigit -> print
+    UInt16(value) / 16 -> literalHexDigit -> print
+    UInt16(value) % 16 -> literalHexDigit -> print
 }
 
 literalEmitConstant context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> Unit uses Console {
@@ -195,9 +195,9 @@ literalEmitConstant context: ref emitterContext.EmitContext, sourceModule: Int, 
             UIntSize(0) => skipped!
             (skipped! < indentation and byteIndex! < byteEnd) -> while {
                 context.sources[sourceModule] -> byte(byteIndex!) => indentByte
-                (indentByte == UInt8(32) or indentByte == UInt8(9)) -> if {
-                    byteIndex! + UIntSize(1) => byteIndex!
-                    skipped! + UIntSize(1) => skipped!
+                (indentByte == 32 or indentByte == 9) -> if {
+                    byteIndex! + 1 => byteIndex!
+                    skipped! + 1 => skipped!
                 } else {
                     indentation => skipped!
                 }
@@ -209,25 +209,25 @@ literalEmitConstant context: ref emitterContext.EmitContext, sourceModule: Int, 
             context -> literalDecodedEscape(sourceModule, token, byteIndex!, byteEnd) => decodedEscape
             decodedEscape >= 0 -> if {
                 UInt8(decodedEscape) => textByte!
-                byteIndex! + UIntSize(1) => byteIndex!
+                byteIndex! + 1 => byteIndex!
             } else {
-                (textByte! == UInt8(13)
-                    and byteIndex! + UIntSize(1) < byteEnd
-                    and (context.sources[sourceModule] -> byte(byteIndex! + UIntSize(1))) == UInt8(10)) -> if {
-                    UInt8(10) => textByte!
-                    byteIndex! + UIntSize(1) => byteIndex!
+                (textByte! == 13
+                    and byteIndex! + 1 < byteEnd
+                    and (context.sources[sourceModule] -> byte(byteIndex! + 1)) == 10) -> if {
+                    10 => textByte!
+                    byteIndex! + 1 => byteIndex!
                 }
             }
-            (textByte! >= UInt8(32)
-                and textByte! <= UInt8(126)
-                and textByte! != UInt8(34)
-                and textByte! != UInt8(92)) -> if {
+            (textByte! >= 32
+                and textByte! <= 126
+                and textByte! != 34
+                and textByte! != 92) -> if {
                 context.sources[sourceModule] -> slice(byteIndex!, UIntSize(1)) -> print
             } else {
                 textByte! -> literalEmitEscapedByte
             }
-            textByte! == UInt8(10) -> if { true => lineStart! }
-            byteIndex! + UIntSize(1) => byteIndex!
+            textByte! == 10 -> if { true => lineStart! }
+            byteIndex! + 1 => byteIndex!
         }
     }
     context.sources[sourceModule] -> slice(token.span.start, UIntSize(1)) -> println
@@ -235,10 +235,10 @@ literalEmitConstant context: ref emitterContext.EmitContext, sourceModule: Int, 
 
 literalEmitSourceByte context: ref emitterContext.EmitContext, sourceModule: Int, byteIndex: UIntSize -> Unit uses Console {
     context.sources[sourceModule] -> byte(byteIndex) => nativeByte
-    (nativeByte >= UInt8(32)
-        and nativeByte <= UInt8(126)
-        and nativeByte != UInt8(34)
-        and nativeByte != UInt8(92)) -> if {
+    (nativeByte >= 32
+        and nativeByte <= 126
+        and nativeByte != 34
+        and nativeByte != 92) -> if {
         context.sources[sourceModule] -> slice(byteIndex, UIntSize(1)) -> print
     } else {
         nativeByte -> literalEmitEscapedByte

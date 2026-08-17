@@ -1,0 +1,120 @@
+namespace sys.quic.tls_handshake
+
+import sys.quic.error as errors
+
+public struct Decoded {
+    messageType: UInt8
+    body: [UInt8; ~]
+    nextOffset: UIntSize
+}
+
+public struct DecodedExtension {
+    extensionType: UInt16
+    data: [UInt8; ~]
+    nextOffset: UIntSize
+}
+
+public clientHello: -> UInt8 => 1
+public serverHello: -> UInt8 => 2
+public encryptedExtensions: -> UInt8 => 8
+public certificate: -> UInt8 => 11
+public certificateVerify: -> UInt8 => 15
+public finished: -> UInt8 => 20
+
+public serverNameExtension: -> UInt16 => 0
+public signatureAlgorithmsExtension: -> UInt16 => 13
+public alpnExtension: -> UInt16 => 16
+public supportedVersionsExtension: -> UInt16 => 43
+public keyShareExtension: -> UInt16 => 51
+public quicTransportParametersExtension: -> UInt16 => 57
+
+error kind: errors.Kind, code: UInt64 -> errors.Error {
+    errors.Error { kind: kind, code: code }
+}
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+appendUInt16 output: mut [UInt8; ~], value: UInt16 -> Unit {
+    output -> push(UInt8(value / 256))
+    output -> push(UInt8(value % 256))
+}
+
+readUInt16 bytes: [UInt8], offset: UIntSize -> Result<UInt16, errors.Error> {
+    offset + 2 <= UIntSize(bytes -> len) -> unless {
+        Result<UInt16, errors.Error>.Err(error(errors.Kind.Truncated, UInt64(offset))) -> return
+    }
+    UInt16(bytes[Int(offset)]) * 256 + UInt16(bytes[Int(offset + 1)]) -> Result<UInt16, errors.Error>.Ok
+}
+
+copyRange bytes: [UInt8], offset: UIntSize, length: UIntSize -> Result<[UInt8; ~], errors.Error> {
+    offset + length <= UIntSize(bytes -> len) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Truncated, UInt64(offset))) -> return
+    }
+    [UInt8; ~] => output!
+    UIntSize(0) => index!
+    index! < length -> while {
+        output! -> push(bytes[Int(offset + index!)])
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+public encode messageType: UInt8, body: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    (body -> len) <= 16_777_215 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(body -> len))) -> return
+    }
+    UInt32(body -> len) => length
+    [UInt8; ~] => output!
+    output! -> push(messageType)
+    output! -> push(UInt8(length / 65_536))
+    output! -> push(UInt8(length / 256 % 256))
+    output! -> push(UInt8(length % 256))
+    output! -> appendBytes(body)
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+public decode bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    offset + 4 <= UIntSize(bytes -> len) -> unless {
+        Result<Decoded, errors.Error>.Err(error(errors.Kind.Truncated, UInt64(offset))) -> return
+    }
+    UIntSize(bytes[Int(offset + 1)]) * 65_536 => length!
+    length! + UIntSize(bytes[Int(offset + 2)]) * 256 => length!
+    length! + UIntSize(bytes[Int(offset + 3)]) => length!
+    offset + 4 => bodyOffset
+    copyRange(bytes, bodyOffset, length!)? => body
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        messageType: bytes[Int(offset)]
+        body: body
+        nextOffset: bodyOffset + length!
+    })
+}
+
+public encodeExtension extensionType: UInt16, data: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    (data -> len) <= 65_535 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(data -> len))) -> return
+    }
+    [UInt8; ~] => output!
+    output! -> appendUInt16(extensionType)
+    output! -> appendUInt16(UInt16(data -> len))
+    output! -> appendBytes(data)
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+public decodeExtension bytes: [UInt8], offset: UIntSize -> Result<DecodedExtension, errors.Error> {
+    readUInt16(bytes, offset)? => extensionType
+    readUInt16(bytes, offset + 2)? => encodedLength
+    UIntSize(encodedLength) => length
+    offset + 4 => dataOffset
+    copyRange(bytes, dataOffset, length)? => data
+    Result<DecodedExtension, errors.Error>.Ok(DecodedExtension {
+        extensionType: extensionType
+        data: data
+        nextOffset: dataOffset + length
+    })
+}

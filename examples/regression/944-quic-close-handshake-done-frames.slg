@@ -1,0 +1,58 @@
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+
+reason: -> [UInt8; ~] => [100, 111, 110, 101; ~]
+
+verifyClose application: Bool -> Result<Bool, errors.Error> {
+    frames.Value.ConnectionClose(frames.ConnectionClose {
+        application: application
+        errorCode: 256
+        frameType: 8
+        reason: reason()
+    }) -> frame.encode? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        ConnectionClose(close) {
+            Result<Bool, errors.Error>.Ok(
+                ((close.application and application) or (not close.application and not application))
+                    and close.errorCode == 256
+                    and (application or close.frameType == 8)
+                    and close.reason[0] == 100
+                    and close.reason[3] == 101
+                    and decoded.nextOffset == UIntSize(encoded -> len))
+        }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+verifyHandshakeDone: -> Result<Bool, errors.Error> {
+    frames.Value.HandshakeDone => source
+    source -> frame.encode? => encoded
+    frame.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        HandshakeDone {
+            Result<Bool, errors.Error>.Ok(
+                (encoded -> len) == 1
+                    and encoded[0] == 30
+                    and decoded.nextOffset == 1)
+        }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+run: -> Result<Bool, errors.Error> {
+    verifyClose(false)? => transportClose
+    verifyClose(true)? => applicationClose
+    verifyHandshakeDone()? => handshakeDone
+    Result<Bool, errors.Error>.Ok(transportClose and applicationClose and handshakeDone)
+}
+
+main {
+    run() -> when {
+        Ok(valid) {
+            valid -> if { "close-frames=ok" } else { "close-frames=failed" } -> println
+        }
+        Err(error) { "close-frames-error=$(error.code)" -> println }
+    }
+}

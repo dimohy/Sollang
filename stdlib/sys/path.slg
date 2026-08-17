@@ -35,13 +35,13 @@ public enum Style {
 public queryRaw target: Path -> Result<RawInfo, Text> uses File = intrinsic
 
 queryKind code: UInt8 -> kinds.Kind {
-    code == UInt8(0) -> if {
+    code == 0 -> if {
         kinds.Kind.File
     } else {
-        code == UInt8(1) -> if {
+        code == 1 -> if {
             kinds.Kind.Directory
         } else {
-            code == UInt8(2) -> if {
+            code == 2 -> if {
                 kinds.Kind.Symlink
             } else {
                 kinds.Kind.Other
@@ -64,14 +64,14 @@ public query target: Path -> Result<Info, Text> uses File {
     target.style => style
     target -> queryRaw -> when {
         Ok(raw) {
-            raw.bytes -> copyBytes => canonicalBytes!
+            raw.bytes -> copyBytes => canonicalBytes
             Info {
-                canonical: Path { bytes: canonicalBytes!, style: style }
+                canonical: Path { bytes: canonicalBytes, style: style }
                 kind: raw.kindCode -> queryKind
                 byteLength: raw.byteLength
                 modifiedNanos: raw.modifiedNanos
-            } => info!
-            Result<Info, Text>.Ok(info!) -> return
+            } => info
+            Result<Info, Text>.Ok(info) -> return
         }
         Err(error) {
             Result<Info, Text>.Err(error) -> return
@@ -104,14 +104,14 @@ sameStyle left: Style, right: Style -> Bool {
 
 isSeparator value: UInt8, style: Style -> Bool {
     style -> when {
-        Posix { value == UInt8(47) }
-        Windows { value == UInt8(47) or value == UInt8(92) }
+        Posix { value == 47 }
+        Windows { value == 47 or value == 92 }
     }
 }
 
 pathError message: Text -> Result<Path, Text> {
-    Result<Path, Text>.Err(message) => result!
-    result!
+    Result<Path, Text>.Err(message) => result
+    result
 }
 
 public fromText value: Text, style: Style -> Path {
@@ -119,10 +119,10 @@ public fromText value: Text, style: Style -> Path {
     UIntSize(0) => index!
     index! < (value -> len) -> while {
         bytes! -> push(value -> byte(index!))
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
-    Path { bytes: bytes!, style: style } => result!
-    result!
+    Path { bytes: bytes!, style: style } => result
+    result
 }
 
 public byteCount path: Path -> UIntSize {
@@ -136,7 +136,7 @@ public equalsText path: Path, value: Text -> Bool {
     UIntSize(0) => index!
     (matches! and index! < pathLength) -> while {
         path.bytes[Int(index!)] != (value -> byte(index!)) -> if { false => matches! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
@@ -149,7 +149,7 @@ public endsWithText path: ref Path, value: Text -> Bool {
     UIntSize(0) => index!
     (matches! and index! < valueLength) -> while {
         path.bytes[Int(start + index!)] != (value -> byte(index!)) -> if { false => matches! }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
@@ -157,13 +157,13 @@ public endsWithText path: ref Path, value: Text -> Bool {
 public isAbsolute path: Path -> Bool {
     path.style -> when {
         Posix {
-            UIntSize(path.bytes -> len) > UIntSize(0) and path.bytes[0] == UInt8(47)
+            UIntSize(path.bytes -> len) > 0 and path.bytes[0] == 47
         }
         Windows {
             UIntSize(path.bytes -> len) => length
             false => absolute!
-            (length >= UIntSize(2) and (path.bytes[0] == UInt8(47) or path.bytes[0] == UInt8(92)) and (path.bytes[1] == UInt8(47) or path.bytes[1] == UInt8(92))) -> if { true => absolute! }
-            (length >= UIntSize(3) and path.bytes[1] == UInt8(58) and (path.bytes[2] == UInt8(47) or path.bytes[2] == UInt8(92))) -> if { true => absolute! }
+            (length >= 2 and (path.bytes[0] == 47 or path.bytes[0] == 92) and (path.bytes[1] == 47 or path.bytes[1] == 92)) -> if { true => absolute! }
+            (length >= 3 and path.bytes[1] == 58 and (path.bytes[2] == 47 or path.bytes[2] == 92)) -> if { true => absolute! }
             absolute!
         }
     }
@@ -174,13 +174,13 @@ public join base: move Path, child: Text -> Result<Path, Text> {
     base.style => style
     style -> when {
         Posix {
-            (child -> len) > UIntSize(0) and (child -> byte(UIntSize(0))) == UInt8(47)
+            (child -> len) > 0 and (child -> byte(0)) == 47
         }
         Windows {
             child -> len => childLength
             false => absolute!
-            (childLength >= UIntSize(2) and ((child -> byte(UIntSize(0))) == UInt8(47) or (child -> byte(UIntSize(0))) == UInt8(92)) and ((child -> byte(UIntSize(1))) == UInt8(47) or (child -> byte(UIntSize(1))) == UInt8(92))) -> if { true => absolute! }
-            (childLength >= UIntSize(3) and (child -> byte(UIntSize(1))) == UInt8(58) and ((child -> byte(UIntSize(2))) == UInt8(47) or (child -> byte(UIntSize(2))) == UInt8(92))) -> if { true => absolute! }
+            (childLength >= 2 and ((child -> byte(UIntSize(0))) == 47 or (child -> byte(UIntSize(0))) == 92) and ((child -> byte(UIntSize(1))) == 47 or (child -> byte(UIntSize(1))) == 92)) -> if { true => absolute! }
+            (childLength >= 3 and (child -> byte(UIntSize(1))) == 58 and ((child -> byte(UIntSize(2))) == 47 or (child -> byte(UIntSize(2))) == 92)) -> if { true => absolute! }
             absolute!
         }
     } => childAbsolute
@@ -190,14 +190,14 @@ public join base: move Path, child: Text -> Result<Path, Text> {
     base.bytes => bytes!
     UIntSize(bytes! -> len) => baseLength
     false => endsWithSeparator!
-    baseLength > UIntSize(0) -> if {
-        bytes![Int(baseLength - UIntSize(1))] => lastByte
+    baseLength > 0 -> if {
+        bytes![Int(baseLength - 1)] => lastByte
         style -> when {
-            Posix => lastByte == UInt8(47)
-            Windows => lastByte == UInt8(47) or lastByte == UInt8(92)
+            Posix => lastByte == 47
+            Windows => lastByte == 47 or lastByte == 92
         } => endsWithSeparator!
     }
-    (baseLength > UIntSize(0) and (child -> len) > UIntSize(0) and not endsWithSeparator!) -> if {
+    (baseLength > 0 and (child -> len) > 0 and not endsWithSeparator!) -> if {
         style -> when {
             Posix => UInt8(47)
             Windows => UInt8(92)
@@ -207,10 +207,10 @@ public join base: move Path, child: Text -> Result<Path, Text> {
     UIntSize(0) => childIndex!
     childIndex! < (child -> len) -> while {
         bytes! -> push(child -> byte(childIndex!))
-        childIndex! + UIntSize(1) => childIndex!
+        childIndex! + 1 => childIndex!
     }
-    Path { bytes: bytes!, style: style } => joined!
-    Result<Path, Text>.Ok(joined!)
+    Path { bytes: bytes!, style: style } => joined
+    Result<Path, Text>.Ok(joined)
 }
 
 # Joins two borrowed path values into a fresh owned result.
@@ -219,15 +219,15 @@ public joinDiscovered base: ref Path, child: ref Path -> Path {
     UIntSize(0) => baseIndex!
     baseIndex! < UIntSize(base.bytes -> len) -> while {
         bytes! -> push(base.bytes[Int(baseIndex!)])
-        baseIndex! + UIntSize(1) => baseIndex!
+        baseIndex! + 1 => baseIndex!
     }
     UIntSize(bytes! -> len) => baseLength
     false => endsWithSeparator!
-    baseLength > UIntSize(0) -> if {
-        bytes![Int(baseLength - UIntSize(1))] => last
+    baseLength > 0 -> if {
+        bytes![Int(baseLength - 1)] => last
         isSeparator(last, base.style) => endsWithSeparator!
     }
-    (baseLength > UIntSize(0) and UIntSize(child.bytes -> len) > UIntSize(0) and not endsWithSeparator!) -> if {
+    (baseLength > 0 and UIntSize(child.bytes -> len) > 0 and not endsWithSeparator!) -> if {
         base.style -> when {
             Posix => UInt8(47)
             Windows => UInt8(92)
@@ -237,10 +237,10 @@ public joinDiscovered base: ref Path, child: ref Path -> Path {
     UIntSize(0) => childIndex!
     childIndex! < UIntSize(child.bytes -> len) -> while {
         bytes! -> push(child.bytes[Int(childIndex!)])
-        childIndex! + UIntSize(1) => childIndex!
+        childIndex! + 1 => childIndex!
     }
-    Path { bytes: bytes!, style: base.style } => joined!
-    joined!
+    Path { bytes: bytes!, style: base.style } => joined
+    joined
 }
 
 public joinPath base: Path, child: Path -> Result<Path, Text> {
@@ -251,8 +251,8 @@ public joinPath base: Path, child: Path -> Result<Path, Text> {
         Result<Path, Text>.Err("cannot join an absolute child") -> return
     }
 
-    base -> joinDiscovered(child) => joined!
-    Result<Path, Text>.Ok(joined!)
+    base -> joinDiscovered(child) => joined
+    Result<Path, Text>.Ok(joined)
 }
 
 # Lexical normalization never touches the filesystem. Parent components that
@@ -260,46 +260,46 @@ public joinPath base: Path, child: Path -> Result<Path, Text> {
 # package roots and module discovery.
 public normalizeConfined path: move Path -> Result<Path, Text> {
     path.style => style
-    path.bytes => source!
+    path.bytes => source
     [UInt8; ~] => output!
     [UIntSize; ~] => componentStarts!
     style -> when {
         Posix => false
         Windows => true
     } => windows
-    UIntSize(source! -> len) => sourceLength
+    UIntSize(source -> len) => sourceLength
     UIntSize(0) => index!
     false => absolute!
     false => unc!
     UIntSize(0) => protectedComponents!
 
     windows -> if {
-        (sourceLength >= UIntSize(2) and source![1] == UInt8(58)) -> if {
-            output! -> push(source![0])
-            output! -> push(UInt8(58))
-            UIntSize(2) => index!
-            (index! < sourceLength and (source![Int(index!)] == UInt8(47) or source![Int(index!)] == UInt8(92))) -> if {
-                output! -> push(UInt8(92))
+        (sourceLength >= 2 and source[1] == 58) -> if {
+            output! -> push(source[0])
+            output! -> push(58)
+            2 => index!
+            (index! < sourceLength and (source[Int(index!)] == 47 or source[Int(index!)] == 92)) -> if {
+                output! -> push(92)
                 true => absolute!
-                (index! < sourceLength and (source![Int(index!)] == UInt8(47) or source![Int(index!)] == UInt8(92))) -> while { index! + UIntSize(1) => index! }
+                (index! < sourceLength and (source[Int(index!)] == 47 or source[Int(index!)] == 92)) -> while { index! + 1 => index! }
             }
         } else {
-            (sourceLength >= UIntSize(2) and (source![0] == UInt8(47) or source![0] == UInt8(92)) and (source![1] == UInt8(47) or source![1] == UInt8(92))) -> if {
-                output! -> push(UInt8(92))
-                output! -> push(UInt8(92))
+            (sourceLength >= 2 and (source[0] == 47 or source[0] == 92) and (source[1] == 47 or source[1] == 92)) -> if {
+                output! -> push(92)
+                output! -> push(92)
                 true => absolute!
                 true => unc!
-                UIntSize(2) => protectedComponents!
-                UIntSize(2) => index!
-                (index! < sourceLength and (source![Int(index!)] == UInt8(47) or source![Int(index!)] == UInt8(92))) -> while { index! + UIntSize(1) => index! }
+                2 => protectedComponents!
+                2 => index!
+                (index! < sourceLength and (source[Int(index!)] == 47 or source[Int(index!)] == 92)) -> while { index! + 1 => index! }
             }
         }
     } else {
-        (sourceLength > UIntSize(0) and source![0] == UInt8(47)) -> if {
-            output! -> push(UInt8(47))
+        (sourceLength > 0 and source[0] == 47) -> if {
+            output! -> push(47)
             true => absolute!
-            UIntSize(1) => index!
-            (index! < sourceLength and source![Int(index!)] == UInt8(47)) -> while { index! + UIntSize(1) => index! }
+            1 => index!
+            (index! < sourceLength and source[Int(index!)] == 47) -> while { index! + 1 => index! }
         }
     }
 
@@ -307,37 +307,37 @@ public normalizeConfined path: move Path -> Result<Path, Text> {
     false => wroteComponent!
     (index! < sourceLength and not escaped!) -> while {
         index! => componentStart
-        (index! < sourceLength and (windows -> if { source![Int(index!)] != UInt8(47) and source![Int(index!)] != UInt8(92) } else { source![Int(index!)] != UInt8(47) })) -> while {
-            index! + UIntSize(1) => index!
+        (index! < sourceLength and (windows -> if { source[Int(index!)] != 47 and source[Int(index!)] != 92 } else { source[Int(index!)] != 47 })) -> while {
+            index! + 1 => index!
         }
         index! => componentEnd
         componentEnd - componentStart => componentLength
-        (index! < sourceLength and (windows -> if { source![Int(index!)] == UInt8(47) or source![Int(index!)] == UInt8(92) } else { source![Int(index!)] == UInt8(47) })) -> while {
-            index! + UIntSize(1) => index!
+        (index! < sourceLength and (windows -> if { source[Int(index!)] == 47 or source[Int(index!)] == 92 } else { source[Int(index!)] == 47 })) -> while {
+            index! + 1 => index!
         }
 
-        componentLength == UIntSize(1) and source![Int(componentStart)] == UInt8(46) => currentDirectory
-        componentLength == UIntSize(2) and source![Int(componentStart)] == UInt8(46) and source![Int(componentStart + UIntSize(1))] == UInt8(46) => parentDirectory
-        (componentLength > UIntSize(0) and not currentDirectory and not parentDirectory) -> if {
+        componentLength == 1 and source[Int(componentStart)] == 46 => currentDirectory
+        componentLength == 2 and source[Int(componentStart)] == 46 and source[Int(componentStart + 1)] == 46 => parentDirectory
+        (componentLength > 0 and not currentDirectory and not parentDirectory) -> if {
             UIntSize(output! -> len) => truncateStart
             wroteComponent! -> if {
-                windows -> if { output! -> push(UInt8(92)) } else { output! -> push(UInt8(47)) }
+                windows -> if { output! -> push(92) } else { output! -> push(47) }
             }
             componentStarts! -> push(truncateStart)
             componentStart => componentByteIndex!
             componentByteIndex! < componentEnd -> while {
-                output! -> push(source![Int(componentByteIndex!)])
-                componentByteIndex! + UIntSize(1) => componentByteIndex!
+                output! -> push(source[Int(componentByteIndex!)])
+                componentByteIndex! + 1 => componentByteIndex!
             }
             true => wroteComponent!
         }
         parentDirectory -> if {
             UIntSize(componentStarts! -> len) > protectedComponents! -> if {
-                componentStarts! -> take(Int(UIntSize(componentStarts! -> len) - UIntSize(1))) => truncateTo
+                componentStarts! -> take(Int(UIntSize(componentStarts! -> len) - 1)) => truncateTo
                 UIntSize(output! -> len) > truncateTo -> while {
-                    output! -> take(Int(UIntSize(output! -> len) - UIntSize(1))) => removedByte
+                    output! -> take(Int(UIntSize(output! -> len) - 1)) => removedByte
                 }
-                UIntSize(componentStarts! -> len) > UIntSize(0) => wroteComponent!
+                UIntSize(componentStarts! -> len) > 0 => wroteComponent!
             } else {
                 true => escaped!
             }
@@ -347,10 +347,10 @@ public normalizeConfined path: move Path -> Result<Path, Text> {
     escaped! -> if {
         pathError("path escapes root") -> return
     }
-    (unc! and UIntSize(componentStarts! -> len) < UIntSize(2)) -> if {
+    (unc! and UIntSize(componentStarts! -> len) < 2) -> if {
         pathError("incomplete UNC path") -> return
     }
-    UIntSize(output! -> len) == UIntSize(0) -> if { output! -> push(UInt8(46)) }
-    Path { bytes: output!, style: style } => normalized!
-    Result<Path, Text>.Ok(normalized!)
+    UIntSize(output! -> len) == 0 -> if { output! -> push(46) }
+    Path { bytes: output!, style: style } => normalized
+    Result<Path, Text>.Ok(normalized)
 }

@@ -1,0 +1,72 @@
+namespace sys.quic.varint
+
+import sys.quic.error as errors
+
+public struct Decoded {
+    value: UInt64
+    nextOffset: UIntSize
+}
+
+encodedLength value: UInt64 -> Int {
+    value -> when {
+        < 64 { 1 }
+        < 16_384 { 2 }
+        < 1_073_741_824 { 4 }
+        else { 8 }
+    }
+}
+
+public encode value: UInt64 -> Result<[UInt8; ~], errors.Error> {
+    value > 4_611_686_018_427_387_903 -> if {
+        Result<[UInt8; ~], errors.Error>.Err(errors.Error { kind: errors.Kind.Encoding, code: value }) -> return
+    }
+    encodedLength(value) => length
+    length -> when {
+        == 1 { UInt64(0) }
+        == 2 { UInt64(64) }
+        == 4 { UInt64(128) }
+        else { UInt64(192) }
+    } => prefix
+    UInt64(1) => divisor!
+    1 => divisorIndex!
+    divisorIndex! < length -> while {
+        divisor! * 256 => divisor!
+        divisorIndex! + 1 => divisorIndex!
+    }
+    value => remaining!
+    [UInt8; ~] => bytes!
+    0 => byteIndex!
+    byteIndex! < length -> while {
+        remaining! / divisor! => byteValue
+        byteIndex! == 0 -> if { byteValue + prefix } else { byteValue } => encodedByte
+        bytes! -> push(UInt8(encodedByte))
+        remaining! % divisor! => remaining!
+        divisor! > 1 -> if { divisor! / 256 => divisor! }
+        byteIndex! + 1 => byteIndex!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(bytes!)
+}
+
+public decode bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    offset >= UIntSize(bytes -> len) -> if {
+        Result<Decoded, errors.Error>.Err(errors.Error { kind: errors.Kind.Truncated, code: UInt64(offset) }) -> return
+    }
+    UInt64(bytes[Int(offset)]) => first
+    first / 64 => prefix
+    prefix -> when {
+        == 0 { UIntSize(1) }
+        == 1 { UIntSize(2) }
+        == 2 { UIntSize(4) }
+        else { UIntSize(8) }
+    } => length
+    offset + length > UIntSize(bytes -> len) -> if {
+        Result<Decoded, errors.Error>.Err(errors.Error { kind: errors.Kind.Truncated, code: UInt64(offset) }) -> return
+    }
+    first % 64 => value!
+    UIntSize(1) => index!
+    index! < length -> while {
+        value! * 256 + UInt64(bytes[Int(offset + index!)]) => value!
+        index! + 1 => index!
+    }
+    Result<Decoded, errors.Error>.Ok(Decoded { value: value!, nextOffset: offset + length })
+}

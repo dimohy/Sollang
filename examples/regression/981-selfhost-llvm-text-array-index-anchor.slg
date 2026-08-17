@@ -1,0 +1,35 @@
+import sollang.compiler.llvm.text as llvm
+
+# An indexed Text value can be the first type anchor of a growable literal.
+# Container storage must use the inferred Text element layout, never i32.
+main {
+    [
+        """
+        namespace sys.process
+
+        public struct RunToFileRequest {
+            argv: [Text; ~]
+            output: Text
+        }
+
+        public arguments: -> Arguments uses Process = intrinsic
+        """,
+        """
+        import sys.process as process
+
+        targetMode target: Int -> Text => target == 0 -> if { "windows" } else { "linux" }
+
+        collect root: Text -> [Text; ~] uses Process {
+            process.arguments() => arguments
+            "" => selectedRoot!
+            (root -> len) > 0 -> if { root => selectedRoot! }
+            [arguments[0], 0 -> targetMode, selectedRoot!; ~]
+        }
+
+        main {
+            "root" -> collect -> len -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

@@ -14,7 +14,6 @@ internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
         bool sharedLibrary = false)
     {
         var objectPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(outputPath) + ".o");
-
         Run(toolchain.Clang,
         [
             "-target",

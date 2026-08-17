@@ -173,6 +173,47 @@ internal sealed partial class LlvmEmitter
               ret ptr %dest
             }
 
+            define dso_local ptr @memmove(ptr %dest, ptr %source, i64 %count) #0 {
+            entry:
+              %same = icmp eq ptr %dest, %source
+              %empty = icmp eq i64 %count, 0
+              %done_early = or i1 %same, %empty
+              br i1 %done_early, label %done, label %choose_direction
+
+            choose_direction:
+              %forward = icmp ult ptr %dest, %source
+              br i1 %forward, label %forward_loop, label %backward_loop
+
+            forward_loop:
+              %forward_i = phi i64 [ 0, %choose_direction ], [ %forward_next, %forward_body ]
+              %forward_active = icmp ult i64 %forward_i, %count
+              br i1 %forward_active, label %forward_body, label %done
+
+            forward_body:
+              %forward_src = getelementptr i8, ptr %source, i64 %forward_i
+              %forward_dst = getelementptr i8, ptr %dest, i64 %forward_i
+              %forward_byte = load i8, ptr %forward_src, align 1
+              store i8 %forward_byte, ptr %forward_dst, align 1
+              %forward_next = add i64 %forward_i, 1
+              br label %forward_loop
+
+            backward_loop:
+              %backward_i = phi i64 [ %count, %choose_direction ], [ %backward_next, %backward_body ]
+              %backward_active = icmp ugt i64 %backward_i, 0
+              br i1 %backward_active, label %backward_body, label %done
+
+            backward_body:
+              %backward_next = sub i64 %backward_i, 1
+              %backward_src = getelementptr i8, ptr %source, i64 %backward_next
+              %backward_dst = getelementptr i8, ptr %dest, i64 %backward_next
+              %backward_byte = load i8, ptr %backward_src, align 1
+              store i8 %backward_byte, ptr %backward_dst, align 1
+              br label %backward_loop
+
+            done:
+              ret ptr %dest
+            }
+
             define internal i64 @sollang_format_u64(ptr %dest, i64 %value) #0 {
             entry:
               br label %count

@@ -1,0 +1,139 @@
+namespace sys.crypto.tls13_keys
+
+import sys.crypto.hkdf_sha256 as hkdf
+import sys.crypto.hmac_sha256 as hmac
+import sys.crypto.sha256 as sha256
+import sys.crypto.tls13_hkdf as tls13
+
+public struct HandshakeSecrets {
+    handshakeSecret: [UInt8; 32]
+    clientTrafficSecret: [UInt8; 32]
+    serverTrafficSecret: [UInt8; 32]
+    mainSecret: [UInt8; 32]
+}
+
+public struct EarlySecrets {
+    earlySecret: [UInt8; 32]
+    clientTrafficSecret: [UInt8; 32]
+    exporterSecret: [UInt8; 32]
+}
+
+public struct ApplicationSecrets {
+    clientTrafficSecret: [UInt8; 32]
+    serverTrafficSecret: [UInt8; 32]
+    exporterSecret: [UInt8; 32]
+}
+
+zeros: -> [UInt8; 32] => [0; 32]
+
+empty: -> [UInt8] => []
+
+public deriveSecretFromHash secret: [UInt8], label: Text, transcriptHash: [UInt8] -> [UInt8; 32] {
+    secret -> tls13.expandLabel32(label, transcriptHash)
+}
+
+public deriveSecret secret: [UInt8], label: Text, transcript: [UInt8] -> [UInt8; 32] {
+    transcript -> sha256.digest => transcriptHash
+    secret -> deriveSecretFromHash(label, transcriptHash)
+}
+
+public extractEarlySecret psk: [UInt8] -> [UInt8; 32] {
+    hkdf.extract(zeros(), psk)
+}
+
+public deriveExternalBinderKey psk: [UInt8] -> [UInt8; 32] {
+    psk -> extractEarlySecret -> deriveSecret("ext binder", empty())
+}
+
+public deriveResumptionBinderKey psk: [UInt8] -> [UInt8; 32] {
+    psk -> extractEarlySecret -> deriveSecret("res binder", empty())
+}
+
+public binderVerifyDataFromHash binderKey: [UInt8], truncatedClientHelloHash: [UInt8] -> [UInt8; 32] {
+    finishedVerifyDataFromHash(binderKey, truncatedClientHelloHash)
+}
+
+public binderVerifyData binderKey: [UInt8], truncatedClientHello: [UInt8] -> [UInt8; 32] {
+    truncatedClientHello -> sha256.digest => transcriptHash
+    binderVerifyDataFromHash(binderKey, transcriptHash)
+}
+
+public deriveEarlyFromHash psk: [UInt8], clientHelloTranscriptHash: [UInt8] -> EarlySecrets {
+    psk -> extractEarlySecret => earlySecret
+    earlySecret -> deriveSecretFromHash("c e traffic", clientHelloTranscriptHash) => clientTrafficSecret
+    earlySecret -> deriveSecretFromHash("e exp master", clientHelloTranscriptHash) => exporterSecret
+    EarlySecrets {
+        earlySecret: earlySecret
+        clientTrafficSecret: clientTrafficSecret
+        exporterSecret: exporterSecret
+    }
+}
+
+public deriveEarly psk: [UInt8], clientHelloTranscript: [UInt8] -> EarlySecrets {
+    clientHelloTranscript -> sha256.digest => transcriptHash
+    deriveEarlyFromHash(psk, transcriptHash)
+}
+
+public deriveHandshakeWithPskFromHash psk: [UInt8], sharedSecret: [UInt8], helloTranscriptHash: [UInt8] -> HandshakeSecrets {
+    psk -> extractEarlySecret => earlySecret
+    earlySecret -> deriveSecret("derived", empty()) => derivedEarlySecret
+    hkdf.extract(derivedEarlySecret, sharedSecret) => handshakeSecret
+    handshakeSecret -> deriveSecretFromHash("c hs traffic", helloTranscriptHash) => clientTrafficSecret
+    handshakeSecret -> deriveSecretFromHash("s hs traffic", helloTranscriptHash) => serverTrafficSecret
+    handshakeSecret -> deriveSecret("derived", empty()) => derivedHandshakeSecret
+    hkdf.extract(derivedHandshakeSecret, zeros()) => mainSecret
+    HandshakeSecrets {
+        handshakeSecret: handshakeSecret
+        clientTrafficSecret: clientTrafficSecret
+        serverTrafficSecret: serverTrafficSecret
+        mainSecret: mainSecret
+    }
+}
+
+public deriveHandshakeFromHash sharedSecret: [UInt8], helloTranscriptHash: [UInt8] -> HandshakeSecrets {
+    deriveHandshakeWithPskFromHash(zeros(), sharedSecret, helloTranscriptHash)
+}
+
+public deriveHandshakeWithPsk psk: [UInt8], sharedSecret: [UInt8], helloTranscript: [UInt8] -> HandshakeSecrets {
+    helloTranscript -> sha256.digest => transcriptHash
+    deriveHandshakeWithPskFromHash(psk, sharedSecret, transcriptHash)
+}
+
+public deriveHandshake sharedSecret: [UInt8], helloTranscript: [UInt8] -> HandshakeSecrets {
+    helloTranscript -> sha256.digest => transcriptHash
+    deriveHandshakeFromHash(sharedSecret, transcriptHash)
+}
+
+public deriveApplicationFromHash mainSecret: [UInt8], serverFinishedTranscriptHash: [UInt8] -> ApplicationSecrets {
+    mainSecret -> deriveSecretFromHash("c ap traffic", serverFinishedTranscriptHash) => clientTrafficSecret
+    mainSecret -> deriveSecretFromHash("s ap traffic", serverFinishedTranscriptHash) => serverTrafficSecret
+    mainSecret -> deriveSecretFromHash("exp master", serverFinishedTranscriptHash) => exporterSecret
+    ApplicationSecrets {
+        clientTrafficSecret: clientTrafficSecret
+        serverTrafficSecret: serverTrafficSecret
+        exporterSecret: exporterSecret
+    }
+}
+
+public deriveApplication mainSecret: [UInt8], serverFinishedTranscript: [UInt8] -> ApplicationSecrets {
+    serverFinishedTranscript -> sha256.digest => transcriptHash
+    deriveApplicationFromHash(mainSecret, transcriptHash)
+}
+
+public deriveResumptionFromHash mainSecret: [UInt8], clientFinishedTranscriptHash: [UInt8] -> [UInt8; 32] {
+    mainSecret -> deriveSecretFromHash("res master", clientFinishedTranscriptHash)
+}
+
+public finishedVerifyDataFromHash baseKey: [UInt8], transcriptHash: [UInt8] -> [UInt8; 32] {
+    baseKey -> tls13.expandLabel32("finished", empty()) => finishedKey
+    hmac.digest(finishedKey, transcriptHash)
+}
+
+public finishedVerifyData baseKey: [UInt8], transcript: [UInt8] -> [UInt8; 32] {
+    transcript -> sha256.digest => transcriptHash
+    finishedVerifyDataFromHash(baseKey, transcriptHash)
+}
+
+public updateTrafficSecret secret: [UInt8] -> [UInt8; 32] {
+    secret -> tls13.expandLabel32("traffic upd", empty())
+}

@@ -22,7 +22,7 @@ textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
         (source -> byte(token.span.start + index!)) != (expected -> byte(index!)) -> if {
             false => matches!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
@@ -42,7 +42,7 @@ sameMember source: Text, left: WorkspaceMember, right: WorkspaceMember -> Bool {
         (source -> byte(left.start + index!)) != (source -> byte(right.start + index!)) -> if {
             false => same!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     same!
 }
@@ -51,9 +51,9 @@ sameMember source: Text, left: WorkspaceMember, right: WorkspaceMember -> Bool {
 # 4 colon, 5 opening array, 6 string member, 7 duplicate member,
 # 8 missing separator, 9 closing brace, 10 trailing input, 11 empty members.
 public parse source: Text -> WorkspaceManifest {
-    source -> lexer.lex => rawTokens!
+    source -> lexer.lex => rawTokens
     [syntax.SyntaxToken; ~] => tokens!
-    rawTokens! -> each token {
+    rawTokens -> each token {
         (token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()) -> if {
             tokens! -> push(token)
         }
@@ -92,10 +92,10 @@ public parse source: Text -> WorkspaceManifest {
         (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBracket()) -> while {
             tokens![index!].kind == grammar.tokenIdString() -> if {
                 tokens![index!] => memberToken
-                memberToken.span.length >= UIntSize(2) -> if {
+                memberToken.span.length >= 2 -> if {
                     WorkspaceMember {
-                        start: memberToken.span.start + UIntSize(1)
-                        length: memberToken.span.length - UIntSize(2)
+                        start: memberToken.span.start + 1
+                        length: memberToken.span.length - 2
                     } => member
                     false => duplicate!
                     0 => memberIndex!
@@ -132,8 +132,8 @@ public parse source: Text -> WorkspaceManifest {
         tokens![index!].kind != grammar.tokenIdEnd() -> if { 10 => status! }
     }
 
-    WorkspaceManifest { status: status!, members: members! } => result!
-    result!
+    WorkspaceManifest { status: status!, members: members! } => result
+    result
 }
 
 public parseSource source: file.SourceText -> WorkspaceManifest {

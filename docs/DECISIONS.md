@@ -8134,6 +8134,11 @@ therefore blocks LLVM emission. Reinitializing the exact path before the join
 repairs the state, while a moving branch that returns does not contribute a
 normal successor and needs no artificial repair.
 
+A binding declared inside an arm or loop body is not live at that region's
+exit, so its move paths do not participate in the outer join. Remaining fields
+are dropped independently. E20 applies only to a binding whose lifetime crosses
+the join or back-edge; fixture 504 covers an arm-local enum payload binding.
+
 The first production run found eleven false positives in the compiler itself.
 They were read-only field projections nested in call-scoped request literals,
 not ownership extractions. Kind-13 request projections remain in the move table
@@ -11623,3 +11628,1227 @@ The emitted WASM LLVM declares `memcpy` and `memset` intrinsics explicitly, and
 the browser host implements the corresponding imports when LLVM 16 lowers
 them to libc-shaped calls. The verified Stage 2 WASM SHA-256 is
 `3D6E8F825E64588B32AD79CB65ADAC27C33029DA2773717EE12A3001C3B91558`.
+
+## D305 — Networking composes through flat Result propagation
+
+Status: superseded by D307
+Date: 2026-08-14
+
+The web-server foundation uses two explicit layers. `sys.socket` owns portable
+TCP and UDP intrinsics in the Windows and Linux runtimes. `sys.quic` owns the
+stable Sollang API for QUIC while a locked Rust `cdylib` delegates protocol,
+TLS 1.3, congestion control, streams, and datagrams to Quinn. QUIC peers trust
+only the certificate supplied at bind time; there is no insecure verifier or
+ambient trust fallback.
+
+All public fallible calls return structured `Result` values and require the
+`Network` effect. Sequential application code propagates them with postfix
+`?` inside a Result-returning function, leaving one final `when` at the recovery
+or presentation boundary. This directly replaces the earlier block-inside-
+block style without introducing exception syntax or hidden error control flow.
+
+TCP and UDP handles are affine runtime resources. QUIC handle wrappers are also
+affine, and the adapter runtime is owned transitively by Endpoint, Connection,
+and BiStream handles. This lifetime rule is required: a process-global Tokio
+runtime could leave worker threads executing after the dynamically loaded
+adapter was released. Each endpoint also drives inbound Quinn handshakes into a
+completion queue, allowing deterministic `connect?` followed by `accept?`
+without a source-level parallel workaround.
+
+Fixtures 875-878 prove TCP/UDP API execution and self-host socket intrinsic
+lowering. Fixture 879 proves the QUIC surface and fixture 880 executes pinned
+peer identity exchange, a bidirectional `ping` stream, a QUIC datagram, and
+clean native shutdown on Windows and Linux. `scripts/build-quic-adapter.ps1`
+reproduces both native adapter artifacts from `Cargo.lock`.
+The 0.4 release packager runs that locked, verified build and places the
+platform adapter beside the native compiler. The native-only prohibition still
+excludes bootstrap/runtime `.dll` files; `sollang_quic.dll` is the explicit
+protocol adapter exception, paired with `libsollang_quic.so` on Linux.
+
+Native-library binding follows the reachable call graph. Merely discovering
+`sys.quic` in the standard-library source set does not load its adapter, emit a
+browser capability failure, or create a deployment dependency for TCP/UDP-only
+programs. Once a reachable wrapper calls a native declaration, its library,
+symbols, and affine handle-drop functions are emitted as one binding unit.
+
+## D306 — Inference removes redundant type and storage declarations
+
+Status: implemented
+Date: 2026-08-15
+
+Sollang source now defaults to inferred numeric literals, immutable bindings,
+and the narrowest provable collection storage. S001 reports numeric
+constructors whose target type is already supplied by return, argument,
+operator, comparison, assignment, or collection-element context. S002 reports
+mutable `!` bindings that are never mutated. S003 tracks straight-line
+growable-array construction and reports an exact final length when no loop,
+unknown container operation, or mutable borrow invalidates that proof.
+
+Fixed-array repetition now accepts inline copyable values rather than only
+`Int`, and generic fixed arrays support indexed replacement. LLVM numeric
+context propagation covers fixed-array elements as well as division and modulo,
+so inferred `UInt64` literals retain their semantic type during lowering.
+Readonly `[T]` literal results remain immutable private module constants.
+Concrete `[T; N]` annotations are now accepted outside value-generic function
+signatures, including nominal struct fields. Each `(T, N)` receives a distinct
+semantic identity. Initializing that field from a compatible growable owner
+emits an exact length check before ownership moves into its fixed contract, and
+a mismatched literal is rejected during semantic analysis.
+
+`sys.crypto.sha256` consequently stores the 64 round constants as one
+`[UInt64]` static literal, uses an eight-element fixed `UInt64` hash state, and
+uses `[UInt64(0); 64]` for the mutable message schedule. Focused SHA-256,
+HMAC/HKDF, and RFC 9369 QUIC v2 initial-key fixtures pass, the SHA build emits
+zero S001-S003 warnings, and dedicated fixtures assert S001 and S003 compiler
+output.
+`sys.quic.keys.InitialKeys` therefore declares 32-byte secrets, 16-byte AES-128
+keys and header-protection keys, and 12-byte IVs directly in its field types.
+Fixed arrays also support `mut [T; N]` payload borrows. The ABI passes the
+fixed pointer and length rather than a resizable container triple, so an
+algorithm can update a fixed state block without weakening its length contract.
+
+## D307 — QUIC is pure Sollang and protocol dispatch stays flat
+
+Status: implemented
+Date: 2026-08-15
+
+D307 supersedes the Rust-adapter implementation choice in D305 while retaining
+its flat `Result` propagation rule. QUIC cryptography, packet protection,
+varints, frames, TLS 1.3, transport state, loss recovery, streams, and datagrams
+are reachable standard-library Sollang modules. Windows and Linux native
+executables complete QUIC v1 and v2 self-roundtrips and aioquic 1.3.0
+interoperability without a QUIC shared library. The obsolete
+`sollang_quic.dll`/`libsollang_quic.so`, Rust crate, archive resolver, adapter
+build, test environment injection, and release-packaging exceptions are
+removed.
+
+One decoded discriminant is dispatched with subject-style `when`, not nested
+`if`/`else` ladders. Subject comparisons and ranges accept every Sollang integer
+type and contextually infer arm literals from that type. QUIC frame decoding
+therefore reads as one ordered list of exact values, inclusive ranges, and a
+final protocol-error `else`. Readonly calls likewise accept named owner field
+and index projections directly, preserving the owner without artificial
+temporary moves.
+
+Focused Windows/Linux fixtures cover AES-128-GCM open/seal, QUIC frame
+roundtrips, RFC 9000 packet-number restoration, and the RFC 9369 v2 Initial
+header plus protected packet seal/open roundtrip. The header vector corrected the v2 wire version from an erroneous
+`0x6b3347cf` to the standards value `0x6b3343cf`. The same implementation work
+extended contextual inference through enum payloads and `when` returns, allowed
+all integer subject types, admitted named-owner field borrows, contextual empty
+static `[]`, multiline call arguments, and integer-valued `when` expressions in
+numeric operands and struct fields. SHA-256 and HMAC now return exact 32-byte
+arrays, HKDF uses fixed-size output kernels, and concrete array repeats preserve
+their declared length. Supporting compiler work aligned fixed-array call ABI,
+mutable value-generic borrows, specialized value names in ordinary expressions,
+and owned repeat-array returns. Value-generic calls now validate a returned
+fixed array from its canonical `(element type, length)` identity instead of
+trying to parse the LLVM SSA name that carries its runtime length. Example 897
+keeps this function-return and mutable-kernel boundary covered.
+
+TLS key-schedule work exposed a separate incremental-compiler defect: skipping
+a reusable function could omit a static-array type used only in its nested body,
+so LLVM drop helpers and the codegen type-universe fingerprint drifted between
+cold and warm builds. Semantic cache schema 8 therefore persists all static
+arrays, not only `[T; N]`. The fresh type table reserves their exact numeric ids
+without advancing normal allocation, materializes a reservation when its shape
+is requested, and restores any remaining body-only shapes before codegen. A
+declaration-universe conflict declines that reservation while retaining
+structural semantic reuse. The Windows/Linux ten-state cache matrix now embeds
+both body-only `[UInt8]` and `[UInt64; 64]` coverage.
+
+TLS handshake framing also exposed that ordinary flow targets accepted only one
+generic argument, so `value -> Result<T, E>.Ok` failed in the parser even though
+the equivalent direct constructor was legal. Standard `Option<T>` and
+`Result<T, E>` variants are now first-class flow targets; the source value
+becomes the first payload argument and the generated grammar table carries the
+same rule.
+
+The pure wire layer now includes QUIC transport-parameter framing and raw TLS
+handshake framing for CRYPTO streams. It recognizes the RFC 9000 base parameter
+ids, RFC 9221 `max_datagram_frame_size`, RFC 9287 `grease_quic_bit`, and TLS
+extension 57 (`quic_transport_parameters`). Windows/Linux fixtures 899 and 900
+cover integer/empty parameter roundtrips and 24-bit handshake plus 16-bit
+extension length boundaries. This is framing infrastructure, not yet a claim of
+a complete authenticated TLS handshake.
+
+ACK frame type 0x02 now carries the RFC 9000 largest-acknowledged, delay,
+first-range, and repeated gap/range pairs. Validation rejects every subtraction
+that would underflow before encoding or accepting decoded state. Fixture 901
+proves a multi-range decode and byte-exact re-encode on Windows and Linux.
+
+That fixture exposed an ownership hole rather than a QUIC algorithm defect.
+An owned enum payload projected from `owner.field -> when` was borrowed, but
+could be wrapped into a second owner and freed twice. Semantic analysis now
+rejects that transfer, while LLVM branch merging excludes borrowed pattern
+payloads from owning-local consistency checks. A complete value-flow expression
+also accepts postfix propagation, so `output! -> appendVarint(value)?` is the
+canonical flat form. The dedicated diagnostic and fixture 901 cover rejection
+and successful move paths respectively.
+
+The first RFC 9002 recovery state is also pure Sollang. `RttState` implements
+the 333 ms initial RTT, minimum/latest tracking, capped application-data ACK
+delay adjustment, 7/8 smoothed RTT, and 3/4 variance update. Loss detection
+uses packet threshold 3 and the 9/8 time threshold with a 1 ms granularity.
+PTO includes ACK delay only for application data and applies checked exponential
+backoff. `CongestionState` implements the RFC initial/minimum windows, excludes
+ACK-only packets from bytes in flight, grows only while congestion-limited,
+tracks recovery by packet send time versus recovery-start time, halves once per
+recovery period, and collapses to two datagrams on persistent congestion.
+Fixture 902 verifies the formulas and NewReno transitions on Windows and Linux.
+
+Writing ACK-only byte accounting exposed a contextual-inference gap: an integer
+field supplied an expected type to its outer addition but not to a nested
+value-form `if`. Expected integer types now recurse through arithmetic operands
+and both `if` branches, preserving inferred numeric style without a redundant
+constructor.
+
+Stream state now decodes the RFC 9000 stream-id initiator, direction, and
+sequence bits and enforces peer-opened bidi/uni limits. Per-stream receive state
+checks offset overflow, stream flow control, immutable final size, and consumed
+byte bounds. Send state enforces monotonic MAX_STREAM_DATA and forbids writes
+after FIN. Connection state independently accounts unique received bytes and
+reserved send bytes against MAX_DATA. Transport failures preserve their exact
+QUIC codes (FLOW_CONTROL_ERROR 0x03, STREAM_LIMIT_ERROR 0x04,
+STREAM_STATE_ERROR 0x05, FINAL_SIZE_ERROR 0x06). Fixture 903 verifies these
+transitions on Windows and Linux.
+
+ACK processing now operates on a mutable sent-packet journal while returning
+immutable recovery summaries. It removes acknowledged and threshold-lost
+packets, retains outstanding packets, samples RTT only from the largest newly
+acknowledged ack-eliciting packet, updates bytes in flight, and applies ACK then
+loss congestion transitions in protocol order. Fixture 904 covers a disjoint
+ACK range, packet-threshold loss, one retained packet, RTT sampling, and the
+resulting congestion window on Windows and Linux.
+
+Removing the head of a dynamic struct array exposed an optimizer/runtime ABI
+gap: LLVM can lower the overlapping shift to the C `memmove` symbol even when
+Sollang source never names libc. The freestanding runtime now defines an
+overlap-safe forward/backward `memmove` alongside its existing `memcpy` and
+`memset`, so optimized collection operations do not gain an undeclared Windows
+dependency.
+
+The existing owned-container `take` fixture then exposed a contextual lowering
+defect. Although `[OwnedValues; ...; ~]` supplied the element type, codegen
+treated `{ values: [...] }` as a dictionary and tried to resolve `values` as a
+runtime binding. Expected struct types now route brace literals through the
+same contextual struct emitter in every function-argument path, and nested
+owned field sources are transferred exactly once. Fixture 401 passes again on
+Windows and Linux without restoring unnecessary mutable result bindings.
+
+TLS 1.3 PSK scheduling now derives the early secret, separate external and
+resumption binder keys, binder Finished MAC, client early traffic secret, early
+exporter secret, and the PSK plus shared-secret handshake schedule. The
+zero-PSK full-handshake API delegates to the same schedule instead of carrying
+a second derivation path. Fixture 905 uses an independent SHA-256/HMAC oracle
+vector and passes with fixture 898 on Windows and Linux.
+
+CRYPTO stream transport now has an offset-addressed pure Sollang reassembly
+buffer. It accepts out-of-order bytes, deduplicates identical overlap, rejects
+conflicting overlap with PROTOCOL_VIOLATION, enforces CRYPTO_BUFFER_EXCEEDED on
+unique buffered bytes, and releases only a contiguous prefix. Its append-only
+send buffer returns stable offsets and slices the same bytes for retransmission.
+Fixture 906 covers all of these transitions on Windows and Linux.
+
+X25519 key agreement now has a pure Sollang RFC 7748 Montgomery-ladder path.
+Field elements use fixed sixteen-limb `UInt64` arrays, multiplication reduces
+with `2^256 = 38 (mod 2^255 - 19)`, inversion uses the fixed `p - 2` exponent,
+and scalar decoding applies the required clamp. Fixture 907 matches the RFC
+7748 Alice public-key vector on Windows and Linux. This is functional protocol
+coverage; the final interoperability gate still includes constant-time review
+of field normalization and a native cryptographic random source.
+
+This implementation uncovered three more expected-type gaps. Mutable scalar
+rebinds now inherit the existing binding type, indexed assignments inherit the
+element/value type, and integer function returns propagate their declared type
+through nested value-form `if` blocks in semantic analysis and LLVM emission.
+Consequently `0 => borrow!`, `9 => basePoint![0]`, and nested literal returns
+remain inferred Sollang rather than accumulating redundant constructors. The
+same warning sweep removed now-redundant constructors in AES-GCM, SHA-256, and
+path normalization.
+
+The external adapter remains only as
+an unshipped comparison path until the complete pure Sollang transport stack
+and interoperability gates pass.
+
+## D308 — Cryptographic entropy is a reachable OS intrinsic, not a PRNG fallback
+
+Pure Sollang X25519 now obtains private-key material through
+`sys.crypto.random.bytes`. The public operation returns an owned dynamic byte
+array or `sys.crypto.random.Error.Unavailable`; it never substitutes the
+deterministic `seedRandom`/`randomBelow` generator. Windows lowers the reachable
+intrinsic to `BCryptGenRandom` with the system-preferred generator, while Linux
+loops over `getrandom` until the requested buffer is full. The helper and the
+Windows bcrypt import library are emitted only when the intrinsic is reachable,
+and browser WASM produces an explicit capability diagnostic.
+
+`x25519.generatePrivateKey` copies exactly 32 cryptographic bytes into a fixed
+array and leaves RFC 7748 clamping to scalar use. Fixture 909 validates actual
+random production and private/public-key sizes on Windows and Linux, while an
+LLVM comparison with fixture 908 proves the CNG declaration and helper are
+absent from programs that do not use the feature.
+
+The first fixture build exposed a general ownership-codegen defect: an owned
+`Result` consumed directly by `when` could call a drop symbol that was never
+emitted because helper discovery inspected named bindings and emitted
+functions, but not every reachable function signature. Drop-helper discovery
+now includes owned inputs and returns for all reachable functions. The fix is
+type-driven and no longer depends on the old network-only exception.
+
+## D309 — TLS handshake messages are strict owned wire values
+
+The pure TLS path now emits and decodes ClientHello, ServerHello, and
+EncryptedExtensions with TLS 1.3, AES-128-GCM-SHA256, X25519, SNI, ALPN,
+signature algorithms, and QUIC transport parameters. Required extensions are
+located with duplicate detection and all nested vector lengths must terminate
+at their enclosing boundary. Fixture 910 matches an independent Python wire
+oracle byte length and checksum and round-trips every negotiated field on
+Windows and Linux.
+
+Certificate, CertificateVerify, and Finished framing is also pure Sollang.
+Single-certificate lists retain owned DER bytes, CertificateVerify preserves
+the selected algorithm and signature, the signature input uses the exact RFC
+9846 context construction, and Finished compares every byte without an early
+exit. Fixture 911 covers each message on both native targets. This is the wire
+and transcript layer, not yet X.509 chain, hostname, or signature-algorithm
+verification; those remain explicit interoperability gates.
+
+Writing these APIs exposed two language/backend gaps. `Result<Unit, E>.Ok`
+previously demanded an impossible explicit Unit payload, so Unit-payload enum
+variants now use member syntax and materialize only their tag. Array-repeat
+literals already inherited slice element types semantically, but codegen lost
+that context and rebuilt `[7; 64]` as an Int array. Function-argument emission
+now lowers repeats with the expected slice element type. X25519 conditional
+swap was also changed from a secret-bit branch to arithmetic selection; field
+normalization still requires the remaining constant-time audit.
+
+## D310 — Aggregate declarations provide initialization and borrow context
+
+Named struct literals now use each field declaration as the complete expected
+type for array literals. An empty `[]` initializer for a declared `[UInt8; ~]`
+field therefore creates that growable byte owner instead of first becoming an
+untyped fixed Int array. Semantic inference and LLVM materialization use the
+same field type, so source code does not repeat a type already present in the
+struct contract.
+
+Mutable-borrow arguments now accept field and index places rooted in a named
+mutable owner. LLVM passes the address of the projected struct or the projected
+container's pointer/length/capacity slots, rather than loading and mutating a
+copy. Fixture 912 exercises both rules through a TLS transcript nested in the
+client state and drives the full ordered server-flight state machine on Windows
+and Linux. The same fixture also retains the direct-call spelling for a
+namespace function when an imported namespace name could be confused with a
+field in value-flow syntax.
+
+## D311 — Module-local name resolution is identical in semantics and reachability
+
+An unqualified call in a named module selects a declaration from that module
+before a same-named declaration in the executable root. Semantic analysis and
+normal LLVM call emission already followed this rule, but reachable-function
+discovery checked the root spelling first. With both declarations present it
+could retain the root definition while emitting a call to the module-qualified
+symbol, leaving a valid program with an undefined LLVM function.
+
+Reachability discovery now applies the same module-first lookup order. User
+function symbols and emission duplicate checks use one canonical
+module-qualified identity, while dead functions remain removable. Fixture 913
+defines same-named root and module functions and proves the distinct `42` and
+`100` results on Windows and Linux. The complete self-host driver, which has
+the same collision for `nativeClangPath`, links again. This is a compiler
+consistency fix discovered while extending pure Sollang QUIC; no standard-
+library workaround or broad keep-all fallback was added.
+
+The new reachability gate also exposed that parallel callback collection still
+walked every declared function. A dead self-host LLVM writer therefore emitted
+a worker callback that called its correctly eliminated helper. Callback
+collection now walks the same reachable user-function set as ordinary emission;
+focused self-host fixture 536 again links and executes.
+
+The same full-suite run exposed a separate test-harness defect: cleanup marked
+directories as ordinary files before recursive deletion. Cleanup now clears
+attributes only on files, retaining directory identity and making repeated Git
+dependency fixture runs deterministic on Windows.
+
+## D312 — Bound UDP sockets expose the kernel-assigned port
+
+QUIC listeners commonly bind port zero so the kernel can choose an available
+ephemeral port, then publish that concrete port to a client. `sys.socket` now
+provides `localPort: UdpSocket -> Result<UInt16, SocketError> uses Network`.
+Windows and Linux lower it to `getsockname`, decode the network-order port, and
+preserve the existing structured socket error contract. The operation is wired
+through semantic validation, effect checking, reachability, managed LLVM
+lowering, and the self-host typed IR/runtime path; it is not a QUIC-specific
+native adapter escape hatch. Fixture 914 binds IPv4 port zero and verifies a
+nonzero assigned port on both native targets.
+
+Implementing reachable-function elimination also revealed that resolved
+instance methods were not recorded as semantic call targets. Reachability could
+therefore discard `Counter.weighted` while LLVM still emitted a call. Instance
+calls now retain their resolved declaration, and lowering restores the implicit
+receiver when consuming that record. Fixture 406 remains the focused regression
+for a method with additional arguments.
+
+## D313 — Stable QUIC support includes authenticated version information
+
+The pure Sollang target is the current stable IETF family: RFC 9000, RFC 9001,
+RFC 9002, QUIC v2 (RFC 9369), compatible version negotiation (RFC 9368), and
+DATAGRAM (RFC 9221). Multipath remains an Internet-Draft as of the standards
+review and is not represented as a completed protocol feature.
+
+`sys.quic.version_negotiation` encodes and strictly decodes RFC 9368 Version
+Information, rejects zero versions and malformed four-byte lists, validates
+that a client includes its chosen version, skips reserved `0x?a?a?a?a`
+versions, and selects the first mutually supported local preference. The
+transport-parameter vocabulary now includes `version_information` at ID 17.
+Fixture 915 checks v1/v2 wire bytes, validation, and v2 selection on Windows
+and Linux. This closes the authenticated negotiation data primitive; packet-
+level Version Negotiation is encoded and decoded by `version_packet`, including
+long-header and zero-version validation, 20-byte connection-ID bounds, a
+nonempty four-byte offered-version list, and RFC 9368 rejection when the list
+contains the client's Original Version. Fixture 916 covers that wire path on
+Windows and Linux. Applying the accepted selection to the live connection
+remains part of the connection state-machine gate.
+
+## D314 — Every callable syntax participates in one resolved-call graph
+
+Property-style readonly methods such as `origin.translated` are executable
+calls, not ordinary field projections. Semantic analysis now records their
+resolved declarations, stable incremental identities index field-access call
+sites, and reachability therefore retains the same function that LLVM lowers.
+This completes the direct-call, value-flow, and property-call consistency fix;
+fixture 43 proves that a computed member remains linked and executable.
+
+Reachability also retains the implicit `Hash` and `Eq` implementations required
+by every reachable dictionary key type. The example harness normalizes only
+generated struct and enum identity numbers in LLVM assertions, leaving types,
+shapes, and operations strict. Deferred interpolation used as an enum Text
+payload is now rejected during semantic analysis with the required Arena
+materialization guidance instead of failing later in code generation.
+
+## D315 — Contextual array inference is uniform across value positions
+
+Struct fields, ordinary function arguments, and the first input of a value-flow
+call now share the contextual value inference contract. Consequently `[7; 16]`
+in a declared `[UInt8; 16]` field and `[3; 32] -> carry` for a
+`[UInt8; 32]` parameter infer UInt8 elements without source-level conversions.
+LLVM uses the same expected type when materializing a value-flow source. The
+general contextual path also preserves dynamic and bounded array ownership and
+capacity rather than returning the temporary fixed literal type. Fixture 918
+covers fixed-repeat inference and aggregate return on Windows and Linux.
+
+`sys.quic.traffic_keys` derives QUIC v1 and v2 packet keys, IVs, and header-
+protection keys from TLS 1.3 traffic secrets and exposes RFC 9846 traffic-secret
+updates. Fixture 917 checks that derivation agrees with the independently
+covered Initial-key schedule for both versions and verifies key update on both
+native targets. This establishes the reusable Handshake/1-RTT key primitive;
+live key-phase transition remains a connection-state-machine gate.
+
+## D316 — TLS server-flight ordering is an explicit state machine
+
+`sys.quic.tls_server_state` is the server-side counterpart to the client
+handshake state. It accepts exactly one complete ClientHello, records the
+ordered ServerHello, EncryptedExtensions, Certificate, CertificateVerify, and
+server Finished flight, then accepts exactly one complete client Finished.
+Every accepted message extends the same transcript and an invalid phase or
+message transitions to `Failed`. Fixture 919 drives the complete ordered flight
+and verifies the transcript byte count on Windows and Linux. This state machine
+enforces TLS 1.3 ordering; certificate-chain, hostname, signature, and Finished
+MAC verification remain separate authentication gates and are not implied by
+the framing transition.
+
+## D317 — Context, specialization, and storage facts survive lowering
+
+Resolved calls are call-site facts, but a syntax node in a generic function can
+be emitted under more than one receiver specialization. Reachability and LLVM
+lowering now resolve an instance method against the current specialized
+receiver before consulting the general resolved-call map. Generic block
+specialization also changes `User` to `UserBlock` only for source-defined
+blocks; intrinsic blocks retain their runtime kind. This prevents one generic
+instantiation from selecting another type's trait implementation and prevents
+`parallel` from being validated as a source block with an absent body.
+
+Contextual value inference now carries the enclosing block's `yield` input type
+through mutable rebind validation. A nested contextual array or aggregate no
+longer loses its control-flow contract merely because the destination is
+mutable. Fixture 585 retains the focused transaction-risk scan for this rule.
+
+Repeated arrays now obey the storage-placement plan. A small unconstrained
+integral repeat bound directly to a local receives an exact Int-sized stack
+slot and lifetime markers, while a repeat beyond the 4096-byte frame budget
+remains heap allocated. Fixture 42 proves both outcomes on Windows and Linux.
+Value-generic fixed-array calls use a runtime array value's explicit
+compile-time length when its nominal static-array definition is unsized;
+fixture 51 covers Int, Text, struct, and owned-struct element specializations.
+LLVM fixture normalization treats generated numeric type identities as opaque
+while preserving value-generic lengths and all asserted operations.
+
+## D318 — SHA-512 remains pure Sollang and numeric context reaches codegen
+
+Ed25519 authentication requires SHA-512, so `sys.crypto.sha512` implements the
+FIPS 180-4 digest in Sollang using fixed UInt64 state and schedule arrays. The
+shared `sys.crypto.bits` module now supplies auditable UInt64 rotate, shift,
+xor, and operations in addition to its UInt32 surface. Fixture 920 verifies the
+empty, `abc`, and 112-byte two-block standard vectors on Windows and Linux.
+
+This work exposed a semantic/codegen disagreement for an arithmetic expression
+whose expected type is known. Semantic analysis accepted the full-width UInt64
+literal in `18_446_744_073_709_551_615 - value`, but LLVM emission tried to
+parse the left operand as signed Int64 before using the UInt64 return context.
+Contextual numeric lowering now passes the expected type recursively to both
+operands for addition, subtraction, multiplication, division, and modulo. The
+source therefore keeps the inferred literal and does not add a redundant
+`UInt64(...)` workaround.
+
+## D319 — Ed25519 is pure Sollang and inline names have lexical storage
+
+`sys.crypto.ed25519` implements RFC 8032 signing, public-key derivation, and
+verification in Sollang over the shared `sys.crypto.field25519` arithmetic and
+pure `sys.crypto.sha512`. Fixed-size keys, scalars, points, and signatures stay
+fixed arrays; no Rust or native cryptographic adapter is introduced. Fixture
+921 checks RFC 8032 test vectors 1 and 2, including the nonempty-message case,
+while fixture 920 also checks SHA-512 over the first vector's 32-byte seed. Both
+execute on Windows and Linux.
+
+The implementation exposed two compiler ownership defects. Binding an explicit
+`move` function input directly to a local is an ownership transfer, so semantic
+analysis and LLVM lowering now invalidate the source parameter consistently.
+Separately, inline lowering previously retained caller slot metadata when a
+callee parameter or local reused the same spelling. A caller `destination`
+struct slot could therefore reinterpret a callee `destination: mut [UInt64;
+16]` as a struct, and an ordinary local such as `output!` could collide with a
+caller's local. Inline parameters and bindings now replace every name-keyed
+local, mutable, borrow, and slot fact for the callee scope; restoring the saved
+scope reinstates the caller facts. Fixture 922 is the focused storage-shadowing
+regression, and fixture 923 separately proves direct `move`-input transfer on
+both native targets.
+
+## D320 — TLS authentication transitions require cryptographic proof
+
+The client and server TLS state machines no longer treat a correctly framed
+CertificateVerify or Finished message as authenticated. `tls_auth` now signs
+and verifies the RFC 9846 CertificateVerify input with pure Sollang Ed25519 and
+requires signature scheme `0x0807`. The client pinned-key path hashes the
+transcript before CertificateVerify, verifies the received signature, and only
+then appends the message. The server constructs its CertificateVerify from the
+same transcript point rather than accepting arbitrary outbound bytes. Received
+Finished messages likewise advance only when all 32 expected verify_data bytes
+match. A parse, signature, verify-data, or phase failure moves the state to
+`Failed` before returning its TLS alert.
+
+Because this cipher suite fixes the signed-input length at 130 bytes, the
+context builder now returns `[UInt8; 130]` and fills it in place. The previous
+growable `push` construction was unnecessary runtime state and weakened the
+protocol contract. Fixture 925 checks the exact fixed layout. Its local repeat
+uses `UInt8(0)` because no initializer context exists at that binding; unlike a
+constructor repeated in a
+typed argument, field, or return, this constructor establishes the element type
+and is not redundant.
+
+This probe also confirmed a broader compiler limitation: the native ABI returns
+fixed arrays through the current pointer/length aggregate, so a non-static fixed
+array that escapes a function is heap-backed to preserve its lifetime. Removing
+that allocation correctly requires a caller-provided return slot across normal,
+inline, generic, self-host, and cached call paths; it must not be disguised by a
+stdlib helper or a dangling stack pointer. That ABI change remains an explicit
+compiler optimization gate rather than a false no-allocation claim here.
+
+Fixtures 912 and 919 now traverse those authenticated APIs on Windows and
+Linux. Fixture 924 flips one signature bit and requires TLS decrypt_error 51
+with a non-connected client, preventing a future framing-only regression.
+This establishes explicit Ed25519 key-possession authentication for a pinned
+peer certificate. It does not claim X.509 path building, certificate validity,
+server name verification, revocation handling, or a constant-time proof; those remain
+production-hardening gates for broader WebPKI deployment; they are not a reason
+to retain an unused foreign QUIC implementation or deployment fallback.
+
+## D321 — The TLS authority is RFC 9846
+
+RFC 9846, published in July 2026, obsoletes RFC 8446 and is the normative TLS
+1.3 reference for the pure QUIC path. The implemented SHA-256
+CertificateVerify construction, Ed25519 scheme value, decrypt_error behavior,
+Finished HMAC shape, traffic-secret update label, and TLS wire version remain
+compatible with the replacement specification. Documentation now names RFC
+9846 so future protocol work is reviewed against the current standard rather
+than its superseded predecessor.
+
+This standards refresh does not by itself complete TLS interoperability. The
+remaining gates still include certificate-list handling beyond one entry,
+negotiated X.509 or RawPublicKey type, trust-path and hostname validation,
+HelloRetryRequest, complete Finished-key state integration, and the
+constant-time audit.
+
+## D322 — Exact certificate pinning binds Certificate to CertificateVerify
+
+The client no longer accepts a public key supplied separately from the TLS
+Certificate message. `sys.quic.x509_ed25519` compares the complete pinned DER
+value, parses definite-length DER with minimal length encodings and strict
+bounds, walks the RFC 5280 Certificate/TBSCertificate structure, and extracts
+only an RFC 8410 Ed25519 SubjectPublicKeyInfo. The algorithm identifier must
+contain exactly OID `1.3.101.112`; parameters, including an explicit NULL, are
+rejected. The pinned server certificate must also contain a subjectAltName
+dNSName that exactly matches the requested name under ASCII case folding. The
+following CertificateVerify transition reads only the key stored by that
+certificate transition. Fixture 912 uses a deterministic independently
+generated Ed25519 certificate, completes the authenticated client flight, and
+requires TLS unrecognized_name 112 for a mismatched name.
+
+Exact DER pinning is the trust decision, so the pinned leaf/root's own
+signature algorithm need not equal its subject public-key algorithm and its
+self-signature is not redundantly treated as path validation. TLS
+CertificateVerify proves possession of the extracted private key. General
+WebPKI path construction, validity, wildcard/IP/IDNA service identity, and
+revocation checks remain a separate required gate.
+
+This integration exposed an LLVM ownership bug rather than a TLS defect. An
+owned `when` payload stored into a struct field was removed from the arm local,
+but the enum-subject cleanup analysis did not classify field assignment as a
+transfer. It consequently freed the new field storage after the arm and caused
+use-after-free/double-free behavior. Transfer analysis now covers bindings,
+field assignments, indexed assignments, and returns. Fixture 927 retains the
+minimal `Result<[UInt8; 32], E>` payload-to-field case, while fixture 926 checks
+independently generated Ed25519 signing and verification over a 206-byte
+multi-block certificate payload.
+
+## D323 — Initial packet integration consumes projected owners exactly once
+
+`sys.quic.initial_engine` is the first integrated pure-Sollang wire engine. It
+encodes a TLS ClientHello in an offset-zero CRYPTO frame, pads the client
+Initial datagram to at least 1200 bytes, derives client/server Initial keys from
+the original destination connection ID, and validates the inverse server
+flight. Fixture 929 proves this v2 packet roundtrip in memory. Fixture 933 binds
+two kernel-assigned UDP ports and proves the same datagrams across real sockets
+on Windows and Linux. This does not claim a complete handshake or independent
+endpoint interoperability.
+
+The integration exposed two compiler ownership defects. First, a fresh owned
+enum constructor could not flow directly into a `move` input even though it had
+no competing owner. Second, an owned enum payload field transferred into a
+returned aggregate was still freed through either the enum subject or its
+containing struct. Flow analysis now accepts fresh owned creation at an
+immediate move boundary. LLVM transfer analysis carries the payload's known
+type, recognizes owned field projections, consumes a projected root owner,
+drops untransferred sibling fields, and normalizes outer-owner consumption over
+all enum branches. Fixtures 930-932 retain the three minimal regressions.
+
+## D324 — Failure-only conditionals use `unless`
+
+Sollang now expresses a validation guard as
+`condition -> unless { failure }`. The parser lowers this surface directly to a
+negated statement-form conditional, so it adds no runtime construct and cannot
+grow an `else` branch. S004 reports the previous
+`condition -> if {} else { failure }` spelling because its empty success block
+hides the actual action and adds needless nesting.
+
+The source-tree audit converted 277 occurrences across the standard library,
+self-hosted compiler, examples, and test fixtures. Fixture 934 proves both
+executed and skipped `unless` paths. Fixture 935 is the sole intentional legacy
+spelling and pins S004. Fixtures 936 and 937 additionally pin Stage 2 execution
+and the self-host AST/typed-IR marker (`operatorKind = -28`), so the bootstrap
+compiler and self-host compiler cannot silently disagree about the inverse
+branch.
+
+The audit also exposed a readonly type-classification helper that wrapped two
+owned arrays in a temporary request struct. Constructing that wrapper moved the
+arrays even though classification only reads them, invalidating the original
+resolution result. The helper now accepts the arrays directly as readonly
+inputs. This keeps ownership in the caller and removes an unnecessary aggregate
+whose shape did not express the operation's actual contract.
+
+## D325 — Handshake and 1-RTT packet protection remain pure Sollang
+
+`sys.quic.handshake_engine` now seals and opens v1/v2 Handshake packets from
+TLS handshake traffic secrets. `sys.quic.application_engine` seals and opens
+1-RTT short-header packets, validates the destination connection ID and
+reserved bits, carries STREAM and DATAGRAM frames, and accepts a peer key-phase
+transition only after the packet authenticates with the next TLS `traffic upd`
+secret. The frame layer also encodes and decodes transport/application
+CONNECTION_CLOSE and HANDSHAKE_DONE. Fixtures 938-944 retain these protocol and
+ownership paths on Windows and Linux.
+
+The shared frame layer also carries MAX_DATA, MAX_STREAM_DATA, MAX_STREAMS,
+DATA_BLOCKED, STREAM_DATA_BLOCKED, and STREAMS_BLOCKED. Fixture 945 retains all
+six varint roundtrips and the directional stream-limit discriminator.
+Fixtures 948 and 949 retain ordered multi-frame codec and authenticated 1-RTT
+packet roundtrips.
+
+This integration exposed two compiler defects and did not add source-level
+workarounds. Dynamic-array function bodies were lowering array literals without
+the declared return-type context, which could select the wrong element layout.
+Function emission now supplies that context. Separately, a payloadless enum
+variant was rejected as a non-fresh owned value merely because another variant
+of the same enum owns storage. Semantic creation analysis now classifies the
+payloadless variant expression itself as fresh. Fixtures 941 and 944 pin the
+natural source spellings without redundant numeric constructors or helper
+owners.
+
+The flow-control additions exposed two more contextual control-flow defects.
+A numeric function parameter did not pass its expected type through a value-form
+`if`, and a function's declared return type did not reach an explicit return
+expression. In addition, semantic branch unification incorrectly treated a
+terminating `return` arm as a joining Unit-valued arm. Expected-type propagation
+now covers both call arguments and explicit returns; value-form `if`/`when` and
+enum matches unify only branches that reach the join. Codegen returns the sole
+surviving branch value without fabricating a phi predecessor. Fixtures 946 and
+947 retain these compiler contracts.
+
+Multi-frame decoding exposed a projected-owner transfer defect. Moving an owned
+struct field into a growable collection copied its runtime representation but
+left the root struct live, causing double cleanup. Collection transfer analysis
+now consumes the projected root, drops only untransferred owned siblings, and
+rejects later use of that root during semantic analysis. A mutable struct's
+dynamic-array field is also a first-class mutable place for `take`; codegen
+stores the shortened container representation back into that field. Fixture
+948 and its diagnostic retain field-to-collection transfer, while fixture 950
+retains projected mutable `take` independently of QUIC.
+
+This decision completes packet-protection slices, not a complete connection.
+Independent endpoint interoperability, coalesced datagram packet handling,
+ACK and recovery integration, flow control, handshake confirmation, and key
+discard remain gates before the legacy native adapter can be removed.
+
+## D326 — Readonly aggregate slots are refreshed at every borrow site
+
+An immutable aggregate binding can be created inside a loop and borrowed from
+different control-flow arms. LLVM may reuse one alloca for the borrow ABI, but
+the alloca is only storage identity: it is not a cached value. The emitter now
+stores the current SSA aggregate into that slot at every borrow site. A lazy
+materialization first emitted in one arm therefore cannot leave a sibling arm
+or the next loop iteration observing stale owned fields.
+
+The defect surfaced when `sollang.compiler.source_root.discover` made its
+per-entry `Path` immutable as required by S002. The first file arm initialized
+the readonly slot, while the directory arm reused the previous file name and
+queued the wrong path. The compiler was fixed instead of restoring unnecessary
+mutability. Fixture 952 is the minimal branch-and-loop regression; fixture 428
+proves deterministic recursive discovery with immutable `Path` bindings on
+Windows and Linux.
+
+## D327 — Fixed-length style analysis respects conditional control flow
+
+S003 is emitted only when every counted growable-array append is executed in
+straight-line code. An append inside `if`, `unless`, `when`, or a loop makes the
+final length path-dependent, even when the compiler can count a maximum number
+of append sites. The semantic compiler tracks conditional depth as well as loop
+depth and suppresses S003 for such candidates. Regression fixture 953 protects
+the conditional case; standard-library literals with an unconditional known
+length use inferred fixed-array syntax.
+
+## D328 — Intrinsic calls preserve ordinary argument context
+
+Runtime intrinsics are not a separate source-language type system. Their LLVM
+lowering must emit each argument with the bound parameter's expected type, just
+as an ordinary function call does. Secure random byte counts therefore infer
+`UIntSize` from `random.bytes(8)` without a redundant constructor. Fixture 955
+guards both native targets.
+
+## D329 — Fixed Int array assignment uses the declared i32 layout
+
+The canonical `Int` representation is i32. Static `Int` array slots are
+`[N x i32]`, so indexed assignment stores i32 with alignment 4; the previous
+i64/alignment-8 store produced invalid LLVM and could not be repaired in
+Sollang source. Fixture 956 guards mutation and execution on Windows and Linux.
+
+## D330 — Projected result returns preserve the field and drop its siblings
+
+An owned field returned through an owning enum constructor transfers out of
+its source struct. Function cleanup must therefore preserve that field while
+still dropping every other owned field in the source. Treating the returned
+field as an ordinary copy frees it before the caller receives it; treating the
+whole struct as transferred avoids the crash but leaks its siblings. The LLVM
+emitter now resolves the local owner through nested enum and struct result
+constructors, excludes the transferred field from cleanup, and emits drop glue
+for the remaining fields. Explicit and final-expression returns use the same
+rule, including inline and async function lowering.
+
+The defect was isolated from the pure Sollang QUIC server: `receivePacket` put
+`received.bytes` into `Result.Ok`, then function cleanup dropped the entire UDP
+datagram. `sys.quic.receive` later dropped the returned byte owner again.
+Fixture 970 is the minimal two-field regression. Fixtures 927, 932, 963, 967,
+and 970 execute on Windows and Linux, and the real aioquic 1.3.0 roundtrip now
+completes for QUIC v1 and v2 on both targets without a native QUIC adapter.
+
+## D331 — Future-risk patterns become contract-aware Snnn diagnostics
+
+Sollang treats a deterministic, compiler-provable pattern that is safe enough
+to run today but is likely to become a correctness, ownership, portability,
+maintainability, or performance defect as a candidate for a stable Snnn
+diagnostic. Such a diagnostic requires positive and negative regression
+fixtures, a rewrite that is valid under the current type and ownership
+contracts, cleanup of ordinary Sollang sources, and warning-free standard
+library, self-host, and release builds. Speculative heuristics and warnings
+whose advice does not compile are rejected.
+
+Mutable-binding analysis now tracks declaration identity across lexical scopes
+and keeps a function statement body's declarations active through its final
+expression. This removes false S002 reports for mutations inside a trailing
+`if` or loop while preserving independent warnings for same-named declarations
+in different scopes (fixtures 973 and 974). S005 covers never-mutated bindings
+whose immutable spelling would be reserved (fixture 972).
+
+S003 now records when a fixed-length growable candidate flows into a parameter
+whose contract explicitly requires a growable array. In that case no fixed
+array warning is emitted because the suggested replacement would fail type
+checking (fixture 975). The 145-source self-host compiler graph is required to
+compile with zero Snnn warnings after these rules are applied.
+
+## D332 — Reachability and affine flow cleanup are syntax-complete
+
+Conditional runtime emission walks every reachable call-site form, including
+`TypeApplicationExpression`. A reached intrinsic is recorded even though it has
+no Sollang body, and capability-specific state such as directory traversal is
+set before that early return. This keeps unused stdlib modules excluded without
+allowing a reachable async-file helper or directory nominal type to disappear.
+
+Affine flow consumption is determined by the whole flow rather than only its
+last resolved target. Therefore `task -> await -> describe` removes the task
+owner before lexical cleanup; the generated program cannot join and release the
+same control record a second time. LLVM stack-lifetime hints are emitted only
+in unterminated blocks. Fixtures 261, 263, 266, 268, 270, 425, and 764 retain
+the missing-helper, double-release, capability-type, and post-terminator IR
+regressions. The Windows fast suite passes 1000/1000 with zero unexpected Snnn
+warnings after these invariants are applied. The Linux fast suite passes
+999/999 with zero unexpected or emitted Snnn warnings; target-specific source
+roots and stdout snapshots protect the Linux self-host lowering path.
+
+The incremental semantic cache also treats the syntactic call target as part of
+the stable call-site identity. An ordinal alone is insufficient because a
+target-specific root can replace `llvm.emit` with `llvm.emitLinux` while
+retaining the same traversal position. Path and generic/value arguments now
+prevent restoration of a stale resolved target in that case.
+
+Codegen module fragments independently key the exact reachable function set.
+This is required even when the imported module source is unchanged: changing
+only the executable root can make a different function in that module
+reachable. Reusing a fragment with the old emission set would otherwise leave
+a resolved call with no LLVM definition.
+
+## D333 — Mutable fixed arrays retain inferred shape through LLVM mutation
+
+A mutable binding permits element replacement; it does not make the array
+length dynamic. The self-host semantic pass now uses the first independently
+typed numeric element as context for later bare numeric literals, so
+`[UInt64(11), 22, 33] => values!` produces the canonical `[UInt64; 3]` type.
+Typed-IR repair restores either the growable or exact fixed identity from the
+lowered direct operand chain. Indexed assignment derives the aggregate ABI from the binding instead
+of hard-coding `%sollang.array.i32`, preserving `{ ptr, i64 }` fixed-array
+storage. Fixture 976 executes the mutation and guards the generated LLVM.
+
+S006 is the corresponding blocking compiler-integrity diagnostic. The C# LLVM
+emitter rejects `alloca`, `load`, or `store` with `void`, and checked self-host
+emission rejects a non-empty array IR node without a canonical type before LLVM
+text is produced. S006 identifies a compiler contract defect and must trigger a
+compiler fix rather than a source workaround.
+
+## D334 — Fixed repeats parse first and checked files reject before lowering
+
+`[value; N]` is a canonical fixed-repeat expression, not a special case to be
+rewritten as runtime pushes. The previous `ArrayItems` alternatives placed the
+direct repeat after two comma-list branches. The reference parser accepted the
+form, but the generated self-host parser could consume the first expression,
+fail at `N`, and expose only a recovered prefix AST. The canonical grammar now
+tries the direct repeat first, and fixture 979 pins parser acceptance.
+
+File-backed checked emission previously skipped the syntax gate and prepared
+semantics from that recovered prefix. This converted a parser divergence into
+unrelated interpolation and Typed-IR failures much later. Windows, Linux, and
+selected-test checked entrypoints now emit syntax diagnostics and return before
+semantic preparation. Fixture 980 proves the fail-fast path. With the complete
+AST restored, interpolation ownership is resolved by AST ancestry instead of
+assuming a named function's declaration span covers its body; fixture 978 pins
+the real `cli_grammar.slg` mutable `program!` reference.
+
+## D335 — Lowered operands own array identity and control stores reuse parameter SSA
+
+Expression inference can encounter a nested literal before the direct value of
+an array element. In `[arguments[0], 0 -> targetMode, selectedRoot!; ~]`, the
+integer argument to `targetMode` must not become the array's element anchor.
+Typed-IR lowering now rebuilds every non-empty literal's canonical collection
+identity from its first lowered direct operand. Fixture 982 pins that contract.
+
+The LLVM control-region mutable-store path previously printed every nonliteral
+RHS as `%v<ir-index>`. Function parameters have signature-owned names (`%arg`,
+`%arg1`, ...), so assigning a parameter to a mutable local could reference an
+undefined SSA value and then corrupt downstream type selection. The path now
+uses the shared parameter-reference writer; fixture 981 validates and executes
+the Text-array case.
+
+S007 is the fail-fast compiler-integrity diagnostic for a non-empty array whose
+canonical element type disagrees with its first lowered operand. Such a program
+may appear to work while all array handles share the same header layout, but
+indexed access, ownership, drop behavior, or a later ABI specialization will
+diverge. S007 is never a request to widen or annotate valid source; it requires
+a compiler repair.
+
+The same rule applies to scalar widths. In `UInt16(value) / 16`, the bare
+divisor now inherits UInt16 from the independently typed left operand before
+the final canonical projection. S008 rejects an arithmetic node when its
+semantic result width differs from the width the LLVM emitter will select from
+its operands. Fixture 983 pins `udiv i16`, assembly, and execution; fixture 984
+pins the matching function result, call result, and binary operand identities.
+The entry, function, and control print paths also widen UInt8/UInt16 call
+results before invoking the i32 runtime print ABI.
+
+Mutable slot versions keep the first declaration's canonical type through the
+final operator boundary. Arithmetic identities are then stabilized to a fixed
+point because a parent operator can precede a nested operand in the flat IR;
+the wider canonical integer operand determines the result identity. Fixtures
+985 and 986 pin the reduced and real `stdlib/sys/directory.slg` UIntSize cases,
+and fixture 987 covers platform-size, UInt64 hash, and UInt8-to-Int promotion.
+
+An immutable binding may directly alias a function parameter. Parameter names
+do not define standalone `%v` values, so the binding initializer must use the
+shared `%arg`/`%argN` writer. S009 rejects unresolved scalar alias sources that
+match neither a binding nor an owning-function parameter, and fixture 989
+validates, assembles, and executes the supported parameter-alias path.
+
+LLVM numeric literals are normalized at the backend boundary, so source digit
+separators never reach `llvm-as`; fixture 990 retains binding, arithmetic, and
+return emission. Resolved integer call arguments are promoted or truncated to
+the target parameter width before the call, and fixture 991 proves the
+platform-size promotion path. A contextual integer return literal has no SSA
+producer to convert: it is emitted directly with the declared return type.
+Fixture 992 retains the `UInt64` return of bare `0` and rejects the former
+undefined `%v` conversion source.
+
+Stage2 fingerprint parity then exposed a scope-specific inverse-guard defect:
+entry and nested direct-condition paths honored `unless`, while named-function
+lowering treated it as `if`; named-function and nested short-circuit paths had
+the same latent risk. All three emitter scopes now share one branch-target
+contract for direct and short-circuit conditions. S010 rejects any AST/Typed-IR
+inverse-guard identity mismatch, and fixture 993 executes direct,
+short-circuit, and nested `unless` cases inside a named function.
+
+The next complete stdlib source-root pass exposed an independent generated
+grammar omission: type annotations accepted `[T; Identifier]` and
+`[T; <= Number]` but had lost ordinary `[T; Number]`. The reference parser hid
+the defect until the self-host parser loaded protocol-sized stdlib fields.
+The canonical grammar and generated table again include the numeric fixed
+length, with existing self-host fixed-array fixtures retaining the contract.
+The same source-root probe exposed stale parenthesized-call productions. The
+generated grammar now accepts leading, trailing, and post-comma newlines for
+ordinary calls, type-application calls, and enum constructors, matching the
+reference parser and the documented multiline-call contract.
+
+The stdlib QUIC source also proved that the Typed-IR invariant validator must
+not classify every `SubjectWhenCondition` wrapper as an enum pattern. Numeric
+and relational arms use that wrapper too. Enum identity now requires its direct
+kind-59 `EnumPattern` child; S011 is reserved for the real defect where such a
+pattern does not lower to an enum-constructor operand. Fixture 994 keeps enum,
+equality, and relational subject arms in one parser/lowering regression.
+
+Nested enum payloads exposed the corresponding producer defect: a member such
+as `parameter.id` could be lowered outside the nested subject-control slice,
+leaving the control without its comparison value and every arm one-sided.
+Final Typed-IR projection now recovers the nearest preceding canonical integer
+sibling in the same block before the subject target. S012 blocks any future missing subject.
+The emitter's value-use analysis also follows a block-tail result only when the
+block itself is consumed; structural arm/body links cannot force an unused
+nested control to materialize a result. Fixture 994 includes both the nested
+payload-member shape and the statement-valued nested control.
+
+The complete source root then showed that a valid relational arm may be absent
+from the control's first-arm sibling chain after nested region planning. Final
+projection now canonicalizes every non-enum kind-70 subject condition from its
+arm-to-control IR parentage. S013 rejects any remaining one-sided relational
+arm without conflating it with S011 enum patterns.
+
+Missing member bases are now reported as S014 instead of a backend invariant
+number. A field's resolved type cannot substitute for its base-value identity;
+the producer must preserve the exact parameter, local, or pattern payload
+origin before LLVM lowering. For an enum arm, final projection follows the
+member-to-arm parent chain and reconnects only to that arm's unique kind-29
+pattern binding, avoiding both name matching and compatible-type guesses.
+
+Ordinary binary nodes with a missing right operand are reported as S015. The
+final projection must preserve both direct expression children and order them
+by their AST positions; LLVM emission never guesses a second value.
+For a nested two-argument call, a first argument retained as the exact
+same-parent continuation predecessor is authoritative structural evidence and
+is reconnected before S015 validation. A direct same-parent continuation may
+likewise restore the right value; type compatibility alone is never used.
+
+Conditional nodes with a missing condition operand are reported as S016. A
+present then/else region is not enough to infer the condition safely, and
+silently omitting the conditional would turn a valid build into incorrect
+runtime behavior. Pipeline condition recovery is allowed only from the exact
+same-parent continuation predecessor that targets the conditional node.
+
+Member bases whose canonical nominal owner cannot map to a source module are
+reported as S017. Region member emission now unwraps readonly references and
+uses the recursive semantic `typeId` owner before consulting legacy
+origin/module fields; this prevents imported projections from turning stale
+module metadata into an unchecked source-range index. A missing or non-nominal
+canonical base type also triggers S017 instead of falling back to legacy owner
+metadata.
+
+Pattern and imported nominal bindings may bridge into recursive semantic types
+only when their complete legacy `(origin, module, symbol)` identity has exactly
+one canonical match. That match publishes `typeId`; absent or ambiguous matches
+remain S017 failures rather than backend guesses.
+
+Enum match lowering now rejects a missing or non-enum canonical subject as
+S018 before LLVM emission. This intentionally catches pipelines where an
+intermediate operation such as `take` is omitted or a provisional container or
+owner name is selected as the match subject; backend tag/payload extraction may
+not guess through that producer defect.
+
+Value-producing enum matches require every arm to retain a canonical result
+value. Missing arm results are reported as S019 before LLVM emission instead of
+surfacing as an undefined `%vN` reference or a backend bounds trap.
+
+Enum match subjects that are name nodes must resolve to a same-module parameter
+ABI value or retain a concrete producer link. S020 blocks
+typed-but-unmaterialized names; module-local symbol ordinals cannot alias a
+parameter from another module.
+
+Return, declaration, control-transfer, and region nodes cannot serve as enum
+subjects even when contextual typing has copied an enum type onto them. S021
+blocks these non-materialized nodes, and match selection prefers the actual
+call, constructor, member, index, or value-producing control result at the same
+AST position.
+
+A value-producing enum match has one canonical result slot type from its
+declared function or enclosing value context. S022 rejects an arm whose final
+result type differs from that slot. In particular, a flow such as
+`packet -> Result<T, E>.Ok` contributes the Result constructor, not the initial
+`packet` payload, as the arm result.
+
+A value-producing enum match arm cannot end at a transparent parser wrapper:
+that wrapper has no LLVM SSA definition even when contextual typing looks
+correct. S023 rejects this form. Final arm selection preserves an existing
+canonical result such as a short-circuit logical join, unwraps transparent
+flow wrappers to their concrete producer, and searches for another producer
+only when the existing result type is incompatible. The CST-backed self-host
+path also mirrors the surface parser's standard generic enum flow rewrite, so
+`value -> Option<T>.Some` and `value -> Result<T, E>.Ok` are constructors.
+
+A value-producing `if` must retain concrete values in both branch regions.
+S024 blocks a missing then/else result before `regionResultValueIndex` can turn
+the malformed control graph into an out-of-bounds compiler crash.
+
+All value-producing control result stores retain a final S025 boundary check.
+An invalid source index is reported with the control and branch identity; the
+emitter must never turn malformed Typed IR into a process-level bounds crash.
+
+Enum payload binding repair is not limited to missing type ids. S026 compares
+the binding with the exact matched variant payload and rejects stale
+non-negative identities, including fixed-array values misidentified as slice
+headers.
+
+Contextual collection typing includes fixed and bounded arrays, not only
+growable arrays. S027 enforces exact function-return shapes, and S028 enforces
+the same contract for nominal struct fields before LLVM selects inline storage
+or a header carrier.
+
+A fixed repeat literal has one lowered seed operand but `N` static elements.
+Expression type interning and final Typed IR both read the source repeat count;
+S029 blocks any later pass that collapses `[value; N]` to `[T; 1]`. A terminal
+try binding owns the success payload even though its call operand remains a
+`Result`; S030 prevents final synchronization from restoring that wrapper.
+Enum payload typing can settle after the primary member pass, so nominal member
+projection runs again at the final boundary and S031 rejects any remaining
+field-bearing dotted member without a canonical field type.
+
+Fixed arrays were previously omitted from the shared array-element query, so
+an otherwise valid index assignment could emit `getelementptr void` and `store
+void`. S032 now guards that emitter boundary, and the shared query includes
+kind 4. Repeat literal emission also uses the canonical fixed length for
+allocation, replicated stores, and the runtime length field; using the one
+lowered seed operand would under-allocate and corrupt memory.
+The same failure exposed a legacy owner lookup that replaced a valid nominal
+struct `typeId` with the last coordinate-equivalent duplicate. Struct emission
+now treats the canonical id as authoritative and uses legacy lookup only when
+the id is absent, allowing fixed fields to materialize their carrier into
+inline storage deterministically.
+S033 makes the duplicate-owner condition a blocking Typed IR invariant rather
+than waiting for an LLVM `insertvalue` carrier/inline mismatch.
+S034 also guards final field lookup. The emitter matches
+`NominalField.ordinal` directly; incrementing an encounter-order counter is
+invalid once field tables from multiple nominal declarations are interleaved.
+The control-region emitter is an independent lowering boundary and must obey
+the same contract. It now preserves a canonical owner id, resolves explicit
+field ordinals, materializes fixed-array carriers into inline storage, and
+reports S035 if canonical field resolution fails instead of emitting invalid
+LLVM that happens to survive frontend execution.
+The fixed-array call mismatch was rooted one boundary earlier: aggregate
+storage is inline, while every fixed-array expression uses the borrowed
+`{ptr, len}` carrier. Member projection now constructs that carrier from the
+field address and canonical static length. S036 rejects malformed fixed-array
+metadata there instead of teaching call sites to compensate for invalid SSA.
+Region termination is transitive through a terminal enum match when every arm
+returns. The enclosing match must not select and re-emit one nested arm's
+constructor as a merge value. S037 guards that SSA-uniqueness boundary.
+The `?` success path previously loaded inline fixed-array payload storage into
+an SSA value whose language ABI is `{ptr, len}`. It now constructs the carrier
+from the payload address; S038 guards the required static shape metadata.
+Slice literals were previously excluded from array-literal emission, so an
+empty slice used as a call argument referenced an undefined SSA name. Slice,
+fixed, and growable literals now share allocation lowering while retaining
+their distinct carriers; S039 guards an unclassified empty literal.
+
+Value-position compile-time generics now lower to hidden trailing `Int` ABI
+parameters. A call's numeric generic tokens supply those parameters, allowing
+one body to serve `fill<12>`, `fill<16>`, and other fixed lengths. The shared
+interpolation/name resolver treats value generics as function-scoped values so
+loop and control expressions reference the hidden parameter rather than an
+undefined temporary. `%sollang.mutable_container` is emitted when a mutable
+container parameter actually uses that carrier, independently of whether the
+module also contains a dynamic-array value. Mutable fixed arrays instead pass
+their canonical `{ ptr, i64 }` value by pointer: inventing a capacity address
+for a two-field value would make the call ABI structurally invalid.
+
+Contextual empty arrays exposed one more stale production: the generated
+grammar required either typed-empty or non-empty array contents even though
+semantic analysis already supports `[]` from return, argument, and field
+context. The array body is now optional, so parsing no longer preempts the
+existing contextual fixed/growable/static-array inference.
+Flow-target calls now share the parenthesized newline production as well. An
+initial enum-pattern alternative reorder was insufficient because all forms
+share an identifier prefix. Subject patterns are now a single `Path`
+plus optional payload binder, while non-subject `when` conditions stay logical
+expressions. This removes prefix commitment without weakening predicate arms.
+The final stdlib parse failure was another prefix-commit case: the dedicated
+control-flow statement production accepted the leading `if` but not its
+trailing pipeline. It now carries the full continuation target set and `?`, so
+value-form control expressions can continue through ordinary flow targets.
+Nested `take(0) -> when` then exposed the parallel ambiguity in the generic
+block-function statement. That alternative now rejects control keywords before
+consuming its path, matching the reference parser and preserving the intended
+FlowExpression parse for subject dispatch.
+Because a preceding `take(...)` stream-slice stage could still commit the whole
+block alternative, statement ordering now tries ordinary expressions before
+block callbacks. Callback syntax remains unambiguous at its `{`, while
+multi-stage control pipelines no longer enter the block parser first.
+
+## 2026-08-16: reject self-referential subject-when IR
+
+A subject-style `when` may temporarily use its own control index as an
+unresolved subject sentinel while Typed IR is assembled. Treating only a
+negative operand as unresolved allowed that sentinel to survive and generated
+comparisons against an undefined `%vN`. Final Typed IR canonicalization now
+repairs both missing and self-referential subjects from the exact preceding
+same-region integer producer. S040 guards the LLVM boundary so this latent IR
+cycle is reported as a compiler-integrity defect instead of being hidden by an
+emitter workaround.
+Subject-arm repair also runs when a comparison already has two operands: an
+earlier pass may have copied the temporary control sentinel before the control
+subject was finalized. The right operand is shifted only when absent, while
+the left is always synchronized to the control's canonical subject. S013 now
+checks that exact identity rather than treating any in-range left operand as
+valid.
+Because final flow-wrapper resolution can replace the control subject after
+the earlier repair, subject-arm synchronization runs after that resolution as
+the authoritative final pass. This ordering makes the invariant stable instead
+of repeatedly patching individual emitter paths.
+
+## 2026-08-16: preserve ownership context through flow sources
+
+`mutableCall(owner!) -> next` first infers the call as the source of a flow.
+That boundary previously omitted the active mutable-binding set, causing a
+correct owner to be rejected only when the call result had a following target.
+Flow-source inference now carries the same ownership context as ordinary call
+inference. Regression 998 fixes this distinction, while resolved container
+intrinsics are recorded by target identity so later consumption analysis
+cannot reinterpret an intrinsic `push` as a same-named moving function.
+
+All LLVM integer literal emission now routes through `writeIntegerLiteral`.
+This includes range bounds, capacities, indices, dictionary keys and values,
+interpolation roots, control regions, and loop conditions. Copying raw token
+text was invalid because Sollang permits digit separators that LLVM does not;
+boolean hash and index operands are normalized to `1` or `0` at the same
+boundary.
+
+## 2026-08-17: align native parser and final Typed IR storage contracts
+
+The canonical enum-pattern grammar now accepts qualified generic standard-enum
+patterns such as `Option<Text>.Some(value)` and `Result<Int, Text>.Err(error)`,
+matching the C# bootstrap parser. The generated grammar table remains the
+native parser's single source of truth.
+
+Final Typed IR now synchronizes control-valued immutable aliases, limits
+mutable-slot root repair to mutable bindings, resolves arithmetic types through
+transparent integer wrappers, and confines operand discovery to the current
+function range. S041 through S044 guard producer/storage disagreement and
+invalid aggregate receivers before LLVM emission.
+
+Partition type inference does not publish a structural route product until its
+source is a canonical `Stream<T>` or `EventStream<T>`. A provisional earlier
+`Range` observed during fixed-point iteration is not a valid route type, and a
+later canonical product replaces any stale expression type. S045 guards this
+boundary before direct-dispatch LLVM can consume an array/range ABI or refer to
+an unmaterialized product. Stage2 retains both direct and separately bound
+partition producers because their source ordering previously exposed different
+fixed-point states.
+
+Flow intrinsic recognition is restricted to top-level identifiers after `->`.
+This prevents a local variable named `capacity` from becoming the container
+intrinsic. Entry, function, and control-region slice emitters also share the
+same `writeValue` path for numeric bounds, so literals never become undefined
+`%vN` references. Regression 999 fixes both contracts, and the complete
+self-host source set must assemble with `llvm-as` with zero diagnostics.
+
+Explicit return cleanup previously recognized only a directly returned name,
+while tail-return cleanup followed an owner through enum constructors. Thus a
+valid `Result.Ok(info) -> return` copied the same owned payload into the result
+and then dropped the local before the caller dropped the returned value. Both
+paths now use one aggregate-transfer resolver through value wrappers and nested
+enum constructors. The Windows and Linux Stage2 path-normalization execution
+fixture guards the process exit as well as its output, so a repeated free cannot
+pass as a successful textual result.
+
+Fixed-repeat array lowering previously used the canonical static length only in
+the top-level function emitter. The control-region emitter instead allocated
+one element for the single lowered seed operand and then indexed it as the full
+fixed array. A 64-word SHA-256 schedule therefore overwrote the native heap when
+created inside its block loop. Both emitters now derive allocation and stores
+from the canonical fixed-array length while advancing the operand only for
+multi-element literals. Regression 1001 executes a repeated 64-element fixed
+array inside a loop so this ABI defect fails at its source boundary.
+
+Expression-bodied enum match arms use `operand1` for the matched payload
+binding, not for the arm's computed result. Native result-slot lowering had
+treated that payload as the result, which made identity arms appear correct but
+silently discarded a final transform such as unary negation. Arm result
+resolution now selects a nested block's canonical result or the final direct
+value child after the pattern and payload binding. Regression 1002 fixes the
+transformed error-arm contract, and the C++ binding matrix exercises it through
+real exception-to-`Result` ABI calls.
+
+## D336 — Mutable borrows invalidate live arena-backed Text views
+
+Status: implemented
+Date: 2026-08-18
+
+An arena-backed `Text` is a view into storage whose backing block may move on
+growth. The ownership checker already rejected direct `Arena` mutations while
+such a view remained reachable, but a user-defined function with a `mut Arena`
+parameter could hide the same mutation. Managed execution happened to retain
+the old bytes while native execution exposed the dangling view as a corrupted
+relative C++ header path.
+
+Every mutable-borrow call now checks the root place against active borrowed
+Text origins. Return-origin inference carries the arena loan through helper
+functions, and both the C# bootstrap checker and the self-host Typed-IR checker
+reject a conflicting call before LLVM emission. The C++ binding generator uses
+independent arenas for simultaneously live normalized paths, hashes, and names.
+The `borrowed-text-owner-mutable-borrow` diagnostic fixes the user-visible
+contract. Regression 1003 fixes the matching self-host analysis, including
+uses retained in interpolation IR rather than ordinary name-read nodes. Linux
+`bind-cpp` parity fixes the original cross-target failure.
+
+## D337 — Enum match arm result discovery is type-directed
+
+Status: implemented
+Date: 2026-08-18
+
+Expression-bodied enum arms may contain nested calls and controls after their
+payload binding. Selecting the last direct child fixed transformed scalar arms,
+but a nested `Result` match could also have a later aggregate constructor whose
+value was not the enclosing arm result. This produced an invalid store of an
+enum aggregate into the enclosing scalar result slot.
+
+The self-host LLVM emitter now chooses only a direct child whose canonical type
+matches the arm result type, while nested block arms continue to use their
+explicit region result. Regressions 1002, 390, and 613 together retain unary
+transformation, Result construction, nested COM Result lowering, LLVM assembly,
+and execution.

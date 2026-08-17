@@ -1,4 +1,5 @@
 using System.Globalization;
+using Sollang.Compiler.Diagnostics;
 
 namespace Sollang.Compiler.CodeGen;
 
@@ -47,6 +48,7 @@ internal sealed partial class LlvmEmitter
 
     private void EmitAlloca(string target, string typeName, int align)
     {
+        RequireStorageType(typeName, $"allocation '{target}'");
         var instruction = $"  {target} = alloca {typeName}, align {align.ToString(CultureInfo.InvariantCulture)}{Environment.NewLine}";
         if (_currentHoistedAllocas is not null)
         {
@@ -59,12 +61,23 @@ internal sealed partial class LlvmEmitter
 
     private void EmitLoad(string target, string typeName, string pointer, int align)
     {
+        RequireStorageType(typeName, $"load '{target}'");
         EmitAssign(target, $"load {typeName}, ptr {pointer}, align {align.ToString(CultureInfo.InvariantCulture)}");
     }
 
     private void EmitStore(string typeName, string value, string pointer, int align)
     {
+        RequireStorageType(typeName, $"store to '{pointer}'");
         EmitInstruction($"store {typeName} {value}, ptr {pointer}, align {align.ToString(CultureInfo.InvariantCulture)}");
+    }
+
+    private static void RequireStorageType(string typeName, string operation)
+    {
+        if (typeName == "void")
+        {
+            throw new SollangException(
+                $"compiler error S006: {operation} has no canonical storage type; value-producing typed IR cannot use Unit storage");
+        }
     }
 
     private void EmitCall(string? target, string returnType, string functionName, string arguments)

@@ -1,4 +1,5 @@
 using Sollang.Compiler.Syntax;
+using Sollang.Compiler.Diagnostics;
 
 namespace Sollang.Compiler.Semantics;
 
@@ -27,7 +28,8 @@ internal sealed record BoundProgram(
     IReadOnlyDictionary<Statement, BoundPartitionPipeline> PartitionConsumers,
     IReadOnlyDictionary<Statement, BoundStreamJoinPipeline> StreamJoinConsumers,
     IReadOnlyDictionary<StreamJoinExpression, BoundStreamJoin> StreamJoins,
-    IReadOnlyDictionary<BranchExpression, BoundParallelBranch> ParallelBranches);
+    IReadOnlyDictionary<BranchExpression, BoundParallelBranch> ParallelBranches,
+    IReadOnlyList<SemanticWarning> Warnings);
 
 internal sealed record BoundParallelBranch(
     TypeId SourceType,
@@ -183,6 +185,7 @@ internal enum BoundFunctionKind
     RuntimeReadInt,
     RuntimeSeedRandom,
     RuntimeRandomBelow,
+    RuntimeSecureRandomBytes,
     RuntimeOpenIntWriter,
     RuntimeWriteInt,
     RuntimeCloseIntWriter,
@@ -224,6 +227,17 @@ internal enum BoundFunctionKind
     RuntimeSyncFileAsync,
     RuntimeSyncFile,
     RuntimeAtomicReplaceFile,
+    RuntimeSocketListen,
+    RuntimeSocketAccept,
+    RuntimeSocketConnect,
+    RuntimeSocketReceive,
+    RuntimeSocketSend,
+    RuntimeSocketSendText,
+    RuntimeSocketShutdown,
+    RuntimeSocketBindDatagram,
+    RuntimeSocketLocalPort,
+    RuntimeSocketSendTo,
+    RuntimeSocketReceiveFrom,
     RuntimeRangeStream,
     RuntimeMouseEvents,
     Native
@@ -278,6 +292,9 @@ internal enum TypeId
     MouseEvent,
     MouseEventKind,
     EventOverflowPolicy,
+    FixedUInt8Array12,
+    FixedUInt8Array16,
+    FixedUInt8Array32,
     GenericParameter = 512,
     SecondaryGenericParameter = 513,
     TertiaryGenericParameter = 514,
@@ -323,13 +340,16 @@ internal sealed record BoundBoxDefinition(TypeId Id, TypeId ElementType, int Siz
 
 internal sealed record BoundReferenceDefinition(TypeId Id, TypeId ElementType);
 
+internal sealed record BoundSliceDefinition(TypeId Id, TypeId ElementType);
+
 internal sealed record BoundDynTraitDefinition(TypeId Id, string TraitName);
 
 internal sealed record BoundStaticArrayDefinition(
     TypeId Id,
     TypeId ElementType,
     int ElementSize,
-    int ElementAlignment);
+    int ElementAlignment,
+    int? FixedLength = null);
 
 internal sealed record BoundDynamicArrayDefinition(
     TypeId Id,
@@ -386,10 +406,16 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<TypeId, BoundBoxDefinition> _boxes;
     private readonly Dictionary<TypeId, BoundReferenceDefinition> _references;
     private readonly Dictionary<TypeId, TypeId> _referencesByElement;
+    private readonly Dictionary<TypeId, BoundSliceDefinition> _slices = [];
+    private readonly Dictionary<TypeId, TypeId> _slicesByElement = [];
     private readonly Dictionary<TypeId, BoundDynTraitDefinition> _dynTraits = [];
     private readonly Dictionary<string, TypeId> _dynTraitsByName = new(StringComparer.Ordinal);
     private readonly Dictionary<TypeId, BoundStaticArrayDefinition> _staticArrays = [];
     private readonly Dictionary<TypeId, TypeId> _staticArraysByElement = [];
+    private readonly Dictionary<TypeId, TypeId> _reservedStaticArraysByElement = [];
+    private readonly Dictionary<(TypeId Element, int Length), TypeId> _fixedStaticArraysByShape = [];
+    private readonly Dictionary<(TypeId Element, int Length), TypeId> _reservedFixedStaticArraysByShape = [];
+    private readonly HashSet<TypeId> _reservedParametricTypeIds = [];
     private readonly Dictionary<TypeId, BoundDynamicArrayDefinition> _dynamicArrays = [];
     private readonly Dictionary<TypeId, TypeId> _dynamicArraysByElement = [];
     private readonly Dictionary<TypeId, BoundBoundedArrayDefinition> _boundedArrays = [];
@@ -463,6 +489,8 @@ internal sealed class TypeDefinitionTable
 
     public IReadOnlyCollection<BoundReferenceDefinition> References => _references.Values.ToArray();
 
+    public IReadOnlyCollection<BoundSliceDefinition> Slices => _slices.Values.ToArray();
+
     public IReadOnlyCollection<BoundDynTraitDefinition> DynTraits => _dynTraits.Values.ToArray();
 
     public IReadOnlyCollection<BoundStaticArrayDefinition> StaticArrays => _staticArrays.Values.ToArray();
@@ -508,7 +536,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         var boundFields = fields.Select((field, index) => new BoundStructField(
             field.Label ?? $"_{index}", field.Type, index, line, column)).ToArray();
         _structs.Add(id, new BoundStructDefinition(
@@ -525,6 +553,8 @@ internal sealed class TypeDefinitionTable
 
     public bool IsReference(TypeId type) => _references.ContainsKey(type);
 
+    public bool IsSlice(TypeId type) => type == TypeId.IntSlice || _slices.ContainsKey(type);
+
     public bool IsDynTrait(TypeId type) => _dynTraits.ContainsKey(type);
 
     public TypeId GetOrAddDynTrait(string traitName)
@@ -534,7 +564,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _dynTraits.Add(id, new BoundDynTraitDefinition(id, traitName));
         _dynTraitsByName.Add(traitName, id);
         _names.TryAdd("dyn " + traitName, id);
@@ -553,7 +583,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _references.Add(id, new BoundReferenceDefinition(id, elementType));
         _referencesByElement.Add(elementType, id);
         return id;
@@ -584,12 +614,144 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var id = (TypeId)_nextParametricTypeId++;
+        if (_reservedStaticArraysByElement.TryGetValue(elementType, out var reserved))
+        {
+            RegisterStaticArrays(new Dictionary<TypeId, (TypeId ElementType, int? Length)>
+            {
+                [reserved] = (elementType, null)
+            });
+            return reserved;
+        }
+
+        var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
         var alignment = Math.Min(Math.Max(size, 1), 8);
         _staticArrays.Add(id, new BoundStaticArrayDefinition(id, elementType, size, alignment));
         _staticArraysByElement.Add(elementType, id);
         return id;
+    }
+
+    public TypeId GetOrAddFixedStaticArray(TypeId elementType, int length)
+    {
+        if (length < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(length));
+        }
+        if (_fixedStaticArraysByShape.TryGetValue((elementType, length), out var existing))
+        {
+            return existing;
+        }
+
+        if (_reservedFixedStaticArraysByShape.TryGetValue((elementType, length), out var reserved))
+        {
+            RegisterFixedStaticArrays(new Dictionary<TypeId, (TypeId ElementType, int Length)>
+            {
+                [reserved] = (elementType, length)
+            });
+            return reserved;
+        }
+
+        var id = AllocateParametricTypeId();
+        var size = InlineSizeOf(elementType);
+        var alignment = Math.Min(Math.Max(size, 1), 8);
+        _staticArrays.Add(id, new BoundStaticArrayDefinition(id, elementType, size, alignment, length));
+        _fixedStaticArraysByShape.Add((elementType, length), id);
+        return id;
+    }
+
+    public void RegisterFixedStaticArrays(
+        IReadOnlyDictionary<TypeId, (TypeId ElementType, int Length)> definitions)
+    {
+        RegisterStaticArrays(definitions.ToDictionary(
+            static pair => pair.Key,
+            static pair => (pair.Value.ElementType, (int?)pair.Value.Length)));
+    }
+
+    public void RegisterStaticArrays(
+        IReadOnlyDictionary<TypeId, (TypeId ElementType, int? Length)> definitions)
+    {
+        foreach (var (id, shape) in definitions)
+        {
+            if (shape.Length is null
+                && _staticArraysByElement.TryGetValue(shape.ElementType, out var existingStatic))
+            {
+                if (existingStatic != id)
+                    throw new InvalidOperationException(
+                        $"static array element type '{(int)shape.ElementType}' already has type id '{(int)existingStatic}'");
+                continue;
+            }
+            if (shape.Length is { } length
+                && _fixedStaticArraysByShape.TryGetValue((shape.ElementType, length), out var existing))
+            {
+                if (existing != id)
+                {
+                    throw new InvalidOperationException(
+                        $"fixed array shape '{(int)shape.ElementType};{length}' already has type id '{(int)existing}'");
+                }
+                continue;
+            }
+
+            if (IsTypeIdInUse(id))
+            {
+                throw new InvalidOperationException(
+                    $"cannot register static array type id '{(int)id}' because that id is already in use");
+            }
+
+            var size = InlineSizeOf(shape.ElementType);
+            var alignment = Math.Min(Math.Max(size, 1), 8);
+            _staticArrays.Add(
+                id,
+                new BoundStaticArrayDefinition(id, shape.ElementType, size, alignment, shape.Length));
+            if (shape.Length is { } fixedLength)
+            {
+                _fixedStaticArraysByShape.Add((shape.ElementType, fixedLength), id);
+                _reservedFixedStaticArraysByShape.Remove((shape.ElementType, fixedLength));
+            }
+            else
+            {
+                _staticArraysByElement.Add(shape.ElementType, id);
+                _reservedStaticArraysByElement.Remove(shape.ElementType);
+            }
+            _reservedParametricTypeIds.Remove(id);
+            _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
+        }
+    }
+
+    public bool TryReserveStaticArray(TypeId id, TypeId elementType, int? length)
+    {
+        if (length is null)
+        {
+            if (_staticArraysByElement.TryGetValue(elementType, out var existing)
+                || _reservedStaticArraysByElement.TryGetValue(elementType, out existing))
+            {
+                if (existing != id)
+                    return false;
+                return false;
+            }
+            if (!TryReserveTypeId(id))
+                return false;
+            _reservedStaticArraysByElement.Add(elementType, id);
+        }
+        else
+        {
+            var shape = (elementType, length.Value);
+            if (_fixedStaticArraysByShape.TryGetValue(shape, out var existing)
+                || _reservedFixedStaticArraysByShape.TryGetValue(shape, out existing))
+            {
+                if (existing != id)
+                    return false;
+                return false;
+            }
+            if (!TryReserveTypeId(id))
+                return false;
+            _reservedFixedStaticArraysByShape.Add(shape, id);
+        }
+        return true;
+    }
+
+    private bool TryReserveTypeId(TypeId id)
+    {
+        return !IsTypeIdInUse(id) && _reservedParametricTypeIds.Add(id);
     }
 
     public bool TryGetStaticArrayForElement(TypeId elementType, out TypeId arrayType) =>
@@ -602,7 +764,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
         var alignment = Math.Min(Math.Max(size, 1), 8);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
@@ -725,7 +887,7 @@ internal sealed class TypeDefinitionTable
         var dataOffset = AlignUp(8, elementAlignment);
         var alignment = Math.Max(8, elementAlignment);
         var size = AlignUp(checked(dataOffset + checked(elementSize * capacity)), alignment);
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
             id, elementType, capacity, elementSize, elementAlignment,
             dataOffset, size, alignment));
@@ -752,7 +914,7 @@ internal sealed class TypeDefinitionTable
         var valueOffset = AlignUp(keySize, valueAlignment);
         var entryAlignment = Math.Max(keyAlignment, valueAlignment);
         var stride = AlignUp(checked(valueOffset + valueSize), entryAlignment);
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _dictionaries.Add(id, new BoundDictionaryDefinition(
             id, keyType, valueType, keySize, keyAlignment,
             valueOffset, valueSize, valueAlignment, stride));
@@ -785,7 +947,7 @@ internal sealed class TypeDefinitionTable
         var alignment = Math.Max(8, Math.Max(layout.KeyAlignment, layout.ValueAlignment));
         var storageSize = AlignUp(checked(entriesOffset + checked(bucketCapacity * layout.EntryStride)), alignment);
         var size = AlignUp(checked(8 + storageSize), alignment);
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _boundedDictionaries.Add(id, new BoundBoundedDictionaryDefinition(
             id, keyType, valueType, maxEntries, bucketCapacity,
             controlsOffset, entriesOffset, storageSize, size, alignment, layout));
@@ -819,7 +981,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
         var wordCount = checked((bitCount + 63) / 64);
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _bitSets.Add(id, new BoundBitSetDefinition(id, bitCount, wordCount,
             checked(wordCount * 8), Alignment: 8));
         _bitSetsByBitCount.Add(bitCount, id);
@@ -838,7 +1000,7 @@ internal sealed class TypeDefinitionTable
         {
             return existing;
         }
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
         var alignment = Math.Min(Math.Max(size, 1), 8);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
@@ -859,7 +1021,7 @@ internal sealed class TypeDefinitionTable
         {
             return existing;
         }
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
         var alignment = Math.Min(Math.Max(size, 1), 8);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
@@ -882,7 +1044,7 @@ internal sealed class TypeDefinitionTable
         }
         var keySize = InlineSizeOf(elementType);
         var keyAlignment = Math.Min(Math.Max(keySize, 1), 8);
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _dictionaries.Add(id, new BoundDictionaryDefinition(
             id, elementType, BoundType.Unit,
             keySize, keyAlignment,
@@ -909,7 +1071,7 @@ internal sealed class TypeDefinitionTable
             _names.TryAdd(displayName, existing);
             return existing;
         }
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         var payloadWords = (InlineSizeOf(valueType) + 7) / 8;
         _enums.Add(id, new BoundEnumDefinition(id, displayName, [
             new BoundEnumVariant("None", null, 0, 0, 0),
@@ -928,7 +1090,7 @@ internal sealed class TypeDefinitionTable
             _names.TryAdd(displayName, existing);
             return existing;
         }
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         var payloadWords = (Math.Max(InlineSizeOf(okType), InlineSizeOf(errorType)) + 7) / 8;
         _enums.Add(id, new BoundEnumDefinition(id, displayName, [
             new BoundEnumVariant("Ok", okType, 0, 0, 0),
@@ -953,7 +1115,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _tasksByValue.Add(valueType, id);
         _taskValues.Add(id, valueType);
         return id;
@@ -971,7 +1133,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _streamsByValue.Add(valueType, id);
         _streamValues.Add(id, valueType);
         return id;
@@ -989,7 +1151,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var id = (TypeId)_nextParametricTypeId++;
+        var id = AllocateParametricTypeId();
         _eventStreamsByValue.Add(valueType, id);
         _eventStreamValues.Add(id, valueType);
         return id;
@@ -1022,6 +1184,11 @@ internal sealed class TypeDefinitionTable
             || IsTask(type) || IsBox(type) || IsDynTrait(type)
             || IsStream(type) || IsEventStream(type)
             || IsStaticArray(type) || IsDynamicArray(type) || _dictionaries.ContainsKey(type))
+        {
+            return true;
+        }
+        if (_structs.TryGetValue(type, out var nativeOwner)
+            && nativeOwner.Name is "sys.socket.TcpListener" or "sys.socket.TcpStream" or "sys.socket.UdpSocket")
         {
             return true;
         }
@@ -1080,6 +1247,34 @@ internal sealed class TypeDefinitionTable
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a reference");
     }
 
+    public TypeId GetOrAddSlice(TypeId elementType)
+    {
+        if (elementType == TypeId.Int)
+        {
+            return TypeId.IntSlice;
+        }
+        if (_slicesByElement.TryGetValue(elementType, out var existing))
+        {
+            return existing;
+        }
+
+        var id = AllocateParametricTypeId();
+        _slices.Add(id, new BoundSliceDefinition(id, elementType));
+        _slicesByElement.Add(elementType, id);
+        return id;
+    }
+
+    public TypeId GetSliceElement(TypeId type)
+    {
+        if (type == TypeId.IntSlice)
+        {
+            return TypeId.Int;
+        }
+        return _slices.TryGetValue(type, out var definition)
+            ? definition.ElementType
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a slice");
+    }
+
     public BoundStaticArrayDefinition GetStaticArray(TypeId type)
     {
         return _staticArrays.TryGetValue(type, out var definition)
@@ -1115,6 +1310,10 @@ internal sealed class TypeDefinitionTable
         if (IsDynamicArray(type) || IsDictionary(type))
         {
             return 24;
+        }
+        if (IsStaticArray(type))
+        {
+            return checked(_pointerSize * 2);
         }
         if (_boxes.ContainsKey(type) || _references.ContainsKey(type))
         {
@@ -1186,6 +1385,10 @@ internal sealed class TypeDefinitionTable
         {
             return boundedArray.Alignment;
         }
+        if (IsStaticArray(type))
+        {
+            return _pointerSize;
+        }
         if (_structs.TryGetValue(type, out var structure))
         {
             return structure.Fields.Count == 0
@@ -1235,6 +1438,35 @@ internal sealed class TypeDefinitionTable
         }
         throw new ArgumentOutOfRangeException(nameof(fieldIndex));
     }
+
+    private TypeId AllocateParametricTypeId()
+    {
+        while (_reservedParametricTypeIds.Contains((TypeId)_nextParametricTypeId))
+            _nextParametricTypeId++;
+        return (TypeId)_nextParametricTypeId++;
+    }
+
+    private bool IsTypeIdInUse(TypeId id) =>
+        _structs.ContainsKey(id)
+        || _enums.ContainsKey(id)
+        || _boxes.ContainsKey(id)
+        || _references.ContainsKey(id)
+        || _slices.ContainsKey(id)
+        || _dynTraits.ContainsKey(id)
+        || _staticArrays.ContainsKey(id)
+        || _dynamicArrays.ContainsKey(id)
+        || _boundedArrays.ContainsKey(id)
+        || _dictionaries.ContainsKey(id)
+        || _boundedDictionaries.ContainsKey(id)
+        || _bitSets.ContainsKey(id)
+        || _binaryHeaps.ContainsKey(id)
+        || _deques.ContainsKey(id)
+        || _sets.ContainsKey(id)
+        || _optionValues.ContainsKey(id)
+        || _resultTypes.ContainsKey(id)
+        || _taskValues.ContainsKey(id)
+        || _streamValues.ContainsKey(id)
+        || _eventStreamValues.ContainsKey(id);
 
     private static int AlignUp(int value, int alignment) =>
         checked((value + alignment - 1) / alignment * alignment);

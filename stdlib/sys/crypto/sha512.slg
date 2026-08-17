@@ -1,0 +1,173 @@
+namespace sys.crypto.sha512
+
+import sys.crypto.bits as bits
+
+zero64: -> UInt64 => 0
+zeroSize: -> UIntSize => 0
+scheduleZeros: -> [UInt64; 80] => [0; 80]
+digestZeros: -> [UInt8; 64] => [0; 64]
+
+initialState: -> [UInt64; 8] => [
+    7_640_891_576_956_012_808, 13_503_953_896_175_478_587,
+    4_354_685_564_936_845_355, 11_912_009_170_470_909_681,
+    5_840_696_475_078_001_361, 11_170_449_401_992_604_703,
+    2_270_897_969_802_886_507, 6_620_516_959_819_538_809]
+
+roundConstants: -> [UInt64] => [
+    4_794_697_086_780_616_226, 8_158_064_640_168_781_261,
+    13_096_744_586_834_688_815, 16_840_607_885_511_220_156,
+    4_131_703_408_338_449_720, 6_480_981_068_601_479_193,
+    10_538_285_296_894_168_987, 12_329_834_152_419_229_976,
+    15_566_598_209_576_043_074, 1_334_009_975_649_890_238,
+    2_608_012_711_638_119_052, 6_128_411_473_006_802_146,
+    8_268_148_722_764_581_231, 9_286_055_187_155_687_089,
+    11_230_858_885_718_282_805, 13_951_009_754_708_518_548,
+    16_472_876_342_353_939_154, 17_275_323_862_435_702_243,
+    1_135_362_057_144_423_861, 2_597_628_984_639_134_821,
+    3_308_224_258_029_322_869, 5_365_058_923_640_841_347,
+    6_679_025_012_923_562_964, 8_573_033_837_759_648_693,
+    10_970_295_158_949_994_411, 12_119_686_244_451_234_320,
+    12_683_024_718_118_986_047, 13_788_192_230_050_041_572,
+    14_330_467_153_632_333_762, 15_395_433_587_784_984_357,
+    489_312_712_824_947_311, 1_452_737_877_330_783_856,
+    2_861_767_655_752_347_644, 3_322_285_676_063_803_686,
+    5_560_940_570_517_711_597, 5_996_557_281_743_188_959,
+    7_280_758_554_555_802_590, 8_532_644_243_296_465_576,
+    9_350_256_976_987_008_742, 10_552_545_826_968_843_579,
+    11_727_347_734_174_303_076, 12_113_106_623_233_404_929,
+    14_000_437_183_269_869_457, 14_369_950_271_660_146_224,
+    15_101_387_698_204_529_176, 15_463_397_548_674_623_760,
+    17_586_052_441_742_319_658, 1_182_934_255_886_127_544,
+    1_847_814_050_463_011_016, 2_177_327_727_835_720_531,
+    2_830_643_537_854_262_169, 3_796_741_975_233_480_872,
+    4_115_178_125_766_777_443, 5_681_478_168_544_905_931,
+    6_601_373_596_472_566_643, 7_507_060_721_942_968_483,
+    8_399_075_790_359_081_724, 8_693_463_985_226_723_168,
+    9_568_029_438_360_202_098, 10_144_078_919_501_101_548,
+    10_430_055_236_837_252_648, 11_840_083_180_663_258_601,
+    13_761_210_420_658_862_357, 14_299_343_276_471_374_635,
+    14_566_680_578_165_727_644, 15_097_957_966_210_449_927,
+    16_922_976_911_328_602_910, 17_689_382_322_260_857_208,
+    500_013_540_394_364_858, 748_580_250_866_718_886,
+    1_242_879_168_328_830_382, 1_977_374_033_974_150_939,
+    2_944_078_676_154_940_804, 3_659_926_193_048_069_267,
+    4_368_137_639_120_453_308, 4_836_135_668_995_329_356,
+    5_532_061_633_213_252_278, 6_448_918_945_643_986_474,
+    6_902_733_635_092_675_308, 7_801_388_544_844_847_127]
+
+xor3 first: UInt64, second: UInt64, third: UInt64 -> UInt64 {
+    bits.xor64(bits.xor64(first, second), third)
+}
+
+choose selector: UInt64, whenSet: UInt64, whenClear: UInt64 -> UInt64 {
+    bits.xor64(bits.and64(selector, whenSet), bits.and64(bits.not64(selector), whenClear))
+}
+
+majority first: UInt64, second: UInt64, third: UInt64 -> UInt64 {
+    xor3(bits.and64(first, second), bits.and64(first, third), bits.and64(second, third))
+}
+
+largeSigma0 value: UInt64 -> UInt64 {
+    xor3(bits.rotateRight64(value, 28), bits.rotateRight64(value, 34), bits.rotateRight64(value, 39))
+}
+
+largeSigma1 value: UInt64 -> UInt64 {
+    xor3(bits.rotateRight64(value, 14), bits.rotateRight64(value, 18), bits.rotateRight64(value, 41))
+}
+
+smallSigma0 value: UInt64 -> UInt64 {
+    xor3(bits.rotateRight64(value, 1), bits.rotateRight64(value, 8), bits.shiftRight64(value, 7))
+}
+
+smallSigma1 value: UInt64 -> UInt64 {
+    xor3(bits.rotateRight64(value, 19), bits.rotateRight64(value, 61), bits.shiftRight64(value, 6))
+}
+
+public digest source: [UInt8] -> [UInt8; 64] {
+    roundConstants() => constants
+    initialState() => hash!
+    UInt64(source -> len) * 8 => bitLength
+    UIntSize(source -> len) + 1 => paddedWithoutLength
+    ((paddedWithoutLength + 16 + 127) / 128) * 128 => paddedLength
+    zeroSize() => blockStart!
+    blockStart! < paddedLength -> while {
+        scheduleZeros() => words!
+        0 => wordIndex!
+        wordIndex! < 16 -> while {
+            zero64() => word!
+            0 => byteIndex!
+            byteIndex! < 8 -> while {
+                blockStart! + UIntSize(wordIndex! * 8 + byteIndex!) => sourceIndex
+                zero64() => byteValue!
+                sourceIndex < UIntSize(source -> len) -> if {
+                    UInt64(source[Int(sourceIndex)]) => byteValue!
+                } else {
+                    sourceIndex == UIntSize(source -> len) -> if {
+                        128 => byteValue!
+                    } else {
+                        sourceIndex >= paddedLength - 8 -> if {
+                            UInt64(paddedLength - 1 - sourceIndex) * 8 => shift
+                            (bitLength / bits.powerOfTwo64(shift)) % 256 => byteValue!
+                        }
+                    }
+                }
+                word! * 256 + byteValue! => word!
+                byteIndex! + 1 => byteIndex!
+            }
+            word! => words![wordIndex!]
+            wordIndex! + 1 => wordIndex!
+        }
+        16 => scheduleIndex!
+        scheduleIndex! < 80 -> while {
+            smallSigma1(words![scheduleIndex! - 2]) + words![scheduleIndex! - 7] => scheduleTail
+            smallSigma0(words![scheduleIndex! - 15]) + words![scheduleIndex! - 16] => scheduleHead
+            scheduleTail + scheduleHead => words![scheduleIndex!]
+            scheduleIndex! + 1 => scheduleIndex!
+        }
+        hash![0] => a!
+        hash![1] => b!
+        hash![2] => c!
+        hash![3] => d!
+        hash![4] => e!
+        hash![5] => f!
+        hash![6] => g!
+        hash![7] => h!
+        0 => round!
+        round! < 80 -> while {
+            h! + largeSigma1(e!) + choose(e!, f!, g!) + constants[round!] + words![round!] => temporary1
+            largeSigma0(a!) + majority(a!, b!, c!) => temporary2
+            g! => h!
+            f! => g!
+            e! => f!
+            d! + temporary1 => e!
+            c! => d!
+            b! => c!
+            a! => b!
+            temporary1 + temporary2 => a!
+            round! + 1 => round!
+        }
+        hash![0] + a! => hash![0]
+        hash![1] + b! => hash![1]
+        hash![2] + c! => hash![2]
+        hash![3] + d! => hash![3]
+        hash![4] + e! => hash![4]
+        hash![5] + f! => hash![5]
+        hash![6] + g! => hash![6]
+        hash![7] + h! => hash![7]
+        blockStart! + 128 => blockStart!
+    }
+    digestZeros() => output!
+    0 => outputIndex!
+    0 => hashIndex!
+    hashIndex! < 8 -> while {
+        7 => byteIndex!
+        byteIndex! >= 0 -> while {
+            UInt64(byteIndex! * 8) => shift
+            UInt8(hash![hashIndex!] / bits.powerOfTwo64(shift) % 256) => output![outputIndex!]
+            outputIndex! + 1 => outputIndex!
+            byteIndex! - 1 => byteIndex!
+        }
+        hashIndex! + 1 => hashIndex!
+    }
+    output!
+}

@@ -85,15 +85,27 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitDivideExpression(DivideExpression expression)
     {
         var left = EmitExpression(expression.Left);
+        var right = EmitFunctionArgumentExpression(expression.Right, left.Type);
+        if (left.Type != right.Type && TryGetNumericLiteralText(expression.Left, out _))
+        {
+            right = EmitExpression(expression.Right);
+            left = EmitFunctionArgumentExpression(expression.Left, right.Type);
+        }
         var integerOp = IsSignedIntegerType(left.Type) ? "sdiv" : "udiv";
-        return EmitNumericBinary(left, EmitExpression(expression.Right), integerOp, "fdiv", "div");
+        return EmitNumericBinary(left, right, integerOp, "fdiv", "div");
     }
 
     private RuntimeValue EmitModuloExpression(ModuloExpression expression)
     {
         var left = EmitExpression(expression.Left);
+        var right = EmitFunctionArgumentExpression(expression.Right, left.Type);
+        if (left.Type != right.Type && TryGetNumericLiteralText(expression.Left, out _))
+        {
+            right = EmitExpression(expression.Right);
+            left = EmitFunctionArgumentExpression(expression.Left, right.Type);
+        }
         var integerOp = IsSignedIntegerType(left.Type) ? "srem" : "urem";
-        return EmitNumericBinary(left, EmitExpression(expression.Right), integerOp, "frem", "mod");
+        return EmitNumericBinary(left, right, integerOp, "frem", "mod");
     }
 
     private RuntimeValue EmitNegateExpression(NegateExpression expression)
@@ -118,8 +130,22 @@ internal sealed partial class LlvmEmitter
         Expression rightExpression,
         string integerOperation,
         string floatOperation,
-        string prefix) => EmitNumericBinary(
-            EmitExpression(leftExpression), EmitExpression(rightExpression), integerOperation, floatOperation, prefix);
+        string prefix)
+    {
+        var left = EmitExpression(leftExpression);
+        var right = EmitFunctionArgumentExpression(rightExpression, left.Type);
+        if (left.Type != right.Type && TryGetNumericLiteralText(leftExpression, out _))
+        {
+            right = EmitExpression(rightExpression);
+            left = EmitFunctionArgumentExpression(leftExpression, right.Type);
+        }
+        if (left.Type != right.Type)
+        {
+            throw new SollangException(
+                $"codegen error at {leftExpression.Line}:{leftExpression.Column}: numeric operands must have the same runtime type; got {left.Type} and {right.Type}");
+        }
+        return EmitNumericBinary(left, right, integerOperation, floatOperation, prefix);
+    }
 
     private RuntimeValue EmitNumericBinary(
         RuntimeValue left,
@@ -139,13 +165,45 @@ internal sealed partial class LlvmEmitter
             EmitBinary(result, floatOperation, LlvmType(left.Type), leftFloat.ValueName, rightFloat.ValueName);
             return new RuntimeFloat(left.Type, result);
         }
-        throw new SollangException("numeric operands must have the same runtime type");
+        throw new SollangException(
+            $"numeric operands must have the same runtime type; got {left.Type} and {right.Type}");
+    }
+
+    private RuntimeValue EmitContextualNumericBinary(Expression expression, BoundType expectedType)
+    {
+        var (leftExpression, rightExpression, integerOperation, floatOperation, prefix) = expression switch
+        {
+            AddExpression value => (value.Left, value.Right, "add", "fadd", "add"),
+            SubtractExpression value => (value.Left, value.Right, "sub", "fsub", "sub"),
+            MultiplyExpression value => (value.Left, value.Right, "mul", "fmul", "mul"),
+            DivideExpression value => (
+                value.Left,
+                value.Right,
+                IsSignedIntegerType(expectedType) ? "sdiv" : "udiv",
+                "fdiv",
+                "div"),
+            ModuloExpression value => (
+                value.Left,
+                value.Right,
+                IsSignedIntegerType(expectedType) ? "srem" : "urem",
+                "frem",
+                "mod"),
+            _ => throw new SollangException("contextual numeric emission expects a binary numeric expression")
+        };
+        var left = EmitFunctionArgumentExpression(leftExpression, expectedType);
+        var right = EmitFunctionArgumentExpression(rightExpression, expectedType);
+        return EmitNumericBinary(left, right, integerOperation, floatOperation, prefix);
     }
 
     private RuntimeBool EmitCompareExpression(CompareExpression expression)
     {
         var left = EmitExpression(expression.Left);
-        var right = EmitExpression(expression.Right);
+        var right = EmitFunctionArgumentExpression(expression.Right, left.Type);
+        if (left.Type != right.Type && TryGetNumericLiteralText(expression.Left, out _))
+        {
+            right = EmitExpression(expression.Right);
+            left = EmitFunctionArgumentExpression(expression.Left, right.Type);
+        }
         if (left is RuntimeInt leftInt && right is RuntimeInt rightInt)
         {
             return EmitIntegerComparison(leftInt, expression.Operator, rightInt);
@@ -242,7 +300,7 @@ internal sealed partial class LlvmEmitter
         return new RuntimeBool(result);
     }
 
-    private RuntimeValue EmitIfExpression(IfExpression expression)
+    private RuntimeValue EmitIfExpression(IfExpression expression, BoundType? expectedResultType = null)
     {
         var condition = EmitBoolExpression(expression.Condition);
         var conditionLabel = _currentBlockLabel;
@@ -256,7 +314,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(thenLabel);
         _currentBlockLabel = thenLabel;
         RestoreLocals(entryScope);
-        var thenResult = EmitScopedBlockBody(expression.Then);
+        var thenResult = EmitScopedBlockBody(expression.Then, expectedResultType);
         var thenEndLabel = _currentBlockLabel;
         var thenTerminated = _currentBlockTerminated;
         if (!thenTerminated)
@@ -272,7 +330,7 @@ internal sealed partial class LlvmEmitter
             EmitLabel(activeElseLabel);
             _currentBlockLabel = activeElseLabel;
             RestoreLocals(entryScope);
-            elseResult = EmitScopedBlockBody(expression.Else);
+            elseResult = EmitScopedBlockBody(expression.Else, expectedResultType);
             elseTerminated = _currentBlockTerminated;
             if (!elseTerminated)
             {
@@ -310,7 +368,20 @@ internal sealed partial class LlvmEmitter
             MergeSynchronousOuterScope(entryScope, incomingScopes);
         }
 
-        if (expression.Else is null || thenResult.Value is null || elseResult?.Value is null)
+        if (expression.Else is null)
+        {
+            return RuntimeUnit.Instance;
+        }
+
+        if (thenTerminated)
+        {
+            return elseResult?.Value ?? RuntimeUnit.Instance;
+        }
+        if (elseTerminated)
+        {
+            return thenResult.Value ?? RuntimeUnit.Instance;
+        }
+        if (thenResult.Value is null || elseResult?.Value is null)
         {
             return RuntimeUnit.Instance;
         }
@@ -318,7 +389,7 @@ internal sealed partial class LlvmEmitter
         return EmitPhiValue("if", thenResult.Value, thenEndLabel, elseResult.Value, elseResult.EndLabel);
     }
 
-    private RuntimeValue EmitWhenExpression(WhenExpression expression)
+    private RuntimeValue EmitWhenExpression(WhenExpression expression, BoundType? expectedResultType = null)
     {
         var endLabel = NextLabel("when_end");
         var valueResults = new List<(RuntimeValue Value, string Label)>();
@@ -347,7 +418,7 @@ internal sealed partial class LlvmEmitter
 
             EmitLabel(armLabel);
             _currentBlockLabel = armLabel;
-            var armResult = EmitScopedBlockBody(arm.Body);
+            var armResult = EmitScopedBlockBody(arm.Body, expectedResultType);
             if (!_currentBlockTerminated && armResult.Value is not null)
             {
                 valueResults.Add((armResult.Value, armResult.EndLabel));
@@ -368,7 +439,7 @@ internal sealed partial class LlvmEmitter
 
         _currentBlockLabel = nextConditionLabel;
         RestoreLocals(entryScope);
-        var elseResult = EmitScopedBlockBody(expression.Else);
+        var elseResult = EmitScopedBlockBody(expression.Else, expectedResultType);
         if (!_currentBlockTerminated && elseResult.Value is not null)
         {
             valueResults.Add((elseResult.Value, elseResult.EndLabel));
@@ -414,9 +485,13 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeBool EmitSubjectWhenCondition(RuntimeInt subject, Expression condition)
     {
+        RuntimeInt EmitOperand(Expression operand) =>
+            EmitFunctionArgumentExpression(operand, subject.Type) as RuntimeInt
+            ?? throw new SollangException("value-flow when operand must be an integer");
+
         if (condition is SubjectCompareExpression compare)
         {
-            return EmitIntegerComparison(subject, compare.Operator, EmitIntExpression(compare.Right));
+            return EmitIntegerComparison(subject, compare.Operator, EmitOperand(compare.Right));
         }
 
         if (condition is not SubjectRangeExpression range)
@@ -424,11 +499,11 @@ internal sealed partial class LlvmEmitter
             throw new SollangException("value-flow when arm must start with a comparison operator or range");
         }
 
-        var lower = EmitIntegerComparison(subject, ComparisonOperator.GreaterOrEqual, EmitIntExpression(range.Start));
+        var lower = EmitIntegerComparison(subject, ComparisonOperator.GreaterOrEqual, EmitOperand(range.Start));
         var upper = EmitIntegerComparison(
             subject,
             range.IsEndExclusive ? ComparisonOperator.Less : ComparisonOperator.LessOrEqual,
-            EmitIntExpression(range.End));
+            EmitOperand(range.End));
         var result = NextTemp("range");
         EmitBinary(result, "and", "i1", lower.ValueName, upper.ValueName);
         return new RuntimeBool(result);
@@ -564,7 +639,7 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(result);
     }
 
-    private BlockResult EmitScopedBlockBody(BlockBody body)
+    private BlockResult EmitScopedBlockBody(BlockBody body, BoundType? expectedResultType = null)
     {
         var outerLocals = CaptureLocals();
         if (_activeAsyncCfg is not null)
@@ -581,12 +656,16 @@ internal sealed partial class LlvmEmitter
             var transferredOwnerName = body.Value is null
                 ? null
                 : GetBlockResultTransferredOwnerName(body.Value);
-            var value = body.Value is null ? null : EmitExpression(body.Value);
+            var value = body.Value is null
+                ? null
+                : expectedResultType is { } expected
+                    ? EmitFunctionArgumentExpression(body.Value, expected)
+                    : EmitExpression(body.Value);
             if (_currentBlockTerminated)
             {
                 return new BlockResult(null, _currentBlockLabel, CaptureLocals());
             }
-            DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName);
+            DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName, body.Value);
             return new BlockResult(value, _currentBlockLabel, CaptureLocals());
         }
         finally
@@ -612,6 +691,10 @@ internal sealed partial class LlvmEmitter
         RestoreLocals(entryScope);
         foreach (var (name, entryValue) in entryScope.Locals)
         {
+            if (entryScope.BorrowedOwnedLocals.Contains(name))
+            {
+                continue;
+            }
             var presentCount = incoming.Count(item => item.Scope.Locals.ContainsKey(name));
             if (presentCount == 0)
             {
@@ -647,7 +730,8 @@ internal sealed partial class LlvmEmitter
 
         foreach (var (name, entryValue) in entryScope.Locals)
         {
-            if (!_program.Types.ContainsOwnedStorage(entryValue.Type))
+            if (entryScope.BorrowedOwnedLocals.Contains(name)
+                || !_program.Types.ContainsOwnedStorage(entryValue.Type))
             {
                 continue;
             }
@@ -767,6 +851,7 @@ internal sealed partial class LlvmEmitter
             RuntimeFloat floating => new RuntimeFloat(floating.Type, EmitScalarPhi(prefix, LlvmType(floating.Type), incoming)),
             RuntimeBool => new RuntimeBool(EmitScalarPhi(prefix, "i1", incoming)),
             RuntimeText => EmitTextPhi(prefix, incoming),
+            RuntimeInlineSlice slice => EmitInlineSlicePhi(prefix, slice, incoming),
             RuntimeDynamicIntArray => EmitDynamicArrayPhi(prefix, incoming),
             RuntimeIntDictionary => EmitIntDictionaryPhi(prefix, incoming),
             RuntimeStruct structure => EmitStructPhi(prefix, structure.Type, incoming),
@@ -799,6 +884,24 @@ internal sealed partial class LlvmEmitter
         EmitPhi(length, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeText)value).LengthName));
 
         return new RuntimeText(pointer, length);
+    }
+
+    private RuntimeInlineSlice EmitInlineSlicePhi(
+        string prefix,
+        RuntimeInlineSlice first,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        var pointer = NextTemp(prefix + "_ptr");
+        EmitPhi(
+            pointer,
+            "ptr",
+            FormatPhiIncoming(incoming, static value => ((RuntimeInlineSlice)value).PointerName));
+        var length = NextTemp(prefix + "_len");
+        EmitPhi(
+            length,
+            "i64",
+            FormatPhiIncoming(incoming, static value => ((RuntimeInlineSlice)value).LengthName));
+        return new RuntimeInlineSlice(first.Type, first.ElementType, pointer, length);
     }
 
     private RuntimeDynamicIntArray EmitDynamicArrayPhi(string prefix, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)

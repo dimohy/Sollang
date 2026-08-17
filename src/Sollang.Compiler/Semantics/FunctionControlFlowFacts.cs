@@ -4,7 +4,52 @@ namespace Sollang.Compiler.Semantics;
 
 internal static class FunctionControlFlowFacts
 {
-    public static bool HasEarlyReturn(BoundFunction function) => function.BlockBody.Any(ContainsReturn);
+    public static bool HasEarlyReturn(BoundFunction function) =>
+        function.BlockBody.Any(ContainsReturn)
+        || (function.Body is not null && ContainsReturn(function.Body));
+
+    public static bool AllPathsReturn(Expression expression) => !MayReachContinuation(expression);
+
+    public static bool MayReachContinuation(BlockBody block)
+    {
+        foreach (var statement in block.Statements)
+        {
+            if (!MayReachContinuation(statement))
+            {
+                return false;
+            }
+        }
+
+        return block.Value is null || MayReachContinuation(block.Value);
+    }
+
+    private static bool MayReachContinuation(Statement statement) => statement switch
+    {
+        ReturnStatement => false,
+        BindingStatement binding => MayReachContinuation(binding.Value),
+        IndexAssignmentStatement assignment =>
+            MayReachContinuation(assignment.Index) && MayReachContinuation(assignment.Value),
+        FieldAssignmentStatement assignment => MayReachContinuation(assignment.Value),
+        ExpressionStatement expression => MayReachContinuation(expression.Expression),
+        // Returns inside a callback body do not make invocation of the block
+        // function itself unconditional; the callee controls whether it runs.
+        BlockFunctionCallStatement or BlockFunctionPipelineStatement => true,
+        _ => true
+    };
+
+    private static bool MayReachContinuation(Expression expression) => expression switch
+    {
+        IfExpression { Else: { } alternative } conditional =>
+            MayReachContinuation(conditional.Then) || MayReachContinuation(alternative),
+        IfExpression => true,
+        WhenExpression selection =>
+            selection.Arms.Any(arm => MayReachContinuation(arm.Body))
+            || MayReachContinuation(selection.Else),
+        EnumMatchExpression selection =>
+            selection.Arms.Any(arm => MayReachContinuation(arm.Body))
+            || (selection.Else is not null && MayReachContinuation(selection.Else)),
+        _ => true
+    };
 
     public static bool RequiresStandaloneStandardLibraryEmission(BoundFunction function)
     {
@@ -67,7 +112,10 @@ internal static class FunctionControlFlowFacts
         StructLiteralExpression structure => structure.Fields.Any(field => ContainsStackCandidate(field.Value)),
         ProductExpression product => product.Elements.Any(element => ContainsStackCandidate(element.Value)),
         FieldAccessExpression field => ContainsStackCandidate(field.Source),
-        TryExpression attempt => ContainsStackCandidate(attempt.Value),
+        // `?` emits an error return from the function that owns it. Inlining it
+        // into a caller with a different Result success type would return the
+        // callee's LLVM enum from the caller, so it requires a real boundary.
+        TryExpression => true,
         BoxExpression box => ContainsStackCandidate(box.Value),
         MapExpression map => ContainsStackCandidate(map.Path)
             || (map.Offset is not null && ContainsStackCandidate(map.Offset))

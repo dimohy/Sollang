@@ -44,6 +44,7 @@ $streamDeferredTextSource = Join-Path $repoRoot "examples\regression\580-deferre
 $streamSensorSource = Join-Path $repoRoot "examples\regression\582-billion-sensor-alerts.slg"
 $streamStateSource = Join-Path $repoRoot "examples\regression\583-stream-state-take-skip.slg"
 $streamRiskSource = Join-Path $repoRoot "examples\regression\585-stream-transaction-risk-scan.slg"
+$streamPartitionSource = Join-Path $repoRoot "examples\user\797-partition-first-match-direct-dispatch.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
 $borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-union-conflict.slg"
 $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-alias-conflict.slg"
@@ -534,7 +535,8 @@ $streamParityCases = @(
     @("deferred-text", $streamDeferredTextSource, "580-deferred-text-evaluation.stdout.txt"),
     @("sensor", $streamSensorSource, "582-billion-sensor-alerts.stdout.txt"),
     @("state", $streamStateSource, "583-stream-state-take-skip.stdout.txt"),
-    @("risk", $streamRiskSource, "585-stream-transaction-risk-scan.stdout.txt")
+    @("risk", $streamRiskSource, "585-stream-transaction-risk-scan.stdout.txt"),
+    @("partition-bound", $streamPartitionSource, "797-partition-first-match-direct-dispatch.stdout.txt")
 )
 $streamStage2LlvmPaths = @()
 foreach ($streamCase in $streamParityCases) {

@@ -9,6 +9,8 @@ public struct RuntimeFunctionSymbols {
     readIntSymbol: Int
     seedRandomSymbol: Int
     randomBelowSymbol: Int
+    secureRandomBytesSymbol: Int
+    secureRandomBytesType: Int
     openIntWriterSymbol: Int
     writeIntSymbol: Int
     closeIntWriterSymbol: Int
@@ -18,6 +20,108 @@ public struct RuntimeFunctionSymbols {
     nowMillisSymbol: Int
     eprintlnSymbol: Int
     flushStandardOutputSymbol: Int
+}
+
+emitSecureRandomFunction runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit uses Console {
+    "define %sollang.enum.t$(functions.secureRandomBytesType) @sollang_m$(runtimeModule)_s$(functions.secureRandomBytesSymbol)(i64 %arg) {" -> println
+    """
+    entry:
+      %empty = icmp eq i64 %arg, 0
+      %allocation_size = select i1 %empty, i64 1, i64 %arg
+      %buffer = call ptr @malloc(i64 %allocation_size)
+      %filled = call i1 @sollang_secure_random_fill(ptr %buffer, i64 %arg)
+      br i1 %filled, label %success, label %failure
+    success:
+    """ -> println
+    "  %success_slot = alloca %sollang.enum.t$(functions.secureRandomBytesType), align 8" -> println
+    "  store %sollang.enum.t$(functions.secureRandomBytesType) zeroinitializer, ptr %success_slot, align 8" -> println
+    "  %success_tag = getelementptr inbounds %sollang.enum.t$(functions.secureRandomBytesType), ptr %success_slot, i32 0, i32 0" -> println
+    """
+      store i32 0, ptr %success_tag, align 4
+    """ -> println
+    "  %success_payload = getelementptr inbounds %sollang.enum.t$(functions.secureRandomBytesType), ptr %success_slot, i32 0, i32 1" -> println
+    """
+      %bytes0 = insertvalue %sollang.array.i32 poison, ptr %buffer, 0
+      %bytes1 = insertvalue %sollang.array.i32 %bytes0, i64 %arg, 1
+      %bytes = insertvalue %sollang.array.i32 %bytes1, i64 %arg, 2
+      store %sollang.array.i32 %bytes, ptr %success_payload, align 8
+    """ -> println
+    "  %success_result = load %sollang.enum.t$(functions.secureRandomBytesType), ptr %success_slot, align 8" -> println
+    "  ret %sollang.enum.t$(functions.secureRandomBytesType) %success_result" -> println
+    """
+    failure:
+      call void @free(ptr %buffer)
+    """ -> println
+    "  %failure_slot = alloca %sollang.enum.t$(functions.secureRandomBytesType), align 8" -> println
+    "  store %sollang.enum.t$(functions.secureRandomBytesType) zeroinitializer, ptr %failure_slot, align 8" -> println
+    "  %failure_tag = getelementptr inbounds %sollang.enum.t$(functions.secureRandomBytesType), ptr %failure_slot, i32 0, i32 0" -> println
+    """
+      store i32 1, ptr %failure_tag, align 4
+    """ -> println
+    "  %failure_result = load %sollang.enum.t$(functions.secureRandomBytesType), ptr %failure_slot, align 8" -> println
+    "  ret %sollang.enum.t$(functions.secureRandomBytesType) %failure_result" -> println
+    "}" -> println
+}
+
+emitWindowsSecureRandom runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit uses Console {
+    (functions.secureRandomBytesSymbol >= 0 and functions.secureRandomBytesType >= 0) -> if {
+        "declare dllimport i32 @BCryptGenRandom(ptr, ptr, i32, i32)" -> println
+        """
+        define internal i1 @sollang_secure_random_fill(ptr %buffer, i64 %length) {
+        entry:
+          %empty = icmp eq i64 %length, 0
+          br i1 %empty, label %success, label %fill
+        fill:
+          %offset = phi i64 [ 0, %entry ], [ %next_offset, %continue ]
+          %remaining = sub i64 %length, %offset
+          %large = icmp ugt i64 %remaining, 4294967295
+          %chunk64 = select i1 %large, i64 4294967295, i64 %remaining
+          %chunk = trunc i64 %chunk64 to i32
+          %target = getelementptr i8, ptr %buffer, i64 %offset
+          %status = call i32 @BCryptGenRandom(ptr null, ptr %target, i32 %chunk, i32 2)
+          %ok = icmp eq i32 %status, 0
+          br i1 %ok, label %continue, label %failure
+        continue:
+          %next_offset = add i64 %offset, %chunk64
+          %done = icmp eq i64 %next_offset, %length
+          br i1 %done, label %success, label %fill
+        success:
+          ret i1 true
+        failure:
+          ret i1 false
+        }
+        """ -> println
+        runtimeModule -> emitSecureRandomFunction(functions)
+    }
+}
+
+emitLinuxSecureRandom runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit uses Console {
+    (functions.secureRandomBytesSymbol >= 0 and functions.secureRandomBytesType >= 0) -> if {
+        "declare i64 @getrandom(ptr, i64, i32)" -> println
+        """
+        define internal i1 @sollang_secure_random_fill(ptr %buffer, i64 %length) {
+        entry:
+          %empty = icmp eq i64 %length, 0
+          br i1 %empty, label %success, label %fill
+        fill:
+          %offset = phi i64 [ 0, %entry ], [ %next_offset, %continue ]
+          %remaining = sub i64 %length, %offset
+          %target = getelementptr i8, ptr %buffer, i64 %offset
+          %read = call i64 @getrandom(ptr %target, i64 %remaining, i32 0)
+          %progress = icmp sgt i64 %read, 0
+          br i1 %progress, label %continue, label %failure
+        continue:
+          %next_offset = add i64 %offset, %read
+          %done = icmp eq i64 %next_offset, %length
+          br i1 %done, label %success, label %fill
+        success:
+          ret i1 true
+        failure:
+          ret i1 false
+        }
+        """ -> println
+        runtimeModule -> emitSecureRandomFunction(functions)
+    }
 }
 
 public emitDictionaryTextHelpers: -> Unit uses Console {
@@ -386,6 +490,7 @@ public emitWindows runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit
       ret void
     }
     """ -> println
+    runtimeModule -> emitWindowsSecureRandom(functions)
 }
 
 public emitLinux runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit uses Console {
@@ -522,6 +627,7 @@ public emitLinux runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit u
       ret void
     }
     """ -> println
+    runtimeModule -> emitLinuxSecureRandom(functions)
 }
 
 public emitWindowsDirectory: -> Unit uses Console {
@@ -1049,7 +1155,6 @@ public emitLinuxDirectory: -> Unit uses Console {
     declare ptr @opendir(ptr)
     declare ptr @readdir(ptr)
     declare i32 @closedir(ptr)
-    declare ptr @__errno_location()
     declare ptr @realpath(ptr, ptr)
     declare i64 @strlen(ptr)
     declare i32 @stat(ptr, ptr)

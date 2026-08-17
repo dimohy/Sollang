@@ -1,0 +1,52 @@
+namespace sys.quic.keys
+
+import sys.crypto.hkdf_sha256 as hkdf
+import sys.crypto.tls13_hkdf as tls13
+
+public struct InitialKeys {
+    clientSecret: [UInt8; 32]
+    serverSecret: [UInt8; 32]
+    clientKey: [UInt8; 16]
+    serverKey: [UInt8; 16]
+    clientIv: [UInt8; 12]
+    serverIv: [UInt8; 12]
+    clientHeaderProtection: [UInt8; 16]
+    serverHeaderProtection: [UInt8; 16]
+}
+
+public version1: -> UInt32 => 1
+public version2: -> UInt32 => 1_798_521_807
+
+v1Salt: -> [UInt8] => [56, 118, 44, 247, 245, 89, 52, 179, 77, 23,
+    154, 230, 164, 200, 12, 173, 204, 187, 127, 10]
+
+v2Salt: -> [UInt8] => [13, 237, 227, 222, 247, 0, 166, 219, 129, 147,
+    129, 190, 110, 38, 157, 203, 249, 189, 46, 217]
+
+public deriveInitial version: UInt32, destinationConnectionId: [UInt8] -> InitialKeys {
+    version == version2() -> if { v2Salt() } else { v1Salt() } => salt
+    [UInt8; ~] => empty
+    hkdf.extract(salt, destinationConnectionId) => initialSecret
+    initialSecret -> tls13.expandLabel32("client in", empty) => clientSecret
+    initialSecret -> tls13.expandLabel32("server in", empty) => serverSecret
+    version == version2() -> if { "quicv2 key" } else { "quic key" } => keyName
+    version == version2() -> if { "quicv2 iv" } else { "quic iv" } => ivName
+    version == version2() -> if { "quicv2 hp" } else { "quic hp" } => hpName
+    clientSecret -> tls13.expandLabel16(keyName, empty) => clientKey
+    serverSecret -> tls13.expandLabel16(keyName, empty) => serverKey
+    clientSecret -> tls13.expandLabel12(ivName, empty) => clientIv
+    serverSecret -> tls13.expandLabel12(ivName, empty) => serverIv
+    clientSecret -> tls13.expandLabel16(hpName, empty) => clientHeaderProtection
+    serverSecret -> tls13.expandLabel16(hpName, empty) => serverHeaderProtection
+    InitialKeys {
+        clientSecret: clientSecret
+        serverSecret: serverSecret
+        clientKey: clientKey
+        serverKey: serverKey
+        clientIv: clientIv
+        serverIv: serverIv
+        clientHeaderProtection: clientHeaderProtection
+        serverHeaderProtection: serverHeaderProtection
+    } => result
+    result
+}

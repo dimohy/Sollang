@@ -1,0 +1,27 @@
+import sys.io
+import sys.socket as socket
+
+# UDP uses the same flat Result propagation contract as TCP.
+# An unused sys.quic declaration must not make this program load its adapter.
+runDatagram serverEndpoint: socket.Endpoint -> Result<socket.Datagram, socket.SocketError> uses Network {
+    socket.bindDatagram(socket.DatagramBindOptions { endpoint: serverEndpoint, reuseAddress: true })? => server
+    socket.Endpoint { address: "127.0.0.1", port: 43177 } => clientEndpoint
+    socket.bindDatagram(socket.DatagramBindOptions { endpoint: clientEndpoint, reuseAddress: true })? => client
+    [UInt8(112), 105, 110, 103; ~] => ping
+    socket.sendTo(client, serverEndpoint, ping)? => sent
+    socket.receiveFrom(server, 16)
+}
+
+main {
+    socket.Endpoint { address: "127.0.0.1", port: 43176 } => serverEndpoint
+    serverEndpoint -> runDatagram -> when {
+        Ok(datagram) {
+            UInt32(datagram.sourcePort) => sourcePort
+            datagram.bytes -> len => count
+            UInt32(datagram.bytes[0]) => first
+            UInt32(datagram.bytes[3]) => last
+            "udp=$sourcePort,$count,$first,$last" -> println
+        }
+        Err(error) { "udp-error=$(error.code)" -> println }
+    }
+}

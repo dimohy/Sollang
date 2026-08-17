@@ -1,0 +1,104 @@
+namespace sys.quic.crypto_stream
+
+import sys.quic.error as errors
+
+public struct ByteCell {
+    offset: UInt64
+    value: UInt8
+}
+
+public struct Read {
+    bytes: [UInt8; ~]
+    nextOffset: UInt64
+}
+
+public struct Chunk {
+    offset: UInt64
+    bytes: [UInt8; ~]
+}
+
+transportError code: UInt64 -> errors.Error => errors.Error { kind: errors.Kind.Transport, code: code }
+maximumOffset: -> UInt64 => 18_446_744_073_709_551_615
+
+public insert cells: mut [ByteCell; ~], offset: UInt64, bytes: [UInt8], maximumBuffered: UInt64 -> Result<UInt64, errors.Error> {
+    UInt64(bytes -> len) <= maximumOffset() - offset -> unless {
+        Result<UInt64, errors.Error>.Err(transportError(errors.frameEncodingError())) -> return
+    }
+    maximumBuffered - maximumBuffered => inserted!
+    0 => sourceIndex!
+    sourceIndex! < (bytes -> len) -> while {
+        offset + UInt64(sourceIndex!) => absoluteOffset
+        false => found!
+        0 => cellIndex!
+        cellIndex! < (cells -> len) -> while {
+            cells[cellIndex!].offset == absoluteOffset -> if {
+                cells[cellIndex!].value == bytes[Int(sourceIndex!)] -> unless {
+                    Result<UInt64, errors.Error>.Err(transportError(errors.protocolViolation())) -> return
+                }
+                true => found!
+            }
+            cellIndex! + 1 => cellIndex!
+        }
+        found! -> unless {
+            UInt64(cells -> len) < maximumBuffered -> unless {
+                Result<UInt64, errors.Error>.Err(transportError(errors.cryptoBufferExceeded())) -> return
+            }
+            cells -> push(ByteCell { offset: absoluteOffset, value: bytes[Int(sourceIndex!)] })
+            inserted! + 1 => inserted!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    Result<UInt64, errors.Error>.Ok(inserted!)
+}
+
+public readContiguous cells: mut [ByteCell; ~], offset: UInt64, maximum: UIntSize -> Read {
+    [UInt8; ~] => output!
+    offset => nextOffset!
+    true => reading!
+    (reading! and UIntSize(output! -> len) < maximum) -> while {
+        false => found!
+        0 => foundIndex!
+        0 => cellIndex!
+        cellIndex! < (cells -> len) -> while {
+            cells[cellIndex!].offset == nextOffset! -> if {
+                true => found!
+                cellIndex! => foundIndex!
+            }
+            cellIndex! + 1 => cellIndex!
+        }
+        found! -> if {
+            cells -> take(foundIndex!) => cell
+            output! -> push(cell.value)
+            nextOffset! + 1 => nextOffset!
+        } else {
+            false => reading!
+        }
+    }
+    Read { bytes: output!, nextOffset: nextOffset! }
+}
+
+public append buffer: mut [UInt8; ~], bytes: [UInt8] -> UInt64 {
+    UInt64(buffer -> len) => offset
+    0 => index!
+    index! < (bytes -> len) -> while {
+        buffer -> push(bytes[Int(index!)])
+        index! + 1 => index!
+    }
+    offset
+}
+
+public chunk buffer: [UInt8], offset: UInt64, maximum: UIntSize -> Result<Chunk, errors.Error> {
+    offset <= UInt64(buffer -> len) -> unless {
+        Result<Chunk, errors.Error>.Err(transportError(errors.frameEncodingError())) -> return
+    }
+    UIntSize(offset) => start
+    UIntSize(buffer -> len) - start => remaining
+    remaining < maximum -> if { remaining } else { maximum } => length
+    [UInt8; ~] => output!
+    UIntSize(0) => index!
+    index! < length -> while {
+        output! -> push(buffer[Int(start + index!)])
+        index! + 1 => index!
+    }
+    Result<Chunk, errors.Error>.Ok(Chunk { offset: offset, bytes: output! })
+}

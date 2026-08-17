@@ -1,0 +1,32 @@
+struct Payload {
+    data: [UInt8; ~]
+}
+
+enum Value {
+    Data(Payload)
+    Empty
+}
+
+struct Packet {
+    data: [UInt8; ~]
+    token: [UInt8; 4]
+}
+
+extract value: Value -> Result<[UInt8; ~], Text> {
+    value -> when {
+        Data(payload) { Result<[UInt8; ~], Text>.Ok(payload.data) }
+        Empty { Result<[UInt8; ~], Text>.Err("empty") }
+    }
+}
+
+packet: -> Result<Packet, Text> {
+    extract(Value.Data(Payload { data: [1, 2; ~] }))? => data
+    Result<Packet, Text>.Ok(Packet { data: data, token: [7; 4] })
+}
+
+main {
+    packet() -> when {
+        Ok(value) { "late-types=$(value.data -> len),$(value.token -> len),$(value.token[3])" -> println }
+        Err(error) { "error=$error" -> println }
+    }
+}

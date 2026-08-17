@@ -1,0 +1,188 @@
+namespace sys.quic.stream_state
+
+import sys.quic.error as errors
+import sys.quic.stream_types as types
+
+transportError code: UInt64 -> errors.Error => errors.Error { kind: errors.Kind.Transport, code: code }
+maximumOffset: -> UInt64 => 18_446_744_073_709_551_615
+
+public identity id: UInt64 -> types.StreamIdentity => types.StreamIdentity {
+    id: id
+    sequence: id / 4
+    initiator: id % 2 == 0 -> if { types.Initiator.Client } else { types.Initiator.Server }
+    direction: id % 4 < 2 -> if { types.Direction.Bidirectional } else { types.Direction.Unidirectional }
+}
+
+public validatePeerOpened id: UInt64, localIsServer: Bool, maximumBidirectional: UInt64, maximumUnidirectional: UInt64 -> Result<types.StreamIdentity, errors.Error> {
+    identity(id) => identified
+    identified.initiator -> when {
+        Client { localIsServer }
+        Server { not localIsServer }
+    } => peerInitiated
+    peerInitiated -> unless {
+        Result<types.StreamIdentity, errors.Error>.Err(transportError(errors.streamStateError())) -> return
+    }
+    identified.direction -> when {
+        Bidirectional { maximumBidirectional }
+        Unidirectional { maximumUnidirectional }
+    } => limit
+    identified.sequence < limit -> if {
+        Result<types.StreamIdentity, errors.Error>.Ok(identified)
+    } else {
+        Result<types.StreamIdentity, errors.Error>.Err(transportError(errors.streamLimitError()))
+    }
+}
+
+public initialReceiveFlow maximum: UInt64 -> types.ReceiveFlow => types.ReceiveFlow {
+    maximum: maximum
+    highestReceived: 0
+    consumed: 0
+    finalKnown: false
+    finalSize: 0
+}
+
+public onReceive state: types.ReceiveFlow, offset: UInt64, length: UInt64, fin: Bool -> Result<types.ReceiveFlow, errors.Error> {
+    offset <= maximumOffset() - length -> unless {
+        Result<types.ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+    }
+    offset + length => end
+    end <= state.maximum -> unless {
+        Result<types.ReceiveFlow, errors.Error>.Err(transportError(errors.flowControlError())) -> return
+    }
+    (state.finalKnown and end > state.finalSize) -> if {
+        Result<types.ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+    }
+    (fin and state.finalKnown and end != state.finalSize) -> if {
+        Result<types.ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+    }
+    types.ReceiveFlow {
+        maximum: state.maximum
+        highestReceived: end > state.highestReceived -> if { end } else { state.highestReceived }
+        consumed: state.consumed
+        finalKnown: state.finalKnown or fin
+        finalSize: fin -> if { end } else { state.finalSize }
+    } -> Result<types.ReceiveFlow, errors.Error>.Ok
+}
+
+public onConsumed state: types.ReceiveFlow, bytes: UInt64 -> Result<types.ReceiveFlow, errors.Error> {
+    bytes <= state.highestReceived - state.consumed -> if {
+        types.ReceiveFlow {
+            maximum: state.maximum
+            highestReceived: state.highestReceived
+            consumed: state.consumed + bytes
+            finalKnown: state.finalKnown
+            finalSize: state.finalSize
+        } -> Result<types.ReceiveFlow, errors.Error>.Ok
+    } else {
+        Result<types.ReceiveFlow, errors.Error>.Err(transportError(errors.streamStateError()))
+    }
+}
+
+public initialSendFlow maximum: UInt64 -> types.SendFlow => types.SendFlow {
+    maximum: maximum
+    sent: 0
+    finalKnown: false
+    finalSize: 0
+}
+
+public onMaxStreamData state: types.SendFlow, maximum: UInt64 -> types.SendFlow => types.SendFlow {
+    maximum: maximum > state.maximum -> if { maximum } else { state.maximum }
+    sent: state.sent
+    finalKnown: state.finalKnown
+    finalSize: state.finalSize
+}
+
+public reserveSend state: types.SendFlow, length: UInt64, fin: Bool -> Result<types.SendFlow, errors.Error> {
+    state.sent <= maximumOffset() - length -> unless {
+        Result<types.SendFlow, errors.Error>.Err(transportError(errors.flowControlError())) -> return
+    }
+    state.sent + length => end
+    end <= state.maximum -> unless {
+        Result<types.SendFlow, errors.Error>.Err(transportError(errors.flowControlError())) -> return
+    }
+    state.finalKnown -> if {
+        Result<types.SendFlow, errors.Error>.Err(transportError(errors.streamStateError())) -> return
+    }
+    types.SendFlow {
+        maximum: state.maximum
+        sent: end
+        finalKnown: fin
+        finalSize: fin -> if { end } else { 0 }
+    } -> Result<types.SendFlow, errors.Error>.Ok
+}
+
+public initialConnectionFlow receiveMaximum: UInt64, sendMaximum: UInt64 -> types.ConnectionFlow => types.ConnectionFlow {
+    receiveMaximum: receiveMaximum
+    received: 0
+    consumed: 0
+    sendMaximum: sendMaximum
+    sent: 0
+}
+
+public onMaxData state: types.ConnectionFlow, maximum: UInt64 -> types.ConnectionFlow => types.ConnectionFlow {
+    receiveMaximum: state.receiveMaximum
+    received: state.received
+    consumed: state.consumed
+    sendMaximum: maximum > state.sendMaximum -> if { maximum } else { state.sendMaximum }
+    sent: state.sent
+}
+
+public initialStreamLimits bidirectional: UInt64, unidirectional: UInt64 -> types.StreamLimits => types.StreamLimits {
+    bidirectional: bidirectional
+    unidirectional: unidirectional
+}
+
+public onMaxStreams state: types.StreamLimits, bidirectional: Bool, maximum: UInt64 -> types.StreamLimits => types.StreamLimits {
+    bidirectional: bidirectional -> if {
+        maximum > state.bidirectional -> if { maximum } else { state.bidirectional }
+    } else {
+        state.bidirectional
+    }
+    unidirectional: bidirectional -> if {
+        state.unidirectional
+    } else {
+        maximum > state.unidirectional -> if { maximum } else { state.unidirectional }
+    }
+}
+
+public onConnectionReceive state: types.ConnectionFlow, newlyReceived: UInt64 -> Result<types.ConnectionFlow, errors.Error> {
+    newlyReceived <= state.receiveMaximum - state.received -> if {
+        types.ConnectionFlow {
+            receiveMaximum: state.receiveMaximum
+            received: state.received + newlyReceived
+            consumed: state.consumed
+            sendMaximum: state.sendMaximum
+            sent: state.sent
+        } -> Result<types.ConnectionFlow, errors.Error>.Ok
+    } else {
+        Result<types.ConnectionFlow, errors.Error>.Err(transportError(errors.flowControlError()))
+    }
+}
+
+public onConnectionConsumed state: types.ConnectionFlow, bytes: UInt64 -> Result<types.ConnectionFlow, errors.Error> {
+    bytes <= state.received - state.consumed -> if {
+        types.ConnectionFlow {
+            receiveMaximum: state.receiveMaximum
+            received: state.received
+            consumed: state.consumed + bytes
+            sendMaximum: state.sendMaximum
+            sent: state.sent
+        } -> Result<types.ConnectionFlow, errors.Error>.Ok
+    } else {
+        Result<types.ConnectionFlow, errors.Error>.Err(transportError(errors.streamStateError()))
+    }
+}
+
+public reserveConnectionSend state: types.ConnectionFlow, bytes: UInt64 -> Result<types.ConnectionFlow, errors.Error> {
+    bytes <= state.sendMaximum - state.sent -> if {
+        types.ConnectionFlow {
+            receiveMaximum: state.receiveMaximum
+            received: state.received
+            consumed: state.consumed
+            sendMaximum: state.sendMaximum
+            sent: state.sent + bytes
+        } -> Result<types.ConnectionFlow, errors.Error>.Ok
+    } else {
+        Result<types.ConnectionFlow, errors.Error>.Err(transportError(errors.flowControlError()))
+    }
+}

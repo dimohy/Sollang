@@ -1,0 +1,40 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        namespace sys.socket
+
+        public struct TcpStream {
+            token: UInt64
+        }
+
+        public enum SocketErrorKind {
+            Other
+        }
+
+        public struct SocketError {
+            kind: SocketErrorKind
+            code: Int32
+        }
+
+        public shutdown connection: TcpStream -> Result<Unit, SocketError> uses Network = intrinsic
+        """,
+        """
+        import sys.socket as socket
+
+        closeInBranch condition: Bool, connection: socket.TcpStream -> Result<Unit, socket.SocketError> uses Network {
+            condition -> if {
+                socket.shutdown(connection)
+            } else {
+                socket.shutdown(connection)
+            }
+        }
+
+        main {
+            "nested-socket-intrinsic" -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

@@ -33,7 +33,7 @@ public struct ProjectManifest {
 }
 
 emptySpan: -> TextSpan {
-    TextSpan { start: UIntSize(0), length: UIntSize(0) }
+    TextSpan { start: 0, length: 0 }
 }
 
 textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
@@ -43,16 +43,16 @@ textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
         (source -> byte(token.span.start + index!)) != (expected -> byte(index!)) -> if {
             false => matches!
         }
-        index! + UIntSize(1) => index!
+        index! + 1 => index!
     }
     matches!
 }
 
 stringSpan token: syntax.SyntaxToken -> TextSpan {
-    token.span.length >= UIntSize(2) -> if {
+    token.span.length >= 2 -> if {
         TextSpan {
-            start: token.span.start + UIntSize(1)
-            length: token.span.length - UIntSize(2)
+            start: token.span.start + 1
+            length: token.span.length - 2
         }
     } else {
         emptySpan()
@@ -138,12 +138,12 @@ parseDependency source: Text, name: TextSpan, start: Int, tokens: [syntax.Syntax
         index! -> skipSeparators(tokens) => index!
     }
     0 => sourceCount!
-    dependencyPath!.length > UIntSize(0) -> if { sourceCount! + 1 => sourceCount! }
-    dependencyGit!.length > UIntSize(0) -> if { sourceCount! + 1 => sourceCount! }
-    dependencyRegistry!.length > UIntSize(0) -> if { sourceCount! + 1 => sourceCount! }
+    dependencyPath!.length > 0 -> if { sourceCount! + 1 => sourceCount! }
+    dependencyGit!.length > 0 -> if { sourceCount! + 1 => sourceCount! }
+    dependencyRegistry!.length > 0 -> if { sourceCount! + 1 => sourceCount! }
     sourceCount! != 1 -> if { -1 -> return }
-    dependencyGit!.length > UIntSize(0) => hasGit
-    dependencyRevision!.length > UIntSize(0) => hasRevision
+    dependencyGit!.length > 0 => hasGit
+    dependencyRevision!.length > 0 => hasRevision
     ((hasGit and not hasRevision) or (not hasGit and hasRevision)) -> if { -1 -> return }
     dependencies -> push(Dependency {
         name: name
@@ -179,9 +179,9 @@ parseDependencies source: Text, start: Int, tokens: [syntax.SyntaxToken; ~], dep
 # 4 root/products contract, 5 product syntax, 6 dependency syntax,
 # 7 unknown field, 8 trailing input.
 public parse source: Text -> ProjectManifest {
-    source -> lexer.lex => rawTokens!
+    source -> lexer.lex => rawTokens
     [syntax.SyntaxToken; ~] => tokens!
-    rawTokens! -> each token {
+    rawTokens -> each token {
         (token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()) -> if {
             tokens! -> push(token)
         }
@@ -280,10 +280,10 @@ public parse source: Text -> ProjectManifest {
         } else { 2 => status! }
     }
     status! == 0 -> if {
-        (name!.length == UIntSize(0) or version!.length == UIntSize(0)) -> if { 3 => status! }
-        ((root!.length == UIntSize(0) and (products! -> len) == 0) or (root!.length > UIntSize(0) and (products! -> len) > 0)) -> if { 4 => status! }
+        (name!.length == 0 or version!.length == 0) -> if { 3 => status! }
+        ((root!.length == 0 and (products! -> len) == 0) or (root!.length > 0 and (products! -> len) > 0)) -> if { 4 => status! }
     }
-    (status! == 0 and root!.length > UIntSize(0)) -> if {
+    (status! == 0 and root!.length > 0) -> if {
         products! -> push(Product { name: name!, root: root! })
     }
 
@@ -293,8 +293,8 @@ public parse source: Text -> ProjectManifest {
         version: version!
         products: products!
         dependencies: dependencies!
-    } => result!
-    result!
+    } => result
+    result
 }
 
 public parseSource source: file.SourceText -> ProjectManifest {

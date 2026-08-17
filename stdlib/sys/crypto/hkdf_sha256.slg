@@ -1,0 +1,68 @@
+namespace sys.crypto.hkdf_sha256
+
+import sys.crypto.hmac_sha256 as hmac
+
+public extract salt: [UInt8], inputKeyMaterial: [UInt8] -> [UInt8; 32] {
+    hmac.digest(salt, inputKeyMaterial)
+}
+
+fill<N> output: mut [UInt8; N], pseudorandomKey: [UInt8], info: [UInt8] -> Unit where N: Int {
+    [UInt8(0); 32] => previous!
+    false => hasPrevious!
+    0 => outputIndex!
+    UInt8(1) => counter!
+    outputIndex! < N -> while {
+        [UInt8; ~] => input!
+        hasPrevious! -> if {
+            0 => previousIndex!
+            previousIndex! < 32 -> while {
+                input! -> push(previous![previousIndex!])
+                previousIndex! + 1 => previousIndex!
+            }
+        }
+        0 => infoIndex!
+        infoIndex! < (info -> len) -> while {
+            input! -> push(info[infoIndex!])
+            infoIndex! + 1 => infoIndex!
+        }
+        input! -> push(counter!)
+        hmac.digest(pseudorandomKey, input!) => digestBlock
+        0 => blockIndex!
+        (blockIndex! < 32 and outputIndex! < N) -> while {
+            digestBlock[blockIndex!] => output[outputIndex!]
+            outputIndex! + 1 => outputIndex!
+            blockIndex! + 1 => blockIndex!
+        }
+        0 => previousCopyIndex!
+        previousCopyIndex! < 32 -> while {
+            digestBlock[previousCopyIndex!] => previous![previousCopyIndex!]
+            previousCopyIndex! + 1 => previousCopyIndex!
+        }
+        true => hasPrevious!
+        counter! + 1 => counter!
+    }
+}
+
+public expand12 pseudorandomKey: [UInt8], info: [UInt8] -> [UInt8; 12] {
+    [UInt8(0); 12] => output!
+    output! -> fill<12>(pseudorandomKey, info)
+    output!
+}
+
+public expand16 pseudorandomKey: [UInt8], info: [UInt8] -> [UInt8; 16] {
+    [UInt8(0); 16] => output!
+    output! -> fill<16>(pseudorandomKey, info)
+    output!
+}
+
+public expand32 pseudorandomKey: [UInt8], info: [UInt8] -> [UInt8; 32] {
+    [UInt8(0); 32] => output!
+    output! -> fill<32>(pseudorandomKey, info)
+    output!
+}
+
+public expand42 pseudorandomKey: [UInt8], info: [UInt8] -> [UInt8; 42] {
+    [UInt8(0); 42] => output!
+    output! -> fill<42>(pseudorandomKey, info)
+    output!
+}

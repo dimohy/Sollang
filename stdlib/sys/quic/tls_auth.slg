@@ -1,0 +1,239 @@
+namespace sys.quic.tls_auth
+
+import sys.quic.error as errors
+import sys.quic.tls_handshake as handshake
+import sys.crypto.bits
+import sys.crypto.ed25519
+
+public struct Certificate {
+    der: [UInt8; ~]
+}
+
+public struct CertificateVerify {
+    algorithm: UInt16
+    signature: [UInt8; ~]
+}
+
+error code: UInt64 -> errors.Error {
+    errors.Error { kind: errors.Kind.Tls, code: code }
+}
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+appendUInt16 output: mut [UInt8; ~], value: UInt16 -> Unit {
+    output -> push(UInt8(value / 256))
+    output -> push(UInt8(value % 256))
+}
+
+appendUInt24 output: mut [UInt8; ~], value: UInt32 -> Unit {
+    output -> push(UInt8(value / 65_536))
+    output -> push(UInt8(value / 256 % 256))
+    output -> push(UInt8(value % 256))
+}
+
+byteZeros: -> [UInt8; 32] => [0; 32]
+
+public ed25519SignatureScheme: -> UInt16 => 2_055
+
+readUInt16 bytes: [UInt8], offset: UIntSize -> Result<UInt16, errors.Error> {
+    offset + 2 <= UIntSize(bytes -> len) -> unless {
+        Result<UInt16, errors.Error>.Err(error(50)) -> return
+    }
+    UInt16(bytes[Int(offset)]) * 256 + UInt16(bytes[Int(offset + 1)]) -> Result<UInt16, errors.Error>.Ok
+}
+
+readUInt24 bytes: [UInt8], offset: UIntSize -> Result<UInt32, errors.Error> {
+    offset + 3 <= UIntSize(bytes -> len) -> unless {
+        Result<UInt32, errors.Error>.Err(error(50)) -> return
+    }
+    UInt32(bytes[Int(offset)]) * 65_536 + UInt32(bytes[Int(offset + 1)]) * 256 + UInt32(bytes[Int(offset + 2)]) -> Result<UInt32, errors.Error>.Ok
+}
+
+copyRange bytes: [UInt8], offset: UIntSize, length: UIntSize -> Result<[UInt8; ~], errors.Error> {
+    offset + length <= UIntSize(bytes -> len) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(50)) -> return
+    }
+    [UInt8; ~] => output!
+    UIntSize(0) => index!
+    index! < length -> while {
+        output! -> push(bytes[Int(offset + index!)])
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+serverContext: -> [UInt8] => [
+    84, 76, 83, 32, 49, 46, 51, 44, 32,
+    115, 101, 114, 118, 101, 114, 32,
+    67, 101, 114, 116, 105, 102, 105, 99, 97, 116, 101, 86, 101, 114, 105, 102, 121
+]
+
+clientContext: -> [UInt8] => [
+    84, 76, 83, 32, 49, 46, 51, 44, 32,
+    99, 108, 105, 101, 110, 116, 32,
+    67, 101, 114, 116, 105, 102, 105, 99, 97, 116, 101, 86, 101, 114, 105, 102, 121
+]
+
+public certificateVerifyInput server: Bool, transcriptHash: [UInt8; 32] -> [UInt8; 130] {
+    [UInt8(0); 130] => output!
+    0 => index!
+    index! < 64 -> while {
+        32 => output![index!]
+        index! + 1 => index!
+    }
+    server -> if { serverContext() } else { clientContext() } => context
+    0 => contextIndex!
+    contextIndex! < 33 -> while {
+        context[contextIndex!] => output![64 + contextIndex!]
+        contextIndex! + 1 => contextIndex!
+    }
+    0 => hashIndex!
+    hashIndex! < 32 -> while {
+        transcriptHash[hashIndex!] => output![98 + hashIndex!]
+        hashIndex! + 1 => hashIndex!
+    }
+    output!
+}
+
+public encodeCertificate der: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    ((der -> len) > 0 and (der -> len) <= 16_777_210) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(80)) -> return
+    }
+    UInt32(der -> len) => certificateLength
+    [UInt8; ~] => body!
+    body! -> push(0)
+    body! -> appendUInt24(certificateLength + 5)
+    body! -> appendUInt24(certificateLength)
+    body! -> appendBytes(der)
+    body! -> appendUInt16(0)
+    handshake.encode(handshake.certificate(), body!)
+}
+
+public decodeCertificate bytes: [UInt8] -> Result<Certificate, errors.Error> {
+    handshake.decode(bytes, 0)? => decoded
+    (decoded.messageType == handshake.certificate() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+        Result<Certificate, errors.Error>.Err(error(50)) -> return
+    }
+    copyRange(decoded.body, 0, UIntSize(decoded.body -> len))? => body
+    (body -> len) >= 9 -> unless {
+        Result<Certificate, errors.Error>.Err(error(50)) -> return
+    }
+    body[0] == 0 -> unless {
+        Result<Certificate, errors.Error>.Err(error(47)) -> return
+    }
+    readUInt24(body, 1)? => listLength
+    UIntSize(listLength) + 4 == UIntSize(body -> len) -> unless {
+        Result<Certificate, errors.Error>.Err(error(50)) -> return
+    }
+    readUInt24(body, 4)? => certificateLength
+    certificateLength > 0 -> unless {
+        Result<Certificate, errors.Error>.Err(error(42)) -> return
+    }
+    7 + UIntSize(certificateLength) + 2 == UIntSize(body -> len) -> unless {
+        Result<Certificate, errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(body, 7 + UIntSize(certificateLength))? => certificateExtensionsLength
+    certificateExtensionsLength == 0 -> unless {
+        Result<Certificate, errors.Error>.Err(error(110)) -> return
+    }
+    copyRange(body, 7, UIntSize(certificateLength))? => der
+    Result<Certificate, errors.Error>.Ok(Certificate { der: der })
+}
+
+public encodeCertificateVerify algorithm: UInt16, signature: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    ((signature -> len) > 0 and (signature -> len) <= 65_535) -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(80)) -> return
+    }
+    [UInt8; ~] => body!
+    body! -> appendUInt16(algorithm)
+    body! -> appendUInt16(UInt16(signature -> len))
+    body! -> appendBytes(signature)
+    handshake.encode(handshake.certificateVerify(), body!)
+}
+
+public decodeCertificateVerify bytes: [UInt8] -> Result<CertificateVerify, errors.Error> {
+    handshake.decode(bytes, 0)? => decoded
+    (decoded.messageType == handshake.certificateVerify() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+        Result<CertificateVerify, errors.Error>.Err(error(50)) -> return
+    }
+    copyRange(decoded.body, 0, UIntSize(decoded.body -> len))? => body
+    (body -> len) >= 5 -> unless {
+        Result<CertificateVerify, errors.Error>.Err(error(50)) -> return
+    }
+    readUInt16(body, 0)? => algorithm
+    readUInt16(body, 2)? => signatureLength
+    UIntSize(signatureLength) + 4 == UIntSize(body -> len) -> unless {
+        Result<CertificateVerify, errors.Error>.Err(error(50)) -> return
+    }
+    copyRange(body, 4, UIntSize(signatureLength))? => signature
+    Result<CertificateVerify, errors.Error>.Ok(CertificateVerify {
+        algorithm: algorithm
+        signature: signature
+    })
+}
+
+public signCertificateVerify seed: [UInt8], server: Bool, transcriptHash: [UInt8; 32] -> Result<[UInt8; ~], errors.Error> {
+    certificateVerifyInput(server, transcriptHash) => signedInput
+    ed25519.sign(seed, signedInput) -> when {
+        Ok(signature) { encodeCertificateVerify(ed25519SignatureScheme(), signature) }
+        Err(signError) { Result<[UInt8; ~], errors.Error>.Err(error(80)) }
+    }
+}
+
+public verifyCertificateVerify publicKey: [UInt8], server: Bool, transcriptHash: [UInt8; 32], message: [UInt8] -> Result<Unit, errors.Error> {
+    decodeCertificateVerify(message)? => decoded
+    (decoded.algorithm == ed25519SignatureScheme() and (decoded.signature -> len) == 64) -> unless {
+        Result<Unit, errors.Error>.Err(error(47)) -> return
+    }
+    certificateVerifyInput(server, transcriptHash) => signedInput
+    ed25519.verify(publicKey, signedInput, decoded.signature) -> when {
+        Ok(valid) {
+            valid -> if {
+                Result<Unit, errors.Error>.Ok
+            } else {
+                Result<Unit, errors.Error>.Err(error(51))
+            }
+        }
+        Err(verifyError) { Result<Unit, errors.Error>.Err(error(51)) }
+    }
+}
+
+public encodeFinished verifyData: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    (verifyData -> len) == 32 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(47)) -> return
+    }
+    handshake.encode(handshake.finished(), verifyData)
+}
+
+public decodeFinished bytes: [UInt8] -> Result<[UInt8; 32], errors.Error> {
+    handshake.decode(bytes, 0)? => decoded
+    (decoded.messageType == handshake.finished() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(50)) -> return
+    }
+    (decoded.body -> len) == 32 -> unless {
+        Result<[UInt8; 32], errors.Error>.Err(error(50)) -> return
+    }
+    byteZeros() => output!
+    0 => index!
+    index! < 32 -> while {
+        decoded.body[index!] => output![index!]
+        index! + 1 => index!
+    }
+    Result<[UInt8; 32], errors.Error>.Ok(output!)
+}
+
+public verifyFinished expected: [UInt8; 32], actual: [UInt8; 32] -> Bool {
+    UInt32(0) => difference!
+    0 => index!
+    index! < 32 -> while {
+        difference! + bits.xor(UInt32(expected[index!]), UInt32(actual[index!])) => difference!
+        index! + 1 => index!
+    }
+    difference! == 0
+}

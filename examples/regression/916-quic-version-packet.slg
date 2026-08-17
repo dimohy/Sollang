@@ -1,0 +1,23 @@
+import sys.io
+import sys.quic.error as errors
+import sys.quic.keys
+import sys.quic.version_packet as versionPacket
+
+verify: -> Result<UInt32, errors.Error> {
+    versionPacket.Packet {
+        destinationConnectionId: [1, 2, 3; ~]
+        sourceConnectionId: [4, 5; ~]
+        versions: [keys.version2(); ~]
+    } => packet
+    versionPacket.encode(192, packet)? => encoded
+    versionPacket.decode(encoded)? => decoded
+    versionPacket.validateOriginal(keys.version1(), decoded)? => valid
+    valid -> if { decoded.versions[0] } else { 0 } -> Result<UInt32, errors.Error>.Ok
+}
+
+main {
+    verify() -> when {
+        Ok(version) { "packet-version=$version" -> println }
+        Err(error) { "packet-error=$(error.code)" -> println }
+    }
+}

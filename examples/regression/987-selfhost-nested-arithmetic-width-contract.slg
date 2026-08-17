@@ -1,0 +1,50 @@
+import sollang.compiler.ir.typed as typedIr
+
+rank symbol: Int -> Int {
+    0 => value!
+    (symbol == 3 or symbol == 8) -> if { 1 => value! }
+    (symbol == 4 or symbol == 9) -> if { 2 => value! }
+    (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14) -> if { 3 => value! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13) -> if { 4 => value! }
+    value!
+}
+
+main {
+    [
+        """
+        indexDifference: -> UIntSize {
+            UIntSize(9) => end!
+            UIntSize(4) => start!
+            true -> if { end! - 1 => end! }
+            end! - start!
+        }
+
+        hashByte: -> UInt64 {
+            UInt64(1) => hash!
+            UInt8(7) => value
+            hash! * 1_099_511_628_211 + UInt64(value)
+        }
+
+        decodeDigit: -> UInt8 {
+            UInt8(1) => decoded!
+            decoded! * 16 + Int(2) => decoded!
+            decoded!
+        }
+        """; ~
+    ] -> typedIr.lower => ir
+    0 => mismatches!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.kind == 8 and node.operand0 >= 0 and node.operand1 >= 0) -> if {
+            ir[node.operand0] => left
+            ir[node.operand1] => right
+            left.typeSymbol -> rank => leftRank
+            right.typeSymbol -> rank => rightRank
+            leftRank > rightRank -> if { leftRank } else { rightRank } => expectedRank
+            (expectedRank > 0 and (node.typeSymbol -> rank) != expectedRank) -> if { mismatches! + 1 => mismatches! }
+        }
+        index! + 1 => index!
+    }
+    "nested-arithmetic-width-mismatches=$(mismatches!)" -> println
+}

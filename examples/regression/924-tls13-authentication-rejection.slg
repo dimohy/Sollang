@@ -1,0 +1,35 @@
+import sys.crypto.bits
+import sys.quic.error as errors
+import sys.quic.tls_auth as auth
+
+transcriptHash: -> [UInt8; 32] => [0; 32]
+serverSeed: -> [UInt8; 32] => [
+    157, 97, 177, 157, 239, 253, 90, 96,
+    186, 132, 74, 244, 146, 236, 44, 196,
+    68, 73, 197, 105, 123, 50, 105, 25,
+    112, 59, 172, 3, 28, 174, 127, 96
+]
+serverPublicKey: -> [UInt8; 32] => [
+    215, 90, 152, 1, 130, 177, 10, 183,
+    213, 75, 254, 211, 201, 100, 7, 58,
+    14, 225, 114, 243, 218, 166, 35, 37,
+    175, 2, 26, 104, 247, 7, 81, 26
+]
+
+run: -> Result<Unit, errors.Error> uses Console {
+    auth.signCertificateVerify(serverSeed(), true, transcriptHash())? => certificateVerify!
+    UInt8(bits.xor(UInt32(certificateVerify![10]), 1)) => certificateVerify![10]
+    auth.verifyCertificateVerify(serverPublicKey(), true, transcriptHash(), certificateVerify!) -> when {
+        Ok(done) { UInt64(0) }
+        Err(error) { error.code }
+    } => rejectedCode
+    "tls-auth-reject=$rejectedCode,false" -> println
+    Result<Unit, errors.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) {}
+        Err(error) { "tls-auth-test-error=$(error.code)" -> println }
+    }
+}

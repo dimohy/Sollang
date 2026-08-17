@@ -1,0 +1,20 @@
+import sys.quic.transport_parameters as parameters
+import sys.quic.error as errors
+
+verify: -> Result<Bool, errors.Error> uses Console {
+    parameters.encodeInteger(parameters.maxDatagramFrameSize(), 65_535)? => encoded
+    parameters.decode(encoded, 0)? => decoded
+    parameters.decodeInteger(decoded)? => value
+    parameters.encodeEmpty(parameters.greaseQuicBit())? => grease
+    parameters.decode(grease, 0)? => decodedGrease
+    "$(decoded.id),$value,$(decoded.nextOffset),$(encoded[0]),$(encoded[2]),$(encoded[5])" -> println
+    "$(decodedGrease.id),$(decodedGrease.value -> len),$(decodedGrease.nextOffset),$(grease[0]),$(grease[1])" -> println
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+main {
+    verify() -> when {
+        Ok(done) {}
+        Err(error) { "error=$(error.code)" -> println }
+    }
+}

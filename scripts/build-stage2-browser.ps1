@@ -17,7 +17,7 @@ $compilerError = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.err"
 $compilerBitcode = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.bc"
 $compilerObject = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.o"
 $compilerArtifact = Join-Path $repoRoot "artifacts\sollangc-browser.wasm"
-$publicCompiler = Join-Path $repoRoot "public\sollangc-stage2-0.4.260813.wasm"
+$publicCompiler = Join-Path $repoRoot "public\sollangc-stage2-0.4.260817.wasm"
 
 $browserSources = Get-Content -LiteralPath $manifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |

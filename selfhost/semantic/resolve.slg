@@ -63,7 +63,7 @@ public resolvePrepared request: ResolutionRequest -> [ResolvedName; ~] {
                 0 => candidateSymbolIndex!
                 candidateSymbolIndex! < symbolCount -> while {
                     request.symbols[candidateSymbolIndex!] => candidate
-                    (candidate.kind != 48 and candidate.parent == searchScope!) -> if {
+                    (candidate.kind != 48 and candidate.kind != 58 and candidate.parent == searchScope!) -> if {
                         request.tokens[nameAst.payloadToken] => referenceName
                         request.tokens[candidate.nameToken] => candidateName
                         referenceName.span.length == candidateName.span.length => namesEqual!
@@ -72,13 +72,13 @@ public resolvePrepared request: ResolutionRequest -> [ResolvedName; ~] {
                             request.source -> byte(referenceName.span.start + nameByte!) => referenceByte
                             request.source -> byte(candidateName.span.start + nameByte!) => candidateByte
                             referenceByte != candidateByte -> if { false => namesEqual! }
-                            nameByte! + UIntSize(1) => nameByte!
+                            nameByte! + 1 => nameByte!
                         }
                         candidate.flags / 262144 % 2 == 1 -> if {
-                            referenceName.span.length == UIntSize(2) => namesEqual!
+                            referenceName.span.length == 2 => namesEqual!
                             (namesEqual!
-                                and (request.source -> byte(referenceName.span.start)) == UInt8(105)
-                                and (request.source -> byte(referenceName.span.start + UIntSize(1))) == UInt8(116)) => namesEqual!
+                                and (request.source -> byte(referenceName.span.start)) == 105
+                                and (request.source -> byte(referenceName.span.start + 1)) == 116) => namesEqual!
                         }
                         namesEqual! -> if {
                             request.nodes[candidate.astNode].start => candidateStart
@@ -162,10 +162,10 @@ public resolvePrepared request: ResolutionRequest -> [ResolvedName; ~] {
 }
 
 public resolve source: Text -> [ResolvedName; ~] {
-    source -> ast.lower => nodes!
-    nodes! -> symbols.collectPrepared => table!
-    source -> lexer.lex => tokens!
-    ResolutionRequest { source: source, nodes: nodes!, symbols: table!, tokens: tokens! } => request!
-    request! -> resolvePrepared => resolved!
-    resolved!
+    source -> ast.lower => nodes
+    nodes -> symbols.collectPrepared => table
+    source -> lexer.lex => tokens
+    ResolutionRequest { source: source, nodes: nodes, symbols: table, tokens: tokens } => request
+    request -> resolvePrepared => resolved
+    resolved
 }

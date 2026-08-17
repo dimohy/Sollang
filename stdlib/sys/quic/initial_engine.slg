@@ -1,0 +1,220 @@
+namespace sys.quic.initial_engine
+
+import sys.crypto.bits
+import sys.quic.error as errors
+import sys.quic.frame
+import sys.quic.frame_types as frames
+import sys.quic.keys
+import sys.quic.packet
+import sys.quic.tls_hello as hello
+
+public struct AcceptedClientInitial {
+    version: UInt32
+    originalDestinationConnectionId: [UInt8; ~]
+    clientSourceConnectionId: [UInt8; ~]
+    packetNumber: UInt64
+    clientHello: [UInt8; ~]
+}
+
+public struct OpenedServerInitial {
+    serverSourceConnectionId: [UInt8; ~]
+    packetNumber: UInt64
+    serverHello: [UInt8; ~]
+}
+
+error kind: errors.Kind, code: UInt64 -> errors.Error {
+    errors.Error { kind: kind, code: code }
+}
+
+copyBytes source: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => output!
+    0 => index!
+    index! < (source -> len) -> while {
+        output! -> push(source[index!])
+        index! + 1 => index!
+    }
+    output!
+}
+
+sameBytes left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    UInt32(0) => difference!
+    0 => index!
+    index! < (left -> len) -> while {
+        bits.xor(UInt32(left[index!]), UInt32(right[index!])) => different
+        difference! + different => difference!
+        index! + 1 => index!
+    }
+    difference! == 0
+}
+
+cryptoPayload message: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    message -> copyBytes => data
+    frames.Value.Crypto(frames.Crypto { offset: 0, data: data }) -> frame.encode
+}
+
+validatePadding plaintext: [UInt8], offset: UIntSize -> Result<Unit, errors.Error> {
+    offset => cursor!
+    cursor! < UIntSize(plaintext -> len) -> while {
+        plaintext[Int(cursor!)] == 0 -> unless {
+            Result<Unit, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(cursor!))) -> return
+        }
+        cursor! + 1 => cursor!
+    }
+    Result<Unit, errors.Error>.Ok
+}
+
+public encodeClientInitial version: UInt32, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], packetNumber: UInt64, clientHello: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    hello.decodeClientHello(clientHello)? => decodedHello
+    keys.deriveInitial(version, destinationConnectionId) => initialKeys
+    clientHello -> cryptoPayload? => plaintext!
+    packet.sealInitial(
+        version,
+        destinationConnectionId,
+        sourceConnectionId,
+        [],
+        packetNumber,
+        4,
+        plaintext!,
+        initialKeys.clientKey,
+        initialKeys.clientIv,
+        initialKeys.clientHeaderProtection)? => firstPacket
+    (firstPacket -> len) < 1_200 -> if {
+        1_200 - (firstPacket -> len) => paddingCount
+        0 => paddingIndex!
+        paddingIndex! < paddingCount -> while {
+            plaintext! -> push(0)
+            paddingIndex! + 1 => paddingIndex!
+        }
+    }
+    packet.sealInitial(
+        version,
+        destinationConnectionId,
+        sourceConnectionId,
+        [],
+        packetNumber,
+        4,
+        plaintext!,
+        initialKeys.clientKey,
+        initialKeys.clientIv,
+        initialKeys.clientHeaderProtection)? => protected
+    (protected -> len) >= 1_200 -> unless {
+        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Internal, UInt64(protected -> len))) -> return
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(protected)
+}
+
+public acceptClientInitial datagram: [UInt8], expectedPacketNumber: UInt64 -> Result<AcceptedClientInitial, errors.Error> {
+    packet.parseInitialHeader(datagram)? => header
+    (header.token -> len) == 0 -> unless {
+        Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(header.token -> len))) -> return
+    }
+    keys.deriveInitial(header.version, header.destinationConnectionId) => initialKeys
+    packet.openInitial(
+        datagram,
+        expectedPacketNumber,
+        initialKeys.clientKey,
+        initialKeys.clientIv,
+        initialKeys.clientHeaderProtection)? => opened
+    opened.nextOffset == header.packetEnd -> unless {
+        Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(opened.nextOffset))) -> return
+    }
+    frame.decode(opened.plaintext, 0)? => decodedFrame
+    decodedFrame.nextOffset => paddingOffset
+    validatePadding(opened.plaintext, paddingOffset)?
+    decodedFrame.frame -> when {
+        Crypto(crypto) {
+            crypto.offset == 0 -> unless {
+                Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, crypto.offset)) -> return
+            }
+            hello.decodeClientHello(crypto.data)? => decodedHello
+            Result<AcceptedClientInitial, errors.Error>.Ok(AcceptedClientInitial {
+                version: header.version
+                originalDestinationConnectionId: header.destinationConnectionId
+                clientSourceConnectionId: header.sourceConnectionId
+                packetNumber: opened.packetNumber
+                clientHello: crypto.data
+            })
+        }
+        Padding(count) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, count)) }
+        Ping { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 1)) }
+        Ack(ack) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 2)) }
+        Stream(streamFrame) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 8)) }
+        Datagram(datagramFrame) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 48)) }
+        MaxData(maximum) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 16)) }
+        MaxStreamData(limit) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 17)) }
+        MaxStreams(limit) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 18)) }
+        DataBlocked(limit) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 20)) }
+        StreamDataBlocked(blocked) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 21)) }
+        StreamsBlocked(blocked) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 22)) }
+        NewConnectionId(value) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 24)) }
+        RetireConnectionId(sequence) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 25)) }
+        ConnectionClose(close) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 28)) }
+        HandshakeDone { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 30)) }
+    }
+}
+
+public encodeServerInitial accepted: ref AcceptedClientInitial, serverSourceConnectionId: [UInt8], packetNumber: UInt64, serverHello: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+    hello.decodeServerHello(serverHello)? => decodedHello
+    keys.deriveInitial(accepted.version, accepted.originalDestinationConnectionId) => initialKeys
+    serverHello -> cryptoPayload? => plaintext
+    packet.sealInitial(
+        accepted.version,
+        accepted.clientSourceConnectionId,
+        serverSourceConnectionId,
+        [],
+        packetNumber,
+        4,
+        plaintext,
+        initialKeys.serverKey,
+        initialKeys.serverIv,
+        initialKeys.serverHeaderProtection)
+}
+
+public openServerInitial datagram: [UInt8], version: UInt32, originalDestinationConnectionId: [UInt8], clientSourceConnectionId: [UInt8], expectedPacketNumber: UInt64 -> Result<OpenedServerInitial, errors.Error> {
+    packet.parseInitialHeader(datagram)? => header
+    (header.version == version
+        and sameBytes(header.destinationConnectionId, clientSourceConnectionId)
+        and (header.token -> len) == 0) -> unless {
+        Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(header.version))) -> return
+    }
+    keys.deriveInitial(version, originalDestinationConnectionId) => initialKeys
+    packet.openInitial(
+        datagram,
+        expectedPacketNumber,
+        initialKeys.serverKey,
+        initialKeys.serverIv,
+        initialKeys.serverHeaderProtection)? => opened
+    frame.decode(opened.plaintext, 0)? => decodedFrame
+    decodedFrame.nextOffset == UIntSize(opened.plaintext -> len) -> unless {
+        Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(decodedFrame.nextOffset))) -> return
+    }
+    decodedFrame.frame -> when {
+        Crypto(crypto) {
+            crypto.offset == 0 -> unless {
+                Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, crypto.offset)) -> return
+            }
+            hello.decodeServerHello(crypto.data)? => decodedHello
+            Result<OpenedServerInitial, errors.Error>.Ok(OpenedServerInitial {
+                serverSourceConnectionId: header.sourceConnectionId
+                packetNumber: opened.packetNumber
+                serverHello: crypto.data
+            })
+        }
+        Padding(count) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, count)) }
+        Ping { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 1)) }
+        Ack(ack) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 2)) }
+        Stream(streamFrame) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 8)) }
+        Datagram(datagramFrame) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 48)) }
+        MaxData(maximum) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 16)) }
+        MaxStreamData(limit) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 17)) }
+        MaxStreams(limit) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 18)) }
+        DataBlocked(limit) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 20)) }
+        StreamDataBlocked(blocked) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 21)) }
+        StreamsBlocked(blocked) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 22)) }
+        NewConnectionId(value) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 24)) }
+        RetireConnectionId(sequence) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 25)) }
+        ConnectionClose(close) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 28)) }
+        HandshakeDone { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, 30)) }
+    }
+}

@@ -145,7 +145,17 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                     } else {
                         ownerAst.secondaryToken >= 0 -> if {
                             owner!.secondaryTypeNode < 0 -> if {
-                                typeAstIndex! => owner!.secondaryTypeNode
+                                # The compact AST is not required to store
+                                # signature type nodes in lexical order. The
+                                # first source type is the named input and the
+                                # second is the declared result, so establish
+                                # that order from spans instead of visit order.
+                                nodes[typeAstIndex!].start < nodes[owner!.typeNode].start -> if {
+                                    owner!.typeNode => owner!.secondaryTypeNode
+                                    typeAstIndex! => owner!.typeNode
+                                } else {
+                                    typeAstIndex! => owner!.secondaryTypeNode
+                                }
                             } else {
                                 owner!.blockTypeNode < 0 -> if {
                                     typeAstIndex! => owner!.blockTypeNode
@@ -574,13 +584,13 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
 }
 
 public collect source: Text -> [Symbol; ~] {
-    source -> ast.lower => nodes!
-    nodes! -> collectPrepared => symbols!
-    symbols!
+    source -> ast.lower => nodes
+    nodes -> collectPrepared => symbols
+    symbols
 }
 
 public collectSource source: file.SourceText -> [Symbol; ~] {
-    source -> ast.lowerSource => nodes!
-    nodes! -> collectPrepared => symbols!
-    symbols!
+    source -> ast.lowerSource => nodes
+    nodes -> collectPrepared => symbols
+    symbols
 }

@@ -17,22 +17,22 @@ public struct SemanticDiagnostic {
 # Code 2 identifies an unresolved name expression.
 # Code 3 identifies break/continue without an enclosing while.
 public analyze source: Text -> [SemanticDiagnostic; ~] {
-    source -> ast.lower => nodes!
-    nodes! -> symbols.collectPrepared => table!
-    source -> lexer.lex => tokens!
+    source -> ast.lower => nodes
+    nodes -> symbols.collectPrepared => table
+    source -> lexer.lex => tokens
     [SemanticDiagnostic; ~] => diagnostics!
-    table! -> len => symbolCount
+    table -> len => symbolCount
     0 => symbolIndex!
 
     symbolIndex! < symbolCount -> while {
-        table![symbolIndex!] => current
+        table[symbolIndex!] => current
         -1 => duplicateOf!
         0 => candidateIndex!
         (candidateIndex! < symbolIndex! and duplicateOf! < 0) -> while {
-            table![candidateIndex!] => candidate
+            table[candidateIndex!] => candidate
             (current.kind != 48 and candidate.kind != 48 and current.parent == candidate.parent) -> if {
-                tokens![current.nameToken] => currentName
-                tokens![candidate.nameToken] => candidateName
+                tokens[current.nameToken] => currentName
+                tokens[candidate.nameToken] => candidateName
                 currentName.span.length == candidateName.span.length => namesEqual!
                 UIntSize(0) => nameByte!
                 (namesEqual! and nameByte! < currentName.span.length) -> while {
@@ -41,7 +41,7 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
                     currentByte != candidateByte -> if {
                         false => namesEqual!
                     }
-                    nameByte! + UIntSize(1) => nameByte!
+                    nameByte! + 1 => nameByte!
                 }
                 namesEqual! -> if {
                     not ((current.kind == 9 or current.kind == 61) and (candidate.kind == 9 or candidate.kind == 61) and current.flags == 1 and candidate.flags == 1) -> if {
@@ -52,7 +52,7 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
             candidateIndex! + 1 => candidateIndex!
         }
         duplicateOf! >= 0 -> if {
-            tokens![current.nameToken] => duplicateName
+            tokens[current.nameToken] => duplicateName
             SemanticDiagnostic {
                 code: 1
                 symbol: symbolIndex!
@@ -64,38 +64,38 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
         symbolIndex! + 1 => symbolIndex!
     }
 
-    source -> resolution.resolve => resolved!
-    nodes! -> len => astCount
-    resolved! -> len => resolvedCount
+    source -> resolution.resolve => resolved
+    nodes -> len => astCount
+    resolved -> len => resolvedCount
     0 => diagnosticAstIndex!
     diagnosticAstIndex! < astCount -> while {
-        nodes![diagnosticAstIndex!] => nameAst
+        nodes[diagnosticAstIndex!] => nameAst
         nameAst.kind == 15 -> if {
             false => nameResolved!
             0 => resolutionIndex!
             resolutionIndex! < resolvedCount -> while {
-                resolved![resolutionIndex!].astNode == diagnosticAstIndex! -> if {
+                resolved[resolutionIndex!].astNode == diagnosticAstIndex! -> if {
                     true => nameResolved!
                 }
                 resolutionIndex! + 1 => resolutionIndex!
             }
             not nameResolved! -> if {
-                tokens![nameAst.payloadToken] => unresolvedName
+                tokens[nameAst.payloadToken] => unresolvedName
                 false => booleanLiteral!
-                unresolvedName.span.length == UIntSize(4) -> if {
+                unresolvedName.span.length == 4 -> if {
                     source -> byte(unresolvedName.span.start) => boolByte0
-                    source -> byte(unresolvedName.span.start + UIntSize(1)) => boolByte1
-                    source -> byte(unresolvedName.span.start + UIntSize(2)) => boolByte2
-                    source -> byte(unresolvedName.span.start + UIntSize(3)) => boolByte3
-                    (boolByte0 == UInt8(116) and boolByte1 == UInt8(114) and boolByte2 == UInt8(117) and boolByte3 == UInt8(101)) -> if { true => booleanLiteral! }
+                    source -> byte(unresolvedName.span.start + 1) => boolByte1
+                    source -> byte(unresolvedName.span.start + 2) => boolByte2
+                    source -> byte(unresolvedName.span.start + 3) => boolByte3
+                    (boolByte0 == 116 and boolByte1 == 114 and boolByte2 == 117 and boolByte3 == 101) -> if { true => booleanLiteral! }
                 }
-                unresolvedName.span.length == UIntSize(5) -> if {
+                unresolvedName.span.length == 5 -> if {
                     source -> byte(unresolvedName.span.start) => falseByte0
-                    source -> byte(unresolvedName.span.start + UIntSize(1)) => falseByte1
-                    source -> byte(unresolvedName.span.start + UIntSize(2)) => falseByte2
-                    source -> byte(unresolvedName.span.start + UIntSize(3)) => falseByte3
-                    source -> byte(unresolvedName.span.start + UIntSize(4)) => falseByte4
-                    (falseByte0 == UInt8(102) and falseByte1 == UInt8(97) and falseByte2 == UInt8(108) and falseByte3 == UInt8(115) and falseByte4 == UInt8(101)) -> if { true => booleanLiteral! }
+                    source -> byte(unresolvedName.span.start + 1) => falseByte1
+                    source -> byte(unresolvedName.span.start + 2) => falseByte2
+                    source -> byte(unresolvedName.span.start + 3) => falseByte3
+                    source -> byte(unresolvedName.span.start + 4) => falseByte4
+                    (falseByte0 == 102 and falseByte1 == 97 and falseByte2 == 108 and falseByte3 == 115 and falseByte4 == 101) -> if { true => booleanLiteral! }
                 }
                 not booleanLiteral! -> if {
                     SemanticDiagnostic {
@@ -112,10 +112,10 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
             nameAst.parent => loopOwner!
             false => hasLoopOwner!
             (loopOwner! >= 0 and not hasLoopOwner!) -> while {
-                nodes![loopOwner!].kind == 44 -> if { true => hasLoopOwner! } else { nodes![loopOwner!].parent => loopOwner! }
+                nodes[loopOwner!].kind == 44 -> if { true => hasLoopOwner! } else { nodes[loopOwner!].parent => loopOwner! }
             }
             not hasLoopOwner! -> if {
-                tokens![nameAst.payloadToken] => loopControlToken
+                tokens[nameAst.payloadToken] => loopControlToken
                 diagnostics! -> push(SemanticDiagnostic {
                     code: 3
                     symbol: -1

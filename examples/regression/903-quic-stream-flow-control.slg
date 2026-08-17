@@ -1,0 +1,42 @@
+import sys.quic.error as errors
+import sys.quic.stream_state as streams
+
+verify: -> Result<Bool, errors.Error> uses Console {
+    streams.validatePeerOpened(0, true, 1, 1)? => bidirectional
+    streams.validatePeerOpened(2, true, 1, 1)? => unidirectional
+    streams.validatePeerOpened(4, true, 1, 1) -> when {
+        Ok(opened) { "missing-limit-error" -> println }
+        Err(error) { "$(bidirectional.sequence),$(unidirectional.id),$(error.code)" -> println }
+    }
+    streams.validatePeerOpened(1, true, 1, 1) -> when {
+        Ok(opened) { "missing-state-error" -> println }
+        Err(error) { "$(error.code)" -> println }
+    }
+
+    streams.onReceive(streams.initialReceiveFlow(100), 10, 20, false)? => received
+    streams.onReceive(received, 30, 10, true)? => finished
+    streams.onConsumed(finished, 25)? => consumed
+    streams.onReceive(finished, 40, 1, false) -> when {
+        Ok(state) { "missing-final-size-error" -> println }
+        Err(error) { "$(finished.highestReceived),$(finished.finalSize),$(consumed.consumed),$(error.code)" -> println }
+    }
+
+    streams.reserveSend(streams.initialSendFlow(50), 30, false)? => firstSend
+    streams.reserveSend(firstSend, 20, true)? => finalSend
+    streams.reserveSend(finalSend, 0, false) -> when {
+        Ok(state) { "missing-closed-send-error" -> println }
+        Err(error) { "$(finalSend.sent),$(finalSend.finalSize),$(error.code)" -> println }
+    }
+
+    streams.onConnectionReceive(streams.initialConnectionFlow(100, 80), 60)? => connectionReceived
+    streams.reserveConnectionSend(connectionReceived, 70)? => connectionSent
+    "$(connectionSent.received),$(connectionSent.sent)" -> println
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+main {
+    verify() -> when {
+        Ok(done) {}
+        Err(error) { "unexpected=$(error.code)" -> println }
+    }
+}

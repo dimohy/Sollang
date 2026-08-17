@@ -1,0 +1,40 @@
+import sys.crypto.tls13_keys as tls13
+
+psk: -> [UInt8] => [
+    115, 111, 108, 108, 97, 110, 103, 45,
+    113, 117, 105, 99, 45, 112, 115, 107,
+    45, 118, 101, 99, 116, 111, 114, 45,
+    51, 50, 98, 121, 116, 101, 115, 33]
+
+helloTranscriptHash: -> [UInt8] => [
+    239, 33, 155, 68, 12, 93, 62, 243,
+    41, 3, 102, 92, 82, 59, 232, 191,
+    199, 137, 51, 236, 172, 158, 186, 162,
+    114, 205, 189, 227, 37, 208, 116, 21]
+
+truncatedClientHelloHash: -> [UInt8] => [
+    223, 27, 242, 51, 82, 223, 177, 219,
+    240, 171, 198, 181, 41, 84, 108, 227,
+    254, 4, 46, 161, 176, 151, 146, 53,
+    205, 78, 42, 208, 128, 215, 190, 123]
+
+sharedSecret: -> [UInt8] => [
+    217, 133, 202, 95, 146, 227, 237, 135,
+    167, 23, 83, 187, 196, 251, 245, 201,
+    243, 179, 96, 184, 171, 60, 65, 36,
+    238, 236, 6, 195, 80, 37, 177, 187]
+
+main {
+    psk() -> tls13.deriveExternalBinderKey => externalBinderKey
+    psk() -> tls13.deriveResumptionBinderKey => resumptionBinderKey
+    externalBinderKey -> tls13.binderVerifyDataFromHash(truncatedClientHelloHash()) => binder
+    tls13.deriveEarlyFromHash(psk(), helloTranscriptHash()) => early
+    tls13.deriveHandshakeWithPskFromHash(psk(), sharedSecret(), helloTranscriptHash()) => handshake
+
+    "$(early.earlySecret[0]),$(early.earlySecret[15]),$(early.earlySecret[31])" -> println
+    "$(externalBinderKey[0]),$(externalBinderKey[15]),$(externalBinderKey[31])" -> println
+    "$(resumptionBinderKey[0]),$(resumptionBinderKey[15]),$(resumptionBinderKey[31])" -> println
+    "$(binder[0]),$(binder[15]),$(binder[31])" -> println
+    "$(early.clientTrafficSecret[0]),$(early.clientTrafficSecret[15]),$(early.clientTrafficSecret[31])" -> println
+    "$(handshake.handshakeSecret[0]),$(handshake.handshakeSecret[15]),$(handshake.handshakeSecret[31])" -> println
+}

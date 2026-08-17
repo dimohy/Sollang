@@ -1,0 +1,51 @@
+import sys.quic.error as errors
+import sys.quic.initial_engine as initial
+import sys.quic.keys
+import sys.quic.tls_hello as hello
+
+randomBytes: -> [UInt8; 32] => [1; 32]
+clientKeyShare: -> [UInt8; 32] => [2; 32]
+serverKeyShare: -> [UInt8; 32] => [3; 32]
+originalDestinationConnectionId: -> [UInt8] => [131, 148, 200, 240, 62, 81, 87, 8]
+clientSourceConnectionId: -> [UInt8] => [17, 18, 19, 20, 21, 22, 23, 24]
+serverSourceConnectionId: -> [UInt8] => [33, 34, 35, 36, 37, 38, 39, 40]
+
+check: -> Result<Bool, errors.Error> {
+    hello.encodeClientHello(
+        randomBytes(),
+        [115, 111, 108, 108, 97, 110, 103, 45, 112, 101, 101, 114],
+        [104, 51],
+        clientKeyShare(),
+        [1])? => clientHello
+    initial.encodeClientInitial(
+        keys.version2(),
+        originalDestinationConnectionId(),
+        clientSourceConnectionId(),
+        0,
+        clientHello)? => clientPacket
+    initial.acceptClientInitial(clientPacket, 0)? => accepted
+    hello.encodeServerHello(randomBytes(), serverKeyShare())? => serverHello
+    initial.encodeServerInitial(accepted, serverSourceConnectionId(), 0, serverHello)? => serverPacket
+    initial.openServerInitial(
+        serverPacket,
+        keys.version2(),
+        originalDestinationConnectionId(),
+        clientSourceConnectionId(),
+        0)? => opened
+    Result<Bool, errors.Error>.Ok(
+        (clientPacket -> len) >= 1_200
+            and accepted.version == keys.version2()
+            and accepted.packetNumber == 0
+            and (accepted.clientHello -> len) == (clientHello -> len)
+            and opened.packetNumber == 0
+            and (opened.serverHello -> len) == (serverHello -> len)
+            and opened.serverSourceConnectionId[0] == 33
+            and opened.serverSourceConnectionId[7] == 40)
+}
+
+main {
+    check() -> when {
+        Ok(valid) { valid -> if { "quic-initial-engine=ok" } else { "quic-initial-engine=failed" } -> println }
+        Err(error) { "quic-initial-engine-error=$(error.code)" -> println }
+    }
+}

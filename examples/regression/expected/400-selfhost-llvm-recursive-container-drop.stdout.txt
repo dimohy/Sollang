@@ -18,7 +18,6 @@ done:
 }
 %sollang.struct.m0_s0 = type { %sollang.array.i32 }
 %sollang.array.i32 = type { ptr, i64, i64 }
-%sollang.mutable_container = type { ptr, ptr, ptr }
 declare ptr @malloc(i64)
 declare void @free(ptr)
 %sollang.dict = type { ptr, ptr, i64, i64 }
@@ -56,37 +55,6 @@ done:
   call void @free(ptr %data)
   ret void
 }
-define internal void @sollang_drop_t29(%sollang.dict %value) {
-entry:
-  %keys = extractvalue %sollang.dict %value, 0
-  %values = extractvalue %sollang.dict %value, 1
-  %length = extractvalue %sollang.dict %value, 2
-  %capacity = extractvalue %sollang.dict %value, 3
-  %control_offset = mul i64 %capacity, 4
-  %controls = getelementptr i8, ptr %keys, i64 %control_offset
-  br label %loop
-loop:
-  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
-  %in_range = icmp ult i64 %index, %capacity
-  br i1 %in_range, label %check, label %done
-check:
-  %control_slot = getelementptr i8, ptr %controls, i64 %index
-  %control = load i8, ptr %control_slot, align 1
-  %occupied = icmp sgt i8 %control, 0
-  br i1 %occupied, label %item, label %continue
-item:
-  %value_slot = getelementptr %sollang.array.i32, ptr %values, i64 %index
-  %item_value = load %sollang.array.i32, ptr %value_slot, align 8
-  call void @sollang_drop_t27(%sollang.array.i32 %item_value)
-  br label %continue
-continue:
-  %next = add i64 %index, 1
-  br label %loop
-done:
-  call void @free(ptr %keys)
-  call void @free(ptr %values)
-  ret void
-}
 declare void @llvm.trap()
 %sollang.text = type { ptr, i64 }
 @sollang_str_30 = private unnamed_addr constant [15 x i8] c"recursive drops"
@@ -94,11 +62,6 @@ define i32 @sollang_m0_s2(%sollang.array.i32 %arg) {
 entry:
   call void @sollang_drop_t28(%sollang.array.i32 %arg)
   ret i32 1
-}
-define i32 @sollang_m0_s3(%sollang.dict %arg) {
-entry:
-  call void @sollang_drop_t29(%sollang.dict %arg)
-  ret i32 2
 }
 define %sollang.array.i32 @sollang_m0_s4() {
 entry:
