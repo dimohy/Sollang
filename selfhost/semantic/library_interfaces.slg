@@ -60,7 +60,8 @@ skipWhitespace source: Text, cursor: Cursor -> Cursor {
     source -> len => sourceLength
     (result!.status == 0
         and result!.index < sourceLength
-        and ((source -> byte(result!.index)) -> isWhitespace)) -> while {
+        and ((source -> byte(result!.index)) -> isWhitespace))
+            -> while {
         result!.index + 1 => result!.index
     }
     result!
@@ -70,7 +71,8 @@ expectByte source: Text, cursor: Cursor, expected: UInt8, code: Int -> Cursor {
     source -> skipWhitespace(cursor) => result!
     source -> len => sourceLength
     result!.status == 0 -> if {
-        (result!.index < sourceLength and (source -> byte(result!.index)) == expected) -> if {
+        (result!.index < sourceLength and (source -> byte(result!.index)) == expected)
+            -> if {
             result!.index + 1 => result!.index
         } else {
             code => result!.status
@@ -84,11 +86,13 @@ readString source: Text, cursor: Cursor, code: Int -> StringRead {
     MetadataSpan { start: next!.index, length: 0 } => value!
     source -> len => sourceLength
     next!.status == 0 -> if {
-        (next!.index < sourceLength and (source -> byte(next!.index)) == 34) -> if {
+        (next!.index < sourceLength and (source -> byte(next!.index)) == 34)
+            -> if {
             next!.index + 1 => next!.index
             next!.index => value!.start
             false => closed!
-            (next!.status == 0 and next!.index < sourceLength and not closed!) -> while {
+            (next!.status == 0 and next!.index < sourceLength and not closed!)
+                -> while {
                 source -> byte(next!.index) => current
                 current == 34 -> if {
                     next!.index - value!.start => value!.length
@@ -107,7 +111,8 @@ readString source: Text, cursor: Cursor, code: Int -> StringRead {
                                     (next!.status == 0 and hexIndex! < 4) -> while {
                                         next!.index + 1 => next!.index
                                         (next!.index < sourceLength
-                                            and ((source -> byte(next!.index)) -> isHex)) -> if {
+                                            and ((source -> byte(next!.index)) -> isHex))
+                                                -> if {
                                             hexIndex! + 1 => hexIndex!
                                         } else {
                                             code => next!.status
@@ -147,7 +152,8 @@ spanIs source: Text, span: MetadataSpan, expected: Text -> Bool {
     span.length == (expected -> len) => matches!
     UIntSize(0) => index!
     (matches! and index! < span.length) -> while {
-        (source -> byte(span.start + index!)) != (expected -> byte(index!)) -> if {
+        (source -> byte(span.start + index!)) != (expected -> byte(index!))
+            -> if {
             false => matches!
         }
         index! + 1 => index!
@@ -184,7 +190,8 @@ sameSpan source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
     left.length == right.length => matches!
     UIntSize(0) => index!
     (matches! and index! < left.length) -> while {
-        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!)) -> if {
+        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!))
+            -> if {
             false => matches!
         }
         index! + 1 => index!
@@ -196,7 +203,8 @@ spanIsHex source: Text, span: MetadataSpan, length: UIntSize -> Bool {
     span.length == length => valid!
     UIntSize(0) => index!
     (valid! and index! < span.length) -> while {
-        (source -> byte(span.start + index!)) -> isHex -> unless {
+        (source -> byte(span.start + index!)) -> isHex
+            -> unless {
             false => valid!
         }
         index! + 1 => index!
@@ -276,10 +284,13 @@ readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parame
         parameterStart => leftParameter!
         leftParameter! < Int(parameters -> len) -> while {
             parameters[leftParameter!].name.length == 0 -> if { 63 => next!.status }
-            parameters[leftParameter!].typeName.length == 0 -> if { 63 => next!.status }
+            parameters[leftParameter!].typeName.length == 0
+                -> if { 63 => next!.status }
             leftParameter! + 1 => rightParameter!
-            (next!.status == 0 and rightParameter! < Int(parameters -> len)) -> while {
-                source -> sameSpan(parameters[leftParameter!].name, parameters[rightParameter!].name) -> if {
+            (next!.status == 0 and rightParameter! < Int(parameters -> len))
+                -> while {
+                source -> sameSpan(parameters[leftParameter!].name, parameters[rightParameter!].name)
+                    -> if {
                     63 => next!.status
                 }
                 rightParameter! + 1 => rightParameter!
@@ -305,15 +316,18 @@ readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parame
             64 => next!.status
         }
         (next!.status == 0
-            and not (source -> spanIsHex(signatureRead.value, 64))) -> if {
+            and not (source -> spanIsHex(signatureRead.value, 64)))
+                -> if {
             65 => next!.status
         }
     }
     next!.status == 0 -> if {
         false => duplicate!
         0 => exportIndex!
-        (not duplicate! and exportIndex! < (exports -> len)) -> while {
-            source -> sameSpan(exports[exportIndex!].name, nameRead.value) -> if {
+        (not duplicate! and exportIndex! < (exports -> len))
+            -> while {
+            source -> sameSpan(exports[exportIndex!].name, nameRead.value)
+                -> if {
                 true => duplicate!
             }
             exportIndex! + 1 => exportIndex!
@@ -369,7 +383,8 @@ public parse source: Text -> LibraryInterface {
     source -> skipWhitespace(cursor!) => cursor!
     source -> len => sourceLength
     cursor!.status == 0 -> if {
-        (cursor!.index < sourceLength and (source -> byte(cursor!.index)) == 49) -> if {
+        (cursor!.index < sourceLength and (source -> byte(cursor!.index)) == 49)
+            -> if {
             cursor!.index + 1 => cursor!.index
         } else {
             21 => cursor!.status
@@ -379,7 +394,8 @@ public parse source: Text -> LibraryInterface {
     source -> expectKey(cursor!, "abi", 14) => cursor!
     source -> readString(cursor!, 15) => abiRead
     abiRead.cursor => cursor!
-    (cursor!.status == 0 and not (source -> spanIs(abiRead.value, "sollang-c-v1"))) -> if {
+    (cursor!.status == 0 and not (source -> spanIs(abiRead.value, "sollang-c-v1")))
+        -> if {
         22 => cursor!.status
     }
     source -> expectByte(cursor!, 44, 16) => cursor!
@@ -389,7 +405,8 @@ public parse source: Text -> LibraryInterface {
     targetRead.value => target!
     (cursor!.status == 0
         and not (source -> spanIs(target!, "windows-x64"))
-        and not (source -> spanIs(target!, "linux-x64"))) -> if {
+        and not (source -> spanIs(target!, "linux-x64")))
+            -> if {
         23 => cursor!.status
     }
     source -> expectByte(cursor!, 44, 19) => cursor!
@@ -411,7 +428,8 @@ public parse source: Text -> LibraryInterface {
     source -> readExports(cursor!, exports!, parameters!) => cursor!
     source -> expectByte(cursor!, 125, 30) => cursor!
     source -> skipWhitespace(cursor!) => cursor!
-    (cursor!.status == 0 and cursor!.index != sourceLength) -> if { 70 => cursor!.status }
+    (cursor!.status == 0 and cursor!.index != sourceLength)
+        -> if { 70 => cursor!.status }
 
     LibraryInterface {
         status: cursor!.status

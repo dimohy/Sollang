@@ -37,7 +37,8 @@ sourceStart node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
 }
 moveRegionFor nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     context.ir[nodeIndex].parent => region!
-    (region! >= 0 and context.ir[region!].kind != 1 and context.ir[region!].kind != 11 and context.ir[region!].kind != 19 and context.ir[region!].kind != 20) -> while {
+    (region! >= 0 and context.ir[region!].kind != 1 and context.ir[region!].kind != 11 and context.ir[region!].kind != 19 and context.ir[region!].kind != 20)
+        -> while {
         context.ir[region!].parent => region!
     }
     region!
@@ -46,11 +47,13 @@ nodeBelongsToOwnershipRegion nodeIndex: Int, regionIndex: Int, context: ref emit
     context.ir[nodeIndex].parent => ancestor!
     false => belongs!
     false => blocked!
-    (ancestor! >= 0 and not belongs! and not blocked!) -> while {
+    (ancestor! >= 0 and not belongs! and not blocked!)
+        -> while {
         ancestor! == regionIndex -> if {
             true => belongs!
         } else {
-            (context.ir[ancestor!].kind == 19 or context.ir[ancestor!].kind == 20) -> if {
+            (context.ir[ancestor!].kind == 19 or context.ir[ancestor!].kind == 20)
+                -> if {
                 true => blocked!
             } else {
                 context.ir[ancestor!].parent => ancestor!
@@ -62,40 +65,48 @@ nodeBelongsToOwnershipRegion nodeIndex: Int, regionIndex: Int, context: ref emit
 regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterStart: UIntSize, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => moved!
     0 => moveIndex!
-    (moveIndex! < (context.moves -> len) and not moved!) -> while {
+    (moveIndex! < (context.moves -> len) and not moved!)
+        -> while {
         context.moves[moveIndex!] => candidateMove
         (candidateMove.memberIr < 0
             and candidateMove.regionIr == regionIndex
             and candidateMove.sourceModule == sourceModule
             and candidateMove.symbol == symbol
-            and (context.ir[candidateMove.siteIr] -> sourceStart(context, state)) > afterStart) -> if {
+            and (context.ir[candidateMove.siteIr] -> sourceStart(context, state)) > afterStart)
+                -> if {
             true => moved!
         }
         moveIndex! + 1 => moveIndex!
     }
     0 => controlIndex!
-    (controlIndex! < (context.ir -> len) and not moved!) -> while {
+    (controlIndex! < (context.ir -> len) and not moved!)
+        -> while {
         context.ir[controlIndex!] => control
-        controlIndex! -> nodeBelongsToOwnershipRegion(regionIndex, context, state) -> if {
-            (control.kind == 18 and control.nextOperand >= 0 and (control -> sourceStart(context, state)) > afterStart) -> if {
+        controlIndex! -> nodeBelongsToOwnershipRegion(regionIndex, context, state)
+            -> if {
+            (control.kind == 18 and control.nextOperand >= 0 and (control -> sourceStart(context, state)) > afterStart)
+                -> if {
                 control.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) => thenMoves
                 control.nextOperand -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) => elseMoves
                 (thenMoves and elseMoves) -> if { true => moved! }
             }
-            (control.kind == 27 and control.operand1 >= 0 and (control -> sourceStart(context, state)) > afterStart) -> if {
+            (control.kind == 27 and control.operand1 >= 0 and (control -> sourceStart(context, state)) > afterStart)
+                -> if {
                 true => allArmsMove!
                 false => hasArm!
                 control.operand1 => armIndex!
                 armIndex! >= 0 -> while {
                     true => hasArm!
-                    armIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
+                    armIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state)
+                        -> unless {
                         false => allArmsMove!
                     }
                     context.ir[armIndex!].nextOperand => armIndex!
                 }
                 (hasArm! and allArmsMove!) -> if { true => moved! }
             }
-            (control.kind == 33 and control.operand0 >= 0 and (control -> sourceStart(context, state)) > afterStart) -> if {
+            (control.kind == 33 and control.operand0 >= 0 and (control -> sourceStart(context, state)) > afterStart)
+                -> if {
                 true => allWhenArmsMove!
                 false => hasWhenArm!
                 false => hasWhenElse!
@@ -103,25 +114,29 @@ regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterS
                 true => whenArmOpen!
                 (whenArmIndex! >= 0 and whenArmOpen!) -> while {
                     context.ir[whenArmIndex!] => whenArm
-                    (whenArm.kind != 19 or whenArm.parent != controlIndex!) -> if {
+                    (whenArm.kind != 19 or whenArm.parent != controlIndex!)
+                        -> if {
                         false => allWhenArmsMove!
                         false => whenArmOpen!
                     } else {
                         true => hasWhenArm!
                         (whenArm.operand0 >= 0 and whenArm.operand1 >= 0 and whenArm.operand0 != whenArm.operand1 and context.ir[whenArm.operand0].kind != 19) => conditionalWhenArm
                         conditionalWhenArm -> if {
-                            whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
+                            whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state)
+                                -> unless {
                                 false => allWhenArmsMove!
                             }
                             whenArm.nextOperand => whenArmIndex!
                         } else {
                             true => hasWhenElse!
                             whenArm.operand1 >= 0 -> if {
-                                whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
+                                whenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state)
+                                    -> unless {
                                     false => allWhenArmsMove!
                                 }
                             } else {
-                                whenArm.operand0 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
+                                whenArm.operand0 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state)
+                                    -> unless {
                                     false => allWhenArmsMove!
                                 }
                             }
@@ -129,17 +144,21 @@ regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterS
                         }
                     }
                 }
-                (hasWhenArm! and hasWhenElse! and allWhenArmsMove!) -> if { true => moved! }
+                (hasWhenArm! and hasWhenElse! and allWhenArmsMove!)
+                    -> if { true => moved! }
             }
-            (control.kind == 34 and control.operand1 >= 0 and (control -> sourceStart(context, state)) > afterStart) -> if {
+            (control.kind == 34 and control.operand1 >= 0 and (control -> sourceStart(context, state)) > afterStart)
+                -> if {
                 true => allSubjectWhenArmsMove!
                 false => hasSubjectWhenArm!
                 false => hasSubjectWhenElse!
                 control.operand1 => subjectWhenArmIndex!
                 true => subjectWhenArmOpen!
-                (subjectWhenArmIndex! >= 0 and subjectWhenArmOpen!) -> while {
+                (subjectWhenArmIndex! >= 0 and subjectWhenArmOpen!)
+                    -> while {
                     context.ir[subjectWhenArmIndex!] => subjectWhenArm
-                    (subjectWhenArm.kind != 19 or subjectWhenArm.parent != controlIndex!) -> if {
+                    (subjectWhenArm.kind != 19 or subjectWhenArm.parent != controlIndex!)
+                        -> if {
                         false => allSubjectWhenArmsMove!
                         false => subjectWhenArmOpen!
                     } else {
@@ -147,20 +166,23 @@ regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterS
                         subjectWhenArm -> sourceNode(context, state) => subjectWhenArmSource
                         subjectWhenArmSource.kind == 58 => conditionalSubjectWhenArm
                         conditionalSubjectWhenArm -> if {
-                            subjectWhenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
+                            subjectWhenArm.operand1 -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state)
+                                -> unless {
                                 false => allSubjectWhenArmsMove!
                             }
                             subjectWhenArm.nextOperand => subjectWhenArmIndex!
                         } else {
                             true => hasSubjectWhenElse!
-                            subjectWhenArmIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state) -> unless {
+                            subjectWhenArmIndex! -> regionFullyMovesBinding(sourceModule, symbol, afterStart, context, state)
+                                -> unless {
                                 false => allSubjectWhenArmsMove!
                             }
                             false => subjectWhenArmOpen!
                         }
                     }
                 }
-                (hasSubjectWhenArm! and hasSubjectWhenElse! and allSubjectWhenArmsMove!) -> if { true => moved! }
+                (hasSubjectWhenArm! and hasSubjectWhenElse! and allSubjectWhenArmsMove!)
+                    -> if { true => moved! }
             }
         }
         controlIndex! + 1 => controlIndex!
@@ -171,27 +193,33 @@ memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int, context: ref e
     context.moves[moveIndex] => candidateMove
     context.ir[assignmentIndex] => candidateAssignment
     false => matches!
-    (candidateMove.memberIr >= 0 and candidateAssignment.kind == 25 and candidateAssignment.sourceModule == candidateMove.sourceModule and candidateAssignment.symbol == candidateMove.symbol) -> if {
+    (candidateMove.memberIr >= 0 and candidateAssignment.kind == 25 and candidateAssignment.sourceModule == candidateMove.sourceModule and candidateAssignment.symbol == candidateMove.symbol)
+        -> if {
         context.ir[candidateMove.memberIr] => candidateMember
         candidateMember -> sourceNode(context, state) => candidateMemberAst
         candidateAssignment -> sourceNode(context, state) => candidateAssignmentAst
         -1 => movedFieldToken!
         0 => movedIdentifierCount!
         candidateMemberAst.firstToken => movedTokenIndex!
-        movedTokenIndex! < candidateMemberAst.firstToken + candidateMemberAst.tokenCount -> while {
-            context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+        movedTokenIndex! < candidateMemberAst.firstToken + candidateMemberAst.tokenCount
+            -> while {
+            context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier()
+                -> if {
                 movedTokenIndex! => movedFieldToken!
                 movedIdentifierCount! + 1 => movedIdentifierCount!
             }
             movedTokenIndex! + 1 => movedTokenIndex!
         }
-        (movedIdentifierCount! == 2 and movedFieldToken! >= 0 and candidateAssignmentAst.secondaryToken >= 0) -> if {
+        (movedIdentifierCount! == 2 and movedFieldToken! >= 0 and candidateAssignmentAst.secondaryToken >= 0)
+            -> if {
             context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedFieldToken!] => movedField
             context.tokens[context.ranges[candidateAssignment.sourceModule].tokenStart + candidateAssignmentAst.secondaryToken] => assignedField
             movedField.span.length == assignedField.span.length => matches!
             UIntSize(0) => fieldByte!
-            (matches! and fieldByte! < movedField.span.length) -> while {
-                (context.sources[candidateMember.sourceModule] -> byte(movedField.span.start + fieldByte!)) != (context.sources[candidateAssignment.sourceModule] -> byte(assignedField.span.start + fieldByte!)) -> if { false => matches! }
+            (matches! and fieldByte! < movedField.span.length)
+                -> while {
+                (context.sources[candidateMember.sourceModule] -> byte(movedField.span.start + fieldByte!)) != (context.sources[candidateAssignment.sourceModule] -> byte(assignedField.span.start + fieldByte!))
+                    -> if { false => matches! }
                 fieldByte! + 1 => fieldByte!
             }
         }
@@ -207,9 +235,11 @@ partialMoveActiveBefore moveIndex: Int, regionIndex: Int, beforeAst: Int, contex
         context.ir[candidateMove.siteIr] => moveSite
         UIntSize(0) => edgeStart!
         beforeAst >= 0 -> if { context.nodes[context.ranges[moveSite.sourceModule].astStart + beforeAst].start => edgeStart! }
-        (active! and boundedEdge and (moveSite -> sourceStart(context, state)) >= edgeStart!) -> if { false => active! }
+        (active! and boundedEdge and (moveSite -> sourceStart(context, state)) >= edgeStart!)
+            -> if { false => active! }
         candidateMove.regionIr => assignmentOwner!
-        (assignmentOwner! >= 0 and context.ir[assignmentOwner!].kind != 0 and context.ir[assignmentOwner!].kind != 11) -> while {
+        (assignmentOwner! >= 0 and context.ir[assignmentOwner!].kind != 0 and context.ir[assignmentOwner!].kind != 11)
+            -> while {
             context.ir[assignmentOwner!].parent => assignmentOwner!
         }
         0 => assignmentSearch!
@@ -226,8 +256,10 @@ partialMoveActiveBefore moveIndex: Int, regionIndex: Int, beforeAst: Int, contex
                 reinitialization -> sourceStart(context, state) => reinitializationStart
                 true => reinitializationBeforeEdge!
                 boundedEdge -> if { reinitializationStart < edgeStart! => reinitializationBeforeEdge! }
-                (reinitialization.kind == 25 and reinitializationRegion == candidateMove.regionIr and moveSiteStart < reinitializationStart and reinitializationBeforeEdge!) -> if {
-                    moveIndex -> memberMoveMatchesAssignment(assignmentSearch!, context, state) -> if { false => active! }
+                (reinitialization.kind == 25 and reinitializationRegion == candidateMove.regionIr and moveSiteStart < reinitializationStart and reinitializationBeforeEdge!)
+                    -> if {
+                    moveIndex -> memberMoveMatchesAssignment(assignmentSearch!, context, state)
+                        -> if { false => active! }
                 }
             }
             assignmentSearch! + 1 => assignmentSearch!
@@ -239,7 +271,8 @@ sourceInterpolations node: typedIr.TypedIrNode, context: ref emitterContext.Emit
     context.interpolationRanges[node.sourceModule] => interpolationRange
     [interpolation.InterpolationNode; ~] => sourceNodes!
     0 => interpolationIndex!
-    interpolationIndex! < interpolationRange.nodeCount -> while {
+    interpolationIndex! < interpolationRange.nodeCount
+        -> while {
         context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode!
         interpolationNode!.parent >= 0 -> if { interpolationNode!.parent - interpolationRange.nodeStart => interpolationNode!.parent }
         interpolationNode!.operand0 >= 0 -> if { interpolationNode!.operand0 - interpolationRange.nodeStart => interpolationNode!.operand0 }
@@ -254,7 +287,8 @@ emitDropValueName request: DropGlueRequest, context: ref emitterContext.EmitCont
     request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print } else {
         request.valueKind == 1 -> if {
             context.ir[request.regionIndex].parent => dropParameterOwner!
-            (dropParameterOwner! >= 0 and context.ir[dropParameterOwner!].kind != 0 and context.ir[dropParameterOwner!].kind != 11) -> while {
+            (dropParameterOwner! >= 0 and context.ir[dropParameterOwner!].kind != 0 and context.ir[dropParameterOwner!].kind != 11)
+                -> while {
                 context.ir[dropParameterOwner!].parent => dropParameterOwner!
             }
             context -> writeParameterReference(dropParameterOwner!, context.ir[request.bindingIndex].symbol) => dropParameterWritten
@@ -270,24 +304,30 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
     dropTaskIndex! < (dropTasks! -> len) -> while {
     dropTasks![dropTaskIndex!] => dropTask
     false => dropTaskMoved!
-    (dropTask.bindingIndex >= 0 and dropTask.hasPartialMoves) -> if {
+    (dropTask.bindingIndex >= 0 and dropTask.hasPartialMoves)
+        -> if {
         context.ir[dropTask.bindingIndex] => dropGlueBinding
         context.ranges[dropGlueBinding.sourceModule] => dropGlueRange
         UIntSize(0) => dropGlueBeforeStart!
         dropTask.beforeAst >= 0 -> if { context.nodes[dropGlueRange.astStart + dropTask.beforeAst].start => dropGlueBeforeStart! }
         0 => dropGlueMoveIndex!
-        (dropGlueMoveIndex! < (context.moves -> len) and not dropTaskMoved!) -> while {
+        (dropGlueMoveIndex! < (context.moves -> len) and not dropTaskMoved!)
+            -> while {
             context.moves[dropGlueMoveIndex!] => dropGlueMove
-            (dropGlueMove.memberIr >= 0 and dropGlueMove.sourceModule == dropGlueBinding.sourceModule and dropGlueMove.symbol == dropGlueBinding.symbol and (dropGlueMoveIndex! -> partialMoveActiveBefore(dropTask.regionIndex, dropTask.beforeAst, context, state))) -> if {
+            (dropGlueMove.memberIr >= 0 and dropGlueMove.sourceModule == dropGlueBinding.sourceModule and dropGlueMove.symbol == dropGlueBinding.symbol and (dropGlueMoveIndex! -> partialMoveActiveBefore(dropTask.regionIndex, dropTask.beforeAst, context, state)))
+                -> if {
                 context.ir[dropGlueMove.siteIr] => dropGlueSite
                 true => dropGlueMoveBeforeEdge!
                 dropTask.beforeAst >= 0 -> if {
-                    context.nodes[dropGlueRange.astStart + dropGlueSite.astNode].start >= dropGlueBeforeStart! -> if { false => dropGlueMoveBeforeEdge! }
+                    context.nodes[dropGlueRange.astStart + dropGlueSite.astNode].start >= dropGlueBeforeStart!
+                        -> if { false => dropGlueMoveBeforeEdge! }
                 }
-                context.nodes[dropGlueRange.astStart + dropGlueSite.astNode].start <= context.nodes[dropGlueRange.astStart + dropGlueBinding.astNode].start -> if { false => dropGlueMoveBeforeEdge! }
+                context.nodes[dropGlueRange.astStart + dropGlueSite.astNode].start <= context.nodes[dropGlueRange.astStart + dropGlueBinding.astNode].start
+                    -> if { false => dropGlueMoveBeforeEdge! }
                 0 => dropTaskDepth!
                 dropTaskIndex! => dropTaskCursor!
-                (dropTaskCursor! >= 0 and dropTasks![dropTaskCursor!].fieldOrdinal >= 0) -> while {
+                (dropTaskCursor! >= 0 and dropTasks![dropTaskCursor!].fieldOrdinal >= 0)
+                    -> while {
                     dropTaskDepth! + 1 => dropTaskDepth!
                     dropTasks![dropTaskCursor!].parentTask => dropTaskCursor!
                 }
@@ -296,8 +336,10 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                 context.nodes[dropMoveRange.astStart + dropMoveMember.astNode] => dropMoveAst
                 -1 => dropMoveDepth!
                 dropMoveAst.firstToken => dropMoveTokenIndex!
-                dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount -> while {
-                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier() -> if { dropMoveDepth! + 1 => dropMoveDepth! }
+                dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount
+                    -> while {
+                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier()
+                        -> if { dropMoveDepth! + 1 => dropMoveDepth! }
                     dropMoveTokenIndex! + 1 => dropMoveTokenIndex!
                 }
                 dropTaskDepth! == dropMoveDepth! => sameDropPath!
@@ -306,8 +348,10 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                 dropGlueBinding.typeSymbol => dropMoveCurrentSymbol!
                 0 => dropMoveIdentifierOrdinal!
                 dropMoveAst.firstToken => dropMoveTokenIndex!
-                (sameDropPath! and dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount) -> while {
-                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+                (sameDropPath! and dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount)
+                    -> while {
+                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier()
+                        -> if {
                         dropMoveIdentifierOrdinal! > 0 -> if {
                             dropMoveCurrentModule! => dropMoveOwnerSource!
                             dropMoveCurrentOrigin! == 2 -> if { context.modules[dropMoveCurrentModule!].sourceIndex => dropMoveOwnerSource! }
@@ -316,14 +360,17 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                             -1 => dropMoveFieldTypeNode!
                             0 => dropMoveCandidateOrdinal!
                             0 => dropMoveFieldIndex!
-                            dropMoveFieldIndex! < dropMoveOwnerRange.symbolCount -> while {
+                            dropMoveFieldIndex! < dropMoveOwnerRange.symbolCount
+                                -> while {
                                 context.symbols[dropMoveOwnerRange.symbolStart + dropMoveFieldIndex!] => dropMoveField
-                                (dropMoveField.kind == 26 and dropMoveField.parent == dropMoveCurrentSymbol!) -> if {
+                                (dropMoveField.kind == 26 and dropMoveField.parent == dropMoveCurrentSymbol!)
+                                    -> if {
                                     context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!] => dropMoveName
                                     context.tokens[dropMoveOwnerRange.tokenStart + dropMoveField.nameToken] => dropMoveFieldName
                                     dropMoveName.span.length == dropMoveFieldName.span.length => dropMoveEqual!
                                     UIntSize(0) => dropMoveNameByte!
-                                    (dropMoveEqual! and dropMoveNameByte! < dropMoveName.span.length) -> while {
+                                    (dropMoveEqual! and dropMoveNameByte! < dropMoveName.span.length)
+                                        -> while {
                                         context.sources[dropMoveMember.sourceModule] -> byte(dropMoveName.span.start + dropMoveNameByte!) => dropMoveByte
                                         context.sources[dropMoveOwnerSource!] -> byte(dropMoveFieldName.span.start + dropMoveNameByte!) => dropMoveFieldByte
                                         dropMoveByte != dropMoveFieldByte -> if { false => dropMoveEqual! }
@@ -343,11 +390,14 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                                 dropTasks![dropTaskCursor!].parentTask => dropTaskCursor!
                                 dropTaskParentSteps! - 1 => dropTaskParentSteps!
                             }
-                            (dropMoveFieldOrdinal! < 0 or dropTasks![dropTaskCursor!].fieldOrdinal != dropMoveFieldOrdinal!) -> if { false => sameDropPath! }
+                            (dropMoveFieldOrdinal! < 0 or dropTasks![dropTaskCursor!].fieldOrdinal != dropMoveFieldOrdinal!)
+                                -> if { false => sameDropPath! }
                             0 => dropMoveNominalIndex!
-                            dropMoveNominalIndex! < (context.nominal -> len) -> while {
+                            dropMoveNominalIndex! < (context.nominal -> len)
+                                -> while {
                                 context.nominal[dropMoveNominalIndex!] => dropMoveNominalType
-                                (dropMoveNominalType.sourceModule == dropMoveOwnerSource! and dropMoveNominalType.typeAst == dropMoveFieldTypeNode!) -> if {
+                                (dropMoveNominalType.sourceModule == dropMoveOwnerSource! and dropMoveNominalType.typeAst == dropMoveFieldTypeNode!)
+                                    -> if {
                                     dropMoveNominalType.origin => dropMoveCurrentOrigin!
                                     dropMoveNominalType.targetModule => dropMoveCurrentModule!
                                     dropMoveNominalType.targetSymbol => dropMoveCurrentSymbol!
@@ -364,14 +414,16 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
             dropGlueMoveIndex! + 1 => dropGlueMoveIndex!
         }
     }
-    (not dropTaskMoved! and dropTask.typeId >= 0 and (not dropTask.hasPartialMoves or (dropTask.fieldOrdinal >= 0 and context.types[dropTask.typeId].kind != 1)) and (dropTask.typeId -> semanticTypeOwns(context, state))) -> if {
+    (not dropTaskMoved! and dropTask.typeId >= 0 and (not dropTask.hasPartialMoves or (dropTask.fieldOrdinal >= 0 and context.types[dropTask.typeId].kind != 1)) and (dropTask.typeId -> semanticTypeOwns(context, state)))
+        -> if {
         "  call void @sollang_drop_t$(dropTask.typeId)(" -> print
         dropTask.typeId -> writeSemanticTypeId(context, state)
         " " -> print
         dropTask -> emitDropValueName(context, state)
         ")" -> println
     } else {
-    (not dropTaskMoved! and (dropTask.typeOrigin == 13 or dropTask.typeOrigin == 14)) -> if {
+    (not dropTaskMoved! and (dropTask.typeOrigin == 13 or dropTask.typeOrigin == 14))
+        -> if {
         "  " -> print
         dropTask -> emitDropPathName(context, state)
         "_data = extractvalue %sollang.array.i32 " -> print
@@ -381,7 +433,8 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
         dropTask -> emitDropPathName(context, state)
         "_data)" -> println
     } else {
-    (not dropTaskMoved! and dropTask.typeOrigin == 15) -> if {
+    (not dropTaskMoved! and dropTask.typeOrigin == 15)
+        -> if {
         "  " -> print
         dropTask -> emitDropPathName(context, state)
         "_keys = extractvalue %sollang.dict " -> print
@@ -399,18 +452,23 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
         dropTask -> emitDropPathName(context, state)
         "_values)" -> println
     } else {
-    (not dropTaskMoved! and (dropTask.typeOrigin == 0 or dropTask.typeOrigin == 2)) -> if {
+    (not dropTaskMoved! and (dropTask.typeOrigin == 0 or dropTask.typeOrigin == 2))
+        -> if {
         context.ranges[dropTask.typeModule] => dropStructRange
         0 => dropFieldOrdinal!
         0 => dropFieldIndex!
-        dropFieldIndex! < dropStructRange.symbolCount -> while {
+        dropFieldIndex! < dropStructRange.symbolCount
+            -> while {
             context.symbols[dropStructRange.symbolStart + dropFieldIndex!] => dropField
-            (dropField.kind == 26 and dropField.parent == dropTask.typeSymbol) -> if {
+            (dropField.kind == 26 and dropField.parent == dropTask.typeSymbol)
+                -> if {
                 -1 => dropFieldTypeId!
                 0 => canonicalDropFieldIndex!
-                canonicalDropFieldIndex! < (context.fields -> len) -> while {
+                canonicalDropFieldIndex! < (context.fields -> len)
+                    -> while {
                     context.fields[canonicalDropFieldIndex!] => canonicalDropField
-                    (canonicalDropField.status == 0 and canonicalDropField.ownerType == dropTask.typeId and canonicalDropField.ordinal == dropFieldOrdinal!) -> if {
+                    (canonicalDropField.status == 0 and canonicalDropField.ownerType == dropTask.typeId and canonicalDropField.ordinal == dropFieldOrdinal!)
+                        -> if {
                         canonicalDropField.fieldType => dropFieldTypeId!
                     }
                     canonicalDropFieldIndex! + 1 => canonicalDropFieldIndex!
@@ -430,9 +488,11 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                     }
                 }
                 0 => dropCompositeIndex!
-                dropCompositeIndex! < (context.composite -> len) -> while {
+                dropCompositeIndex! < (context.composite -> len)
+                    -> while {
                     context.composite[dropCompositeIndex!] => dropCompositeType
-                    (dropCompositeType.sourceModule == dropTask.typeModule and dropCompositeType.typeAst == dropField.typeNode) -> if {
+                    (dropCompositeType.sourceModule == dropTask.typeModule and dropCompositeType.typeAst == dropField.typeNode)
+                        -> if {
                         dropCompositeType.kind == 3 -> if { 13 => dropFieldOrigin! }
                         dropCompositeType.kind == 5 -> if { 15 => dropFieldOrigin! }
                     }
@@ -441,14 +501,16 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                 0 => dropNominalIndex!
                 dropNominalIndex! < (context.nominal -> len) -> while {
                     context.nominal[dropNominalIndex!] => dropNominalType
-                    (dropNominalType.sourceModule == dropTask.typeModule and dropNominalType.typeAst == dropField.typeNode and (dropNominalType.origin == 0 or dropNominalType.origin == 2)) -> if {
+                    (dropNominalType.sourceModule == dropTask.typeModule and dropNominalType.typeAst == dropField.typeNode and (dropNominalType.origin == 0 or dropNominalType.origin == 2))
+                        -> if {
                         dropNominalType.origin => dropFieldOrigin!
                         dropNominalType.targetModule => dropFieldModule!
                         dropNominalType.targetSymbol => dropFieldSymbol!
                     }
                     dropNominalIndex! + 1 => dropNominalIndex!
                 }
-                (dropFieldOrigin! >= 0 or (dropFieldTypeId! >= 0 and (dropFieldTypeId! -> semanticTypeOwns(context, state)))) -> if {
+                (dropFieldOrigin! >= 0 or (dropFieldTypeId! >= 0 and (dropFieldTypeId! -> semanticTypeOwns(context, state))))
+                    -> if {
                     dropTasks! -> len => dropFieldPath
                     "  %dropg$(dropTask.nameRoot)_p$dropFieldPath = extractvalue %sollang.struct.m$(dropTask.typeModule)_s$(dropTask.typeSymbol) " -> print
                     dropTask -> emitDropValueName(context, state)
@@ -482,29 +544,37 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
     }
 }
 semanticTypeOwns typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
-    (typeId >= 0 and typeId < (context.typeTraits -> len)) -> if {
+    (typeId >= 0 and typeId < (context.typeTraits -> len))
+        -> if {
         context.typeTraits[typeId] % 2 == 1
     } else { false }
 }
 isOwnedSocketType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => owned!
-    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+    (typeId >= 0 and typeId < (context.types -> len))
+        -> if {
         context.types[typeId] => candidate
-        (candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2) and candidate.module >= 0) -> if {
+        (candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2) and candidate.module >= 0)
+            -> if {
             false => socketModule!
             0 => moduleSearch!
             moduleSearch! < (context.modules -> len) -> while {
                 context.modules[moduleSearch!] => moduleIdentity
-                (moduleIdentity.sourceIndex == candidate.module and moduleIdentity.pathHash == 2487526727054784715) -> if { true => socketModule! }
+                (moduleIdentity.sourceIndex == candidate.module and moduleIdentity.pathHash == 2487526727054784715)
+                    -> if { true => socketModule! }
                 moduleSearch! + 1 => moduleSearch!
             }
             socketModule! -> if {
                 context.ranges[candidate.module] => candidateRange
-                (candidate.symbol >= 0 and candidate.symbol < candidateRange.symbolCount) -> if {
+                (candidate.symbol >= 0 and candidate.symbol < candidateRange.symbolCount)
+                    -> if {
                     context.symbols[candidateRange.symbolStart + candidate.symbol] => candidateSymbol
-                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "TcpListener", context, state) -> if { true => owned! }
-                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "TcpStream", context, state) -> if { true => owned! }
-                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "UdpSocket", context, state) -> if { true => owned! }
+                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "TcpListener", context, state)
+                        -> if { true => owned! }
+                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "TcpStream", context, state)
+                        -> if { true => owned! }
+                    candidate.module -> sourceTokenIs(candidateSymbol.nameToken, "UdpSocket", context, state)
+                        -> if { true => owned! }
                 }
             }
         }
@@ -517,22 +587,31 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
     dropTypeIndex! < (context.types -> len) -> while {
         context.types[dropTypeIndex!] => dropType
         false => supported!
-        (dropType.kind == 3 or dropType.kind == 4 or dropType.kind == 5 or dropType.kind == 6 or dropType.kind == 12 or dropType.kind == 13) -> if { true => supported! }
+        (dropType.kind == 3 or dropType.kind == 4 or dropType.kind == 5 or dropType.kind == 6 or dropType.kind == 12 or dropType.kind == 13)
+            -> if { true => supported! }
         dropType.kind == 9 -> if { true => supported! }
-        (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24) -> if { true => supported! }
-        ((dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) or dropType.kind == 10) -> if { true => supported! }
-        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1)) -> if { true => supported! }
-        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 3 or dropType.symbol == 4)) -> if { true => supported! }
-        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 5 or dropType.symbol == 6 or dropType.symbol == 7)) -> if { true => supported! }
-        (active[dropTypeIndex!] == 1 and context.typeTraits[dropTypeIndex!] % 2 == 1 and supported!) -> if {
+        (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24)
+            -> if { true => supported! }
+        ((dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) or dropType.kind == 10)
+            -> if { true => supported! }
+        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1))
+            -> if { true => supported! }
+        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 3 or dropType.symbol == 4))
+            -> if { true => supported! }
+        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 5 or dropType.symbol == 6 or dropType.symbol == 7))
+            -> if { true => supported! }
+        (active[dropTypeIndex!] == 1 and context.typeTraits[dropTypeIndex!] % 2 == 1 and supported!)
+            -> if {
             "define internal void @sollang_drop_t$(dropTypeIndex!)(" -> print
             dropTypeIndex! -> writeSemanticTypeId(context, state)
             " %value) {" -> println
             "entry:" -> println
-            (dropType.kind == 3 or dropType.kind == 12 or (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 7)) -> if {
+            (dropType.kind == 3 or dropType.kind == 12 or (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 7))
+                -> if {
                 "  %data = extractvalue %sollang.array.i32 %value, 0" -> println
                 "  %length = extractvalue %sollang.array.i32 %value, 1" -> println
-                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1)
+                    -> if {
                     "  br label %loop" -> println
                     "loop:" -> println
                     "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
@@ -555,14 +634,17 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                     "  br label %loop" -> println
                     "done:" -> println
                 }
-                (dropType.kind == 3 or (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 7)) -> if { "  call void @free(ptr %data)" -> println }
+                (dropType.kind == 3 or (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 7))
+                    -> if { "  call void @free(ptr %data)" -> println }
                 "  ret void" -> println
             }
-            (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 6) -> if {
+            (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 6)
+                -> if {
                 "  %data = extractvalue %sollang.array.i32 %value, 0" -> println
                 "  %length = extractvalue %sollang.array.i32 %value, 1" -> println
                 "  %capacity = extractvalue %sollang.array.i32 %value, 2" -> println
-                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1)
+                    -> if {
                     "  %head = load i64, ptr %data, align 8" -> println
                     "  %payload = getelementptr i8, ptr %data, i64 8" -> println
                     "  %mask = sub i64 %capacity, 1" -> println
@@ -593,11 +675,13 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  call void @free(ptr %data)" -> println
                 "  ret void" -> println
             }
-            (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 5) -> if {
+            (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 5)
+                -> if {
                 "  %keys = extractvalue %sollang.dict %value, 0" -> println
                 "  %controls = extractvalue %sollang.dict %value, 1" -> println
                 "  %capacity = extractvalue %sollang.dict %value, 3" -> println
-                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1)
+                    -> if {
                     "  br label %loop" -> println
                     "loop:" -> println
                     "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
@@ -666,7 +750,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  %values = extractvalue %sollang.dict %value, 1" -> println
                 "  %length = extractvalue %sollang.dict %value, 2" -> println
                 "  %capacity = extractvalue %sollang.dict %value, 3" -> println
-                ((dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) or (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1)) -> if {
+                ((dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) or (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1))
+                    -> if {
                     "  %control_offset = mul i64 %capacity, " -> print
                     context.typeSizes[dropType.first] -> writeDecimalLine
                     "  %controls = getelementptr i8, ptr %keys, i64 %control_offset" -> println
@@ -681,7 +766,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                     "  %occupied = icmp sgt i8 %control, 0" -> println
                     "  br i1 %occupied, label %item, label %continue" -> println
                     "item:" -> println
-                    (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                    (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1)
+                        -> if {
                         "  %key_slot = getelementptr " -> print
                         dropType.first -> writeSemanticTypeId(context, state)
                         ", ptr %keys, i64 %index" -> println
@@ -693,7 +779,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                         dropType.first -> writeSemanticTypeId(context, state)
                         " %key)" -> println
                     }
-                    (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1) -> if {
+                    (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1)
+                        -> if {
                         "  %value_slot = getelementptr " -> print
                         dropType.second -> writeSemanticTypeId(context, state)
                         ", ptr %values, i64 %index" -> println
@@ -721,7 +808,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  %present = icmp ne ptr %value, null" -> println
                 "  br i1 %present, label %drop, label %done" -> println
                 "drop:" -> println
-                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1)
+                    -> if {
                     "  %element = load " -> print
                     dropType.first -> writeSemanticTypeId(context, state)
                     ", ptr %value, align " -> print
@@ -743,23 +831,28 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                     "  ret void" -> println
                 }
             }
-            (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24) -> if {
+            (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24)
+                -> if {
                 "  call void @sollang_runtime_unmap_text(%sollang.source_text %value)" -> println
                 "  ret void" -> println
             }
-            ((dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2) and not (dropTypeIndex! -> isNominalEnumType(context, state))) or dropType.kind == 10) -> if {
-                (dropType.kind == 1 and (dropTypeIndex! -> isOwnedSocketType(context, state))) -> if {
+            ((dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2) and not (dropTypeIndex! -> isNominalEnumType(context, state))) or dropType.kind == 10)
+                -> if {
+                (dropType.kind == 1 and (dropTypeIndex! -> isOwnedSocketType(context, state)))
+                    -> if {
                     "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
                     "  call void @sollang_platform_close_socket(i64 %handle)" -> println
                 } else {
-                (dropType.kind == 1 and (dropTypeIndex! -> isOwnedFileType(context, state))) -> if {
+                (dropType.kind == 1 and (dropTypeIndex! -> isOwnedFileType(context, state)))
+                    -> if {
                     "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
                     "  call void @sollang_platform_close_owned_file(i64 %handle)" -> println
                 } else {
                     0 => dropFieldIndex!
                     dropFieldIndex! < (context.fields -> len) -> while {
                         context.fields[dropFieldIndex!] => dropField
-                        (dropField.status == 0 and dropField.ownerType == dropTypeIndex! and dropField.fieldType >= 0 and context.typeTraits[dropField.fieldType] % 2 == 1) -> if {
+                        (dropField.status == 0 and dropField.ownerType == dropTypeIndex! and dropField.fieldType >= 0 and context.typeTraits[dropField.fieldType] % 2 == 1)
+                            -> if {
                             "  %field$(dropField.ordinal) = extractvalue " -> print
                             dropTypeIndex! -> writeSemanticTypeId(context, state)
                             " %value, $(dropField.ordinal)" -> println
@@ -773,7 +866,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 }
                 "  ret void" -> println
             }
-            (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 3 or dropType.symbol == 4)) -> if {
+            (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 3 or dropType.symbol == 4))
+                -> if {
                 "%sollang.stream" => producerDropType!
                 dropType.symbol == 4 -> if { "%sollang.event_stream" => producerDropType! }
                 "  %context = extractvalue $(producerDropType!) %value, 0" -> println
@@ -786,7 +880,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "done:" -> println
                 "  ret void" -> println
             }
-            (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1)) -> if {
+            (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1))
+                -> if {
                 "  %slot = alloca %sollang.enum.t$(dropTypeIndex!), align 8" -> println
                 "  store %sollang.enum.t$(dropTypeIndex!) %value, ptr %slot, align 8" -> println
                 "  %tag = extractvalue %sollang.enum.t$(dropTypeIndex!) %value, 0" -> println
@@ -794,7 +889,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  %is0 = icmp eq i32 %tag, 0" -> println
                 "  br i1 %is0, label %tag0, label %tag1" -> println
                 "tag0:" -> println
-                (dropType.symbol == 1 and dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                (dropType.symbol == 1 and dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1)
+                    -> if {
                     "  %first = load " -> print
                     dropType.first -> writeSemanticTypeId(context, state)
                     ", ptr %payload, align " -> print
@@ -806,7 +902,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "  br label %done" -> println
                 "tag1:" -> println
                 dropType.symbol == 0 -> if {
-                    (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                    (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1)
+                        -> if {
                         "  %some = load " -> print
                         dropType.first -> writeSemanticTypeId(context, state)
                         ", ptr %payload, align " -> print
@@ -816,7 +913,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                         " %some)" -> println
                     }
                 } else {
-                    (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1) -> if {
+                    (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1)
+                        -> if {
                         "  %second = load " -> print
                         dropType.second -> writeSemanticTypeId(context, state)
                         ", ptr %payload, align " -> print
@@ -830,7 +928,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "done:" -> println
                 "  ret void" -> println
             }
-            (dropTypeIndex! -> isNominalEnumType(context, state)) -> if {
+            (dropTypeIndex! -> isNominalEnumType(context, state))
+                -> if {
                 dropTypeIndex! -> enumPayloadTypes(context, state) => nominalDropPayloads
                 "  %slot = alloca %sollang.enum.t$(dropTypeIndex!), align 8" -> println
                 "  store %sollang.enum.t$(dropTypeIndex!) %value, ptr %slot, align 8" -> println
@@ -841,7 +940,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "tag0:" -> println
                 (nominalDropPayloads -> len) > 0 -> if {
                     nominalDropPayloads[0] => nominalDropFirst
-                    (nominalDropFirst >= 0 and context.typeTraits[nominalDropFirst] % 2 == 1) -> if {
+                    (nominalDropFirst >= 0 and context.typeTraits[nominalDropFirst] % 2 == 1)
+                        -> if {
                         "  %first = load " -> print
                         nominalDropFirst -> writeSemanticTypeId(context, state)
                         ", ptr %payload, align " -> print
@@ -855,7 +955,8 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                 "tag1:" -> println
                 (nominalDropPayloads -> len) > 1 -> if {
                     nominalDropPayloads[1] => nominalDropSecond
-                    (nominalDropSecond >= 0 and context.typeTraits[nominalDropSecond] % 2 == 1) -> if {
+                    (nominalDropSecond >= 0 and context.typeTraits[nominalDropSecond] % 2 == 1)
+                        -> if {
                         "  %second = load " -> print
                         nominalDropSecond -> writeSemanticTypeId(context, state)
                         ", ptr %payload, align " -> print
@@ -895,13 +996,15 @@ emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext
         context.typeAligns[request.payloadTypeId] -> writeDecimalLine
         "  call void @free(ptr %enumdrop$(request.nameRoot)_payload)" -> println
     }
-    (payloadType.kind == 1 and payloadType.origin == 1 and payloadType.symbol == 24) -> if {
+    (payloadType.kind == 1 and payloadType.origin == 1 and payloadType.symbol == 24)
+        -> if {
         "  %enumdrop$(request.nameRoot)_payload = load %sollang.source_text, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
         context.typeAligns[request.payloadTypeId] -> writeDecimalLine
         "  %enumdrop$(request.nameRoot)_owner = extractvalue %sollang.source_text %enumdrop$(request.nameRoot)_payload, 2" -> println
         "  call void @free(ptr %enumdrop$(request.nameRoot)_owner)" -> println
     }
-    (payloadType.kind == 1 and (payloadType.origin == 0 or payloadType.origin == 2)) -> if {
+    (payloadType.kind == 1 and (payloadType.origin == 0 or payloadType.origin == 2))
+        -> if {
         "  %dropg$(request.nameRoot)_p0 = load %sollang.struct.m$(payloadType.module)_s$(payloadType.symbol), ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
         context.typeAligns[request.payloadTypeId] -> writeDecimalLine
         DropGlueRequest {
@@ -931,7 +1034,8 @@ emitEnumDrop request: EnumDropRequest, context: ref emitterContext.EmitContext, 
     request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print }
     request.valueKind == 1 -> if {
         context.ir[request.regionIndex].parent => enumParameterOwner!
-        (enumParameterOwner! >= 0 and context.ir[enumParameterOwner!].kind != 0 and context.ir[enumParameterOwner!].kind != 11) -> while {
+        (enumParameterOwner! >= 0 and context.ir[enumParameterOwner!].kind != 0 and context.ir[enumParameterOwner!].kind != 11)
+            -> while {
             context.ir[enumParameterOwner!].parent => enumParameterOwner!
         }
         context -> writeParameterReference(enumParameterOwner!, context.ir[request.bindingIndex].symbol) => enumParameterWritten
@@ -941,11 +1045,14 @@ emitEnumDrop request: EnumDropRequest, context: ref emitterContext.EmitContext, 
 }
 nominalDeclarationAst typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     -1 => declarationAst!
-    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+    (typeId >= 0 and typeId < (context.types -> len))
+        -> if {
         context.types[typeId] => nominalType
-        (nominalType.kind == 1 and (nominalType.origin == 0 or nominalType.origin == 2) and nominalType.module >= 0 and nominalType.module < (context.ranges -> len)) -> if {
+        (nominalType.kind == 1 and (nominalType.origin == 0 or nominalType.origin == 2) and nominalType.module >= 0 and nominalType.module < (context.ranges -> len))
+            -> if {
             context.ranges[nominalType.module] => nominalRange
-            (nominalType.symbol >= 0 and nominalType.symbol < nominalRange.symbolCount) -> if {
+            (nominalType.symbol >= 0 and nominalType.symbol < nominalRange.symbolCount)
+                -> if {
                 context.symbols[nominalRange.symbolStart + nominalType.symbol] => nominalSymbol
                 nominalSymbol.astNode >= 0 -> if { nominalSymbol.astNode => declarationAst! }
             }
@@ -959,7 +1066,8 @@ isNominalEnumType typeId: Int, context: ref emitterContext.EmitContext, state: r
     declarationAst >= 0 -> if {
         context.types[typeId] => nominalType
         context.ranges[nominalType.module] => nominalRange
-        context.nodes[nominalRange.astStart + declarationAst].kind == 4 -> if { true => result! }
+        context.nodes[nominalRange.astStart + declarationAst].kind == 4
+            -> if { true => result! }
     }
     result!
 }
@@ -970,29 +1078,36 @@ enumPayloadTypes typeId: Int, context: ref emitterContext.EmitContext, state: re
         enumType.module => enumModule
         typeId -> nominalDeclarationAst(context, state) => enumAst
         0 => nominalPayloadIndex!
-        nominalPayloadIndex! < (context.nominal -> len) -> while {
+        nominalPayloadIndex! < (context.nominal -> len)
+            -> while {
             context.nominal[nominalPayloadIndex!] => nominalPayload
-            (nominalPayload.status == 0 and nominalPayload.sourceModule == enumModule and nominalPayload.typeAst >= 0) -> if {
+            (nominalPayload.status == 0 and nominalPayload.sourceModule == enumModule and nominalPayload.typeAst >= 0)
+                -> if {
                 nominalPayload.typeAst => payloadAncestor!
                 false => payloadBelongs!
-                (payloadAncestor! >= 0 and payloadAncestor! < context.ranges[enumModule].astCount and not payloadBelongs!) -> while {
+                (payloadAncestor! >= 0 and payloadAncestor! < context.ranges[enumModule].astCount and not payloadBelongs!)
+                    -> while {
                     context.ranges[enumModule] => payloadRange
                     context.nodes[payloadRange.astStart + payloadAncestor!] => payloadNode
-                    (payloadNode.kind == 27 and payloadNode.parent == enumAst) -> if { true => payloadBelongs! } else { payloadNode.parent => payloadAncestor! }
+                    (payloadNode.kind == 27 and payloadNode.parent == enumAst)
+                        -> if { true => payloadBelongs! } else { payloadNode.parent => payloadAncestor! }
                 }
                 payloadBelongs! -> if {
                     -1 => resolvedPayloadType!
                     0 => resolvedPayloadSearch!
-                    resolvedPayloadSearch! < (context.types -> len) -> while {
+                    resolvedPayloadSearch! < (context.types -> len)
+                        -> while {
                         context.types[resolvedPayloadSearch!] => payloadTypeCandidate
-                        (payloadTypeCandidate.status == 0 and payloadTypeCandidate.kind == 1 and payloadTypeCandidate.origin == nominalPayload.origin and payloadTypeCandidate.module == nominalPayload.targetModule and payloadTypeCandidate.symbol == nominalPayload.targetSymbol) -> if { resolvedPayloadSearch! => resolvedPayloadType! }
+                        (payloadTypeCandidate.status == 0 and payloadTypeCandidate.kind == 1 and payloadTypeCandidate.origin == nominalPayload.origin and payloadTypeCandidate.module == nominalPayload.targetModule and payloadTypeCandidate.symbol == nominalPayload.targetSymbol)
+                            -> if { resolvedPayloadSearch! => resolvedPayloadType! }
                         resolvedPayloadSearch! + 1 => resolvedPayloadSearch!
                     }
                     resolvedPayloadType! >= 0 -> if {
                         false => alreadyPayload!
                         0 => existingPayloadIndex!
                         existingPayloadIndex! < (payloads! -> len) -> while {
-                            payloads![existingPayloadIndex!] == resolvedPayloadType! -> if { true => alreadyPayload! }
+                            payloads![existingPayloadIndex!] == resolvedPayloadType!
+                                -> if { true => alreadyPayload! }
                             existingPayloadIndex! + 1 => existingPayloadIndex!
                         }
                         not alreadyPayload! -> if { payloads! -> push(resolvedPayloadType!) }
@@ -1002,36 +1117,45 @@ enumPayloadTypes typeId: Int, context: ref emitterContext.EmitContext, state: re
             nominalPayloadIndex! + 1 => nominalPayloadIndex!
         }
         0 => compositePayloadIndex!
-        compositePayloadIndex! < (context.composite -> len) -> while {
+        compositePayloadIndex! < (context.composite -> len)
+            -> while {
             context.composite[compositePayloadIndex!] => compositePayload
-            (compositePayload.status == 0 and compositePayload.sourceModule == enumModule and compositePayload.typeAst >= 0) -> if {
+            (compositePayload.status == 0 and compositePayload.sourceModule == enumModule and compositePayload.typeAst >= 0)
+                -> if {
                 compositePayload.typeAst => payloadAncestor!
                 false => payloadBelongs!
-                (payloadAncestor! >= 0 and payloadAncestor! < context.ranges[enumModule].astCount and not payloadBelongs!) -> while {
+                (payloadAncestor! >= 0 and payloadAncestor! < context.ranges[enumModule].astCount and not payloadBelongs!)
+                    -> while {
                     context.ranges[enumModule] => payloadRange
                     context.nodes[payloadRange.astStart + payloadAncestor!] => payloadNode
-                    (payloadNode.kind == 27 and payloadNode.parent == enumAst) -> if { true => payloadBelongs! } else { payloadNode.parent => payloadAncestor! }
+                    (payloadNode.kind == 27 and payloadNode.parent == enumAst)
+                        -> if { true => payloadBelongs! } else { payloadNode.parent => payloadAncestor! }
                 }
                 payloadBelongs! -> if {
                     -1 => compositeElementType!
                     0 => compositeElementSearch!
-                    compositeElementSearch! < (context.types -> len) -> while {
+                    compositeElementSearch! < (context.types -> len)
+                        -> while {
                         context.types[compositeElementSearch!] => compositeElementCandidate
-                        (compositeElementCandidate.status == 0 and compositeElementCandidate.kind == 1 and compositeElementCandidate.origin == compositePayload.elementOrigin and compositeElementCandidate.module == compositePayload.elementModule and compositeElementCandidate.symbol == compositePayload.elementSymbol) -> if { compositeElementSearch! => compositeElementType! }
+                        (compositeElementCandidate.status == 0 and compositeElementCandidate.kind == 1 and compositeElementCandidate.origin == compositePayload.elementOrigin and compositeElementCandidate.module == compositePayload.elementModule and compositeElementCandidate.symbol == compositePayload.elementSymbol)
+                            -> if { compositeElementSearch! => compositeElementType! }
                         compositeElementSearch! + 1 => compositeElementSearch!
                     }
                     -1 => resolvedPayloadType!
                     0 => resolvedPayloadSearch!
-                    resolvedPayloadSearch! < (context.types -> len) -> while {
+                    resolvedPayloadSearch! < (context.types -> len)
+                        -> while {
                         context.types[resolvedPayloadSearch!] => payloadTypeCandidate
-                        (payloadTypeCandidate.status == 0 and payloadTypeCandidate.kind == compositePayload.kind and payloadTypeCandidate.first == compositeElementType!) -> if { resolvedPayloadSearch! => resolvedPayloadType! }
+                        (payloadTypeCandidate.status == 0 and payloadTypeCandidate.kind == compositePayload.kind and payloadTypeCandidate.first == compositeElementType!)
+                            -> if { resolvedPayloadSearch! => resolvedPayloadType! }
                         resolvedPayloadSearch! + 1 => resolvedPayloadSearch!
                     }
                     resolvedPayloadType! >= 0 -> if {
                         false => alreadyPayload!
                         0 => existingPayloadIndex!
                         existingPayloadIndex! < (payloads! -> len) -> while {
-                            payloads![existingPayloadIndex!] == resolvedPayloadType! -> if { true => alreadyPayload! }
+                            payloads![existingPayloadIndex!] == resolvedPayloadType!
+                                -> if { true => alreadyPayload! }
                             existingPayloadIndex! + 1 => existingPayloadIndex!
                         }
                         not alreadyPayload! -> if { payloads! -> push(resolvedPayloadType!) }
@@ -1042,7 +1166,8 @@ enumPayloadTypes typeId: Int, context: ref emitterContext.EmitContext, state: re
         }
     } else {
         context.types[typeId] => enumType
-        (enumType.kind == 7 and enumType.origin == 4 and (enumType.symbol == 0 or enumType.symbol == 1)) -> if {
+        (enumType.kind == 7 and enumType.origin == 4 and (enumType.symbol == 0 or enumType.symbol == 1))
+            -> if {
             enumType.first >= 0 -> if { payloads! -> push(enumType.first) }
             enumType.second >= 0 -> if { payloads! -> push(enumType.second) }
         }
@@ -1068,12 +1193,18 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
             current.kind == 9 -> if { "ptr" -> print }
             current.kind == 10 -> if { "%sollang.product.t$(typeTask)" -> print }
             current.kind == 7 -> if {
-                (current.origin == 4 and (current.symbol == 0 or current.symbol == 1)) -> if { "%sollang.enum.t$(typeTask)" -> print }
-                (current.origin == 4 and current.symbol == 2) -> if { "%sollang.task" -> print }
-                (current.origin == 4 and current.symbol == 3) -> if { "%sollang.stream" -> print }
-                (current.origin == 4 and current.symbol == 4) -> if { "%sollang.event_stream" -> print }
-                (current.origin == 4 and current.symbol == 5) -> if { "%sollang.dict" -> print }
-                (current.origin == 4 and (current.symbol == 6 or current.symbol == 7)) -> if { "%sollang.array.i32" -> print }
+                (current.origin == 4 and (current.symbol == 0 or current.symbol == 1))
+                    -> if { "%sollang.enum.t$(typeTask)" -> print }
+                (current.origin == 4 and current.symbol == 2)
+                    -> if { "%sollang.task" -> print }
+                (current.origin == 4 and current.symbol == 3)
+                    -> if { "%sollang.stream" -> print }
+                (current.origin == 4 and current.symbol == 4)
+                    -> if { "%sollang.event_stream" -> print }
+                (current.origin == 4 and current.symbol == 5)
+                    -> if { "%sollang.dict" -> print }
+                (current.origin == 4 and (current.symbol == 6 or current.symbol == 7))
+                    -> if { "%sollang.array.i32" -> print }
             }
             current.kind == 4 -> if {
                 "[$(current.length) x " -> print
@@ -1084,20 +1215,26 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
             }
             current.kind == 1 -> if {
                 (current.origin == 0 or current.origin == 2) -> if {
-                    typeTask -> isNominalEnumType(context, state) -> if { "%sollang.enum.t$(typeTask)" -> print } else { "%sollang.struct.m$(current.module)_s$(current.symbol)" -> print }
+                    typeTask -> isNominalEnumType(context, state)
+                        -> if { "%sollang.enum.t$(typeTask)" -> print } else { "%sollang.struct.m$(current.module)_s$(current.symbol)" -> print }
                 } else {
                     current.symbol == 0 -> if { "void" -> print }
                     current.symbol == 1 -> if { "%sollang.text" -> print }
                     current.symbol == 15 -> if { "%sollang.array.i32" -> print }
-                    (current.symbol == 2 or current.symbol == 5 or current.symbol == 10 or current.symbol == 14) -> if { "i32" -> print }
+                    (current.symbol == 2 or current.symbol == 5 or current.symbol == 10 or current.symbol == 14)
+                        -> if { "i32" -> print }
                     (current.symbol == 3 or current.symbol == 8) -> if { "i8" -> print }
                     (current.symbol == 4 or current.symbol == 9) -> if { "i16" -> print }
-                    (current.symbol == 6 or current.symbol == 7 or current.symbol == 11) -> if { "i64" -> print }
-                    (current.symbol == 12 or current.symbol == 13) -> if {
+                    (current.symbol == 6 or current.symbol == 7 or current.symbol == 11)
+                        -> if { "i64" -> print }
+                    (current.symbol == 12 or current.symbol == 13)
+                        -> if {
                         context.pointerBitWidth == 32 -> if { "i32" -> print } else { "i64" -> print }
                     }
-                    (current.symbol == 19 or current.symbol == 20) -> if { "float" -> print }
-                    (current.symbol == 21 or current.symbol == 22) -> if { "double" -> print }
+                    (current.symbol == 19 or current.symbol == 20)
+                        -> if { "float" -> print }
+                    (current.symbol == 21 or current.symbol == 22)
+                        -> if { "double" -> print }
                     current.symbol == 23 -> if { "i1" -> print }
                     current.symbol == 24 -> if { "%sollang.source_text" -> print }
                     current.symbol == 25 -> if { "{ i32, i32 }" -> print }
@@ -1108,7 +1245,8 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
 }
 effectiveTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     node.typeId => effective!
-    (node.kind == 5 and node.operand0 >= 0 and context.ir[node.operand0].kind == 17 and context.ir[node.operand0].flags == 1) -> if {
+    (node.kind == 5 and node.operand0 >= 0 and context.ir[node.operand0].kind == 17 and context.ir[node.operand0].flags == 1)
+        -> if {
         node.operand0 -> mutableBindingRoot(context, state) => effectiveBindingRoot
         context.ir[effectiveBindingRoot].typeId >= 0 -> if { context.ir[effectiveBindingRoot].typeId => effective! }
     }
@@ -1122,7 +1260,8 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
     # Byte indexing is lowered directly to an i8 load in every expression
     # region. Its producer ABI is therefore UInt8 even when an inferred use
     # retained the surrounding integer context in legacy node metadata.
-    ((node.kind == 9 or node.kind == 6) and node.opcode == -202) -> if {
+    ((node.kind == 9 or node.kind == 6) and node.opcode == -202)
+        -> if {
         "i8" -> print
     } else {
     node.typeOrigin == 16 -> if {
@@ -1133,7 +1272,8 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
         "i$(effectiveIntegerWidth)" -> print
     } else {
         node -> effectiveTypeId(context, state) => typeId
-        (typeId >= 0 and context.types[typeId].kind == 4) -> if {
+        (typeId >= 0 and context.types[typeId].kind == 4)
+            -> if {
             # Fixed-array expression values use the documented borrowed
             # pointer/length ABI. Their canonical storage type remains inline
             # and is still written by writeSemanticTypeId for owner layouts.
@@ -1149,10 +1289,12 @@ llvmType symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEm
     "void" => result!
     symbol == 1 -> if { "%sollang.text" => result! }
     symbol == 15 -> if { "%sollang.array.i32" => result! }
-    (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14) -> if { "i32" => result! }
+    (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14)
+        -> if { "i32" => result! }
     (symbol == 3 or symbol == 8) -> if { "i8" => result! }
     (symbol == 4 or symbol == 9) -> if { "i16" => result! }
-    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13) -> if { "i64" => result! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13)
+        -> if { "i64" => result! }
     (symbol == 19 or symbol == 20) -> if { "float" => result! }
     (symbol == 21 or symbol == 22) -> if { "double" => result! }
     symbol == 23 -> if { "i1" => result! }
@@ -1169,7 +1311,8 @@ storageSize symbol: Int, context: ref emitterContext.EmitContext, state: ref Cor
     symbol == 24 -> if { context.pointerBitWidth / 8 * 4 => result! }
     symbol == 25 -> if { 8 => result! }
     (symbol == 4 or symbol == 9) -> if { 2 => result! }
-    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22) -> if { 8 => result! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22)
+        -> if { 8 => result! }
     result! => selected
     selected
 }
@@ -1177,8 +1320,10 @@ integerWidth symbol: Int, context: ref emitterContext.EmitContext, state: ref Co
     0 => result!
     (symbol == 3 or symbol == 8) -> if { 8 => result! }
     (symbol == 4 or symbol == 9) -> if { 16 => result! }
-    (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14) -> if { 32 => result! }
-    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13) -> if { 64 => result! }
+    (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14)
+        -> if { 32 => result! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13)
+        -> if { 64 => result! }
     result! => selected
     selected
 }
@@ -1188,41 +1333,51 @@ integerSigned symbol: Int, context: ref emitterContext.EmitContext, state: ref C
 integerNodeSigned node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     node.typeSymbol => symbol!
     node -> effectiveTypeId(context, state) => typeId
-    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+    (typeId >= 0 and typeId < (context.types -> len))
+        -> if {
         context.types[typeId] => canonicalType
-        (canonicalType.kind == 1 and canonicalType.origin == 1) -> if {
+        (canonicalType.kind == 1 and canonicalType.origin == 1)
+            -> if {
             canonicalType.symbol => symbol!
         }
     }
     symbol! => canonicalSymbol
-    ((node.kind == 9 or node.kind == 6) and node.opcode == -202) -> if { false } else {
+    ((node.kind == 9 or node.kind == 6) and node.opcode == -202)
+        -> if { false } else {
         canonicalSymbol -> integerSigned(context, state)
     }
 }
 memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     0 => width!
     -1 => canonicalMemberOwnerTypeId!
-    (node.kind == 13 and node.operand0 >= 0 and node.operand0 < (context.ir -> len)) -> if {
+    (node.kind == 13 and node.operand0 >= 0 and node.operand0 < (context.ir -> len))
+        -> if {
         context.ir[node.operand0] -> effectiveTypeId(context, state) => canonicalMemberOwnerTypeId!
-        (canonicalMemberOwnerTypeId! >= 0 and context.types[canonicalMemberOwnerTypeId!].kind == 8) -> if {
+        (canonicalMemberOwnerTypeId! >= 0 and context.types[canonicalMemberOwnerTypeId!].kind == 8)
+            -> if {
             context.types[canonicalMemberOwnerTypeId!].first => canonicalMemberOwnerTypeId!
         }
         0 => canonicalMemberFieldSearch!
-        canonicalMemberFieldSearch! < (context.fields -> len) -> while {
+        canonicalMemberFieldSearch! < (context.fields -> len)
+            -> while {
             context.fields[canonicalMemberFieldSearch!] => canonicalMemberField
             (canonicalMemberField.status == 0
                 and canonicalMemberField.ownerType == canonicalMemberOwnerTypeId!
-                and canonicalMemberField.ordinal == node.symbol) -> if {
+                and canonicalMemberField.ordinal == node.symbol)
+                    -> if {
                 context.types[canonicalMemberField.fieldType] => canonicalMemberFieldType
-                (canonicalMemberFieldType.kind == 1 and canonicalMemberFieldType.origin == 1) -> if {
+                (canonicalMemberFieldType.kind == 1 and canonicalMemberFieldType.origin == 1)
+                    -> if {
                     canonicalMemberFieldType.symbol -> integerWidth(context, state) => width!
-                    (canonicalMemberFieldType.symbol == 12 or canonicalMemberFieldType.symbol == 13) -> if { context.pointerBitWidth => width! }
+                    (canonicalMemberFieldType.symbol == 12 or canonicalMemberFieldType.symbol == 13)
+                        -> if { context.pointerBitWidth => width! }
                 }
             }
             canonicalMemberFieldSearch! + 1 => canonicalMemberFieldSearch!
         }
     }
-    (node.kind == 13 and node.operand0 >= 0 and canonicalMemberOwnerTypeId! < 0) -> if {
+    (node.kind == 13 and node.operand0 >= 0 and canonicalMemberOwnerTypeId! < 0)
+        -> if {
         context.ir[node.operand0] => memberBase
         memberBase.typeOrigin => currentOrigin!
         memberBase.typeModule => currentModule!
@@ -1232,26 +1387,33 @@ memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.Em
         memberBaseAst.start + memberBaseAst.length => memberBaseEnd
         memberAst.firstToken => memberTokenIndex!
         true => beforeMemberBaseEnd!
-        (beforeMemberBaseEnd! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount) -> while {
-            context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].span.start < memberBaseEnd -> if {
+        (beforeMemberBaseEnd! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount)
+            -> while {
+            context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].span.start < memberBaseEnd
+                -> if {
                 memberTokenIndex! + 1 => memberTokenIndex!
             } else { false => beforeMemberBaseEnd! }
         }
-        memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
-            context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
+        memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount
+            -> while {
+            context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier()
+                -> if {
                 currentModule! => ownerSourceModule!
                 currentOrigin! == 2 -> if { context.modules[currentModule!].sourceIndex => ownerSourceModule! }
                 context.ranges[ownerSourceModule!] => ownerRange
                 0 => memberFieldSearch!
                 false => memberFieldFound!
-                (not memberFieldFound! and memberFieldSearch! < ownerRange.symbolCount) -> while {
+                (not memberFieldFound! and memberFieldSearch! < ownerRange.symbolCount)
+                    -> while {
                     context.symbols[ownerRange.symbolStart + memberFieldSearch!] => memberField
-                    (memberField.kind == 26 and memberField.parent == currentSymbol!) -> if {
+                    (memberField.kind == 26 and memberField.parent == currentSymbol!)
+                        -> if {
                         context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!] => memberName
                         context.tokens[ownerRange.tokenStart + memberField.nameToken] => fieldName
                         memberName.span.length == fieldName.span.length => fieldEqual!
                         UIntSize(0) => fieldNameByte!
-                        (fieldEqual! and fieldNameByte! < memberName.span.length) -> while {
+                        (fieldEqual! and fieldNameByte! < memberName.span.length)
+                            -> while {
                             context.sources[node.sourceModule] -> byte(memberName.span.start + fieldNameByte!) => memberByte
                             context.sources[ownerSourceModule!] -> byte(fieldName.span.start + fieldNameByte!) => fieldByte
                             memberByte != fieldByte -> if { false => fieldEqual! }
@@ -1261,8 +1423,10 @@ memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.Em
                             true => memberFieldFound!
                             -1 => memberFieldTypeIndex!
                             0 => memberFieldTypeSearch!
-                            memberFieldTypeSearch! < (context.nominal -> len) -> while {
-                                (context.nominal[memberFieldTypeSearch!].sourceModule == ownerSourceModule! and context.nominal[memberFieldTypeSearch!].typeAst == memberField.typeNode) -> if {
+                            memberFieldTypeSearch! < (context.nominal -> len)
+                                -> while {
+                                (context.nominal[memberFieldTypeSearch!].sourceModule == ownerSourceModule! and context.nominal[memberFieldTypeSearch!].typeAst == memberField.typeNode)
+                                    -> if {
                                     memberFieldTypeSearch! => memberFieldTypeIndex!
                                 }
                                 memberFieldTypeSearch! + 1 => memberFieldTypeSearch!
@@ -1275,9 +1439,11 @@ memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.Em
                             } else {
                                 -1 => currentOrigin!
                                 0 => memberCompositeSearch!
-                                memberCompositeSearch! < (context.composite -> len) -> while {
+                                memberCompositeSearch! < (context.composite -> len)
+                                    -> while {
                                     context.composite[memberCompositeSearch!] => memberCompositeType
-                                    (memberCompositeType.sourceModule == ownerSourceModule! and memberCompositeType.typeAst == memberField.typeNode) -> if {
+                                    (memberCompositeType.sourceModule == ownerSourceModule! and memberCompositeType.typeAst == memberField.typeNode)
+                                        -> if {
                                         10 + memberCompositeType.kind => currentOrigin!
                                         memberCompositeType.elementModule => currentModule!
                                         memberCompositeType.elementSymbol => currentSymbol!
@@ -1294,7 +1460,8 @@ memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.Em
         }
         currentOrigin! == 1 -> if {
             currentSymbol! -> integerWidth(context, state) => width!
-            (currentSymbol! == 12 or currentSymbol! == 13) -> if { context.pointerBitWidth => width! }
+            (currentSymbol! == 12 or currentSymbol! == 13)
+                -> if { context.pointerBitWidth => width! }
         }
     }
     width!
@@ -1304,9 +1471,11 @@ integerNodeWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
     false => canonicalReference!
     node.typeOrigin == 1 -> if { node.typeSymbol => symbol! }
     node -> effectiveTypeId(context, state) => typeId
-    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+    (typeId >= 0 and typeId < (context.types -> len))
+        -> if {
         context.types[typeId] => canonicalType
-        (canonicalType.kind == 1 and canonicalType.origin == 1) -> if {
+        (canonicalType.kind == 1 and canonicalType.origin == 1)
+            -> if {
             canonicalType.symbol => symbol!
         }
         canonicalType.kind == 8 -> if { true => canonicalReference! }
@@ -1314,16 +1483,22 @@ integerNodeWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
     symbol! -> integerWidth(context, state) => width!
     symbol! == 23 -> if { 1 => width! }
     (symbol! == 12 or symbol! == 13) -> if { context.pointerBitWidth => width! }
-    ((node.kind == 9 or node.kind == 6) and node.opcode == -202) -> if { 8 => width! }
-    (width! == 0 and node.kind == 13 and not canonicalReference!) -> if { node -> memberNodeIntegerWidth(context, state) => width! }
-    (node.kind == 5 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and context.ir[node.operand0].kind == 17 and context.ir[node.operand0].flags != 1 and context.ir[node.operand0].operand0 >= 0 and context.ir[node.operand0].operand0 < (context.ir -> len)) -> if {
+    ((node.kind == 9 or node.kind == 6) and node.opcode == -202)
+        -> if { 8 => width! }
+    (width! == 0 and node.kind == 13 and not canonicalReference!)
+        -> if { node -> memberNodeIntegerWidth(context, state) => width! }
+    (node.kind == 5 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and context.ir[node.operand0].kind == 17 and context.ir[node.operand0].flags != 1 and context.ir[node.operand0].operand0 >= 0 and context.ir[node.operand0].operand0 < (context.ir -> len))
+        -> if {
         context.ir[context.ir[node.operand0].operand0] -> integerNodeWidth(context, state) => width!
     }
-    (node.kind == 7 and node.operand0 >= 0 and node.operand0 < (context.ir -> len)) -> if {
+    (node.kind == 7 and node.operand0 >= 0 and node.operand0 < (context.ir -> len))
+        -> if {
         node.opcode == -26 -> if { 1 => width! } else { context.ir[node.operand0] -> integerNodeWidth(context, state) => width! }
     }
-    (node.kind == 8 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and node.operand1 >= 0 and node.operand1 < (context.ir -> len)) -> if {
-        (node.opcode == grammar.tokenIdEqualEqual() or node.opcode == grammar.tokenIdBangEqual() or node.opcode == grammar.tokenIdLess() or node.opcode == grammar.tokenIdLessEqual() or node.opcode == grammar.tokenIdGreater() or node.opcode == grammar.tokenIdGreaterEqual() or node.opcode == -24 or node.opcode == -25) -> if {
+    (node.kind == 8 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and node.operand1 >= 0 and node.operand1 < (context.ir -> len))
+        -> if {
+        (node.opcode == grammar.tokenIdEqualEqual() or node.opcode == grammar.tokenIdBangEqual() or node.opcode == grammar.tokenIdLess() or node.opcode == grammar.tokenIdLessEqual() or node.opcode == grammar.tokenIdGreater() or node.opcode == grammar.tokenIdGreaterEqual() or node.opcode == -24 or node.opcode == -25)
+            -> if {
             1 => width!
         } else {
             context.ir[node.operand0] -> integerNodeWidth(context, state) => leftWidth
@@ -1331,22 +1506,26 @@ integerNodeWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
             leftWidth > rightWidth -> if { leftWidth => width! } else { rightWidth => width! }
         }
     }
-    ((node.kind == 9 or node.kind == 6) and (node.opcode == -201 or node.opcode == -236) and node.operand0 >= 0) -> if {
+    ((node.kind == 9 or node.kind == 6) and (node.opcode == -201 or node.opcode == -236) and node.operand0 >= 0)
+        -> if {
         node.typeSymbol == 2 -> if { 32 => width! } else { context.pointerBitWidth => width! }
     }
     width!
 }
 nodeContainsReadIntAt nodeIndex: Int, depth: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => contains!
-    (depth < 32 and nodeIndex >= 0 and nodeIndex < (context.ir -> len)) -> if {
+    (depth < 32 and nodeIndex >= 0 and nodeIndex < (context.ir -> len))
+        -> if {
         context.ir[nodeIndex] => candidate
-        (candidate.kind == 6 and candidate.symbol == -103) -> if {
+        (candidate.kind == 6 and candidate.symbol == -103)
+            -> if {
             true => contains!
         } else {
             candidate.operand0 != nodeIndex -> if {
                 candidate.operand0 -> nodeContainsReadIntAt(depth + 1, context, state) => contains!
             }
-            (not contains! and candidate.operand1 != nodeIndex) -> if {
+            (not contains! and candidate.operand1 != nodeIndex)
+                -> if {
                 candidate.operand1 -> nodeContainsReadIntAt(depth + 1, context, state) => contains!
             }
         }
@@ -1362,10 +1541,12 @@ integerComparisonOperation expression: typedIr.TypedIrNode, context: ref emitter
     expression.opcode == grammar.tokenIdLess() -> if {
         signed -> if { "icmp slt" } else { "icmp ult" }
     } else {
-        expression.opcode == grammar.tokenIdLessEqual() -> if {
+        expression.opcode == grammar.tokenIdLessEqual()
+            -> if {
             signed -> if { "icmp sle" } else { "icmp ule" }
         } else {
-            expression.opcode == grammar.tokenIdGreater() -> if {
+            expression.opcode == grammar.tokenIdGreater()
+                -> if {
                 signed -> if { "icmp sgt" } else { "icmp ugt" }
             } else {
                 signed -> if { "icmp sge" } else { "icmp uge" }
@@ -1387,7 +1568,8 @@ legacyStorageAlign symbol: Int, context: ref emitterContext.EmitContext, state: 
     (symbol == 3 or symbol == 8 or symbol == 23) -> if { 1 => result! }
     symbol == 24 -> if { context.pointerBitWidth / 8 => result! }
     (symbol == 4 or symbol == 9) -> if { 2 => result! }
-    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22) -> if { 8 => result! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22)
+        -> if { 8 => result! }
     result! => selected
     selected
 }
@@ -1405,9 +1587,11 @@ storageAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext,
 }
 enumVariantTag node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
     -1 => tag!
-    (node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len)) -> if {
+    (node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len))
+        -> if {
         context.ranges[node.sourceModule] => variantRange
-        (node.payloadToken >= 0 and node.payloadToken < variantRange.tokenCount) -> if {
+        (node.payloadToken >= 0 and node.payloadToken < variantRange.tokenCount)
+            -> if {
             context.tokens[variantRange.tokenStart + node.payloadToken] => variantToken
             variantToken.span.length == 2 -> if {
                 context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
@@ -1418,28 +1602,35 @@ enumVariantTag node: typedIr.TypedIrNode, context: ref emitterContext.EmitContex
                 context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
                 context.sources[node.sourceModule] -> byte(variantToken.span.start + 1) => second
                 context.sources[node.sourceModule] -> byte(variantToken.span.start + 2) => third
-                (first == 69 and second == 114 and third == 114) -> if { 1 => tag! }
+                (first == 69 and second == 114 and third == 114)
+                    -> if { 1 => tag! }
             }
             variantToken.span.length == 4 -> if {
                 context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
                 context.sources[node.sourceModule] -> byte(variantToken.span.start + 1) => second
                 context.sources[node.sourceModule] -> byte(variantToken.span.start + 2) => third
                 context.sources[node.sourceModule] -> byte(variantToken.span.start + 3) => fourth
-                (first == 78 and second == 111 and third == 110 and fourth == 101) -> if { 0 => tag! }
-                (first == 83 and second == 111 and third == 109 and fourth == 101) -> if { 1 => tag! }
+                (first == 78 and second == 111 and third == 110 and fourth == 101)
+                    -> if { 0 => tag! }
+                (first == 83 and second == 111 and third == 109 and fourth == 101)
+                    -> if { 1 => tag! }
             }
         }
     }
-    (tag! < 0 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len)) -> if {
+    (tag! < 0 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len))
+        -> if {
         context.ranges[node.targetModule] => targetVariantRange
-        (node.symbol >= 0 and node.symbol < targetVariantRange.symbolCount) -> if {
+        (node.symbol >= 0 and node.symbol < targetVariantRange.symbolCount)
+            -> if {
             context.symbols[targetVariantRange.symbolStart + node.symbol] => variantSymbol
-            (variantSymbol.kind == 27 and variantSymbol.parent >= 0) -> if {
+            (variantSymbol.kind == 27 and variantSymbol.parent >= 0)
+                -> if {
                 0 => variantOrdinal!
                 0 => variantSymbolIndex!
                 variantSymbolIndex! < node.symbol -> while {
                     context.symbols[targetVariantRange.symbolStart + variantSymbolIndex!] => siblingVariant
-                    (siblingVariant.kind == 27 and siblingVariant.parent == variantSymbol.parent) -> if { variantOrdinal! + 1 => variantOrdinal! }
+                    (siblingVariant.kind == 27 and siblingVariant.parent == variantSymbol.parent)
+                        -> if { variantOrdinal! + 1 => variantOrdinal! }
                     variantSymbolIndex! + 1 => variantSymbolIndex!
                 }
                 variantOrdinal! => tag!

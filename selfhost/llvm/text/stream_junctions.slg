@@ -409,13 +409,17 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
 junctionRequiresConcurrent junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     context.streamPlan.junctions[junctionIndex] => junction
     false => concurrent!
-    (junction.kind == 2 and (junction.policy == 1 or junction.policy == 3)) -> if {
+    (junction.kind == 2 and (junction.policy == 1 or junction.policy == 3))
+        -> if {
         junction.inputStart => inputIndex!
-        inputIndex! < junction.inputStart + junction.inputCount -> while {
+        inputIndex! < junction.inputStart + junction.inputCount
+            -> while {
             context.streamPlan.junctionInputs[inputIndex!].typeId => inputTypeId
-            (inputTypeId >= 0 and inputTypeId < (context.types -> len)) -> if {
+            (inputTypeId >= 0 and inputTypeId < (context.types -> len))
+                -> if {
                 context.types[inputTypeId] => inputType
-                (inputType.kind == 7 and inputType.symbol == 4) -> if { true => concurrent! }
+                (inputType.kind == 7 and inputType.symbol == 4)
+                    -> if { true => concurrent! }
             }
             inputIndex! + 1 => inputIndex!
         }
@@ -461,7 +465,8 @@ emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterCon
     ownedSearch! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + ownedSearch!] => ownedInput
         context.types[ownedInput.typeId].first => ownedElementType
-        context.typeTraits[ownedElementType] % 2 == 1 -> if { true => hasOwnedInput! }
+        context.typeTraits[ownedElementType] % 2 == 1
+            -> if { true => hasOwnedInput! }
         ownedSearch! + 1 => ownedSearch!
     }
     hasOwnedInput! -> if {
@@ -690,11 +695,15 @@ emitConcurrentLatestJunctionRuntime junctionIndex: Int, context: ref emitterCont
 emitStreamJunctionRuntimes context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     false => concurrentRuntimeEmitted!
     0 => junctionIndex!
-    junctionIndex! < (context.streamPlan.junctions -> len) -> while {
+    junctionIndex! < (context.streamPlan.junctions -> len)
+        -> while {
         context.streamPlan.junctions[junctionIndex!] => junction
-        (junction.kind == 2 and junction.policy == 0) -> if { junctionIndex! -> emitZipJunctionRuntime(context, state) }
-        (junction.kind == 2 and junction.policy == 1 and not (junctionIndex! -> junctionRequiresConcurrent(context, state))) -> if { junctionIndex! -> emitMergeJunctionRuntime(context, state) }
-        (junction.kind == 2 and junction.policy == 1 and (junctionIndex! -> junctionRequiresConcurrent(context, state))) -> if {
+        (junction.kind == 2 and junction.policy == 0)
+            -> if { junctionIndex! -> emitZipJunctionRuntime(context, state) }
+        (junction.kind == 2 and junction.policy == 1 and not (junctionIndex! -> junctionRequiresConcurrent(context, state)))
+            -> if { junctionIndex! -> emitMergeJunctionRuntime(context, state) }
+        (junction.kind == 2 and junction.policy == 1 and (junctionIndex! -> junctionRequiresConcurrent(context, state)))
+            -> if {
             not concurrentRuntimeEmitted! -> if {
                 context.expectedPathStyle == 1 -> if { streamJoinRuntime.emitWindowsPlatform() } else { streamJoinRuntime.emitLinuxPlatform() }
                 streamJoinRuntime.emitCommon()
@@ -702,9 +711,12 @@ emitStreamJunctionRuntimes context: ref emitterContext.EmitContext, state: ref C
             }
             junctionIndex! -> emitConcurrentMergeJunctionRuntime(context, state)
         }
-        (junction.kind == 2 and junction.policy == 2) -> if { junctionIndex! -> emitConcatJunctionRuntime(context, state) }
-        (junction.kind == 2 and junction.policy == 3 and not (junctionIndex! -> junctionRequiresConcurrent(context, state))) -> if { junctionIndex! -> emitLatestJunctionRuntime(context, state) }
-        (junction.kind == 2 and junction.policy == 3 and (junctionIndex! -> junctionRequiresConcurrent(context, state))) -> if {
+        (junction.kind == 2 and junction.policy == 2)
+            -> if { junctionIndex! -> emitConcatJunctionRuntime(context, state) }
+        (junction.kind == 2 and junction.policy == 3 and not (junctionIndex! -> junctionRequiresConcurrent(context, state)))
+            -> if { junctionIndex! -> emitLatestJunctionRuntime(context, state) }
+        (junction.kind == 2 and junction.policy == 3 and (junctionIndex! -> junctionRequiresConcurrent(context, state)))
+            -> if {
             not concurrentRuntimeEmitted! -> if {
                 context.expectedPathStyle == 1 -> if { streamJoinRuntime.emitWindowsPlatform() } else { streamJoinRuntime.emitLinuxPlatform() }
                 streamJoinRuntime.emitCommon()

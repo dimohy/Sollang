@@ -27,7 +27,8 @@ textEndsWith value: Text, suffix: Text -> Bool {
     valueLength - suffixLength => start
     UIntSize(0) => index!
     (matches! and index! < suffixLength) -> while {
-        (value -> byte(start + index!)) != (suffix -> byte(index!)) -> if { false => matches! }
+        (value -> byte(start + index!)) != (suffix -> byte(index!))
+            -> if { false => matches! }
         index! + 1 => index!
     }
     matches!
@@ -37,7 +38,8 @@ textEquals left: Text, right: Text -> Bool {
     (left -> len) == (right -> len) => matches!
     UIntSize(0) => index!
     (matches! and index! < (left -> len)) -> while {
-        (left -> byte(index!)) != (right -> byte(index!)) -> if { false => matches! }
+        (left -> byte(index!)) != (right -> byte(index!))
+            -> if { false => matches! }
         index! + 1 => index!
     }
     matches!
@@ -133,12 +135,14 @@ normalizePath value: move path.Path -> Result<path.Path, Text> {
     false => wroteComponent!
 
     windows! -> if {
-        (sourceLength >= 3 and source[1] == 58 and source[2] == 92) -> if {
+        (sourceLength >= 3 and source[1] == 58 and source[2] == 92)
+            -> if {
             output! -> push(source[0])
             output! -> push(58)
             output! -> push(92)
             3 => index!
-            (index! < sourceLength and source[Int(index!)] == 92) -> while {
+            (index! < sourceLength and source[Int(index!)] == 92)
+                -> while {
                 index! + 1 => index!
             }
         }
@@ -146,7 +150,8 @@ normalizePath value: move path.Path -> Result<path.Path, Text> {
         (sourceLength > 0 and source[0] == 47) -> if {
             output! -> push(47)
             1 => index!
-            (index! < sourceLength and source[Int(index!)] == 47) -> while {
+            (index! < sourceLength and source[Int(index!)] == 47)
+                -> while {
                 index! + 1 => index!
             }
         }
@@ -155,18 +160,21 @@ normalizePath value: move path.Path -> Result<path.Path, Text> {
     false => escaped!
     (index! < sourceLength and not escaped!) -> while {
         index! => componentStart
-        (index! < sourceLength and (windows! -> if { source[Int(index!)] != 92 } else { source[Int(index!)] != 47 })) -> while {
+        (index! < sourceLength and (windows! -> if { source[Int(index!)] != 92 } else { source[Int(index!)] != 47 }))
+            -> while {
             index! + 1 => index!
         }
         index! => componentEnd
         componentEnd - componentStart => componentLength
-        (index! < sourceLength and (windows! -> if { source[Int(index!)] == 92 } else { source[Int(index!)] == 47 })) -> while {
+        (index! < sourceLength and (windows! -> if { source[Int(index!)] == 92 } else { source[Int(index!)] == 47 }))
+            -> while {
             index! + 1 => index!
         }
 
         componentLength == 1 and source[Int(componentStart)] == 46 => currentDirectory
         componentLength == 2 and source[Int(componentStart)] == 46 and source[Int(componentStart + 1)] == 46 => parentDirectory
-        (componentLength > 0 and not currentDirectory and not parentDirectory) -> if {
+        (componentLength > 0 and not currentDirectory and not parentDirectory)
+            -> if {
             UIntSize(output! -> len) => truncateStart
             wroteComponent! -> if {
                 windows! -> if { output! -> push(92) } else { output! -> push(47) }
@@ -241,7 +249,8 @@ sameSpanText source: file.SourceText, left: project.TextSpan, right: project.Tex
     left.length == right.length => same!
     UIntSize(0) => index!
     (same! and index! < left.length) -> while {
-        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!)) -> if {
+        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!))
+            -> if {
             false => same!
         }
         index! + 1 => index!
@@ -291,7 +300,8 @@ public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManife
     [path.Path; ~] => requirements!
     requirements! -> push("" -> path.fromText(style))
     0 => processed!
-    (status! == 0 and processed! < (manifests! -> len)) -> while {
+    (status! == 0 and processed! < (manifests! -> len))
+        -> while {
         processed! >= 64 -> if { 23 => status! }
         status! == 0 -> if {
             path.pathText(manifests![processed!]) => queuedManifestText
@@ -301,14 +311,17 @@ public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManife
             status! == 0 -> if {
                 parents![processed!] => ancestor!
                 (not skipCurrent! and ancestor! >= 0) -> while {
-                    path.equalsText(canonicalManifests![ancestor!], manifestText) -> if {
+                    path.equalsText(canonicalManifests![ancestor!], manifestText)
+                        -> if {
                         24 => status!
                     }
                     parents![ancestor!] => ancestor!
                 }
                 0 => seenIndex!
-                (status! == 0 and not skipCurrent! and seenIndex! < processed!) -> while {
-                    path.equalsText(canonicalManifests![seenIndex!], manifestText) -> if {
+                (status! == 0 and not skipCurrent! and seenIndex! < processed!)
+                    -> while {
+                    path.equalsText(canonicalManifests![seenIndex!], manifestText)
+                        -> if {
                         true => skipCurrent!
                     }
                     seenIndex! + 1 => seenIndex!
@@ -331,14 +344,16 @@ public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManife
 
                 (status! == 0 and processed! > 0) -> if {
                     source -> spanText(parsed.name) => manifestName
-                    not (path.equalsText(expectedNames![processed!], manifestName)) -> if {
+                    not (path.equalsText(expectedNames![processed!], manifestName))
+                        -> if {
                         25 => status!
                     }
                     status! == 0 -> if {
                         path.pathText(requirements![processed!]) => requirementText
                         source -> spanText(parsed.version) => manifestVersion
                         requirementText -> versions.accepts(manifestVersion) => accepted
-                        (accepted.status != 0 or not accepted.accepted) -> if { 26 => status! }
+                        (accepted.status != 0 or not accepted.accepted)
+                            -> if { 26 => status! }
                     }
                 }
 
@@ -354,7 +369,8 @@ public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManife
                     -1 => productIndex!
                     0 => candidateIndex!
                     candidateIndex! < (parsed.products -> len) -> while {
-                        source -> sameSpanText(parsed.products[candidateIndex!].name, parsed.name) -> if {
+                        source -> sameSpanText(parsed.products[candidateIndex!].name, parsed.name)
+                            -> if {
                             candidateIndex! => productIndex!
                         }
                         candidateIndex! + 1 => candidateIndex!
@@ -379,8 +395,10 @@ public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManife
                 }
 
                 0 => dependencyIndex!
-                (status! == 0 and dependencyIndex! < (parsed.dependencies -> len)) -> while {
-                    parsed.dependencies[dependencyIndex!].path.length == 0 -> if {
+                (status! == 0 and dependencyIndex! < (parsed.dependencies -> len))
+                    -> while {
+                    parsed.dependencies[dependencyIndex!].path.length == 0
+                        -> if {
                         20 => status!
                     } else {
                         source -> spanText(parsed.dependencies[dependencyIndex!].path) => dependencyRelative
@@ -395,7 +413,8 @@ public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManife
                                 parents! -> push(processed!)
                                 source -> spanText(parsed.dependencies[dependencyIndex!].name) => dependencyName
                                 expectedNames! -> push(dependencyName -> path.fromText(style))
-                                parsed.dependencies[dependencyIndex!].version.length > 0 -> if {
+                                parsed.dependencies[dependencyIndex!].version.length > 0
+                                    -> if {
                                     source -> spanText(parsed.dependencies[dependencyIndex!].version)
                                 } else {
                                     "*"

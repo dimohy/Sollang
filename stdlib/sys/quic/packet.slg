@@ -118,7 +118,8 @@ copyRange bytes: [UInt8], offset: UIntSize, length: UIntSize -> Result<[UInt8; ~
 }
 
 initialFirstByte version: UInt32, packetNumberLength: UIntSize -> Result<UInt8, errors.Error> {
-    (packetNumberLength >= 1 and packetNumberLength <= 4) -> unless {
+    (packetNumberLength >= 1 and packetNumberLength <= 4)
+        -> unless {
         Result<UInt8, errors.Error>.Err(error(errors.Kind.Encoding, UInt64(packetNumberLength))) -> return
     }
     version -> when {
@@ -129,7 +130,8 @@ initialFirstByte version: UInt32, packetNumberLength: UIntSize -> Result<UInt8, 
 }
 
 handshakeFirstByte version: UInt32, packetNumberLength: UIntSize -> Result<UInt8, errors.Error> {
-    (packetNumberLength >= 1 and packetNumberLength <= 4) -> unless {
+    (packetNumberLength >= 1 and packetNumberLength <= 4)
+        -> unless {
         Result<UInt8, errors.Error>.Err(error(errors.Kind.Encoding, UInt64(packetNumberLength))) -> return
     }
     version -> when {
@@ -202,7 +204,8 @@ sealProtectedLong header: [UInt8], packetNumberValue: UInt64, packetNumberLength
     packet! -> appendBytes(sealed.tag)
     UIntSize(header -> len) - packetNumberLength => packetNumberOffset
     packetNumberOffset + 4 => sampleOffset
-    sampleOffset + 16 <= UIntSize(packet! -> len) -> unless {
+    sampleOffset + 16 <= UIntSize(packet! -> len)
+        -> unless {
         Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Truncated, UInt64(sampleOffset))) -> return
     }
     [UInt8(0); 16] => sample!
@@ -269,7 +272,8 @@ public parseInitialHeader packet: [UInt8] -> Result<InitialHeader, errors.Error>
         Result<InitialHeader, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(packet[0]))) -> return
     }
     readUInt32(packet, 1)? => version
-    (version == keys.version1() or version == keys.version2()) -> unless {
+    (version == keys.version1() or version == keys.version2())
+        -> unless {
         Result<InitialHeader, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(version))) -> return
     }
     packet[0] / 16 % 4 == (version -> when {
@@ -292,12 +296,14 @@ public parseInitialHeader packet: [UInt8] -> Result<InitialHeader, errors.Error>
     }
     sourceLengthOffset + 1 + sourceLength => tokenLengthOffset
     varint.decode(packet, tokenLengthOffset)? => tokenLength
-    tokenLength.value <= UInt64(UIntSize(packet -> len) - tokenLength.nextOffset) -> unless {
+    tokenLength.value <= UInt64(UIntSize(packet -> len) - tokenLength.nextOffset)
+        -> unless {
         Result<InitialHeader, errors.Error>.Err(error(errors.Kind.Truncated, tokenLength.value)) -> return
     }
     tokenLength.nextOffset + UIntSize(tokenLength.value) => protectedLengthOffset
     varint.decode(packet, protectedLengthOffset)? => protectedLength
-    protectedLength.value <= UInt64(UIntSize(packet -> len) - protectedLength.nextOffset) -> unless {
+    protectedLength.value <= UInt64(UIntSize(packet -> len) - protectedLength.nextOffset)
+        -> unless {
         Result<InitialHeader, errors.Error>.Err(error(errors.Kind.Truncated, protectedLength.value)) -> return
     }
     protectedLength.nextOffset + UIntSize(protectedLength.value) => packetEnd
@@ -322,7 +328,8 @@ public parseHandshakeHeader packet: [UInt8] -> Result<HandshakeHeader, errors.Er
         Result<HandshakeHeader, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(packet[0]))) -> return
     }
     readUInt32(packet, 1)? => version
-    (version == keys.version1() or version == keys.version2()) -> unless {
+    (version == keys.version1() or version == keys.version2())
+        -> unless {
         Result<HandshakeHeader, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(version))) -> return
     }
     packet[0] / 16 % 4 == (version -> when {
@@ -345,7 +352,8 @@ public parseHandshakeHeader packet: [UInt8] -> Result<HandshakeHeader, errors.Er
     }
     sourceLengthOffset + 1 + sourceLength => protectedLengthOffset
     varint.decode(packet, protectedLengthOffset)? => protectedLength
-    protectedLength.value <= UInt64(UIntSize(packet -> len) - protectedLength.nextOffset) -> unless {
+    protectedLength.value <= UInt64(UIntSize(packet -> len) - protectedLength.nextOffset)
+        -> unless {
         Result<HandshakeHeader, errors.Error>.Err(error(errors.Kind.Truncated, protectedLength.value)) -> return
     }
     protectedLength.nextOffset + UIntSize(protectedLength.value) => packetEnd
@@ -399,7 +407,8 @@ openProtectedLong packet: [UInt8], packetNumberOffset: UIntSize, packetEnd: UInt
     protection.headerMask(headerProtectionKey, sample!) => mask
     UInt8(bits.xor(UInt32(packet[0]), bits.and(UInt32(mask[0]), 15))) => firstByte
     UIntSize(firstByte % 4 + 1) => packetNumberLength
-    UInt64(packetEnd - packetNumberOffset) >= UInt64(packetNumberLength + 16) -> unless {
+    UInt64(packetEnd - packetNumberOffset) >= UInt64(packetNumberLength + 16)
+        -> unless {
         Result<OpenedProtectedLong, errors.Error>.Err(error(errors.Kind.Truncated, UInt64(packetEnd - packetNumberOffset))) -> return
     }
     UInt32(0) => truncatedPacketNumber!
@@ -421,7 +430,8 @@ openProtectedLong packet: [UInt8], packetNumberOffset: UIntSize, packetEnd: UInt
         packetNumberDivisor! * 256 => packetNumberDivisor!
         divisorIndex! + 1 => divisorIndex!
     }
-    headerPacketNumberIndex! < packetNumberLength -> while {
+    headerPacketNumberIndex! < packetNumberLength
+        -> while {
         UInt8(truncatedPacketNumber! / packetNumberDivisor! % 256) => header![Int(packetNumberOffset + headerPacketNumberIndex!)]
         packetNumberDivisor! > 1 -> if { packetNumberDivisor! / 256 => packetNumberDivisor! }
         headerPacketNumberIndex! + 1 => headerPacketNumberIndex!
@@ -503,7 +513,8 @@ public openHandshake packet: [UInt8], expectedPacketNumber: UInt64, key: [UInt8;
 }
 
 oneRttFirstByte keyPhase: Bool, packetNumberLength: UIntSize -> Result<UInt8, errors.Error> {
-    (packetNumberLength >= 1 and packetNumberLength <= 4) -> unless {
+    (packetNumberLength >= 1 and packetNumberLength <= 4)
+        -> unless {
         Result<UInt8, errors.Error>.Err(error(errors.Kind.Encoding, UInt64(packetNumberLength))) -> return
     }
     UInt8(64 + (keyPhase -> if { 4 } else { 0 }) + Int(packetNumberLength - 1)) => firstByte
@@ -531,7 +542,8 @@ public sealOneRtt destinationConnectionId: [UInt8], keyPhase: Bool, packetNumber
     packet! -> appendBytes(sealed.tag)
     1 + UIntSize(destinationConnectionId -> len) => packetNumberOffset
     packetNumberOffset + 4 => sampleOffset
-    sampleOffset + 16 <= UIntSize(packet! -> len) -> unless {
+    sampleOffset + 16 <= UIntSize(packet! -> len)
+        -> unless {
         Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Truncated, UInt64(sampleOffset))) -> return
     }
     [UInt8(0); 16] => sample!
@@ -558,12 +570,14 @@ public openOneRtt packet: [UInt8], destinationConnectionId: [UInt8], expectedPac
         Result<OpenedOneRtt, errors.Error>.Err(error(errors.Kind.Encoding, UInt64(destinationConnectionId -> len))) -> return
     }
     1 + UIntSize(destinationConnectionId -> len) => packetNumberOffset
-    packetNumberOffset <= UIntSize(packet -> len) -> unless {
+    packetNumberOffset <= UIntSize(packet -> len)
+        -> unless {
         Result<OpenedOneRtt, errors.Error>.Err(error(errors.Kind.Truncated, UInt64(packetNumberOffset))) -> return
     }
     UInt32(0) => connectionIdDifference!
     0 => connectionIdIndex!
-    connectionIdIndex! < (destinationConnectionId -> len) -> while {
+    connectionIdIndex! < (destinationConnectionId -> len)
+        -> while {
         bits.xor(
             UInt32(packet[connectionIdIndex! + 1]),
             UInt32(destinationConnectionId[connectionIdIndex!])) => different
@@ -590,7 +604,8 @@ public openOneRtt packet: [UInt8], destinationConnectionId: [UInt8], expectedPac
         Result<OpenedOneRtt, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(firstByte))) -> return
     }
     UIntSize(firstByte % 4 + 1) => packetNumberLength
-    UIntSize(packet -> len) - packetNumberOffset >= packetNumberLength + 16 -> unless {
+    UIntSize(packet -> len) - packetNumberOffset >= packetNumberLength + 16
+        -> unless {
         Result<OpenedOneRtt, errors.Error>.Err(error(errors.Kind.Truncated, UInt64(packetNumberOffset))) -> return
     }
     UInt32(0) => truncatedPacketNumber!
@@ -612,7 +627,8 @@ public openOneRtt packet: [UInt8], destinationConnectionId: [UInt8], expectedPac
         packetNumberDivisor! * 256 => packetNumberDivisor!
         divisorIndex! + 1 => divisorIndex!
     }
-    headerPacketNumberIndex! < packetNumberLength -> while {
+    headerPacketNumberIndex! < packetNumberLength
+        -> while {
         UInt8(truncatedPacketNumber! / packetNumberDivisor! % 256) => header![Int(packetNumberOffset + headerPacketNumberIndex!)]
         packetNumberDivisor! > 1 -> if { packetNumberDivisor! / 256 => packetNumberDivisor! }
         headerPacketNumberIndex! + 1 => headerPacketNumberIndex!

@@ -47,17 +47,20 @@ public truncate packetNumber: UInt64, byteCount: UIntSize -> Result<Truncated, e
 # `expectedPacketNumber` is one greater than the largest authenticated packet
 # number in this packet-number space, matching RFC 9000 Appendix A.3.
 public restore expectedPacketNumber: UInt64, truncatedPacketNumber: UInt32, byteCount: UIntSize -> Result<UInt64, errors.Error> {
-    expectedPacketNumber > 4_611_686_018_427_387_904 -> if {
+    expectedPacketNumber > 4_611_686_018_427_387_904
+        -> if {
         Result<UInt64, errors.Error>.Err(error(expectedPacketNumber)) -> return
     }
     window(byteCount)? => packetWindow
     packetWindow / 2 => halfWindow
     expectedPacketNumber / packetWindow * packetWindow + UInt64(truncatedPacketNumber) => candidate
     (candidate + halfWindow <= expectedPacketNumber
-        and candidate < 4_611_686_018_427_387_904 - packetWindow) -> if {
+        and candidate < 4_611_686_018_427_387_904 - packetWindow)
+            -> if {
         Result<UInt64, errors.Error>.Ok(candidate + packetWindow) -> return
     }
-    (candidate > expectedPacketNumber + halfWindow and candidate >= packetWindow) -> if {
+    (candidate > expectedPacketNumber + halfWindow and candidate >= packetWindow)
+        -> if {
         Result<UInt64, errors.Error>.Ok(candidate - packetWindow) -> return
     }
     candidate < 4_611_686_018_427_387_904 -> if {

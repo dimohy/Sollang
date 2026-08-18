@@ -364,7 +364,8 @@ parseOptions messageStorage: mut Arena, headerStorage: mut Arena, moduleStorage:
                     or (argument -> binding.textEquals("--compile-commands"))
                     or (argument -> binding.textEquals("--compile-entry"))
                     or (argument -> binding.textEquals("--clang-arg"))
-                    or (argument -> binding.textEquals("--build-arg"))) -> if {
+                    or (argument -> binding.textEquals("--build-arg")))
+                        -> if {
                     index! + 1 >= (arguments -> len) -> if {
                         options! -> failValue("", argument, " requires a value", messageStorage)
                     } else {
@@ -372,15 +373,22 @@ parseOptions messageStorage: mut Arena, headerStorage: mut Arena, moduleStorage:
                         arguments[index!] => optionValue
                         argument -> binding.textEquals("--module") -> if { optionValue => options!.module }
                         argument -> binding.textEquals("--library") -> if { optionValue => options!.library }
-                        ((argument -> binding.textEquals("-o")) or (argument -> binding.textEquals("--output"))) -> if { optionValue => options!.output }
+                        ((argument -> binding.textEquals("-o")) or (argument -> binding.textEquals("--output")))
+                            -> if { optionValue => options!.output }
                         argument -> binding.textEquals("--llvm") -> if { optionValue => options!.llvm }
-                        argument -> binding.textEquals("--compile-commands") -> if { optionValue => options!.compilationDatabase }
-                        argument -> binding.textEquals("--compile-entry") -> if { optionValue => options!.compilationEntry }
-                        argument -> binding.textEquals("--clang-arg") -> if { clangArguments! -> push(optionValue) }
-                        argument -> binding.textEquals("--build-arg") -> if { buildArguments! -> push(optionValue) }
+                        argument -> binding.textEquals("--compile-commands")
+                            -> if { optionValue => options!.compilationDatabase }
+                        argument -> binding.textEquals("--compile-entry")
+                            -> if { optionValue => options!.compilationEntry }
+                        argument -> binding.textEquals("--clang-arg")
+                            -> if { clangArguments! -> push(optionValue) }
+                        argument -> binding.textEquals("--build-arg")
+                            -> if { buildArguments! -> push(optionValue) }
                         argument -> binding.textEquals("--target") -> if {
-                            optionValue -> binding.textEquals("windows-x64") -> if { 0 => options!.target } else {
-                                optionValue -> binding.textEquals("linux-x64") -> if { 1 => options!.target } else {
+                            optionValue -> binding.textEquals("windows-x64")
+                                -> if { 0 => options!.target } else {
+                                optionValue -> binding.textEquals("linux-x64")
+                                    -> if { 1 => options!.target } else {
                                     options! -> failValue("unsupported C++ binding target '", optionValue, "'", messageStorage)
                                 }
                             }
@@ -507,8 +515,10 @@ selectedCompilationArguments options: Options, storage: mut Arena, status: mut b
             source -> jsonMemberText(cursor!.value, "directory", storage) => entryDirectory
             source -> jsonMemberText(cursor!.value, "file", storage) => entryFile
             entryDirectory -> absoluteJoinedPath(entryFile, options.target, storage) => combined!
-            entryFile -> path.fromText(style) -> path.isAbsolute -> if { entryFile -> absolutePath(options.target, storage) => combined! }
-            combined! -> binding.textEqualsPath(requested!, options.target == 0) -> if {
+            entryFile -> path.fromText(style) -> path.isAbsolute
+                -> if { entryFile -> absolutePath(options.target, storage) => combined! }
+            combined! -> binding.textEqualsPath(requested!, options.target == 0)
+                -> if {
                 entryCount! => selected!
             }
             entryCount! + 1 => entryCount!
@@ -528,7 +538,8 @@ selectedCompilationArguments options: Options, storage: mut Arena, status: mut b
             source -> jsonMemberText(cursor!.value, "directory", storage) => entryDirectory
             source -> jsonMemberText(cursor!.value, "file", storage) => entryFile
             source -> json.findMember(cursor!.value, "arguments") => argumentsMember
-            (not argumentsMember.found or argumentsMember.value.kind != 4) -> if {
+            (not argumentsMember.found or argumentsMember.value.kind != 4)
+                -> if {
                 1 => status.code
                 "the selected compile_commands.json entry uses 'command'; regenerate it with the lossless 'arguments' array" -> materialize(storage) => status.message
             } else {
@@ -539,15 +550,20 @@ selectedCompilationArguments options: Options, storage: mut Arena, status: mut b
                 1 => argumentIndex!
                 argumentIndex! < (rawArguments! -> len) -> while {
                     rawArguments![argumentIndex!] => argument
-                    ((argument -> binding.textEquals("-c")) or (argument -> binding.textEquals("/c"))) -> unless {
-                        ((argument -> binding.textEquals("-o")) or (argument -> binding.textEquals("/Fo"))) -> if {
+                    ((argument -> binding.textEquals("-c")) or (argument -> binding.textEquals("/c")))
+                        -> unless {
+                        ((argument -> binding.textEquals("-o")) or (argument -> binding.textEquals("/Fo")))
+                            -> if {
                             argumentIndex! + 1 => argumentIndex!
                         } else {
                             entryDirectory -> absoluteJoinedPath(argument, options.target, storage) => argumentPath!
-                            argument -> path.fromText(style) -> path.isAbsolute -> if { argument -> absolutePath(options.target, storage) => argumentPath! }
+                            argument -> path.fromText(style) -> path.isAbsolute
+                                -> if { argument -> absolutePath(options.target, storage) => argumentPath! }
                             entryDirectory -> absoluteJoinedPath(entryFile, options.target, storage) => sourcePath!
-                            entryFile -> path.fromText(style) -> path.isAbsolute -> if { entryFile -> absolutePath(options.target, storage) => sourcePath! }
-                            argumentPath! -> binding.textEqualsPath(sourcePath!, options.target == 0) -> unless { result! -> push(argument) }
+                            entryFile -> path.fromText(style) -> path.isAbsolute
+                                -> if { entryFile -> absolutePath(options.target, storage) => sourcePath! }
+                            argumentPath! -> binding.textEqualsPath(sourcePath!, options.target == 0)
+                                -> unless { result! -> push(argument) }
                         }
                     }
                     argumentIndex! + 1 => argumentIndex!
@@ -564,7 +580,8 @@ hasPrefix arguments: ref [Text; ~], prefix: Text -> Bool {
     false => found!
     0 => index!
     (not found! and index! < (arguments -> len)) -> while {
-        arguments[index!] -> binding.textStartsWith(prefix) -> if { true => found! }
+        arguments[index!] -> binding.textStartsWith(prefix)
+            -> if { true => found! }
         index! + 1 => index!
     }
     found!
@@ -574,7 +591,8 @@ hasExact arguments: ref [Text; ~], expected: Text -> Bool {
     false => found!
     0 => index!
     (not found! and index! < (arguments -> len)) -> while {
-        arguments[index!] -> binding.textEquals(expected) -> if { true => found! }
+        arguments[index!] -> binding.textEquals(expected)
+            -> if { true => found! }
         index! + 1 => index!
     }
     found!
@@ -630,7 +648,8 @@ appendJsonString output: mut [UInt8; ~], value: Text -> Unit {
                 current == 10 -> if { output -> appendText("\\n") } else {
                     current == 13 -> if { output -> appendText("\\r") } else {
                         current == 9 -> if { output -> appendText("\\t") } else {
-                            (current < 32 or current == 39 or current == 43 or current == 60 or current == 62 or current == 38) -> if {
+                            (current < 32 or current == 39 or current == 43 or current == 60 or current == 62 or current == 38)
+                                -> if {
                                 output -> appendJsonHex(current)
                             } else { output -> push(current) }
                         }
@@ -660,7 +679,8 @@ splitPath value: Text -> [PathPart; ~] {
     UIntSize(0) => start!
     UIntSize(0) => index!
     index! <= (value -> len) -> while {
-        (index! == (value -> len) or (value -> byte(index!)) == 47) -> if {
+        (index! == (value -> len) or (value -> byte(index!)) == 47)
+            -> if {
             index! > start! -> if { parts! -> push(PathPart { start: start!, length: index! - start! }) }
             index! + 1 => start!
         }
@@ -685,7 +705,8 @@ relativeHeader outputDirectory: Text, header: Text, target: Int, storage: mut Ar
     target == 0 => insensitive
     0 => common!
     (common! < (outputParts -> len) and common! < (inputParts -> len)
-        and (output -> pathPartEquals(outputParts[common!], input, inputParts[common!], insensitive))) -> while {
+        and (output -> pathPartEquals(outputParts[common!], input, inputParts[common!], insensitive)))
+            -> while {
         common! + 1 => common!
     }
     (target == 0 and common! == 0) -> if {
@@ -792,7 +813,8 @@ emitSollang options: Options, discovered: ref binding.Discovery -> [UInt8; ~] us
         classIndex! + 1 => classIndex!
     }
     0 => functionIndex!
-    functionIndex! < (discovered.functions -> len) -> while {
+    functionIndex! < (discovered.functions -> len)
+        -> while {
         discovered.functions[functionIndex!] -> borrowFunction => current
         output! -> appendText("    ")
         not current.isNoexcept -> if { output! -> appendText("try ") }
@@ -808,10 +830,12 @@ emitSollang options: Options, discovered: ref binding.Discovery -> [UInt8; ~] us
         functionIndex! + 1 => functionIndex!
     }
     0 => classEmitIndex!
-    classEmitIndex! < (discovered.classes -> len) -> while {
+    classEmitIndex! < (discovered.classes -> len)
+        -> while {
         discovered.classes[classEmitIndex!] -> borrowClass => current
         0 => constructorIndex!
-        constructorIndex! < (current.constructors -> len) -> while {
+        constructorIndex! < (current.constructors -> len)
+            -> while {
             current.constructors[constructorIndex!] -> borrowConstructor => constructor
             output! -> appendText("    try create")
             output! -> appendText(current.name)
@@ -920,7 +944,8 @@ emitShim options: Options, discovered: ref binding.Discovery, storage: mut Arena
     }
     (discovered.classes -> len) > 0 -> if { output! -> push(10) }
     0 => functionIndex!
-    functionIndex! < (discovered.functions -> len) -> while {
+    functionIndex! < (discovered.functions -> len)
+        -> while {
         discovered.functions[functionIndex!] -> borrowFunction => current
         output! -> appendText("SOLLANG_CPP_EXPORT ")
         current.isNoexcept -> if { output! -> appendText(current.result.cppName) } else { output! -> appendText("int") }
@@ -928,7 +953,8 @@ emitShim options: Options, discovered: ref binding.Discovery, storage: mut Arena
         output! -> appendText(current.symbol)
         output! -> push(40)
         output! -> appendCppParameters(current.parameters)
-        (not current.isNoexcept and not (current.result.sollangName -> binding.textEquals("Unit"))) -> if {
+        (not current.isNoexcept and not (current.result.sollangName -> binding.textEquals("Unit")))
+            -> if {
             (current.parameters -> len) > 0 -> if { output! -> appendText(", ") }
             output! -> appendText(current.result.cppName)
             output! -> appendText("* out")
@@ -936,7 +962,8 @@ emitShim options: Options, discovered: ref binding.Discovery, storage: mut Arena
         output! -> appendText(") noexcept {\n")
         not current.isNoexcept -> if {
             output! -> appendText("    try {\n        ")
-            not (current.result.sollangName -> binding.textEquals("Unit")) -> if { output! -> appendText("*out = ") }
+            not (current.result.sollangName -> binding.textEquals("Unit"))
+                -> if { output! -> appendText("*out = ") }
             output! -> appendText("::")
             output! -> appendText(current.qualifiedName)
             output! -> push(40)
@@ -944,7 +971,8 @@ emitShim options: Options, discovered: ref binding.Discovery, storage: mut Arena
             output! -> appendText(");\n        return 0;\n    } catch (...) {\n        return 1;\n    }\n")
         } else {
             output! -> appendText("    ")
-            not (current.result.sollangName -> binding.textEquals("Unit")) -> if { output! -> appendText("return ") }
+            not (current.result.sollangName -> binding.textEquals("Unit"))
+                -> if { output! -> appendText("return ") }
             output! -> appendText("::")
             output! -> appendText(current.qualifiedName)
             output! -> push(40)
@@ -955,10 +983,12 @@ emitShim options: Options, discovered: ref binding.Discovery, storage: mut Arena
         functionIndex! + 1 => functionIndex!
     }
     0 => classEmitIndex!
-    classEmitIndex! < (discovered.classes -> len) -> while {
+    classEmitIndex! < (discovered.classes -> len)
+        -> while {
         discovered.classes[classEmitIndex!] -> borrowClass => current
         0 => constructorIndex!
-        constructorIndex! < (current.constructors -> len) -> while {
+        constructorIndex! < (current.constructors -> len)
+            -> while {
             current.constructors[constructorIndex!] -> borrowConstructor => constructor
             output! -> appendText("SOLLANG_CPP_EXPORT int ")
             output! -> appendText(constructor.symbol)
@@ -988,7 +1018,8 @@ emitShim options: Options, discovered: ref binding.Discovery, storage: mut Arena
                 output! -> appendText(", ")
                 output! -> appendCppParameters(method.parameters)
             }
-            (not method.isNoexcept and not (method.result.sollangName -> binding.textEquals("Unit"))) -> if {
+            (not method.isNoexcept and not (method.result.sollangName -> binding.textEquals("Unit")))
+                -> if {
                 output! -> appendText(", ")
                 output! -> appendText(method.result.cppName)
                 output! -> appendText("* out")
@@ -996,10 +1027,12 @@ emitShim options: Options, discovered: ref binding.Discovery, storage: mut Arena
             output! -> appendText(") noexcept {\n")
             not method.isNoexcept -> if {
                 output! -> appendText("    try {\n        ")
-                not (method.result.sollangName -> binding.textEquals("Unit")) -> if { output! -> appendText("*out = ") }
+                not (method.result.sollangName -> binding.textEquals("Unit"))
+                    -> if { output! -> appendText("*out = ") }
             } else {
                 output! -> appendText("    ")
-                not (method.result.sollangName -> binding.textEquals("Unit")) -> if { output! -> appendText("return ") }
+                not (method.result.sollangName -> binding.textEquals("Unit"))
+                    -> if { output! -> appendText("return ") }
             }
             output! -> appendText("reinterpret_cast<")
             method.isConst -> if { output! -> appendText("const ") }
@@ -1126,7 +1159,8 @@ emitManifest options: Options, clangArguments: ref [Text; ~], discovered: ref bi
     output! -> appendText(": [\n")
     (discovered.functions -> len) + (discovered.classes -> len) => remainingGroups
     0 => functionIndex!
-    functionIndex! < (discovered.functions -> len) -> while {
+    functionIndex! < (discovered.functions -> len)
+        -> while {
         discovered.functions[functionIndex!] -> borrowFunction => current
         functionIndex! + 1 == (discovered.functions -> len) and (discovered.classes -> len) == 0 => last
         output! -> appendManifestFunction(current.memberName, current.qualifiedName, current.symbol, current.signature, not current.isNoexcept, last)
@@ -1136,7 +1170,8 @@ emitManifest options: Options, clangArguments: ref [Text; ~], discovered: ref bi
     classIndex! < (discovered.classes -> len) -> while {
         discovered.classes[classIndex!] -> borrowClass => current
         0 => constructorIndex!
-        constructorIndex! < (current.constructors -> len) -> while {
+        constructorIndex! < (current.constructors -> len)
+            -> while {
             current.constructors[constructorIndex!] -> borrowConstructor => constructor
             Arena(0) => constructorNameStorage!
             constructorIndex! > 0 -> if {
@@ -1149,7 +1184,8 @@ emitManifest options: Options, clangArguments: ref [Text; ~], discovered: ref bi
             [UInt8; ~] => signatureBytes!
             signatureBytes! -> appendText("owner(")
             0 => parameterIndex!
-            parameterIndex! < (constructor.parameters -> len) -> while {
+            parameterIndex! < (constructor.parameters -> len)
+                -> while {
                 parameterIndex! > 0 -> if { signatureBytes! -> push(44) }
                 signatureBytes! -> appendText(constructor.parameters[parameterIndex!].type.sollangName)
                 parameterIndex! + 1 => parameterIndex!
@@ -1285,7 +1321,8 @@ public run: -> Int uses Console, File, Process, Environment {
     } else {
         options!.output -> hostOutputPath("lib$(options!.module)", "_shim.so", libraryPathStorage!)
     } => libraryPath
-    sollangPath -> grammar.ensureParentDirectories -> unless {
+    sollangPath -> grammar.ensureParentDirectories
+        -> unless {
         "sollang: failed to create C++ binding output directory: $(options!.output)" -> runtime.eprintln
         1 -> return
     }
@@ -1305,7 +1342,8 @@ public run: -> Int uses Console, File, Process, Environment {
     options! -> emitManifest(clangArguments, discovered, storage!) => manifestBytes
     ((sollangPath -> writeBytes(sollangBytes))
         and (shimPath -> writeBytes(shimBytes))
-        and (manifestPath -> writeBytes(manifestBytes))) -> unless {
+        and (manifestPath -> writeBytes(manifestBytes)))
+            -> unless {
         "sollang: failed to write generated C++ binding package" -> runtime.eprintln
         1 -> return
     }

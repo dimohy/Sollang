@@ -104,7 +104,8 @@ isWhitespace value: UInt8 -> Bool {
 
 skipWhitespace source: file.SourceText, start: UIntSize, end: UIntSize -> UIntSize {
     start => index!
-    (index! < end and ((source -> byte(index!)) -> isWhitespace)) -> while {
+    (index! < end and ((source -> byte(index!)) -> isWhitespace))
+        -> while {
         index! + 1 => index!
     }
     index!
@@ -289,7 +290,8 @@ decodeJsonString source: file.SourceText, value: JsonValue -> [UInt8; ~] {
                                 and (source -> byte(next!)) == 92
                                 and (source -> byte(next! + 1)) == 117) -> if {
                                 source -> parseHex4(next! + 2, value.contentEnd) => secondCode
-                                (secondCode >= 56320 and secondCode <= 57343) -> if {
+                                (secondCode >= 56320 and secondCode <= 57343)
+                                    -> if {
                                     65536 + (firstCode - 55296) * 1024 + secondCode - 56320 => codePoint!
                                     next! + 6 => next!
                                 } else { false => valid! }
@@ -324,7 +326,8 @@ bytesEqualText bytes: ref [UInt8; ~], value: Text -> Bool {
     UIntSize(bytes -> len) == (value -> len) => equal!
     UIntSize(0) => index!
     (equal! and index! < (value -> len)) -> while {
-        bytes[Int(index!)] != (value -> byte(index!)) -> if { false => equal! }
+        bytes[Int(index!)] != (value -> byte(index!))
+            -> if { false => equal! }
         index! + 1 => index!
     }
     equal!
@@ -356,7 +359,8 @@ findMember source: file.SourceText, object: JsonValue, name: Text -> JsonMember 
                     false => scanning!
                 } else {
                     source -> skipWhitespace(key.end, object.contentEnd) => colon
-                    (colon >= object.contentEnd or (source -> byte(colon)) != 58) -> if {
+                    (colon >= object.contentEnd or (source -> byte(colon)) != 58)
+                        -> if {
                         false => scanning!
                     } else {
                         source -> parseValue(colon + 1, object.contentEnd) => memberValue
@@ -369,7 +373,8 @@ findMember source: file.SourceText, object: JsonValue, name: Text -> JsonMember 
                                 false => scanning!
                             } else {
                                 source -> skipWhitespace(memberValue.end, object.contentEnd) => next
-                                (next < object.contentEnd and (source -> byte(next)) == 44) -> if {
+                                (next < object.contentEnd and (source -> byte(next)) == 44)
+                                    -> if {
                                     next + 1 => index!
                                 } else {
                                     object.contentEnd => index!
@@ -647,26 +652,31 @@ writeFormattingResult source: file.SourceText, id: JsonMember, document: ref Doc
         UIntSize(0) => prefix!
         (prefix! < originalLength
             and prefix! < formattedLength
-            and (original -> byte(prefix!)) == formatted.bytes[Int(prefix!)]) -> while {
+            and (original -> byte(prefix!)) == formatted.bytes[Int(prefix!)])
+                -> while {
             prefix! + 1 => prefix!
         }
-        (prefix! < originalLength and prefix! > 0 and ((original -> byte(prefix!)) / 64) == 2) -> while {
+        (prefix! < originalLength and prefix! > 0 and ((original -> byte(prefix!)) / 64) == 2)
+            -> while {
             prefix! - 1 => prefix!
         }
         UIntSize(0) => suffix!
         (suffix! < originalLength - prefix!
             and suffix! < formattedLength - prefix!
-            and (original -> byte(originalLength - suffix! - 1)) == formatted.bytes[Int(formattedLength - suffix! - 1)]) -> while {
+            and (original -> byte(originalLength - suffix! - 1)) == formatted.bytes[Int(formattedLength - suffix! - 1)])
+                -> while {
             suffix! + 1 => suffix!
         }
-        (prefix! == originalLength and prefix! == formattedLength) -> if {
+        (prefix! == originalLength and prefix! == formattedLength)
+            -> if {
             source -> writeEmptyArrayResult(id)
         } else {
             original -> sourcePosition(prefix!) => start
             original -> sourcePosition(originalLength - suffix!) => end
             [UInt8; ~] => replacement!
             0 => replacementIndex!
-            replacementIndex! < Int(formattedLength - prefix! - suffix!) -> while {
+            replacementIndex! < Int(formattedLength - prefix! - suffix!)
+                -> while {
                 replacement! -> push(formatted.bytes[Int(prefix!) + replacementIndex!])
                 replacementIndex! + 1 => replacementIndex!
             }
@@ -713,7 +723,8 @@ dispatchMessage source: file.SourceText, documents: mut [Document; ~], shutdown:
                         true => result!.exitRequested
                         result!.shutdown -> if { 0 } else { 1 } => result!.exitCode
                     } else {
-                        method -> bytesEqualText("textDocument/didOpen") -> if {
+                        method -> bytesEqualText("textDocument/didOpen")
+                            -> if {
                             source -> nestedMember(root, "params", "textDocument") => textDocument
                             source -> findMember(textDocument.value, "uri") => uriMember
                             source -> findMember(textDocument.value, "text") => textMember
@@ -724,11 +735,13 @@ dispatchMessage source: file.SourceText, documents: mut [Document; ~], shutdown:
                                 documents[documentIndex] -> publishDiagnostics(true)
                             } else { 1 => result!.status }
                         } else {
-                            method -> bytesEqualText("textDocument/didChange") -> if {
+                            method -> bytesEqualText("textDocument/didChange")
+                                -> if {
                                 source -> findMember(root, "params") => parameters
                                 source -> nestedMember(parameters.value, "textDocument", "uri") => uriMember
                                 source -> findMember(parameters.value, "contentChanges") => changes
-                                (uriMember.found and changes.found and changes.value.kind == 4) -> if {
+                                (uriMember.found and changes.found and changes.value.kind == 4)
+                                    -> if {
                                     source -> parseValue(changes.value.contentStart, changes.value.contentEnd) => firstChange
                                     source -> findMember(firstChange, "text") => textMember
                                     textMember.found -> if {
@@ -739,7 +752,8 @@ dispatchMessage source: file.SourceText, documents: mut [Document; ~], shutdown:
                                     }
                                 } else { 1 => result!.status }
                             } else {
-                                method -> bytesEqualText("textDocument/didClose") -> if {
+                                method -> bytesEqualText("textDocument/didClose")
+                                    -> if {
                                     source -> nestedMember(root, "params", "textDocument") => textDocument
                                     source -> findMember(textDocument.value, "uri") => uriMember
                                     uriMember.found -> if {
@@ -750,7 +764,8 @@ dispatchMessage source: file.SourceText, documents: mut [Document; ~], shutdown:
                                         closed -> publishDiagnostics(false)
                                     } else { 1 => result!.status }
                                 } else {
-                                    method -> bytesEqualText("textDocument/formatting") -> if {
+                                    method -> bytesEqualText("textDocument/formatting")
+                                        -> if {
                                         source -> nestedMember(root, "params", "textDocument") => textDocument
                                         source -> findMember(textDocument.value, "uri") => uriMember
                                         uriMember.found -> if {
@@ -779,23 +794,28 @@ parseContentLength source: file.SourceText, start: UIntSize, end: UIntSize -> In
     start => lineStart!
     lineStart! < end -> while {
         lineStart! => lineEnd!
-        (lineEnd! < end and (source -> byte(lineEnd!)) != 10) -> while {
+        (lineEnd! < end and (source -> byte(lineEnd!)) != 10)
+            -> while {
             lineEnd! + 1 => lineEnd!
         }
         lineEnd! => trimmedEnd!
-        (trimmedEnd! > lineStart! and (source -> byte(trimmedEnd! - 1)) == 13) -> if {
+        (trimmedEnd! > lineStart! and (source -> byte(trimmedEnd! - 1)) == 13)
+            -> if {
             trimmedEnd! - 1 => trimmedEnd!
         }
         "Content-Length:" => headerName
         trimmedEnd! - lineStart! >= (headerName -> len) => matches!
         UIntSize(0) => nameIndex!
-        (matches! and nameIndex! < (headerName -> len)) -> while {
-            ((source -> byte(lineStart! + nameIndex!)) -> asciiLower) != ((headerName -> byte(nameIndex!)) -> asciiLower) -> if { false => matches! }
+        (matches! and nameIndex! < (headerName -> len))
+            -> while {
+            ((source -> byte(lineStart! + nameIndex!)) -> asciiLower) != ((headerName -> byte(nameIndex!)) -> asciiLower)
+                -> if { false => matches! }
             nameIndex! + 1 => nameIndex!
         }
         matches! -> if {
             lineStart! + (headerName -> len) => digitIndex!
-            (digitIndex! < trimmedEnd! and ((source -> byte(digitIndex!)) -> isWhitespace)) -> while {
+            (digitIndex! < trimmedEnd! and ((source -> byte(digitIndex!)) -> isWhitespace))
+                -> while {
                 digitIndex! + 1 => digitIndex!
             }
             0 => parsed!
@@ -846,7 +866,8 @@ nextFrame buffer: ref [UInt8; ~], start: UIntSize -> FrameResult {
             2 => result!.kind
         } else {
             UIntSize(headerEnd!) + separatorLength! => payloadStart
-            payloadStart + UIntSize(contentLength) <= end -> if {
+            payloadStart + UIntSize(contentLength) <= end
+                -> if {
                 1 => result!.kind
                 payloadStart + UIntSize(contentLength) => result!.next
                 payloadStart => result!.payloadStart

@@ -102,7 +102,8 @@ public certificateVerifyInput server: Bool, transcriptHash: [UInt8; 32] -> [UInt
 }
 
 public encodeCertificate der: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-    ((der -> len) > 0 and (der -> len) <= 16_777_210) -> unless {
+    ((der -> len) > 0 and (der -> len) <= 16_777_210)
+        -> unless {
         Result<[UInt8; ~], errors.Error>.Err(error(80)) -> return
     }
     UInt32(der -> len) => certificateLength
@@ -117,7 +118,8 @@ public encodeCertificate der: [UInt8] -> Result<[UInt8; ~], errors.Error> {
 
 public decodeCertificate bytes: [UInt8] -> Result<Certificate, errors.Error> {
     handshake.decode(bytes, 0)? => decoded
-    (decoded.messageType == handshake.certificate() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+    (decoded.messageType == handshake.certificate() and decoded.nextOffset == UIntSize(bytes -> len))
+        -> unless {
         Result<Certificate, errors.Error>.Err(error(50)) -> return
     }
     copyRange(decoded.body, 0, UIntSize(decoded.body -> len))? => body
@@ -128,14 +130,16 @@ public decodeCertificate bytes: [UInt8] -> Result<Certificate, errors.Error> {
         Result<Certificate, errors.Error>.Err(error(47)) -> return
     }
     readUInt24(body, 1)? => listLength
-    UIntSize(listLength) + 4 == UIntSize(body -> len) -> unless {
+    UIntSize(listLength) + 4 == UIntSize(body -> len)
+        -> unless {
         Result<Certificate, errors.Error>.Err(error(50)) -> return
     }
     readUInt24(body, 4)? => certificateLength
     certificateLength > 0 -> unless {
         Result<Certificate, errors.Error>.Err(error(42)) -> return
     }
-    7 + UIntSize(certificateLength) + 2 == UIntSize(body -> len) -> unless {
+    7 + UIntSize(certificateLength) + 2 == UIntSize(body -> len)
+        -> unless {
         Result<Certificate, errors.Error>.Err(error(50)) -> return
     }
     readUInt16(body, 7 + UIntSize(certificateLength))? => certificateExtensionsLength
@@ -147,7 +151,8 @@ public decodeCertificate bytes: [UInt8] -> Result<Certificate, errors.Error> {
 }
 
 public encodeCertificateVerify algorithm: UInt16, signature: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-    ((signature -> len) > 0 and (signature -> len) <= 65_535) -> unless {
+    ((signature -> len) > 0 and (signature -> len) <= 65_535)
+        -> unless {
         Result<[UInt8; ~], errors.Error>.Err(error(80)) -> return
     }
     [UInt8; ~] => body!
@@ -159,7 +164,8 @@ public encodeCertificateVerify algorithm: UInt16, signature: [UInt8] -> Result<[
 
 public decodeCertificateVerify bytes: [UInt8] -> Result<CertificateVerify, errors.Error> {
     handshake.decode(bytes, 0)? => decoded
-    (decoded.messageType == handshake.certificateVerify() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+    (decoded.messageType == handshake.certificateVerify() and decoded.nextOffset == UIntSize(bytes -> len))
+        -> unless {
         Result<CertificateVerify, errors.Error>.Err(error(50)) -> return
     }
     copyRange(decoded.body, 0, UIntSize(decoded.body -> len))? => body
@@ -168,7 +174,8 @@ public decodeCertificateVerify bytes: [UInt8] -> Result<CertificateVerify, error
     }
     readUInt16(body, 0)? => algorithm
     readUInt16(body, 2)? => signatureLength
-    UIntSize(signatureLength) + 4 == UIntSize(body -> len) -> unless {
+    UIntSize(signatureLength) + 4 == UIntSize(body -> len)
+        -> unless {
         Result<CertificateVerify, errors.Error>.Err(error(50)) -> return
     }
     copyRange(body, 4, UIntSize(signatureLength))? => signature
@@ -188,7 +195,8 @@ public signCertificateVerify seed: [UInt8], server: Bool, transcriptHash: [UInt8
 
 public verifyCertificateVerify publicKey: [UInt8], server: Bool, transcriptHash: [UInt8; 32], message: [UInt8] -> Result<Unit, errors.Error> {
     decodeCertificateVerify(message)? => decoded
-    (decoded.algorithm == ed25519SignatureScheme() and (decoded.signature -> len) == 64) -> unless {
+    (decoded.algorithm == ed25519SignatureScheme() and (decoded.signature -> len) == 64)
+        -> unless {
         Result<Unit, errors.Error>.Err(error(47)) -> return
     }
     certificateVerifyInput(server, transcriptHash) => signedInput
@@ -213,7 +221,8 @@ public encodeFinished verifyData: [UInt8] -> Result<[UInt8; ~], errors.Error> {
 
 public decodeFinished bytes: [UInt8] -> Result<[UInt8; 32], errors.Error> {
     handshake.decode(bytes, 0)? => decoded
-    (decoded.messageType == handshake.finished() and decoded.nextOffset == UIntSize(bytes -> len)) -> unless {
+    (decoded.messageType == handshake.finished() and decoded.nextOffset == UIntSize(bytes -> len))
+        -> unless {
         Result<[UInt8; 32], errors.Error>.Err(error(50)) -> return
     }
     (decoded.body -> len) == 32 -> unless {

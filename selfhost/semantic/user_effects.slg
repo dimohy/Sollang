@@ -78,8 +78,10 @@ struct TokenPairRequest {
 tokenEqual request: TokenPairRequest -> Bool {
     request.left.span.length == request.right.span.length => equal!
     UIntSize(0) => index!
-    (equal! and index! < request.left.span.length) -> while {
-        (request.leftSource -> byte(request.left.span.start + index!)) != (request.rightSource -> byte(request.right.span.start + index!)) -> if {
+    (equal! and index! < request.left.span.length)
+        -> while {
+        (request.leftSource -> byte(request.left.span.start + index!)) != (request.rightSource -> byte(request.right.span.start + index!))
+            -> if {
             false => equal!
         }
         index! + 1 => index!
@@ -101,7 +103,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
 
     # Declarations and their typed operation signatures are ordinary symbols.
     0 => sourceIndex!
-    sourceIndex! < (prepared.package.sources -> len) -> while {
+    sourceIndex! < (prepared.package.sources -> len)
+        -> while {
         prepared.package.ranges[sourceIndex!] => sourceRange
         0 => symbolIndex!
         symbolIndex! < sourceRange.symbolCount -> while {
@@ -124,11 +127,15 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                 -1 => inputTypeId!
                 -1 => returnTypeId!
                 0 => operationTypeSearch!
-                operationTypeSearch! < (prepared.semantic.references -> len) -> while {
+                operationTypeSearch! < (prepared.semantic.references -> len)
+                    -> while {
                     prepared.semantic.references[operationTypeSearch!] => operationTypeReference
-                    (operationTypeReference.sourceModule == sourceIndex! and operationTypeReference.status == 0) -> if {
-                        operationTypeReference.typeAst == inputTypeNode! -> if { operationTypeReference.typeId => inputTypeId! }
-                        operationTypeReference.typeAst == returnTypeNode! -> if { operationTypeReference.typeId => returnTypeId! }
+                    (operationTypeReference.sourceModule == sourceIndex! and operationTypeReference.status == 0)
+                        -> if {
+                        operationTypeReference.typeAst == inputTypeNode!
+                            -> if { operationTypeReference.typeId => inputTypeId! }
+                        operationTypeReference.typeAst == returnTypeNode!
+                            -> if { operationTypeReference.typeId => returnTypeId! }
                     }
                     operationTypeSearch! + 1 => operationTypeSearch!
                 }
@@ -155,7 +162,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
         leftOperationIndex! + 1 => rightOperationIndex!
         rightOperationIndex! < (operations! -> len) -> while {
             operations![rightOperationIndex!] => rightOperation
-            (leftOperation.sourceModule == rightOperation.sourceModule and leftOperation.effectSymbol == rightOperation.effectSymbol) -> if {
+            (leftOperation.sourceModule == rightOperation.sourceModule and leftOperation.effectSymbol == rightOperation.effectSymbol)
+                -> if {
                 prepared.package.sources[leftOperation.sourceModule] -> len => leftSourceLength
                 prepared.package.sources[leftOperation.sourceModule] -> slice(UIntSize(0), leftSourceLength) => leftSource
                 prepared.package.sources[rightOperation.sourceModule] -> len => rightSourceLength
@@ -190,32 +198,39 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
     # Resolve every user effect reference in a function uses clause. Local
     # effects use lexical names; imported effects reuse qualified module facts.
     0 => requirementSourceIndex!
-    requirementSourceIndex! < (prepared.package.sources -> len) -> while {
+    requirementSourceIndex! < (prepared.package.sources -> len)
+        -> while {
         prepared.package.sources[requirementSourceIndex!] -> len => requirementSourceLength
         prepared.package.sources[requirementSourceIndex!] -> slice(UIntSize(0), requirementSourceLength) => requirementSource
         prepared.package.ranges[requirementSourceIndex!] => requirementRange
         0 => requirementAstIndex!
-        requirementAstIndex! < requirementRange.astCount -> while {
+        requirementAstIndex! < requirementRange.astCount
+            -> while {
             prepared.package.nodes[requirementRange.astStart + requirementAstIndex!] => requirementNode
             requirementNode.kind == 52 -> if {
                 requirementNode.parent => requirementAncestor!
                 -1 => requirementFunctionAst!
-                (requirementAncestor! >= 0 and requirementFunctionAst! < 0) -> while {
+                (requirementAncestor! >= 0 and requirementFunctionAst! < 0)
+                    -> while {
                     prepared.package.nodes[requirementRange.astStart + requirementAncestor!] => ancestorNode
                     ancestorNode.kind == 7 -> if { requirementAncestor! => requirementFunctionAst! } else { ancestorNode.parent => requirementAncestor! }
                 }
                 -1 => requirementFunctionSymbol!
                 0 => functionSearch!
-                (functionSearch! < requirementRange.symbolCount and requirementFunctionSymbol! < 0) -> while {
+                (functionSearch! < requirementRange.symbolCount and requirementFunctionSymbol! < 0)
+                    -> while {
                     prepared.package.symbols[requirementRange.symbolStart + functionSearch!] => functionCandidate
-                    (functionCandidate.kind == 7 and functionCandidate.astNode == requirementFunctionAst!) -> if { functionSearch! => requirementFunctionSymbol! }
+                    (functionCandidate.kind == 7 and functionCandidate.astNode == requirementFunctionAst!)
+                        -> if { functionSearch! => requirementFunctionSymbol! }
                     functionSearch! + 1 => functionSearch!
                 }
 
                 -1 => referenceNameToken!
                 requirementNode.firstToken => referenceTokenIndex!
-                referenceTokenIndex! < requirementNode.firstToken + requirementNode.tokenCount -> while {
-                    prepared.package.tokens[requirementRange.tokenStart + referenceTokenIndex!].kind == grammar.tokenIdIdentifier() -> if { referenceTokenIndex! => referenceNameToken! }
+                referenceTokenIndex! < requirementNode.firstToken + requirementNode.tokenCount
+                    -> while {
+                    prepared.package.tokens[requirementRange.tokenStart + referenceTokenIndex!].kind == grammar.tokenIdIdentifier()
+                        -> if { referenceTokenIndex! => referenceNameToken! }
                     referenceTokenIndex! + 1 => referenceTokenIndex!
                 }
                 -1 => effectSourceModule!
@@ -224,7 +239,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                 0 => localSignatureIndex!
                 localSignatureIndex! < (signatures! -> len) -> while {
                     signatures![localSignatureIndex!] => signature
-                    signature.sourceModule == requirementSourceIndex! -> if {
+                    signature.sourceModule == requirementSourceIndex!
+                        -> if {
                         prepared.package.sources[signature.sourceModule] -> len => signatureSourceLength
                         prepared.package.sources[signature.sourceModule] -> slice(UIntSize(0), signatureSourceLength) => signatureSource
                         TokenPairRequest {
@@ -241,22 +257,27 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                     localSignatureIndex! + 1 => localSignatureIndex!
                 }
                 0 => qualifiedIndex!
-                qualifiedIndex! < (prepared.qualified -> len) -> while {
+                qualifiedIndex! < (prepared.qualified -> len)
+                    -> while {
                     prepared.qualified[qualifiedIndex!] => qualifiedEffect
-                    (qualifiedEffect.sourceModule == requirementSourceIndex! and effectSymbol! < 0) -> if {
+                    (qualifiedEffect.sourceModule == requirementSourceIndex! and effectSymbol! < 0)
+                        -> if {
                         qualifiedEffect.pathAst => qualifiedAncestor!
                         false => belongsToReference!
-                        (qualifiedAncestor! >= 0 and not belongsToReference!) -> while {
+                        (qualifiedAncestor! >= 0 and not belongsToReference!)
+                            -> while {
                             qualifiedAncestor! == requirementAstIndex! -> if { true => belongsToReference! } else {
                                 prepared.package.nodes[requirementRange.astStart + qualifiedAncestor!].parent => qualifiedAncestor!
                             }
                         }
                         (belongsToReference!
                             and qualifiedEffect.targetModule >= 0
-                            and qualifiedEffect.targetModule < (prepared.modules -> len)) -> if {
+                            and qualifiedEffect.targetModule < (prepared.modules -> len))
+                                -> if {
                             prepared.modules[qualifiedEffect.targetModule].sourceIndex => targetSourceModule
                             prepared.package.ranges[targetSourceModule] => targetRange
-                            (qualifiedEffect.targetSymbol >= 0 and prepared.package.symbols[targetRange.symbolStart + qualifiedEffect.targetSymbol].kind == 50) -> if {
+                            (qualifiedEffect.targetSymbol >= 0 and prepared.package.symbols[targetRange.symbolStart + qualifiedEffect.targetSymbol].kind == 50)
+                                -> if {
                                 targetSourceModule => effectSourceModule!
                                 qualifiedEffect.targetSymbol => effectSymbol!
                                 qualifiedEffect.status => requirementStatus!
@@ -297,7 +318,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
     # Ordinary resolved functions win, so an operation never steals a lexical
     # function call with the same name.
     0 => callSourceIndex!
-    callSourceIndex! < (prepared.package.sources -> len) -> while {
+    callSourceIndex! < (prepared.package.sources -> len)
+        -> while {
         prepared.package.sources[callSourceIndex!] -> len => callSourceLength
         prepared.package.sources[callSourceIndex!] -> slice(UIntSize(0), callSourceLength) => callSource
         prepared.package.ranges[callSourceIndex!] => callRange
@@ -306,30 +328,37 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
             prepared.package.nodes[callRange.astStart + callAstIndex!] => callNode
             false => flowArrow!
             callNode.firstToken => arrowSearch!
-            arrowSearch! < callNode.firstToken + callNode.tokenCount -> while {
-                prepared.package.tokens[callRange.tokenStart + arrowSearch!].kind == grammar.tokenIdArrow() -> if { true => flowArrow! }
+            arrowSearch! < callNode.firstToken + callNode.tokenCount
+                -> while {
+                prepared.package.tokens[callRange.tokenStart + arrowSearch!].kind == grammar.tokenIdArrow()
+                    -> if { true => flowArrow! }
                 arrowSearch! + 1 => arrowSearch!
             }
-            (callNode.kind == 11 or callNode.kind == 15 or (callNode.kind == 10 and flowArrow!)) -> if {
+            (callNode.kind == 11 or callNode.kind == 15 or (callNode.kind == 10 and flowArrow!))
+                -> if {
                 false => ordinaryResolved!
                 0 => preparedCallIndex!
                 preparedCallIndex! < (prepared.calls -> len) -> while {
                     prepared.calls[preparedCallIndex!] => preparedCall
-                    (preparedCall.sourceModule == callSourceIndex! and preparedCall.callAst == callAstIndex! and preparedCall.status == 0) -> if { true => ordinaryResolved! }
+                    (preparedCall.sourceModule == callSourceIndex! and preparedCall.callAst == callAstIndex! and preparedCall.status == 0)
+                        -> if { true => ordinaryResolved! }
                     preparedCallIndex! + 1 => preparedCallIndex!
                 }
                 not ordinaryResolved! -> if {
                     callNode.parent => callAncestor!
                     -1 => callFunctionAst!
-                    (callAncestor! >= 0 and callFunctionAst! < 0) -> while {
+                    (callAncestor! >= 0 and callFunctionAst! < 0)
+                        -> while {
                         prepared.package.nodes[callRange.astStart + callAncestor!] => callAncestorNode
                         callAncestorNode.kind == 7 -> if { callAncestor! => callFunctionAst! } else { callAncestorNode.parent => callAncestor! }
                     }
                     -1 => callFunctionSymbol!
                     0 => callFunctionSearch!
-                    (callFunctionSearch! < callRange.symbolCount and callFunctionSymbol! < 0) -> while {
+                    (callFunctionSearch! < callRange.symbolCount and callFunctionSymbol! < 0)
+                        -> while {
                         prepared.package.symbols[callRange.symbolStart + callFunctionSearch!] => callFunctionCandidate
-                        (callFunctionCandidate.kind == 7 and callFunctionCandidate.astNode == callFunctionAst!) -> if { callFunctionSearch! => callFunctionSymbol! }
+                        (callFunctionCandidate.kind == 7 and callFunctionCandidate.astNode == callFunctionAst!)
+                            -> if { callFunctionSearch! => callFunctionSymbol! }
                         callFunctionSearch! + 1 => callFunctionSearch!
                     }
 
@@ -339,7 +368,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                     false => afterArrow!
                     false => insideArguments!
                     callNode.firstToken => callTokenIndex!
-                    callTokenIndex! < callNode.firstToken + callNode.tokenCount -> while {
+                    callTokenIndex! < callNode.firstToken + callNode.tokenCount
+                        -> while {
                         prepared.package.tokens[callRange.tokenStart + callTokenIndex!] => callToken
                         callToken.kind == grammar.tokenIdArrow() -> if {
                             true => afterArrow!
@@ -348,8 +378,10 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                             -1 => previousCallNameToken!
                         }
                         callToken.kind == grammar.tokenIdLeftParen() -> if { true => insideArguments! }
-                        callToken.kind == grammar.tokenIdRightParen() -> if { false => insideArguments! }
-                        (callToken.kind == grammar.tokenIdIdentifier() and not insideArguments! and (callNode.kind == 11 or callNode.kind == 15 or afterArrow!)) -> if {
+                        callToken.kind == grammar.tokenIdRightParen()
+                            -> if { false => insideArguments! }
+                        (callToken.kind == grammar.tokenIdIdentifier() and not insideArguments! and (callNode.kind == 11 or callNode.kind == 15 or afterArrow!))
+                            -> if {
                             firstCallNameToken! < 0 -> if { callTokenIndex! => firstCallNameToken! }
                             callNameToken! >= 0 -> if { callNameToken! => previousCallNameToken! }
                             callTokenIndex! => callNameToken!
@@ -364,13 +396,16 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                             -1 => matchedOperationSymbol!
                             -1 => matchedReturnTypeId!
                             0 => callerRequirementIndex!
-                            callerRequirementIndex! < (requirements! -> len) -> while {
+                            callerRequirementIndex! < (requirements! -> len)
+                                -> while {
                                 requirements![callerRequirementIndex!] => requirement
-                                (requirement.sourceModule == callSourceIndex! and requirement.functionSymbol == callFunctionSymbol! and requirement.status == 0) -> if {
+                                (requirement.sourceModule == callSourceIndex! and requirement.functionSymbol == callFunctionSymbol! and requirement.status == 0)
+                                    -> if {
                                     0 => operationSearch!
                                     operationSearch! < (operations! -> len) -> while {
                                         operations![operationSearch!] => operation
-                                        (operation.sourceModule == requirement.effectSourceModule and operation.effectSymbol == requirement.effectSymbol) -> if {
+                                        (operation.sourceModule == requirement.effectSourceModule and operation.effectSymbol == requirement.effectSymbol)
+                                            -> if {
                                             prepared.package.sources[operation.sourceModule] -> len => operationSourceLength
                                             prepared.package.sources[operation.sourceModule] -> slice(UIntSize(0), operationSourceLength) => operationSource
                                             TokenPairRequest {
@@ -423,9 +458,11 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                                 -1 => explicitEffectSource!
                                 -1 => explicitEffectSymbol!
                                 0 => explicitSignatureIndex!
-                                explicitSignatureIndex! < (signatures! -> len) -> while {
+                                explicitSignatureIndex! < (signatures! -> len)
+                                    -> while {
                                     signatures![explicitSignatureIndex!] => explicitSignature
-                                    explicitSignature.sourceModule == callSourceIndex! -> if {
+                                    explicitSignature.sourceModule == callSourceIndex!
+                                        -> if {
                                         prepared.package.sources[explicitSignature.sourceModule] -> len => explicitSignatureSourceLength
                                         prepared.package.sources[explicitSignature.sourceModule] -> slice(UIntSize(0), explicitSignatureSourceLength) => explicitSignatureSource
                                         TokenPairRequest {
@@ -440,11 +477,14 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                                     }
                                     explicitSignatureIndex! + 1 => explicitSignatureIndex!
                                 }
-                                (explicitEffectSymbol! < 0 and firstCallNameToken! != previousCallNameToken!) -> if {
+                                (explicitEffectSymbol! < 0 and firstCallNameToken! != previousCallNameToken!)
+                                    -> if {
                                     0 => explicitImportIndex!
-                                    explicitImportIndex! < (prepared.imports -> len) -> while {
+                                    explicitImportIndex! < (prepared.imports -> len)
+                                        -> while {
                                         prepared.imports[explicitImportIndex!] => explicitImport
-                                        explicitImport.sourceModule == callSourceIndex! -> if {
+                                        explicitImport.sourceModule == callSourceIndex!
+                                            -> if {
                                             TokenPairRequest {
                                                 leftSource: callSource
                                                 left: prepared.package.tokens[callRange.tokenStart + firstCallNameToken!]
@@ -455,9 +495,11 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                                                 resolvedImport.status == 0 -> if {
                                                     prepared.modules[resolvedImport.targetModule].sourceIndex => importedEffectSource
                                                     0 => importedSignatureIndex!
-                                                    importedSignatureIndex! < (signatures! -> len) -> while {
+                                                    importedSignatureIndex! < (signatures! -> len)
+                                                        -> while {
                                                         signatures![importedSignatureIndex!] => importedSignature
-                                                        (importedSignature.sourceModule == importedEffectSource and importedSignature.flags >= 4) -> if {
+                                                        (importedSignature.sourceModule == importedEffectSource and importedSignature.flags >= 4)
+                                                            -> if {
                                                             prepared.package.sources[importedEffectSource] -> len => importedEffectSourceLength
                                                             prepared.package.sources[importedEffectSource] -> slice(UIntSize(0), importedEffectSourceLength) => importedEffectSourceView
                                                             TokenPairRequest {
@@ -481,9 +523,11 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                                 -1 => explicitOperationSymbol!
                                 -1 => explicitReturnTypeId!
                                 0 => explicitOperationIndex!
-                                explicitOperationIndex! < (operations! -> len) -> while {
+                                explicitOperationIndex! < (operations! -> len)
+                                    -> while {
                                     operations![explicitOperationIndex!] => explicitOperation
-                                    (explicitOperation.sourceModule == explicitEffectSource! and explicitOperation.effectSymbol == explicitEffectSymbol!) -> if {
+                                    (explicitOperation.sourceModule == explicitEffectSource! and explicitOperation.effectSymbol == explicitEffectSymbol!)
+                                        -> if {
                                         prepared.package.sources[explicitOperation.sourceModule] -> len => explicitOperationSourceLength
                                         prepared.package.sources[explicitOperation.sourceModule] -> slice(UIntSize(0), explicitOperationSourceLength) => explicitOperationSource
                                         TokenPairRequest {
@@ -501,9 +545,11 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                                 explicitOperationSymbol! >= 0 -> if {
                                     false => explicitRequirementFound!
                                     0 => explicitRequirementIndex!
-                                    explicitRequirementIndex! < (requirements! -> len) -> while {
+                                    explicitRequirementIndex! < (requirements! -> len)
+                                        -> while {
                                         requirements![explicitRequirementIndex!] => explicitRequirement
-                                        (explicitRequirement.sourceModule == callSourceIndex! and explicitRequirement.functionSymbol == callFunctionSymbol! and explicitRequirement.status == 0 and explicitRequirement.effectSourceModule == explicitEffectSource! and explicitRequirement.effectSymbol == explicitEffectSymbol!) -> if {
+                                        (explicitRequirement.sourceModule == callSourceIndex! and explicitRequirement.functionSymbol == callFunctionSymbol! and explicitRequirement.status == 0 and explicitRequirement.effectSourceModule == explicitEffectSource! and explicitRequirement.effectSymbol == explicitEffectSymbol!)
+                                            -> if {
                                             true => explicitRequirementFound!
                                         }
                                         explicitRequirementIndex! + 1 => explicitRequirementIndex!
@@ -556,7 +602,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
         0 => typedOperationSearch!
         typedOperationSearch! < (operations! -> len) -> while {
             operations![typedOperationSearch!] => typedOperation
-            (typedOperation.sourceModule == typedCall!.effectSourceModule and typedOperation.effectSymbol == typedCall!.effectSymbol and typedOperation.operationSymbol == typedCall!.operationSymbol) -> if {
+            (typedOperation.sourceModule == typedCall!.effectSourceModule and typedOperation.effectSymbol == typedCall!.effectSymbol and typedOperation.operationSymbol == typedCall!.operationSymbol)
+                -> if {
                 typedOperation.inputTypeId => expectedInputTypeId!
                 typedOperation.returnTypeId => typedCall!.returnTypeId
             }
@@ -568,9 +615,11 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
         UIntSize(0) => argumentBoundaryEnd!
         typedCallNode.kind == 10 -> if {
             typedCallNode.firstToken => typedCallTokenIndex!
-            typedCallTokenIndex! < typedCallNode.firstToken + typedCallNode.tokenCount -> while {
+            typedCallTokenIndex! < typedCallNode.firstToken + typedCallNode.tokenCount
+                -> while {
                 prepared.package.tokens[typedCallRange.tokenStart + typedCallTokenIndex!] => typedCallToken
-                typedCallToken.kind == grammar.tokenIdArrow() -> if {
+                typedCallToken.kind == grammar.tokenIdArrow()
+                    -> if {
                     true => hasOperationArgument!
                     typedCallToken.span.start => argumentBoundaryEnd!
                     typedCallNode.firstToken + typedCallNode.tokenCount => typedCallTokenIndex!
@@ -582,17 +631,21 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
         typedCallNode.kind == 11 -> if {
             false => afterOperationLeftParen!
             typedCallNode.firstToken => typedCallTokenIndex!
-            typedCallTokenIndex! < typedCallNode.firstToken + typedCallNode.tokenCount -> while {
+            typedCallTokenIndex! < typedCallNode.firstToken + typedCallNode.tokenCount
+                -> while {
                 prepared.package.tokens[typedCallRange.tokenStart + typedCallTokenIndex!] => typedCallToken
-                typedCallToken.kind == grammar.tokenIdLeftParen() -> if {
+                typedCallToken.kind == grammar.tokenIdLeftParen()
+                    -> if {
                     true => afterOperationLeftParen!
                     typedCallToken.span.start + typedCallToken.span.length => argumentBoundaryStart!
                 } else {
-                    typedCallToken.kind == grammar.tokenIdRightParen() -> if {
+                    typedCallToken.kind == grammar.tokenIdRightParen()
+                        -> if {
                         typedCallToken.span.start => argumentBoundaryEnd!
                         false => afterOperationLeftParen!
                     } else {
-                        (afterOperationLeftParen! and typedCallToken.kind != grammar.triviaIdWhitespace() and typedCallToken.kind != grammar.triviaIdComment()) -> if {
+                        (afterOperationLeftParen! and typedCallToken.kind != grammar.triviaIdWhitespace() and typedCallToken.kind != grammar.triviaIdComment())
+                            -> if {
                             true => hasOperationArgument!
                         }
                     }
@@ -604,27 +657,34 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
         -1 => actualArgumentExpression!
         1000000 => actualArgumentDistance!
         0 => typedExpressionSearch!
-        typedExpressionSearch! < (expressionTypeSet.expressions -> len) -> while {
+        typedExpressionSearch! < (expressionTypeSet.expressions -> len)
+            -> while {
             expressionTypeSet.expressions[typedExpressionSearch!] => typedExpression
-            (typedExpression.sourceModule == typedCall!.sourceModule and typedExpression.astNode != typedCall!.astNode and typedExpression.status == 0) -> if {
+            (typedExpression.sourceModule == typedCall!.sourceModule and typedExpression.astNode != typedCall!.astNode and typedExpression.status == 0)
+                -> if {
                 prepared.package.nodes[typedCallRange.astStart + typedExpression.astNode] => typedExpressionNode
                 true => insideArgumentBoundary!
                 typedCallNode.kind == 10 -> if {
-                    typedExpressionNode.start + typedExpressionNode.length > argumentBoundaryEnd! -> if { false => insideArgumentBoundary! }
+                    typedExpressionNode.start + typedExpressionNode.length > argumentBoundaryEnd!
+                        -> if { false => insideArgumentBoundary! }
                 }
                 typedCallNode.kind == 11 -> if {
-                    (typedExpressionNode.start < argumentBoundaryStart! or typedExpressionNode.start + typedExpressionNode.length > argumentBoundaryEnd!) -> if { false => insideArgumentBoundary! }
+                    (typedExpressionNode.start < argumentBoundaryStart! or typedExpressionNode.start + typedExpressionNode.length > argumentBoundaryEnd!)
+                        -> if { false => insideArgumentBoundary! }
                 }
                 typedExpressionNode.parent => typedExpressionAncestor!
                 1 => typedExpressionDistance!
                 false => belongsToOperationCall!
-                (typedExpressionAncestor! >= 0 and not belongsToOperationCall!) -> while {
-                    typedExpressionAncestor! == typedCall!.astNode -> if { true => belongsToOperationCall! } else {
+                (typedExpressionAncestor! >= 0 and not belongsToOperationCall!)
+                    -> while {
+                    typedExpressionAncestor! == typedCall!.astNode
+                        -> if { true => belongsToOperationCall! } else {
                         prepared.package.nodes[typedCallRange.astStart + typedExpressionAncestor!].parent => typedExpressionAncestor!
                         typedExpressionDistance! + 1 => typedExpressionDistance!
                     }
                 }
-                (insideArgumentBoundary! and belongsToOperationCall! and typedExpressionDistance! < actualArgumentDistance!) -> if {
+                (insideArgumentBoundary! and belongsToOperationCall! and typedExpressionDistance! < actualArgumentDistance!)
+                    -> if {
                     typedExpressionSearch! => actualArgumentExpression!
                     typedExpressionDistance! => actualArgumentDistance!
                 }
@@ -636,7 +696,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
         }
         typedCall! => calls![typedCallIndex!]
 
-        ((expectedInputTypeId! >= 0 and not hasOperationArgument!) or (expectedInputTypeId! < 0 and hasOperationArgument!)) -> if {
+        ((expectedInputTypeId! >= 0 and not hasOperationArgument!) or (expectedInputTypeId! < 0 and hasOperationArgument!))
+            -> if {
             diagnostics! -> push(UserEffectDiagnostic {
                 code: 7
                 sourceModule: typedCall!.sourceModule
@@ -650,10 +711,12 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAn
                 span: syntax.SourceSpan { fileId: typedCall!.sourceModule, start: typedCallNode.start, length: typedCallNode.length }
             })
         }
-        (expectedInputTypeId! >= 0 and typedCall!.argumentTypeId >= 0 and expectedInputTypeId! != typedCall!.argumentTypeId) -> if {
+        (expectedInputTypeId! >= 0 and typedCall!.argumentTypeId >= 0 and expectedInputTypeId! != typedCall!.argumentTypeId)
+            -> if {
             expressionTypeSet.types[expectedInputTypeId!] => expectedInputType
             expressionTypeSet.types[typedCall!.argumentTypeId] => actualInputType
-            (not expectedInputType.containsParameter and not actualInputType.containsParameter) -> if {
+            (not expectedInputType.containsParameter and not actualInputType.containsParameter)
+                -> if {
                 expressionTypeSet.expressions[actualArgumentExpression!] => actualArgument
                 prepared.package.nodes[typedCallRange.astStart + actualArgument.astNode] => actualArgumentNode
                 diagnostics! -> push(UserEffectDiagnostic {

@@ -40,7 +40,8 @@ currentInterface fingerprints: [interfaces.ModuleFingerprint; ~], moduleHash: UI
     UInt64(0) => result!
     0 => index!
     index! < (fingerprints -> len) -> while {
-        fingerprints[index!].moduleHash == moduleHash -> if {
+        fingerprints[index!].moduleHash == moduleHash
+            -> if {
             fingerprints[index!].interfaceHash => result!
             fingerprints -> len => index!
         } else {
@@ -54,7 +55,8 @@ currentImplementation fingerprints: [interfaces.ModuleFingerprint; ~], moduleHas
     UInt64(0) => result!
     0 => index!
     index! < (fingerprints -> len) -> while {
-        fingerprints[index!].moduleHash == moduleHash -> if {
+        fingerprints[index!].moduleHash == moduleHash
+            -> if {
             fingerprints[index!].implementationHash => result!
             fingerprints -> len => index!
         } else {
@@ -150,24 +152,30 @@ public validate words: [UInt64; ~], targetHash: UInt64 -> CacheValidation {
     wordLength >= 7 -> if {
         words[0] == 6002245291164258115 -> unless { 2 => status! }
         (status! == 0 and words[1] != 2) -> if { 3 => status! }
-        (status! == 0 and (words[2] != 1397509978044337767 or words[3] != targetHash)) -> if { 4 => status! }
-        (status! == 0 and words[4] != UInt64(wordLength)) -> if { 5 => status! }
-        (status! == 0 and actualChecksum != words[5]) -> if { 6 => status! }
+        (status! == 0 and (words[2] != 1397509978044337767 or words[3] != targetHash))
+            -> if { 4 => status! }
+        (status! == 0 and words[4] != UInt64(wordLength))
+            -> if { 5 => status! }
+        (status! == 0 and actualChecksum != words[5])
+            -> if { 6 => status! }
         status! == 0 -> if {
             words[6] <= 1000000 -> if {
                 Int(words[6]) => moduleCount!
                 7 => index!
                 0 => moduleIndex!
-                (status! == 0 and moduleIndex! < moduleCount!) -> while {
+                (status! == 0 and moduleIndex! < moduleCount!)
+                    -> while {
                     index! -> canRead(8, wordLength) -> if {
                         words[index! + 7] <= UInt64(wordLength) -> if {
                             Int(words[index! + 7]) => canonicalLength
                             index! + 8 => canonicalStart
-                            canonicalStart -> canRead(canonicalLength + 1, wordLength) -> if {
+                            canonicalStart -> canRead(canonicalLength + 1, wordLength)
+                                -> if {
                                 canonicalStart + canonicalLength => dependencyCountIndex
                                 words[dependencyCountIndex] <= 1000000 -> if {
                                     Int(words[dependencyCountIndex]) => dependencyCount
-                                    dependencyCountIndex + 1 -> canRead(dependencyCount * 2, wordLength) -> if {
+                                    dependencyCountIndex + 1 -> canRead(dependencyCount * 2, wordLength)
+                                        -> if {
                                         dependencyCountIndex + 1 + dependencyCount * 2 => index!
                                     } else { 7 => status! }
                                 } else { 7 => status! }
@@ -208,8 +216,10 @@ public reuseAnalyzed package: analysis.PackageAnalysis, words: [UInt64; ~], targ
                 cachedCanonicalLength == currentCanonicalLength => hit!
                 canonical.wordStarts[sourceIndex!] => currentCanonicalStart
                 0 => canonicalIndex!
-                (hit! and canonicalIndex! < cachedCanonicalLength) -> while {
-                    words[recordStart + 8 + canonicalIndex!] == canonical.words[currentCanonicalStart + canonicalIndex!] -> unless { false => hit! }
+                (hit! and canonicalIndex! < cachedCanonicalLength)
+                    -> while {
+                    words[recordStart + 8 + canonicalIndex!] == canonical.words[currentCanonicalStart + canonicalIndex!]
+                        -> unless { false => hit! }
                     canonicalIndex! + 1 => canonicalIndex!
                 }
             }
@@ -222,11 +232,13 @@ public reuseAnalyzed package: analysis.PackageAnalysis, words: [UInt64; ~], targ
                 0 => dependencyIndex!
                 0 => currentImportOrdinal!
                 0 => importScan!
-                (hit! and dependencyIndex! < cachedDependencyCount) -> while {
+                (hit! and dependencyIndex! < cachedDependencyCount)
+                    -> while {
                     UInt64(0) => currentTarget!
                     importScan! < (imports -> len) -> while {
                         imports[importScan!] => edge
-                        (edge.sourceModule == sourceIndex! and currentImportOrdinal! == dependencyIndex!) -> if {
+                        (edge.sourceModule == sourceIndex! and currentImportOrdinal! == dependencyIndex!)
+                            -> if {
                             edge.targetHash => currentTarget!
                             imports -> len => importScan!
                         } else {
@@ -238,10 +250,12 @@ public reuseAnalyzed package: analysis.PackageAnalysis, words: [UInt64; ~], targ
                     words[cachedDependencyIndex] => cachedTarget
                     words[cachedDependencyIndex + 1] => cachedInterface
                     fingerprints -> currentInterface(currentTarget!) => currentDependencyInterface
-                    (cachedTarget == currentTarget! and cachedInterface == currentDependencyInterface) -> if {
+                    (cachedTarget == currentTarget! and cachedInterface == currentDependencyInterface)
+                        -> if {
                         words -> cacheRecordStart(cachedTarget) => dependencyRecordStart
                         dependencyRecordStart >= 0 -> if {
-                            words[dependencyRecordStart + 3] != (fingerprints -> currentImplementation(currentTarget!)) -> if {
+                            words[dependencyRecordStart + 3] != (fingerprints -> currentImplementation(currentTarget!))
+                                -> if {
                                 true => bodyDependencyChanged!
                             }
                         }

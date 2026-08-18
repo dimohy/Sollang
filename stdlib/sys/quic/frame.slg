@@ -75,7 +75,8 @@ public acknowledges ack: ref types.Ack, packetNumber: UInt64 -> Result<Bool, err
         ack.ranges[index!] => range
         smallest! - range.gap - 2 => largest
         largest - range.rangeLength => nextSmallest
-        (packetNumber >= nextSmallest and packetNumber <= largest) -> if {
+        (packetNumber >= nextSmallest and packetNumber <= largest)
+            -> if {
             Result<Bool, errors.Error>.Ok(true) -> return
         }
         nextSmallest => smallest!
@@ -192,10 +193,12 @@ public encode frame: move types.Value -> Result<[UInt8; ~], errors.Error> {
         Datagram(datagram) => encodeDatagram(datagram)
         MaxData(maximum) => encodeLimit(16, maximum)
         MaxStreamData(limit) => encodeStreamLimit(17, limit.id, limit.maximum)
-        MaxStreams(limit) => encodeLimit(limit.bidirectional -> if { 18 } else { 19 }, limit.maximum)
+        MaxStreams(limit) => encodeLimit(limit.bidirectional
+            -> if { 18 } else { 19 }, limit.maximum)
         DataBlocked(limit) => encodeLimit(20, limit)
         StreamDataBlocked(blocked) => encodeStreamLimit(21, blocked.id, blocked.limit)
-        StreamsBlocked(blocked) => encodeLimit(blocked.bidirectional -> if { 22 } else { 23 }, blocked.limit)
+        StreamsBlocked(blocked) => encodeLimit(blocked.bidirectional
+            -> if { 22 } else { 23 }, blocked.limit)
         NewConnectionId(value) => encodeNewConnectionId(value)
         RetireConnectionId(sequence) => encodeLimit(25, sequence)
         ConnectionClose(close) => encodeConnectionClose(close)
@@ -216,7 +219,8 @@ public encodeAll frames: mut [types.Value; ~] -> Result<[UInt8; ~], errors.Error
 }
 
 copyPayload bytes: [UInt8], offset: UIntSize, length: UInt64 -> Result<[UInt8; ~], errors.Error> {
-    length > UInt64(UIntSize(bytes -> len) - offset) -> if {
+    length > UInt64(UIntSize(bytes -> len) - offset)
+        -> if {
         Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Truncated, UInt64(offset))) -> return
     }
     [UInt8; ~] => data!
@@ -230,7 +234,8 @@ copyPayload bytes: [UInt8], offset: UIntSize, length: UInt64 -> Result<[UInt8; ~
 
 decodePadding bytes: [UInt8], offset: UIntSize -> Result<types.Decoded, errors.Error> {
     offset => cursor!
-    (cursor! < UIntSize(bytes -> len) and bytes[Int(cursor!)] == 0) -> while {
+    (cursor! < UIntSize(bytes -> len) and bytes[Int(cursor!)] == 0)
+        -> while {
         cursor! + 1 => cursor!
     }
     Result<types.Decoded, errors.Error>.Ok(types.Decoded {
@@ -366,11 +371,13 @@ decodeNewConnectionId bytes: [UInt8], offset: UIntSize -> Result<types.Decoded, 
     retirePriorTo.value <= sequence.value -> unless {
         Result<types.Decoded, errors.Error>.Err(error(errors.Kind.ProtocolViolation, retirePriorTo.value)) -> return
     }
-    retirePriorTo.nextOffset < UIntSize(bytes -> len) -> unless {
+    retirePriorTo.nextOffset < UIntSize(bytes -> len)
+        -> unless {
         Result<types.Decoded, errors.Error>.Err(error(errors.Kind.Truncated, UInt64(retirePriorTo.nextOffset))) -> return
     }
     bytes[Int(retirePriorTo.nextOffset)] => connectionIdLength
-    (connectionIdLength >= 1 and connectionIdLength <= 20) -> unless {
+    (connectionIdLength >= 1 and connectionIdLength <= 20)
+        -> unless {
         Result<types.Decoded, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(connectionIdLength))) -> return
     }
     retirePriorTo.nextOffset + 1 => connectionIdOffset

@@ -40,7 +40,8 @@ textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
     token.span.length == (expected -> len) => matches!
     UIntSize(0) => index!
     (matches! and index! < token.span.length) -> while {
-        (source -> byte(token.span.start + index!)) != (expected -> byte(index!)) -> if {
+        (source -> byte(token.span.start + index!)) != (expected -> byte(index!))
+            -> if {
             false => matches!
         }
         index! + 1 => index!
@@ -68,7 +69,8 @@ tokenSpan token: syntax.SyntaxToken -> TextSpan {
 
 skipSeparators start: Int, tokens: [syntax.SyntaxToken; ~] -> Int {
     start => index!
-    (tokens[index!].kind == grammar.tokenIdNewLine() or tokens[index!].kind == grammar.tokenIdComma()) -> while {
+    (tokens[index!].kind == grammar.tokenIdNewLine() or tokens[index!].kind == grammar.tokenIdComma())
+        -> while {
         index! + 1 => index!
     }
     index!
@@ -77,13 +79,16 @@ skipSeparators start: Int, tokens: [syntax.SyntaxToken; ~] -> Int {
 skipObject start: Int, tokens: [syntax.SyntaxToken; ~] -> Int {
     start => index!
     0 => depth!
-    tokens[index!].kind == grammar.tokenIdLeftBrace() -> if {
+    tokens[index!].kind == grammar.tokenIdLeftBrace()
+        -> if {
         1 => depth!
         index! + 1 => index!
     }
     depth! > 0 -> while {
-        tokens[index!].kind == grammar.tokenIdLeftBrace() -> if { depth! + 1 => depth! }
-        tokens[index!].kind == grammar.tokenIdRightBrace() -> if { depth! - 1 => depth! }
+        tokens[index!].kind == grammar.tokenIdLeftBrace()
+            -> if { depth! + 1 => depth! }
+        tokens[index!].kind == grammar.tokenIdRightBrace()
+            -> if { depth! - 1 => depth! }
         index! + 1 => index!
     }
     index!
@@ -91,17 +96,22 @@ skipObject start: Int, tokens: [syntax.SyntaxToken; ~] -> Int {
 
 parseProducts source: Text, start: Int, tokens: [syntax.SyntaxToken; ~], products: mut [Product; ~] -> Int {
     start => index!
-    tokens[index!].kind == grammar.tokenIdLeftBrace() -> if { index! + 1 => index! } else { -1 -> return }
+    tokens[index!].kind == grammar.tokenIdLeftBrace()
+        -> if { index! + 1 => index! } else { -1 -> return }
     index! -> skipSeparators(tokens) => index!
-    tokens[index!].kind != grammar.tokenIdRightBrace() -> while {
-        tokens[index!].kind != grammar.tokenIdIdentifier() -> if { -1 -> return }
+    tokens[index!].kind != grammar.tokenIdRightBrace()
+        -> while {
+        tokens[index!].kind != grammar.tokenIdIdentifier()
+            -> if { -1 -> return }
         tokens[index!] -> tokenSpan => name
         index! + 1 => index!
         index! -> skipSeparators(tokens) => index!
-        tokens[index!].kind != grammar.tokenIdColon() -> if { -1 -> return }
+        tokens[index!].kind != grammar.tokenIdColon()
+            -> if { -1 -> return }
         index! + 1 => index!
         index! -> skipSeparators(tokens) => index!
-        tokens[index!].kind != grammar.tokenIdString() -> if { -1 -> return }
+        tokens[index!].kind != grammar.tokenIdString()
+            -> if { -1 -> return }
         products -> push(Product { name: name, root: tokens[index!] -> stringSpan })
         index! + 1 => index!
         index! -> skipSeparators(tokens) => index!
@@ -111,28 +121,34 @@ parseProducts source: Text, start: Int, tokens: [syntax.SyntaxToken; ~], product
 
 parseDependency source: Text, name: TextSpan, start: Int, tokens: [syntax.SyntaxToken; ~], dependencies: mut [Dependency; ~] -> Int {
     start => index!
-    tokens[index!].kind == grammar.tokenIdLeftBrace() -> if { index! + 1 => index! } else { -1 -> return }
+    tokens[index!].kind == grammar.tokenIdLeftBrace()
+        -> if { index! + 1 => index! } else { -1 -> return }
     emptySpan() => dependencyPath!
     emptySpan() => dependencyGit!
     emptySpan() => dependencyRevision!
     emptySpan() => dependencyRegistry!
     emptySpan() => dependencyVersion!
     index! -> skipSeparators(tokens) => index!
-    tokens[index!].kind != grammar.tokenIdRightBrace() -> while {
-        tokens[index!].kind != grammar.tokenIdIdentifier() -> if { -1 -> return }
+    tokens[index!].kind != grammar.tokenIdRightBrace()
+        -> while {
+        tokens[index!].kind != grammar.tokenIdIdentifier()
+            -> if { -1 -> return }
         tokens[index!] => field
         index! + 1 => index!
         index! -> skipSeparators(tokens) => index!
-        tokens[index!].kind != grammar.tokenIdColon() -> if { -1 -> return }
+        tokens[index!].kind != grammar.tokenIdColon()
+            -> if { -1 -> return }
         index! + 1 => index!
         index! -> skipSeparators(tokens) => index!
-        tokens[index!].kind == grammar.tokenIdString() -> if {
+        tokens[index!].kind == grammar.tokenIdString()
+            -> if {
             source -> textIs(field, "path") -> if { tokens[index!] -> stringSpan => dependencyPath! }
             source -> textIs(field, "git") -> if { tokens[index!] -> stringSpan => dependencyGit! }
             source -> textIs(field, "rev") -> if { tokens[index!] -> stringSpan => dependencyRevision! }
             source -> textIs(field, "registry") -> if { tokens[index!] -> stringSpan => dependencyRegistry! }
             source -> textIs(field, "version") -> if { tokens[index!] -> stringSpan => dependencyVersion! }
-            (not (source -> textIs(field, "path")) and not (source -> textIs(field, "git")) and not (source -> textIs(field, "rev")) and not (source -> textIs(field, "registry")) and not (source -> textIs(field, "version"))) -> if { -1 -> return }
+            (not (source -> textIs(field, "path")) and not (source -> textIs(field, "git")) and not (source -> textIs(field, "rev")) and not (source -> textIs(field, "registry")) and not (source -> textIs(field, "version")))
+                -> if { -1 -> return }
             index! + 1 => index!
         } else { -1 -> return }
         index! -> skipSeparators(tokens) => index!
@@ -144,7 +160,8 @@ parseDependency source: Text, name: TextSpan, start: Int, tokens: [syntax.Syntax
     sourceCount! != 1 -> if { -1 -> return }
     dependencyGit!.length > 0 => hasGit
     dependencyRevision!.length > 0 => hasRevision
-    ((hasGit and not hasRevision) or (not hasGit and hasRevision)) -> if { -1 -> return }
+    ((hasGit and not hasRevision) or (not hasGit and hasRevision))
+        -> if { -1 -> return }
     dependencies -> push(Dependency {
         name: name
         path: dependencyPath!
@@ -158,14 +175,18 @@ parseDependency source: Text, name: TextSpan, start: Int, tokens: [syntax.Syntax
 
 parseDependencies source: Text, start: Int, tokens: [syntax.SyntaxToken; ~], dependencies: mut [Dependency; ~] -> Int {
     start => index!
-    tokens[index!].kind == grammar.tokenIdLeftBrace() -> if { index! + 1 => index! } else { -1 -> return }
+    tokens[index!].kind == grammar.tokenIdLeftBrace()
+        -> if { index! + 1 => index! } else { -1 -> return }
     index! -> skipSeparators(tokens) => index!
-    tokens[index!].kind != grammar.tokenIdRightBrace() -> while {
-        tokens[index!].kind != grammar.tokenIdIdentifier() -> if { -1 -> return }
+    tokens[index!].kind != grammar.tokenIdRightBrace()
+        -> while {
+        tokens[index!].kind != grammar.tokenIdIdentifier()
+            -> if { -1 -> return }
         tokens[index!] -> tokenSpan => name
         index! + 1 => index!
         index! -> skipSeparators(tokens) => index!
-        tokens[index!].kind != grammar.tokenIdColon() -> if { -1 -> return }
+        tokens[index!].kind != grammar.tokenIdColon()
+            -> if { -1 -> return }
         index! + 1 => index!
         index! -> skipSeparators(tokens) => index!
         source -> parseDependency(name, index!, tokens, dependencies) => index!
@@ -182,7 +203,8 @@ public parse source: Text -> ProjectManifest {
     source -> lexer.lex => rawTokens
     [syntax.SyntaxToken; ~] => tokens!
     rawTokens -> each token {
-        (token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()) -> if {
+        (token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment())
+            -> if {
             tokens! -> push(token)
         }
     }
@@ -195,55 +217,68 @@ public parse source: Text -> ProjectManifest {
     0 => status!
     0 => index!
     index! -> skipSeparators(tokens!) => index!
-    (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "project"))) -> if {
+    (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "project")))
+        -> if {
         index! + 1 => index!
     } else { 1 => status! }
     status! == 0 -> if {
         index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdLeftBrace() -> if { index! + 1 => index! } else { 1 => status! }
+        tokens![index!].kind == grammar.tokenIdLeftBrace()
+            -> if { index! + 1 => index! } else { 1 => status! }
     }
 
     status! == 0 -> if {
         index! -> skipSeparators(tokens!) => index!
-        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBrace()) -> while {
-            tokens![index!].kind == grammar.tokenIdIdentifier() -> if {
+        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBrace())
+            -> while {
+            tokens![index!].kind == grammar.tokenIdIdentifier()
+                -> if {
                 tokens![index!] => field
                 index! + 1 => index!
                 index! -> skipSeparators(tokens!) => index!
-                tokens![index!].kind == grammar.tokenIdColon() -> if {
+                tokens![index!].kind == grammar.tokenIdColon()
+                    -> if {
                     index! + 1 => index!
                     index! -> skipSeparators(tokens!) => index!
                     (source -> textIs(field, "name")) -> if {
-                        tokens![index!].kind == grammar.tokenIdString() -> if {
+                        tokens![index!].kind == grammar.tokenIdString()
+                            -> if {
                             tokens![index!] -> stringSpan => name!
                             index! + 1 => index!
                         } else { 2 => status! }
                     } else {
                         (source -> textIs(field, "version")) -> if {
-                            tokens![index!].kind == grammar.tokenIdString() -> if {
+                            tokens![index!].kind == grammar.tokenIdString()
+                                -> if {
                                 tokens![index!] -> stringSpan => version!
                                 index! + 1 => index!
                             } else { 2 => status! }
                         } else {
                             (source -> textIs(field, "root")) -> if {
-                                tokens![index!].kind == grammar.tokenIdString() -> if {
+                                tokens![index!].kind == grammar.tokenIdString()
+                                    -> if {
                                     tokens![index!] -> stringSpan => root!
                                     index! + 1 => index!
                                 } else { 2 => status! }
                                 } else {
                                     (source -> textIs(field, "products")) -> if {
-                                    tokens![index!].kind == grammar.tokenIdLeftBrace() -> if {
+                                    tokens![index!].kind == grammar.tokenIdLeftBrace()
+                                        -> if {
                                         index! + 1 => index!
                                         index! -> skipSeparators(tokens!) => index!
-                                        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBrace()) -> while {
-                                            tokens![index!].kind == grammar.tokenIdIdentifier() -> if {
+                                        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBrace())
+                                            -> while {
+                                            tokens![index!].kind == grammar.tokenIdIdentifier()
+                                                -> if {
                                                 tokens![index!] -> tokenSpan => productName
                                                 index! + 1 => index!
                                                 index! -> skipSeparators(tokens!) => index!
-                                                tokens![index!].kind == grammar.tokenIdColon() -> if {
+                                                tokens![index!].kind == grammar.tokenIdColon()
+                                                    -> if {
                                                     index! + 1 => index!
                                                     index! -> skipSeparators(tokens!) => index!
-                                                    tokens![index!].kind == grammar.tokenIdString() -> if {
+                                                    tokens![index!].kind == grammar.tokenIdString()
+                                                        -> if {
                                                         tokens![index!] -> stringSpan => productRoot
                                                         products! -> push(Product { name: productName, root: productRoot })
                                                         index! + 1 => index!
@@ -253,7 +288,8 @@ public parse source: Text -> ProjectManifest {
                                             } else { 5 => status! }
                                         }
                                         status! == 0 -> if {
-                                            tokens![index!].kind == grammar.tokenIdRightBrace() -> if {
+                                            tokens![index!].kind == grammar.tokenIdRightBrace()
+                                                -> if {
                                                 index! + 1 => index!
                                             } else { 5 => status! }
                                         }
@@ -273,7 +309,8 @@ public parse source: Text -> ProjectManifest {
         }
     }
     status! == 0 -> if {
-        tokens![index!].kind == grammar.tokenIdRightBrace() -> if {
+        tokens![index!].kind == grammar.tokenIdRightBrace()
+            -> if {
             index! + 1 => index!
             index! -> skipSeparators(tokens!) => index!
             tokens![index!].kind != grammar.tokenIdEnd() -> if { 8 => status! }
@@ -281,7 +318,8 @@ public parse source: Text -> ProjectManifest {
     }
     status! == 0 -> if {
         (name!.length == 0 or version!.length == 0) -> if { 3 => status! }
-        ((root!.length == 0 and (products! -> len) == 0) or (root!.length > 0 and (products! -> len) > 0)) -> if { 4 => status! }
+        ((root!.length == 0 and (products! -> len) == 0) or (root!.length > 0 and (products! -> len) > 0))
+            -> if { 4 => status! }
     }
     (status! == 0 and root!.length > 0) -> if {
         products! -> push(Product { name: name!, root: root! })

@@ -23,7 +23,8 @@ textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
     token.span.length == (expected -> len) => matches!
     UIntSize(0) => index!
     (matches! and index! < token.span.length) -> while {
-        (source -> byte(token.span.start + index!)) != (expected -> byte(index!)) -> if { false => matches! }
+        (source -> byte(token.span.start + index!)) != (expected -> byte(index!))
+            -> if { false => matches! }
         index! + 1 => index!
     }
     matches!
@@ -31,7 +32,8 @@ textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
 
 skipSeparators start: Int, tokens: [syntax.SyntaxToken; ~] -> Int {
     start => index!
-    (tokens[index!].kind == grammar.tokenIdNewLine() or tokens[index!].kind == grammar.tokenIdComma()) -> while { index! + 1 => index! }
+    (tokens[index!].kind == grammar.tokenIdNewLine() or tokens[index!].kind == grammar.tokenIdComma())
+        -> while { index! + 1 => index! }
     index!
 }
 
@@ -57,7 +59,8 @@ validChecksum source: Text, token: syntax.SyntaxToken -> Bool {
 allowsPrerelease requirement: Text -> Bool {
     false => allowed!
     UIntSize(0) => index!
-    (not allowed! and index! < (requirement -> len)) -> while {
+    (not allowed! and index! < (requirement -> len))
+        -> while {
         (requirement -> byte(index!)) == 45 -> if { true => allowed! }
         index! + 1 => index!
     }
@@ -72,7 +75,8 @@ public select source: Text, requirement: Text -> RegistrySelection {
     source -> lexer.lex => rawTokens
     [syntax.SyntaxToken; ~] => tokens!
     rawTokens -> each token {
-        (token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()) -> if { tokens! -> push(token) }
+        (token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment())
+            -> if { tokens! -> push(token) }
     }
     [TextSpan; ~] => seenVersions!
     0 => status!
@@ -85,41 +89,54 @@ public select source: Text, requirement: Text -> RegistrySelection {
     0 => selectedPatch!
     0 => index!
     index! -> skipSeparators(tokens!) => index!
-    (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "registry"))) -> if { index! + 1 => index! } else { 1 => status! }
+    (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "registry")))
+        -> if { index! + 1 => index! } else { 1 => status! }
     status! == 0 -> if {
         index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdLeftBrace() -> if { index! + 1 => index! } else { 2 => status! }
+        tokens![index!].kind == grammar.tokenIdLeftBrace()
+            -> if { index! + 1 => index! } else { 2 => status! }
     }
     status! == 0 -> if {
         index! -> skipSeparators(tokens!) => index!
-        (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "package"))) -> if { index! + 1 => index! } else { 3 => status! }
+        (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "package")))
+            -> if { index! + 1 => index! } else { 3 => status! }
         index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdColon() -> if { index! + 1 => index! } else { 3 => status! }
+        tokens![index!].kind == grammar.tokenIdColon()
+            -> if { index! + 1 => index! } else { 3 => status! }
         index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdString() -> if { index! + 1 => index! } else { 3 => status! }
+        tokens![index!].kind == grammar.tokenIdString()
+            -> if { index! + 1 => index! } else { 3 => status! }
     }
     status! == 0 -> if {
         index! -> skipSeparators(tokens!) => index!
-        (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "versions"))) -> if { index! + 1 => index! } else { 4 => status! }
+        (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "versions")))
+            -> if { index! + 1 => index! } else { 4 => status! }
         index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdColon() -> if { index! + 1 => index! } else { 4 => status! }
+        tokens![index!].kind == grammar.tokenIdColon()
+            -> if { index! + 1 => index! } else { 4 => status! }
         index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdLeftBracket() -> if { index! + 1 => index! } else { 5 => status! }
+        tokens![index!].kind == grammar.tokenIdLeftBracket()
+            -> if { index! + 1 => index! } else { 5 => status! }
     }
     status! == 0 -> if {
         index! -> skipSeparators(tokens!) => index!
-        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBracket()) -> while {
-            tokens![index!].kind == grammar.tokenIdLeftBrace() -> if { index! + 1 => index! } else { 6 => status! }
+        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBracket())
+            -> while {
+            tokens![index!].kind == grammar.tokenIdLeftBrace()
+                -> if { index! + 1 => index! } else { 6 => status! }
             false => yanked!
             false => candidatePrerelease!
             "" => candidateText!
             status! == 0 -> if {
                 index! -> skipSeparators(tokens!) => index!
-                (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "version"))) -> if { index! + 1 => index! } else { 7 => status! }
+                (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "version")))
+                    -> if { index! + 1 => index! } else { 7 => status! }
                 index! -> skipSeparators(tokens!) => index!
-                tokens![index!].kind == grammar.tokenIdColon() -> if { index! + 1 => index! } else { 7 => status! }
+                tokens![index!].kind == grammar.tokenIdColon()
+                    -> if { index! + 1 => index! } else { 7 => status! }
                 index! -> skipSeparators(tokens!) => index!
-                tokens![index!].kind == grammar.tokenIdString() -> if {
+                tokens![index!].kind == grammar.tokenIdString()
+                    -> if {
                     tokens![index!] => versionToken
                     TextSpan { start: versionToken.span.start + 1, length: versionToken.span.length - 2 } => versionSpan
                     source -> slice(versionSpan.start, versionSpan.length) => candidateText!
@@ -128,11 +145,13 @@ public select source: Text, requirement: Text -> RegistrySelection {
                     parsedCandidate.preLength > 0 => candidatePrerelease!
                     false => duplicate!
                     0 => priorIndex!
-                    (status! == 0 and not duplicate! and priorIndex! < (seenVersions! -> len)) -> while {
+                    (status! == 0 and not duplicate! and priorIndex! < (seenVersions! -> len))
+                        -> while {
                         seenVersions![priorIndex!] => priorSpan
                         source -> slice(priorSpan.start, priorSpan.length) => priorText
                         priorText -> versions.parse => priorVersion
-                        (candidateText! -> versions.compare(parsedCandidate, priorText, priorVersion)) == 0 -> if { true => duplicate! }
+                        (candidateText! -> versions.compare(parsedCandidate, priorText, priorVersion)) == 0
+                            -> if { true => duplicate! }
                         priorIndex! + 1 => priorIndex!
                     }
                     duplicate! -> if { 9 => status! } else { seenVersions! -> push(versionSpan) }
@@ -141,37 +160,47 @@ public select source: Text, requirement: Text -> RegistrySelection {
             }
             status! == 0 -> if {
                 index! -> skipSeparators(tokens!) => index!
-                (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "checksum"))) -> if { index! + 1 => index! } else { 10 => status! }
+                (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "checksum")))
+                    -> if { index! + 1 => index! } else { 10 => status! }
                 index! -> skipSeparators(tokens!) => index!
-                tokens![index!].kind == grammar.tokenIdColon() -> if { index! + 1 => index! } else { 10 => status! }
+                tokens![index!].kind == grammar.tokenIdColon()
+                    -> if { index! + 1 => index! } else { 10 => status! }
                 index! -> skipSeparators(tokens!) => index!
-                (tokens![index!].kind == grammar.tokenIdString() and (source -> validChecksum(tokens![index!]))) -> if { index! + 1 => index! } else { 10 => status! }
+                (tokens![index!].kind == grammar.tokenIdString() and (source -> validChecksum(tokens![index!])))
+                    -> if { index! + 1 => index! } else { 10 => status! }
             }
             status! == 0 -> if {
                 index! -> skipSeparators(tokens!) => index!
-                (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "yanked"))) -> if { index! + 1 => index! } else { 11 => status! }
+                (tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "yanked")))
+                    -> if { index! + 1 => index! } else { 11 => status! }
                 index! -> skipSeparators(tokens!) => index!
-                tokens![index!].kind == grammar.tokenIdColon() -> if { index! + 1 => index! } else { 11 => status! }
+                tokens![index!].kind == grammar.tokenIdColon()
+                    -> if { index! + 1 => index! } else { 11 => status! }
                 index! -> skipSeparators(tokens!) => index!
-                tokens![index!].kind == grammar.tokenIdIdentifier() -> if {
+                tokens![index!].kind == grammar.tokenIdIdentifier()
+                    -> if {
                     source -> textIs(tokens![index!], "true") -> if { true => yanked! } else {
-                        not (source -> textIs(tokens![index!], "false")) -> if { 11 => status! }
+                        not (source -> textIs(tokens![index!], "false"))
+                            -> if { 11 => status! }
                     }
                     index! + 1 => index!
                 } else { 11 => status! }
             }
             status! == 0 -> if {
                 index! -> skipSeparators(tokens!) => index!
-                tokens![index!].kind == grammar.tokenIdRightBrace() -> if { index! + 1 => index! } else { 6 => status! }
+                tokens![index!].kind == grammar.tokenIdRightBrace()
+                    -> if { index! + 1 => index! } else { 6 => status! }
                 versionCount! + 1 => versionCount!
                 not yanked! -> if {
                     requirement -> versions.accepts(candidateText!) => accepted
                     accepted.status != 0 -> if { 12 => status! }
-                    (accepted.status == 0 and accepted.accepted and (not candidatePrerelease! or (requirement -> allowsPrerelease))) -> if {
+                    (accepted.status == 0 and accepted.accepted and (not candidatePrerelease! or (requirement -> allowsPrerelease)))
+                        -> if {
                         available! + 1 => available!
                         candidateText! -> versions.parse => selectableVersion
                         selectedText! -> versions.parse => currentSelection
-                        (not selected! or (candidateText! -> versions.compare(selectableVersion, selectedText!, currentSelection)) > 0) -> if {
+                        (not selected! or (candidateText! -> versions.compare(selectableVersion, selectedText!, currentSelection)) > 0)
+                            -> if {
                             true => selected!
                             candidateText! => selectedText!
                             selectableVersion.major => selectedMajor!
@@ -187,7 +216,8 @@ public select source: Text, requirement: Text -> RegistrySelection {
     }
     status! == 0 -> if {
         index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdRightBrace() -> if { index! + 1 => index! } else { 2 => status! }
+        tokens![index!].kind == grammar.tokenIdRightBrace()
+            -> if { index! + 1 => index! } else { 2 => status! }
         index! -> skipSeparators(tokens!) => index!
         tokens![index!].kind != grammar.tokenIdEnd() -> if { 13 => status! }
     }

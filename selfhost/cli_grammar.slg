@@ -47,7 +47,8 @@ textEquals left: Text, right: Text -> Bool {
     (left -> len) == (right -> len) => matches!
     UIntSize(0) => index!
     (matches! and index! < (left -> len)) -> while {
-        (left -> byte(index!)) != (right -> byte(index!)) -> if { false => matches! }
+        (left -> byte(index!)) != (right -> byte(index!))
+            -> if { false => matches! }
         index! + 1 => index!
     }
     matches!
@@ -57,7 +58,8 @@ startsWith value: Text, prefix: Text -> Bool {
     (prefix -> len) <= (value -> len) => matches!
     UIntSize(0) => index!
     (matches! and index! < (prefix -> len)) -> while {
-        (value -> byte(index!)) != (prefix -> byte(index!)) -> if { false => matches! }
+        (value -> byte(index!)) != (prefix -> byte(index!))
+            -> if { false => matches! }
         index! + 1 => index!
     }
     matches!
@@ -82,10 +84,12 @@ isIdentifierByte value: UInt8 -> Bool {
 trimSpan source: Text, start: UIntSize, length: UIntSize -> LineSpan {
     start => trimmedStart!
     start + length => end!
-    (trimmedStart! < end! and ((source -> byte(trimmedStart!)) -> isSpace)) -> while {
+    (trimmedStart! < end! and ((source -> byte(trimmedStart!)) -> isSpace))
+        -> while {
         trimmedStart! + 1 => trimmedStart!
     }
-    (end! > trimmedStart! and ((source -> byte(end! - 1)) -> isSpace)) -> while {
+    (end! > trimmedStart! and ((source -> byte(end! - 1)) -> isSpace))
+        -> while {
         end! - 1 => end!
     }
     LineSpan { start: trimmedStart!, length: end! - trimmedStart!, number: 0 }
@@ -97,9 +101,11 @@ meaningfulLines source: Text -> [LineSpan; ~] {
     1 => number!
     UIntSize(0) => index!
     index! <= (source -> len) -> while {
-        (index! == (source -> len) or (source -> byte(index!)) == 10) -> if {
+        (index! == (source -> len) or (source -> byte(index!)) == 10)
+            -> if {
             index! => end!
-            (end! > start! and (source -> byte(end! - 1)) == 13) -> if {
+            (end! > start! and (source -> byte(end! - 1)) == 13)
+                -> if {
                 end! - 1 => end!
             }
             start! => comment!
@@ -150,7 +156,8 @@ validIdentifier value: Text -> Bool {
     }
     UIntSize(1) => index!
     (valid! and index! < (value -> len)) -> while {
-        not ((value -> byte(index!)) -> isIdentifierByte) -> if { false => valid! }
+        not ((value -> byte(index!)) -> isIdentifierByte)
+            -> if { false => valid! }
         index! + 1 => index!
     }
     valid!
@@ -458,7 +465,8 @@ parseLexer source: Text, pathValue: Text, tokenNames: mut [Text; ~], rules: mut 
             -1 => kind!
             ((pattern -> len) >= 2
                 and (pattern -> byte(UIntSize(0))) == 34
-                and (pattern -> byte((pattern -> len) - 1)) == 34) -> if {
+                and (pattern -> byte((pattern -> len) - 1)) == 34)
+                    -> if {
                 true => hasLiteral!
                 7 => kind!
                 pattern -> slice(UIntSize(1), (pattern -> len) - 2) => literal!
@@ -536,7 +544,8 @@ parseGrammar source: Text, pathValue: Text, startStorage: mut Arena, startName: 
         "sollang: $pathValue: missing start rule" -> runtime.eprintln
         1 -> return
     }
-    (seen! -> findText(startName[(startName -> len) - 1])) < 0 -> if {
+    (seen! -> findText(startName[(startName -> len) - 1])) < 0
+        -> if {
         "sollang: $pathValue: unknown start rule '$(startName[(startName -> len) - 1])'" -> runtime.eprintln
         1 -> return
     }
@@ -554,7 +563,8 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
     true => expectOperand!
 
     index! < (production -> len) -> while {
-        (index! < (production -> len) and ((production -> byte(index!)) -> isSpace)) -> while {
+        (index! < (production -> len) and ((production -> byte(index!)) -> isSpace))
+            -> while {
             index! + 1 => index!
         }
         index! == (production -> len) -> unless {
@@ -567,7 +577,8 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
                 # Sequence has higher precedence. Equal-precedence choices stay
                 # stacked and therefore reduce from right to left.
                 (operators! -> len) > 0 -> if {
-                    ((operators! -> len) > 0 and operators![(operators! -> len) - 1] == 2) -> while {
+                    ((operators! -> len) > 0 and operators![(operators! -> len) - 1] == 2)
+                        -> while {
                         operators! -> take((operators! -> len) - 1) => operation
                         values! -> take((values! -> len) - 1) => right
                         values! -> take((values! -> len) - 1) => left
@@ -610,10 +621,12 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
                         1 -> return
                     }
                     index! + 1 => index!
-                    (index! < (production -> len) and ((production -> byte(index!)) -> isSpace)) -> while { index! + 1 => index! }
+                    (index! < (production -> len) and ((production -> byte(index!)) -> isSpace))
+                        -> while { index! + 1 => index! }
                     index! < (production -> len) -> if {
                         production -> byte(index!) => quantifier
-                        (quantifier == 63 or quantifier == 42 or quantifier == 43) -> if {
+                        (quantifier == 63 or quantifier == 42 or quantifier == 43)
+                            -> if {
                             values! -> take((values! -> len) - 1) => child
                             0 => quantifierKind!
                             quantifier == 63 -> if { 2 => quantifierKind! }
@@ -631,7 +644,8 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
                         # Insert implicit sequence, reducing the earlier sequence
                         # first to preserve the reference parser's item order.
                         (operators! -> len) > 0 -> if {
-                            ((operators! -> len) > 0 and operators![(operators! -> len) - 1] == 2) -> while {
+                            ((operators! -> len) > 0 and operators![(operators! -> len) - 1] == 2)
+                                -> while {
                                 operators! -> take((operators! -> len) - 1) => operation
                                 values! -> take((values! -> len) - 1) => right
                                 values! -> take((values! -> len) - 1) => left
@@ -649,7 +663,8 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
                         true => expectOperand!
                     } else {
                         index! => nameStart
-                        (index! < (production -> len) and ((production -> byte(index!)) -> isIdentifierByte)) -> while {
+                        (index! < (production -> len) and ((production -> byte(index!)) -> isIdentifierByte))
+                            -> while {
                             index! + 1 => index!
                         }
                         index! == nameStart -> if {
@@ -661,12 +676,15 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
                         0 => value0!
                         0 => value1!
 
-                        (index! < (production -> len) and (production -> byte(index!)) == 40) -> if {
+                        (index! < (production -> len) and (production -> byte(index!)) == 40)
+                            -> if {
                             index! + 1 => index!
                             name -> textEquals("lookahead") -> if {
-                                (index! < (production -> len) and ((production -> byte(index!)) -> isSpace)) -> while { index! + 1 => index! }
+                                (index! < (production -> len) and ((production -> byte(index!)) -> isSpace))
+                                    -> while { index! + 1 => index! }
                                 index! => tokenStart
-                                (index! < (production -> len) and ((production -> byte(index!)) -> isIdentifierByte)) -> while { index! + 1 => index! }
+                                (index! < (production -> len) and ((production -> byte(index!)) -> isIdentifierByte))
+                                    -> while { index! + 1 => index! }
                                 index! == tokenStart -> if {
                                     "sollang: grammar line $line: expected grammar symbol" -> runtime.eprintln
                                     1 -> return
@@ -680,15 +698,19 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
                                 8 => nodeKind!
                                 tokenId => value0!
                             } else {
-                                ((name -> textEquals("notKeyword")) or (name -> textEquals("Identifier"))) -> if {
-                                    (index! < (production -> len) and ((production -> byte(index!)) -> isSpace)) -> while { index! + 1 => index! }
-                                    (index! == (production -> len) or (production -> byte(index!)) != 34) -> if {
+                                ((name -> textEquals("notKeyword")) or (name -> textEquals("Identifier")))
+                                    -> if {
+                                    (index! < (production -> len) and ((production -> byte(index!)) -> isSpace))
+                                        -> while { index! + 1 => index! }
+                                    (index! == (production -> len) or (production -> byte(index!)) != 34)
+                                        -> if {
                                         "sollang: grammar line $line: expected '$(CodePoint(UInt32(34)))'" -> runtime.eprintln
                                         1 -> return
                                     }
                                     index! + 1 => index!
                                     index! => stringStart
-                                    (index! < (production -> len) and (production -> byte(index!)) != 34) -> while { index! + 1 => index! }
+                                    (index! < (production -> len) and (production -> byte(index!)) != 34)
+                                        -> while { index! + 1 => index! }
                                     index! == (production -> len) -> if {
                                         "sollang: grammar line $line: unterminated grammar string" -> runtime.eprintln
                                         1 -> return
@@ -718,8 +740,10 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
                                     1 -> return
                                 }
                             }
-                            (index! < (production -> len) and ((production -> byte(index!)) -> isSpace)) -> while { index! + 1 => index! }
-                            (index! == (production -> len) or (production -> byte(index!)) != 41) -> if {
+                            (index! < (production -> len) and ((production -> byte(index!)) -> isSpace))
+                                -> while { index! + 1 => index! }
+                            (index! == (production -> len) or (production -> byte(index!)) != 41)
+                                -> if {
                                 "sollang: grammar line $line: expected ')'" -> runtime.eprintln
                                 1 -> return
                             }
@@ -743,10 +767,12 @@ compileProduction production: Text, line: Int, tokenNames: [Text; ~], ruleNames:
                         nodes! -> len => nodeIndex!
                         nodes! -> push(GrammarNode { kind: nodeKind!, value0: value0!, value1: value1!, firstChild: -1 })
                         values! -> push(nodeIndex!)
-                        (index! < (production -> len) and ((production -> byte(index!)) -> isSpace)) -> while { index! + 1 => index! }
+                        (index! < (production -> len) and ((production -> byte(index!)) -> isSpace))
+                            -> while { index! + 1 => index! }
                         index! < (production -> len) -> if {
                             production -> byte(index!) => quantifier
-                            (quantifier == 63 or quantifier == 42 or quantifier == 43) -> if {
+                            (quantifier == 63 or quantifier == 42 or quantifier == 43)
+                                -> if {
                                 values! -> take((values! -> len) - 1) => child
                                 quantifier == 63 -> if { 2 => nodeKind! }
                                 quantifier == 42 -> if { 3 => nodeKind! }
@@ -933,7 +959,8 @@ grammarHashInput lexerSource: file.SourceText, grammarSource: file.SourceText ->
         lexerSource -> byte(index!) => current
         current == 13 -> if {
             output! -> push(10)
-            (index! + 1 < (lexerSource -> len) and (lexerSource -> byte(index! + 1)) == 10) -> if {
+            (index! + 1 < (lexerSource -> len) and (lexerSource -> byte(index! + 1)) == 10)
+                -> if {
                 index! + 1 => index!
             }
         } else {
@@ -947,7 +974,8 @@ grammarHashInput lexerSource: file.SourceText, grammarSource: file.SourceText ->
         grammarSource -> byte(grammarIndex!) => current
         current == 13 -> if {
             output! -> push(10)
-            (grammarIndex! + 1 < (grammarSource -> len) and (grammarSource -> byte(grammarIndex! + 1)) == 10) -> if {
+            (grammarIndex! + 1 < (grammarSource -> len) and (grammarSource -> byte(grammarIndex! + 1)) == 10)
+                -> if {
                 grammarIndex! + 1 => grammarIndex!
             }
         } else {
@@ -965,7 +993,8 @@ verifyProgram program: [Int; ~], ruleOffsets: [Int; ~], tokenCount: Int, ruleCou
     }
     0 => offsetIndex!
     offsetIndex! < (ruleOffsets -> len) -> while {
-        (ruleOffsets[offsetIndex!] < 0 or ruleOffsets[offsetIndex!] >= (program -> len)) -> if {
+        (ruleOffsets[offsetIndex!] < 0 or ruleOffsets[offsetIndex!] >= (program -> len))
+            -> if {
             "sollang: generated grammar has an invalid rule offset table" -> runtime.eprintln
             1 -> return
         }
@@ -976,40 +1005,47 @@ verifyProgram program: [Int; ~], ruleOffsets: [Int; ~], tokenCount: Int, ruleCou
         program[pc!] => operation
         pc! + 1 => pc!
         (operation == 1 or operation == 7) -> if {
-            (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= tokenCount) -> if {
+            (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= tokenCount)
+                -> if {
                 "sollang: generated grammar has an invalid token id" -> runtime.eprintln
                 1 -> return
             }
             pc! + 1 => pc!
         } else {
             operation == 2 -> if {
-                (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= tokenCount) -> if {
+                (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= tokenCount)
+                    -> if {
                     "sollang: generated grammar has an invalid keyword token id" -> runtime.eprintln
                     1 -> return
                 }
                 pc! + 1 => pc!
-                (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= stringCount) -> if {
+                (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= stringCount)
+                    -> if {
                     "sollang: generated grammar has an invalid keyword string id" -> runtime.eprintln
                     1 -> return
                 }
                 pc! + 1 => pc!
             } else {
                 operation == 8 -> if {
-                    (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= stringCount) -> if {
+                    (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= stringCount)
+                        -> if {
                         "sollang: generated grammar has an invalid rejected keyword string id" -> runtime.eprintln
                         1 -> return
                     }
                     pc! + 1 => pc!
                 } else {
                     operation == 3 -> if {
-                        (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= ruleCount) -> if {
+                        (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= ruleCount)
+                            -> if {
                             "sollang: generated grammar has an invalid rule id" -> runtime.eprintln
                             1 -> return
                         }
                         pc! + 1 => pc!
                     } else {
-                        (operation == 4 or operation == 5 or operation == 6) -> if {
-                            (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= (program -> len)) -> if {
+                        (operation == 4 or operation == 5 or operation == 6)
+                            -> if {
+                            (pc! >= (program -> len) or program[pc!] < 0 or program[pc!] >= (program -> len))
+                                -> if {
                                 "sollang: generated grammar has an invalid instruction target" -> runtime.eprintln
                                 1 -> return
                             }
@@ -1201,7 +1237,8 @@ resolveAbsolutePath value: Text -> ResolvedPath uses File {
                     and (currentText -> byte(UIntSize(4))) == 85
                     and (currentText -> byte(UIntSize(5))) == 78
                     and (currentText -> byte(UIntSize(6))) == 67
-                    and (currentText -> byte(UIntSize(7))) == 92) -> if {
+                    and (currentText -> byte(UIntSize(7))) == 92)
+                        -> if {
                     [UInt8; ~] => uncBytes!
                     uncBytes! -> push(92)
                     uncBytes! -> push(92)
@@ -1265,7 +1302,8 @@ public ensureParentDirectories outputPath: Text -> Bool uses File {
                 # A drive prefix such as C: and the server/share portion of a UNC
                 # path are roots, not directories to create.
                 false => rootPrefix!
-                (index! == 2 and (outputPath -> byte(UIntSize(1))) == 58) -> if { true => rootPrefix! }
+                (index! == 2 and (outputPath -> byte(UIntSize(1))) == 58)
+                    -> if { true => rootPrefix! }
                 not rootPrefix! -> if {
                     outputPath -> slice(UIntSize(0), index!) => parentText
                     path.fromText(parentText, style) => parent
@@ -1301,14 +1339,16 @@ writeGenerated outputPath: Text, bytes: ref [UInt8; ~] -> Bool uses File {
 
 public run: -> Int uses Console, File, Process {
     process.arguments() => arguments
-    ((arguments -> len) != 7 or not (arguments[2] -> textEquals("build")) or not (arguments[5] -> textEquals("-o"))) -> if {
+    ((arguments -> len) != 7 or not (arguments[2] -> textEquals("build")) or not (arguments[5] -> textEquals("-o")))
+        -> if {
         "sollang: usage: sollang grammar build <lexer-file> <grammar-file> -o <generated.slg>" -> runtime.eprintln
         1 -> return
     }
     arguments[3] -> resolveAbsolutePath => lexerResolved
     arguments[4] -> resolveAbsolutePath => grammarResolved
     arguments[6] -> resolveAbsolutePath => outputResolved
-    (not lexerResolved.valid or not grammarResolved.valid or not outputResolved.valid) -> if {
+    (not lexerResolved.valid or not grammarResolved.valid or not outputResolved.valid)
+        -> if {
         "sollang: failed to resolve grammar build paths" -> runtime.eprintln
         1 -> return
     }

@@ -141,9 +141,12 @@ inputShapeValid units: CodegenUnits -> Bool {
     ((units.moduleHashes -> len) == count and (units.interfaceHashes -> len) == count and (units.implementationHashes -> len) == count and (units.identityStarts -> len) == count and (units.identityLengths -> len) == count and (units.fragmentStarts -> len) == count and (units.fragmentWordLengths -> len) == count and (units.fragmentByteLengths -> len) == count) => valid!
     0 => index!
     (valid! and index! < count) -> while {
-        units.identityStarts[index!] -> canRead(units.identityLengths[index!], units.identityWords -> len) -> unless { false => valid! }
-        units.fragmentStarts[index!] -> canRead(units.fragmentWordLengths[index!], units.fragmentWords -> len) -> unless { false => valid! }
-        (valid! and units.fragmentByteLengths[index!] >= 0 and units.fragmentWordLengths[index!] == (units.fragmentByteLengths[index!] -> requiredWords)) -> unless { false => valid! }
+        units.identityStarts[index!] -> canRead(units.identityLengths[index!], units.identityWords -> len)
+            -> unless { false => valid! }
+        units.fragmentStarts[index!] -> canRead(units.fragmentWordLengths[index!], units.fragmentWords -> len)
+            -> unless { false => valid! }
+        (valid! and units.fragmentByteLengths[index!] >= 0 and units.fragmentWordLengths[index!] == (units.fragmentByteLengths[index!] -> requiredWords))
+            -> unless { false => valid! }
         index! + 1 => index!
     }
     valid!
@@ -195,7 +198,8 @@ public encode units: CodegenUnits, compilerHash: UInt64, targetHash: UInt64, con
                 } else {
                     units -> unitLess(candidate!, selected!) => candidateLess!
                 }
-                (not emitted![candidate!] and candidateLess!) -> if { candidate! => selected! }
+                (not emitted![candidate!] and candidateLess!)
+                    -> if { candidate! => selected! }
                 candidate! + 1 => candidate!
             }
             true => emitted![selected!]
@@ -246,12 +250,15 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
     wordLength >= 8 -> if {
         words[0] == 6002245291164258119 -> unless { 2 => status! }
         (status! == 0 and words[1] != 1) -> if { 3 => status! }
-        (status! == 0 and (words[2] != compilerHash or words[3] != targetHash or words[4] != configurationHash)) -> if { 4 => status! }
-        (status! == 0 and words[6] != UInt64(wordLength)) -> if { 5 => status! }
+        (status! == 0 and (words[2] != compilerHash or words[3] != targetHash or words[4] != configurationHash))
+            -> if { 4 => status! }
+        (status! == 0 and words[6] != UInt64(wordLength))
+            -> if { 5 => status! }
         wordLength - 8 => checksumWordCount
         UInt64(7809847782465536322) => checksumSeed
         words -> checksum(8, checksumWordCount, checksumSeed) => actualChecksum
-        (status! == 0 and words[7] != actualChecksum) -> if { 6 => status! }
+        (status! == 0 and words[7] != actualChecksum)
+            -> if { 6 => status! }
         status! == 0 -> if {
             words[5] <= 1000000 -> if { Int(words[5]) => unitCount! } else { 7 => status! }
         }
@@ -276,7 +283,8 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
                     Int(words[index! + 5]) => fragmentByteLength!
                     Int(words[index! + 6]) => fragmentWordLength!
                 }
-                (status! == 0 and fragmentWordLength! != (fragmentByteLength! -> requiredWords)) -> if { 7 => status! }
+                (status! == 0 and fragmentWordLength! != (fragmentByteLength! -> requiredWords))
+                    -> if { 7 => status! }
                 index! + 8 => identityStart
                 identityStart -> canRead(identityLength!, wordLength) => identityReadable
                 (status! == 0 and not identityReadable) -> if { 7 => status! }
@@ -294,9 +302,11 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
                     kind == 1 -> if {
                         moduleCount! + 1 => moduleCount!
                         identityLength! == 0 -> if { 9 => status! }
-                        (previousKind! == 1 and moduleHash == previousModuleHash!) -> if { 10 => status! }
+                        (previousKind! == 1 and moduleHash == previousModuleHash!)
+                            -> if { 10 => status! }
                         (status! == 0 and previousKind! == 1) -> if {
-                            previousModuleHash! -> lessUnsigned(moduleHash) -> unless { 8 => status! }
+                            previousModuleHash! -> lessUnsigned(moduleHash)
+                                -> unless { 8 => status! }
                         }
                         moduleHash => previousModuleHash!
                     }
@@ -305,7 +315,8 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
                         (moduleHash != 0 or identityLength! != 0) -> if { 9 => status! }
                     }
                     0 => identityIndex!
-                    (status! == 0 and identityIndex! < identityLength!) -> while {
+                    (status! == 0 and identityIndex! < identityLength!)
+                        -> while {
                         words[identityStart + identityIndex!] <= 255 -> unless { 7 => status! }
                         identityIndex! + 1 => identityIndex!
                     }
@@ -315,11 +326,14 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
                     }
                     fragmentByteCount! + fragmentByteLength! => fragmentByteCount!
                     words -> fragmentChecksum(fragmentStart!, fragmentWordLength!, fragmentByteLength!) => actualFragmentChecksum
-                    (status! == 0 and actualFragmentChecksum != words[index! + 7]) -> if { 11 => status! }
-                    (status! == 0 and fragmentWordLength! > 0 and fragmentByteLength! % 8 != 0) -> if {
+                    (status! == 0 and actualFragmentChecksum != words[index! + 7])
+                        -> if { 11 => status! }
+                    (status! == 0 and fragmentWordLength! > 0 and fragmentByteLength! % 8 != 0)
+                        -> if {
                         fragmentByteLength! % 8 => usedBytes
                         usedBytes -> power256 => paddingFactor
-                        words[fragmentStart! + fragmentWordLength! - 1] / paddingFactor != 0 -> if { 7 => status! }
+                        words[fragmentStart! + fragmentWordLength! - 1] / paddingFactor != 0
+                            -> if { 7 => status! }
                     }
                     kind => previousKind!
                     fragmentStart! + fragmentWordLength! => index!
@@ -328,7 +342,8 @@ public validate words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, co
             unitIndex! + 1 => unitIndex!
         }
         (status! == 0 and index! != wordLength) -> if { 7 => status! }
-        (status! == 0 and (prefixCount! != 1 or suffixCount! != 1)) -> if { 9 => status! }
+        (status! == 0 and (prefixCount! != 1 or suffixCount! != 1))
+            -> if { 9 => status! }
     } else { 1 => status! }
     CodegenValidation { status: status!, unitCount: unitCount!, moduleCount: moduleCount!, fragmentByteCount: fragmentByteCount! }
 }
@@ -349,7 +364,8 @@ public decode words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, conf
     validation.status => status
     8 => index!
     0 => unitIndex!
-    (status == 0 and unitIndex! < validation.unitCount) -> while {
+    (status == 0 and unitIndex! < validation.unitCount)
+        -> while {
         Int(words[index!]) => kind
         Int(words[index! + 4]) => identityLength
         Int(words[index! + 5]) => fragmentByteLength
@@ -401,7 +417,8 @@ public merge words: [UInt64; ~], compilerHash: UInt64, targetHash: UInt64, confi
     0 => mergedByteLength!
     8 => index!
     0 => unitIndex!
-    (validation.status == 0 and unitIndex! < validation.unitCount) -> while {
+    (validation.status == 0 and unitIndex! < validation.unitCount)
+        -> while {
         Int(words[index! + 4]) => identityLength
         Int(words[index! + 5]) => fragmentByteLength
         Int(words[index! + 6]) => fragmentWordLength

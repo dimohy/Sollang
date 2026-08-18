@@ -83,7 +83,8 @@ spanNameIs request: SpanNameRequest -> Bool {
     request.length == (request.expected -> len) => equal!
     UIntSize(0) => byteIndex!
     (equal! and byteIndex! < request.length) -> while {
-        (request.source -> byte(request.start + byteIndex!)) != (request.expected -> byte(byteIndex!)) -> if { false => equal! }
+        (request.source -> byte(request.start + byteIndex!)) != (request.expected -> byte(byteIndex!))
+            -> if { false => equal! }
         byteIndex! + 1 => byteIndex!
     }
     equal!
@@ -98,8 +99,10 @@ public intrinsicNominalSymbol package: ref analysis.PackageAnalysis, identities:
     package.ranges[identity.sourceIndex] => sourceRange
     package.symbols[sourceRange.symbolStart + targetSymbol] => symbol
     package.tokens[sourceRange.tokenStart + symbol.nameToken] => name
-    (SpanNameRequest { source: source, start: identity.pathStart, length: identity.pathLength, expected: fileNamespace } -> spanNameIs) -> if {
-        (SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: sourceTextName } -> spanNameIs) -> if { 24 } else { -1 }
+    (SpanNameRequest { source: source, start: identity.pathStart, length: identity.pathLength, expected: fileNamespace } -> spanNameIs)
+        -> if {
+        (SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: sourceTextName } -> spanNameIs)
+            -> if { 24 } else { -1 }
     } else { -1 }
 }
 
@@ -127,29 +130,35 @@ public classify sourceTypes: [SemanticType; ~], sourceFields: [NominalField; ~] 
         false => owns!
         false => reachesHeap!
         current.kind == 9 -> if { true => owns! }
-        (current.kind == 3 or current.kind == 5 or current.kind == 6) -> if {
+        (current.kind == 3 or current.kind == 5 or current.kind == 6)
+            -> if {
             true => owns!
             true => reachesHeap!
         }
         (current.kind == 12 or current.kind == 13) -> if { true => owns! }
-        (current.kind == 1 and current.origin == 1 and current.symbol == 24) -> if {
+        (current.kind == 1 and current.origin == 1 and current.symbol == 24)
+            -> if {
             true => owns!
             true => reachesHeap!
         }
-        (current.kind == 1 and (current.origin == 0 or current.origin == 2)) -> if {
+        (current.kind == 1 and (current.origin == 0 or current.origin == 2))
+            -> if {
             true => owns!
         }
         # Stream and EventStream are affine producer handles. Their fixed
         # three-pointer ABI owns producer state even when T itself is scalar.
-        (current.kind == 7 and current.origin == 4 and (current.symbol == 3 or current.symbol == 4)) -> if {
+        (current.kind == 7 and current.origin == 4 and (current.symbol == 3 or current.symbol == 4))
+            -> if {
             true => owns!
             true => reachesHeap!
         }
-        (current.kind == 7 and current.origin == 4 and (current.symbol == 5 or current.symbol == 6 or current.symbol == 7)) -> if {
+        (current.kind == 7 and current.origin == 4 and (current.symbol == 5 or current.symbol == 6 or current.symbol == 7))
+            -> if {
             true => owns!
             true => reachesHeap!
         }
-        (current.kind == 4 or current.kind == 7 or current.kind == 12 or current.kind == 13) -> if {
+        (current.kind == 4 or current.kind == 7 or current.kind == 12 or current.kind == 13)
+            -> if {
             current.first >= 0 -> if {
                 traits![current.first] % 2 == 1 -> if { true => owns! }
                 (traits![current.first] / 2) % 2 == 1 -> if { true => reachesHeap! }
@@ -174,7 +183,8 @@ public classify sourceTypes: [SemanticType; ~], sourceFields: [NominalField; ~] 
             traits![typeIndex!] => value
             value % 2 == 1 => owns!
             (value / 2) % 2 == 1 => reachesHeap!
-            (current.kind == 4 or current.kind == 7 or current.kind == 12 or current.kind == 13) -> if {
+            (current.kind == 4 or current.kind == 7 or current.kind == 12 or current.kind == 13)
+                -> if {
                 current.first >= 0 -> if {
                     traits![current.first] % 2 == 1 -> if { true => owns! }
                     (traits![current.first] / 2) % 2 == 1 -> if { true => reachesHeap! }
@@ -187,7 +197,8 @@ public classify sourceTypes: [SemanticType; ~], sourceFields: [NominalField; ~] 
             0 => fieldIndex!
             fieldIndex! < (fields! -> len) -> while {
                 fields![fieldIndex!] => field
-                (field.status == 0 and field.ownerType == typeIndex! and field.fieldType >= 0) -> if {
+                (field.status == 0 and field.ownerType == typeIndex! and field.fieldType >= 0)
+                    -> if {
                     traits![field.fieldType] % 2 == 1 -> if { true => owns! }
                     (traits![field.fieldType] / 2) % 2 == 1 -> if { true => reachesHeap! }
                 }
@@ -246,12 +257,15 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
     # spells it. COM activation/clone/receivers and native opaque handles then
     # share the same pointer-sized canonical identity without wrapper storage.
     0 => comTypeSourceIndex!
-    comTypeSourceIndex! < (package.sources -> len) -> while {
+    comTypeSourceIndex! < (package.sources -> len)
+        -> while {
         package.ranges[comTypeSourceIndex!] => comTypeRange
         0 => comTypeSymbolIndex!
-        comTypeSymbolIndex! < comTypeRange.symbolCount -> while {
+        comTypeSymbolIndex! < comTypeRange.symbolCount
+            -> while {
             package.symbols[comTypeRange.symbolStart + comTypeSymbolIndex!] => comTypeSymbol
-            (comTypeSymbol.kind == 3 and (comTypeSymbol.flags / 512 % 2 == 1 or comTypeSymbol.flags / 65536 % 2 == 1)) -> if {
+            (comTypeSymbol.kind == 3 and (comTypeSymbol.flags / 512 % 2 == 1 or comTypeSymbol.flags / 65536 % 2 == 1))
+                -> if {
                 semanticTypes! -> len => comInterfaceTypeId
                 semanticTypes! -> push(SemanticType {
                     kind: 9
@@ -299,7 +313,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
 
         0 => completed!
         true => changed!
-        (completed! < sourceRange.termCount and changed!) -> while {
+        (completed! < sourceRange.termCount and changed!)
+            -> while {
             false => changed!
             0 => termIndex!
             termIndex! < sourceRange.termCount -> while {
@@ -331,7 +346,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 qualifiedResults[qualifiedSearch!] => candidate
                                 candidate.sourceModule == sourceIndex! -> if {
                                     package.nodes[sourceRange.astStart + candidate.pathAst] => candidatePath
-                                    (term.nameToken >= candidatePath.firstToken and term.nameToken < candidatePath.firstToken + candidatePath.tokenCount) -> if {
+                                    (term.nameToken >= candidatePath.firstToken and term.nameToken < candidatePath.firstToken + candidatePath.tokenCount)
+                                        -> if {
                                         qualifiedSearch! => qualifiedIndex!
                                     }
                                 }
@@ -355,7 +371,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 package.tokens[sourceRange.tokenStart + term.nameToken] => name
                                 -1 => builtinIndex!
                                 0 => builtinSearch!
-                                (builtinSearch! < (builtinNames -> len) and builtinIndex! < 0) -> while {
+                                (builtinSearch! < (builtinNames -> len) and builtinIndex! < 0)
+                                    -> while {
                                     builtinNames[builtinSearch!] => builtinName
                                     name.span.length == (builtinName -> len) => equal!
                                     UIntSize(0) => nameByte!
@@ -379,7 +396,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                         0 => ownerSymbolIndex!
                                         ownerSymbolIndex! < sourceRange.symbolCount -> while {
                                             package.symbols[sourceRange.symbolStart + ownerSymbolIndex!] => ownerCandidate
-                                            (ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!) -> if {
+                                            (ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!)
+                                                -> if {
                                                 ownerSymbolIndex! => ownerFunction!
                                             }
                                             ownerSymbolIndex! + 1 => ownerSymbolIndex!
@@ -388,9 +406,11 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                     }
                                     -1 => localSymbol!
                                     0 => symbolIndex!
-                                    (symbolIndex! < sourceRange.symbolCount and localSymbol! < 0) -> while {
+                                    (symbolIndex! < sourceRange.symbolCount and localSymbol! < 0)
+                                        -> while {
                                         package.symbols[sourceRange.symbolStart + symbolIndex!] => candidate
-                                        ((candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == ownerFunction!)) -> if {
+                                        ((candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == ownerFunction!))
+                                            -> if {
                                             package.tokens[sourceRange.tokenStart + candidate.nameToken] => candidateName
                                             name.span.length == candidateName.span.length => equal!
                                             UIntSize(0) => localByte!
@@ -411,20 +431,25 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                         0 => siblingModuleIndex!
                                         siblingModuleIndex! < (identities -> len) -> while {
                                             identities[siblingModuleIndex!] => siblingIdentity
-                                            (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
+                                            (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash)
+                                                -> if {
                                                 siblingIdentity.sourceIndex => siblingSourceIndex
                                                 package.sources[siblingSourceIndex] -> len => siblingSourceLength
                                                 package.sources[siblingSourceIndex] -> slice(UIntSize(0), siblingSourceLength) => siblingSource
                                                 package.ranges[siblingSourceIndex] => siblingRange
                                                 0 => siblingSymbolIndex!
-                                                siblingSymbolIndex! < siblingRange.symbolCount -> while {
+                                                siblingSymbolIndex! < siblingRange.symbolCount
+                                                    -> while {
                                                     package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingCandidate
-                                                    (siblingCandidate.parent < 0 and (siblingCandidate.kind == 3 or siblingCandidate.kind == 4)) -> if {
+                                                    (siblingCandidate.parent < 0 and (siblingCandidate.kind == 3 or siblingCandidate.kind == 4))
+                                                        -> if {
                                                         package.tokens[siblingRange.tokenStart + siblingCandidate.nameToken] => siblingName
                                                         name.span.length == siblingName.span.length => siblingEqual!
                                                         UIntSize(0) => siblingByte!
-                                                        (siblingEqual! and siblingByte! < name.span.length) -> while {
-                                                            (source -> byte(name.span.start + siblingByte!)) != (siblingSource -> byte(siblingName.span.start + siblingByte!)) -> if {
+                                                        (siblingEqual! and siblingByte! < name.span.length)
+                                                            -> while {
+                                                            (source -> byte(name.span.start + siblingByte!)) != (siblingSource -> byte(siblingName.span.start + siblingByte!))
+                                                                -> if {
                                                                 false => siblingEqual!
                                                             }
                                                             siblingByte! + 1 => siblingByte!
@@ -444,9 +469,11 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                             siblingModuleIndex! + 1 => siblingModuleIndex!
                                         }
                                     }
-                                    (localSymbol! >= 0 and not siblingTypeAmbiguous!) -> if {
+                                    (localSymbol! >= 0 and not siblingTypeAmbiguous!)
+                                        -> if {
                                         package.ranges[localTypeSource!] => localTypeRange
-                                        package.symbols[localTypeRange.symbolStart + localSymbol!].kind == 32 -> if { 3 => origin! } else { 0 => origin! }
+                                        package.symbols[localTypeRange.symbolStart + localSymbol!].kind == 32
+                                            -> if { 3 => origin! } else { 0 => origin! }
                                         localTypeSource! => targetModule!
                                         localSymbol! => targetSymbol!
                                     } else {
@@ -464,28 +491,35 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                                 and (source -> byte(name.span.start + 6)) == 118
                                                 and (source -> byte(name.span.start + 7)) == 101
                                                 and (source -> byte(name.span.start + 8)) == 110
-                                                and (source -> byte(name.span.start + 9)) == 116) -> if {
+                                                and (source -> byte(name.span.start + 9)) == 116)
+                                                    -> if {
                                                 true => searchImportedType!
                                             }
                                         }
                                         0 => importedTypeEdgeIndex!
-                                        (searchImportedType! and importedTypeEdgeIndex! < (imports -> len)) -> while {
+                                        (searchImportedType! and importedTypeEdgeIndex! < (imports -> len))
+                                            -> while {
                                             imports[importedTypeEdgeIndex!] => importedTypeEdge
                                             resolvedImports[importedTypeEdgeIndex!] => importedTypeResolution
-                                            (importedTypeEdge.sourceModule == sourceIndex! and importedTypeResolution.status == 0) -> if {
+                                            (importedTypeEdge.sourceModule == sourceIndex! and importedTypeResolution.status == 0)
+                                                -> if {
                                                 identities[importedTypeResolution.targetModule].sourceIndex => importedTypeSourceModule
                                                 package.sources[importedTypeSourceModule] -> len => importedTypeSourceLength
                                                 package.sources[importedTypeSourceModule] -> slice(UIntSize(0), importedTypeSourceLength) => importedTypeSource
                                                 package.ranges[importedTypeSourceModule] => importedTypeRange
                                                 0 => importedTypeCandidateIndex!
-                                                importedTypeCandidateIndex! < importedTypeRange.symbolCount -> while {
+                                                importedTypeCandidateIndex! < importedTypeRange.symbolCount
+                                                    -> while {
                                                     package.symbols[importedTypeRange.symbolStart + importedTypeCandidateIndex!] => importedTypeCandidate
-                                                    (importedTypeCandidate.parent < 0 and (importedTypeCandidate.kind == 3 or importedTypeCandidate.kind == 4) and importedTypeCandidate.flags >= 4) -> if {
+                                                    (importedTypeCandidate.parent < 0 and (importedTypeCandidate.kind == 3 or importedTypeCandidate.kind == 4) and importedTypeCandidate.flags >= 4)
+                                                        -> if {
                                                         package.tokens[importedTypeRange.tokenStart + importedTypeCandidate.nameToken] => importedTypeCandidateName
                                                         name.span.length == importedTypeCandidateName.span.length => importedTypeNameEqual!
                                                         UIntSize(0) => importedTypeNameByte!
-                                                        (importedTypeNameEqual! and importedTypeNameByte! < name.span.length) -> while {
-                                                            (source -> byte(name.span.start + importedTypeNameByte!)) != (importedTypeSource -> byte(importedTypeCandidateName.span.start + importedTypeNameByte!)) -> if {
+                                                        (importedTypeNameEqual! and importedTypeNameByte! < name.span.length)
+                                                            -> while {
+                                                            (source -> byte(name.span.start + importedTypeNameByte!)) != (importedTypeSource -> byte(importedTypeCandidateName.span.start + importedTypeNameByte!))
+                                                                -> if {
                                                                 false => importedTypeNameEqual!
                                                             }
                                                             importedTypeNameByte! + 1 => importedTypeNameByte!
@@ -523,22 +557,27 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 source -> byte(constructorName.span.start + 3) => byte3
                                 source -> byte(constructorName.span.start + 4) => byte4
                                 source -> byte(constructorName.span.start + 5) => byte5
-                                (byte0 == 82 and byte1 == 101 and byte2 == 115 and byte3 == 117 and byte4 == 108 and byte5 == 116) -> if { 1 => targetSymbol! }
-                                (byte0 == 79 and byte1 == 112 and byte2 == 116 and byte3 == 105 and byte4 == 111 and byte5 == 110) -> if { 0 => targetSymbol! }
-                                (byte0 == 83 and byte1 == 116 and byte2 == 114 and byte3 == 101 and byte4 == 97 and byte5 == 109) -> if { 3 => targetSymbol! }
+                                (byte0 == 82 and byte1 == 101 and byte2 == 115 and byte3 == 117 and byte4 == 108 and byte5 == 116)
+                                    -> if { 1 => targetSymbol! }
+                                (byte0 == 79 and byte1 == 112 and byte2 == 116 and byte3 == 105 and byte4 == 111 and byte5 == 110)
+                                    -> if { 0 => targetSymbol! }
+                                (byte0 == 83 and byte1 == 116 and byte2 == 114 and byte3 == 101 and byte4 == 97 and byte5 == 109)
+                                    -> if { 3 => targetSymbol! }
                             }
                             constructorName.span.length == 4 -> if {
                                 source -> byte(constructorName.span.start) => byte0
                                 source -> byte(constructorName.span.start + 1) => byte1
                                 source -> byte(constructorName.span.start + 2) => byte2
                                 source -> byte(constructorName.span.start + 3) => byte3
-                                (byte0 == 84 and byte1 == 97 and byte2 == 115 and byte3 == 107) -> if { 2 => targetSymbol! }
+                                (byte0 == 84 and byte1 == 97 and byte2 == 115 and byte3 == 107)
+                                    -> if { 2 => targetSymbol! }
                             }
                             constructorName.span.length == 3 -> if {
                                 source -> byte(constructorName.span.start) => byte0
                                 source -> byte(constructorName.span.start + 1) => byte1
                                 source -> byte(constructorName.span.start + 2) => byte2
-                                (byte0 == 83 and byte1 == 101 and byte2 == 116) -> if { 5 => targetSymbol! }
+                                (byte0 == 83 and byte1 == 101 and byte2 == 116)
+                                    -> if { 5 => targetSymbol! }
                             }
                             constructorName.span.length == 5 -> if {
                                 source -> byte(constructorName.span.start) => byte0
@@ -546,7 +585,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 source -> byte(constructorName.span.start + 2) => byte2
                                 source -> byte(constructorName.span.start + 3) => byte3
                                 source -> byte(constructorName.span.start + 4) => byte4
-                                (byte0 == 68 and byte1 == 101 and byte2 == 113 and byte3 == 117 and byte4 == 101) -> if { 6 => targetSymbol! }
+                                (byte0 == 68 and byte1 == 101 and byte2 == 113 and byte3 == 117 and byte4 == 101)
+                                    -> if { 6 => targetSymbol! }
                             }
                             constructorName.span.length == 10 -> if {
                                 source -> byte(constructorName.span.start) => byte0
@@ -559,7 +599,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 source -> byte(constructorName.span.start + 7) => byte7
                                 source -> byte(constructorName.span.start + 8) => byte8
                                 source -> byte(constructorName.span.start + 9) => byte9
-                                (byte0 == 66 and byte1 == 105 and byte2 == 110 and byte3 == 97 and byte4 == 114 and byte5 == 121 and byte6 == 72 and byte7 == 101 and byte8 == 97 and byte9 == 112) -> if { 7 => targetSymbol! }
+                                (byte0 == 66 and byte1 == 105 and byte2 == 110 and byte3 == 97 and byte4 == 114 and byte5 == 121 and byte6 == 72 and byte7 == 101 and byte8 == 97 and byte9 == 112)
+                                    -> if { 7 => targetSymbol! }
                             }
                             constructorName.span.length == 11 -> if {
                                 source -> byte(constructorName.span.start) => byte0
@@ -573,7 +614,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 source -> byte(constructorName.span.start + 8) => byte8
                                 source -> byte(constructorName.span.start + 9) => byte9
                                 source -> byte(constructorName.span.start + 10) => byte10
-                                (byte0 == 69 and byte1 == 118 and byte2 == 101 and byte3 == 110 and byte4 == 116 and byte5 == 83 and byte6 == 116 and byte7 == 114 and byte8 == 101 and byte9 == 97 and byte10 == 109) -> if { 4 => targetSymbol! }
+                                (byte0 == 69 and byte1 == 118 and byte2 == 101 and byte3 == 110 and byte4 == 116 and byte5 == 83 and byte6 == 116 and byte7 == 114 and byte8 == 101 and byte9 == 97 and byte10 == 109)
+                                    -> if { 4 => targetSymbol! }
                             }
                             targetSymbol! < 0 -> if { 2 => status! }
                         }
@@ -592,7 +634,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                             semanticTypes![firstType!].containsParameter -> if { true => containsParameter! }
                         }
                         secondType! >= 0 -> if {
-                            semanticTypes![secondType!].containsParameter -> if { true => containsParameter! }
+                            semanticTypes![secondType!].containsParameter
+                                -> if { true => containsParameter! }
                         }
                         UInt64(0) => lengthHash!
                         -1 => lengthValue!
@@ -615,7 +658,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 package.tokens[sourceRange.tokenStart + term.nameToken] => productFieldName
                                 Int(productFieldName.span.length) => lengthValue!
                                 UIntSize(0) => productFieldNameByte!
-                                productFieldNameByte! < productFieldName.span.length -> while {
+                                productFieldNameByte! < productFieldName.span.length
+                                    -> while {
                                     source -> byte(productFieldName.span.start + productFieldNameByte!) => productFieldNameValue
                                     lengthHash! * 1099511628211 + UInt64(productFieldNameValue) => lengthHash!
                                     productFieldNameByte! + 1 => productFieldNameByte!
@@ -631,51 +675,64 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                             }
                         }
                         term.kind => resolvedKind!
-                        (term.kind == 1 and targetModule! >= 0 and targetSymbol! >= 0 and status! == 0) -> if {
+                        (term.kind == 1 and targetModule! >= 0 and targetSymbol! >= 0 and status! == 0)
+                            -> if {
                             package.ranges[targetModule!] => resolvedNominalRange
                             package.symbols[resolvedNominalRange.symbolStart + targetSymbol!] => resolvedNominalSymbol
-                            (resolvedNominalSymbol.flags / 512 % 2 == 1 or resolvedNominalSymbol.flags / 65536 % 2 == 1) -> if {
+                            (resolvedNominalSymbol.flags / 512 % 2 == 1 or resolvedNominalSymbol.flags / 65536 % 2 == 1)
+                                -> if {
                                 9 => resolvedKind!
                             }
                         }
                         -1 => existing!
                         0 => semanticIndex!
-                        (semanticIndex! < (semanticTypes! -> len) and existing! < 0) -> while {
+                        (semanticIndex! < (semanticTypes! -> len) and existing! < 0)
+                            -> while {
                             semanticTypes![semanticIndex!] => known
                             known.origin == origin! => sameOrigin!
-                            (term.kind == 1 and ((known.origin == 0 and origin! == 2) or (known.origin == 2 and origin! == 0))) -> if { true => sameOrigin! }
-                            (term.kind != 10 and known.kind == resolvedKind! and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType! and known.second == secondType! and known.lengthHash == lengthHash! and known.status == status!) -> if {
+                            (term.kind == 1 and ((known.origin == 0 and origin! == 2) or (known.origin == 2 and origin! == 0)))
+                                -> if { true => sameOrigin! }
+                            (term.kind != 10 and known.kind == resolvedKind! and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType! and known.second == secondType! and known.lengthHash == lengthHash! and known.status == status!)
+                                -> if {
                                 semanticIndex! => existing!
                             }
                             semanticIndex! + 1 => semanticIndex!
                         }
                         term.kind == 10 -> if {
                             0 => productCandidateSearch!
-                            (productCandidateSearch! < (semanticTypes! -> len) and existing! < 0) -> while {
+                            (productCandidateSearch! < (semanticTypes! -> len) and existing! < 0)
+                                -> while {
                                 semanticTypes![productCandidateSearch!] => productCandidate
-                                (productCandidate.kind == 10 and productCandidate.length == lengthValue! and productCandidate.status == status!) -> if {
+                                (productCandidate.kind == 10 and productCandidate.length == lengthValue! and productCandidate.status == status!)
+                                    -> if {
                                     true => productCandidateEqual!
                                     term.firstArgument => currentProductFieldTerm!
                                     0 => currentProductOrdinal!
-                                    (currentProductFieldTerm! >= 0 and productCandidateEqual!) -> while {
+                                    (currentProductFieldTerm! >= 0 and productCandidateEqual!)
+                                        -> while {
                                         -1 => candidateProductFieldIndex!
                                         0 => candidateProductFieldSearch!
-                                        candidateProductFieldSearch! < (fields! -> len) -> while {
+                                        candidateProductFieldSearch! < (fields! -> len)
+                                            -> while {
                                             fields![candidateProductFieldSearch!] => candidateProductField
-                                            (candidateProductField.ownerType == productCandidateSearch! and candidateProductField.ordinal == currentProductOrdinal!) -> if {
+                                            (candidateProductField.ownerType == productCandidateSearch! and candidateProductField.ordinal == currentProductOrdinal!)
+                                                -> if {
                                                 candidateProductFieldSearch! => candidateProductFieldIndex!
                                             }
                                             candidateProductFieldSearch! + 1 => candidateProductFieldSearch!
                                         }
                                         package.terms[sourceRange.termStart + currentProductFieldTerm!] => currentProductField
-                                        (candidateProductFieldIndex! < 0 or semanticTypes![mapped![currentProductFieldTerm!]].first != fields![candidateProductFieldIndex!].fieldType) -> if {
+                                        (candidateProductFieldIndex! < 0 or semanticTypes![mapped![currentProductFieldTerm!]].first != fields![candidateProductFieldIndex!].fieldType)
+                                            -> if {
                                             false => productCandidateEqual!
                                         } else {
                                             fields![candidateProductFieldIndex!] => candidateProductField
-                                            (((currentProductField.nameToken < 0) and not (candidateProductField.labelToken < 0)) or ((candidateProductField.labelToken < 0) and not (currentProductField.nameToken < 0))) -> if {
+                                            (((currentProductField.nameToken < 0) and not (candidateProductField.labelToken < 0)) or ((candidateProductField.labelToken < 0) and not (currentProductField.nameToken < 0)))
+                                                -> if {
                                                 false => productCandidateEqual!
                                             }
-                                            (productCandidateEqual! and currentProductField.nameToken >= 0) -> if {
+                                            (productCandidateEqual! and currentProductField.nameToken >= 0)
+                                                -> if {
                                                 package.tokens[sourceRange.tokenStart + currentProductField.nameToken] => currentProductLabel
                                                 package.ranges[candidateProductField.sourceModule] => candidateProductFieldRange
                                                 package.sources[candidateProductField.sourceModule] -> len => candidateProductSourceLength
@@ -683,8 +740,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                                 package.tokens[candidateProductFieldRange.tokenStart + candidateProductField.labelToken] => candidateProductLabel
                                                 currentProductLabel.span.length == candidateProductLabel.span.length => productLabelEqual!
                                                 UIntSize(0) => productLabelByte!
-                                                (productLabelEqual! and productLabelByte! < currentProductLabel.span.length) -> while {
-                                                    (source -> byte(currentProductLabel.span.start + productLabelByte!)) != (candidateProductSource -> byte(candidateProductLabel.span.start + productLabelByte!)) -> if {
+                                                (productLabelEqual! and productLabelByte! < currentProductLabel.span.length)
+                                                    -> while {
+                                                    (source -> byte(currentProductLabel.span.start + productLabelByte!)) != (candidateProductSource -> byte(candidateProductLabel.span.start + productLabelByte!))
+                                                        -> if {
                                                         false => productLabelEqual!
                                                     }
                                                     productLabelByte! + 1 => productLabelByte!
@@ -754,12 +813,15 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
         0 => fieldSymbolIndex!
         fieldSymbolIndex! < sourceRange.symbolCount -> while {
             package.symbols[sourceRange.symbolStart + fieldSymbolIndex!] => fieldSymbol
-            (fieldSymbol.kind == 26 and fieldSymbol.parent >= 0 and fieldSymbol.typeNode >= 0) -> if {
+            (fieldSymbol.kind == 26 and fieldSymbol.parent >= 0 and fieldSymbol.typeNode >= 0)
+                -> if {
                 -1 => ownerType!
                 0 => ownerTypeSearch!
-                (ownerTypeSearch! < (semanticTypes! -> len) and ownerType! < 0) -> while {
+                (ownerTypeSearch! < (semanticTypes! -> len) and ownerType! < 0)
+                    -> while {
                     semanticTypes![ownerTypeSearch!] => ownerCandidate
-                    (ownerCandidate.kind == 1 and (ownerCandidate.origin == 0 or ownerCandidate.origin == 2) and ownerCandidate.module == sourceIndex! and ownerCandidate.symbol == fieldSymbol.parent) -> if {
+                    (ownerCandidate.kind == 1 and (ownerCandidate.origin == 0 or ownerCandidate.origin == 2) and ownerCandidate.module == sourceIndex! and ownerCandidate.symbol == fieldSymbol.parent)
+                        -> if {
                         ownerTypeSearch! => ownerType!
                     }
                     ownerTypeSearch! + 1 => ownerTypeSearch!
@@ -782,7 +844,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                 -1 => fieldType!
                 0 => fieldTermSearch!
                 fieldTermSearch! < sourceRange.termCount -> while {
-                    (package.terms[sourceRange.termStart + fieldTermSearch!].astNode == fieldSymbol.typeNode and mapped![fieldTermSearch!] >= 0) -> if {
+                    (package.terms[sourceRange.termStart + fieldTermSearch!].astNode == fieldSymbol.typeNode and mapped![fieldTermSearch!] >= 0)
+                        -> if {
                         mapped![fieldTermSearch!] => fieldType!
                     }
                     fieldTermSearch! + 1 => fieldTermSearch!
@@ -791,7 +854,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                 0 => priorFieldIndex!
                 priorFieldIndex! < fieldSymbolIndex! -> while {
                     package.symbols[sourceRange.symbolStart + priorFieldIndex!] => priorField
-                    (priorField.kind == 26 and priorField.parent == fieldSymbol.parent) -> if { fieldOrdinal! + 1 => fieldOrdinal! }
+                    (priorField.kind == 26 and priorField.parent == fieldSymbol.parent)
+                        -> if { fieldOrdinal! + 1 => fieldOrdinal! }
                     priorFieldIndex! + 1 => priorFieldIndex!
                 }
                 (ownerType! >= 0 and fieldType! >= 0) -> if {
@@ -820,28 +884,34 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
     nativeTrySource! < (package.sources -> len) -> while {
         package.ranges[nativeTrySource!] => nativeTryRange
         0 => nativeTrySymbolIndex!
-        nativeTrySymbolIndex! < nativeTryRange.symbolCount -> while {
+        nativeTrySymbolIndex! < nativeTryRange.symbolCount
+            -> while {
             package.symbols[nativeTryRange.symbolStart + nativeTrySymbolIndex!] => nativeTrySymbol
-            (nativeTrySymbol.kind == 7 and nativeTrySymbol.flags / 32768 % 2 == 1) -> if {
+            (nativeTrySymbol.kind == 7 and nativeTrySymbol.flags / 32768 % 2 == 1)
+                -> if {
                 nativeTrySymbol.typeNode => nativeTrySuccessAst!
                 nativeTrySymbol.secondaryTypeNode >= 0 -> if {
                     nativeTrySymbol.secondaryTypeNode => nativeTrySuccessAst!
                 }
                 -1 => nativeTrySuccessType!
                 0 => nativeTryReferenceIndex!
-                nativeTryReferenceIndex! < (references! -> len) -> while {
+                nativeTryReferenceIndex! < (references! -> len)
+                    -> while {
                     references![nativeTryReferenceIndex!] => nativeTryReference
                     (nativeTryReference.status == 0
                         and nativeTryReference.sourceModule == nativeTrySource!
-                        and nativeTryReference.typeAst == nativeTrySuccessAst!) -> if {
+                        and nativeTryReference.typeAst == nativeTrySuccessAst!)
+                            -> if {
                         nativeTryReference.typeId => nativeTrySuccessType!
                     }
                     nativeTryReferenceIndex! + 1 => nativeTryReferenceIndex!
                 }
-                (nativeTrySuccessType! >= 0 and nativeTrySuccessType! < (semanticTypes! -> len)) -> if {
+                (nativeTrySuccessType! >= 0 and nativeTrySuccessType! < (semanticTypes! -> len))
+                    -> if {
                     -1 => nativeTryResultType!
                     0 => nativeTryResultSearch!
-                    nativeTryResultSearch! < (semanticTypes! -> len) -> while {
+                    nativeTryResultSearch! < (semanticTypes! -> len)
+                        -> while {
                         semanticTypes![nativeTryResultSearch!] => nativeTryResultCandidate
                         (nativeTryResultCandidate.kind == 7
                             and nativeTryResultCandidate.origin == 4
@@ -888,7 +958,8 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
     [Int; ~] => parameterSymbols!
     [Int; ~] => replacements!
     0 => status!
-    (inputTemplate < 0 or inputTemplate >= (types -> len) or actualInput < 0 or actualInput >= (types -> len) or resultTemplate < 0 or resultTemplate >= (types -> len)) -> if {
+    (inputTemplate < 0 or inputTemplate >= (types -> len) or actualInput < 0 or actualInput >= (types -> len) or resultTemplate < 0 or resultTemplate >= (types -> len))
+        -> if {
         2 => status!
     } else {
         templateStack! -> push(inputTemplate)
@@ -896,16 +967,20 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
     }
 
     0 => workIndex!
-    (status! == 0 and workIndex! < (templateStack! -> len)) -> while {
+    (status! == 0 and workIndex! < (templateStack! -> len))
+        -> while {
         templateStack![workIndex!] => templateId
         actualStack![workIndex!] => actualId
         types[templateId] => template
         types[actualId] => actual
-        (template.kind == 1 and template.origin == 3) -> if {
+        (template.kind == 1 and template.origin == 3)
+            -> if {
             -1 => parameterIndex!
             0 => parameterSearch!
-            (parameterSearch! < (parameterSymbols! -> len) and parameterIndex! < 0) -> while {
-                (parameterModules![parameterSearch!] == template.module and parameterSymbols![parameterSearch!] == template.symbol) -> if {
+            (parameterSearch! < (parameterSymbols! -> len) and parameterIndex! < 0)
+                -> while {
+                (parameterModules![parameterSearch!] == template.module and parameterSymbols![parameterSearch!] == template.symbol)
+                    -> if {
                     parameterSearch! => parameterIndex!
                 }
                 parameterSearch! + 1 => parameterSearch!
@@ -919,13 +994,16 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
             }
         } else {
             template.kind != actual.kind -> if { 2 => status! }
-            (status! == 0 and template.kind == 1 and templateId != actualId) -> if { 2 => status! }
-            (status! == 0 and template.kind == 7 and (template.origin != actual.origin or template.module != actual.module or template.symbol != actual.symbol)) -> if { 2 => status! }
+            (status! == 0 and template.kind == 1 and templateId != actualId)
+                -> if { 2 => status! }
+            (status! == 0 and template.kind == 7 and (template.origin != actual.origin or template.module != actual.module or template.symbol != actual.symbol))
+                -> if { 2 => status! }
             # An identifier length in a generic fixed-array template is a
             # compile-time value parameter. Its concrete length is checked at
             # the call surface; structural unification must still infer the
             # element type from [T; N] against [Concrete; literal].
-            (status! == 0 and template.kind == 4 and template.length >= 0 and template.lengthHash != actual.lengthHash) -> if { 2 => status! }
+            (status! == 0 and template.kind == 4 and template.length >= 0 and template.lengthHash != actual.lengthHash)
+                -> if { 2 => status! }
             status! == 0 -> if {
                 (template.first < 0 and actual.first >= 0) -> if { 2 => status! }
                 (template.first >= 0 and actual.first < 0) -> if { 2 => status! }
@@ -962,7 +1040,8 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
 
             -1 => alreadyResolved!
             0 => resolvedSearch!
-            (resolvedSearch! < (resolvedNodes! -> len) and alreadyResolved! < 0) -> while {
+            (resolvedSearch! < (resolvedNodes! -> len) and alreadyResolved! < 0)
+                -> while {
                 resolvedNodes![resolvedSearch!] == nodeId -> if {
                     resolvedTypes![resolvedSearch!] => alreadyResolved!
                 }
@@ -977,8 +1056,10 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
                 -1 => parameterReplacement!
                 (current.kind == 1 and current.origin == 3) -> if {
                     0 => parameterReplacementSearch!
-                    (parameterReplacementSearch! < (parameterSymbols! -> len) and parameterReplacement! < 0) -> while {
-                        (parameterModules![parameterReplacementSearch!] == current.module and parameterSymbols![parameterReplacementSearch!] == current.symbol) -> if {
+                    (parameterReplacementSearch! < (parameterSymbols! -> len) and parameterReplacement! < 0)
+                        -> while {
+                        (parameterModules![parameterReplacementSearch!] == current.module and parameterSymbols![parameterReplacementSearch!] == current.symbol)
+                            -> if {
                             replacements![parameterReplacementSearch!] => parameterReplacement!
                         }
                         parameterReplacementSearch! + 1 => parameterReplacementSearch!
@@ -1009,8 +1090,10 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
                             current.first >= 0 -> if {
                                 -1 => first!
                                 0 => firstSearch!
-                                (firstSearch! < (resolvedNodes! -> len) and first! < 0) -> while {
-                                    resolvedNodes![firstSearch!] == current.first -> if { resolvedTypes![firstSearch!] => first! }
+                                (firstSearch! < (resolvedNodes! -> len) and first! < 0)
+                                    -> while {
+                                    resolvedNodes![firstSearch!] == current.first
+                                        -> if { resolvedTypes![firstSearch!] => first! }
                                     firstSearch! + 1 => firstSearch!
                                 }
                             }
@@ -1018,22 +1101,29 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
                             current.second >= 0 -> if {
                                 -1 => second!
                                 0 => secondSearch!
-                                (secondSearch! < (resolvedNodes! -> len) and second! < 0) -> while {
-                                    resolvedNodes![secondSearch!] == current.second -> if { resolvedTypes![secondSearch!] => second! }
+                                (secondSearch! < (resolvedNodes! -> len) and second! < 0)
+                                    -> while {
+                                    resolvedNodes![secondSearch!] == current.second
+                                        -> if { resolvedTypes![secondSearch!] => second! }
                                     secondSearch! + 1 => secondSearch!
                                 }
                             }
 
                             nodeId => replacementType!
-                            (first! != current.first or second! != current.second) -> if {
+                            (first! != current.first or second! != current.second)
+                                -> if {
                                 current.origin == 3 => containsParameter!
-                                first! >= 0 -> if { types[first!].containsParameter -> if { true => containsParameter! } }
-                                second! >= 0 -> if { types[second!].containsParameter -> if { true => containsParameter! } }
+                                first! >= 0 -> if { types[first!].containsParameter
+                                    -> if { true => containsParameter! } }
+                                second! >= 0 -> if { types[second!].containsParameter
+                                    -> if { true => containsParameter! } }
                                 -1 => existing!
                                 0 => existingSearch!
-                                (existingSearch! < (types -> len) and existing! < 0) -> while {
+                                (existingSearch! < (types -> len) and existing! < 0)
+                                    -> while {
                                     types[existingSearch!] => known
-                                    (known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first! and known.second == second! and known.lengthHash == current.lengthHash and known.status == current.status) -> if {
+                                    (known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first! and known.second == second! and known.lengthHash == current.lengthHash and known.status == current.status)
+                                        -> if {
                                         existingSearch! => existing!
                                     }
                                     existingSearch! + 1 => existingSearch!
@@ -1065,8 +1155,10 @@ public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualIn
             }
         }
         0 => resultSearch!
-        (resultSearch! < (resolvedNodes! -> len) and specializedRoot! < 0) -> while {
-            resolvedNodes![resultSearch!] == resultTemplate -> if { resolvedTypes![resultSearch!] => specializedRoot! }
+        (resultSearch! < (resolvedNodes! -> len) and specializedRoot! < 0)
+            -> while {
+            resolvedNodes![resultSearch!] == resultTemplate
+                -> if { resolvedTypes![resultSearch!] => specializedRoot! }
             resultSearch! + 1 => resultSearch!
         }
     }
@@ -1083,7 +1175,8 @@ public specialize request: SpecializationRequest -> SpecializationResult {
     request.resultTemplate => resultTemplate
     [SemanticType; ~] => types!
     0 => compatibilityTypeIndex!
-    compatibilityTypeIndex! < (request.types -> len) -> while {
+    compatibilityTypeIndex! < (request.types -> len)
+        -> while {
         types! -> push(request.types[compatibilityTypeIndex!])
         compatibilityTypeIndex! + 1 => compatibilityTypeIndex!
     }

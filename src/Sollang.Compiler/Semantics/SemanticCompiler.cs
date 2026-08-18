@@ -3976,6 +3976,10 @@ internal sealed partial class SemanticCompiler
                             guardLoopControl.Column,
                             $"'{guardLoopControl.Kind.ToString().ToLowerInvariant()}' guard is only valid inside a loop");
                     }
+                    NoteLongControlCondition(
+                        guardLoopControl.Condition,
+                        guardLoopControl.Line,
+                        guardLoopControl.Kind == LoopControlKind.Break ? "if break" : "if continue");
                     var guardType = InferExpression(
                         guardLoopControl.Condition,
                         functions,
@@ -5204,6 +5208,8 @@ internal sealed partial class SemanticCompiler
         {
             throw Error(call.Line, call.Column, "while does not bind an iteration item");
         }
+
+        NoteLongControlCondition(call.Source, call.Line, "while");
         var conditionType = InferExpression(call.Source, functions, bindings,
             allowPrintCall: false, allowReadIntCall: true, allowFlowBindingTarget: false,
             mutableBindings: mutableBindings);
@@ -6577,7 +6583,12 @@ internal sealed partial class SemanticCompiler
         }
         foreach (var arm in expression.Arms)
         {
-            if (arm.Condition is null) continue;
+            if (arm.Condition is null)
+            {
+                continue;
+            }
+
+            NoteLongControlCondition(arm.Condition, arm.Line, "partition");
             var conditionType = InferExpression(
                 arm.Condition,
                 functions,
@@ -8137,6 +8148,11 @@ internal sealed partial class SemanticCompiler
                 "the success branch is empty; replace 'condition -> if {} else { ... }' with 'condition -> unless { ... }'");
         }
 
+        NoteLongControlCondition(
+            UnwrapUnlessCondition(expression),
+            expression.Line,
+            IsUnlessCondition(expression) ? "unless" : "if");
+
         var condition = InferExpression(
             expression.Condition,
             functions,
@@ -8279,6 +8295,10 @@ internal sealed partial class SemanticCompiler
         foreach (var arm in expression.Arms)
         {
             RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
+            if (expression.Subject is null && !hasSubjectConditions)
+            {
+                NoteLongControlCondition(arm.Condition, arm.Body.Line, "when");
+            }
             var condition = expression.Subject is null && !hasSubjectConditions
                 ? InferExpression(
                     arm.Condition,
@@ -14098,6 +14118,287 @@ internal sealed partial class SemanticCompiler
         if (_warningLocations.Add((code, _currentModuleName, line, column)))
         {
             _warnings.Add(new SemanticWarning(code, _currentModuleName, line, column, message));
+        }
+    }
+
+    private const int ControlConditionInlineLimit = 45;
+
+    private static bool IsUnlessCondition(IfExpression expression)
+    {
+        return expression.Condition is NotExpression notExpression
+            && notExpression.Line == expression.Line
+            && notExpression.Column == expression.Column;
+    }
+
+    private static Expression UnwrapUnlessCondition(IfExpression expression)
+    {
+        return IsUnlessCondition(expression)
+            ? ((NotExpression)expression.Condition).Value
+            : expression.Condition;
+    }
+
+    private void NoteLongControlCondition(Expression condition, int controlLine, string role)
+    {
+        if (condition.Line != controlLine || ConditionSpansMultipleLines(condition))
+        {
+            return;
+        }
+
+        var length = EstimateControlConditionLength(condition);
+        if (length < ControlConditionInlineLimit)
+        {
+            return;
+        }
+
+        var continuation = role is "when" or "partition"
+            ? $"then write the {role} arm body on the next line"
+            : $"then write '-> {role} {{' on the next line";
+        AddWarning(
+            "N001",
+            condition.Line,
+            condition.Column,
+            $"control condition is {length} characters; keep conditions under {ControlConditionInlineLimit} on the same line as '{role}', or put the condition on its own line and {continuation}");
+    }
+
+    private static bool ConditionSpansMultipleLines(Expression expression)
+    {
+        var line = expression.Line;
+        var spanned = false;
+        WalkConditionLines(expression, visitedLine =>
+        {
+            if (visitedLine != line)
+            {
+                spanned = true;
+            }
+        });
+        return spanned;
+    }
+
+    private static void WalkConditionLines(Expression expression, Action<int> visit)
+    {
+        visit(expression.Line);
+        switch (expression)
+        {
+            case NotExpression notExpression:
+                WalkConditionLines(notExpression.Value, visit);
+                break;
+            case NegateExpression negate:
+                WalkConditionLines(negate.Value, visit);
+                break;
+            case AndExpression binary:
+                WalkConditionLines(binary.Left, visit);
+                WalkConditionLines(binary.Right, visit);
+                break;
+            case OrExpression binary:
+                WalkConditionLines(binary.Left, visit);
+                WalkConditionLines(binary.Right, visit);
+                break;
+            case AddExpression binary:
+                WalkConditionLines(binary.Left, visit);
+                WalkConditionLines(binary.Right, visit);
+                break;
+            case SubtractExpression binary:
+                WalkConditionLines(binary.Left, visit);
+                WalkConditionLines(binary.Right, visit);
+                break;
+            case MultiplyExpression binary:
+                WalkConditionLines(binary.Left, visit);
+                WalkConditionLines(binary.Right, visit);
+                break;
+            case DivideExpression binary:
+                WalkConditionLines(binary.Left, visit);
+                WalkConditionLines(binary.Right, visit);
+                break;
+            case ModuloExpression binary:
+                WalkConditionLines(binary.Left, visit);
+                WalkConditionLines(binary.Right, visit);
+                break;
+            case CompareExpression compare:
+                WalkConditionLines(compare.Left, visit);
+                WalkConditionLines(compare.Right, visit);
+                break;
+            case RangeExpression range:
+                WalkConditionLines(range.Start, visit);
+                WalkConditionLines(range.End, visit);
+                break;
+            case IndexExpression index:
+                WalkConditionLines(index.Source, visit);
+                WalkConditionLines(index.Index, visit);
+                break;
+            case FieldAccessExpression field:
+                WalkConditionLines(field.Source, visit);
+                break;
+            case TryExpression tryExpression:
+                WalkConditionLines(tryExpression.Value, visit);
+                break;
+            case BoxExpression box:
+                WalkConditionLines(box.Value, visit);
+                break;
+            case CallExpression call:
+                foreach (var argument in call.Arguments)
+                {
+                    WalkConditionLines(argument, visit);
+                }
+                break;
+            case FlowExpression flow:
+                WalkConditionLines(flow.Source, visit);
+                foreach (var argument in flow.Targets.SelectMany(static target => target.Arguments))
+                {
+                    WalkConditionLines(argument, visit);
+                }
+                break;
+            case TypeApplicationExpression typeApplication:
+                foreach (var argument in typeApplication.Arguments ?? [])
+                {
+                    WalkConditionLines(argument, visit);
+                }
+                break;
+        }
+    }
+
+    private static int EstimateControlConditionLength(Expression expression)
+    {
+        var text = new System.Text.StringBuilder();
+        AppendControlCondition(text, expression, parentPrec: 0);
+        return text.Length;
+    }
+
+    private static void AppendControlCondition(System.Text.StringBuilder text, Expression expression, int parentPrec)
+    {
+        switch (expression)
+        {
+            case BoolExpression boolean:
+                text.Append(boolean.Value ? "true" : "false");
+                break;
+            case NumberExpression number:
+                text.Append(number.Text);
+                break;
+            case NameExpression name:
+                text.Append(name.Name);
+                break;
+            case NotExpression notExpression:
+                text.Append("not ");
+                AppendControlCondition(text, notExpression.Value, 5);
+                break;
+            case NegateExpression negate:
+                text.Append('-');
+                AppendControlCondition(text, negate.Value, 5);
+                break;
+            case AndExpression binary:
+                AppendBinaryCondition(text, binary.Left, " and ", binary.Right, 2, parentPrec);
+                break;
+            case OrExpression binary:
+                AppendBinaryCondition(text, binary.Left, " or ", binary.Right, 1, parentPrec);
+                break;
+            case AddExpression binary:
+                AppendBinaryCondition(text, binary.Left, " + ", binary.Right, 3, parentPrec);
+                break;
+            case SubtractExpression binary:
+                AppendBinaryCondition(text, binary.Left, " - ", binary.Right, 3, parentPrec);
+                break;
+            case MultiplyExpression binary:
+                AppendBinaryCondition(text, binary.Left, " * ", binary.Right, 4, parentPrec);
+                break;
+            case DivideExpression binary:
+                AppendBinaryCondition(text, binary.Left, " / ", binary.Right, 4, parentPrec);
+                break;
+            case ModuloExpression binary:
+                AppendBinaryCondition(text, binary.Left, " % ", binary.Right, 4, parentPrec);
+                break;
+            case CompareExpression compare:
+                AppendBinaryCondition(
+                    text,
+                    compare.Left,
+                    compare.Operator switch
+                    {
+                        ComparisonOperator.Equal => " == ",
+                        ComparisonOperator.NotEqual => " != ",
+                        ComparisonOperator.Less => " < ",
+                        ComparisonOperator.LessOrEqual => " <= ",
+                        ComparisonOperator.Greater => " > ",
+                        ComparisonOperator.GreaterOrEqual => " >= ",
+                        _ => " ?? "
+                    },
+                    compare.Right,
+                    2,
+                    parentPrec);
+                break;
+            case FieldAccessExpression field:
+                AppendControlCondition(text, field.Source, 6);
+                text.Append('.').Append(field.FieldName);
+                break;
+            case IndexExpression index:
+                AppendControlCondition(text, index.Source, 6);
+                text.Append('[');
+                AppendControlCondition(text, index.Index, 0);
+                text.Append(']');
+                break;
+            case TryExpression tryExpression:
+                AppendControlCondition(text, tryExpression.Value, 6);
+                text.Append('?');
+                break;
+            case CallExpression call:
+                text.Append(string.Join('.', call.Path)).Append('(');
+                AppendConditionList(text, call.Arguments);
+                text.Append(')');
+                break;
+            case FlowExpression flow:
+                AppendControlCondition(text, flow.Source, 0);
+                foreach (var target in flow.Targets)
+                {
+                    text.Append(" -> ").Append(string.Join('.', target.Path));
+                    if (target.UsesCallSyntax || target.Arguments.Count > 0)
+                    {
+                        text.Append('(');
+                        AppendConditionList(text, target.Arguments);
+                        text.Append(')');
+                    }
+                }
+                break;
+            case TypeApplicationExpression typeApplication:
+                text.Append(string.Join('.', typeApplication.Path))
+                    .Append('<')
+                    .Append(typeApplication.TypeArgument)
+                    .Append(">(");
+                AppendConditionList(text, typeApplication.Arguments ?? []);
+                text.Append(')');
+                break;
+            default:
+                text.Append("condition");
+                break;
+        }
+    }
+
+    private static void AppendBinaryCondition(
+        System.Text.StringBuilder text,
+        Expression left,
+        string op,
+        Expression right,
+        int prec,
+        int parentPrec)
+    {
+        if (prec < parentPrec)
+        {
+            text.Append('(');
+        }
+        AppendControlCondition(text, left, prec);
+        text.Append(op);
+        AppendControlCondition(text, right, prec);
+        if (prec < parentPrec)
+        {
+            text.Append(')');
+        }
+    }
+
+    private static void AppendConditionList(System.Text.StringBuilder text, IReadOnlyList<Expression> arguments)
+    {
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            if (index > 0)
+            {
+                text.Append(", ");
+            }
+            AppendControlCondition(text, arguments[index], 0);
         }
     }
 

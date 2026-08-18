@@ -33,9 +33,9 @@ regression counterpart.
 | Kind | Location | Count |
 | --- | --- | ---: |
 | User examples | `examples/user/` | 20 |
-| Regression cases | `examples/regression/expected/*.stdout.txt` | 985 |
+| Regression cases | `examples/regression/expected/*.stdout.txt` | 987 |
 | Diagnostic cases | test runner | 274 |
-| Complete logical catalog | test runner | 1,259 |
+| Complete logical catalog | test runner | 1,261 |
 | Flow Junctions positive fixtures | `examples/regression/788-844*.slg` | 57 |
 | Flow Junctions diagnostic fixtures | `examples/regression/diagnostics/` | 26 |
 | Flow Junctions physical fixtures | positive + diagnostic | 83 |

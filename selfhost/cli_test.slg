@@ -58,7 +58,8 @@ matchesText source: file.SourceText, start: UIntSize, length: UIntSize, expected
     length == (expected -> len) => matches!
     UIntSize(0) => index!
     (matches! and index! < length) -> while {
-        (source -> byte(start + index!)) != (expected -> byte(index!)) -> if { false => matches! }
+        (source -> byte(start + index!)) != (expected -> byte(index!))
+            -> if { false => matches! }
         index! + 1 => index!
     }
     matches!
@@ -68,11 +69,13 @@ containsText source: file.SourceText, start: UIntSize, length: UIntSize, filter:
     (filter -> len) == 0 -> if { true -> return }
     false => found!
     UIntSize(0) => offset!
-    (not found! and offset! + (filter -> len) <= length) -> while {
+    (not found! and offset! + (filter -> len) <= length)
+        -> while {
         true => equal!
         UIntSize(0) => index!
         (equal! and index! < (filter -> len)) -> while {
-            (source -> byte(start + offset! + index!)) != (filter -> byte(index!)) -> if { false => equal! }
+            (source -> byte(start + offset! + index!)) != (filter -> byte(index!))
+                -> if { false => equal! }
             index! + 1 => index!
         }
         equal! -> if { true => found! }
@@ -202,33 +205,39 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         0 => moduleIndex!
         0 => moduleSearch!
         moduleSearch! < (prepared.modules -> len) -> while {
-            prepared.modules[moduleSearch!].sourceIndex == sourceIndex! -> if { moduleSearch! => moduleIndex! }
+            prepared.modules[moduleSearch!].sourceIndex == sourceIndex!
+                -> if { moduleSearch! => moduleIndex! }
             moduleSearch! + 1 => moduleSearch!
         }
         0 => symbolIndex!
         symbolIndex! < range.symbolCount -> while {
             prepared.package.symbols[range.symbolStart + symbolIndex!] => function
-            (function.kind == 7 and function.parent < 0 and function.nameToken >= 0) -> if {
+            (function.kind == 7 and function.parent < 0 and function.nameToken >= 0)
+                -> if {
                 availableSourceIndices! -> push(sourceIndex!)
                 availableSymbolIndices! -> push(symbolIndex!)
                 availableModuleIndices! -> push(moduleIndex!)
                 availableNameTokenIndices! -> push(function.nameToken)
                 prepared.package.tokens[range.tokenStart + function.nameToken] => nameToken
-                prepared.package.sources[sourceIndex!] -> isTestName(nameToken.span.start, nameToken.span.length) -> if {
+                prepared.package.sources[sourceIndex!] -> isTestName(nameToken.span.start, nameToken.span.length)
+                    -> if {
                     false => generic!
                     false => parameter!
                     0 => childIndex!
                     childIndex! < range.symbolCount -> while {
                         prepared.package.symbols[range.symbolStart + childIndex!] => child
-                        (child.parent == symbolIndex! and child.kind == 32) -> if { true => generic! }
-                        (child.parent == symbolIndex! and child.kind == 35) -> if { true => parameter! }
+                        (child.parent == symbolIndex! and child.kind == 32)
+                            -> if { true => generic! }
+                        (child.parent == symbolIndex! and child.kind == 35)
+                            -> if { true => parameter! }
                         childIndex! + 1 => childIndex!
                     }
                     function.typeNode => resultNode!
                     function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => resultNode! }
                     prepared.package.nodes[range.astStart + resultNode!] => resultType
                     prepared.package.sources[sourceIndex!] -> matchesText(resultType.start, resultType.length, "Bool") => returnsBool
-                    (generic! or parameter! or function.secondaryTypeNode >= 0 or function.blockNameToken >= 0 or not returnsBool or (function.flags / 128 % 2) == 1) -> if {
+                    (generic! or parameter! or function.secondaryTypeNode >= 0 or function.blockNameToken >= 0 or not returnsBool or (function.flags / 128 % 2) == 1)
+                        -> if {
                         "sollang: test function '" -> print
                         prepared.modules[moduleIndex!] => moduleIdentity
                         moduleIdentity.pathLength > 0 -> if {
@@ -258,7 +267,8 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
 
     prepared -> sortQualified(availableSourceIndices!, availableSymbolIndices!, availableModuleIndices!, availableNameTokenIndices!)
     prepared -> sortQualified(sourceIndices!, symbolIndices!, moduleIndices!, nameTokenIndices!)
-    (status! == 0 and (sourceIndices! -> len) > 1) -> if {
+    (status! == 0 and (sourceIndices! -> len) > 1)
+        -> if {
         1 => selectedIndex!
         selectedIndex! < (sourceIndices! -> len) -> while {
             prepared -> compareQualified(moduleIndices![selectedIndex! - 1], nameTokenIndices![selectedIndex! - 1], moduleIndices![selectedIndex!], nameTokenIndices![selectedIndex!]) => ordering
@@ -270,7 +280,8 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         }
     }
 
-    (status! == 0 and (sourceIndices! -> len) == 0) -> if {
+    (status! == 0 and (sourceIndices! -> len) == 0)
+        -> if {
         (filter -> len) > 0 -> if {
             "sollang: no tests matched filter '$filter'" -> println
         } else {
@@ -278,7 +289,8 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
             (availableModuleIndices! -> len) > 0 -> if {
                 "; available functions: " -> print
                 0 => availableIndex!
-                availableIndex! < (availableModuleIndices! -> len) -> while {
+                availableIndex! < (availableModuleIndices! -> len)
+                    -> while {
                     availableIndex! > 0 -> if { ", " -> print }
                     prepared -> printQualified(availableModuleIndices![availableIndex!], availableNameTokenIndices![availableIndex!])
                     availableIndex! + 1 => availableIndex!
@@ -303,7 +315,8 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
                     prepared.modules[uniqueModuleIndices![uniqueIndex!]] => uniqueModule
                     moduleIdentity.pathLength == uniqueModule.pathLength => sameModule!
                     UIntSize(0) => moduleByte!
-                    (sameModule! and moduleByte! < moduleIdentity.pathLength) -> while {
+                    (sameModule! and moduleByte! < moduleIdentity.pathLength)
+                        -> while {
                         prepared.package.sources[moduleIdentity.sourceIndex] -> byte(moduleIdentity.pathStart + moduleByte!) => modulePathByte
                         prepared.package.sources[uniqueModule.sourceIndex] -> byte(uniqueModule.pathStart + moduleByte!) => uniqueModulePathByte
                         modulePathByte != uniqueModulePathByte -> if {

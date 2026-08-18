@@ -50,7 +50,8 @@ emitEnumConstructor request: WhileValueRequest, context: ref emitterContext.Emit
         constructor.operand0 -> aggregateValueIndex(context, state) => payloadIndex
         context.ir[payloadIndex] => payload
         payload -> effectiveTypeId(context, state) => payloadTypeId
-        (payloadTypeId < 0 or context.typeSizes[payloadTypeId] > 0) -> if {
+        (payloadTypeId < 0 or context.typeSizes[payloadTypeId] > 0)
+            -> if {
             "  %v$(request.nodeIndex)_enum_payload = getelementptr inbounds " -> print
             constructor -> writeIrType(context, state)
             ", ptr %v$(request.nodeIndex)_enum_slot, i32 0, i32 1" -> println
@@ -62,10 +63,12 @@ emitEnumConstructor request: WhileValueRequest, context: ref emitterContext.Emit
                 payload.kind == 3 -> if {
                     payload -> writeIntegerLiteral(context, state)
                 } else {
-                    ((context.sources[payload.sourceModule] -> byte(payloadToken.span.start)) == 116) -> if { "1" -> print } else { "0" -> print }
+                    ((context.sources[payload.sourceModule] -> byte(payloadToken.span.start)) == 116)
+                        -> if { "1" -> print } else { "0" -> print }
                 }
             } else {
-                (payload.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and payload.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(payloadIndex)" -> print }
+                (payload.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and payload.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+                    -> if { "%arg" -> print } else { "%v$(payloadIndex)" -> print }
             }
             ", ptr %v$(request.nodeIndex)_enum_payload, align " -> print
             payload -> storageAlign(context, state) -> writeDecimalLine
@@ -82,13 +85,15 @@ emitProcessCall request: ProcessCallRequest, context: ref emitterContext.EmitCon
     # process.arguments intrinsic wrapped around the actual aggregate.
     # It carries no runtime value, so recover the canonical operand before
     # lowering run/runToFile.
-    (argumentIndex! >= 0 and context.ir[argumentIndex!].kind == 6 and context.ir[argumentIndex!].opcode == -212 and context.ir[argumentIndex!].operand0 >= 0) -> while {
+    (argumentIndex! >= 0 and context.ir[argumentIndex!].kind == 6 and context.ir[argumentIndex!].opcode == -212 and context.ir[argumentIndex!].operand0 >= 0)
+        -> while {
         context.ir[argumentIndex!].operand0 -> aggregateValueIndex(context, state) => argumentIndex!
     }
     argumentIndex! => resolvedArgumentIndex
     context.ir[argumentIndex!] => argument
     -1 => processArgumentMutableRoot!
-    (argument.kind == 17 and argument.flags == 1) -> if {
+    (argument.kind == 17 and argument.flags == 1)
+        -> if {
         argumentIndex! -> mutableBindingRoot(context, state) => processArgumentMutableRoot!
         "  %v$(request.callIndex)_process_argument = load " -> print
         argument -> writeIrType(context, state)
@@ -102,14 +107,16 @@ emitProcessCall request: ProcessCallRequest, context: ref emitterContext.EmitCon
         argument -> writeIrType(context, state)
         " " -> print
         processArgumentMutableRoot! >= 0 -> if { "%v$(request.callIndex)_process_argument" -> print } else {
-            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+                -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
         }
         ", 0" -> println
         "  %v$(request.callIndex)_process_count = extractvalue " -> print
         argument -> writeIrType(context, state)
         " " -> print
         processArgumentMutableRoot! >= 0 -> if { "%v$(request.callIndex)_process_argument" -> print } else {
-            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+                -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
         }
         ", 1" -> println
         "  %v$(request.callIndex)_process_raw = call %sollang.process_result @sollang_run_process(ptr %v$(request.callIndex)_process_records, i64 %v$(request.callIndex)_process_count)" -> println
@@ -119,22 +126,26 @@ emitProcessCall request: ProcessCallRequest, context: ref emitterContext.EmitCon
         0 => processFieldIndex!
         processFieldIndex! < (context.fields -> len) -> while {
             context.fields[processFieldIndex!] => processField
-            (processField.status == 0 and processField.ownerType == argument.typeId and processField.ordinal == 0) -> if { processField.fieldType => argvFieldType! }
-            (processField.status == 0 and processField.ownerType == argument.typeId and processField.ordinal == 1) -> if { processField.fieldType => outputFieldType! }
+            (processField.status == 0 and processField.ownerType == argument.typeId and processField.ordinal == 0)
+                -> if { processField.fieldType => argvFieldType! }
+            (processField.status == 0 and processField.ownerType == argument.typeId and processField.ordinal == 1)
+                -> if { processField.fieldType => outputFieldType! }
             processFieldIndex! + 1 => processFieldIndex!
         }
         "  %v$(request.callIndex)_process_argv = extractvalue " -> print
         argument -> writeIrType(context, state)
         " " -> print
         processArgumentMutableRoot! >= 0 -> if { "%v$(request.callIndex)_process_argument" -> print } else {
-            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+                -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
         }
         ", 0" -> println
         "  %v$(request.callIndex)_process_output = extractvalue " -> print
         argument -> writeIrType(context, state)
         " " -> print
         processArgumentMutableRoot! >= 0 -> if { "%v$(request.callIndex)_process_argument" -> print } else {
-            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+                -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
         }
         ", 1" -> println
         "  %v$(request.callIndex)_process_records = extractvalue " -> print
@@ -315,7 +326,8 @@ emitSocketCall request: SocketCallRequest, context: ref emitterContext.EmitConte
         "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_bind_datagram(ptr %v$(request.callIndex)_socket_address_data, i64 %v$(request.callIndex)_socket_address_length, i16 %v$(request.callIndex)_socket_port, i1 %v$(request.callIndex)_socket_reuse)" -> println
     }
     # accept(TcpListener), shutdown(TcpStream), localPort(UdpSocket)
-    (call.opcode == -259 or call.opcode == -264 or call.opcode == -268) -> if {
+    (call.opcode == -259 or call.opcode == -264 or call.opcode == -268)
+        -> if {
         "  %v$(request.callIndex)_socket_handle = extractvalue " -> print
         firstValue -> writeIrType(context, state)
         " " -> print
@@ -344,7 +356,8 @@ emitSocketCall request: SocketCallRequest, context: ref emitterContext.EmitConte
         "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_connect(ptr %v$(request.callIndex)_socket_address_data, i64 %v$(request.callIndex)_socket_address_length, i16 %v$(request.callIndex)_socket_port)" -> println
     }
     # receive/send/sendText all begin with an owned stream handle.
-    ((call.opcode <= -261 and call.opcode >= -263) or call.opcode == -266 or call.opcode == -267) -> if {
+    ((call.opcode <= -261 and call.opcode >= -263) or call.opcode == -266 or call.opcode == -267)
+        -> if {
         "  %v$(request.callIndex)_socket_handle = extractvalue " -> print
         firstValue -> writeIrType(context, state)
         " " -> print
@@ -386,7 +399,8 @@ emitSocketCall request: SocketCallRequest, context: ref emitterContext.EmitConte
         context.ir[secondArgumentIndex!] => socketPayload
         socketPayload.typeId => socketPayloadType!
         false => socketPayloadReference!
-        (socketPayloadType! >= 0 and context.types[socketPayloadType!].kind == 8) -> if {
+        (socketPayloadType! >= 0 and context.types[socketPayloadType!].kind == 8)
+            -> if {
             context.types[socketPayloadType!].first => socketPayloadType!
             true => socketPayloadReference!
             "  %v$(request.callIndex)_socket_payload = load " -> print
@@ -432,7 +446,8 @@ emitSocketCall request: SocketCallRequest, context: ref emitterContext.EmitConte
         context.ir[thirdArgumentIndex!] => socketPayload
         socketPayload.typeId => socketPayloadType!
         false => socketPayloadReference!
-        (socketPayloadType! >= 0 and context.types[socketPayloadType!].kind == 8) -> if {
+        (socketPayloadType! >= 0 and context.types[socketPayloadType!].kind == 8)
+            -> if {
             context.types[socketPayloadType!].first => socketPayloadType!
             true => socketPayloadReference!
             "  %v$(request.callIndex)_socket_payload = load " -> print
@@ -472,7 +487,8 @@ emitSocketCall request: SocketCallRequest, context: ref emitterContext.EmitConte
         "  %v$(request.callIndex)_socket_ok_payload = getelementptr inbounds " -> print
         call -> writeIrType(context, state)
         ", ptr %v$(request.callIndex)_socket_result_slot, i32 0, i32 1" -> println
-        (call.opcode == -258 or call.opcode == -259 or call.opcode == -260 or call.opcode == -265) -> if {
+        (call.opcode == -258 or call.opcode == -259 or call.opcode == -260 or call.opcode == -265)
+            -> if {
             "  %v$(request.callIndex)_socket_owner = insertvalue " -> print
             socketOkTypeId -> writeSemanticTypeId(context, state)
             " poison, i64 %v$(request.callIndex)_socket_value, 0" -> println
@@ -480,7 +496,8 @@ emitSocketCall request: SocketCallRequest, context: ref emitterContext.EmitConte
             socketOkTypeId -> writeSemanticTypeId(context, state)
             " %v$(request.callIndex)_socket_owner, ptr %v$(request.callIndex)_socket_ok_payload, align 8" -> println
         }
-        (call.opcode == -262 or call.opcode == -263 or call.opcode == -266) -> if {
+        (call.opcode == -262 or call.opcode == -263 or call.opcode == -266)
+            -> if {
             "  store i64 %v$(request.callIndex)_socket_value, ptr %v$(request.callIndex)_socket_ok_payload, align 8" -> println
         }
         call.opcode == -268 -> if {
@@ -586,7 +603,8 @@ nominalFieldType ownerType: Int, ordinal: Int, context: ref emitterContext.EmitC
     0 => fieldIndex!
     fieldIndex! < (context.fields -> len) -> while {
         context.fields[fieldIndex!] => field
-        (field.status == 0 and field.ownerType == ownerType and field.ordinal == ordinal) -> if { field.fieldType => fieldType! }
+        (field.status == 0 and field.ownerType == ownerType and field.ordinal == ordinal)
+            -> if { field.fieldType => fieldType! }
         fieldIndex! + 1 => fieldIndex!
     }
     fieldType!
@@ -596,7 +614,8 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
     context.ir[request.callIndex] => call
     -1 => enclosingFileMatch!
     call.parent => fileCallAncestor!
-    (fileCallAncestor! >= 0 and enclosingFileMatch! < 0) -> while {
+    (fileCallAncestor! >= 0 and enclosingFileMatch! < 0)
+        -> while {
         context.ir[fileCallAncestor!].kind == 27 -> if { fileCallAncestor! => enclosingFileMatch! } else { context.ir[fileCallAncestor!].parent => fileCallAncestor! }
     }
     (call.opcode == -216 or call.opcode == -217) -> if {
@@ -718,7 +737,8 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
     call.opcode == -221 -> if {
         call.operand0 => scalarArgumentIndex!
         context.ir[scalarArgumentIndex!].nextOperand => offsetArgumentIndex!
-        context.ir[offsetArgumentIndex!].nextOperand >= 0 -> while {
+        context.ir[offsetArgumentIndex!].nextOperand >= 0
+            -> while {
             offsetArgumentIndex! => scalarArgumentIndex!
             context.ir[offsetArgumentIndex!].nextOperand => offsetArgumentIndex!
         }
@@ -784,7 +804,8 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
     }
     call.opcode == -220 -> if {
         call.operand0 => offsetArgumentIndex!
-        context.ir[offsetArgumentIndex!].nextOperand >= 0 -> while {
+        context.ir[offsetArgumentIndex!].nextOperand >= 0
+            -> while {
             context.ir[offsetArgumentIndex!].nextOperand => offsetArgumentIndex!
         }
         offsetArgumentIndex! -> aggregateValueIndex(context, state) => offsetIndex
@@ -929,13 +950,16 @@ emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     0 => pathFieldIndex!
     pathFieldIndex! < (context.fields -> len) -> while {
         context.fields[pathFieldIndex!] => pathField
-        (pathField.status == 0 and pathField.ownerType == pathValue.typeId and pathField.ordinal == 0) -> if { pathField.fieldType => pathBytesType! }
-        (pathField.status == 0 and pathField.ownerType == pathValue.typeId and pathField.ordinal == 1) -> if { pathField.fieldType => pathStyleType! }
+        (pathField.status == 0 and pathField.ownerType == pathValue.typeId and pathField.ordinal == 0)
+            -> if { pathField.fieldType => pathBytesType! }
+        (pathField.status == 0 and pathField.ownerType == pathValue.typeId and pathField.ordinal == 1)
+            -> if { pathField.fieldType => pathStyleType! }
         pathFieldIndex! + 1 => pathFieldIndex!
     }
     context.types[call.typeId] => resultType
     resultType.first => rawTypeId!
-    call.typeId -> isNominalEnumType(context, state) -> if {
+    call.typeId -> isNominalEnumType(context, state)
+        -> if {
         call.typeId -> enumPayloadTypes(context, state) => resultPayloads
         (resultPayloads -> len) > 0 -> if { resultPayloads[0] => rawTypeId! }
     }
@@ -943,13 +967,15 @@ emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     0 => rawFieldSearch!
     rawFieldSearch! < (context.fields -> len) -> while {
         context.fields[rawFieldSearch!] => rawField
-        (rawField.status == 0 and rawField.ownerType == rawTypeId! and rawField.ordinal == 0) -> if { rawField.fieldType => rawBytesType! }
+        (rawField.status == 0 and rawField.ownerType == rawTypeId! and rawField.ordinal == 0)
+            -> if { rawField.fieldType => rawBytesType! }
         rawFieldSearch! + 1 => rawFieldSearch!
     }
     "  %v$(request.callIndex)_path_query_bytes = extractvalue " -> print
     pathValue -> writeIrType(context, state)
     " " -> print
-    (pathValue.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and pathValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else {
+    (pathValue.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and pathValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+        -> if { "%arg" -> print } else {
         "%v" -> print
         argumentIndex! -> writeDecimal
     }
@@ -963,7 +989,8 @@ emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     "  %v$(request.callIndex)_path_query_style_value = extractvalue " -> print
     pathValue -> writeIrType(context, state)
     " " -> print
-    (pathValue.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and pathValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else {
+    (pathValue.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and pathValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+        -> if { "%arg" -> print } else {
         "%v" -> print
         argumentIndex! -> writeDecimal
     }
@@ -1048,14 +1075,17 @@ emitCreateDirectoryCall request: DirectoryCallRequest, context: ref emitterConte
     0 => pathFieldIndex!
     pathFieldIndex! < (context.fields -> len) -> while {
         context.fields[pathFieldIndex!] => pathField
-        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 0) -> if { pathField.fieldType => pathBytesType! }
-        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 1) -> if { pathField.fieldType => pathStyleType! }
+        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 0)
+            -> if { pathField.fieldType => pathBytesType! }
+        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 1)
+            -> if { pathField.fieldType => pathStyleType! }
         pathFieldIndex! + 1 => pathFieldIndex!
     }
     "  %v$(request.callIndex)_create_directory_path_bytes = extractvalue " -> print
     directoryPath -> writeIrType(context, state)
     " " -> print
-    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else {
+    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+        -> if { "%arg" -> print } else {
         "%v" -> print
         argumentIndex! -> writeDecimal
     }
@@ -1069,7 +1099,8 @@ emitCreateDirectoryCall request: DirectoryCallRequest, context: ref emitterConte
     "  %v$(request.callIndex)_create_directory_path_style_value = extractvalue " -> print
     directoryPath -> writeIrType(context, state)
     " " -> print
-    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else {
+    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+        -> if { "%arg" -> print } else {
         "%v" -> print
         argumentIndex! -> writeDecimal
     }
@@ -1084,15 +1115,18 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     context.ir[request.callIndex] => call
     context.types[call.typeId] => dispatchResultType
     dispatchResultType.first => dispatchRawTypeId!
-    call.typeId -> isNominalEnumType(context, state) -> if {
+    call.typeId -> isNominalEnumType(context, state)
+        -> if {
         call.typeId -> enumPayloadTypes(context, state) => dispatchPayloads
         (dispatchPayloads -> len) > 0 -> if { dispatchPayloads[0] => dispatchRawTypeId! }
     }
     0 => dispatchFieldCount!
     0 => dispatchFieldIndex!
-    dispatchFieldIndex! < (context.fields -> len) -> while {
+    dispatchFieldIndex! < (context.fields -> len)
+        -> while {
         context.fields[dispatchFieldIndex!] => dispatchField
-        (dispatchField.status == 0 and dispatchField.ownerType == dispatchRawTypeId!) -> if { dispatchFieldCount! + 1 => dispatchFieldCount! }
+        (dispatchField.status == 0 and dispatchField.ownerType == dispatchRawTypeId!)
+            -> if { dispatchFieldCount! + 1 => dispatchFieldCount! }
         dispatchFieldIndex! + 1 => dispatchFieldIndex!
     }
     dispatchFieldCount! == 4 -> if {
@@ -1106,14 +1140,17 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     0 => pathFieldIndex!
     pathFieldIndex! < (context.fields -> len) -> while {
         context.fields[pathFieldIndex!] => pathField
-        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 0) -> if { pathField.fieldType => pathBytesType! }
-        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 1) -> if { pathField.fieldType => pathStyleType! }
+        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 0)
+            -> if { pathField.fieldType => pathBytesType! }
+        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 1)
+            -> if { pathField.fieldType => pathStyleType! }
         pathFieldIndex! + 1 => pathFieldIndex!
     }
     "  %v$(request.callIndex)_directory_path_bytes = extractvalue " -> print
     directoryPath -> writeIrType(context, state)
     " " -> print
-    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else {
+    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+        -> if { "%arg" -> print } else {
         "%v" -> print
         argumentIndex! -> writeDecimal
     }
@@ -1127,7 +1164,8 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     "  %v$(request.callIndex)_directory_path_style_value = extractvalue " -> print
     directoryPath -> writeIrType(context, state)
     " " -> print
-    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else {
+    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+        -> if { "%arg" -> print } else {
         "%v" -> print
         argumentIndex! -> writeDecimal
     }
@@ -1143,7 +1181,8 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     "  %v$(request.callIndex)_directory_ok = icmp sgt i32 %v$(request.callIndex)_directory_status, 0" -> println
     context.types[call.typeId] => resultType
     resultType.first => rawTypeId!
-    call.typeId -> isNominalEnumType(context, state) -> if {
+    call.typeId -> isNominalEnumType(context, state)
+        -> if {
         call.typeId -> enumPayloadTypes(context, state) => directoryResultPayloads
         (directoryResultPayloads -> len) > 0 -> if { directoryResultPayloads[0] => rawTypeId! }
     }
@@ -1152,8 +1191,10 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     0 => rawFieldIndex!
     rawFieldIndex! < (context.fields -> len) -> while {
         context.fields[rawFieldIndex!] => rawField
-        (rawField.status == 0 and rawField.ownerType == rawTypeId! and rawField.ordinal == 0) -> if { rawField.fieldType => rawBytesType! }
-        (rawField.status == 0 and rawField.ownerType == rawTypeId! and rawField.ordinal == 1) -> if { rawField.fieldType => rawCountType! }
+        (rawField.status == 0 and rawField.ownerType == rawTypeId! and rawField.ordinal == 0)
+            -> if { rawField.fieldType => rawBytesType! }
+        (rawField.status == 0 and rawField.ownerType == rawTypeId! and rawField.ordinal == 1)
+            -> if { rawField.fieldType => rawCountType! }
         rawFieldIndex! + 1 => rawFieldIndex!
     }
     context.pointerBitWidth == 32 -> if {
@@ -1254,7 +1295,8 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
     errorTypeId -> writeSemanticTypeId(context, state)
     ", ptr %v$(request.expressionIndex)_selected_payload_ptr, align " -> print
     errorAlign -> writeDecimalLine
-    ((okTypeId -> semanticTypeOwns(context, state)) or (errorTypeId -> semanticTypeOwns(context, state))) -> if {
+    ((okTypeId -> semanticTypeOwns(context, state)) or (errorTypeId -> semanticTypeOwns(context, state)))
+        -> if {
         request.expressionIndex * 1000 + 909 => partialDropRoot
         "  %v$(request.expressionIndex)_cleanup_result_slot = alloca " -> print
         request.callbackTypeId -> writeSemanticTypeId(context, state)
@@ -1297,7 +1339,8 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
         }
         "  br label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
         "tryparallel$(request.expressionIndex)_cleanup_error:" -> println
-        errorTypeId -> semanticTypeOwns(context, state) -> if {
+        errorTypeId -> semanticTypeOwns(context, state)
+            -> if {
             EnumPayloadDropRequest { enumTypeId: request.callbackTypeId, payloadTypeId: errorTypeId, nameRoot: partialDropRoot * 10 + 2, pointerRoot: partialDropRoot, bindingIndex: -1, regionIndex: -1 } -> emitEnumPayloadDrop(context, state)
         }
         "  br label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
@@ -1394,7 +1437,8 @@ emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterC
     "  %v$(request.expressionIndex) = phi " -> print
     request.outerTypeId -> writeSemanticTypeId(context, state)
     " [ %v$(request.expressionIndex)_error_result, %tryparallel$(request.expressionIndex)_" -> print
-    ((okTypeId -> semanticTypeOwns(context, state)) or (errorTypeId -> semanticTypeOwns(context, state))) -> if { "cleanup_done" -> print } else { "error" -> print }
+    ((okTypeId -> semanticTypeOwns(context, state)) or (errorTypeId -> semanticTypeOwns(context, state)))
+        -> if { "cleanup_done" -> print } else { "error" -> print }
     " ], [ %v$(request.expressionIndex)_success_result, %tryparallel$(request.expressionIndex)_copy_done ]" -> println
 }
 arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -1409,7 +1453,8 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
                 and context.types[arrayTypeId!].origin == 4
                 and (context.types[arrayTypeId!].symbol == 5
                     or context.types[arrayTypeId!].symbol == 6
-                    or context.types[arrayTypeId!].symbol == 7))) -> if {
+                    or context.types[arrayTypeId!].symbol == 7)))
+                        -> if {
             context.types[arrayTypeId!].first => elementTypeId!
         }
     } else {
@@ -1421,7 +1466,8 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
             context.ir[node.operand0] => firstElement
             firstElement.typeId >= 0 -> if { firstElement.typeId => elementTypeId! } else {
                 0 => builtinElementSearch!
-                (builtinElementSearch! < (context.types -> len) and elementTypeId! < 0) -> while {
+                (builtinElementSearch! < (context.types -> len) and elementTypeId! < 0)
+                    -> while {
                     context.types[builtinElementSearch!] => builtinElementCandidate
                     ((firstElement.typeOrigin == 1
                             and builtinElementCandidate.origin == 1
@@ -1429,7 +1475,8 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
                         or (builtinElementCandidate.kind == firstElement.typeKind
                             and builtinElementCandidate.origin == firstElement.typeOrigin
                             and builtinElementCandidate.module == firstElement.typeModule
-                            and builtinElementCandidate.symbol == firstElement.typeSymbol)) -> if {
+                            and builtinElementCandidate.symbol == firstElement.typeSymbol))
+                                -> if {
                         builtinElementSearch! => elementTypeId!
                     }
                     builtinElementSearch! + 1 => builtinElementSearch!
@@ -1439,11 +1486,14 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
         # The legacy array projection stores a nominal element as
         # typeModule/typeSymbol. Recover its canonical ID so arrays of
         # user structs do not fall through to builtin symbol 0 (Unit).
-        (elementTypeId! < 0 and node.typeModule >= 0) -> if {
+        (elementTypeId! < 0 and node.typeModule >= 0)
+            -> if {
             0 => legacyElementSearch!
-            legacyElementSearch! < (context.types -> len) -> while {
+            legacyElementSearch! < (context.types -> len)
+                -> while {
                 context.types[legacyElementSearch!] => legacyElementCandidate
-                (legacyElementCandidate.kind == 1 and (legacyElementCandidate.origin == 0 or legacyElementCandidate.origin == 2) and legacyElementCandidate.module == node.typeModule and legacyElementCandidate.symbol == node.typeSymbol) -> if {
+                (legacyElementCandidate.kind == 1 and (legacyElementCandidate.origin == 0 or legacyElementCandidate.origin == 2) and legacyElementCandidate.module == node.typeModule and legacyElementCandidate.symbol == node.typeSymbol)
+                    -> if {
                     legacyElementSearch! => elementTypeId!
                 }
                 legacyElementSearch! + 1 => legacyElementSearch!
@@ -1459,7 +1509,8 @@ isSetCollection node: typedIr.TypedIrNode, context: ref emitterContext.EmitConte
         context.types[collectionTypeId!].kind == 8 -> if { context.types[collectionTypeId!].first => collectionTypeId! }
         (context.types[collectionTypeId!].kind == 7
             and context.types[collectionTypeId!].origin == 4
-            and context.types[collectionTypeId!].symbol == 5) -> if { true => result! }
+            and context.types[collectionTypeId!].symbol == 5)
+                -> if { true => result! }
     }
     result!
 }
@@ -1509,14 +1560,17 @@ emitNativeLibraryGlobals sourceModule: Int, libraryAst: Int, context: ref emitte
     nativeLibraryByte! => nativeLibrarySlashSearch!
     nativeLibrarySlashSearch! < nativeLibraryEnd -> while {
         context.sources[sourceModule] -> byte(nativeLibrarySlashSearch!) => nativePathByte
-        (nativePathByte == 47 or nativePathByte == 92) -> if {
+        (nativePathByte == 47 or nativePathByte == 92)
+            -> if {
             nativeLibrarySlashSearch! + 1 => nativeLibraryNameStart!
         }
         nativeLibrarySlashSearch! + 1 => nativeLibrarySlashSearch!
     }
-    (context.expectedPathStyle == 0 and nativeLibraryNameStart! == nativeLibraryByte!) -> if { "lib" -> print }
+    (context.expectedPathStyle == 0 and nativeLibraryNameStart! == nativeLibraryByte!)
+        -> if { "lib" -> print }
     nativeLibraryByte! < nativeLibraryEnd -> while {
-        (context.expectedPathStyle == 0 and nativeLibraryByte! == nativeLibraryNameStart! and nativeLibraryNameStart! != (nativeLibraryRequest -> textLiteralStart(context, state))) -> if { "lib" -> print }
+        (context.expectedPathStyle == 0 and nativeLibraryByte! == nativeLibraryNameStart! and nativeLibraryNameStart! != (nativeLibraryRequest -> textLiteralStart(context, state)))
+            -> if { "lib" -> print }
         sourceModule -> emitNativeSourceByte(nativeLibraryByte!, context, state)
         nativeLibraryByte! + 1 => nativeLibraryByte!
     }
@@ -1534,20 +1588,24 @@ emitImportedLibraryGlobals interfaceIndex: Int, context: ref emitterContext.Emit
     context.libraries -> libraryImports.runtimeLibraryLength(interfaceIndex) => runtimeLibraryLength
     context.libraries -> libraryImports.runtimeLibraryStyle(interfaceIndex) => runtimeLibraryStyle
     false => windowsDrivePath!
-    (runtimeLibraryStyle == 1 and runtimeLibraryLength >= 3) -> if {
+    (runtimeLibraryStyle == 1 and runtimeLibraryLength >= 3)
+        -> if {
         context.libraries -> libraryImports.runtimeLibraryByte(interfaceIndex, 1) => driveColon
         context.libraries -> libraryImports.runtimeLibraryByte(interfaceIndex, 2) => driveSeparator
-        (driveColon == 58 and (driveSeparator == 47 or driveSeparator == 92)) -> if {
+        (driveColon == 58 and (driveSeparator == 47 or driveSeparator == 92))
+            -> if {
             true => windowsDrivePath!
         }
     }
     runtimeLibraryLength => emittedLibraryLength!
-    (context.expectedPathStyle == 0 and windowsDrivePath!) -> if { emittedLibraryLength! + 4 => emittedLibraryLength! }
+    (context.expectedPathStyle == 0 and windowsDrivePath!)
+        -> if { emittedLibraryLength! + 4 => emittedLibraryLength! }
     emittedLibraryLength! + 1 => libraryNameLength
     "@sollang_library_name_i$(interfaceIndex) = private unnamed_addr constant [$libraryNameLength x i8] c" -> print
     manifest -> slice(libraryFileSpan.start - 1, UIntSize(1)) -> print
     0 => libraryByteIndex!
-    (context.expectedPathStyle == 0 and windowsDrivePath!) -> if {
+    (context.expectedPathStyle == 0 and windowsDrivePath!)
+        -> if {
         "/mnt/" -> print
         context.libraries -> libraryImports.runtimeLibraryByte(interfaceIndex, 0) => driveLetter!
         (driveLetter! >= 65 and driveLetter! <= 90) -> if { driveLetter! + 32 => driveLetter! }
@@ -1557,8 +1615,10 @@ emitImportedLibraryGlobals interfaceIndex: Int, context: ref emitterContext.Emit
     }
     libraryByteIndex! < runtimeLibraryLength -> while {
         context.libraries -> libraryImports.runtimeLibraryByte(interfaceIndex, libraryByteIndex!) => libraryByte!
-        (context.expectedPathStyle == 0 and libraryByte! == 92) -> if { 47 => libraryByte! }
-        (context.expectedPathStyle == 1 and libraryByte! == 47) -> if { 92 => libraryByte! }
+        (context.expectedPathStyle == 0 and libraryByte! == 92)
+            -> if { 47 => libraryByte! }
+        (context.expectedPathStyle == 1 and libraryByte! == 47)
+            -> if { 92 => libraryByte! }
         libraryByte! -> literalEmitEscapedByte
         libraryByteIndex! + 1 => libraryByteIndex!
     }
@@ -1615,7 +1675,8 @@ emitNativeSymbolGlobals function: typedIr.TypedIrNode, context: ref emitterConte
     context.ranges[function.sourceModule] => nativeRange
     function -> nativeSymbolToken(context, state) => nativeSymbolTokenIndex
     context.tokens[nativeRange.tokenStart + nativeSymbolTokenIndex] => nativeNameToken
-    nativeNameToken.kind == grammar.tokenIdString() -> if {
+    nativeNameToken.kind == grammar.tokenIdString()
+        -> if {
         TextLiteralRequest { sourceModule: function.sourceModule, token: nativeNameToken } => nativeNameRequest
         nativeNameRequest -> textLiteralLength(context, state) => nativeNameContentLength
         nativeNameContentLength + 1 => nativeNameLength
@@ -1632,7 +1693,8 @@ emitNativeSymbolGlobals function: typedIr.TypedIrNode, context: ref emitterConte
         "00" -> print
         context.sources[function.sourceModule] -> slice(nativeNameToken.span.start, UIntSize(1)) -> println
     }
-    nativeNameToken.kind != grammar.tokenIdString() -> if {
+    nativeNameToken.kind != grammar.tokenIdString()
+        -> if {
         nativeNameToken.span.length + 1 => nativeNameLength
         function -> nativeLibraryAst(context, state) => nativeNameLibraryAst
         context.nodes[nativeRange.astStart + nativeNameLibraryAst] => nativeNameLibrary
@@ -1654,11 +1716,14 @@ emitNativeSymbolGlobals function: typedIr.TypedIrNode, context: ref emitterConte
 emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context -> emitNativeHandleGlobals
     0 => nativeLibrarySource!
-    nativeLibrarySource! < (context.ranges -> len) -> while {
+    nativeLibrarySource! < (context.ranges -> len)
+        -> while {
         context.ranges[nativeLibrarySource!] => nativeLibraryRange
         0 => nativeLibraryAstIndex!
-        nativeLibraryAstIndex! < nativeLibraryRange.astCount -> while {
-            context.nodes[nativeLibraryRange.astStart + nativeLibraryAstIndex!].kind == 65 -> if {
+        nativeLibraryAstIndex! < nativeLibraryRange.astCount
+            -> while {
+            context.nodes[nativeLibraryRange.astStart + nativeLibraryAstIndex!].kind == 65
+                -> if {
                 nativeLibrarySource! -> emitNativeLibraryGlobals(nativeLibraryAstIndex!, context, state)
             }
             nativeLibraryAstIndex! + 1 => nativeLibraryAstIndex!
@@ -1666,16 +1731,19 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
         nativeLibrarySource! + 1 => nativeLibrarySource!
     }
     0 => nativeGlobalFunctionIndex!
-    nativeGlobalFunctionIndex! < (context.ir -> len) -> while {
+    nativeGlobalFunctionIndex! < (context.ir -> len)
+        -> while {
         context.ir[nativeGlobalFunctionIndex!] => nativeGlobalFunction
         ((nativeGlobalFunction -> isNativeFunction(context, state))
-            and not (nativeGlobalFunction -> isImportedLibraryFunction(context, state))) -> if {
+            and not (nativeGlobalFunction -> isImportedLibraryFunction(context, state)))
+                -> if {
             nativeGlobalFunction -> emitNativeSymbolGlobals(context, state)
         }
         nativeGlobalFunctionIndex! + 1 => nativeGlobalFunctionIndex!
     }
     0 => importedLibraryGlobalIndex!
-    importedLibraryGlobalIndex! < (context.libraries.interfaces -> len) -> while {
+    importedLibraryGlobalIndex! < (context.libraries.interfaces -> len)
+        -> while {
         importedLibraryGlobalIndex! -> emitImportedLibraryGlobals(context, state)
         importedLibraryGlobalIndex! + 1 => importedLibraryGlobalIndex!
     }
@@ -1694,12 +1762,15 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
     entry:
     """ -> println
     0 => nativeInitLibrarySource!
-    nativeInitLibrarySource! < (context.ranges -> len) -> while {
+    nativeInitLibrarySource! < (context.ranges -> len)
+        -> while {
         context.ranges[nativeInitLibrarySource!] => nativeInitLibraryRange
         0 => nativeInitLibraryAst!
-        nativeInitLibraryAst! < nativeInitLibraryRange.astCount -> while {
+        nativeInitLibraryAst! < nativeInitLibraryRange.astCount
+            -> while {
             (context.nodes[nativeInitLibraryRange.astStart + nativeInitLibraryAst!].kind == 65
-                and nativeLibraryReachable(nativeInitLibrarySource!, nativeInitLibraryAst!, context, state)) -> if {
+                and nativeLibraryReachable(nativeInitLibrarySource!, nativeInitLibraryAst!, context, state))
+                    -> if {
                 context.expectedPathStyle == 1 -> if {
                     "  %native_library_raw_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!) = call ptr @LoadLibraryA(ptr @sollang_native_library_name_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!))" -> println
                 }
@@ -1714,7 +1785,8 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
         nativeInitLibrarySource! + 1 => nativeInitLibrarySource!
     }
     0 => importedLibraryInitIndex!
-    importedLibraryInitIndex! < (context.libraries.interfaces -> len) -> while {
+    importedLibraryInitIndex! < (context.libraries.interfaces -> len)
+        -> while {
         context.expectedPathStyle == 1 -> if {
             "  %library_raw_i$(importedLibraryInitIndex!) = call ptr @LoadLibraryA(ptr @sollang_library_name_i$(importedLibraryInitIndex!))" -> println
         }
@@ -1726,11 +1798,13 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
         importedLibraryInitIndex! + 1 => importedLibraryInitIndex!
     }
     0 => nativeInitFunctionIndex!
-    nativeInitFunctionIndex! < (context.ir -> len) -> while {
+    nativeInitFunctionIndex! < (context.ir -> len)
+        -> while {
         context.ir[nativeInitFunctionIndex!] => nativeInitFunction
         ((nativeInitFunctionIndex! -> nativeFunctionReachable(state))
             and (nativeInitFunction -> isNativeFunction(context, state))
-            and not (nativeInitFunction -> isImportedLibraryFunction(context, state))) -> if {
+            and not (nativeInitFunction -> isImportedLibraryFunction(context, state)))
+                -> if {
             nativeInitFunction -> nativeLibraryAst(context, state) => nativeInitLibrary
             nativeInitFunction.sourceModule => nativeInitSourceModule
             nativeInitFunction.symbol => nativeInitSymbol
@@ -1747,9 +1821,11 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
         nativeInitFunctionIndex! + 1 => nativeInitFunctionIndex!
     }
     0 => importedSymbolInterface!
-    importedSymbolInterface! < (context.libraries.interfaces -> len) -> while {
+    importedSymbolInterface! < (context.libraries.interfaces -> len)
+        -> while {
         0 => importedSymbolExport!
-        importedSymbolExport! < (context.libraries.interfaces[importedSymbolInterface!].exports -> len) -> while {
+        importedSymbolExport! < (context.libraries.interfaces[importedSymbolInterface!].exports -> len)
+            -> while {
             "  %library_handle_i$(importedSymbolInterface!)_e$(importedSymbolExport!) = load ptr, ptr @sollang_library_handle_i$(importedSymbolInterface!), align 8" -> println
             context.expectedPathStyle == 1 -> if {
                 "  %library_symbol_raw_i$(importedSymbolInterface!)_e$(importedSymbolExport!) = call ptr @GetProcAddress(ptr %library_handle_i$(importedSymbolInterface!)_e$(importedSymbolExport!), ptr @sollang_library_symbol_name_i$(importedSymbolInterface!)_e$(importedSymbolExport!))" -> println
@@ -1771,12 +1847,15 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
     entry:
     """ -> println
     0 => nativeCleanupSource!
-    nativeCleanupSource! < (context.ranges -> len) -> while {
+    nativeCleanupSource! < (context.ranges -> len)
+        -> while {
         context.ranges[nativeCleanupSource!] => nativeCleanupRange
         0 => nativeCleanupAst!
-        nativeCleanupAst! < nativeCleanupRange.astCount -> while {
+        nativeCleanupAst! < nativeCleanupRange.astCount
+            -> while {
             (context.nodes[nativeCleanupRange.astStart + nativeCleanupAst!].kind == 65
-                and nativeLibraryReachable(nativeCleanupSource!, nativeCleanupAst!, context, state)) -> if {
+                and nativeLibraryReachable(nativeCleanupSource!, nativeCleanupAst!, context, state))
+                    -> if {
                 "  %native_close_handle_m$(nativeCleanupSource!)_a$(nativeCleanupAst!) = load ptr, ptr @sollang_native_library_m$(nativeCleanupSource!)_a$(nativeCleanupAst!), align 8" -> println
                 context.expectedPathStyle == 1 -> if {
                     "  %native_closed_m$(nativeCleanupSource!)_a$(nativeCleanupAst!) = call i32 @FreeLibrary(ptr %native_close_handle_m$(nativeCleanupSource!)_a$(nativeCleanupAst!))" -> println
@@ -1790,7 +1869,8 @@ emitNativeRuntime context: ref emitterContext.EmitContext, state: ref CoreEmitte
         nativeCleanupSource! + 1 => nativeCleanupSource!
     }
     0 => importedCleanupIndex!
-    importedCleanupIndex! < (context.libraries.interfaces -> len) -> while {
+    importedCleanupIndex! < (context.libraries.interfaces -> len)
+        -> while {
         "  %library_close_i$(importedCleanupIndex!) = load ptr, ptr @sollang_library_handle_i$(importedCleanupIndex!), align 8" -> println
         context.expectedPathStyle == 1 -> if {
             "  %library_closed_i$(importedCleanupIndex!) = call i32 @FreeLibrary(ptr %library_close_i$(importedCleanupIndex!))" -> println

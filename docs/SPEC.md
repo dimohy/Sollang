@@ -759,6 +759,12 @@ S042 and S044 reject scalar receivers for `len` and `capacity`; S043 rejects a
 dotted member whose base crosses its structural source span or becomes scalar.
 S045 rejects a partition route product unless every field preserves the exact
 canonical `Stream<T>` or `EventStream<T>` wrapper of the partition source.
+N001 is a source-style note, not a warning: a control condition of 45 or more
+characters that still shares a line with `if`, `unless`, `while`, a
+standalone `when` arm, a `partition` predicate, or `if break`/`if continue`
+should move the condition to its own line and keep `->` with the control
+keyword. Short `and`/`or` conditions stay inline. User sources may keep the
+note; repository sources wrap those lines.
 Fixed-point inference treats a preceding `Range` or other provisional type as
 unresolved and updates an already-recorded partition expression when the
 canonical product becomes available.

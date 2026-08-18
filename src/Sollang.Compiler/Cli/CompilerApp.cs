@@ -441,8 +441,13 @@ internal static class CompilerApp
                      .ThenBy(static warning => warning.Code, StringComparer.Ordinal))
         {
             Console.Error.WriteLine(
-                $"warning {warning.Code} in module '{warning.ModuleName}' at {warning.Line}:{warning.Column}: {warning.Message}");
+                $"{DiagnosticKind(warning.Code)} {warning.Code} in module '{warning.ModuleName}' at {warning.Line}:{warning.Column}: {warning.Message}");
         }
+    }
+
+    private static string DiagnosticKind(string code)
+    {
+        return code.StartsWith('N') ? "note" : "warning";
     }
 
     private static void LinkLlvmIr(CliOptions options, LlvmToolchain toolchain, string llPath, string workDir)

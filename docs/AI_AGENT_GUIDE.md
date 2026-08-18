@@ -130,6 +130,11 @@ ready -> if {
 } else {
     "waiting" -> println
 }
+
+(indexReady and moreWorkRemaining and not skippedThisRound)
+    -> if {
+        "ready" -> println
+    }
 ```
 
 When one discriminant is compared against several values or ranges, flow it
@@ -275,7 +280,15 @@ its owned contents are mutated. The compiler reports S001 for a redundant
 numeric constructor, S002 for unused mutability, S003 for a growable array
 whose exact final length is evident from straight-line construction, S004 for
 an empty success branch, and S005 when removing `!` would expose a reserved
-name and the binding must instead be renamed. S006 through S045 are blocking
+name and the binding must instead be renamed. Those remain `warning Snnn`
+source defects. Long control conditions are a separate `note Nnnn` series:
+N001 when a condition of 45 or more characters shares a line with `if`,
+`unless`, `while`, a standalone `when` arm, a `partition` predicate, or
+`if break`/`if continue`. Keep short conditions inline, even with `and`/`or`.
+When the condition is long, put it on its own line and write `-> if {` or
+`-> while {` on the next line. Do not bind the Bool twice around `while`.
+User sources may leave N001 as a note; repository `.slg`, the runtime
+library, and samples wrap those lines. S006 through S045 are blocking
 compiler-integrity diagnostics: S006 means a value-producing typed-IR node
 reached LLVM storage selection without a canonical type; S007 means an array
 storage identity disagrees with its first lowered operand; S008 means an
@@ -420,6 +433,13 @@ check; fixture 975 guards the contract-sensitive analysis. A conditional
 with an empty success branch is never canonical Sollang. Write
 `condition -> unless { failure }` instead of
 `condition -> if {} else { failure }`; S004 reports the latter form.
+A control condition of 45 or more characters on the same line as `if`,
+`unless`, `while`, a standalone `when` arm, a `partition` predicate, or
+`if break`/`if continue` is a note, not a warning. N001 asks for the
+condition on its own line and `-> if {` or `-> while {` on the next line.
+Fixture 1004 retains the note; fixture 1005 retains the wrapped form.
+User sources may keep the note. Repository `.slg`, the runtime library, and
+samples wrap those lines. Short `and`/`or` conditions stay inline.
 Expected integer types propagate recursively through arithmetic and value-form
 `if`/`when` branches. A typed `UInt64` field therefore infers the `0` in
 `known + (condition -> if { value } else { 0 })` without a constructor.

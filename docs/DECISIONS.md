@@ -1,12 +1,12 @@
 # Sollang Decision Log
 
 Updated: 2026-08-18
-Current accepted checkpoint: D337, type-directed enum match arm results
+Current accepted checkpoint: D339, Snnn warnings and Nnnn notes
 
 Entries are chronological. Progress counts and "remaining" work inside an
 older decision describe that decision's checkpoint; later entries supersede
 those counts. Self-host completion remains D254/`SELF_HOSTING_ROADMAP.md`;
-the current language-surface and compiler-integrity checkpoint is D337.
+the current language-surface and compiler-integrity checkpoint is D339.
 
 This file records accepted or working decisions so the language design can
 evolve without losing context.
@@ -12853,3 +12853,36 @@ matches the arm result type, while nested block arms continue to use their
 explicit region result. Regressions 1002, 390, and 613 together retain unary
 transformation, Result construction, nested COM Result lowering, LLVM assembly,
 and execution.
+
+## D338 — Compound control conditions must be named
+
+Status: superseded by D339
+Date: 2026-08-18
+
+The first S046 draft treated every `and`/`or` control condition as a warning
+and asked for a named Bool, or a reusable producer around `while`. That hid
+the control keyword but duplicated loop conditions and renamed short
+junctions. D339 replaces that surface.
+
+## D339 — Snnn warnings and Nnnn notes
+
+Status: implemented
+Date: 2026-08-18
+
+Compiler diagnostics now use two letter series. `warning Snnn` remains a
+source defect: S001–S005 for redundant constructors, unused mutability,
+straight-line growable arrays, empty success branches, and reserved-name
+renames. S006 and later remain blocking compiler-integrity errors.
+
+`note Nnnn` is advisory. N001 reports a control condition of 45 or more
+characters that still shares a line with `if`, `unless`, `while`, a
+standalone `when` arm, a `partition` predicate, or `if break`/`if continue`.
+The rewrite is formatting only: put the condition on its own line, then
+write `-> if {` or `-> while {` on the next line. Short conditions stay
+inline even when they contain `and`/`or`. `while` must not bind the same
+condition twice.
+
+User programs may leave N001 as a note. Example tests fail only on
+unexpected `warning Snnn`. Repository `.slg` files, the runtime library, and
+samples wrap long conditions so in-tree sources stay note-clean. Fixture
+1004 retains the note; fixture 1005 retains the wrapped form.

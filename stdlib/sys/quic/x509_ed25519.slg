@@ -28,7 +28,8 @@ readElement bytes: [UInt8], offset: UIntSize -> Result<Element, errors.Error> {
         UIntSize(firstLength) => contentLength!
     } else {
         UIntSize(firstLength - 128) => lengthOctets
-        (lengthOctets > 0 and lengthOctets <= 4 and contentOffset! + lengthOctets <= UIntSize(bytes -> len)) -> unless {
+        (lengthOctets > 0 and lengthOctets <= 4 and contentOffset! + lengthOctets <= UIntSize(bytes -> len))
+            -> unless {
             Result<Element, errors.Error>.Err(error(42)) -> return
         }
         bytes[Int(contentOffset!)] != 0 -> unless {
@@ -83,7 +84,8 @@ parseSubjectPublicKeyInfo bytes: [UInt8], element: Element -> Result<[UInt8; 32]
     (publicKeyBits.tag == 3
         and publicKeyBits.contentLength == 33
         and publicKeyBits.nextOffset == element.nextOffset
-        and bytes[Int(publicKeyBits.contentOffset)] == 0) -> unless {
+        and bytes[Int(publicKeyBits.contentOffset)] == 0)
+            -> unless {
         Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
     }
     publicKeyZeros() => publicKey!
@@ -108,13 +110,15 @@ isSubjectAlternativeNameOid bytes: [UInt8], element: Element -> Bool {
 }
 
 matchesDnsName bytes: [UInt8], element: Element, serverName: [UInt8] -> Bool {
-    (element.tag == 130 and element.contentLength == UIntSize(serverName -> len)) -> unless {
+    (element.tag == 130 and element.contentLength == UIntSize(serverName -> len))
+        -> unless {
         false -> return
     }
     true => matches!
     0 => index!
     index! < (serverName -> len) -> while {
-        lowerAscii(bytes[Int(element.contentOffset) + index!]) == lowerAscii(serverName[index!]) -> unless {
+        lowerAscii(bytes[Int(element.contentOffset) + index!]) == lowerAscii(serverName[index!])
+            -> unless {
             false => matches!
         }
         index! + 1 => index!
@@ -124,7 +128,8 @@ matchesDnsName bytes: [UInt8], element: Element, serverName: [UInt8] -> Bool {
 
 matchesGeneralNames bytes: [UInt8], value: Element, serverName: [UInt8] -> Result<Bool, errors.Error> {
     readElement(bytes, value.contentOffset)? => names
-    (names.tag == 48 and names.nextOffset == value.nextOffset) -> unless {
+    (names.tag == 48 and names.nextOffset == value.nextOffset)
+        -> unless {
         Result<Bool, errors.Error>.Err(error(42)) -> return
     }
     false => matches!
@@ -153,7 +158,8 @@ matchesServerName bytes: [UInt8], fieldsOffset: UIntSize, fieldsEnd: UIntSize, s
             }
             true => foundExtensions!
             readElement(bytes, field.contentOffset)? => extensions
-            (extensions.tag == 48 and extensions.nextOffset == field.nextOffset) -> unless {
+            (extensions.tag == 48 and extensions.nextOffset == field.nextOffset)
+                -> unless {
                 Result<Bool, errors.Error>.Err(error(42)) -> return
             }
             extensions.contentOffset => extensionOffset!
@@ -168,13 +174,15 @@ matchesServerName bytes: [UInt8], fieldsOffset: UIntSize, fieldsEnd: UIntSize, s
                 possibleCritical.tag == 1 -> if {
                     (possibleCritical.contentLength == 1
                         and (bytes[Int(possibleCritical.contentOffset)] == 0
-                            or bytes[Int(possibleCritical.contentOffset)] == 255)) -> unless {
+                            or bytes[Int(possibleCritical.contentOffset)] == 255))
+                                -> unless {
                         Result<Bool, errors.Error>.Err(error(42)) -> return
                     }
                     possibleCritical.nextOffset => valueOffset!
                 }
                 readElement(bytes, valueOffset!)? => value
-                (value.tag == 4 and value.nextOffset == extension.nextOffset) -> unless {
+                (value.tag == 4 and value.nextOffset == extension.nextOffset)
+                    -> unless {
                     Result<Bool, errors.Error>.Err(error(42)) -> return
                 }
                 isSubjectAlternativeNameOid(bytes, oid) -> if {
@@ -207,7 +215,8 @@ public parsePinnedServer der: [UInt8], pinnedDer: [UInt8], serverName: [UInt8] -
     }
 
     readElement(der, 0)? => outer
-    (outer.tag == 48 and outer.nextOffset == UIntSize(der -> len)) -> unless {
+    (outer.tag == 48 and outer.nextOffset == UIntSize(der -> len))
+        -> unless {
         Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
     }
     readElement(der, outer.contentOffset)? => tbs
@@ -222,7 +231,8 @@ public parsePinnedServer der: [UInt8], pinnedDer: [UInt8], serverName: [UInt8] -
     (signatureBits.tag == 3
         and signatureBits.contentLength > 1
         and signatureBits.nextOffset == outer.nextOffset
-        and der[Int(signatureBits.contentOffset)] == 0) -> unless {
+        and der[Int(signatureBits.contentOffset)] == 0)
+            -> unless {
         Result<[UInt8; 32], errors.Error>.Err(error(42)) -> return
     }
 
@@ -253,7 +263,8 @@ public parsePinnedServer der: [UInt8], pinnedDer: [UInt8], serverName: [UInt8] -
     }
     readElement(der, subject.nextOffset)? => subjectPublicKeyInfo
     parseSubjectPublicKeyInfo(der, subjectPublicKeyInfo)? => publicKey
-    matchesServerName(der, subjectPublicKeyInfo.nextOffset, tbs.nextOffset, serverName)? -> unless {
+    matchesServerName(der, subjectPublicKeyInfo.nextOffset, tbs.nextOffset, serverName)?
+        -> unless {
         Result<[UInt8; 32], errors.Error>.Err(error(112)) -> return
     }
     Result<[UInt8; 32], errors.Error>.Ok(publicKey)

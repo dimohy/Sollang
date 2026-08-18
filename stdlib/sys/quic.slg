@@ -614,14 +614,16 @@ validateTransportParameters bytes: [UInt8], version: UInt32, expectedSourceConne
 
         parameter.id -> when {
             == transport.initialSourceConnectionId() {
-                sameBytes(parameter.value, expectedSourceConnectionId) -> unless {
+                sameBytes(parameter.value, expectedSourceConnectionId)
+                    -> unless {
                     invalidPeerTransport() -> return
                 }
                 true => hasSource!
             }
             == transport.originalDestinationConnectionId() {
                 fromServer -> unless { invalidPeerTransport() -> return }
-                sameBytes(parameter.value, expectedOriginalDestinationConnectionId) -> unless {
+                sameBytes(parameter.value, expectedOriginalDestinationConnectionId)
+                    -> unless {
                     invalidPeerTransport() -> return
                 }
                 true => hasOriginal!
@@ -695,7 +697,8 @@ validateTransportParameters bytes: [UInt8], version: UInt32, expectedSourceConne
 }
 
 public connectVersion endpoint: move Endpoint, peer: Ipv4Endpoint, version: UInt32 -> Result<Connection, QuicError> uses Network, Random {
-    (version == keys.version1() or version == keys.version2()) -> unless {
+    (version == keys.version1() or version == keys.version2())
+        -> unless {
         Result<Connection, QuicError>.Err(QuicError {
             kind: errors.Kind.InvalidArgument
             code: errors.versionNegotiationError()
@@ -881,7 +884,8 @@ handshakePacket socketValue: socket.UdpSocket -> Result<[UInt8; ~], QuicError> u
                     == 0 {
                         packets.parseInitialHeader(received.bytes) -> when {
                             Ok(header) {
-                                header.packetEnd < UIntSize(received.bytes -> len) -> if {
+                                header.packetEnd < UIntSize(received.bytes -> len)
+                                    -> if {
                                     copyRangeBytes(received.bytes, header.packetEnd) => remaining
                                     packets.longHeaderKind(remaining) -> when {
                                         Ok(remainingKind) {
@@ -951,7 +955,8 @@ completeClient connection: mut Connection -> Result<Unit, QuicError> uses Networ
     handshakeMessage(openedHandshake.handshakeBytes, certificateMessage.nextOffset)? => certificateVerify
     acceptClientCertificateVerify(handshakeState!, certificateVerify.bytes)?
     handshakeMessage(openedHandshake.handshakeBytes, certificateVerify.nextOffset)? => serverFinished
-    serverFinished.nextOffset == UIntSize(openedHandshake.handshakeBytes -> len) -> unless {
+    serverFinished.nextOffset == UIntSize(openedHandshake.handshakeBytes -> len)
+        -> unless {
         Result<Unit, QuicError>.Err(QuicError {
             kind: errors.Kind.ProtocolViolation
             code: errors.protocolViolation()
@@ -996,12 +1001,14 @@ completeServer connection: mut Connection -> Result<Unit, QuicError> uses Networ
         connection,
         received,
         connection.handshakeReceiveSecret)? => opened
-    opened.nextOffset < UIntSize(received -> len) -> if {
+    opened.nextOffset < UIntSize(received -> len)
+        -> if {
         copyRangeBytes(received, opened.nextOffset) => pending
         connection.pendingApplicationPacket -> appendBytes(pending)
     }
     handshakeMessage(opened.handshakeBytes, 0)? => finished
-    finished.nextOffset == UIntSize(opened.handshakeBytes -> len) -> unless {
+    finished.nextOffset == UIntSize(opened.handshakeBytes -> len)
+        -> unless {
         Result<Unit, QuicError>.Err(QuicError {
             kind: errors.Kind.ProtocolViolation
             code: errors.protocolViolation()
@@ -1012,7 +1019,8 @@ completeServer connection: mut Connection -> Result<Unit, QuicError> uses Networ
     tls13.finishedVerifyDataFromHash(
         connection.handshakeReceiveSecret,
         transcriptHash) => expectedVerifyData
-    auth.verifyFinished(expectedVerifyData, actualVerifyData) -> unless {
+    auth.verifyFinished(expectedVerifyData, actualVerifyData)
+        -> unless {
         Result<Unit, QuicError>.Err(QuicError {
             kind: errors.Kind.Tls
             code: 51
@@ -1123,7 +1131,8 @@ recordApplicationPacket connection: mut Connection, packetNumber: UInt64, packet
 }
 
 processApplicationAck connection: mut Connection, ack: ref frames.Ack -> Result<Unit, QuicError> uses Clock {
-    ack.largestAcknowledged < connection.nextSendPacketNumber -> unless {
+    ack.largestAcknowledged < connection.nextSendPacketNumber
+        -> unless {
         Result<Unit, QuicError>.Err(QuicError {
             kind: errors.Kind.ProtocolViolation
             code: errors.protocolViolation()
@@ -1150,9 +1159,11 @@ processApplicationAck connection: mut Connection, ack: ref frames.Ack -> Result<
 }
 
 receiveApplicationPacket connection: mut Connection -> Result<[UInt8; ~], QuicError> uses Network {
-    (connection.pendingApplicationPacket -> len) > 0 -> if {
+    (connection.pendingApplicationPacket -> len) > 0
+        -> if {
         [UInt8; ~] => pending!
-        (connection.pendingApplicationPacket -> len) > 0 -> while {
+        (connection.pendingApplicationPacket -> len) > 0
+            -> while {
             connection.pendingApplicationPacket -> take(0) => value
             pending! -> push(value)
         }
@@ -1281,7 +1292,8 @@ public receive connection: mut Connection, channel: mut BiStream, maxBytes: UInt
 
 public sendDatagram connection: mut Connection, bytes: [UInt8] -> Result<Unit, QuicError> uses Network, Clock {
     (connection.peerMaxDatagramFrameSize > 0
-        and UInt64(bytes -> len) + 1 <= connection.peerMaxDatagramFrameSize) -> unless {
+        and UInt64(bytes -> len) + 1 <= connection.peerMaxDatagramFrameSize)
+            -> unless {
         Result<Unit, QuicError>.Err(QuicError {
             kind: errors.Kind.InvalidArgument
             code: UInt64(bytes -> len)
