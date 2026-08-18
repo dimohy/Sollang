@@ -164,6 +164,13 @@ if (exitCode !== 0 || !output.includes('target triple = "wasm32-unknown-unknown-
   throw new Error(`Stage2 browser compiler failed: exit=${exitCode}, output=${output.slice(0, 400)}`);
 }
 
+for (const intrinsic of ["llvm.memcpy.p0.p0.i64", "llvm.memset.p0.i64"]) {
+  if (output.includes(`call void @${intrinsic}`)
+      && !output.includes(`declare void @${intrinsic}`)) {
+    throw new Error(`Stage2 browser compiler omitted the declaration for @${intrinsic}`);
+  }
+}
+
 console.log(
   `PASS Stage2 browser compiler: ${sourceBytes.byteLength} source bytes -> ${output.length} LLVM characters; `
   + `${allocationSizes.size} allocations, ${heapCursor} heap bytes`
