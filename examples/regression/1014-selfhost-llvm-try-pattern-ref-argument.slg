@@ -1,0 +1,43 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        enum Frame {
+            Padding(UInt64)
+            Ack(Ack)
+        }
+
+        struct Ack {
+            largest: UInt64
+        }
+
+        struct Connection {
+            count: UInt64
+        }
+
+        inspect connection: mut Connection, ack: ref Ack -> Result<Unit, UInt64> uses Console {
+            connection.count + 1 => connection.count
+            "connection=$(connection.count),largest=$(ack.largest)" -> println
+            Result<Unit, UInt64>.Ok
+        }
+
+        run: -> Result<Unit, UInt64> uses Console {
+            Connection { count: 6 } => connection!
+            Frame.Ack(Ack { largest: 42 }) -> when {
+                Padding(value) { "padding=$value" -> println }
+                Ack(value) { connection! -> inspect(value)? }
+            }
+            Result<Unit, UInt64>.Ok
+        }
+
+        main {
+            run() -> when {
+                Ok { "done" -> println }
+                Err(value) { "error=$value" -> println }
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

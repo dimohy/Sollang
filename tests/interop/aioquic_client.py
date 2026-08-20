@@ -26,7 +26,13 @@ class LoggingProtocol(QuicConnectionProtocol):
         super().quic_event_received(event)
 
 
-async def roundtrip(host: str, port: int, version: int, qlog: str | None) -> None:
+async def roundtrip(
+    host: str,
+    port: int,
+    version: int,
+    qlog: str | None,
+    split_fin: bool,
+) -> None:
     quic_logger = QuicLogger()
     configuration = QuicConfiguration(
         alpn_protocols=["h3"],
@@ -45,11 +51,15 @@ async def roundtrip(host: str, port: int, version: int, qlog: str | None) -> Non
         ) as protocol:
             reader, writer = await protocol.create_stream()
             writer.write(b"ping")
-            writer.write_eof()
+            if not split_fin:
+                writer.write_eof()
             await writer.drain()
             response = await asyncio.wait_for(reader.read(), timeout=5)
             if response != b"pong":
                 raise RuntimeError(f"unexpected response: {response!r}")
+            if split_fin:
+                writer.write_eof()
+                await writer.drain()
             print(f"aioquic={version},{response.decode('ascii')}")
     finally:
         if qlog is not None:
@@ -63,9 +73,10 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=44_433)
     parser.add_argument("--version", type=lambda value: int(value, 0), default=1)
     parser.add_argument("--qlog")
+    parser.add_argument("--split-fin", action="store_true")
     args = parser.parse_args()
     asyncio.run(asyncio.wait_for(
-        roundtrip(args.host, args.port, args.version, args.qlog),
+        roundtrip(args.host, args.port, args.version, args.qlog, args.split_fin),
         timeout=15,
     ))
 

@@ -40,12 +40,12 @@ Current fixed-point evidence:
 
 | Target | LLVM bytes | Normalized LLVM SHA-256 | Native executable SHA-256 |
 | --- | ---: | --- | --- |
-| Windows x64 | 28,317,932 | `E97879C3C968DDB0751425A0109621522AE26F77675E2981856966FC7A63E527` | `971BEDAD6D8842890EAEACA62477C4359E56369495F08CCA1C1B5B8132E4C4BD` |
-| Linux x64 | 28,297,562 | `7D80DCE6C5C6AC4094E5E85AC0FCB1552D16DA233A151277782BC66562B73AAF` | `885E5B869628169A8623A3C15597BC5FE1A0E94A375FEB2968297C8AE7FBE1C1` |
+| Windows x64 | 28,802,282 | `7C4A882A4F806486EA717859DC7FCC55CAD940A806F4F811E1D2F519C5D2A55D` | `D7005D5AC02EF46A13C77B534EDB1124E46B9CC9DBBE17DFE7F6FE35E20AEF97` |
+| Linux x64 | 28,781,912 | `E09C5A33281E093AAC982E3C66656BF3D98A9A94518FFC4628A40033DF312D47` | `001838A4B3DA37D7493201BBA64DEF24EA35773C14CD0DE90F8837ED91D1055C` |
 
-The complete logical catalog contains 20 user examples, 985 regression cases,
-and 274 diagnostics. Windows passes 1259/1259 selected cases. Linux passes all
-1258/1258 applicable cases; the Windows COM case is structurally validated on
+The complete logical catalog contains 20 user examples, 995 regression cases,
+and 274 diagnostics. Windows passes 1269/1269 selected cases. Linux passes all
+1268/1268 applicable cases; the Windows COM case is structurally validated on
 Linux but is not executed there.
 
 Each fixed-point executable passes 16 exact top-level command contracts plus

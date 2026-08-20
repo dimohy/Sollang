@@ -1,0 +1,51 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        import regression.same_name_frames as frames
+        import regression.same_name_codec as codec
+
+        # The source constructor's opening parenthesis must not hide the later
+        # qualified flow target or redirect it to this same-named function.
+        encode version: Int -> Result<Int, codec.Error> {
+            frames.Value.Crypto(frames.Payload { code: version }) -> codec.encode? => decoded
+            Result<Int, codec.Error>.Ok(decoded)
+        }
+
+        main {
+            6 -> encode -> when {
+                Ok(answer) { "$answer" -> println }
+                Err(error) { "error=$(error.code)" -> println }
+            }
+        }
+        """,
+        """
+        namespace regression.same_name_frames
+
+        public struct Payload {
+            code: Int
+        }
+
+        public enum Value {
+            Crypto(Payload)
+        }
+        """,
+        """
+        namespace regression.same_name_codec
+
+        import regression.same_name_frames as frames
+
+        public struct Error {
+            code: Int
+        }
+
+        public encode value: frames.Value -> Result<Int, Error> {
+            value -> when {
+                Crypto(payload) { Result<Int, Error>.Ok(payload.code + 1) }
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

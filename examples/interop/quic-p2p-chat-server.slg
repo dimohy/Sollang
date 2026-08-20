@@ -1,0 +1,37 @@
+# Authenticated direct P2P chat over one QUIC bidirectional stream.
+# The fixed seed is only for this reproducible sample; applications should
+# generate an identity once and persist it securely.
+import sys.io as io
+import sys.quic as quic
+import sys.quic.p2p as p2p
+import sys.runtime as runtime
+
+chatProtocol: -> [UInt8; 14] => [
+    115, 111, 108, 108, 97, 110, 103,
+    47, 99, 104, 97, 116, 47, 49]
+
+serve: -> Result<Unit, quic.QuicError> uses Network, Random, Clock, Console {
+    p2p.fromSeed([1; 32])? => identity
+    p2p.accept(
+        quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 44_434 },
+        identity)? => session!
+    p2p.acceptProtocol(session!, chatProtocol())? => stream!
+    p2p.receiveMessage(session!, stream!, 1_024)? => request
+    p2p.sendMessage(
+        session!,
+        stream!,
+        [104, 101, 108, 108, 111, 45, 99, 108, 105, 101, 110, 116])?
+    p2p.finish(session!, stream!)?
+    p2p.close(session!, 0)?
+    io.println("server-received=$(request -> len)")
+    Result<Unit, quic.QuicError>.Ok
+}
+
+main {
+    io.println("p2p-ready=44434")
+    runtime.flushStandardOutput()
+    serve() -> when {
+        Ok(done) { "p2p-server-complete" -> io.println }
+        Err(error) { "p2p-server-error=$(error.code)" -> io.println }
+    }
+}

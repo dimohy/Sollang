@@ -1,0 +1,41 @@
+# The sample reconstructs the server's signed record from a deterministic
+# seed so it is self-contained. Real applications receive PeerRecord from a
+# trusted contact, rendezvous service, QR code, or another discovery channel.
+import sys.io as io
+import sys.quic as quic
+import sys.quic.p2p as p2p
+
+chatProtocol: -> [UInt8; 14] => [
+    115, 111, 108, 108, 97, 110, 103,
+    47, 99, 104, 97, 116, 47, 49]
+
+chat: -> Result<Unit, quic.QuicError> uses Network, Random, Clock, Console {
+    p2p.fromSeed([1; 32])? => serverIdentity
+    p2p.createRecord(
+        serverIdentity,
+        quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 44_434 },
+        9_000_000_000_000)? => serverRecord
+    p2p.fromSeed([2; 32])? => clientIdentity
+    p2p.dial(
+        quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 0 },
+        clientIdentity,
+        serverRecord,
+        quic.version1())? => session!
+    p2p.openProtocol(session!, chatProtocol())? => stream!
+    p2p.sendMessage(
+        session!,
+        stream!,
+        [104, 101, 108, 108, 111, 45, 112, 101, 101, 114])?
+    p2p.receiveMessage(session!, stream!, 1_024)? => response
+    p2p.finish(session!, stream!)?
+    p2p.close(session!, 0)?
+    io.println("client-received=$(response -> len)")
+    Result<Unit, quic.QuicError>.Ok
+}
+
+main {
+    chat() -> when {
+        Ok(done) { "p2p-client-complete" -> io.println }
+        Err(error) { "p2p-client-error=$(error.code)" -> io.println }
+    }
+}

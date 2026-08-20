@@ -335,6 +335,26 @@ reachable Sollang standard-library code. The compiler includes only the used
 protocol modules in the native executable; no Rust crate, QUIC DLL, shared
 object, or runtime adapter installation is required.
 
+`sys.quic.p2p` adds stable peer IDs, signed expiring endpoint records, mutual
+Ed25519 authentication, exact application-protocol negotiation, and framed
+messages over direct QUIC. The runnable chat pair is
+`examples/interop/quic-p2p-chat-server.slg` and
+`examples/interop/quic-p2p-chat-client.slg`; verify both native processes with:
+
+```powershell
+.\scripts\verify-quic-p2p.ps1
+```
+
+On Linux or WSL, run the corresponding native-process proof with:
+
+```bash
+./scripts/verify-quic-p2p-linux.sh
+```
+
+The current scope is a directly reachable LAN/public/forwarded UDP endpoint.
+Rendezvous, STUN/ICE discovery, relay, and NAT hole punching are intentionally
+not advertised as implemented.
+
 Comments use `#`. Triple-quoted strings preserve readable embedded source, and
 their common indentation is removed:
 

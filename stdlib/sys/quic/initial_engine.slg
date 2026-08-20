@@ -127,13 +127,16 @@ public acceptClientInitial datagram: [UInt8], expectedPacketNumber: UInt64 -> Re
             crypto.offset == 0 -> unless {
                 Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, crypto.offset)) -> return
             }
-            hello.decodeClientHello(crypto.data)? => decodedHello
+            copyBytes(header.destinationConnectionId) => originalDestinationConnectionId
+            copyBytes(header.sourceConnectionId) => clientSourceConnectionId
+            copyBytes(crypto.data) => clientHello
+            hello.decodeClientHello(clientHello)? => decodedHello
             Result<AcceptedClientInitial, errors.Error>.Ok(AcceptedClientInitial {
                 version: header.version
-                originalDestinationConnectionId: header.destinationConnectionId
-                clientSourceConnectionId: header.sourceConnectionId
+                originalDestinationConnectionId: originalDestinationConnectionId
+                clientSourceConnectionId: clientSourceConnectionId
                 packetNumber: opened.packetNumber
-                clientHello: crypto.data
+                clientHello: clientHello
             })
         }
         Padding(count) { Result<AcceptedClientInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, count)) }
@@ -196,10 +199,12 @@ public openServerInitial datagram: [UInt8], version: UInt32, originalDestination
                 Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, crypto.offset)) -> return
             }
             hello.decodeServerHello(crypto.data)? => decodedHello
+            copyBytes(header.sourceConnectionId) => serverSourceConnectionId
+            copyBytes(crypto.data) => serverHello
             Result<OpenedServerInitial, errors.Error>.Ok(OpenedServerInitial {
-                serverSourceConnectionId: header.sourceConnectionId
+                serverSourceConnectionId: serverSourceConnectionId
                 packetNumber: opened.packetNumber
-                serverHello: crypto.data
+                serverHello: serverHello
             })
         }
         Padding(count) { Result<OpenedServerInitial, errors.Error>.Err(error(errors.Kind.ProtocolViolation, count)) }

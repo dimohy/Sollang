@@ -69,15 +69,25 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
         ") {" -> println
         "entry:" -> println
         functionIndex -> emitHoistedControlAllocas(functionIndex + 1, functionEnd!, context, state)
+        functionIndex -> emitHoistedReferenceArgumentAllocas(functionIndex + 1, functionEnd!, context, state)
         function.operand1 >= 0 -> if {
             context.ir[function.operand1] => entryParameter
             entryParameter.flags / 2 % 2 == 1 -> if {
                 entryParameter -> mutableBorrowUsesStructPointer(context)
                     -> if {
-                    "  %arg = load " -> print
-                    entryParameter -> writeIrType(context, state)
-                    ", ptr %arg_mut_struct, align " -> print
-                    entryParameter -> storageAlign(context, state) -> writeDecimalLine
+                    entryParameter -> effectiveTypeId(context, state) => mutableEntryParameterTypeId
+                    (mutableEntryParameterTypeId >= 0
+                        and context.types[mutableEntryParameterTypeId].kind == 4
+                        and context.types[mutableEntryParameterTypeId].length >= 0)
+                            -> if {
+                        "  %arg_value0 = insertvalue { ptr, i64 } poison, ptr %arg_mut_struct, 0" -> println
+                        "  %arg = insertvalue { ptr, i64 } %arg_value0, i64 $(context.types[mutableEntryParameterTypeId].length), 1" -> println
+                    } else {
+                        "  %arg = load " -> print
+                        entryParameter -> writeIrType(context, state)
+                        ", ptr %arg_mut_struct, align " -> print
+                        entryParameter -> storageAlign(context, state) -> writeDecimalLine
+                    }
                 } else {
                     "  %arg_mut_ptr_addr = extractvalue %sollang.mutable_container %arg_borrow, 0" -> println
                     "  %arg_mut_len_addr = extractvalue %sollang.mutable_container %arg_borrow, 1" -> println
@@ -112,10 +122,19 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             entryAdditionalParameter.flags / 2 % 2 == 1 -> if {
                 entryAdditionalParameter -> mutableBorrowUsesStructPointer(context)
                     -> if {
-                    "  %arg$(entryAdditionalParameterOrdinal!) = load " -> print
-                    entryAdditionalParameter -> writeIrType(context, state)
-                    ", ptr %arg$(entryAdditionalParameterOrdinal!)_mut_struct, align " -> print
-                    entryAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+                    entryAdditionalParameter -> effectiveTypeId(context, state) => mutableAdditionalParameterTypeId
+                    (mutableAdditionalParameterTypeId >= 0
+                        and context.types[mutableAdditionalParameterTypeId].kind == 4
+                        and context.types[mutableAdditionalParameterTypeId].length >= 0)
+                            -> if {
+                        "  %arg$(entryAdditionalParameterOrdinal!)_value0 = insertvalue { ptr, i64 } poison, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_struct, 0" -> println
+                        "  %arg$(entryAdditionalParameterOrdinal!) = insertvalue { ptr, i64 } %arg$(entryAdditionalParameterOrdinal!)_value0, i64 $(context.types[mutableAdditionalParameterTypeId].length), 1" -> println
+                    } else {
+                        "  %arg$(entryAdditionalParameterOrdinal!) = load " -> print
+                        entryAdditionalParameter -> writeIrType(context, state)
+                        ", ptr %arg$(entryAdditionalParameterOrdinal!)_mut_struct, align " -> print
+                        entryAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+                    }
                 } else {
                     "  %arg$(entryAdditionalParameterOrdinal!)_mut_ptr_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 0" -> println
                     "  %arg$(entryAdditionalParameterOrdinal!)_mut_len_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 1" -> println
@@ -714,7 +733,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     }
                     foldRoleUse! + 1 => foldRoleUse!
                 }
-                expression.nextOperand -> emitRegion(context, state)
+                expression.nextOperand -> emitRegion(expressionOrder, context, state)
                 expression.nextOperand -> regionResultValueIndex(context, state) => foldBodyResult
                 "  store i32 %v$(foldBodyResult), ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
                 foldSource.kind == 31 -> if {
@@ -783,11 +802,11 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             expression.kind == 26 -> if {
                 WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitEnumConstructor(context, state)
             }
-            expression.kind == 27 -> if { expressionIndex -> emitEnumMatch(context, state) }
-            expression.kind == 34 -> if { expressionIndex -> emitSubjectWhen(context, state) }
+            expression.kind == 27 -> if { expressionIndex -> emitEnumMatch(expressionOrder, context, state) }
+            expression.kind == 34 -> if { expressionIndex -> emitSubjectWhen(expressionOrder, context, state) }
             (expression.kind == 30 and context.nodes[context.ranges[expression.sourceModule].astStart + expression.astNode].kind == 82)
                 -> if {
-                expressionIndex -> emitResultPropagation(functionIndex, context, state)
+                expressionIndex -> emitResultPropagation(functionIndex, expressionOrder, context, state)
             }
             expression.kind == 2 -> if {
                 expression -> sourceToken(context, state) => expressionToken
@@ -1296,6 +1315,25 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                         -1 => memberNextOrigin!
                                         -1 => memberNextModule!
                                         -1 => memberNextSymbol!
+                                        -1 => memberNextTypeId!
+                                        -1 => memberNextFixedLength!
+                                        -1 => memberNextFixedElementSymbol!
+                                        -1 => memberCanonicalOwnerType!
+                                        0 => memberCanonicalOwnerSearch!
+                                        memberCanonicalOwnerSearch! < (context.types -> len) -> while {
+                                            context.types[memberCanonicalOwnerSearch!] => memberCanonicalOwnerCandidate
+                                            (memberCanonicalOwnerCandidate.kind == 1
+                                                and memberCanonicalOwnerCandidate.module == ownerSourceModule!
+                                                and memberCanonicalOwnerCandidate.symbol == memberCurrentSymbol!)
+                                                    -> if { memberCanonicalOwnerSearch! => memberCanonicalOwnerType! }
+                                            memberCanonicalOwnerSearch! + 1 => memberCanonicalOwnerSearch!
+                                        }
+                                        memberCanonicalOwnerType! >= 0 -> if {
+                                            memberCanonicalOwnerType! -> canonicalMemberFieldOrdinalIndex(fieldOrdinal!, context) => memberCanonicalField
+                                            memberCanonicalField >= 0 -> if {
+                                                context.fields[memberCanonicalField].fieldType => memberNextTypeId!
+                                            }
+                                        }
                                         memberFieldTypeIndex! >= 0 -> if {
                                             context.nominal[memberFieldTypeIndex!] => memberFieldType
                                             memberFieldType.origin => memberNextOrigin!
@@ -1308,6 +1346,30 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                                 context.composite[memberCompositeSearch!] => memberCompositeType
                                                 (memberCompositeType.sourceModule == ownerSourceModule! and memberCompositeType.typeAst == memberField.typeNode)
                                                     -> if {
+                                                    memberCompositeType.canonical >= 0 -> if {
+                                                        memberCompositeType.canonical => memberNextTypeId!
+                                                    }
+                                                    (memberNextTypeId! < 0
+                                                        and memberCompositeType.kind == 4
+                                                        and memberCompositeType.lengthToken >= 0) -> if {
+                                                        ownerSourceModule! -> decimalTokenValue(memberCompositeType.lengthToken, context, state) => memberCompositeLength
+                                                        memberCompositeLength => memberNextFixedLength!
+                                                        memberCompositeType.elementSymbol => memberNextFixedElementSymbol!
+                                                        0 => memberCompositeTypeSearch!
+                                                        memberCompositeTypeSearch! < (context.types -> len) -> while {
+                                                            context.types[memberCompositeTypeSearch!] => memberCompositeCanonical
+                                                            (memberCompositeCanonical.kind == 4
+                                                                and memberCompositeCanonical.length == memberCompositeLength
+                                                                and memberCompositeCanonical.first >= 0) -> if {
+                                                                context.types[memberCompositeCanonical.first] => memberCompositeElement
+                                                                (memberCompositeElement.origin == memberCompositeType.elementOrigin
+                                                                    and memberCompositeElement.module == memberCompositeType.elementModule
+                                                                    and memberCompositeElement.symbol == memberCompositeType.elementSymbol)
+                                                                        -> if { memberCompositeTypeSearch! => memberNextTypeId! }
+                                                            }
+                                                            memberCompositeTypeSearch! + 1 => memberCompositeTypeSearch!
+                                                        }
+                                                    }
                                                     10 + memberCompositeType.kind => memberNextOrigin!
                                                     memberCompositeType.kind == 5 -> if {
                                                         memberCompositeType.keySymbol => memberNextModule!
@@ -1320,9 +1382,43 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                                 memberCompositeSearch! + 1 => memberCompositeSearch!
                                             }
                                         }
+                                        # Imported library projections can lose the
+                                        # composite length token while the field's
+                                        # declaration AST remains authoritative.
+                                        # Recover `[T; N]` directly from that type
+                                        # node before choosing the member ABI.
+                                        (memberNextFixedLength! < 0 and memberField.typeNode >= 0)
+                                            -> if {
+                                            memberField.typeNode => memberDeclaredAst!
+                                            0 => memberDeclaredDepth!
+                                            (memberNextFixedLength! < 0
+                                                and memberDeclaredAst! >= 0
+                                                and memberDeclaredDepth! < 3) -> while {
+                                                context.nodes[ownerRange.astStart + memberDeclaredAst!] => memberDeclaredType
+                                                false => memberDeclaredSemicolon!
+                                                memberDeclaredType.firstToken => memberDeclaredTokenIndex!
+                                                memberDeclaredTokenIndex! < memberDeclaredType.firstToken + memberDeclaredType.tokenCount -> while {
+                                                    context.tokens[ownerRange.tokenStart + memberDeclaredTokenIndex!] => memberDeclaredToken
+                                                    memberDeclaredToken.kind == grammar.tokenIdSemicolon()
+                                                        -> if { true => memberDeclaredSemicolon! }
+                                                    (memberDeclaredSemicolon! and memberDeclaredToken.kind == grammar.tokenIdNumber())
+                                                        -> if {
+                                                        ownerSourceModule! -> decimalTokenValue(memberDeclaredTokenIndex!, context, state) => memberNextFixedLength!
+                                                    }
+                                                    memberDeclaredTokenIndex! + 1 => memberDeclaredTokenIndex!
+                                                }
+                                                memberDeclaredType.parent => memberDeclaredAst!
+                                                memberDeclaredDepth! + 1 => memberDeclaredDepth!
+                                            }
+                                            memberNextSymbol! => memberNextFixedElementSymbol!
+                                        }
+                                        "; member-legacy type=$(memberNextTypeId!),fixed=$(memberNextFixedLength!),element=$(memberNextFixedElementSymbol!),fieldType=$(memberField.typeNode)" -> println
                                         "  " -> print
                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
                                             -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)" -> print }
+                                        ((memberNextTypeId! >= 0 and context.types[memberNextTypeId!].kind == 4)
+                                            or memberNextFixedLength! >= 0)
+                                            -> if { "_inline" -> print }
                                         " = extractvalue %sollang.struct.m$(ownerSourceModule!)_s$(memberCurrentSymbol!) " -> print
                                         memberProjectionOrdinal! == 0 -> if {
                                             (memberBase.kind == 5 and function.operand1 >= 0 and memberBase.symbol == context.ir[function.operand1].symbol)
@@ -1333,6 +1429,55 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                         }
                                         ", " -> print
                                         fieldOrdinal! -> writeDecimalLine
+                                        ((memberNextTypeId! >= 0 and context.types[memberNextTypeId!].kind == 4)
+                                            or memberNextFixedLength! >= 0)
+                                            -> if {
+                                            "  " -> print
+                                            memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                -> if { "%v$(expressionIndex)_slot" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_slot" -> print }
+                                            " = alloca " -> print
+                                            memberNextTypeId! >= 0 -> if {
+                                                memberNextTypeId! -> writeSemanticTypeId(context, state)
+                                            } else {
+                                                "[$(memberNextFixedLength!) x " -> print
+                                                memberNextFixedElementSymbol! -> llvmType(context, state) -> print
+                                                "]" -> print
+                                            }
+                                            ", align " -> print
+                                            memberNextTypeId! >= 0 -> if { context.typeAligns[memberNextTypeId!] -> writeDecimalLine } else { "1" -> println }
+                                            "  store " -> print
+                                            memberNextTypeId! >= 0 -> if {
+                                                memberNextTypeId! -> writeSemanticTypeId(context, state)
+                                            } else {
+                                                "[$(memberNextFixedLength!) x " -> print
+                                                memberNextFixedElementSymbol! -> llvmType(context, state) -> print
+                                                "]" -> print
+                                            }
+                                            " " -> print
+                                            memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                -> if { "%v$(expressionIndex)_inline" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_inline" -> print }
+                                            ", ptr " -> print
+                                            memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                -> if { "%v$(expressionIndex)_slot" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_slot" -> print }
+                                            ", align " -> print
+                                            memberNextTypeId! >= 0 -> if { context.typeAligns[memberNextTypeId!] -> writeDecimalLine } else { "1" -> println }
+                                            "  " -> print
+                                            memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                -> if { "%v$(expressionIndex)_0" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_0" -> print }
+                                            " = insertvalue { ptr, i64 } poison, ptr " -> print
+                                            memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                -> if { "%v$(expressionIndex)_slot" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_slot" -> print }
+                                            ", 0" -> println
+                                            "  " -> print
+                                            memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)" -> print }
+                                            " = insertvalue { ptr, i64 } " -> print
+                                            memberIdentifierOrdinal! == memberIdentifierCount! - 1
+                                                -> if { "%v$(expressionIndex)_0" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_0" -> print }
+                                            ", i64 " -> print
+                                            memberNextTypeId! >= 0 -> if { context.types[memberNextTypeId!].length -> writeDecimal } else { memberNextFixedLength! -> writeDecimal }
+                                            ", 1" -> println
+                                        }
                                         memberNextOrigin! => memberCurrentOrigin!
                                         memberNextModule! => memberCurrentModule!
                                         memberNextSymbol! => memberCurrentSymbol!
@@ -1927,7 +2072,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 -> if {
                 (expression.kind == 8 and (expression.opcode == -24 or expression.opcode == -25))
                     -> if {
-                    expressionIndex -> emitLogicalValue(functionIndex, context, state)
+                    expressionIndex -> emitLogicalValue(functionIndex, expressionOrder, context, state)
                 } else {
                 context.ir[expression.operand0] => leftOperand
                 0 => binaryWidth!
@@ -2964,7 +3109,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     expressionIndex -> callResultPropagationBindingIndex(context, state) => functionPropagationBindingIndex
                     functionPropagationBindingIndex >= 0 -> if {
                         context.ir[functionPropagationBindingIndex] => functionPropagationBinding
-                        functionPropagationBindingIndex -> emitResultPropagationValue(expressionIndex, functionPropagationBinding.parent, functionPropagationBinding.astNode, functionIndex, context, state)
+                        functionPropagationBindingIndex -> emitResultPropagationValue(expressionIndex, functionPropagationBinding.parent, functionPropagationBinding.astNode, functionIndex, expressionOrder, context, state)
                     }
                 }
                 }
@@ -2976,7 +3121,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 expressionIndex -> irValueUsed(functionIndex, context, state) => ifValueUsed!
                 (ifCondition.kind == 8 and (ifCondition.opcode == -25 or ifCondition.opcode == -24) or (ifCondition.kind == 7 and ifCondition.opcode == -26)) => ifShortCircuit
                 ifShortCircuit -> if {
-                    WhileBranchRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, conditionIndex: expression.operand0 } -> emitWhileBranch(context, state)
+                    WhileBranchRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, conditionIndex: expression.operand0 } -> emitWhileBranch(expressionOrder, context, state)
                     "while$(expressionIndex)_body:" -> println
                     expression -> writeIfShortCircuitBodyTarget(expressionIndex)
                     "while$(expressionIndex)_exit:" -> println
@@ -2995,7 +3140,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 }
                 "if$(expressionIndex)_then:" -> println
                 expression.operand1 -> regionReturns(context, state) => thenReturns
-                expression.operand1 -> emitRegion(context, state)
+                expression.operand1 -> emitRegion(expressionOrder, context, state)
                 not thenReturns -> if {
                     (ifValueUsed! and not (expression.typeOrigin == 1 and expression.typeSymbol == 0) and expression.nextOperand >= 0)
                         -> if {
@@ -3008,7 +3153,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 expression.nextOperand >= 0 -> if {
                     "if$(expressionIndex)_else:" -> println
                     expression.nextOperand -> regionReturns(context, state) => elseReturns!
-                    expression.nextOperand -> emitRegion(context, state)
+                    expression.nextOperand -> emitRegion(expressionOrder, context, state)
                     not elseReturns! -> if {
                         (ifValueUsed! and not (expression.typeOrigin == 1 and expression.typeSymbol == 0))
                             -> if {
@@ -3038,13 +3183,13 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     } else {
                         (whenArm.operand0 >= 0 and whenArm.operand1 >= 0 and whenArm.operand0 != whenArm.operand1 and context.ir[whenArm.operand0].kind != 19)
                             -> if {
-                            WhileBranchRequest { whileIndex: whenArmIndex!, ownerIndex: functionIndex, conditionIndex: whenArm.operand0 } -> emitWhileBranch(context, state)
+                            WhileBranchRequest { whileIndex: whenArmIndex!, ownerIndex: functionIndex, conditionIndex: whenArm.operand0 } -> emitWhileBranch(expressionOrder, context, state)
                             "while$(whenArmIndex!)_body:" -> println
-                            whenArm.operand1 -> emitRegion(context, state)
+                            whenArm.operand1 -> emitRegion(expressionOrder, context, state)
                             "  br label %when$(expressionIndex)_end" -> println
                             "while$(whenArmIndex!)_exit:" -> println
                         } else {
-                            whenArm.operand1 >= 0 -> if { whenArm.operand1 -> emitRegion(context, state) } else { whenArm.operand0 -> emitRegion(context, state) }
+                            whenArm.operand1 >= 0 -> if { whenArm.operand1 -> emitRegion(expressionOrder, context, state) } else { whenArm.operand0 -> emitRegion(expressionOrder, context, state) }
                             "  br label %when$(expressionIndex)_end" -> println
                             false => whenArmOpen!
                         }
@@ -3056,10 +3201,10 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             expression.kind == 20 -> if {
                 "  br label %while$(expressionIndex)_header" -> println
                 "while$(expressionIndex)_header:" -> println
-                WhileBranchRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, conditionIndex: expression.operand0 } -> emitWhileBranch(context, state)
+                WhileBranchRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, conditionIndex: expression.operand0 } -> emitWhileBranch(expressionOrder, context, state)
                 "while$(expressionIndex)_body:" -> println
-                expression.operand1 -> emitRegion(context, state)
-                OwnedDropRequest { regionIndex: expression.operand1, beforeAst: -1, edgeIndex: expressionIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                expression.operand1 -> emitRegion(expressionOrder, context, state)
+                OwnedDropRequest { regionIndex: expression.operand1, beforeAst: -1, edgeIndex: expressionIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                 "  br label %while$(expressionIndex)_header" -> println
                 "while$(expressionIndex)_exit:" -> println
             }
@@ -3590,7 +3735,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
             function -> integerNodeWidth(context, state) => returnTargetWidth
             returnOperand -> integerNodeWidth(context, state) => returnSourceWidth
             (function.typeOrigin == 4 and function.typeSymbol == 4 and returnOperand.typeOrigin == 4 and returnOperand.typeSymbol == 3) => convertsStreamToEvent
-            convertsStreamToEvent -> if {
+        convertsStreamToEvent -> if {
                 "  %return_stream_context = extractvalue %sollang.stream %v$(returnValueIndex), 0" -> println
                 "  %return_stream_next = extractvalue %sollang.stream %v$(returnValueIndex), 1" -> println
                 "  %return_stream_drop = extractvalue %sollang.stream %v$(returnValueIndex), 2" -> println
@@ -3616,9 +3761,23 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 " to i$(returnTargetWidth)" -> println
                 true => convertedIntegerReturn!
             }
+            false => promotedFixedArrayReturn!
+            (function.typeId >= 0 and context.types[function.typeId].kind == 4)
+                -> if {
+                "  %return_fixed_source = extractvalue { ptr, i64 } " -> print
+                (returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol)
+                    -> if { "%arg" -> print } else { "%v$(returnValueIndex)" -> print }
+                ", 0" -> println
+                "  %return_fixed_data = call ptr @malloc(i64 $(context.typeSizes[function.typeId]))" -> println
+                "  call void @llvm.memcpy.p0.p0.i64(ptr %return_fixed_data, ptr %return_fixed_source, i64 $(context.typeSizes[function.typeId]), i1 false)" -> println
+                "  %return_fixed_0 = insertvalue { ptr, i64 } poison, ptr %return_fixed_data, 0" -> println
+                "  %return_fixed = insertvalue { ptr, i64 } %return_fixed_0, i64 $(context.types[function.typeId].length), 1" -> println
+                true => promotedFixedArrayReturn!
+            }
             "  ret " -> print
             function -> writeIrType(context, state)
             " " -> print
+            promotedFixedArrayReturn! -> if { "%return_fixed" -> println } else {
             convertedIntegerReturn! -> if { "%return_integer" -> println } else {
             convertsStreamToEvent -> if { "%return_event" -> println } else {
             transparentReferenceReturn! -> if { "%return_ref_value" -> println } else {
@@ -3645,6 +3804,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                         }
                     }
                 }
+            }
             }
             }
             }

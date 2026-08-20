@@ -30,6 +30,128 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
+enumAbiStorageSize typeId: Int, depth: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.typeSizes[typeId] => resolved!
+    depth < 64 -> if {
+        context.types[typeId] => current
+        (current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1))
+            -> if {
+            0 => payloadSize!
+            current.first >= 0 -> if { current.first -> enumAbiStorageSize(depth + 1, context, state) => payloadSize! }
+            current.second >= 0 -> if {
+                current.second -> enumAbiStorageSize(depth + 1, context, state) => secondSize
+                secondSize > payloadSize! -> if { secondSize => payloadSize! }
+            }
+            8 + ((payloadSize! + 7) / 8) * 8 => resolved!
+        }
+        current.kind == 4 -> if {
+            current.first >= 0 -> if {
+                (current.first -> enumAbiStorageSize(depth + 1, context, state)) * current.length => resolved!
+            }
+        }
+        (current.kind == 1 or current.kind == 10) -> if {
+            false => nominalEnum!
+            typeId => nominalEnumTypeId!
+            current.kind == 1 -> if {
+                typeId -> isNominalEnumType(context, state) => nominalEnum!
+                # Imported references may have a distinct type ID for the
+                # same nominal declaration. Resolve enum identity by the
+                # emitted module/symbol name before treating it as a struct.
+                (not nominalEnum! and current.module >= 0) -> if {
+                    0 => nominalEnumCandidateIndex!
+                    (nominalEnumCandidateIndex! < (context.types -> len)
+                        and not nominalEnum!)
+                        -> while {
+                        context.types[nominalEnumCandidateIndex!] => nominalEnumCandidate
+                        (nominalEnumCandidate.status == 0
+                            and nominalEnumCandidate.kind == 1
+                            and nominalEnumCandidate.module == current.module
+                            and nominalEnumCandidate.symbol == current.symbol
+                            and (nominalEnumCandidateIndex! -> isNominalEnumType(context, state)))
+                            -> if {
+                            true => nominalEnum!
+                            nominalEnumCandidateIndex! => nominalEnumTypeId!
+                        }
+                        nominalEnumCandidateIndex! + 1 => nominalEnumCandidateIndex!
+                    }
+                }
+            }
+            nominalEnum! -> if {
+                nominalEnumTypeId! -> enumPayloadTypes(context, state) => payloads
+                0 => payloadSize!
+                0 => payloadIndex!
+                payloadIndex! < (payloads -> len) -> while {
+                    payloads[payloadIndex!] -> enumAbiStorageSize(depth + 1, context, state) => candidateSize
+                    candidateSize > payloadSize! -> if { candidateSize => payloadSize! }
+                    payloadIndex! + 1 => payloadIndex!
+                }
+                context.types[nominalEnumTypeId!] => nominalEnumIdentity
+                0 => nominalEnumConstructorIndex!
+                nominalEnumConstructorIndex! < (context.ir -> len)
+                    -> while {
+                    context.ir[nominalEnumConstructorIndex!] => nominalEnumConstructor
+                    false => nominalEnumConstructorBelongs!
+                    nominalEnumConstructor.typeId == nominalEnumTypeId!
+                        -> if { true => nominalEnumConstructorBelongs! }
+                    (not nominalEnumConstructorBelongs!
+                        and nominalEnumConstructor.typeId >= 0
+                        and nominalEnumConstructor.typeId < (context.types -> len))
+                        -> if {
+                        context.types[nominalEnumConstructor.typeId] => nominalEnumConstructorType
+                        (nominalEnumConstructorType.kind == 1
+                            and nominalEnumConstructorType.module == nominalEnumIdentity.module
+                            and nominalEnumConstructorType.symbol == nominalEnumIdentity.symbol)
+                            -> if { true => nominalEnumConstructorBelongs! }
+                    }
+                    (nominalEnumConstructor.kind == 26
+                        and nominalEnumConstructorBelongs!
+                        and nominalEnumConstructor.operand0 >= 0)
+                        -> if {
+                        context.ir[nominalEnumConstructor.operand0] -> effectiveTypeId(context, state) => nominalEnumConstructorPayloadType
+                        (nominalEnumConstructorPayloadType >= 0
+                            and nominalEnumConstructorPayloadType < (context.types -> len))
+                            -> if {
+                            context.typeSizes[nominalEnumConstructorPayloadType] => nominalEnumConstructorPayloadSize
+                            nominalEnumConstructorPayloadSize > payloadSize!
+                                -> if { nominalEnumConstructorPayloadSize => payloadSize! }
+                        }
+                    }
+                    nominalEnumConstructorIndex! + 1 => nominalEnumConstructorIndex!
+                }
+                8 + ((payloadSize! + 7) / 8) * 8 => resolved!
+            } else {
+                0 => aggregateSize!
+                1 => aggregateAlign!
+                false => aggregateHasField!
+                0 => fieldIndex!
+                fieldIndex! < (context.fields -> len) -> while {
+                    context.fields[fieldIndex!] => field
+                    false => fieldBelongs!
+                    field.ownerType == typeId -> if { true => fieldBelongs! }
+                    (current.kind == 1 and field.ownerType >= 0) -> if {
+                        context.types[field.ownerType] => owner
+                        (owner.kind == 1 and owner.module == current.module and owner.symbol == current.symbol)
+                            -> if { true => fieldBelongs! }
+                    }
+                    (field.status == 0 and fieldBelongs! and field.fieldType >= 0) -> if {
+                        true => aggregateHasField!
+                        context.typeAligns[field.fieldType] => fieldAlign
+                        fieldAlign > aggregateAlign! -> if { fieldAlign => aggregateAlign! }
+                        ((aggregateSize! + fieldAlign - 1) / fieldAlign) * fieldAlign => aggregateSize!
+                        field.fieldType -> enumAbiStorageSize(depth + 1, context, state) => fieldSize
+                        aggregateSize! + fieldSize => aggregateSize!
+                    }
+                    fieldIndex! + 1 => fieldIndex!
+                }
+                aggregateHasField! -> if {
+                    ((aggregateSize! + aggregateAlign! - 1) / aggregateAlign!) * aggregateAlign! => resolved!
+                }
+            }
+        }
+    }
+    resolved!
+}
+
 emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
     borrowCoreState value: ref CoreEmitterState -> ref CoreEmitterState {
         value
@@ -621,9 +743,63 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
             0 => enumPayloadIndex!
             enumPayloadIndex! < (enumPayloads -> len) -> while {
                 enumPayloads[enumPayloadIndex!] => enumPayloadType
-                (enumPayloadType >= 0 and context.typeSizes[enumPayloadType] > enumPayloadSize!)
-                    -> if { context.typeSizes[enumPayloadType] => enumPayloadSize! }
+                enumPayloadType >= 0 -> if {
+                    enumPayloadType -> enumAbiStorageSize(0, context, state) => enumPayloadResolvedSize!
+                    context.types[enumPayloadType] => enumPayloadSemanticType
+                    enumPayloadSemanticType.kind == 1 -> if {
+                        0 => enumPayloadStructSize!
+                        1 => enumPayloadStructAlign!
+                        false => enumPayloadStructHasField!
+                        0 => enumPayloadFieldIndex!
+                        enumPayloadFieldIndex! < (context.fields -> len) -> while {
+                            context.fields[enumPayloadFieldIndex!] => enumPayloadField
+                            enumPayloadField.ownerType >= 0 -> if {
+                                context.types[enumPayloadField.ownerType] => enumPayloadOwnerType
+                                (enumPayloadField.status == 0
+                                    and enumPayloadOwnerType.module == enumPayloadSemanticType.module
+                                    and enumPayloadOwnerType.symbol == enumPayloadSemanticType.symbol
+                                    and enumPayloadField.fieldType >= 0
+                                    and context.typeLayoutStatuses[enumPayloadField.fieldType] == 0)
+                                    -> if {
+                                    true => enumPayloadStructHasField!
+                                    context.typeAligns[enumPayloadField.fieldType] > enumPayloadStructAlign!
+                                        -> if { context.typeAligns[enumPayloadField.fieldType] => enumPayloadStructAlign! }
+                                    ((enumPayloadStructSize! + context.typeAligns[enumPayloadField.fieldType] - 1) / context.typeAligns[enumPayloadField.fieldType]) * context.typeAligns[enumPayloadField.fieldType] => enumPayloadStructSize!
+                                    enumPayloadStructSize! + context.typeSizes[enumPayloadField.fieldType] => enumPayloadStructSize!
+                                }
+                            }
+                            enumPayloadFieldIndex! + 1 => enumPayloadFieldIndex!
+                        }
+                        enumPayloadStructHasField! -> if {
+                            ((enumPayloadStructSize! + enumPayloadStructAlign! - 1) / enumPayloadStructAlign!) * enumPayloadStructAlign! => enumPayloadStructSize!
+                            enumPayloadStructSize! > enumPayloadResolvedSize!
+                                -> if { enumPayloadStructSize! => enumPayloadResolvedSize! }
+                        }
+                    }
+                    enumPayloadResolvedSize! > enumPayloadSize!
+                        -> if { enumPayloadResolvedSize! => enumPayloadSize! }
+                }
                 enumPayloadIndex! + 1 => enumPayloadIndex!
+            }
+            # Constructor operands are the final typed-IR contract for the
+            # payload actually stored. Imported generic applications can keep
+            # an earlier equivalent type ID in the semantic arena, so include
+            # every concrete constructor operand when fixing the ABI width.
+            0 => enumConstructorIndex!
+            enumConstructorIndex! < (context.ir -> len) -> while {
+                context.ir[enumConstructorIndex!] => enumConstructor
+                (enumConstructor.kind == 26
+                    and enumConstructor.typeId == enumTypeIndex!
+                    and enumConstructor.operand0 >= 0)
+                    -> if {
+                    context.ir[enumConstructor.operand0] => enumConstructorPayload
+                    enumConstructorPayload -> effectiveTypeId(context, state) => enumConstructorPayloadType
+                    (enumConstructorPayloadType >= 0
+                        and enumConstructorPayloadType < (context.typeSizes -> len)
+                        and (enumConstructorPayloadType -> enumAbiStorageSize(0, context, state)) > enumPayloadSize!)
+                        -> if { enumConstructorPayloadType -> enumAbiStorageSize(0, context, state) => enumPayloadSize! }
+                }
+                enumConstructorIndex! + 1 => enumConstructorIndex!
             }
             (enumPayloadSize! + 7) / 8 => enumPayloadWords
             "%sollang.enum.t$(enumTypeIndex!) = type { i32, [$enumPayloadWords x i64] }" -> println
@@ -1015,6 +1191,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                 }
                 "entry:" -> println
                 functionIndex! -> emitHoistedControlAllocas(functionIndex! + 1, entryEnd!, context, state)
+                functionIndex! -> emitHoistedReferenceArgumentAllocas(functionIndex! + 1, entryEnd!, context, state)
                 usesNativeInterop -> if { "  call void @sollang_native_init()" -> println }
                 usesComInterop -> if { "  call void @sollang_com_init()" -> println }
                 (usesArguments and context.pointerBitWidth != 32)
@@ -2361,11 +2538,44 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                             -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
                                         "_address, align $(context.typeAligns[entryCanonicalMemberField.fieldType])" -> println
                                     } else {
+                                        context.types[entryCanonicalMemberField.fieldType] => entryCanonicalMemberFieldType
+                                        entryCanonicalMemberFieldType.kind == 4 -> if { "_inline" -> print }
                                         " = extractvalue " -> print
                                         entryCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
                                         " " -> print
                                         entryCanonicalMemberOrdinal! == 0 -> if { "%v$(entryExpression.operand0)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal! - 1)" -> print }
                                         ", $(entryCanonicalMemberField.ordinal)" -> println
+                                        entryCanonicalMemberFieldType.kind == 4 -> if {
+                                            "  " -> print
+                                            entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+                                                -> if { "%v$(entryExpressionIndex)_slot" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)_slot" -> print }
+                                            " = alloca " -> print
+                                            entryCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                                            ", align $(context.typeAligns[entryCanonicalMemberField.fieldType])" -> println
+                                            "  store " -> print
+                                            entryCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                                            " " -> print
+                                            entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+                                                -> if { "%v$(entryExpressionIndex)_inline" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)_inline" -> print }
+                                            ", ptr " -> print
+                                            entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+                                                -> if { "%v$(entryExpressionIndex)_slot" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)_slot" -> print }
+                                            ", align $(context.typeAligns[entryCanonicalMemberField.fieldType])" -> println
+                                            "  " -> print
+                                            entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+                                                -> if { "%v$(entryExpressionIndex)_0" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)_0" -> print }
+                                            " = insertvalue { ptr, i64 } poison, ptr " -> print
+                                            entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+                                                -> if { "%v$(entryExpressionIndex)_slot" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)_slot" -> print }
+                                            ", 0" -> println
+                                            "  " -> print
+                                            entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+                                                -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
+                                            " = insertvalue { ptr, i64 } " -> print
+                                            entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
+                                                -> if { "%v$(entryExpressionIndex)_0" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)_0" -> print }
+                                            ", i64 $(entryCanonicalMemberFieldType.length), 1" -> println
+                                        }
                                     }
                                     entryCanonicalMemberField.fieldType => entryCanonicalMemberOwnerType!
                                     entryCanonicalMemberOrdinal! + 1 => entryCanonicalMemberOrdinal!
@@ -2855,7 +3065,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             }
                             entryFoldRoleUse! + 1 => entryFoldRoleUse!
                         }
-                        entryExpression.nextOperand -> emitRegion(context, state)
+                        entryExpression.nextOperand -> emitRegion(entryOrder!, context, state)
                         entryExpression.nextOperand -> regionResultValueIndex(context, state) => entryFoldBodyResult
                         "  store i32 %v$(entryFoldBodyResult), ptr %fold$(entryExpressionIndex)_acc_slot, align 4" -> println
                         entryFoldSource.kind == 31 -> if {
@@ -3145,8 +3355,8 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                     entryExpression.kind == 26 -> if {
                         WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex!, nodeIndex: entryExpressionIndex } -> emitEnumConstructor(context, state)
                     }
-                    entryExpression.kind == 27 -> if { entryExpressionIndex -> emitEnumMatch(context, state) }
-                    entryExpression.kind == 34 -> if { entryExpressionIndex -> emitSubjectWhen(context, state) }
+                    entryExpression.kind == 27 -> if { entryExpressionIndex -> emitEnumMatch(entryOrder!, context, state) }
+                    entryExpression.kind == 34 -> if { entryExpressionIndex -> emitSubjectWhen(entryOrder!, context, state) }
                     entryExpression.kind == 15 -> if {
                         context.ir[entryExpression.operand0] => entryIndexedValue
                         context.ir[entryExpression.operand1] => entryIndexValue
@@ -3468,7 +3678,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         -> if {
                         (entryExpression.kind == 8 and (entryExpression.opcode == -24 or entryExpression.opcode == -25))
                             -> if {
-                            entryExpressionIndex -> emitLogicalValue(functionIndex!, context, state)
+                            entryExpressionIndex -> emitLogicalValue(functionIndex!, entryOrder!, context, state)
                         } else {
                         context.ir[entryExpression.operand0] => entryLeft
                         0 => entryBinaryWidth!
@@ -4718,7 +4928,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         entryExpressionIndex -> irValueUsed(functionIndex!, context, state) => entryIfValueUsed
                         (entryIfCondition.kind == 8 and (entryIfCondition.opcode == -25 or entryIfCondition.opcode == -24) or (entryIfCondition.kind == 7 and entryIfCondition.opcode == -26)) => entryIfShortCircuit
                         entryIfShortCircuit -> if {
-                            WhileBranchRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex!, conditionIndex: entryExpression.operand0 } -> emitWhileBranch(context, state)
+                            WhileBranchRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex!, conditionIndex: entryExpression.operand0 } -> emitWhileBranch(entryOrder!, context, state)
                             "while$(entryExpressionIndex)_body:" -> println
                             entryExpression -> writeIfShortCircuitBodyTarget(entryExpressionIndex)
                             "while$(entryExpressionIndex)_exit:" -> println
@@ -4733,7 +4943,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             entryExpression -> writeIfDirectBranchTargets(entryExpressionIndex)
                         }
                         "if$(entryExpressionIndex)_then:" -> println
-                        entryExpression.operand1 -> emitRegion(context, state)
+                        entryExpression.operand1 -> emitRegion(entryOrder!, context, state)
                         (entryIfValueUsed and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) and entryExpression.nextOperand >= 0)
                             -> if {
                             entryExpression.operand1 -> regionResultValueIndex(context, state) => entryThenStoreIndex
@@ -4742,7 +4952,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                         "  br label %if$(entryExpressionIndex)_merge" -> println
                         entryExpression.nextOperand >= 0 -> if {
                             "if$(entryExpressionIndex)_else:" -> println
-                            entryExpression.nextOperand -> emitRegion(context, state)
+                            entryExpression.nextOperand -> emitRegion(entryOrder!, context, state)
                             (entryIfValueUsed and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0))
                                 -> if {
                                 entryExpression.nextOperand -> regionResultValueIndex(context, state) => entryElseStoreIndex
@@ -4771,13 +4981,13 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             } else {
                                 (entryWhenArm.operand0 >= 0 and entryWhenArm.operand1 >= 0 and entryWhenArm.operand0 != entryWhenArm.operand1 and context.ir[entryWhenArm.operand0].kind != 19)
                                     -> if {
-                                    WhileBranchRequest { whileIndex: entryWhenArmIndex!, ownerIndex: functionIndex!, conditionIndex: entryWhenArm.operand0 } -> emitWhileBranch(context, state)
+                                    WhileBranchRequest { whileIndex: entryWhenArmIndex!, ownerIndex: functionIndex!, conditionIndex: entryWhenArm.operand0 } -> emitWhileBranch(entryOrder!, context, state)
                                     "while$(entryWhenArmIndex!)_body:" -> println
-                                    entryWhenArm.operand1 -> emitRegion(context, state)
+                                    entryWhenArm.operand1 -> emitRegion(entryOrder!, context, state)
                                     "  br label %when$(entryExpressionIndex)_end" -> println
                                     "while$(entryWhenArmIndex!)_exit:" -> println
                                 } else {
-                                    entryWhenArm.operand1 >= 0 -> if { entryWhenArm.operand1 -> emitRegion(context, state) } else { entryWhenArm.operand0 -> emitRegion(context, state) }
+                                    entryWhenArm.operand1 >= 0 -> if { entryWhenArm.operand1 -> emitRegion(entryOrder!, context, state) } else { entryWhenArm.operand0 -> emitRegion(entryOrder!, context, state) }
                                     "  br label %when$(entryExpressionIndex)_end" -> println
                                     false => entryWhenArmOpen!
                                 }
@@ -4789,10 +4999,10 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                     entryExpression.kind == 20 -> if {
                         "  br label %while$(entryExpressionIndex)_header" -> println
                         "while$(entryExpressionIndex)_header:" -> println
-                        WhileBranchRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex!, conditionIndex: entryExpression.operand0 } -> emitWhileBranch(context, state)
+                        WhileBranchRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex!, conditionIndex: entryExpression.operand0 } -> emitWhileBranch(entryOrder!, context, state)
                         "while$(entryExpressionIndex)_body:" -> println
-                        entryExpression.operand1 -> emitRegion(context, state)
-                        OwnedDropRequest { regionIndex: entryExpression.operand1, beforeAst: -1, edgeIndex: entryExpressionIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                        entryExpression.operand1 -> emitRegion(entryOrder!, context, state)
+                        OwnedDropRequest { regionIndex: entryExpression.operand1, beforeAst: -1, edgeIndex: entryExpressionIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                         "  br label %while$(entryExpressionIndex)_header" -> println
                         "while$(entryExpressionIndex)_exit:" -> println
                     }
@@ -5212,7 +5422,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                     }
                     entryOrderIndex! + 1 => entryOrderIndex!
                 }
-                OwnedDropRequest { regionIndex: functionIndex!, beforeAst: -1, edgeIndex: functionIndex! * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                OwnedDropRequest { regionIndex: functionIndex!, beforeAst: -1, edgeIndex: functionIndex! * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                 usesComInterop -> if { "  call void @sollang_com_cleanup()" -> println }
                 usesNativeInterop -> if { "  call void @sollang_native_cleanup()" -> println }
                 (context.supportsComputePool and (context -> diagnostics.usesParallelRuntime))

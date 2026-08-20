@@ -47,6 +47,22 @@ desired contract fits the language model, then repair parser, semantics, and
 code generation as required and retain a minimal language regression alongside
 the standard-library and cross-target fixture that exposed it.
 
+Repeated manual diagnosis must be promoted into an earlier deterministic
+gate. Use `Observe -> Detect repetition -> Locate authority -> Structure the
+contract -> Validate early -> Retain a regression matrix -> Automate` as the
+general problem-solving loop. If an Agent has to infer the same malformed
+state twice, or the defect is first visible only in LLVM, linking, or native
+execution, model the authoritative state with types, explicit slots, enums, or
+a plan and make the compiler validate it before the expensive stage. Internal
+compiler-invariant failures use the `Vnnn` verification namespace; keep them
+separate from user-source `Snnn` diagnostics and informational `Nnnn` notes.
+When a validator finds a legitimate alternative form, refine the structured
+contract instead of adding a case-specific bypass.
+An early validator also has a cost contract: derive checks from direct typed
+ownership, indexes, or precomputed plans so validation stays linear in the IR
+size. A validator that rescans the whole IR for every node must be structured
+into a single-pass index before it becomes a permanent gate.
+
 ## 2. Language model
 
 Sollang code reads from left to right:
@@ -500,6 +516,18 @@ branch does not dominate a sibling branch or a later loop iteration; reusing its
 old contents changes an immutable binding's value. Fixture 952 retains this
 branch-and-loop contract, while fixture 428 retains the real source-root case
 that exposed it.
+Every fixed-size reference-argument scratch slot is allocated once in the
+function entry block. Never emit its `alloca` in a branch or loop: LLVM stack
+storage lives until function return, so repeated execution grows the same frame
+even when the source-level temporary is short-lived. Dynamic call-text storage
+has a separate runtime-size contract and must not be conflated with these fixed
+reference slots. Both Windows and Linux Stage 2 verifiers reject `%callref*`
+allocas outside `entry`.
+An enum-pattern payload read is the same SSA value as its canonical arm binding.
+After the subject and variant determine the payload type, Typed IR must
+re-synchronize every direct read with that binding. `S046` rejects a differing
+`typeId` before LLVM emission; the text emitter must never compensate for a
+stale read type or produce forms such as `freeze void %payload`.
 
 Functions declare observable capabilities:
 
@@ -643,6 +671,10 @@ re-decoding frame bytes.
 Real 1-RTT packets may carry an ordered frame sequence. Use `frame.encodeAll`,
 `frame.decodeAll`, and the application engine's multi-frame operations; do not
 force one protected packet per frame.
+QUIC interoperability is complete only after an independent implementation
+negotiates the requested version and ALPN, opens a bidirectional stream, and
+exchanges application bytes in both directions. A handshake-only fixture is
+not sufficient; retain live v1 and v2 `ping`/`pong` coverage.
 The stable native QUIC contract targets RFC 9000/9001/9002, TLS 1.3 from RFC
 9846, QUIC v2 from RFC 9369, compatible version negotiation from RFC 9368, and DATAGRAM from RFC
 9221. Draft-only extensions such as multipath remain explicit experimental
@@ -658,6 +690,9 @@ context. Function return types recurse through nested value-form `if` blocks in
 both semantic analysis and codegen. Contextual inference performed while
 validating a mutable rebind inside a block must retain that block's `yield`
 input type; do not restart inference with an empty control-flow context.
+LLVM emission reads a mutable parameter through its current storage, including
+at every `while` condition evaluation. Never reuse the immutable entry `%arg`
+snapshot after the parameter or one of its owned fields can change.
 The same expected numeric type recurses through arithmetic expressions in both
 semantic analysis and codegen. A UInt64-returning `maximum - value` accepts the
 full UInt64 literal directly; do not parse a contextual literal through signed
@@ -691,6 +726,11 @@ Stable semantic call-site identities must include the syntactic target path and
 generic/value arguments, not only an ordinal. Changing `llvm.emit` to
 `llvm.emitLinux` at the same source position must invalidate the old resolved
 target instead of restoring it from the incremental semantic cache.
+A qualified flow target is resolved from its own path even when the source
+expression contains an earlier call or enum-constructor parenthesis. In
+`frames.Value.Crypto(payload) -> frame.encode?`, the `Crypto(` argument boundary
+cannot hide `frame.encode` or redirect it to a same-named function in the
+caller module.
 The LLVM module-fragment cache key must also include the exact reachable
 function identities emitted into that module. A source-unchanged imported
 module can gain or lose a reachable function when only the executable root
@@ -706,6 +746,18 @@ must not require a Rust adapter or separately distributed native QUIC library.
 Keep nominal wire/state declarations separate from transition logic when that
 makes ownership and enum construction explicit; QUIC streams use
 `stream_types` and `stream_state`. Preserve exact QUIC transport error codes.
+The `sys.quic.p2p` layer is authenticated direct P2P: a SHA-256 peer ID, signed
+expiring endpoint/certificate record, nonce-based mutual Ed25519 proof, exact
+application-protocol negotiation, and framed messages. Keep rendezvous,
+STUN/ICE, relay, NAT hole punching, and simultaneous-connect claims outside
+this contract until each has its own state model and live cross-network proof.
+The current single-bidirectional-stream QUIC API requires P2P authentication,
+protocol negotiation, and application messages to reuse stream zero.
+Calls wrapped by `?` retain every explicit ABI argument. In particular, a
+readonly enum-pattern payload used after a mutable first argument remains a
+stable binding and is linked into the call argument chain. Treat the concrete
+function parameter list as authoritative; a shorter emitted call is a compiler
+defect, not an optional or inferred argument.
 TLS 1.3 key scheduling includes zero-PSK full handshakes and external or
 resumption PSK binder derivation; keep `ext binder` and `res binder` distinct,
 and compute binder verification data with the normal Finished-key construction.
@@ -742,6 +794,10 @@ declared return element type, and a payloadless enum variant is a fresh value
 even when sibling variants own payload storage. Do not add numeric constructors,
 temporary owners, copying helpers, or dynamic containers solely to make a
 compiler defect disappear.
+Drop-glue field classification first follows the field's canonical recursive
+type identity. Composite and nominal syntax scans are fallback paths only and
+must not overwrite a canonical fixed-array classification with a stale
+growable-array shape after a partial move.
 Expected numeric types propagate through value-form `if`/`when` inside both
 primary and additional function arguments and through explicit returns. A
 branch that always returns, breaks, or continues does not contribute Unit to a
@@ -767,6 +823,17 @@ constant-time audit of secret-dependent field operations.
 one value and no runtime storage. Array-repeat literals passed to a slice must
 inherit the slice element type in semantic analysis and codegen, just like
 ordinary array literals.
+A trailing `?` belongs to the complete expression that precedes it. In
+particular, `value -> operation?` must lower the resolved flow call first and
+then propagate its `Result`; it is not a discarded call statement.
+Enum ABI sizing follows the widest concrete constructor payload recursively.
+When a nominal enum is nested inside a struct carried by `Result` or `Option`,
+imported equivalent type IDs must resolve to the same nominal enum identity so
+the outer payload includes every field after that enum.
+Contextual call typing follows the declaration's complete parameter chain:
+the first parameter is stored separately and the second and later parameters
+continue from the function declaration. An empty collection argument in any
+ordinal must inherit that exact parameter ABI before LLVM emission.
 CRYPTO stream bytes are offset-addressed, deduplicated before counting against
 the buffer limit, rejected on conflicting overlap, and released to TLS only as
 a contiguous prefix. Retain the send buffer by offset so loss recovery can
@@ -776,8 +843,21 @@ Windows/Linux execution, and the relevant socket and QUIC fixtures aligned.
 Freestanding runtime helpers must include optimizer-emitted memory symbols:
 `memset`, `memcpy`, and overlap-safe `memmove`. Do not fix a missing symbol by
 linking an ambient C runtime on only one target.
+Until LLVM emission performs dead-function elimination, target runtime
+definitions must cover calls from every emitted function body rather than only
+the entry-point reachability closure. A discovered intrinsic symbol plus a
+lowered function or call result type is sufficient to require the matching
+runtime definition; intrinsic declarations without bodies need not have an IR
+function node.
 The Windows native CLI link path must retain `ws2_32` alongside `shell32` so a
 globally installed self-host compiler can link reachable TCP/UDP intrinsics.
+It must also retain `bcrypt` whenever the emitted package contains the
+secure-random runtime definition; code generation and native linking use the
+same emitted-function boundary.
+The `sys.io` wrappers are public standard-library functions. Keeping their
+declarations public is part of the short-name and qualified-import contract;
+self-host codegen must never emit an unresolved module/function symbol for
+`sys.io.print`, `sys.io.println`, or `sys.io.readInt`.
 
 The public playground ships the current self-host Stage 2 compiler as a
 versioned WASM asset together with the matching standard-library JSON. A
@@ -855,6 +935,11 @@ environment-variable path as well as the explicit option.
     dictionary-shaped mutable borrow such as `Set<T>` passes a pointer to the
     whole four-field structure; the single-buffer three-address ABI is only for
     array-shaped containers.
+   Native QUIC P2P changes must run both `verify-quic-p2p.ps1` with the current
+   Windows Stage 3 compiler and `verify-quic-p2p-linux.sh` with the current
+   Linux Stage 3 compiler. A successful build alone is insufficient: both
+   scripts must complete peer discovery, mutual authentication, protocol
+   negotiation, bidirectional chat, finish, close, and exact-output checks.
    Structural-product member ordinals must be resolved after the final
    canonical type projection. A synthesized product can exist only in the
    recursive type arena, beyond the semantic snapshot's nominal type table;
@@ -869,6 +954,23 @@ environment-variable path as well as the explicit option.
    `Stream<T>` or `EventStream<T>` type. Retain both direct
    `producer -> partition` and bound `producer => values; values -> partition`
    fixed-point regressions; source order must not change route field types.
+   Runtime-projected nominal values use their emitted ABI inside collections.
+   In particular, `SourceText` is a four-field native value even though its
+   bootstrap declaration is an opaque token; growable-array allocation and
+   indexing must use the projected 32-byte x64 width. A single-element test is
+   insufficient because the initial four-slot allocation can mask the
+   overwrite until a second source is stored.
+   A nested block used as an enum or subject-`when` arm resolves its result
+   within the arm boundary. If the block ends in a value-producing `if`, enum
+   match, or `when`, use that nested control's merge value rather than a
+   branch-local leaf. Never lift past the arm boundary to the enclosing match,
+   because that would make its result store self-referential.
+   Subject-style `when` arms may carry their result expression directly on the
+   arm node rather than in a nested region. Emit the arm region before reading
+   and storing that direct result; otherwise LLVM can reference an SSA value
+   that was never scheduled. Retain `670-inclusive-and-half-open-ranges.slg`
+   as a cold native Stage 1/Stage 2 differential and execution gate. Passing
+   the managed full example catalog or a warm cache does not prove this path.
    A cross-language performance claim must also pass Perf100's exact-output
    gate for all six implementations, its at-most-10% idle CPU gate, and all 100
    ranking cases. Build with `scripts/perf100-build.sh`, verify representative

@@ -38,6 +38,9 @@ $nestedUInt8IfSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\
 $unusedIfAssignmentSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-unused-if-assignment.slg"
 $unusedMatchAssignmentSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-unused-match-assignment.slg"
 $mutableResetAfterWhileSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-mutable-reset-after-while.slg"
+$directPatternSecondArgumentSource = Join-Path $repoRoot "examples\regression\1016-selfhost-direct-pattern-second-argument.slg"
+$directPatternSecondArgumentFixture = Join-Path $repoRoot "examples\regression\fixtures\1016-pattern-call-frame.slg"
+$subjectWhenDirectResultSource = Join-Path $repoRoot "examples\user\670-inclusive-and-half-open-ranges.slg"
 $sequenceSource = Join-Path $repoRoot "stdlib\std\sequence.slg"
 $streamTableSource = Join-Path $repoRoot "examples\regression\576-linq-multiplication-table.slg"
 $streamDeferredTextSource = Join-Path $repoRoot "examples\regression\580-deferred-text-evaluation.slg"
@@ -370,7 +373,7 @@ if (Test-Stage2IsCurrent) {
 
     & $llvmAsPath $stage2LlvmPath -o $stage2BitcodePath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $clangPath -Wno-override-module $stage2LlvmPath -O1 -o $stage2Path -lshell32
+    & $clangPath -Wno-override-module $stage2LlvmPath -O1 -o $stage2Path -lshell32 -lbcrypt
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
@@ -378,6 +381,19 @@ $stage2Llvm = [System.IO.File]::ReadAllText($stage2LlvmPath)
 if ($stage2Llvm -notmatch '(?s)define internal void @sollang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?%capture_environment = load ptr,.*?%mapped = call [^\r\n]*@sollang_m\d+_s\d+\([^\r\n]*\).*?store [^\r\n]* %mapped,.*?\r?\n\}') {
     throw "stage-2 LLVM does not contain the function-local typed IR worker callback"
 }
+$currentLlvmBlock = ""
+$lateReferenceAllocas = foreach ($line in [System.IO.File]::ReadLines($stage2LlvmPath)) {
+    if ($line -match '^[A-Za-z0-9_.$-]+:$') {
+        $currentLlvmBlock = $line.TrimEnd(':')
+    }
+    if ($line -match '^\s+%callref\d+_arg\d+ = alloca ' -and $currentLlvmBlock -ne 'entry') {
+        "$currentLlvmBlock`: $($line.Trim())"
+    }
+}
+if ($lateReferenceAllocas) {
+    throw "stage-2 LLVM contains reference-argument allocas outside function entry:`n$($lateReferenceAllocas -join "`n")"
+}
+Write-Host "[stage2 2/7] PASS reference-argument allocas are hoisted to function entry."
 
 Write-Host "[stage2 3/7] Compare stage-1 and stage-2 LLVM with an explicit worker limit."
 $singleStage1Llvm = Join-Path $artifactsDir "stage2-check-single-stage1.ll"
@@ -512,6 +528,38 @@ if ($mutableResetFirstWhileExit -lt 0 -or $mutableResetStore -lt $mutableResetFi
 }
 Write-Host "[stage2 3/7] PASS mutable-reset-after-while $mutableResetStage2Hash"
 
+$directPatternStage1Llvm = Join-Path $artifactsDir "stage2-check-direct-pattern-second-argument-stage1.ll"
+$directPatternStage2Llvm = Join-Path $artifactsDir "stage2-check-direct-pattern-second-argument-stage2.ll"
+$directPatternStage1Error = Join-Path $artifactsDir "stage2-check-direct-pattern-second-argument-stage1.err"
+$directPatternStage2Error = Join-Path $artifactsDir "stage2-check-direct-pattern-second-argument-stage2.err"
+$directPatternArguments = @("windows", $directPatternSecondArgumentSource, $directPatternSecondArgumentFixture)
+$directPatternStage1Process = Invoke-ProcessToFile $stage1Path $directPatternArguments $directPatternStage1Llvm $directPatternStage1Error
+$directPatternStage2Process = Invoke-ProcessToFile $stage2Path $directPatternArguments $directPatternStage2Llvm $directPatternStage2Error
+Assert-ProcessSucceeded $directPatternStage1Process $directPatternStage1Error "stage-1 direct pattern second-argument emission"
+Assert-ProcessSucceeded $directPatternStage2Process $directPatternStage2Error "stage-2 direct pattern second-argument emission"
+$directPatternStage1Hash = Get-NormalizedHash $directPatternStage1Llvm
+$directPatternStage2Hash = Get-NormalizedHash $directPatternStage2Llvm
+if ($directPatternStage1Hash -ne $directPatternStage2Hash) {
+    throw "direct pattern second-argument normalized LLVM differs: stage1=$directPatternStage1Hash stage2=$directPatternStage2Hash"
+}
+Write-Host "[stage2 3/7] PASS direct-pattern-second-argument $directPatternStage2Hash"
+
+$subjectWhenStage1Llvm = Join-Path $artifactsDir "stage2-check-subject-when-direct-result-stage1.ll"
+$subjectWhenStage2Llvm = Join-Path $artifactsDir "stage2-check-subject-when-direct-result-stage2.ll"
+$subjectWhenStage1Error = Join-Path $artifactsDir "stage2-check-subject-when-direct-result-stage1.err"
+$subjectWhenStage2Error = Join-Path $artifactsDir "stage2-check-subject-when-direct-result-stage2.err"
+$subjectWhenArguments = @("windows", $subjectWhenDirectResultSource)
+$subjectWhenStage1Process = Invoke-ProcessToFile $stage1Path $subjectWhenArguments $subjectWhenStage1Llvm $subjectWhenStage1Error
+$subjectWhenStage2Process = Invoke-ProcessToFile $stage2Path $subjectWhenArguments $subjectWhenStage2Llvm $subjectWhenStage2Error
+Assert-ProcessSucceeded $subjectWhenStage1Process $subjectWhenStage1Error "stage-1 subject-when direct-result emission"
+Assert-ProcessSucceeded $subjectWhenStage2Process $subjectWhenStage2Error "stage-2 subject-when direct-result emission"
+$subjectWhenStage1Hash = Get-NormalizedHash $subjectWhenStage1Llvm
+$subjectWhenStage2Hash = Get-NormalizedHash $subjectWhenStage2Llvm
+if ($subjectWhenStage1Hash -ne $subjectWhenStage2Hash) {
+    throw "subject-when direct-result normalized LLVM differs: stage1=$subjectWhenStage1Hash stage2=$subjectWhenStage2Hash"
+}
+Write-Host "[stage2 3/7] PASS subject-when-direct-result $subjectWhenStage2Hash"
+
 Write-Host "[stage2 4/7] Compare stage-1 and stage-2 LLVM for imported source files."
 $multiStage1Llvm = Join-Path $artifactsDir "stage2-check-multi-stage1.ll"
 $multiStage2Llvm = Join-Path $artifactsDir "stage2-check-multi-stage2.ll"
@@ -569,7 +617,9 @@ foreach ($case in @(
     @($nestedUInt8IfStage2Llvm, "stage2-check-if-uint8.exe", "ok"),
     @($unusedIfStage2Llvm, "stage2-check-unused-if.exe", "ok"),
     @($unusedMatchStage2Llvm, "stage2-check-unused-match.exe", "ok"),
-    @($mutableResetAfterWhileStage2Llvm, "stage2-check-mutable-reset-after-while.exe", "4`ntrue")
+    @($mutableResetAfterWhileStage2Llvm, "stage2-check-mutable-reset-after-while.exe", "4`ntrue"),
+    @($directPatternStage2Llvm, "stage2-check-direct-pattern-second-argument.exe", "42`n42"),
+    @($subjectWhenStage2Llvm, "stage2-check-subject-when-direct-result.exe", "6,3,inclusive")
 )) {
     $executablePath = Join-Path $artifactsDir $case[1]
     & $llvmAsPath $case[0] -o ([System.IO.Path]::ChangeExtension($executablePath, ".bc"))
@@ -727,7 +777,7 @@ if ($publicStage1Hash -ne $publicStage2Hash) {
 $publicExecutable = Join-Path $artifactsDir "stage2-check-public-stdlib.exe"
 & $llvmAsPath $publicStage2Llvm -o ([System.IO.Path]::ChangeExtension($publicExecutable, ".bc"))
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $clangPath -Wno-override-module $publicStage2Llvm -O1 -o $publicExecutable
+& $clangPath -Wno-override-module $publicStage2Llvm -O1 -o $publicExecutable -lbcrypt
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $publicActual = (& $publicExecutable | Out-String).TrimEnd("`r", "`n")
 if ($LASTEXITCODE -ne 0 -or $publicActual -ne "stage2-single-ok") {

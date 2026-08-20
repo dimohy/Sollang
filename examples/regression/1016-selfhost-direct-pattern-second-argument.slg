@@ -1,0 +1,28 @@
+import regression.pattern_call_frame as wire
+
+protocolCode kind: UInt64, code: UInt64 -> UInt64 => kind + code
+
+apply frame: wire.Frame -> UInt64 {
+    frame -> when {
+        Padding(count) { protocolCode(1, count) }
+        Ack(count) { protocolCode(2, count) }
+    }
+}
+
+reject frame: wire.Frame -> Result<Unit, UInt64> {
+    frame -> when {
+        Padding(count) { Result<Unit, UInt64>.Err(protocolCode(10, count)) }
+        Ack(count) { Result<Unit, UInt64>.Err(protocolCode(20, count)) }
+    }
+}
+
+main {
+    # The imported nominal payload must remain the second runtime argument in
+    # both direct and nested enum-result calls across every bootstrap stage.
+    wire.Frame.Ack(40) -> apply => applied
+    "$applied" -> println
+    reject(wire.Frame.Padding(32)) -> when {
+        Ok(done) { "unexpected" -> println }
+        Err(code) { "$code" -> println }
+    }
+}

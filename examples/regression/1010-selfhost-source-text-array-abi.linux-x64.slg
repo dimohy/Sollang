@@ -1,0 +1,38 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        import sys.file as file
+
+        totalLength: -> UIntSize {
+            [file.SourceText; ~] => sources!
+            "lexer" -> file.borrowText => lexer
+            "parser" -> file.borrowText => parser
+            sources! -> push(lexer)
+            sources! -> push(parser)
+            UIntSize(0) => total!
+            0 => index!
+            index! < (sources! -> len) -> while {
+                total! + (sources![index!] -> len) => total!
+                index! + 1 => index!
+            }
+            total!
+        }
+
+        main {
+            totalLength() -> println
+        }
+        """,
+        """
+        namespace sys.file
+
+        public struct SourceText {
+            token: UInt64
+        }
+
+        borrowText text: Text -> SourceText = intrinsic
+        """; ~
+    ] => sources
+    sources -> llvm.emitLinux
+}

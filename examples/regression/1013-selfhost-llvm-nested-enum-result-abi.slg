@@ -1,0 +1,49 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        struct AckRange {
+            gap: UInt64
+            length: UInt64
+        }
+
+        struct Ack {
+            largest: UInt64
+            delay: UInt64
+            firstRange: UInt64
+            ranges: [AckRange; ~]
+        }
+
+        enum Frame {
+            Padding(UInt64)
+            Ack(Ack)
+        }
+
+        struct Decoded {
+            frame: Frame
+            nextOffset: UInt64
+        }
+
+        decode: -> Result<Decoded, UInt64> {
+            Result<Decoded, UInt64>.Ok(Decoded {
+                frame: Frame.Ack(Ack {
+                    largest: 0
+                    delay: 0
+                    firstRange: 0
+                    ranges: [AckRange; ~]
+                })
+                nextOffset: 5
+            })
+        }
+
+        main {
+            decode() -> when {
+                Ok(decoded) { "next=$(decoded.nextOffset)" -> println }
+                Err(value) { "error=$value" -> println }
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

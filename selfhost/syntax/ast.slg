@@ -436,6 +436,8 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         [Int; ~] => postfixOperatorTokens!
         [Int; ~] => postfixBoundaryTokens!
         false => postfixHasIndex!
+        false => flowHasTry!
+        -1 => flowTryToken!
         node.firstToken => operatorTokenIndex!
         node.firstToken + node.tokenCount => operatorTokenEnd
         0 => operatorGroupDepth!
@@ -527,6 +529,33 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 82 => astKind!
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
+            }
+            (operatorGroupDepth! == 0
+                and (node.ruleId == grammar.ruleIdFlowExpression()
+                    or node.ruleId == grammar.ruleIdControlFlowExpression())
+                and candidateOperator == grammar.tokenIdQuestion())
+                    -> if {
+                false => flowQuestionOwnedByPostfix!
+                0 => flowQuestionCstSearch!
+                (flowQuestionCstSearch! < greenCount and not flowQuestionOwnedByPostfix!)
+                    -> while {
+                    green[flowQuestionCstSearch!] => flowQuestionCst
+                    (flowQuestionCst.ruleId == grammar.ruleIdPostfixExpression()
+                        and operatorTokenIndex! >= flowQuestionCst.firstToken
+                        and operatorTokenIndex! < flowQuestionCst.firstToken + flowQuestionCst.tokenCount)
+                            -> if {
+                        flowQuestionCst.parent => flowQuestionAncestor!
+                        (flowQuestionAncestor! >= 0 and flowQuestionAncestor! != cstIndex!)
+                            -> while { green[flowQuestionAncestor!].parent => flowQuestionAncestor! }
+                        flowQuestionAncestor! == cstIndex!
+                            -> if { true => flowQuestionOwnedByPostfix! }
+                    }
+                    flowQuestionCstSearch! + 1 => flowQuestionCstSearch!
+                }
+                not flowQuestionOwnedByPostfix! -> if {
+                    true => flowHasTry!
+                    operatorTokenIndex! => flowTryToken!
+                }
             }
             (operatorGroupDepth! == 0 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 2)
                 -> if {
@@ -735,6 +764,31 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 }
                 postfixOuterParents! -> push(astIndex)
                 postfixOuterNodes! -> push(postfixLastPrefixNode!)
+            }
+            # Flow-level propagation belongs to FlowExpression in the grammar,
+            # whereas call-level propagation belongs to PostfixExpression.
+            # Preserve the flow AST used by normalized-call resolution and add
+            # an explicit outer propagation node so typed IR cannot silently
+            # discard `value -> fallible?` expression statements.
+            flowHasTry! -> if {
+                ast! -> len => flowTryNode
+                ast![astIndex] => flowTryValue!
+                flowTryNode => flowTryValue!.parent
+                flowTryValue! => ast![astIndex]
+                ast! -> push(AstNode {
+                    kind: 82
+                    parent: astParent!
+                    cstRuleId: node.ruleId
+                    operatorKind: grammar.tokenIdQuestion()
+                    payloadToken: flowTryToken!
+                    secondaryToken: -1
+                    tertiaryToken: -1
+                    flags: 0
+                    firstToken: astFirstToken!
+                    tokenCount: astTokenCount!
+                    start: astStart!
+                    length: astLength!
+                })
             }
         }
         cstIndex! + 1 => cstIndex!

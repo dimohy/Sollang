@@ -55,23 +55,33 @@ emitEnumConstructor request: WhileValueRequest, context: ref emitterContext.Emit
             "  %v$(request.nodeIndex)_enum_payload = getelementptr inbounds " -> print
             constructor -> writeIrType(context, state)
             ", ptr %v$(request.nodeIndex)_enum_slot, i32 0, i32 1" -> println
-            "  store " -> print
-            payload -> writeIrType(context, state)
-            " " -> print
-            (payload.kind == 3 or payload.kind == 4) -> if {
-                payload -> sourceToken(context, state) => payloadToken
-                payload.kind == 3 -> if {
-                    payload -> writeIntegerLiteral(context, state)
-                } else {
-                    ((context.sources[payload.sourceModule] -> byte(payloadToken.span.start)) == 116)
-                        -> if { "1" -> print } else { "0" -> print }
-                }
+            (payloadTypeId >= 0
+                and context.types[payloadTypeId].kind == 4
+                and context.types[payloadTypeId].length >= 0)
+                    -> if {
+                "  %v$(request.nodeIndex)_enum_payload_source = extractvalue { ptr, i64 } " -> print
+                payloadIndex -> writeValue(request.ownerIndex, context, state)
+                ", 0" -> println
+                "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(request.nodeIndex)_enum_payload, ptr %v$(request.nodeIndex)_enum_payload_source, i64 $(context.typeSizes[payloadTypeId]), i1 false)" -> println
             } else {
-                (payload.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and payload.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
-                    -> if { "%arg" -> print } else { "%v$(payloadIndex)" -> print }
+                "  store " -> print
+                payload -> writeIrType(context, state)
+                " " -> print
+                (payload.kind == 3 or payload.kind == 4) -> if {
+                    payload -> sourceToken(context, state) => payloadToken
+                    payload.kind == 3 -> if {
+                        payload -> writeIntegerLiteral(context, state)
+                    } else {
+                        ((context.sources[payload.sourceModule] -> byte(payloadToken.span.start)) == 116)
+                            -> if { "1" -> print } else { "0" -> print }
+                    }
+                } else {
+                    (payload.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and payload.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol)
+                        -> if { "%arg" -> print } else { "%v$(payloadIndex)" -> print }
+                }
+                ", ptr %v$(request.nodeIndex)_enum_payload, align " -> print
+                payload -> storageAlign(context, state) -> writeDecimalLine
             }
-            ", ptr %v$(request.nodeIndex)_enum_payload, align " -> print
-            payload -> storageAlign(context, state) -> writeDecimalLine
         }
     }
     "  %v$(request.nodeIndex) = load " -> print
@@ -1516,11 +1526,25 @@ isSetCollection node: typedIr.TypedIrNode, context: ref emitterContext.EmitConte
 }
 arrayElementSize node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     node -> arrayElementTypeId(context, state) => elementTypeId
-    elementTypeId >= 0 -> if { context.typeSizes[elementTypeId] } else { node.typeSymbol -> storageSize(context, state) }
+    elementTypeId >= 0 -> if {
+        context.types[elementTypeId] => elementType
+        # SourceText is declared as an opaque token in the bootstrap surface,
+        # but its native ABI is { data, length, owner, ownerLength }. Arrays
+        # must reserve the projected ABI width rather than the nominal token
+        # layout or the second element overwrites the allocation.
+        (elementType.kind == 1 and elementType.origin == 1 and elementType.symbol == 24)
+            -> if { elementType.symbol -> storageSize(context, state) } else {
+            elementTypeId -> enumAbiStorageSize(0, context, state)
+        }
+    } else { node.typeSymbol -> storageSize(context, state) }
 }
 arrayElementAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     node -> arrayElementTypeId(context, state) => elementTypeId
-    elementTypeId >= 0 -> if { context.typeAligns[elementTypeId] } else { node.typeSymbol -> legacyStorageAlign(context, state) }
+    elementTypeId >= 0 -> if {
+        context.types[elementTypeId] => elementType
+        (elementType.kind == 1 and elementType.origin == 1 and elementType.symbol == 24)
+            -> if { elementType.symbol -> legacyStorageAlign(context, state) } else { context.typeAligns[elementTypeId] }
+    } else { node.typeSymbol -> legacyStorageAlign(context, state) }
 }
 writeArrayElementType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     node -> arrayElementTypeId(context, state) => elementTypeId

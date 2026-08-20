@@ -30,6 +30,7 @@ $compilerRuntimeSources = Get-Content $runtimeManifestPath |
 $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
+$subjectWhenDirectResultSource = Join-Path $repoRoot "examples\user\670-inclusive-and-half-open-ranges.slg"
 $directoryCreateSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-directory-create.slg"
 $pathNormalizeResultSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-path-normalize-result.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
@@ -225,6 +226,22 @@ if (Test-Stage2IsCurrent) {
 }
 Write-Host "[linux-stage2 2/6] PASS $((Get-Item $stage2LlvmPath).Length) LLVM bytes."
 
+$lateReferenceAllocas = foreach ($line in [System.IO.File]::ReadLines($stage2LlvmPath)) {
+    if ($line -match '^define ') {
+        $inEntryBlock = $false
+    } elseif ($line -eq 'entry:') {
+        $inEntryBlock = $true
+    } elseif ($line -match '^[A-Za-z0-9_.]+:$') {
+        $inEntryBlock = $false
+    } elseif ($line -match '^  %callref\d+_arg\d+ = alloca ' -and -not $inEntryBlock) {
+        $line
+    }
+}
+if ($lateReferenceAllocas) {
+    throw "Linux stage-2 LLVM contains reference-argument allocas outside function entry blocks:`n$($lateReferenceAllocas -join "`n")"
+}
+Write-Host "[linux-stage2 2/6] PASS reference-argument allocas are hoisted to function entry."
+
 Write-Host "[linux-stage2 3/6] Compare stage-1 and stage-2 single-file LLVM."
 $singleStage1Llvm = Join-Path $artifactsDir "linux-stage2-check-single-stage1.ll"
 $singleStage2Llvm = Join-Path $artifactsDir "linux-stage2-check-single-stage2.ll"
@@ -238,6 +255,19 @@ $singleStage1Hash = Get-NormalizedHash $singleStage1Llvm
 $singleStage2Hash = Get-NormalizedHash $singleStage2Llvm
 if ($singleStage1Hash -ne $singleStage2Hash) { throw "Linux single-file LLVM differs: stage1=$singleStage1Hash stage2=$singleStage2Hash" }
 Write-Host "[linux-stage2 3/6] PASS $singleStage2Hash"
+
+$subjectWhenStage1Llvm = Join-Path $artifactsDir "linux-stage2-check-subject-when-direct-result-stage1.ll"
+$subjectWhenStage2Llvm = Join-Path $artifactsDir "linux-stage2-check-subject-when-direct-result-stage2.ll"
+$subjectWhenStage1Error = Join-Path $artifactsDir "linux-stage2-check-subject-when-direct-result-stage1.err"
+$subjectWhenStage2Error = Join-Path $artifactsDir "linux-stage2-check-subject-when-direct-result-stage2.err"
+$subjectWhenStage1 = Invoke-ProcessToFile $stage1Path @("linux", $subjectWhenDirectResultSource) $subjectWhenStage1Llvm $subjectWhenStage1Error
+$subjectWhenStage2 = Invoke-ProcessToFile "wsl.exe" @("-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux", (Convert-ToWslPath $subjectWhenDirectResultSource)) $subjectWhenStage2Llvm $subjectWhenStage2Error
+Assert-ProcessSucceeded $subjectWhenStage1 $subjectWhenStage1Error "Linux stage-1 subject-when direct-result emission"
+Assert-ProcessSucceeded $subjectWhenStage2 $subjectWhenStage2Error "Linux stage-2 subject-when direct-result emission"
+$subjectWhenStage1Hash = Get-NormalizedHash $subjectWhenStage1Llvm
+$subjectWhenStage2Hash = Get-NormalizedHash $subjectWhenStage2Llvm
+if ($subjectWhenStage1Hash -ne $subjectWhenStage2Hash) { throw "Linux subject-when direct-result LLVM differs: stage1=$subjectWhenStage1Hash stage2=$subjectWhenStage2Hash" }
+Write-Host "[linux-stage2 3/6] PASS subject-when-direct-result $subjectWhenStage2Hash"
 
 Write-Host "[linux-stage2 4/6] Compare stage-1 and stage-2 imported multi-file LLVM."
 $multiStage1Llvm = Join-Path $artifactsDir "linux-stage2-check-multi-stage1.ll"
@@ -268,6 +298,7 @@ Write-Host "[linux-stage2 4/6] PASS $multiStage2Hash"
 Write-Host "[linux-stage2 5/6] Assemble, link, and execute both Linux stage-2 products."
 Build-And-ExecuteLinuxLlvm $singleStage2Llvm "linux-stage2-check-single" "stage2-single-ok"
 Build-And-ExecuteLinuxLlvm $multiStage2Llvm "linux-stage2-check-multi" "stage2-multi-ok"
+Build-And-ExecuteLinuxLlvm $subjectWhenStage2Llvm "linux-stage2-check-subject-when-direct-result" "6,3,inclusive"
 Write-Host "[linux-stage2 5/6] PASS Linux stage-2 products execute."
 
 Write-Host "[linux-stage2 6/6] Enforce production ownership diagnostics E17 through E23."

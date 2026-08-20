@@ -337,7 +337,7 @@ encodeVersionInformation chosen: UInt32 -> Result<[UInt8; ~], QuicError> {
         chosen: chosen
         available: [keys.version2(), keys.version1()]
     }) -> when {
-        Ok(encoded) { encoded -> Result<[UInt8; ~], QuicError>.Ok }
+        Ok(encoded) { Result<[UInt8; ~], QuicError>.Ok(encoded) }
         Err(value) { Result<[UInt8; ~], QuicError>.Err(protocolFailure(value)) }
     }
 }
@@ -1041,9 +1041,10 @@ public openBi connection: mut Connection -> Result<BiStream, QuicError> uses Net
     })
 }
 
-public acceptBi connection: mut Connection -> Result<BiStream, QuicError> uses Network {
+public acceptBi connection: mut Connection -> Result<BiStream, QuicError> uses Network, Clock {
     connection -> completeClient?
     connection -> completeServer?
+    connection -> flushPendingControlFrames?
     Result<BiStream, QuicError>.Ok(BiStream {
         id: 0
         sendFlow: streamState.initialSendFlow(connection.streamSendMaximum)
@@ -1080,6 +1081,19 @@ encodeApplicationFrames connection: mut Connection, values: mut [frames.Value; ~
         }
         Err(value) { Result<[UInt8; ~], QuicError>.Err(protocolFailure(value)) }
     }
+}
+
+flushPendingControlFrames connection: mut Connection -> Result<Unit, QuicError> uses Network, Clock {
+    (connection.pendingApplicationAck or connection.handshakeDonePending)
+        -> unless { Result<Unit, QuicError>.Ok -> return }
+    [frames.Value; ~] => values!
+    appendPendingControlFrames(connection, values!)
+    encodeApplicationFrames(connection, values!)? => packet
+    UInt64(packet -> len) => packetSize
+    sendPacket(connection.socket, connection.peer, packet)?
+    recordApplicationPacket(connection, connection.nextSendPacketNumber, packetSize)
+    connection.nextSendPacketNumber + 1 => connection.nextSendPacketNumber
+    Result<Unit, QuicError>.Ok
 }
 
 encodeStreamPacket connection: mut Connection, channel: ref BiStream, data: move [UInt8; ~], fin: Bool -> Result<[UInt8; ~], QuicError> {
@@ -1170,7 +1184,7 @@ receiveApplicationPacket connection: mut Connection -> Result<[UInt8; ~], QuicEr
         Result<[UInt8; ~], QuicError>.Ok(pending!) -> return
     }
     receivePacket(connection.socket)? => received
-    Result<[UInt8; ~], QuicError>.Ok(received.bytes)
+    Result<[UInt8; ~], QuicError>.Ok(copyBytes(received.bytes))
 }
 
 public send connection: mut Connection, channel: mut BiStream, bytes: [UInt8] -> Result<UIntSize, QuicError> uses Network, Clock {

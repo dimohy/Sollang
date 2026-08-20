@@ -1,0 +1,48 @@
+import sys.quic as quic
+import sys.quic.p2p as p2p
+import sys.quic.error as errors
+
+verifyRecords: -> Result<Unit, quic.QuicError> {
+    p2p.fromSeed([7; 32])? => validIdentity
+    p2p.createRecord(
+        validIdentity,
+        quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 44_434 },
+        9_000_000_000_000)? => validRecord
+    p2p.verifyRecord(validRecord, 1)?
+
+    p2p.fromSeed([8; 32])? => expiredIdentity
+    p2p.createRecord(
+        expiredIdentity,
+        quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 44_435 },
+        10)? => expiredRecord
+    p2p.verifyRecord(expiredRecord, 11) -> when {
+        Ok(done) { Result<Unit, quic.QuicError>.Err(quic.QuicError {
+            kind: errors.Kind.Internal
+            code: 81_090
+        }) -> return }
+        Err(error) { error.code == 81_006 -> unless { Result<Unit, quic.QuicError>.Err(error) -> return } }
+    }
+
+    p2p.fromSeed([9; 32])? => tamperedIdentity
+    p2p.createRecord(
+        tamperedIdentity,
+        quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 44_436 },
+        9_000_000_000_000)? => tamperedRecord!
+    quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 44_437 }
+        => tamperedRecord!.endpoint
+    p2p.verifyRecord(tamperedRecord!, 1) -> when {
+        Ok(done) { Result<Unit, quic.QuicError>.Err(quic.QuicError {
+            kind: errors.Kind.Internal
+            code: 81_091
+        }) -> return }
+        Err(error) { error.code == 81_007 -> unless { Result<Unit, quic.QuicError>.Err(error) -> return } }
+    }
+    Result<Unit, quic.QuicError>.Ok
+}
+
+main {
+    verifyRecords() -> when {
+        Ok(done) { "p2p-peer-record-ok" -> println }
+        Err(error) { "p2p-peer-record-error=$(error.code)" -> println }
+    }
+}

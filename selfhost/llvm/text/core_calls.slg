@@ -320,6 +320,36 @@ irValueUsed nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCon
         -1 => useOperand1Value!
         useNode.operand0 >= 0 -> if { useNode.operand0 -> aggregateValueIndex(context, state) => useOperand0Value! }
         useNode.operand1 >= 0 -> if { useNode.operand1 -> aggregateValueIndex(context, state) => useOperand1Value! }
+        ((valueCandidate.kind == 18
+            or valueCandidate.kind == 27
+            or valueCandidate.kind == 33
+            or valueCandidate.kind == 34)
+            and useNode.kind == 19
+            and useNode.operand1 >= 0
+            and not internalUse!
+            and useIndex! != nodeIndex)
+                -> if {
+            false => nestedRegionTypeMatches!
+            (valueCandidate.typeId >= 0 and useNode.typeId == valueCandidate.typeId)
+                -> if { true => nestedRegionTypeMatches! }
+            (valueCandidate.typeId < 0
+                and useNode.typeId < 0
+                and valueCandidate.typeKind == useNode.typeKind
+                and valueCandidate.typeOrigin == useNode.typeOrigin
+                and valueCandidate.typeModule == useNode.typeModule
+                and valueCandidate.typeSymbol == useNode.typeSymbol)
+                    -> if { true => nestedRegionTypeMatches! }
+            NodeAncestorRequest { nodeIndex: useNode.operand1, ownerIndex: nodeIndex } => nestedResultRequest
+            nestedResultRequest -> irDescendsFrom(context, state) => nestedResultDescends
+            (nestedRegionTypeMatches! and nestedResultDescends) -> if {
+                (ownerIndex >= 0 and context.ir[ownerIndex].operand0 == useIndex!)
+                    -> if {
+                    true => used!
+                } else {
+                    useIndex! -> irValueUsed(ownerIndex, context, state) => used!
+                }
+            }
+        }
         (useIndex! != nodeIndex
             and (not internalUse!
                 or useNode.operand0 == nodeIndex
@@ -863,9 +893,7 @@ targetFunctionIndex request: CallEnvironmentRequest, context: ref emitterContext
     }
     targetFunctionIr!
 }
-callTargetParameter callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    context.ir[callIndex] => call
-    CallEnvironmentRequest { callerIndex: -1, callIndex: callIndex, targetModule: call.targetModule, targetSymbol: call.symbol, hasArgument: call.operand0 >= 0 } -> targetFunctionIndex(context, state) => targetFunction
+functionParameterAt targetFunction: Int, ordinal: Int, context: ref emitterContext.EmitContext -> Int {
     -1 => parameter!
     targetFunction >= 0 -> if { context.ir[targetFunction].operand1 => parameter! }
     0 => parameterOrdinal!
@@ -877,6 +905,33 @@ callTargetParameter callIndex: Int, ordinal: Int, context: ref emitterContext.Em
             context.ir[parameter!].nextOperand => parameter!
         }
         parameterOrdinal! + 1 => parameterOrdinal!
+    }
+    parameter!
+}
+callTargetParameter callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[callIndex] => call
+    CallEnvironmentRequest { callerIndex: -1, callIndex: callIndex, targetModule: call.targetModule, targetSymbol: call.symbol, hasArgument: call.operand0 >= 0 } -> targetFunctionIndex(context, state) => targetFunction
+    targetFunction -> functionParameterAt(ordinal, context) => parameter!
+    # A frozen symbol lookup can resolve to an imported interface stub. Some
+    # stubs expose only the primary parameter even though the concrete module
+    # function has additional parameters. The emitted function definition is
+    # authoritative for its ABI, so recover the matching concrete declaration
+    # before deciding that the argument chain has ended.
+    (parameter! < 0 and call.targetModule >= 0 and call.symbol >= 0)
+        -> if {
+        0 => candidateIndex!
+        (candidateIndex! < (context.ir -> len) and parameter! < 0)
+            -> while {
+            context.ir[candidateIndex!] => candidate
+            (candidate.kind == 0
+                and candidate.sourceModule == call.targetModule
+                and candidate.symbol == call.symbol)
+                    -> if {
+                    candidateIndex! -> functionParameterAt(ordinal, context) => candidateParameter
+                    candidateParameter >= 0 -> if { candidateParameter => parameter! }
+                }
+            candidateIndex! + 1 => candidateIndex!
+        }
     }
     parameter!
 }
@@ -1263,8 +1318,55 @@ emitCaptureValue request: CaptureValueRequest, context: ref emitterContext.EmitC
         }
     }
 }
+emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    startIndex => callIndex!
+    callIndex! < endIndex -> while {
+        context.ir[callIndex!] => call
+        (call.kind == 6 or call.kind == 9) -> if {
+            call.operand0 => argumentIndex!
+            0 => ordinal!
+            (argumentIndex! >= 0
+                and (callIndex! -> callTargetParameter(ordinal!, context, state)) >= 0)
+                    -> while {
+                context.ir[argumentIndex!] => callArgument
+                argumentIndex! -> aggregateValueIndex(context, state) => referenceArgumentIndex
+                callIndex! -> callTargetParameter(ordinal!, context, state) => referenceParameterIndex
+                context.ir[referenceParameterIndex] => referenceParameter
+                (referenceParameter.typeId >= 0
+                    and context.types[referenceParameter.typeId].kind == 8
+                    and not (callArgument.typeId >= 0
+                        and context.types[callArgument.typeId].kind == 8))
+                        -> if {
+                    context.types[referenceParameter.typeId].first => referenceOwnerType
+                    referenceArgumentIndex -> referencePlaceRootBindingForOwner(ownerIndex, context, state) => referenceRootBinding
+                    false => referenceUsesMutableSlot!
+                    referenceRootBinding >= 0 -> if {
+                        ((context.ir[referenceRootBinding].kind == 10
+                            and context.ir[referenceRootBinding].typeId >= 0
+                            and context.types[context.ir[referenceRootBinding].typeId].kind == 8)
+                            or (context.ir[referenceRootBinding].kind != 10
+                                and context.ir[referenceRootBinding].flags == 1))
+                                    -> if { true => referenceUsesMutableSlot! }
+                    }
+                    not referenceUsesMutableSlot! -> if {
+                        "  %callref$(callIndex!)_arg$(ordinal!) = alloca " -> print
+                        referenceOwnerType -> writeSemanticTypeId(context, state)
+                        ", align " -> print
+                        context.typeAligns[referenceOwnerType] -> writeDecimalLine
+                    }
+                }
+                context.ir[argumentIndex!].nextOperand => argumentIndex!
+                ordinal! + 1 => ordinal!
+            }
+        }
+        callIndex! + 1 => callIndex!
+    }
+}
 emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    (argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0))
+    (argumentIndex >= 0
+        and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
+            or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+                and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0))))
         -> if {
         context.ir[argumentIndex] => callArgument
         argumentIndex -> aggregateValueIndex(context, state) => referenceArgumentIndex
@@ -1287,14 +1389,6 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                 referenceUsesMutableSlot! -> if {
                     referenceArgumentIndex -> emitMutableReferencePlace(referenceRootBinding, callIndex, ordinal, ownerIndex, context, state) => emittedReferenceProjectionDepth
                 } else {
-                "  %callref" -> print
-                callIndex -> writeDecimal
-                "_arg" -> print
-                ordinal -> writeDecimal
-                " = alloca " -> print
-                referenceOwnerType -> writeSemanticTypeId(context, state)
-                ", align " -> print
-                context.typeAligns[referenceOwnerType] -> writeDecimalLine
                 "  store " -> print
                 referenceOwnerType -> writeSemanticTypeId(context, state)
                 " " -> print
@@ -1317,7 +1411,10 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
     }
 }
 emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    (argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0))
+    (argumentIndex >= 0
+        and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
+            or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+                and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0))))
         -> if {
         context.ir[argumentIndex] => callArgument
         argumentIndex -> aggregateValueIndex(context, state) => referenceArgumentIndex
@@ -1340,10 +1437,6 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
                 referenceUsesMutableSlot! -> if {
                     referenceArgumentIndex -> emitMutableReferencePlace(referenceRootBinding, callIndex, ordinal, ownerIndex, context, state) => emittedReferenceProjectionDepth
                 } else {
-                "  %callref$(callIndex)_arg$(ordinal) = alloca " -> print
-                referenceOwnerType -> writeSemanticTypeId(context, state)
-                ", align " -> print
-                context.typeAligns[referenceOwnerType] -> writeDecimalLine
                 referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveWhileReferenceOrdinal
                 liveWhileReferenceOrdinal >= 0 -> if {
                     "  %callref$(callIndex)_arg$(ordinal)_live_ptr = load ptr, ptr " -> print
@@ -1382,7 +1475,10 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
     }
 }
 emitMutableBorrowArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    (argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0))
+    (argumentIndex >= 0
+        and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
+            or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+                and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0))))
         -> if {
         callIndex -> callTargetParameter(ordinal, context, state) => mutableParameterIndex
         (mutableParameterIndex >= 0
@@ -1414,14 +1510,25 @@ emitMutableBorrowArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: 
                     ", i32 0, i32 " -> print
                     context.ir[mutableValueIndex].symbol -> writeDecimalLine
                 } else {
-                    "  %callmut$(callIndex)_arg$(ordinal) = getelementptr i8, ptr " -> print
-                    forwardedOrdinal >= 0 -> if {
-                        forwardedOrdinal -> writeMutableStructParameterPointer
-                    } else {
+                    context.ir[mutableParameterIndex] -> effectiveTypeId(context, state) => mutableTargetTypeId
+                    (mutableTargetTypeId >= 0
+                        and context.types[mutableTargetTypeId].kind == 4
+                        and context.types[mutableTargetTypeId].length >= 0
+                        and forwardedOrdinal < 0) -> if {
                         mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
-                        "%slot$(mutableRoot)" -> print
+                        "  %callmut$(callIndex)_arg$(ordinal)_fixed = load { ptr, i64 }, ptr %slot$(mutableRoot), align " -> print
+                        context.ir[mutableRoot] -> storageAlign(context, state) -> writeDecimalLine
+                        "  %callmut$(callIndex)_arg$(ordinal) = extractvalue { ptr, i64 } %callmut$(callIndex)_arg$(ordinal)_fixed, 0" -> println
+                    } else {
+                        "  %callmut$(callIndex)_arg$(ordinal) = getelementptr i8, ptr " -> print
+                        forwardedOrdinal >= 0 -> if {
+                            forwardedOrdinal -> writeMutableStructParameterPointer
+                        } else {
+                            mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
+                            "%slot$(mutableRoot)" -> print
+                        }
+                        ", i64 0" -> println
                     }
-                    ", i64 0" -> println
                 }
             } else {
                 forwardedStructMember -> if {
@@ -1485,12 +1592,22 @@ emitCurrentMutableParameterValue valueIndex: Int, parameterOrdinal: Int, ownerIn
     context -> parameterIndexAtOrdinal(ownerIndex, parameterOrdinal) => parameterIndex
     (parameterIndex >= 0 and (context.ir[parameterIndex] -> mutableBorrowUsesStructPointer(context)))
         -> if {
-        "  %v$(valueIndex) = load " -> print
-        value -> writeIrType(context, state)
-        ", ptr " -> print
-        parameterOrdinal -> writeMutableStructParameterPointer
-        ", align " -> print
-        value -> storageAlign(context, state) -> writeDecimalLine
+        context.ir[parameterIndex] -> effectiveTypeId(context, state) => mutableParameterTypeId
+        (mutableParameterTypeId >= 0
+            and context.types[mutableParameterTypeId].kind == 4
+            and context.types[mutableParameterTypeId].length >= 0)
+                -> if {
+            "  %v$(valueIndex) = insertvalue { ptr, i64 } " -> print
+            parameterOrdinal == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal)" -> print }
+            ", i64 $(context.types[mutableParameterTypeId].length), 1" -> println
+        } else {
+            "  %v$(valueIndex) = load " -> print
+            value -> writeIrType(context, state)
+            ", ptr " -> print
+            parameterOrdinal -> writeMutableStructParameterPointer
+            ", align " -> print
+            value -> storageAlign(context, state) -> writeDecimalLine
+        }
     } else {
         "  %v$(valueIndex)_current_ptr = load ptr, ptr " -> print
         parameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(parameterOrdinal)_mut_ptr_addr" -> print }
@@ -1651,7 +1768,10 @@ emitTransientTextArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, o
     }
 }
 emitTransientTextArguments argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex)
+    (argumentIndex >= 0
+        and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
+            or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+                and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0))))
         -> if {
         argumentIndex -> emitTransientTextArgument(callIndex, ownerIndex, ordinal, context, state)
         context.ir[argumentIndex].nextOperand -> emitTransientTextArguments(callIndex, ownerIndex, ordinal + 1, context, state)
@@ -1815,7 +1935,12 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
             }
         }
         parameterOrdinal! >= 0 -> if {
-            parameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal!)" -> print }
+            nodeIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableParameterOrdinal
+            mutableParameterOrdinal >= 0 -> if {
+                "%v$(nodeIndex)" -> print
+            } else {
+                parameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal!)" -> print }
+            }
         } else { "%v$(nodeIndex)" -> print }
         }
     }
@@ -2377,7 +2502,7 @@ callArgumentIndex callIndex: Int, context: ref emitterContext.EmitContext, state
     }
     argumentIndex!
 }
-regionResultValueIndex regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+directRegionResultValueIndex regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     context.ir[regionIndex].operand1 => resolved!
     true => resolving!
     resolving! -> while {
@@ -2393,6 +2518,80 @@ regionResultValueIndex regionIndex: Int, context: ref emitterContext.EmitContext
             true => resolving!
         }
     }
+    # A region operand can still name a leaf inside a nested value-producing
+    # control. Select that control only when it is the region's direct child;
+    # this preserves the nested merge value without escaping into an enclosing
+    # match or when arm.
+    resolved! => directAncestor!
+    -1 => directControlAncestor!
+    true => directAncestorOpen!
+    (directAncestor! >= 0 and directAncestorOpen!)
+        -> while {
+        context.ir[directAncestor!] => directCandidate
+        false => directCandidateTypeMatches!
+        (context.ir[regionIndex].typeId >= 0
+            and directCandidate.typeId == context.ir[regionIndex].typeId)
+                -> if { true => directCandidateTypeMatches! }
+        (context.ir[regionIndex].typeId < 0
+            and directCandidate.typeId < 0
+            and directCandidate.typeKind == context.ir[regionIndex].typeKind
+            and directCandidate.typeOrigin == context.ir[regionIndex].typeOrigin
+            and directCandidate.typeModule == context.ir[regionIndex].typeModule
+            and directCandidate.typeSymbol == context.ir[regionIndex].typeSymbol)
+                -> if { true => directCandidateTypeMatches! }
+        ((directCandidate.kind == 18
+            or directCandidate.kind == 20
+            or directCandidate.kind == 27
+            or directCandidate.kind == 33
+            or directCandidate.kind == 34)
+            and directCandidateTypeMatches!)
+                -> if { directAncestor! => directControlAncestor! }
+        context.ir[directAncestor!].parent => directParent
+        directParent == regionIndex -> if {
+            directControlAncestor! >= 0
+                -> if { directControlAncestor! => resolved! }
+            false => directAncestorOpen!
+        } else {
+            directParent < 0 -> if {
+                false => directAncestorOpen!
+            } else {
+                directParent => directAncestor!
+            }
+        }
+    }
+    resolved!
+}
+regionResultValueIndex regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    regionIndex -> directRegionResultValueIndex(context, state) => resolved!
+    # A block records its leaf result. When that leaf is produced inside a
+    # nested value-control expression, users outside the control flow must
+    # consume the control node's merge value instead of a branch-local leaf.
+    resolved! => resultAncestor!
+    (resultAncestor! >= 0 and resultAncestor! != regionIndex)
+        -> while {
+        context.ir[resultAncestor!].parent => resultParent
+        (resultParent >= 0 and resultParent != regionIndex)
+            -> if {
+            context.ir[resultParent] => resultParentNode
+            false => resultParentTypeMatches!
+            (context.ir[regionIndex].typeId >= 0 and resultParentNode.typeId == context.ir[regionIndex].typeId)
+                -> if { true => resultParentTypeMatches! }
+            (context.ir[regionIndex].typeId < 0
+                and resultParentNode.typeId < 0
+                and resultParentNode.typeKind == context.ir[regionIndex].typeKind
+                and resultParentNode.typeOrigin == context.ir[regionIndex].typeOrigin
+                and resultParentNode.typeModule == context.ir[regionIndex].typeModule
+                and resultParentNode.typeSymbol == context.ir[regionIndex].typeSymbol)
+                    -> if { true => resultParentTypeMatches! }
+            ((resultParentNode.kind == 18
+                or resultParentNode.kind == 27
+                or resultParentNode.kind == 33
+                or resultParentNode.kind == 34)
+                and resultParentTypeMatches!)
+                    -> if { resultParent => resolved! }
+        }
+        resultParent => resultAncestor!
+    }
     resolved!
 }
 matchRegionResultValueIndex regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -2400,7 +2599,7 @@ matchRegionResultValueIndex regionIndex: Int, context: ref emitterContext.EmitCo
     matchArm.operand1 => resolved!
     (matchArm.operand1 >= 0 and context.ir[matchArm.operand1].kind == 19)
         -> if {
-        matchArm.operand1 -> regionResultValueIndex(context, state) => resolved!
+        matchArm.operand1 -> directRegionResultValueIndex(context, state) => resolved!
     } else {
         # Expression-bodied enum arms store the matched payload binding in
         # operand1. The computed arm value is the final direct child after the
@@ -2832,31 +3031,11 @@ callArgumentNeedsSliceProjection argumentIndex: Int, callIndex: Int, ordinal: In
         value.typeId => valueTypeId!
         valueIndex -> canonicalMemberValueTypeId(context, state) => canonicalValueTypeId
         canonicalValueTypeId >= 0 -> if { canonicalValueTypeId => valueTypeId! }
-        false => fixedMemberUsesInlineAbi!
-        (value.kind == 13 and valueTypeId! >= 0 and context.types[valueTypeId!].kind == 4)
-            -> if {
-            value.parent => fixedMemberAncestor!
-            (fixedMemberAncestor! >= 0 and not fixedMemberUsesInlineAbi!)
-                -> while {
-                context.ir[fixedMemberAncestor!] => fixedMemberAncestorNode
-                (fixedMemberAncestorNode.kind == 19 or fixedMemberAncestorNode.kind == 20)
-                    -> if {
-                    true => fixedMemberUsesInlineAbi!
-                } else {
-                    (fixedMemberAncestorNode.kind == 0 or fixedMemberAncestorNode.kind == 11)
-                        -> if {
-                        -1 => fixedMemberAncestor!
-                    } else {
-                        fixedMemberAncestorNode.parent => fixedMemberAncestor!
-                    }
-                }
-            }
-        }
         (valueTypeId! >= 0
             and valueTypeId! < (context.types -> len)
             and parameter.typeId >= 0
             and parameter.typeId < (context.types -> len)
-            and (context.types[valueTypeId!].kind == 3 or fixedMemberUsesInlineAbi!)
+            and context.types[valueTypeId!].kind == 3
             and context.types[parameter.typeId].kind == 2)
                 -> if { true => needsProjection! }
     }
@@ -2864,8 +3043,9 @@ callArgumentNeedsSliceProjection argumentIndex: Int, callIndex: Int, ordinal: In
 }
 emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     (argumentIndex >= 0
-        and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)
-        and (callIndex -> callTargetParameter(ordinal, context, state)) >= 0)
+        and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
+            or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+                and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0))))
             -> if {
         argumentIndex -> callArgumentNeedsIntegerPromotion(callIndex, ordinal, context, state)
             -> if {
@@ -3072,9 +3252,9 @@ emitCallArgumentChain argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordin
     # retain their explicit operands because they intentionally have no
     # function-body parameter IR.
     (argumentIndex >= 0
-        and (context.ir[argumentIndex].parent == chainCallIndex or argumentIndex == context.ir[chainCallIndex].operand0)
         and ((chainCallIndex -> callTargetParameter(ordinal, context, state)) >= 0
-            or not (chainCallIndex -> callHasResolvedFunctionTarget(context, state))))
+            or (not (chainCallIndex -> callHasResolvedFunctionTarget(context, state))
+                and (context.ir[argumentIndex].parent == chainCallIndex or argumentIndex == context.ir[chainCallIndex].operand0))))
                 -> if {
         chainSeparator -> if { ", " -> print }
         argumentIndex -> writeCallArgument(chainCallIndex, chainOwnerIndex, ordinal, context, state)

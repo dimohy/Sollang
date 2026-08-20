@@ -468,6 +468,83 @@ main {
 }`
   },
   {
+    id: "deque-stack-queue",
+    title: "Deque stack and queue",
+    category: "containers",
+    input: "",
+    code: `main {
+    # 1. Stack using Deque (LIFO: pushBack / popBack)
+    Deque<Int>(4) => stack!
+    stack! -> pushBack(10)
+    stack! -> pushBack(20)
+    stack! -> pushBack(30)
+    stack! -> back => top
+    stack! -> popBack => popped3
+    stack! -> popBack => popped2
+
+    # 2. Queue using Deque (FIFO: pushBack / popFront)
+    Deque<Int>(4) => queue!
+    queue! -> pushBack(100)
+    queue! -> pushBack(200)
+    queue! -> popFront => dequeued1
+
+    "stack top=$top, popped=$popped3,$popped2, remaining=$(stack! -> len)" -> println
+    "queue dequeued=$dequeued1, remaining=$(queue! -> len)" -> println
+}`
+  },
+  {
+    id: "dictionary-map",
+    title: "Key-value dictionary",
+    category: "containers",
+    input: "",
+    code: `main {
+    {Text: Int; 4~} => scores!
+    scores! -> put("alice", 100)
+    scores! -> put("bob", 200)
+    scores! -> putIfAbsent("alice", 999) => aliceDuplicate
+    scores! -> putIfAbsent("charlie", 300) => charlieAdded
+
+    scores!["alice"] => aliceScore
+    scores!["bob"] => bobScore
+    scores!["charlie"] => charlieScore
+    scores! -> len => count
+
+    "alice=$aliceScore, bob=$bobScore, charlie=$charlieScore, count=$count" -> println
+    aliceDuplicate -> if {
+        "aliceDuplicate=true" -> println
+    } else {
+        "aliceDuplicate=false" -> println
+    }
+    charlieAdded -> if {
+        "charlieAdded=true" -> println
+    } else {
+        "charlieAdded=false" -> println
+    }
+}`
+  },
+  {
+    id: "binary-heap",
+    title: "Binary heap priority queue",
+    category: "containers",
+    input: "",
+    code: `main {
+    BinaryHeap<Int>(4) => heap!
+    heap! -> push(30)
+    heap! -> push(10)
+    heap! -> push(50)
+    heap! -> push(20)
+
+    heap! -> peek => maxVal
+    heap! -> pop => first
+    heap! -> pop => second
+    heap! -> pop => third
+    heap! -> pop => fourth
+    heap! -> len => remaining
+
+    "peek=$maxVal, order=$first,$second,$third,$fourth, remaining=$remaining" -> println
+}`
+  },
+  {
     id: "key-only-set",
     title: "Key-only Set",
     category: "containers",
@@ -973,6 +1050,9 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "dynamic-trait": "Declare the types and implementations used by an owned dyn trait value.",
     effects: "Declare transitive Console capabilities with a checked uses clause.",
     "compile-time-collections": "Create a collection and print its actual fold result.",
+    "deque-stack-queue": "Use Deque as a double-ended ring buffer for LIFO stack (pushBack/popBack) and FIFO queue (pushBack/popFront).",
+    "dictionary-map": "Store key-value pairs in a hash map with single-probe put, get, and putIfAbsent.",
+    "binary-heap": "Maintain a priority queue with BinaryHeap for max-element peek and ordered pop.",
     "key-only-set": "Use the key-only Swiss Set with single-probe insertion, membership, removal, and direct iteration.",
     "readonly-references": "Declare a readonly projected reference without transferring ownership.",
     "numeric-widths": "Use signed and unsigned integer types with explicit widths.",
@@ -1018,6 +1098,9 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "dynamic-trait": "소유 dyn trait에 필요한 타입과 구현을 선언합니다.",
     effects: "uses 절로 전이되는 Console 능력을 선언합니다.",
     "compile-time-collections": "컬렉션을 만들고 실제 fold 결과를 출력합니다.",
+    "deque-stack-queue": "Deque를 양방향 링 버퍼로 사용하여 LIFO 스택(pushBack/popBack)과 FIFO 큐(pushBack/popFront)를 구현합니다.",
+    "dictionary-map": "put, 인덱싱 조회, putIfAbsent를 사용하여 해시 딕셔너리에 키-값 쌍을 저장하고 관리합니다.",
+    "binary-heap": "BinaryHeap 우선순위 큐로 최대값 peek 및 정렬된 pop을 수행합니다.",
     "key-only-set": "키만 저장하는 Swiss Set의 삽입, 멤버십, 삭제, 직접 순회를 실행합니다.",
     "readonly-references": "소유권을 옮기지 않는 읽기 전용 투영 참조를 선언합니다.",
     "numeric-widths": "명시적 폭의 부호·무부호 정수 타입을 사용합니다.",
@@ -1063,6 +1146,9 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "dynamic-trait": "所有 dyn trait に必要な型と実装を宣言します。",
     effects: "uses 句で推移的な Console 能力を宣言します。",
     "compile-time-collections": "コレクションを作成し、実際の fold 結果を出力します。",
+    "deque-stack-queue": "Deque をリングバッファとして使い、LIFO スタック(pushBack/popBack)と FIFO キュー(pushBack/popFront)を実装します。",
+    "dictionary-map": "put、インデックス参照、putIfAbsent を使いハッシュマップでキーと値を管理します。",
+    "binary-heap": "BinaryHeap 優先度付きキューで最大値の peek および整列 pop を実行します。",
     "key-only-set": "キーのみを格納する Swiss Set の挿入、包含、削除、直接反復を実行します。",
     "readonly-references": "所有権を移さない読み取り専用投影参照を宣言します。",
     "numeric-widths": "幅を明示した符号付き・符号なし整数型を使います。",
@@ -1108,6 +1194,9 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "dynamic-trait": "声明拥有的 dyn trait 所需的类型与实现。",
     effects: "通过 uses 子句声明可传递的 Console 能力。",
     "compile-time-collections": "创建集合并输出实际的 fold 结果。",
+    "deque-stack-queue": "使用 Deque 作为双端环形缓冲区实现 LIFO 栈（pushBack/popBack）与 FIFO 队列（pushBack/popFront）。",
+    "dictionary-map": "使用 put、索引查询与 putIfAbsent 在哈希字典中存储与管理键值对。",
+    "binary-heap": "使用 BinaryHeap 优先队列进行最大值 peek 与有序 pop。",
     "key-only-set": "运行仅存键的 Swiss Set 的插入、成员检查、删除与直接迭代。",
     "readonly-references": "声明不转移所有权的只读投影引用。",
     "numeric-widths": "使用显式宽度的有符号和无符号整数类型。",
@@ -1146,6 +1235,9 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     containers: "동적 배열",
     "immutable-containers": "불변 값과 fold",
     "compile-time-collections": "컬렉션 fold",
+    "deque-stack-queue": "Deque 스택과 큐",
+    "dictionary-map": "키-값 딕셔너리",
+    "binary-heap": "BinaryHeap 우선순위 큐",
     "key-only-set": "키 전용 Set",
     struct: "구조체 투영",
     "mutable-method": "가변 구조체 필드",
@@ -1191,6 +1283,9 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     containers: "動的配列",
     "immutable-containers": "不変値と fold",
     "compile-time-collections": "コレクション fold",
+    "deque-stack-queue": "Deque スタックとキュー",
+    "dictionary-map": "キー値ディクショナリ",
+    "binary-heap": "BinaryHeap 優先度付きキュー",
     "key-only-set": "キー専用 Set",
     struct: "構造体の投影",
     "mutable-method": "可変構造体フィールド",
@@ -1236,6 +1331,9 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     containers: "动态数组",
     "immutable-containers": "不可变值与 fold",
     "compile-time-collections": "集合 fold",
+    "deque-stack-queue": "Deque 栈与队列",
+    "dictionary-map": "键值字典",
+    "binary-heap": "BinaryHeap 优先队列",
     "key-only-set": "仅键 Set",
     struct: "结构体投影",
     "mutable-method": "可变结构体字段",

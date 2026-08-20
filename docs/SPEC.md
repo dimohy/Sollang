@@ -382,6 +382,10 @@ Notes:
 - An empty static literal may use `[]` when its element type is supplied by a
   return, argument, field, or other array context. `[T; ~]` remains the explicit
   empty growable owner; contextual `[]` never implies growable storage.
+- Call-argument context is ordinal and covers the complete declaration. The
+  first parameter and the declaration's second-and-later parameter chain are
+  one logical sequence, so `[]` in any argument position inherits the exact
+  corresponding slice, fixed-array, or growable-array ABI before codegen.
 - A one-element growable value array requires the explicit trailing comma
   `[value,; ~]`; `[T; ~]` remains the typed-empty form. The comma removes the
   value/type ambiguity in the same way a trailing comma distinguishes a
@@ -1086,15 +1090,15 @@ namespace sys.io
 
 import sys.runtime as rt
 
-print value: Text -> Unit {
+public print value: Text -> Unit {
     value -> rt.print
 }
 
-println value: Text -> Unit {
+public println value: Text -> Unit {
     value -> rt.println
 }
 
-readInt prompt: Text -> Int {
+public readInt prompt: Text -> Int {
     prompt -> rt.readInt
 }
 ```
@@ -1105,9 +1109,9 @@ standard library:
 ```sollang
 namespace sys.runtime
 
-print value: Text -> Unit = intrinsic
-println value: Text -> Unit = intrinsic
-readInt prompt: Text -> Int = intrinsic
+public print value: Text -> Unit = intrinsic
+public println value: Text -> Unit = intrinsic
+public readInt prompt: Text -> Int = intrinsic
 ```
 
 The compiler loads the standard library before user code and globally imports
@@ -1211,6 +1215,30 @@ Authentication failure moves the state to `Failed`. Exact certificate pinning
 plus exact DNS SAN matching is not general X.509 path, validity, revocation,
 wildcard, IP-address, or IDNA service-identity validation; those remain separate
 authentication gates for a general-purpose Internet-facing QUIC endpoint.
+
+`sys.quic.p2p` builds an authenticated direct-peer session on that QUIC
+transport. `PeerId` is the SHA-256 digest of an Ed25519 public key. A signed,
+expiring `PeerRecord` binds that identity to an IPv4 endpoint and the exact
+QUIC certificate used for transport pinning. `dial` verifies the record before
+network access, and `dial`/`accept` then perform a nonce-based mutual Ed25519
+proof over a domain-separated transcript. Neither peer trusts the rendezvous
+service that delivered the record.
+
+After authentication, `openProtocol`/`acceptProtocol` negotiate an exact
+application protocol byte string. `sendMessage` and `receiveMessage` use
+length-prefixed messages on the authenticated channel, `finish` closes the
+application direction, and `close` closes the QUIC connection. The present
+connection implementation exposes one bidirectional stream, so authentication,
+protocol negotiation, and messages deliberately reuse stream zero. Protocol
+names are limited to 1,024 bytes and messages to 60,000 bytes.
+
+This is direct P2P for peers whose advertised UDP endpoint is reachable, such
+as a LAN peer or a public/forwarded address. A `PeerRecord` is suitable for a
+future rendezvous or out-of-band exchange, but the module does not claim ICE,
+STUN address discovery, relay, NAT hole punching, simultaneous connect, or
+NAT keepalive support. Those require concurrent endpoint driving and explicit
+rendezvous/relay contracts and must remain separate layers instead of being
+simulated by a direct-connect fallback.
 
 General-purpose sequence operations live in `std.sequence` and require an
 explicit import. `range(start, endInclusive)` returns a first-class `Range`
@@ -1433,9 +1461,12 @@ byte array and fills it from the operating-system cryptographic source:
 `BCryptGenRandom` with `BCRYPT_USE_SYSTEM_PREFERRED_RNG` on Windows and
 `getrandom` on Linux. Failure is returned as `Error.Unavailable`; it never
 falls back to the deterministic generator. The declaration, runtime helper,
-and Windows `bcrypt.dll` import are emitted only when the operation is
-reachable. `wasm32-browser` rejects the capability until a host cryptographic
-random source is explicitly provided.
+and Windows `bcrypt.dll` import are emitted when the intrinsic symbol has a
+lowered function or call result type in the emitted source set. This matches
+the current whole-package function emission model: a runtime definition must
+not be restricted to the entry-point reachability closure while non-root
+function bodies are still emitted. `wasm32-browser` rejects the capability
+until a host cryptographic random source is explicitly provided.
 
 The legacy sorted-`Int` file format is binary, little-endian, signed 64-bit records.
 `writeInt` appends to the current writer through an internal buffer. `closestInt`
@@ -2805,13 +2836,19 @@ value -> function
 
 as a `FlowExpression`. Since binding is now explicit with `=>`, a bare flow
 target is never interpreted as a binding. Semantic analysis resolves each target
-as a callable path. The executable lowering remains equivalent to:
+as a callable path. The executable lowering for unary calls remains equivalent to:
 
 ```sollang
 function(value)
 ```
 
-for unary calls. Chained value-flow calls are parsed left-to-right:
+The callable path after `->` is authoritative independently of syntax in the
+source expression. An opening parenthesis in an earlier direct call or enum
+constructor does not bound qualified-target lookup. Thus
+`frames.Value.Crypto(payload) -> frame.encode?` resolves `frame.encode`, even
+when the enclosing function is also named `encode`.
+
+Chained value-flow calls are parsed left-to-right:
 
 ```sollang
 text -> trim -> lower -> slugify => slug

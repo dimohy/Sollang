@@ -12886,3 +12886,283 @@ User programs may leave N001 as a note. Example tests fail only on
 unexpected `warning Snnn`. Repository `.slg` files, the runtime library, and
 samples wrap long conditions so in-tree sources stay note-clean. Fixture
 1004 retains the note; fixture 1005 retains the wrapped form.
+
+## D340 — Qualified flow targets are not bounded by source-call parentheses
+
+Status: implemented
+Date: 2026-08-18
+
+The self-host call resolver previously reused the first opening parenthesis in
+an entire flow expression as the upper bound for qualified-target lookup. A
+source such as `frames.Value.Crypto(payload) -> frame.encode?` therefore hid
+the later `frame.encode` path. When the enclosing function was also named
+`encode`, Typed IR selected that current function and emitted a recursive call
+whose enum argument did not match its scalar parameter.
+
+Direct calls still use their opening parenthesis as the boundary between the
+callable path and arguments. Flow calls instead select the qualified path that
+contains the indexed flow-target name, regardless of parentheses in their
+source expression. The prepared and analyzed package resolvers share this
+rule. Regression 1006 emits, assembles, links, and executes the same-name enum
+source shape through the native self-host compiler and compares its result
+with the C# bootstrap compiler.
+
+## D341 — Contextual call typing follows every declared parameter
+
+Status: implemented
+Date: 2026-08-18
+
+The self-host Typed-IR contextual-literal repair previously paired the first
+call argument with the declaration's first parameter, then followed that
+parameter node's `nextOperand`. Function declarations store the first
+parameter separately in `operand1`; their second parameter starts at the
+function node's `nextOperand`. As a result, an empty array in the third
+argument of `quic.bind(endpoint, identity, [])` retained no canonical array
+ABI and LLVM referenced its value without emitting a definition.
+
+The repair now traverses parameters with the same authoritative first-versus-
+additional layout already used by native-call typing and call emission. Every
+argument ordinal receives its declared contextual type before scheduling and
+LLVM emission. Regression 1007 retains a three-argument qualified call whose
+third argument is `[]`, then assembles, links, executes, and compares native
+self-host output with the C# bootstrap compiler.
+
+## D342 — The sys.io wrappers are public standard-library API
+
+Status: implemented
+Date: 2026-08-18
+
+The language specification and global short-name aliases describe
+`sys.io.print`, `sys.io.println`, and `sys.io.readInt` as public standard-
+library functions, but their source declarations lacked `public`. The C#
+bootstrap compiler's standard-library handling masked that mismatch. Native
+self-host resolution correctly refused to select the private imported symbols
+and LLVM later exposed the stale unresolved target as `@sollang_m-1_s-1`.
+
+The three wrappers now carry the public modifier required by their documented
+API. The browser standard-library asset is regenerated from the same source,
+and native Stage3 QUIC interop retains qualified `sys.io.println` calls rather
+than bypassing the wrapper contract.
+
+## D343 — Runtime definitions follow the emitted function set
+
+Status: implemented
+Date: 2026-08-19
+
+The self-host LLVM backend currently emits ordinary function bodies for the
+whole analyzed package, while runtime helper selection had gated
+`sys.runtime.secureRandomBytes` on entry-point reachability. A non-root emitted
+wrapper could therefore retain a call to the intrinsic without its target
+definition, producing an undefined `@sollang_m*_s*` reference.
+
+Runtime symbol discovery now derives the secure-random result type from either
+a lowered function node or a call node targeting the intrinsic. Intrinsic
+declarations have no body and therefore are not guaranteed to have a function
+IR node. Entry-point reachability may become the gate only after ordinary
+function emission uses the same dead-function-elimination boundary. Regression
+1008 retains the declaration, call ABI, and Windows/Linux LLVM assembly
+contract.
+
+The Windows self-host compiler and verification link paths include `bcrypt`
+with `shell32` (and `ws2_32` for produced programs). Emitting the runtime
+definition without its matching system import library is an invalid partial
+implementation of the same boundary.
+
+## D344 — Runtime-projected values keep their ABI width in collections
+
+Status: implemented and cross-platform verified
+Date: 2026-08-20
+
+`sys.file.SourceText` is intentionally declared as an opaque `UInt64` token in
+the bootstrap surface, but native lowering projects it to
+`{ data, length, owner, ownerLength }`. Growable-array allocation previously
+used the nominal eight-byte token layout while indexing and stores used the
+32-byte projected LLVM type. The initial capacity happened to fit one value;
+the second source overwrote the heap and made Stage 2 fail only for multi-file
+or standard-library inputs.
+
+Array element sizing and alignment now recognize the canonical intrinsic
+SourceText identity and use its runtime ABI contract. Regression 1010 checks
+both 32-byte allocation operands and execution with two values. Windows and
+Linux Stage 2 multi-file verification are required because allocator behavior
+can otherwise hide the overwrite on one platform.
+
+## D345 — Arm-local results are resolved before enclosing controls
+
+Status: implemented
+Date: 2026-08-20
+
+General region-result discovery lifts a leaf through enclosing value-producing
+controls. Applying that lift while resolving an enum-match or subject-`when`
+arm can select the enclosing merge itself, causing a self-referential store and
+discarding the arm's actual value.
+
+Arm result discovery now uses a bounded block-result resolver. It follows
+transparent wrappers and selects a nested value-producing control's merge
+value, but stops at the arm's own block boundary before it can reach the
+enclosing match. General regions retain unrestricted control lifting.
+Regressions 778 and 1009 retain the enum-arm and mutable-loop-member shapes;
+regression 1011 retains nested enum-match and `if` merge values through native
+LLVM validation and execution.
+
+## D346 — Flow-final try propagates the resolved pipeline call
+
+Status: implemented and cross-platform verified
+Date: 2026-08-20
+
+The grammar owns the trailing `?` of `value -> operation?` at the flow-
+expression level, not inside the final postfix call. The self-host AST and
+Typed IR previously recognized only postfix-owned propagation, so LLVM emitted
+the call and discarded its `Result`. QUIC completion failures were therefore
+silently ignored before stream acceptance.
+
+Flow-expression lowering now preserves the resolved call subtree and wraps it
+in the same canonical propagation node used by a direct `operation(value)?`.
+LLVM rejects missing, non-canonical, or non-Result propagation operands before
+emission. Regression 1012 executes both pipeline-final and direct propagation
+through the native self-host compiler.
+
+## D347 — Enum ABI size follows nested concrete constructor payloads
+
+Status: implemented and cross-platform verified
+Date: 2026-08-20
+
+An imported nominal enum may have more than one canonical type ID. Static
+payload metadata for one identity can therefore be narrower than the concrete
+constructor payload that LLVM emits. When that enum was nested in a struct and
+the struct was carried by `Result`, the outer enum used the stale width: QUIC's
+`Result<Decoded, Error>` reserved 32 bytes for a 72-byte `Decoded`, truncating
+its `nextOffset` field to zero after a valid ACK decode.
+
+Recursive enum ABI sizing now resolves equivalent nominal enum identities by
+module and symbol and includes the widest concrete constructor operand before
+sizing containing structs and outer enums. Regression 1013 retains the nested
+enum-in-struct-in-Result shape; native aioquic v1 and v2 round trips retain the
+real protocol consequence.
+
+## D348 — P2P is an authenticated direct layer above QUIC
+
+Status: implemented and live-process verified
+Date: 2026-08-20
+
+`sys.quic.p2p` separates stable peer identity from transport identity and from
+peer discovery. A peer ID is SHA-256 over an Ed25519 public key. A signed,
+expiring `PeerRecord` binds that ID and key to an IPv4 endpoint and the exact
+certificate that the QUIC dialer pins. The rendezvous or out-of-band carrier
+therefore does not become a trusted identity authority.
+
+After QUIC connects, both sides prove possession of their Ed25519 seeds over a
+domain-separated transcript containing both public keys and fresh nonces.
+They then negotiate an exact application protocol and exchange bounded,
+length-prefixed messages. The current QUIC connection exposes one
+bidirectional stream, so these phases reuse stream zero rather than pretending
+to offer independent multiplexed application streams. The two-process chat
+sample verifies the signed record, mutual authentication, protocol agreement,
+bidirectional message exchange, orderly finish, and close.
+
+RFC 5128, RFC 8445, RFC 8489, and the libp2p DCUtR/rendezvous contracts show
+that Internet NAT traversal is a separate system involving address discovery,
+candidate coordination, simultaneous endpoint activity, and often relay.
+Accordingly this decision claims direct P2P only for reachable LAN, public, or
+forwarded UDP endpoints. STUN/ICE, relay, NAT hole punching, and keepalive are
+future layers, not silent fallbacks or implied behavior.
+
+## D349 — Resolved calls have one structured runtime argument plan
+
+Status: implemented
+Date: 2026-08-20
+
+The P2P live process exposed a general compiler defect in
+`processApplicationAck(connection, ack)?`: a resolved call could retain fewer
+linked runtime arguments than its concrete function declaration. The same
+shape also occurred for ordinary calls whose argument name resolved to a
+parameter, local, or control-pattern payload. LLVM then emitted a two-parameter
+function call with only one pointer, and the malformed call survived until
+native execution.
+
+Typed IR now has one call ABI: `operand0` is the first explicit runtime
+argument, `operand1` records the second, and `nextOperand` preserves the full
+ordered chain. Late name resolution normalizes all value-producing bindings
+into that plan without a QUIC, `Ack`, `?`, or enum-arm exception. The LLVM
+boundary compares the linked plus structurally implicit flow arguments with
+the concrete runtime parameter count and fails early as compiler verification
+`V001`. Verification codes are separate from user-source `Snnn` diagnostics
+and advisory `Nnnn` notes.
+
+The verifier builds the concrete-function symbol index once, passes it by
+reference, and uses direct ownership for implicit flow arguments. It therefore
+stays linear in IR size instead of rescanning or copying the full IR index for
+every call. Regression 1014 retains the exact `mut Connection, ref Ack` call
+under `?`; standard-library source-root emission retains the broader call
+matrix. QUIC receive paths also return owned snapshots of received packet and
+Initial-header data, rather than views into temporary datagram owners.
+
+## D350 — Native runtime declarations have one owning emitter
+
+Status: implemented
+Date: 2026-08-20
+
+The Linux P2P sample simultaneously reaches socket and directory runtimes.
+Both previously emitted `declare i64 @strlen(ptr)`, which produced duplicate
+LLVM declarations even though smaller programs reached only one runtime.
+Entrypoint emission now owns the single target-dependent declaration whenever
+either reachable runtime requires it; the socket and directory fragments emit
+uses and definitions, not competing declarations. Regression 1015 retains
+signed peer-record acceptance plus expired-record and signature-tampering
+rejection, while the Windows and Linux two-process scripts retain the combined
+runtime and wire-level behavior.
+
+## D351 — Reference temporaries and pattern payloads are compiler invariants
+
+Status: implemented, cross-platform fixed-point and live-process verified
+Date: 2026-08-20
+
+LLVM `alloca` storage remains live until the containing function returns. The
+self-host text emitter previously created fixed reference-argument scratch
+slots at the call site. A call inside the roughly 32,000-iteration Typed IR
+validation loop therefore allocated another slot on every iteration and made
+Stage 3 terminate with Windows stack overflow. Increasing the executable stack
+only delayed the same defect and is not part of the solution.
+
+Ordinary-function and program-entry lowering now discover fixed
+reference-argument slots structurally and emit each `%callref*` alloca once in
+the entry block; call sites only store the current value. Windows and Linux Stage 2 inspect the complete compiler LLVM
+and reject any such alloca outside `entry`. Dynamic call-text storage remains a
+separate runtime-sized path. The repaired compiler completes both Stage 3 fixed
+points with the default process stack.
+
+The P2P build then exposed the adjacent Typed IR ordering defect. General name
+binding ran before an imported `Result.Err` arm acquired its final payload type,
+so the pattern binding was later repaired to `sys.socket.SocketError` while its
+direct call-argument read retained `Unit`. LLVM consequently emitted the invalid
+`freeze void %payload` even though the payload load and callee ABI were both the
+correct struct type.
+
+Enum payload finalization now re-synchronizes all direct pattern reads from the
+canonical binding. Compiler diagnostic `S046` rejects any remaining pattern
+reference/binding `typeId` disagreement before LLVM text is emitted. Regression
+1016 retains the minimal direct-pattern second-argument shape, and the full
+Windows and Linux QUIC P2P scripts retain the imported payload and live protocol
+path. Windows Stage 2 passes 7/7 and Stage 3 reaches 28,909,205 LLVM bytes at
+SHA-256 `5106F070548A34C7BB0CEFE193602EC829BB984951CCB9E0E837E318A69C1CAA`.
+Linux Stage 2 passes 6/6 and Stage 3 reaches 28,888,835 LLVM bytes at SHA-256
+`C3755ED213FD78E8DDD332BFD2B897AA618370AC723FBA1F02F4A59562A46B48`.
+
+## D352 — Cold native user examples are a required compiler gate
+
+Status: implemented
+Date: 2026-08-21
+
+The managed full example suite and its cache did not exercise every user
+program through the native self-host compiler. A clean global installation
+therefore exposed invalid LLVM for user example 670 after the broader suite had
+passed: a subject-style `when` arm stored `%v...` from its direct result
+expression without first scheduling that expression for emission.
+
+Subject-`when` lowering now selects the arm node as the emission region unless
+the arm explicitly owns a nested region, and derives the stored result from
+that same region. Windows and Linux Stage 2 both compile example 670 with Stage
+1 and Stage 2, require normalized LLVM equality, assemble and link the product,
+and require exact output `6,3,inclusive`. This cold native differential is the
+machine-enforced boundary; managed catalog success and warm artifacts are not
+accepted as substitutes.

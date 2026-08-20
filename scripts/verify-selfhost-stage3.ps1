@@ -90,7 +90,7 @@ if ($stage2Hash -ne $stage3Hash) {
 }
 & $llvmAsPath $stage3LlvmPath -o $stage3BitcodePath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $clangPath -Wno-override-module $stage3LlvmPath -O1 -o $stage3Path -lshell32
+& $clangPath -Wno-override-module $stage3LlvmPath -O1 -o $stage3Path -lshell32 -lbcrypt
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "[stage3 3/3] PASS fixed point $stage3Hash"
 }

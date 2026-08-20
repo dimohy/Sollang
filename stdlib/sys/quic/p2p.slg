@@ -1,0 +1,492 @@
+namespace sys.quic.p2p
+
+import sys.crypto.ed25519
+import sys.crypto.random
+import sys.crypto.sha256
+import sys.quic as quic
+import sys.quic.error as errors
+import sys.runtime
+
+# Sollang's P2P layer deliberately separates direct authenticated QUIC from
+# rendezvous, relay, and NAT traversal. PeerRecord is the signed hand-off
+# format those discovery layers can distribute without being trusted.
+public struct PeerId {
+    bytes: [UInt8; 32]
+}
+
+public struct Identity {
+    transport: quic.Identity
+    publicKey: [UInt8; 32]
+    id: PeerId
+}
+
+public struct PeerRecord {
+    id: PeerId
+    publicKey: [UInt8; 32]
+    endpoint: quic.Ipv4Endpoint
+    expiresAtMillis: UInt64
+    certificate: [UInt8; ~]
+    signature: [UInt8; 64]
+}
+
+public struct Session {
+    connection: quic.Connection
+    channel: quic.BiStream
+    remote: PeerId
+}
+
+public struct ProtocolStream {
+    protocol: [UInt8; ~]
+}
+
+struct Authenticated {
+    remote: PeerId
+    channel: quic.BiStream
+}
+
+copyBytes bytes: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => copied!
+    0 => index!
+    index! < (bytes -> len) -> while {
+        copied! -> push(bytes[index!])
+        index! + 1 => index!
+    }
+    copied!
+}
+
+copy32 bytes: [UInt8] -> [UInt8; 32] {
+    [UInt8(0); 32] => copied!
+    0 => index!
+    index! < 32 -> while {
+        bytes[index!] => copied![index!]
+        index! + 1 => index!
+    }
+    copied!
+}
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+appendUInt16 output: mut [UInt8; ~], value: UInt16 -> Unit {
+    output -> push(UInt8(value / 256))
+    output -> push(UInt8(value % 256))
+}
+
+appendUInt32 output: mut [UInt8; ~], value: UInt32 -> Unit {
+    output -> push(UInt8(value / 16_777_216))
+    output -> push(UInt8(value / 65_536 % 256))
+    output -> push(UInt8(value / 256 % 256))
+    output -> push(UInt8(value % 256))
+}
+
+appendUInt64 output: mut [UInt8; ~], value: UInt64 -> Unit {
+    UInt64(72_057_594_037_927_936) => divisor!
+    0 => index!
+    index! < 8 -> while {
+        output -> push(UInt8(value / divisor! % 256))
+        divisor! > 1 -> if { divisor! / 256 => divisor! }
+        index! + 1 => index!
+    }
+}
+
+decodeUInt16 bytes: [UInt8], offset: Int -> UInt16 {
+    UInt16(bytes[offset]) * 256 + UInt16(bytes[offset + 1])
+}
+
+decodeUInt32 bytes: [UInt8], offset: Int -> UInt32 {
+    UInt32(bytes[offset]) * 16_777_216 + UInt32(bytes[offset + 1]) * 65_536 + UInt32(bytes[offset + 2]) * 256 + UInt32(bytes[offset + 3])
+}
+
+sameBytes left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+failure kind: errors.Kind, code: UInt64 -> quic.QuicError {
+    quic.QuicError { kind: kind, code: code }
+}
+
+invalidRecord code: UInt64 -> Result<Unit, quic.QuicError> {
+    Result<Unit, quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, code))
+}
+
+recordDomain: -> [UInt8; 21] => [
+    115, 111, 108, 108, 97, 110, 103, 45, 112, 50, 112,
+    45, 114, 101, 99, 111, 114, 100, 45, 118, 49]
+
+handshakeDomain: -> [UInt8; 24] => [
+    115, 111, 108, 108, 97, 110, 103, 45, 112, 50, 112, 45,
+    104, 97, 110, 100, 115, 104, 97, 107, 101, 45, 118, 49]
+
+recordBytes id: ref PeerId, publicKey: [UInt8], endpoint: quic.Ipv4Endpoint, expiresAtMillis: UInt64, certificate: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    bytes! -> appendBytes(recordDomain())
+    bytes! -> appendBytes(id.bytes)
+    bytes! -> appendBytes(publicKey)
+    bytes! -> push(endpoint.a)
+    bytes! -> push(endpoint.b)
+    bytes! -> push(endpoint.c)
+    bytes! -> push(endpoint.d)
+    bytes! -> appendUInt16(endpoint.port)
+    bytes! -> appendUInt64(expiresAtMillis)
+    bytes! -> appendUInt32(UInt32(certificate -> len))
+    bytes! -> appendBytes(certificate)
+    bytes!
+}
+
+peerId publicKey: [UInt8] -> PeerId {
+    PeerId { bytes: sha256.digest(publicKey) }
+}
+
+public fromSeed seed: [UInt8; 32] -> Result<Identity, quic.QuicError> {
+    publicKeyFor(seed)? => publicKey
+    peerId(publicKey) => id
+    quic.Identity { seed: seed } => transport
+    Result<Identity, quic.QuicError>.Ok(Identity {
+        transport: transport
+        publicKey: publicKey
+        id: id
+    })
+}
+
+public generateIdentity: -> Result<Identity, quic.QuicError> uses Random {
+    random.bytes(32) -> when {
+        Ok(seed) { fromSeed(copy32(seed)) }
+        Err(error) {
+            Result<Identity, quic.QuicError>.Err(failure(errors.Kind.Internal, 81_002))
+        }
+    }
+}
+
+public createRecord identity: ref Identity, endpoint: quic.Ipv4Endpoint, expiresAtMillis: UInt64 -> Result<PeerRecord, quic.QuicError> {
+    quic.certificate(identity.transport)? => certificate
+    recordBytes(identity.id, identity.publicKey, endpoint, expiresAtMillis, certificate) => bytes
+    ed25519.sign(identity.transport.seed, bytes) -> when {
+        Ok(signature) {
+            Result<PeerRecord, quic.QuicError>.Ok(PeerRecord {
+                id: PeerId { bytes: copy32(identity.id.bytes) }
+                publicKey: copy32(identity.publicKey)
+                endpoint: endpoint
+                expiresAtMillis: expiresAtMillis
+                certificate: certificate
+                signature: signature
+            })
+        }
+        Err(error) {
+            Result<PeerRecord, quic.QuicError>.Err(failure(errors.Kind.Crypto, 81_003))
+        }
+    }
+}
+
+public verifyRecord record: ref PeerRecord, currentMillis: UInt64 -> Result<Unit, quic.QuicError> {
+    (record.certificate -> len) > 0 -> unless { invalidRecord(81_004) -> return }
+    peerId(record.publicKey) => derivedId
+    sameBytes(derivedId.bytes, record.id.bytes)
+        -> unless { invalidRecord(81_005) -> return }
+    record.expiresAtMillis >= currentMillis -> unless { invalidRecord(81_006) -> return }
+    recordBytes(record.id, record.publicKey, record.endpoint, record.expiresAtMillis, record.certificate) => bytes
+    ed25519.verify(record.publicKey, bytes, record.signature) -> when {
+        Ok(valid) {
+            valid -> unless { invalidRecord(81_007) -> return }
+        }
+        Err(error) { invalidRecord(81_008) -> return }
+    }
+    Result<Unit, quic.QuicError>.Ok
+}
+
+random32: -> Result<[UInt8; 32], quic.QuicError> uses Random {
+    random.bytes(32) -> when {
+        Ok(bytes) { Result<[UInt8; 32], quic.QuicError>.Ok(copy32(bytes)) }
+        Err(error) {
+            Result<[UInt8; 32], quic.QuicError>.Err(failure(errors.Kind.Internal, 81_009))
+        }
+    }
+}
+
+publicKeyFor seed: [UInt8] -> Result<[UInt8; 32], quic.QuicError> {
+    ed25519.publicKey(seed) -> when {
+        Ok(value) { Result<[UInt8; 32], quic.QuicError>.Ok(value) }
+        Err(error) {
+            Result<[UInt8; 32], quic.QuicError>.Err(failure(errors.Kind.Crypto, 81_011))
+        }
+    }
+}
+
+signBytes seed: [UInt8], message: [UInt8] -> Result<[UInt8; 64], quic.QuicError> {
+    ed25519.sign(seed, message) -> when {
+        Ok(value) { Result<[UInt8; 64], quic.QuicError>.Ok(value) }
+        Err(error) {
+            Result<[UInt8; 64], quic.QuicError>.Err(failure(errors.Kind.Crypto, 81_016))
+        }
+    }
+}
+
+verifyBytes publicKey: [UInt8], message: [UInt8], signature: [UInt8] -> Result<Bool, quic.QuicError> {
+    ed25519.verify(publicKey, message, signature) -> when {
+        Ok(valid) { Result<Bool, quic.QuicError>.Ok(valid) }
+        Err(error) { Result<Bool, quic.QuicError>.Err(failure(errors.Kind.Crypto, 81_015)) }
+    }
+}
+
+handshakeTranscript initiatorKey: [UInt8], initiatorNonce: [UInt8], responderKey: [UInt8], responderNonce: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => transcript!
+    transcript! -> appendBytes(handshakeDomain())
+    transcript! -> appendBytes(initiatorKey)
+    transcript! -> appendBytes(initiatorNonce)
+    transcript! -> appendBytes(responderKey)
+    transcript! -> appendBytes(responderNonce)
+    transcript!
+}
+
+authHeader kind: UInt8 -> [UInt8; ~] {
+    [83, 80, 50, 80, 1, kind; ~]
+}
+
+hasAuthHeader bytes: [UInt8], kind: UInt8 -> Bool {
+    (bytes -> len) >= 6
+        and bytes[0] == 83
+        and bytes[1] == 80
+        and bytes[2] == 50
+        and bytes[3] == 80
+        and bytes[4] == 1
+        and bytes[5] == kind
+}
+
+slice32 bytes: [UInt8], offset: Int -> [UInt8; 32] {
+    [UInt8(0); 32] => value!
+    0 => index!
+    index! < 32 -> while {
+        bytes[offset + index!] => value![index!]
+        index! + 1 => index!
+    }
+    value!
+}
+
+slice64 bytes: [UInt8], offset: Int -> [UInt8; 64] {
+    [UInt8(0); 64] => value!
+    0 => index!
+    index! < 64 -> while {
+        bytes[offset + index!] => value![index!]
+        index! + 1 => index!
+    }
+    value!
+}
+
+sendAuth connection: mut quic.Connection, channel: mut quic.BiStream, bytes: [UInt8] -> Result<Unit, quic.QuicError> uses Network, Clock {
+    quic.send(connection, channel, bytes)? => sent
+    sent == UIntSize(bytes -> len) -> unless {
+        Result<Unit, quic.QuicError>.Err(failure(errors.Kind.Internal, 81_010)) -> return
+    }
+    Result<Unit, quic.QuicError>.Ok
+}
+
+receiveAuth connection: mut quic.Connection, channel: mut quic.BiStream -> Result<[UInt8; ~], quic.QuicError> uses Network, Clock {
+    quic.receive(connection, channel, 256)
+}
+
+authenticateInitiator connection: mut quic.Connection, expected: ref PeerId -> Result<Authenticated, quic.QuicError> uses Network, Random, Clock {
+    quic.openBi(connection)? => channel!
+    publicKeyFor(connection.identity.seed)? => localKey
+    random32()? => localNonce
+    authHeader(1) => initial!
+    initial! -> appendBytes(localKey)
+    initial! -> appendBytes(localNonce)
+    sendAuth(connection, channel!, initial!)?
+
+    receiveAuth(connection, channel!)? => challenge
+    (challenge -> len) == 134 and hasAuthHeader(challenge, 2)
+        -> unless {
+        Result<Authenticated, quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_012)) -> return
+    }
+    slice32(challenge, 6) => remoteKey
+    slice32(challenge, 38) => remoteNonce
+    slice64(challenge, 70) => remoteSignature
+    peerId(remoteKey) => remoteId
+    sameBytes(remoteId.bytes, expected.bytes) -> unless {
+        Result<Authenticated, quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_013)) -> return
+    }
+    handshakeTranscript(localKey, localNonce, remoteKey, remoteNonce) => transcript
+    verifyBytes(remoteKey, transcript, remoteSignature)? => validRemote
+    validRemote -> unless {
+        Result<Authenticated, quic.QuicError>.Err(failure(errors.Kind.Crypto, 81_014)) -> return
+    }
+    signBytes(connection.identity.seed, transcript)? => localSignature
+    authHeader(3) => proof!
+    proof! -> appendBytes(localSignature)
+    sendAuth(connection, channel!, proof!)?
+    Result<Authenticated, quic.QuicError>.Ok(Authenticated {
+        remote: remoteId
+        channel: channel!
+    })
+}
+
+authenticateResponder connection: mut quic.Connection -> Result<Authenticated, quic.QuicError> uses Network, Random, Clock {
+    quic.acceptBi(connection)? => channel!
+    receiveAuth(connection, channel!)? => initial
+    (initial -> len) == 70 and hasAuthHeader(initial, 1)
+        -> unless {
+        Result<Authenticated, quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_017)) -> return
+    }
+    slice32(initial, 6) => remoteKey
+    slice32(initial, 38) => remoteNonce
+    publicKeyFor(connection.identity.seed)? => localKey
+    random32()? => localNonce
+    handshakeTranscript(remoteKey, remoteNonce, localKey, localNonce) => transcript
+    signBytes(connection.identity.seed, transcript)? => localSignature
+    authHeader(2) => challenge!
+    challenge! -> appendBytes(localKey)
+    challenge! -> appendBytes(localNonce)
+    challenge! -> appendBytes(localSignature)
+    sendAuth(connection, channel!, challenge!)?
+
+    receiveAuth(connection, channel!)? => proof
+    (proof -> len) == 70 and hasAuthHeader(proof, 3)
+        -> unless {
+        Result<Authenticated, quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_020)) -> return
+    }
+    slice64(proof, 6) => remoteSignature
+    verifyBytes(remoteKey, transcript, remoteSignature)? => validRemote
+    validRemote -> unless {
+        Result<Authenticated, quic.QuicError>.Err(failure(errors.Kind.Crypto, 81_021)) -> return
+    }
+    Result<Authenticated, quic.QuicError>.Ok(Authenticated {
+        remote: peerId(remoteKey)
+        channel: channel!
+    })
+}
+
+public dial local: quic.Ipv4Endpoint, identity: move Identity, remote: ref PeerRecord, version: UInt32 -> Result<Session, quic.QuicError> uses Network, Random, Clock {
+    verifyRecord(remote, UInt64(runtime.nowMillis()))?
+    copyBytes(remote.certificate) => certificate
+    identity.transport => transportIdentity
+    quic.bind(local, transportIdentity, certificate)? => endpoint
+    quic.connectVersion(endpoint, remote.endpoint, version)? => connection!
+    authenticateInitiator(connection!, remote.id)? => authenticated
+    Result<Session, quic.QuicError>.Ok(Session {
+        connection: connection!
+        channel: authenticated.channel
+        remote: authenticated.remote
+    })
+}
+
+public accept local: quic.Ipv4Endpoint, identity: move Identity -> Result<Session, quic.QuicError> uses Network, Random, Clock {
+    identity.transport => transportIdentity
+    [UInt8; ~] => noPeerCertificate
+    quic.bind(local, transportIdentity, noPeerCertificate)? => endpoint
+    quic.accept(endpoint)? => connection!
+    authenticateResponder(connection!)? => authenticated
+    Result<Session, quic.QuicError>.Ok(Session {
+        connection: connection!
+        channel: authenticated.channel
+        remote: authenticated.remote
+    })
+}
+
+protocolFrame protocol: [UInt8] -> Result<[UInt8; ~], quic.QuicError> {
+    ((protocol -> len) > 0 and (protocol -> len) <= 1_024)
+        -> unless {
+        Result<[UInt8; ~], quic.QuicError>.Err(failure(errors.Kind.InvalidArgument, 81_023)) -> return
+    }
+    [UInt8(83), 80, 50, 83, 1; ~] => bytes!
+    bytes! -> appendUInt16(UInt16(protocol -> len))
+    bytes! -> appendBytes(protocol)
+    Result<[UInt8; ~], quic.QuicError>.Ok(bytes!)
+}
+
+decodeProtocol bytes: [UInt8] -> Result<[UInt8; ~], quic.QuicError> {
+    ((bytes -> len) >= 7
+        and bytes[0] == 83
+        and bytes[1] == 80
+        and bytes[2] == 50
+        and bytes[3] == 83
+        and bytes[4] == 1) -> unless {
+        Result<[UInt8; ~], quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_024)) -> return
+    }
+    Int(decodeUInt16(bytes, 5)) => length
+    (length > 0 and length <= 1_024 and (bytes -> len) == length + 7)
+        -> unless {
+        Result<[UInt8; ~], quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_025)) -> return
+    }
+    [UInt8; ~] => protocol!
+    0 => index!
+    index! < length -> while {
+        protocol! -> push(bytes[index! + 7])
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], quic.QuicError>.Ok(protocol!)
+}
+
+public openProtocol session: mut Session, protocol: [UInt8] -> Result<ProtocolStream, quic.QuicError> uses Network, Clock {
+    protocolFrame(protocol)? => request
+    sendAuth(session.connection, session.channel, request)?
+    quic.receive(session.connection, session.channel, 1)? => response
+    ((response -> len) == 1 and response[0] == 1) -> unless {
+        Result<ProtocolStream, quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_026)) -> return
+    }
+    Result<ProtocolStream, quic.QuicError>.Ok(ProtocolStream {
+        protocol: copyBytes(protocol)
+    })
+}
+
+public acceptProtocol session: mut Session, expected: [UInt8] -> Result<ProtocolStream, quic.QuicError> uses Network, Clock {
+    quic.receive(session.connection, session.channel, 1_031)? => request
+    decodeProtocol(request)? => protocol
+    sameBytes(protocol, expected) -> unless {
+        sendAuth(session.connection, session.channel, [0])?
+        Result<ProtocolStream, quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_027)) -> return
+    }
+    sendAuth(session.connection, session.channel, [1])?
+    Result<ProtocolStream, quic.QuicError>.Ok(ProtocolStream {
+        protocol: protocol
+    })
+}
+
+public sendMessage session: mut Session, protocolStream: mut ProtocolStream, message: [UInt8] -> Result<Unit, quic.QuicError> uses Network, Clock {
+    (message -> len) <= 60_000 -> unless {
+        Result<Unit, quic.QuicError>.Err(failure(errors.Kind.InvalidArgument, 81_028)) -> return
+    }
+    [UInt8; ~] => frame!
+    frame! -> appendUInt32(UInt32(message -> len))
+    frame! -> appendBytes(message)
+    sendAuth(session.connection, session.channel, frame!)
+}
+
+public receiveMessage session: mut Session, protocolStream: mut ProtocolStream, maximum: UIntSize -> Result<[UInt8; ~], quic.QuicError> uses Network, Clock {
+    maximum <= 60_000 -> unless {
+        Result<[UInt8; ~], quic.QuicError>.Err(failure(errors.Kind.InvalidArgument, 81_029)) -> return
+    }
+    quic.receive(session.connection, session.channel, maximum + 4)? => frame
+    (frame -> len) >= 4 -> unless {
+        Result<[UInt8; ~], quic.QuicError>.Err(failure(errors.Kind.Truncated, 81_030)) -> return
+    }
+    UIntSize(decodeUInt32(frame, 0)) => length
+    (length <= maximum and UIntSize(frame -> len) == length + 4)
+        -> unless {
+        Result<[UInt8; ~], quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_031)) -> return
+    }
+    [UInt8; ~] => message!
+    UIntSize(0) => index!
+    index! < length -> while {
+        message! -> push(frame[Int(index! + 4)])
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], quic.QuicError>.Ok(message!)
+}
+
+public finish session: mut Session, protocolStream: mut ProtocolStream -> Result<Unit, quic.QuicError> uses Network, Clock {
+    quic.finish(session.connection, session.channel)
+}
+
+public close session: mut Session, code: UInt32 -> Result<Unit, quic.QuicError> uses Network {
+    quic.close(session.connection, code)
+}

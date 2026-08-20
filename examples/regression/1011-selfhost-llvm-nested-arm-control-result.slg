@@ -1,0 +1,50 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        enum Outcome {
+            Ok(Int)
+            Err(Int)
+        }
+
+        nestedMatch outcome: Outcome -> Outcome {
+            outcome -> when {
+                Ok(value) {
+                    Outcome.Ok(value) -> when {
+                        Ok(inner) { Outcome.Ok(inner + 1) }
+                        Err(error) { Outcome.Err(error) }
+                    }
+                }
+                Err(error) { Outcome.Err(error) }
+            }
+        }
+
+        nestedIf outcome: Outcome -> Outcome {
+            outcome -> when {
+                Ok(value) {
+                    value == 0 -> if {
+                        Outcome.Ok(20)
+                    } else {
+                        Outcome.Err(value)
+                    }
+                }
+                Err(error) { Outcome.Err(error) }
+            }
+        }
+
+        printOutcome outcome: Outcome -> Unit uses Console {
+            outcome -> when {
+                Ok(value) { value -> println }
+                Err(error) { error -> println }
+            }
+        }
+
+        main {
+            Outcome.Ok(10) -> nestedMatch -> printOutcome
+            Outcome.Ok(0) -> nestedIf -> printOutcome
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

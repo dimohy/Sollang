@@ -101,12 +101,30 @@ regionReturns regionIndex: Int, context: ref emitterContext.EmitContext, state: 
     }
     returns!
 }
-emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, tryAst: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, tryAst: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    (operandIndex < 0 or operandIndex >= (context.ir -> len))
+        -> if {
+        "; sollang compiler error S039: result propagation lacks an operand at ir $tryIndex (operand $operandIndex, parent $parentIndex, ast $tryAst, owner $ownerIndex)" -> println
+        return
+    }
     context.ir[operandIndex] => operand
     context.ir[ownerIndex] => owner
     operand.typeId => operandTypeId
     owner.typeId => ownerTypeId
+    (operandTypeId < 0 or operandTypeId >= (context.types -> len)
+        or ownerTypeId < 0 or ownerTypeId >= (context.types -> len))
+            -> if {
+        "; sollang compiler error S040: result propagation lacks canonical types at ir $tryIndex (operand $operandIndex/$operandTypeId, owner $ownerIndex/$ownerTypeId, ast $tryAst)" -> println
+        return
+    }
     context.types[operandTypeId] => operandType
+    (operandType.kind != 7 or operandType.first < 0 or operandType.second < 0
+        or operandType.first >= (context.types -> len)
+        or operandType.second >= (context.types -> len))
+            -> if {
+        "; sollang compiler error S041: result propagation operand is not a canonical Result at ir $tryIndex (operand $operandIndex/$operandTypeId, kind $(operandType.kind), first $(operandType.first), second $(operandType.second), ast $tryAst)" -> println
+        return
+    }
     operandType.first => okTypeId
     operandType.second => errorTypeId
 
@@ -156,7 +174,7 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
         -> while {
         (context.ir[tryCleanupAncestor!].kind == 19 or context.ir[tryCleanupAncestor!].kind == 1)
             -> if {
-            OwnedDropRequest { regionIndex: tryCleanupAncestor!, beforeAst: tryAst, edgeIndex: tryIndex * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+            OwnedDropRequest { regionIndex: tryCleanupAncestor!, beforeAst: tryAst, edgeIndex: tryIndex * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
         }
         context.ir[tryCleanupAncestor!].parent => tryCleanupAncestor!
     }
@@ -185,11 +203,11 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
         }
     }
 }
-emitResultPropagation tryIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitResultPropagation tryIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[tryIndex] => tryNode
-    tryIndex -> emitResultPropagationValue(tryNode.operand0, tryNode.parent, tryNode.astNode, ownerIndex, context, state)
+    tryIndex -> emitResultPropagationValue(tryNode.operand0, tryNode.parent, tryNode.astNode, ownerIndex, emissionOrder, context, state)
 }
-emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.pointerBitWidth / 8 => regionPointerAlignment
     context.ir[regionIndex] => region
     region.parent => ownerIndex!
@@ -597,7 +615,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 -> while {
                 (context.ir[returnCleanupAncestor!].kind == 19 or context.ir[returnCleanupAncestor!].kind == 1)
                     -> if {
-                    OwnedDropRequest { regionIndex: returnCleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 7, transferredSymbol: returnedSymbol! } -> emitOwnedDrops(context, state)
+                    OwnedDropRequest { regionIndex: returnCleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 7, transferredSymbol: returnedSymbol! } -> emitOwnedDrops([Int; ~], context, state)
                 }
                 context.ir[returnCleanupAncestor!].parent => returnCleanupAncestor!
             }
@@ -672,7 +690,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             (guardCleanupAncestor! >= 0 and guardCleanupAncestor! != regionNode.operand0)
                 -> while {
                 context.ir[guardCleanupAncestor!].kind == 19 -> if {
-                    OwnedDropRequest { regionIndex: guardCleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 8, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                    OwnedDropRequest { regionIndex: guardCleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 8, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                 }
                 context.ir[guardCleanupAncestor!].parent => guardCleanupAncestor!
             }
@@ -691,7 +709,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             (cleanupAncestor! >= 0 and cleanupAncestor! != regionNode.operand0)
                 -> while {
                 context.ir[cleanupAncestor!].kind == 19 -> if {
-                    OwnedDropRequest { regionIndex: cleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 9, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                    OwnedDropRequest { regionIndex: cleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 9, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                 }
                 context.ir[cleanupAncestor!].parent => cleanupAncestor!
             }
@@ -785,26 +803,6 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             mutableRegionBinding -> integerNodeWidth(context, state) => mutableRegionTargetWidth
             mutableRegionValue -> integerNodeWidth(context, state) => mutableRegionSourceWidth
             (mutableRegionTargetWidth > 0 and mutableRegionSourceWidth > 0 and mutableRegionTargetWidth != mutableRegionSourceWidth and mutableRegionValue.kind != 3 and mutableRegionValue.kind != 4) => castMutableRegionValue
-            -1 => mutableRegionCanonicalMemberTypeId!
-            mutableRegionValue.kind == 13 -> if {
-                regionNode.operand0 -> canonicalMemberValueTypeId(context, state) => mutableRegionCanonicalMemberTypeId!
-            }
-            (mutableRegionCanonicalMemberTypeId! >= 0
-                and context.types[mutableRegionCanonicalMemberTypeId!].kind == 4) => materializeMutableRegionFixedView
-            materializeMutableRegionFixedView -> if {
-                "  %v$(regionNodeIndex)_fixed_storage = alloca " -> print
-                mutableRegionCanonicalMemberTypeId! -> writeSemanticTypeId(context, state)
-                ", align $(context.typeAligns[mutableRegionCanonicalMemberTypeId!])" -> println
-                "  store " -> print
-                mutableRegionCanonicalMemberTypeId! -> writeSemanticTypeId(context, state)
-                " %v$(regionNode.operand0), ptr %v$(regionNodeIndex)_fixed_storage, align $(context.typeAligns[mutableRegionCanonicalMemberTypeId!])" -> println
-                "  %v$(regionNodeIndex)_fixed_view0 = insertvalue " -> print
-                mutableRegionBinding -> writeIrType(context, state)
-                " poison, ptr %v$(regionNodeIndex)_fixed_storage, 0" -> println
-                "  %v$(regionNodeIndex)_fixed_view = insertvalue " -> print
-                mutableRegionBinding -> writeIrType(context, state)
-                " %v$(regionNodeIndex)_fixed_view0, i64 $(context.types[mutableRegionCanonicalMemberTypeId!].length), 1" -> println
-            }
             castMutableRegionValue -> if {
                 "  %v$(regionNodeIndex)_mutable_cast = " -> print
                 mutableRegionTargetWidth < mutableRegionSourceWidth -> if { "trunc " -> print } else { mutableRegionValue -> integerNodeSigned(context, state)
@@ -832,16 +830,12 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 castMutableRegionValue -> if {
                     "%v$(regionNodeIndex)_mutable_cast" -> print
                 } else {
-                materializeMutableRegionFixedView -> if {
-                    "%v$(regionNodeIndex)_fixed_view" -> print
-                } else {
-                    false => mutableRegionParameterWritten!
-                    (ownerIndex! >= 0 and mutableRegionValue.kind == 5)
-                        -> if {
-                        context -> writeParameterReference(ownerIndex!, mutableRegionValue.symbol) => mutableRegionParameterWritten!
-                    }
-                    not mutableRegionParameterWritten! -> if { "%v$(regionNode.operand0)" -> print }
+                false => mutableRegionParameterWritten!
+                (ownerIndex! >= 0 and mutableRegionValue.kind == 5)
+                    -> if {
+                    context -> writeParameterReference(ownerIndex!, mutableRegionValue.symbol) => mutableRegionParameterWritten!
                 }
+                not mutableRegionParameterWritten! -> if { "%v$(regionNode.operand0)" -> print }
                 }
                 }
             }
@@ -859,11 +853,11 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
         regionNode.kind == 26 -> if {
             WhileValueRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, nodeIndex: regionNodeIndex } -> emitEnumConstructor(context, state)
         }
-        regionNode.kind == 27 -> if { regionNodeIndex -> emitEnumMatch(context, state) }
-        regionNode.kind == 34 -> if { regionNodeIndex -> emitSubjectWhen(context, state) }
+        regionNode.kind == 27 -> if { regionNodeIndex -> emitEnumMatch(emissionOrder, context, state) }
+        regionNode.kind == 34 -> if { regionNodeIndex -> emitSubjectWhen(emissionOrder, context, state) }
         (regionNode.kind == 30 and context.nodes[context.ranges[regionNode.sourceModule].astStart + regionNode.astNode].kind == 82)
             -> if {
-            regionNodeIndex -> emitResultPropagation(ownerIndex!, context, state)
+            regionNodeIndex -> emitResultPropagation(ownerIndex!, emissionOrder, context, state)
         }
         regionNode.kind == 36 -> if {
             "  %v$(regionNodeIndex) = freeze " -> print
@@ -1105,6 +1099,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                             regionCanonicalMemberOwnerType! -> canonicalMemberFieldIndex(regionNode.sourceModule, regionCanonicalMemberTokenIndex!, context)
                         } => regionCanonicalMemberResolvedField
                         context.fields[regionCanonicalMemberResolvedField] => regionCanonicalMemberField
+                        context.types[regionCanonicalMemberField.fieldType] => regionCanonicalMemberFieldType
                         "  " -> print
                         regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
                             -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
@@ -1114,21 +1109,70 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                             ", ptr " -> print
                             regionCanonicalMemberOrdinal! == 0 -> if { ownerIndex! -> writeReferencePlaceValue(regionNode.operand0, context, state) } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal! - 1)" -> print }
                             ", i32 0, i32 $(regionCanonicalMemberField.ordinal)" -> println
-                            "  " -> print
-                            regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
-                                -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
-                            " = load " -> print
-                            regionCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
-                            ", ptr " -> print
-                            regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
-                                -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
-                            "_address, align $(context.typeAligns[regionCanonicalMemberField.fieldType])" -> println
+                            regionCanonicalMemberFieldType.kind == 4 -> if {
+                                "  " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_0" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_0" -> print }
+                                " = insertvalue { ptr, i64 } poison, ptr " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_address" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_address" -> print }
+                                ", 0" -> println
+                                "  " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                                " = insertvalue { ptr, i64 } " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_0" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_0" -> print }
+                                ", i64 $(regionCanonicalMemberFieldType.length), 1" -> println
+                            } else {
+                                "  " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                                " = load " -> print
+                                regionCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                                ", ptr " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                                "_address, align $(context.typeAligns[regionCanonicalMemberField.fieldType])" -> println
+                            }
                         } else {
+                            regionCanonicalMemberFieldType.kind == 4 -> if { "_inline" -> print }
                             " = extractvalue " -> print
                             regionCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
                             " " -> print
                             regionCanonicalMemberOrdinal! == 0 -> if { regionNode.operand0 -> writeValue(ownerIndex!, context, state) } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal! - 1)" -> print }
                             ", $(regionCanonicalMemberField.ordinal)" -> println
+                            regionCanonicalMemberFieldType.kind == 4 -> if {
+                                "  " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_slot" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_slot" -> print }
+                                " = alloca " -> print
+                                regionCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                                ", align $(context.typeAligns[regionCanonicalMemberField.fieldType])" -> println
+                                "  store " -> print
+                                regionCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
+                                " " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_inline" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_inline" -> print }
+                                ", ptr " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_slot" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_slot" -> print }
+                                ", align $(context.typeAligns[regionCanonicalMemberField.fieldType])" -> println
+                                "  " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_0" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_0" -> print }
+                                " = insertvalue { ptr, i64 } poison, ptr " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_slot" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_slot" -> print }
+                                ", 0" -> println
+                                "  " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                                " = insertvalue { ptr, i64 } " -> print
+                                regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
+                                    -> if { "%v$(regionNodeIndex)_0" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)_0" -> print }
+                                ", i64 $(regionCanonicalMemberFieldType.length), 1" -> println
+                            }
                         }
                         regionCanonicalMemberField.fieldType => regionCanonicalMemberOwnerType!
                         regionCanonicalMemberOrdinal! + 1 => regionCanonicalMemberOrdinal!
@@ -2208,7 +2252,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             -> if {
             (regionNode.kind == 8 and (regionNode.opcode == -24 or regionNode.opcode == -25))
                 -> if {
-                regionNodeIndex -> emitLogicalValue(ownerIndex!, context, state)
+                regionNodeIndex -> emitLogicalValue(ownerIndex!, emissionOrder, context, state)
             } else {
             context.ir[regionNode.operand0] => regionLeft
             0 => regionBinaryWidth!
@@ -3162,7 +3206,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                     regionNodeIndex -> callResultPropagationBindingIndex(context, state) => regionPropagationBindingIndex
                     regionPropagationBindingIndex >= 0 -> if {
                         context.ir[regionPropagationBindingIndex] => regionPropagationBinding
-                        regionPropagationBindingIndex -> emitResultPropagationValue(regionNodeIndex, regionPropagationBinding.parent, regionPropagationBinding.astNode, ownerIndex!, context, state)
+                        regionPropagationBindingIndex -> emitResultPropagationValue(regionNodeIndex, regionPropagationBinding.parent, regionPropagationBinding.astNode, ownerIndex!, emissionOrder, context, state)
                     }
                 }
             }
@@ -3200,7 +3244,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             context.ir[nestedConditionIndex!] => nestedCondition
             (nestedCondition.kind == 8 and (nestedCondition.opcode == -25 or nestedCondition.opcode == -24) or (nestedCondition.kind == 7 and nestedCondition.opcode == -26)) => nestedShortCircuit
             nestedShortCircuit -> if {
-                WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex! } -> emitWhileBranch(context, state)
+                WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex! } -> emitWhileBranch(emissionOrder, context, state)
                 "while$(regionNodeIndex)_body:" -> println
                 regionNode -> writeIfShortCircuitBodyTarget(regionNodeIndex)
                 "while$(regionNodeIndex)_exit:" -> println
@@ -3232,7 +3276,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                         regionNode.operand1 -> regionResultValueIndex(context, state) => nestedThenStoreIndex
                         regionNode -> emitIfResultStore(nestedThenStoreIndex, ownerIndex!, regionNodeIndex, 0, context, state)
                     }
-                    OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                    OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                     "  br label %if$(regionNodeIndex)_merge" -> println
                     true => ifThenReachesMerge![regionNodeIndex - regionLocalStart]
                 }
@@ -3253,9 +3297,9 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                         regionNode.nextOperand -> regionResultValueIndex(context, state) => nestedElseStoreIndex
                         regionNode -> emitIfResultStore(nestedElseStoreIndex, ownerIndex!, regionNodeIndex, 1, context, state)
                     }
-                    OwnedDropRequest { regionIndex: regionNode.nextOperand, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                    OwnedDropRequest { regionIndex: regionNode.nextOperand, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                 } else {
-                    OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                    OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                 }
                 "  br label %if$(regionNodeIndex)_merge" -> println
                 true => ifThenReachesMerge![regionNodeIndex - regionLocalStart]
@@ -3287,7 +3331,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
         regionEventKind == 7 -> if {
             loopActive![regionNodeIndex - regionLocalStart]
                 -> if {
-                WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: regionNode.operand0 } -> emitWhileBranch(context, state)
+                WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: regionNode.operand0 } -> emitWhileBranch(emissionOrder, context, state)
                 "while$(regionNodeIndex)_body:" -> println
                 false => regionTerminated!
             }
@@ -3296,7 +3340,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             loopActive![regionNodeIndex - regionLocalStart]
                 -> if {
                 not regionTerminated! -> if {
-                    OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops(context, state)
+                    OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
                     "  br label %while$(regionNodeIndex)_header" -> println
                 }
                 "while$(regionNodeIndex)_exit:" -> println
@@ -3309,13 +3353,13 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
 subjectWhenArmResultValueIndex armResultIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     armResultIndex => resolved!
     context.ir[armResultIndex].kind == 19 -> if {
-        armResultIndex -> regionResultValueIndex(context, state) => resolved!
+        armResultIndex -> directRegionResultValueIndex(context, state) => resolved!
     } else {
         armResultIndex -> aggregateValueIndex(context, state) => resolved!
     }
     resolved!
 }
-emitSubjectWhen whenIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[whenIndex] => subjectWhen
     context.ir[subjectWhen.operand0] => subject
     whenIndex => whenOwner!
@@ -3387,16 +3431,18 @@ emitSubjectWhen whenIndex: Int, context: ref emitterContext.EmitContext, state: 
                     "  %v$(whenIndex)_range$(armOrdinal!) = and i1 %v$(whenIndex)_range$(armOrdinal!)_lower, %v$(whenIndex)_range$(armOrdinal!)_upper" -> println
                     "  br i1 %v$(whenIndex)_range$(armOrdinal!), label %while$(armIndex!)_body, label %while$(armIndex!)_exit" -> println
                 } else {
-                    WhileBranchRequest { whileIndex: armIndex!, ownerIndex: whenOwner!, conditionIndex: arm.operand0 } -> emitWhileBranch(context, state)
+                    WhileBranchRequest { whileIndex: armIndex!, ownerIndex: whenOwner!, conditionIndex: arm.operand0 } -> emitWhileBranch(emissionOrder, context, state)
                 }
                 "while$(armIndex!)_body:" -> println
-                arm.operand1 => emittedArmRegion
-                emittedArmRegion -> regionReturns(context, state) => armReturns
-                emittedArmRegion -> emitRegion(context, state)
+                armIndex! => emittedArmRegion!
+                (arm.operand1 >= 0 and context.ir[arm.operand1].kind == 19)
+                    -> if { arm.operand1 => emittedArmRegion! }
+                emittedArmRegion! -> regionReturns(context, state) => armReturns
+                emittedArmRegion! -> emitRegion(emissionOrder, context, state)
                 not armReturns -> if {
                     (whenValueUsed and not (subjectWhen.typeOrigin == 1 and subjectWhen.typeSymbol == 0))
                         -> if {
-                        emittedArmRegion -> subjectWhenArmResultValueIndex(context, state) => armValueIndex
+                        emittedArmRegion! -> subjectWhenArmResultValueIndex(context, state) => armValueIndex
                         subjectWhen -> emitIfResultStore(armValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                     }
                     "  br label %when$(whenIndex)_end" -> println
@@ -3407,7 +3453,7 @@ emitSubjectWhen whenIndex: Int, context: ref emitterContext.EmitContext, state: 
             } else {
                 armIndex! => emittedElseRegion
                 emittedElseRegion -> regionReturns(context, state) => elseReturns
-                emittedElseRegion -> emitRegion(context, state)
+                emittedElseRegion -> emitRegion(emissionOrder, context, state)
                 not elseReturns -> if {
                     (whenValueUsed and not (subjectWhen.typeOrigin == 1 and subjectWhen.typeSymbol == 0))
                         -> if {
@@ -3432,7 +3478,7 @@ emitSubjectWhen whenIndex: Int, context: ref emitterContext.EmitContext, state: 
     }
 }
 
-emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[matchIndex] => match
     context.ir[match.operand0] => subject
     matchIndex => matchOwner!
@@ -3527,10 +3573,19 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
             "  %v$(matchIndex)_arm$(armOrdinal!)_payload = getelementptr inbounds " -> print
             subject -> writeIrType(context, state)
             ", ptr %v$(matchIndex)_subject_slot, i32 0, i32 1" -> println
-            "  %v$(armBindingIndex!) = load " -> print
-            armBinding -> writeIrType(context, state)
-            ", ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align " -> print
-            armBinding -> storageAlign(context, state) -> writeDecimalLine
+            armBinding -> effectiveTypeId(context, state) => matchArmBindingTypeId
+            (matchArmBindingTypeId >= 0
+                and context.types[matchArmBindingTypeId].kind == 4
+                and context.types[matchArmBindingTypeId].length >= 0)
+                    -> if {
+                "  %v$(armBindingIndex!)_0 = insertvalue { ptr, i64 } poison, ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, 0" -> println
+                "  %v$(armBindingIndex!) = insertvalue { ptr, i64 } %v$(armBindingIndex!)_0, i64 $(context.types[matchArmBindingTypeId].length), 1" -> println
+            } else {
+                "  %v$(armBindingIndex!) = load " -> print
+                armBinding -> writeIrType(context, state)
+                ", ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align " -> print
+                armBinding -> storageAlign(context, state) -> writeDecimalLine
+            }
             }
         }
         armIndex! => emittedArmRegion!
@@ -3539,13 +3594,17 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
             arm.operand1 => emittedArmRegion!
         }
         emittedArmRegion! -> regionReturns(context, state) => armReturns
-        emittedArmRegion! -> emitRegion(context, state)
+        emittedArmRegion! -> emitRegion(emissionOrder, context, state)
         not armReturns -> if {
         (matchValueUsed! and not (match.typeOrigin == 1 and match.typeSymbol == 0))
             -> if {
             armIndex! -> matchRegionResultValueIndex(context, state) => armValueIndex
             context.ir[armValueIndex] => armValue
-            (armBindingIndex! >= 0 and armValue.kind == 26 and armValue.operand0 < 0) => missingDirectArmPayload
+            (armBindingIndex! >= 0
+                and not (context.ir[armBindingIndex!].typeOrigin == 1
+                    and context.ir[armBindingIndex!].typeSymbol == 0)
+                and armValue.kind == 26
+                and armValue.operand0 < 0) => missingDirectArmPayload
             (armValue.kind == 26
                 and armValue.parent != armIndex!
                 and armValue.parent != emittedArmRegion!
@@ -3559,22 +3618,23 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
                     (context.ir[armValueAncestor!].kind == 19 or context.ir[armValueAncestor!].kind == 20)
                         -> if { true => nestedArmValueDefinition! } else { context.ir[armValueAncestor!].parent => armValueAncestor! }
                 }
-                (not nestedArmValueDefinition! or missingDirectArmPayload)
+                (not nestedArmValueDefinition! and not missingDirectArmPayload)
                     -> if {
                     WhileValueRequest { whileIndex: armValueIndex, ownerIndex: matchIndex, nodeIndex: armValueIndex } -> emitEnumConstructor(context, state)
                 }
-                missingDirectArmPayload -> if {
-                    "  %v$(armValueIndex)_enum_payload_direct = getelementptr inbounds " -> print
-                    armValue -> writeIrType(context, state)
-                    ", ptr %v$(armValueIndex)_enum_slot, i32 0, i32 1" -> println
-                    "  store " -> print
-                    context.ir[armBindingIndex!] -> writeIrType(context, state)
-                    " %v$(armBindingIndex!), ptr %v$(armValueIndex)_enum_payload_direct, align " -> print
-                    context.ir[armBindingIndex!] -> storageAlign(context, state) -> writeDecimalLine
-                    "  %v$(armValueIndex) = load " -> print
-                    armValue -> writeIrType(context, state)
-                    ", ptr %v$(armValueIndex)_enum_slot, align 8" -> println
-                }
+            }
+            missingDirectArmPayload -> if {
+                true => armBindingTransferred!
+                "  %v$(armValueIndex)_enum_payload_direct = getelementptr inbounds " -> print
+                armValue -> writeIrType(context, state)
+                ", ptr %v$(armValueIndex)_enum_slot, i32 0, i32 1" -> println
+                "  store " -> print
+                context.ir[armBindingIndex!] -> writeIrType(context, state)
+                " %v$(armBindingIndex!), ptr %v$(armValueIndex)_enum_payload_direct, align " -> print
+                context.ir[armBindingIndex!] -> storageAlign(context, state) -> writeDecimalLine
+                "  %v$(armValueIndex)_with_direct_payload = load " -> print
+                armValue -> writeIrType(context, state)
+                ", ptr %v$(armValueIndex)_enum_slot, align 8" -> println
             }
             (armBindingIndex! < 0 and (armValueIndex == armIndex! or (armValue.kind == 19 and armValue.operand0 < 0))) => directArmPayload
             0 => safeArmBindingIndex!
@@ -3599,6 +3659,7 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
             match -> writeIrType(context, state)
             " " -> print
             directArmPayload -> if { "%v$(matchIndex)_arm$(armOrdinal!)_direct_value" -> print } else {
+            missingDirectArmPayload -> if { "%v$(armValueIndex)_with_direct_payload" -> print } else {
             emptyPayloadlessArm -> if { "zeroinitializer" -> print } else {
             armValueUsesBlockBinding -> if { "%v$(armBindingIndex!)" -> print } else {
             (armValue.kind == 3 or armValue.kind == 4) -> if {
@@ -3608,6 +3669,7 @@ emitEnumMatch matchIndex: Int, context: ref emitterContext.EmitContext, state: r
                         -> if { "1" -> print } else { "0" -> print }
                 }
             } else { "%v$(armValueIndex)" -> print }
+            }
             }
             }
             }

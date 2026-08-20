@@ -2314,8 +2314,9 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
             }
         }
         whileParameterOrdinal! >= 0 -> if {
-            value.flags / 2 % 2 == 1 -> if {
-                "%v$(request.nodeIndex)" -> print
+            request.nodeIndex -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => mutableWhileParameterOrdinal
+            mutableWhileParameterOrdinal >= 0 -> if {
+                "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print
             } else {
                 whileParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(whileParameterOrdinal!)" -> print }
             }
@@ -2360,6 +2361,49 @@ writeWhileValue request: WhileValueRequest, context: ref emitterContext.EmitCont
         }
     }
     }
+    }
+}
+
+emitWhileCurrentMutableParameterValue whileIndex: Int, valueIndex: Int, parameterOrdinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[valueIndex] => value
+    context -> parameterIndexAtOrdinal(ownerIndex, parameterOrdinal) => parameterIndex
+    (parameterIndex >= 0 and (context.ir[parameterIndex] -> mutableBorrowUsesStructPointer(context)))
+        -> if {
+        context.ir[parameterIndex] -> effectiveTypeId(context, state) => mutableParameterTypeId
+        (mutableParameterTypeId >= 0
+            and context.types[mutableParameterTypeId].kind == 4
+            and context.types[mutableParameterTypeId].length >= 0)
+                -> if {
+            "  %while$(whileIndex)_v$(valueIndex) = insertvalue { ptr, i64 } " -> print
+            parameterOrdinal == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal)" -> print }
+            ", i64 $(context.types[mutableParameterTypeId].length), 1" -> println
+        } else {
+            "  %while$(whileIndex)_v$(valueIndex) = load " -> print
+            value -> writeIrType(context, state)
+            ", ptr " -> print
+            parameterOrdinal -> writeMutableStructParameterPointer
+            ", align " -> print
+            value -> storageAlign(context, state) -> writeDecimalLine
+        }
+    } else {
+        "  %while$(whileIndex)_v$(valueIndex)_current_ptr = load ptr, ptr " -> print
+        parameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(parameterOrdinal)_mut_ptr_addr" -> print }
+        ", align 8" -> println
+        "  %while$(whileIndex)_v$(valueIndex)_current_len = load i64, ptr " -> print
+        parameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(parameterOrdinal)_mut_len_addr" -> print }
+        ", align 8" -> println
+        "  %while$(whileIndex)_v$(valueIndex)_current_capacity = load i64, ptr " -> print
+        parameterOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(parameterOrdinal)_mut_capacity_addr" -> print }
+        ", align 8" -> println
+        "  %while$(whileIndex)_v$(valueIndex)_current0 = insertvalue " -> print
+        value -> writeIrType(context, state)
+        " poison, ptr %while$(whileIndex)_v$(valueIndex)_current_ptr, 0" -> println
+        "  %while$(whileIndex)_v$(valueIndex)_current1 = insertvalue " -> print
+        value -> writeIrType(context, state)
+        " %while$(whileIndex)_v$(valueIndex)_current0, i64 %while$(whileIndex)_v$(valueIndex)_current_len, 1" -> println
+        "  %while$(whileIndex)_v$(valueIndex) = insertvalue " -> print
+        value -> writeIrType(context, state)
+        " %while$(whileIndex)_v$(valueIndex)_current1, i64 %while$(whileIndex)_v$(valueIndex)_current_capacity, 2" -> println
     }
 }
 emitIndexAssignment request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -2790,6 +2834,9 @@ emitMemberAssignment request: WhileValueRequest, context: ref emitterContext.Emi
 }
 emitWhileMember request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[request.nodeIndex] => member
+    request.nodeIndex -> canonicalMemberValueTypeId(context, state) => memberCanonicalValueTypeId
+    (memberCanonicalValueTypeId >= 0
+        and context.types[memberCanonicalValueTypeId].kind == 4) => memberIsFixedArray
     context.ir[member.operand0] => memberBase
     memberBase.typeOrigin => currentOrigin!
     memberBase.typeModule => currentModule!
@@ -2903,21 +2950,27 @@ emitWhileMember request: WhileValueRequest, context: ref emitterContext.EmitCont
                                 fieldOrdinal! -> writeDecimalLine
                                 memberIdentifierOrdinal! == memberIdentifierCount! - 1
                                     -> if {
-                                    member.typeId => memberValueType!
-                                    (memberValueType! >= 0 and context.types[memberValueType!].kind == 8)
-                                        -> if {
-                                        context.types[memberValueType!].first => memberValueType!
+                                    memberIsFixedArray -> if {
+                                        "  %while$(request.whileIndex)_v$(request.nodeIndex)_0 = insertvalue { ptr, i64 } poison, ptr %while$(request.whileIndex)_v$(request.nodeIndex)_a$(projectionOrdinal!), 0" -> println
+                                        "  %while$(request.whileIndex)_v$(request.nodeIndex) = insertvalue { ptr, i64 } %while$(request.whileIndex)_v$(request.nodeIndex)_0, i64 $(context.types[memberCanonicalValueTypeId].length), 1" -> println
+                                    } else {
+                                        member.typeId => memberValueType!
+                                        (memberValueType! >= 0 and context.types[memberValueType!].kind == 8)
+                                            -> if {
+                                            context.types[memberValueType!].first => memberValueType!
+                                        }
+                                        "  %while$(request.whileIndex)_v$(request.nodeIndex) = load " -> print
+                                        memberValueType! -> writeSemanticTypeId(context, state)
+                                        ", ptr %while$(request.whileIndex)_v$(request.nodeIndex)_a$(projectionOrdinal!), align " -> print
+                                        context.typeAligns[memberValueType!] -> writeDecimalLine
                                     }
-                                    "  %while$(request.whileIndex)_v$(request.nodeIndex) = load " -> print
-                                    memberValueType! -> writeSemanticTypeId(context, state)
-                                    ", ptr %while$(request.whileIndex)_v$(request.nodeIndex)_a$(projectionOrdinal!), align " -> print
-                                    context.typeAligns[memberValueType!] -> writeDecimalLine
                                 }
                             } else {
                                 "  " -> print
                                 memberIdentifierOrdinal! == memberIdentifierCount! - 1
                                     -> if {
                                     "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+                                    memberIsFixedArray -> if { "_inline" -> print }
                                 } else {
                                     "%while$(request.whileIndex)_v$(request.nodeIndex)_m$(projectionOrdinal!)" -> print
                                 }
@@ -2930,6 +2983,17 @@ emitWhileMember request: WhileValueRequest, context: ref emitterContext.EmitCont
                                 }
                                 ", " -> print
                                 fieldOrdinal! -> writeDecimalLine
+                                (memberIdentifierOrdinal! == memberIdentifierCount! - 1 and memberIsFixedArray)
+                                    -> if {
+                                    "  %while$(request.whileIndex)_v$(request.nodeIndex)_slot = alloca " -> print
+                                    memberCanonicalValueTypeId -> writeSemanticTypeId(context, state)
+                                    ", align $(context.typeAligns[memberCanonicalValueTypeId])" -> println
+                                    "  store " -> print
+                                    memberCanonicalValueTypeId -> writeSemanticTypeId(context, state)
+                                    " %while$(request.whileIndex)_v$(request.nodeIndex)_inline, ptr %while$(request.whileIndex)_v$(request.nodeIndex)_slot, align $(context.typeAligns[memberCanonicalValueTypeId])" -> println
+                                    "  %while$(request.whileIndex)_v$(request.nodeIndex)_0 = insertvalue { ptr, i64 } poison, ptr %while$(request.whileIndex)_v$(request.nodeIndex)_slot, 0" -> println
+                                    "  %while$(request.whileIndex)_v$(request.nodeIndex) = insertvalue { ptr, i64 } %while$(request.whileIndex)_v$(request.nodeIndex)_0, i64 $(context.types[memberCanonicalValueTypeId].length), 1" -> println
+                                }
                             }
                             nextOrigin! => currentOrigin!
                             nextModule! => currentModule!
@@ -3036,7 +3100,7 @@ emitWhileCallArgumentPromotions argumentIndex: Int, callIndex: Int, whileIndex: 
         context.ir[argumentIndex].nextOperand -> emitWhileCallArgumentPromotions(callIndex, whileIndex, ownerIndex, ordinal + 1, context, state)
     }
 }
-emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     request.whileIndex => whileIndex
     request.ownerIndex => ownerIndex
     context.ir[whileIndex] => whileNode
@@ -3188,12 +3252,19 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                         context.ir[valueNodeIndex] => valueNode
                         (valueNode.kind == 8 and (valueNode.opcode == -24 or valueNode.opcode == -25))
                             -> if {
-                            valueNodeIndex -> emitLogicalValue(ownerIndex, context, state)
+                            valueNodeIndex -> emitLogicalValue(ownerIndex, emissionOrder, context, state)
                         }
                         valueNode.kind == 5 -> if {
                             false => parameterValue!
                             (ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].operand1 >= 0 and valueNode.symbol == context.ir[context.ir[ownerIndex].operand1].symbol)
                                 -> if { true => parameterValue! }
+                            -1 => mutableParameterOrdinal!
+                            valueNode.operand0 < 0 -> if {
+                                valueNodeIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => mutableParameterOrdinal!
+                            }
+                            mutableParameterOrdinal! >= 0 -> if {
+                                emitWhileCurrentMutableParameterValue(whileIndex, valueNodeIndex, mutableParameterOrdinal!, ownerIndex, context, state)
+                            }
                             not parameterValue! -> if {
                                 -1 => valueBindingIndex!
                                 (valueNode.operand0 >= 0 and context.ir[valueNode.operand0].kind == 17)
@@ -3464,7 +3535,7 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                             context.ir[valueNode.operand0] => whileIfCondition
                             (whileIfCondition.kind == 8 and (whileIfCondition.opcode == -25 or whileIfCondition.opcode == -24) or (whileIfCondition.kind == 7 and whileIfCondition.opcode == -26)) => whileIfShortCircuit
                             whileIfShortCircuit -> if {
-                                WhileBranchRequest { whileIndex: valueNodeIndex, ownerIndex: ownerIndex, conditionIndex: valueNode.operand0 } -> emitWhileBranch(context, state)
+                                WhileBranchRequest { whileIndex: valueNodeIndex, ownerIndex: ownerIndex, conditionIndex: valueNode.operand0 } -> emitWhileBranch(emissionOrder, context, state)
                                 "while$(valueNodeIndex)_body:" -> println
                                 "  br label %if$(valueNodeIndex)_then" -> println
                                 "while$(valueNodeIndex)_exit:" -> println
@@ -3475,12 +3546,12 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                                 ", label %if$(valueNodeIndex)_then, label %if$(valueNodeIndex)_else" -> println
                             }
                             "if$(valueNodeIndex)_then:" -> println
-                            valueNode.operand1 -> emitRegion(context, state)
+                            valueNode.operand1 -> emitRegion(emissionOrder, context, state)
                             valueNode.operand1 -> regionResultValueIndex(context, state) => whileThenStoreIndex
                             valueNode -> emitIfResultStore(whileThenStoreIndex, ownerIndex, valueNodeIndex, 0, context, state)
                             "  br label %if$(valueNodeIndex)_merge" -> println
                             "if$(valueNodeIndex)_else:" -> println
-                            valueNode.nextOperand -> emitRegion(context, state)
+                            valueNode.nextOperand -> emitRegion(emissionOrder, context, state)
                             valueNode.nextOperand -> regionResultValueIndex(context, state) => whileElseStoreIndex
                             valueNode -> emitIfResultStore(whileElseStoreIndex, ownerIndex, valueNodeIndex, 1, context, state)
                             "  br label %if$(valueNodeIndex)_merge" -> println
@@ -3592,8 +3663,8 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
 # Logical operators are values, but their right operand is evaluated only along
 # the branch selected by the left operand. Reuse the condition tree emitter and
 # merge its true/false exits into the SSA value expected for the logical node.
-emitLogicalValue logicalIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    WhileBranchRequest { whileIndex: logicalIndex, ownerIndex: ownerIndex, conditionIndex: logicalIndex } -> emitWhileBranch(context, state)
+emitLogicalValue logicalIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    WhileBranchRequest { whileIndex: logicalIndex, ownerIndex: ownerIndex, conditionIndex: logicalIndex } -> emitWhileBranch(emissionOrder, context, state)
     "while$(logicalIndex)_body:" -> println
     "  br label %logical$(logicalIndex)_merge" -> println
     "while$(logicalIndex)_exit:" -> println
@@ -3641,8 +3712,43 @@ ownershipRegionContainsEdge regionIndex: Int, edgeNodeIndex: Int, context: ref e
     }
     contains!
 }
-bindingValueDominatesEdge valueIndex: Int, bindingRegion: Int, edgeNodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+bindingValueDominatesEdge valueIndex: Int, bindingRegion: Int, edgeNodeIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     true => dominates!
+    (valueIndex >= 0 and edgeNodeIndex >= 0 and (emissionOrder -> len) > 0)
+        -> if {
+        valueIndex => valueRoot!
+        -1 => valueOrderPosition!
+        (valueRoot! >= 0 and valueOrderPosition! < 0)
+            -> while {
+            0 => valueOrderSearch!
+            (valueOrderSearch! < (emissionOrder -> len) and valueOrderPosition! < 0)
+                -> while {
+                emissionOrder[valueOrderSearch!] == valueRoot!
+                    -> if { valueOrderSearch! => valueOrderPosition! }
+                valueOrderSearch! + 1 => valueOrderSearch!
+            }
+            valueOrderPosition! < 0 -> if { context.ir[valueRoot!].parent => valueRoot! }
+        }
+        edgeNodeIndex => edgeRoot!
+        -1 => edgeOrderPosition!
+        (edgeRoot! >= 0 and edgeOrderPosition! < 0)
+            -> while {
+            0 => edgeOrderSearch!
+            (edgeOrderSearch! < (emissionOrder -> len) and edgeOrderPosition! < 0)
+                -> while {
+                emissionOrder[edgeOrderSearch!] == edgeRoot!
+                    -> if { edgeOrderSearch! => edgeOrderPosition! }
+                edgeOrderSearch! + 1 => edgeOrderSearch!
+            }
+            edgeOrderPosition! < 0 -> if { context.ir[edgeRoot!].parent => edgeRoot! }
+        }
+        (valueOrderPosition! >= 0
+            and edgeOrderPosition! >= 0
+            and valueOrderPosition! >= edgeOrderPosition!)
+                -> if {
+            false => dominates!
+        }
+    }
     valueIndex => valueAncestor!
     (valueAncestor! >= 0 and valueAncestor! != bindingRegion and dominates!)
         -> while {
@@ -3656,7 +3762,7 @@ bindingValueDominatesEdge valueIndex: Int, bindingRegion: Int, edgeNodeIndex: In
     }
     dominates!
 }
-emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.pointerBitWidth / 8 => ownedPointerAlignment
     context.ir[request.regionIndex] => dropRegion
     UIntSize(0) => dropBeforeStart!
@@ -3689,7 +3795,7 @@ emitOwnedDrops request: OwnedDropRequest, context: ref emitterContext.EmitContex
         (ownedDropBeforeEdge!
             and ownedDropCandidate.kind == 17
             and ownedDropCandidate.operand0 >= 0
-            and not (ownedDropCandidate.operand0 -> bindingValueDominatesEdge(request.regionIndex, ownedDropEdgeNode, context, state)))
+            and not (ownedDropCandidate.operand0 -> bindingValueDominatesEdge(request.regionIndex, ownedDropEdgeNode, emissionOrder, context, state)))
                 -> if {
             false => ownedDropBeforeEdge!
         }

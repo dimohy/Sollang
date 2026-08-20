@@ -1296,7 +1296,10 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
         -1 => size!
         1 => align!
         1 => status!
-        current.status != 0 -> if { 2 => status! } else {
+        current.status != 0 -> if {
+            (current.kind == 1 and (current.origin == 0 or current.origin == 2))
+                -> if { 1 => status! } else { 2 => status! }
+        } else {
             current.kind == 1 -> if {
                 current.origin == 1 -> if {
                     current.symbol == 0 -> if {
@@ -1470,7 +1473,19 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                     0 => fieldIndex!
                     fieldIndex! < (request.fields -> len) -> while {
                         request.fields[fieldIndex!] => field
-                        (field.status == 0 and field.ownerType == typeIndex!)
+                        false => fieldBelongs!
+                        field.ownerType == typeIndex! -> if { true => fieldBelongs! }
+                        (field.ownerType >= 0
+                            and field.ownerType < (request.types -> len)
+                            and current.kind == 1)
+                            -> if {
+                            request.types[field.ownerType] => fieldOwner
+                            (fieldOwner.kind == 1
+                                and fieldOwner.module == current.module
+                                and fieldOwner.symbol == current.symbol)
+                                -> if { true => fieldBelongs! }
+                        }
+                        (field.status == 0 and fieldBelongs!)
                             -> if {
                             (field.fieldType < 0 or statuses![field.fieldType] != 0)
                                 -> if { false => ready! } else {

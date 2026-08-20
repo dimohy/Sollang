@@ -868,9 +868,29 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         (function.kind == 7 or function.kind == 31) -> if {
             frozenFunctionResultLegacyIndexByAst[sourceRange.astStart + function.astNode] => resultTypeIndex
             frozenFunctionResultRootAstByAst[sourceRange.astStart + function.astNode] => resultRootAst!
+            # An empty collection literal has no element-driven inference record.
+            # Its declared function result is still authoritative, so preserve
+            # the final direct body child as the structural return root instead
+            # of dropping the entire nullary helper from Typed IR.
+            (resultRootAst! < 0 and function.flags / 128 % 2 == 0 and function.typeNode >= 0)
+                -> if {
+                UIntSize(0) => declaredBodyStart!
+                0 => declaredBodySearch!
+                declaredBodySearch! < sourceRange.astCount -> while {
+                    prepared.package.nodes[sourceRange.astStart + declaredBodySearch!] => declaredBodyCandidate
+                    (declaredBodyCandidate.parent == function.astNode
+                        and declaredBodyCandidate.kind == 10
+                        and (resultRootAst! < 0 or declaredBodyCandidate.start >= declaredBodyStart!))
+                            -> if {
+                        declaredBodySearch! => resultRootAst!
+                        declaredBodyCandidate.start => declaredBodyStart!
+                    }
+                    declaredBodySearch! + 1 => declaredBodySearch!
+                }
+            }
             (function.flags / 128 % 2 == 1 and resultRootAst! < 0)
                 -> if { function.astNode => resultRootAst! }
-            (resultTypeIndex >= 0 or function.flags / 128 % 2 == 1)
+            (resultTypeIndex >= 0 or function.flags / 128 % 2 == 1 or resultRootAst! >= 0)
                 -> if {
                 -1 => functionResultOrigin!
                 -1 => functionResultModule!
@@ -1755,6 +1775,43 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     -> if { patternResolvedSymbol.astNode => patternTypeAst! }
                             }
                             patternNameResolutionSearch! + 1 => patternNameResolutionSearch!
+                        }
+                    }
+                    # A resolved plain pattern payload used as a call argument
+                    # is structurally authoritative even when nominal payload
+                    # typing is deferred. Preserve that value node so the
+                    # canonical pattern-binding pass can supply its final type.
+                    (expression.kind == 15 and patternTypeAst! >= 0)
+                        -> if {
+                        0 => patternArgumentCallSearch!
+                        (patternArgumentCallSearch! < (prepared.calls -> len)
+                            and not knownPatternReference!) -> while {
+                            prepared.calls[patternArgumentCallSearch!] => patternArgumentCall
+                            false => patternArgumentBelongs!
+                            true => patternArgumentPlain!
+                            expression.parent => patternArgumentAncestor!
+                            (patternArgumentCall.status == 0
+                                and patternArgumentCall.sourceModule == sourceIndex
+                                and patternArgumentCall.callAst >= 0)
+                                    -> if {
+                                (patternArgumentAncestor! >= 0
+                                    and not patternArgumentBelongs!
+                                    and patternArgumentPlain!) -> while {
+                                    patternArgumentAncestor! == patternArgumentCall.callAst
+                                        -> if { true => patternArgumentBelongs! } else {
+                                        prepared.package.nodes[sourceRange.astStart + patternArgumentAncestor!]
+                                            => patternArgumentAncestorNode
+                                        (patternArgumentAncestorNode.kind == 36
+                                            or patternArgumentAncestorNode.kind == 41)
+                                                -> if { false => patternArgumentPlain! } else {
+                                            patternArgumentAncestorNode.parent => patternArgumentAncestor!
+                                        }
+                                    }
+                                }
+                            }
+                            (patternArgumentBelongs! and patternArgumentPlain!)
+                                -> if { true => knownPatternReference! }
+                            patternArgumentCallSearch! + 1 => patternArgumentCallSearch!
                         }
                     }
                     patternTypeAst! >= 0 -> if {
@@ -3940,6 +3997,58 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 -> if { tryOperandSearch! => tryOperandIr! }
                             tryOperandSearch! + 1 => tryOperandSearch!
                         }
+                        tryOperandIr! >= 0 -> if {
+                            results![tryOperandIr!] => directTryOperand
+                            (directTryOperand.typeId < 0
+                                or directTryOperand.typeId >= (frozenRecursiveSemanticTypes -> len)
+                                or frozenRecursiveSemanticTypes[directTryOperand.typeId].kind != 7
+                                or frozenRecursiveSemanticTypes[directTryOperand.typeId].origin != 4
+                                or frozenRecursiveSemanticTypes[directTryOperand.typeId].symbol != 1)
+                                    -> if { -1 => tryOperandIr! }
+                        }
+                        # A flow-level `?` wraps the preserved FlowExpression
+                        # AST. Normalized call lowering maps that child AST to
+                        # the terminal call IR, whose IR parent remains the
+                        # enclosing function. Recover the operand through the
+                        # authoritative AST-to-IR map before unwrapping regions.
+                        tryOperandIr! < 0 -> if {
+                            0 => tryAstChildSearch!
+                            tryAstChildSearch! < sourceRange.astCount -> while {
+                                prepared.package.nodes[sourceRange.astStart + tryAstChildSearch!].parent == control!.astNode
+                                    -> if {
+                                    UIntSize(0) => tryFlowOperandStart!
+                                    expressionIrStart => tryFlowOperandSearch!
+                                    tryFlowOperandSearch! < expressionIrEnd -> while {
+                                        results![tryFlowOperandSearch!] => tryFlowOperandCandidate
+                                        tryFlowOperandCandidate.astNode => tryFlowOperandAncestor!
+                                        false => tryFlowOperandDescends!
+                                        (tryFlowOperandAncestor! >= 0 and not tryFlowOperandDescends!)
+                                            -> while {
+                                            tryFlowOperandAncestor! == tryAstChildSearch!
+                                                -> if { true => tryFlowOperandDescends! } else {
+                                                prepared.package.nodes[sourceRange.astStart + tryFlowOperandAncestor!].parent => tryFlowOperandAncestor!
+                                            }
+                                        }
+                                        (tryFlowOperandDescends!
+                                            and tryFlowOperandCandidate.typeId >= 0
+                                            and tryFlowOperandCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
+                                            and frozenRecursiveSemanticTypes[tryFlowOperandCandidate.typeId].kind == 7
+                                            and frozenRecursiveSemanticTypes[tryFlowOperandCandidate.typeId].origin == 4
+                                            and frozenRecursiveSemanticTypes[tryFlowOperandCandidate.typeId].symbol == 1)
+                                                -> if {
+                                            prepared.package.nodes[sourceRange.astStart + tryFlowOperandCandidate.astNode].start => tryFlowOperandCandidateStart
+                                            (tryOperandIr! < 0 or tryFlowOperandCandidateStart >= tryFlowOperandStart!)
+                                                -> if {
+                                                tryFlowOperandSearch! => tryOperandIr!
+                                                tryFlowOperandCandidateStart => tryFlowOperandStart!
+                                            }
+                                        }
+                                        tryFlowOperandSearch! + 1 => tryFlowOperandSearch!
+                                    }
+                                }
+                                tryAstChildSearch! + 1 => tryAstChildSearch!
+                            }
+                        }
                         true => tryOperandUnwrap!
                         (tryOperandIr! >= 0 and tryOperandUnwrap! and results![tryOperandIr!].kind == 9 and results![tryOperandIr!].opcode == -1)
                             -> while {
@@ -5339,6 +5448,39 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         -> if { entryPatternResolvedSymbol.astNode => entryPatternTypeAst! }
                                 }
                                 entryPatternNameResolutionSearch! + 1 => entryPatternNameResolutionSearch!
+                            }
+                        }
+                        (entryExpression.kind == 15 and entryPatternTypeAst! >= 0)
+                            -> if {
+                            0 => entryPatternArgumentCallSearch!
+                            (entryPatternArgumentCallSearch! < (prepared.calls -> len)
+                                and not knownEntryPatternReference!) -> while {
+                                prepared.calls[entryPatternArgumentCallSearch!] => entryPatternArgumentCall
+                                false => entryPatternArgumentBelongs!
+                                true => entryPatternArgumentPlain!
+                                entryExpression.parent => entryPatternArgumentAncestor!
+                                (entryPatternArgumentCall.status == 0
+                                    and entryPatternArgumentCall.sourceModule == sourceIndex
+                                    and entryPatternArgumentCall.callAst >= 0)
+                                        -> if {
+                                    (entryPatternArgumentAncestor! >= 0
+                                        and not entryPatternArgumentBelongs!
+                                        and entryPatternArgumentPlain!) -> while {
+                                        entryPatternArgumentAncestor! == entryPatternArgumentCall.callAst
+                                            -> if { true => entryPatternArgumentBelongs! } else {
+                                            prepared.package.nodes[sourceRange.astStart + entryPatternArgumentAncestor!]
+                                                => entryPatternArgumentAncestorNode
+                                            (entryPatternArgumentAncestorNode.kind == 36
+                                                or entryPatternArgumentAncestorNode.kind == 41)
+                                                    -> if { false => entryPatternArgumentPlain! } else {
+                                                entryPatternArgumentAncestorNode.parent => entryPatternArgumentAncestor!
+                                            }
+                                        }
+                                    }
+                                }
+                                (entryPatternArgumentBelongs! and entryPatternArgumentPlain!)
+                                    -> if { true => knownEntryPatternReference! }
+                                entryPatternArgumentCallSearch! + 1 => entryPatternArgumentCallSearch!
                             }
                         }
                         entryPatternTypeAst! >= 0 -> if {
@@ -7404,6 +7546,53 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 results![entryTryOperandSearch!].parent == entryControlIrIndex!
                                     -> if { entryTryOperandSearch! => entryTryOperandIr! }
                                 entryTryOperandSearch! + 1 => entryTryOperandSearch!
+                            }
+                            entryTryOperandIr! >= 0 -> if {
+                                results![entryTryOperandIr!] => directEntryTryOperand
+                                (directEntryTryOperand.typeId < 0
+                                    or directEntryTryOperand.typeId >= (frozenRecursiveSemanticTypes -> len)
+                                    or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].kind != 7
+                                    or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].origin != 4
+                                    or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].symbol != 1)
+                                        -> if { -1 => entryTryOperandIr! }
+                            }
+                            entryTryOperandIr! < 0 -> if {
+                                0 => entryTryAstChildSearch!
+                                entryTryAstChildSearch! < sourceRange.astCount -> while {
+                                    prepared.package.nodes[sourceRange.astStart + entryTryAstChildSearch!].parent == entryControl!.astNode
+                                        -> if {
+                                        UIntSize(0) => entryTryFlowOperandStart!
+                                        entryExpressionStart => entryTryFlowOperandSearch!
+                                        entryTryFlowOperandSearch! < entryExpressionEnd -> while {
+                                            results![entryTryFlowOperandSearch!] => entryTryFlowOperandCandidate
+                                            entryTryFlowOperandCandidate.astNode => entryTryFlowOperandAncestor!
+                                            false => entryTryFlowOperandDescends!
+                                            (entryTryFlowOperandAncestor! >= 0 and not entryTryFlowOperandDescends!)
+                                                -> while {
+                                                entryTryFlowOperandAncestor! == entryTryAstChildSearch!
+                                                    -> if { true => entryTryFlowOperandDescends! } else {
+                                                    prepared.package.nodes[sourceRange.astStart + entryTryFlowOperandAncestor!].parent => entryTryFlowOperandAncestor!
+                                                }
+                                            }
+                                            (entryTryFlowOperandDescends!
+                                                and entryTryFlowOperandCandidate.typeId >= 0
+                                                and entryTryFlowOperandCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
+                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].kind == 7
+                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].origin == 4
+                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].symbol == 1)
+                                                    -> if {
+                                                prepared.package.nodes[sourceRange.astStart + entryTryFlowOperandCandidate.astNode].start => entryTryFlowOperandCandidateStart
+                                                (entryTryOperandIr! < 0 or entryTryFlowOperandCandidateStart >= entryTryFlowOperandStart!)
+                                                    -> if {
+                                                    entryTryFlowOperandSearch! => entryTryOperandIr!
+                                                    entryTryFlowOperandCandidateStart => entryTryFlowOperandStart!
+                                                }
+                                            }
+                                            entryTryFlowOperandSearch! + 1 => entryTryFlowOperandSearch!
+                                        }
+                                    }
+                                    entryTryAstChildSearch! + 1 => entryTryAstChildSearch!
+                                }
                             }
                             true => entryTryOperandUnwrap!
                             (entryTryOperandIr! >= 0 and entryTryOperandUnwrap! and results![entryTryOperandIr!].kind == 9 and results![entryTryOperandIr!].opcode == -1)
@@ -10030,20 +10219,16 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         contextualArrayIndex! + 1 => contextualArrayIndex!
     }
-    # Empty collection literals have no element from which to infer a shape.
-    # A standard enum constructor still provides an exact payload contract:
-    # Result.Ok/Err and Option.Some carry one of the constructor's canonical
-    # generic arguments. Preserve that fixed, bounded, or growable array type
-    # instead of letting an untyped `[]` reach LLVM as `void`.
+    # Standard enum constructors provide an exact payload contract. Preserve
+    # that contract for empty collections and contextually typed integer
+    # literals instead of retaining an inferred `void` or `Int` payload ABI.
     0 => contextualEnumCollectionIndex!
     contextualEnumCollectionIndex! < (results! -> len)
         -> while {
         results![contextualEnumCollectionIndex!] => contextualEnumCollection
         (contextualEnumCollection.kind == 26
             and contextualEnumCollection.typeId >= 0
-            and contextualEnumCollection.operand0 >= 0
-            and results![contextualEnumCollection.operand0].kind == 14
-            and results![contextualEnumCollection.operand0].operand0 < 0)
+            and contextualEnumCollection.operand0 >= 0)
                 -> if {
             frozenRecursiveSemanticTypes[contextualEnumCollection.typeId] => contextualEnumType
             (contextualEnumType.kind == 7
@@ -10065,10 +10250,16 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 }
                 contextualEnumPayloadTypeId! >= 0 -> if {
                     frozenRecursiveSemanticTypes[contextualEnumPayloadTypeId!] => contextualEnumPayloadType
-                    (contextualEnumPayloadType.kind == 3
-                        or contextualEnumPayloadType.kind == 4
-                        or contextualEnumPayloadType.kind == 12) -> if {
-                        results![contextualEnumCollection.operand0] => contextualEnumPayload!
+                    results![contextualEnumCollection.operand0] => contextualEnumPayload!
+                    ((contextualEnumPayload!.kind == 14
+                            and contextualEnumPayload!.operand0 < 0
+                            and (contextualEnumPayloadType.kind == 3
+                                or contextualEnumPayloadType.kind == 4
+                                or contextualEnumPayloadType.kind == 12))
+                        or (contextualEnumPayload!.kind == 3
+                            and contextualEnumPayloadType.kind == 1
+                            and contextualEnumPayloadType.origin == 1
+                            and integerTypeRank(contextualEnumPayloadType.symbol) > 0)) -> if {
                         contextualEnumPayloadTypeId! => contextualEnumPayload!.typeId
                         contextualEnumPayloadType.kind => contextualEnumPayload!.typeKind
                         contextualEnumPayloadType.origin => contextualEnumPayload!.typeOrigin
@@ -10211,7 +10402,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 contextualCollectionReturn.operand0 => contextualCollectionLiteralIndex
                 contextualCollectionLiteralIndex >= 0 -> if {
                     results![contextualCollectionLiteralIndex] => contextualCollectionLiteral!
-                    (((contextualCollectionFunction.typeKind == 3 or contextualCollectionFunction.typeKind == 4 or contextualCollectionFunction.typeKind == 12) and contextualCollectionLiteral!.kind == 14) or (contextualCollectionFunction.typeKind == 5 and contextualCollectionLiteral!.kind == 16))
+                    (((contextualCollectionFunction.typeKind == 2 or contextualCollectionFunction.typeKind == 3 or contextualCollectionFunction.typeKind == 4 or contextualCollectionFunction.typeKind == 12) and contextualCollectionLiteral!.kind == 14) or (contextualCollectionFunction.typeKind == 5 and contextualCollectionLiteral!.kind == 16))
                         -> if {
                         contextualCollectionFunction.typeId => contextualCollectionLiteral!.typeId
                         contextualCollectionFunction.typeKind => contextualCollectionLiteral!.typeKind
@@ -11221,6 +11412,30 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         enumPayloadTypeRepairIndex! + 1 => enumPayloadTypeRepairIndex!
     }
+    # Enum payload typing is finalized after the general reference pass above.
+    # Re-synchronize direct pattern reads here so a previously unresolved
+    # payload cannot retain Unit while its binding has acquired the canonical
+    # payload identity.  LLVM must see one type on both sides of the SSA alias.
+    0 => enumPayloadReferenceRepairIndex!
+    enumPayloadReferenceRepairIndex! < (results! -> len)
+        -> while {
+        results![enumPayloadReferenceRepairIndex!] => enumPayloadReferenceRepair!
+        (enumPayloadReferenceRepair!.kind == 5
+            and enumPayloadReferenceRepair!.operand0 >= 0
+            and enumPayloadReferenceRepair!.operand0 < (results! -> len)
+            and results![enumPayloadReferenceRepair!.operand0].kind == 29)
+                -> if {
+            results![enumPayloadReferenceRepair!.operand0] => enumPayloadReferenceBinding
+            enumPayloadReferenceBinding.typeId => enumPayloadReferenceRepair!.typeId
+            enumPayloadReferenceBinding.typeKind => enumPayloadReferenceRepair!.typeKind
+            enumPayloadReferenceBinding.typeOrigin => enumPayloadReferenceRepair!.typeOrigin
+            enumPayloadReferenceBinding.typeModule => enumPayloadReferenceRepair!.typeModule
+            enumPayloadReferenceBinding.typeSymbol => enumPayloadReferenceRepair!.typeSymbol
+            enumPayloadReferenceBinding.typeFlags => enumPayloadReferenceRepair!.typeFlags
+            enumPayloadReferenceRepair! => results![enumPayloadReferenceRepairIndex!]
+        }
+        enumPayloadReferenceRepairIndex! + 1 => enumPayloadReferenceRepairIndex!
+    }
     # Pattern and imported nominal bindings can retain their exact legacy
     # nominal identity before recursive inference publishes typeId. Canonicalize
     # only a unique semantic-type match; ambiguous or absent matches remain
@@ -11471,12 +11686,12 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             contextualCallFunctionIndex! >= 0 -> if {
                 contextualCallLiteral.operand0 => contextualCallArgumentIndex!
                 results![contextualCallFunctionIndex!].operand1 => contextualCallParameterIndex!
+                true => contextualCallPrimaryParameter!
                 (contextualCallArgumentIndex! >= 0 and contextualCallParameterIndex! >= 0)
                     -> while {
                     results![contextualCallArgumentIndex!] => contextualCallArgument!
                     results![contextualCallParameterIndex!] => contextualCallParameter
                     (contextualCallArgument!.kind == 14
-                        and contextualCallArgument!.typeId < 0
                         and ((contextualCallParameter.typeKind == 2
                             or contextualCallParameter.typeKind == 3
                             or contextualCallParameter.typeKind == 4
@@ -11492,9 +11707,34 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         contextualCallParameter.typeSymbol => contextualCallArgument!.typeSymbol
                         contextualCallParameter.typeFlags => contextualCallArgument!.typeFlags
                         contextualCallArgument! => results![contextualCallArgumentIndex!]
+                        contextualCallParameter.typeId >= 0 -> if {
+                            frozenRecursiveSemanticTypes[contextualCallParameter.typeId] => contextualCallCollectionType
+                            contextualCallCollectionType.first >= 0 -> if {
+                                frozenRecursiveSemanticTypes[contextualCallCollectionType.first] => contextualCallElementType
+                                contextualCallArgument!.operand0 => contextualCallElementIndex!
+                                contextualCallElementIndex! >= 0 -> while {
+                                    results![contextualCallElementIndex!] => contextualCallElement!
+                                    contextualCallElement!.kind == 3 -> if {
+                                        contextualCallCollectionType.first => contextualCallElement!.typeId
+                                        contextualCallElementType.kind => contextualCallElement!.typeKind
+                                        contextualCallElementType.origin => contextualCallElement!.typeOrigin
+                                        contextualCallElementType.module => contextualCallElement!.typeModule
+                                        contextualCallElementType.symbol => contextualCallElement!.typeSymbol
+                                        recursiveTypeFlags[contextualCallCollectionType.first] => contextualCallElement!.typeFlags
+                                        contextualCallElement! => results![contextualCallElementIndex!]
+                                    }
+                                    contextualCallElement!.nextOperand => contextualCallElementIndex!
+                                }
+                            }
+                        }
                     }
                     contextualCallArgument!.nextOperand => contextualCallArgumentIndex!
-                    contextualCallParameter.nextOperand => contextualCallParameterIndex!
+                    contextualCallPrimaryParameter! -> if {
+                        results![contextualCallFunctionIndex!].nextOperand => contextualCallParameterIndex!
+                        false => contextualCallPrimaryParameter!
+                    } else {
+                        contextualCallParameter.nextOperand => contextualCallParameterIndex!
+                    }
                 }
             }
         }
@@ -12811,6 +13051,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             finalArithmeticTypeIndex! + 1 => finalArithmeticTypeIndex!
         }
     }
+
     # Call targets and argument chains are final only after the late call/type
     # repairs above. Reapply contextual empty-array typing at this boundary so
     # a late-resolved local or imported call cannot leave `[]` untyped.
@@ -12866,6 +13107,127 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
         }
         finalCallArrayIndex! + 1 => finalCallArrayIndex!
+    }
+    # Collection literals can receive their canonical type after the earlier
+    # index pass. Re-derive every index result from its final container type so
+    # a late `[a, b; ~]` inference cannot leak the collection ABI into the
+    # indexed element node.
+    0 => finalCanonicalIndex!
+    finalCanonicalIndex! < (results! -> len) -> while {
+        results![finalCanonicalIndex!] => finalIndexNode!
+        (finalIndexNode!.kind == 15 and finalIndexNode!.operand0 >= 0)
+            -> if {
+            results![finalIndexNode!.operand0] => finalIndexContainer
+            finalIndexContainer.typeId >= 0 -> if {
+                frozenRecursiveSemanticTypes[finalIndexContainer.typeId] => finalIndexContainerType!
+                (finalIndexContainerType!.kind == 8 and finalIndexContainerType!.first >= 0)
+                    -> if {
+                    frozenRecursiveSemanticTypes[finalIndexContainerType!.first] => finalIndexContainerType!
+                }
+                -1 => finalIndexElementTypeId!
+                (finalIndexContainerType!.kind == 2
+                    or finalIndexContainerType!.kind == 3
+                    or finalIndexContainerType!.kind == 4)
+                        -> if { finalIndexContainerType!.first => finalIndexElementTypeId! }
+                finalIndexContainerType!.kind == 5
+                    -> if { finalIndexContainerType!.second => finalIndexElementTypeId! }
+                finalIndexElementTypeId! >= 0 -> if {
+                    frozenRecursiveSemanticTypes[finalIndexElementTypeId!] => finalIndexElementType
+                    finalIndexElementTypeId! => finalIndexNode!.typeId
+                    finalIndexElementType.kind => finalIndexNode!.typeKind
+                    finalIndexElementType.origin => finalIndexNode!.typeOrigin
+                    finalIndexElementType.module => finalIndexNode!.typeModule
+                    finalIndexElementType.symbol => finalIndexNode!.typeSymbol
+                    recursiveTypeFlags[finalIndexElementTypeId!] => finalIndexNode!.typeFlags
+                }
+            }
+            finalIndexNode! => results![finalCanonicalIndex!]
+        }
+        finalCanonicalIndex! + 1 => finalCanonicalIndex!
+    }
+    0 => finalIndexBindingIndex!
+    finalIndexBindingIndex! < (results! -> len) -> while {
+        results![finalIndexBindingIndex!] => finalIndexBinding!
+        (finalIndexBinding!.kind == 17
+            and finalIndexBinding!.operand0 >= 0
+            and results![finalIndexBinding!.operand0].kind == 15)
+            -> if {
+            results![finalIndexBinding!.operand0] => finalIndexBindingValue
+            finalIndexBindingValue.typeId => finalIndexBinding!.typeId
+            finalIndexBindingValue.typeKind => finalIndexBinding!.typeKind
+            finalIndexBindingValue.typeOrigin => finalIndexBinding!.typeOrigin
+            finalIndexBindingValue.typeModule => finalIndexBinding!.typeModule
+            finalIndexBindingValue.typeSymbol => finalIndexBinding!.typeSymbol
+            finalIndexBindingValue.typeFlags => finalIndexBinding!.typeFlags
+            finalIndexBinding! => results![finalIndexBindingIndex!]
+        }
+        finalIndexBindingIndex! + 1 => finalIndexBindingIndex!
+    }
+    0 => finalIndexReferenceIndex!
+    finalIndexReferenceIndex! < (results! -> len) -> while {
+        results![finalIndexReferenceIndex!] => finalIndexReference!
+        (finalIndexReference!.kind == 5
+            and finalIndexReference!.operand0 >= 0
+            and results![finalIndexReference!.operand0].kind == 17)
+                -> if {
+            results![finalIndexReference!.operand0] => finalIndexReferenceBinding
+            finalIndexReferenceBinding.typeId => finalIndexReference!.typeId
+            finalIndexReferenceBinding.typeKind => finalIndexReference!.typeKind
+            finalIndexReferenceBinding.typeOrigin => finalIndexReference!.typeOrigin
+            finalIndexReferenceBinding.typeModule => finalIndexReference!.typeModule
+            finalIndexReferenceBinding.typeSymbol => finalIndexReference!.typeSymbol
+            finalIndexReferenceBinding.typeFlags => finalIndexReference!.typeFlags
+            finalIndexReference! => results![finalIndexReferenceIndex!]
+        }
+        finalIndexReferenceIndex! + 1 => finalIndexReferenceIndex!
+    }
+    # Imported enum subjects can receive their canonical type only after the
+    # per-function control pass. Rebind every enum arm opcode from its pattern
+    # name at the final typed-IR boundary; source arm order is not the enum's
+    # declaration order.
+    0 => finalEnumMatchIndex!
+    finalEnumMatchIndex! < (results! -> len) -> while {
+        results![finalEnumMatchIndex!] => finalEnumMatch
+        (finalEnumMatch.kind == 27
+            and finalEnumMatch.operand0 >= 0
+            and finalEnumMatch.operand1 >= 0
+            and results![finalEnumMatch.operand0].typeId >= 0) -> if {
+            results![finalEnumMatch.operand0].typeId => finalEnumSubjectTypeId
+            frozenRecursiveSemanticTypes[finalEnumSubjectTypeId] => finalEnumSubjectType
+            finalEnumMatch.operand1 => finalEnumArmIndex!
+            (finalEnumArmIndex! >= 0
+                and finalEnumArmIndex! < (results! -> len)
+                and results![finalEnumArmIndex!].kind == 19
+                and results![finalEnumArmIndex!].parent == finalEnumMatchIndex!) -> while {
+                results![finalEnumArmIndex!] => finalEnumArm!
+                prepared.package.ranges[finalEnumArm!.sourceModule] => finalEnumArmRange
+                -1 => finalEnumPatternAst!
+                0 => finalEnumPatternSearch!
+                finalEnumPatternSearch! < finalEnumArmRange.astCount -> while {
+                    prepared.package.nodes[finalEnumArmRange.astStart + finalEnumPatternSearch!] => finalEnumPatternCandidate
+                    finalEnumPatternCandidate.parent => finalEnumPatternParent!
+                    (finalEnumPatternParent! >= 0
+                        and prepared.package.nodes[finalEnumArmRange.astStart + finalEnumPatternParent!].kind == 70)
+                            -> if {
+                        prepared.package.nodes[finalEnumArmRange.astStart + finalEnumPatternParent!].parent => finalEnumPatternParent!
+                    }
+                    (finalEnumPatternCandidate.kind == 59 and finalEnumPatternParent! == finalEnumArm!.astNode)
+                        -> if { finalEnumPatternSearch! => finalEnumPatternAst! }
+                    finalEnumPatternSearch! + 1 => finalEnumPatternSearch!
+                }
+                finalEnumPatternAst! >= 0 -> if {
+                    prepared.package.nodes[finalEnumArmRange.astStart + finalEnumPatternAst!] => finalEnumPattern
+                    prepared.package.tokens[finalEnumArmRange.tokenStart + finalEnumPattern.payloadToken] => finalEnumVariantToken
+                    finalEnumArm!.sourceModule -> nominalVariantTagForType(finalEnumSubjectType, finalEnumVariantToken) => finalEnumVariantTag
+                    finalEnumVariantTag >= 0 -> if {
+                        finalEnumVariantTag => finalEnumArm!.opcode
+                        finalEnumArm! => results![finalEnumArmIndex!]
+                    }
+                }
+                finalEnumArm!.nextOperand => finalEnumArmIndex!
+            }
+        }
+        finalEnumMatchIndex! + 1 => finalEnumMatchIndex!
     }
     # No pass may follow this synchronization: operator wrapper repair can
     # otherwise replace an already-canonical subject operand with the control
@@ -13158,6 +13520,131 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
         }
         finalExplicitReturnIndex! + 1 => finalExplicitReturnIndex!
+    }
+    # A value-producing control nested as a binary operand owns the merged
+    # value of that operand. Shallow inference can leave the control subject as
+    # the binary input (for example `headerKind == (version -> when {...})`).
+    # Recover the outermost control from AST containment after every late
+    # operand repair so LLVM consumes its merge value, never its subject.
+    0 => finalNestedControlBinaryIndex!
+    finalNestedControlBinaryIndex! < (results! -> len) -> while {
+        results![finalNestedControlBinaryIndex!] => finalNestedControlBinary!
+        (finalNestedControlBinary!.kind == 8
+            and finalNestedControlBinary!.sourceModule >= 0
+            and finalNestedControlBinary!.payloadToken >= 0) -> if {
+            prepared.package.ranges[finalNestedControlBinary!.sourceModule] => finalNestedControlRange
+            prepared.package.nodes[finalNestedControlRange.astStart + finalNestedControlBinary!.astNode] => finalNestedControlBinaryAst
+            prepared.package.tokens[finalNestedControlRange.tokenStart + finalNestedControlBinary!.payloadToken] => finalNestedControlOperator
+            UIntSize(4_294_967_295) => finalNestedControlBestRightStart!
+            0 => finalNestedControlCandidateIndex!
+            finalNestedControlCandidateIndex! < (results! -> len) -> while {
+                results![finalNestedControlCandidateIndex!] => finalNestedControlCandidate
+                (finalNestedControlCandidate.sourceModule == finalNestedControlBinary!.sourceModule
+                    and (finalNestedControlCandidate.kind == 18
+                        or finalNestedControlCandidate.kind == 27
+                        or finalNestedControlCandidate.kind == 33
+                        or finalNestedControlCandidate.kind == 34)) -> if {
+                    finalNestedControlCandidate.astNode => finalNestedControlAncestor!
+                    false => finalNestedControlDescends!
+                    (finalNestedControlAncestor! >= 0
+                        and not finalNestedControlDescends!)
+                        -> while {
+                        finalNestedControlAncestor! == finalNestedControlBinary!.astNode
+                            -> if { true => finalNestedControlDescends! } else {
+                            prepared.package.nodes[finalNestedControlRange.astStart + finalNestedControlAncestor!].parent => finalNestedControlAncestor!
+                        }
+                    }
+                    prepared.package.nodes[finalNestedControlRange.astStart + finalNestedControlCandidate.astNode] => finalNestedControlAst
+                    (finalNestedControlDescends!
+                        or (finalNestedControlAst.start >= finalNestedControlBinaryAst.start
+                            and finalNestedControlAst.start + finalNestedControlAst.length <= finalNestedControlBinaryAst.start + finalNestedControlBinaryAst.length)
+                        or (finalNestedControlBinary!.operand1 >= 0
+                            and finalNestedControlCandidate.operand0 == finalNestedControlBinary!.operand1
+                            and finalNestedControlAst.start >= finalNestedControlOperator.span.start)) -> if {
+                        finalNestedControlAst.start >= finalNestedControlOperator.span.start
+                            -> if {
+                            finalNestedControlBinary!.operand1 >= 0 -> if {
+                                results![finalNestedControlBinary!.operand1] => finalNestedControlOperand
+                                (finalNestedControlCandidate.operand0 == finalNestedControlBinary!.operand1
+                                    or (finalNestedControlCandidate.typeId >= 0
+                                    and finalNestedControlOperand.typeId == finalNestedControlCandidate.typeId)
+                                    or (finalNestedControlCandidate.typeId < 0
+                                        and finalNestedControlOperand.typeId < 0
+                                        and finalNestedControlOperand.typeKind == finalNestedControlCandidate.typeKind
+                                        and finalNestedControlOperand.typeOrigin == finalNestedControlCandidate.typeOrigin
+                                        and finalNestedControlOperand.typeModule == finalNestedControlCandidate.typeModule
+                                        and finalNestedControlOperand.typeSymbol == finalNestedControlCandidate.typeSymbol))
+                                        -> if {
+                                    finalNestedControlAst.start < finalNestedControlBestRightStart!
+                                        => finalNestedControlEarlier
+                                    finalNestedControlEarlier -> if {
+                                        finalNestedControlCandidateIndex! => finalNestedControlBinary!.operand1
+                                        finalNestedControlAst.start => finalNestedControlBestRightStart!
+                                    }
+                                }
+                            }
+                        } else {
+                            finalNestedControlBinary!.operand0 >= 0 -> if {
+                                results![finalNestedControlBinary!.operand0] => finalNestedControlOperand
+                                ((finalNestedControlCandidate.typeId >= 0
+                                    and finalNestedControlOperand.typeId == finalNestedControlCandidate.typeId)
+                                    or (finalNestedControlCandidate.typeId < 0
+                                        and finalNestedControlOperand.typeId < 0
+                                        and finalNestedControlOperand.typeKind == finalNestedControlCandidate.typeKind
+                                        and finalNestedControlOperand.typeOrigin == finalNestedControlCandidate.typeOrigin
+                                        and finalNestedControlOperand.typeModule == finalNestedControlCandidate.typeModule
+                                        and finalNestedControlOperand.typeSymbol == finalNestedControlCandidate.typeSymbol))
+                                        -> if { finalNestedControlCandidateIndex! => finalNestedControlBinary!.operand0 }
+                            }
+                        }
+                    }
+                }
+                finalNestedControlCandidateIndex! + 1 => finalNestedControlCandidateIndex!
+            }
+            finalNestedControlBinary! => results![finalNestedControlBinaryIndex!]
+        }
+        finalNestedControlBinaryIndex! + 1 => finalNestedControlBinaryIndex!
+    }
+    # Seal the resolved call plan after every late control and value repair.
+    # operand1 is the authoritative second explicit argument slot; ensure the
+    # ordered chain rooted at operand0 reaches it exactly once before the IR
+    # crosses into code generation and V001 validation.
+    0 => finalCallPlanIndex!
+    finalCallPlanIndex! < (results! -> len) -> while {
+        results![finalCallPlanIndex!] => finalCallPlan
+        ((finalCallPlan.kind == 6 or finalCallPlan.kind == 9)
+            and finalCallPlan.symbol >= 0
+            and finalCallPlan.operand0 >= 0
+            and finalCallPlan.operand1 >= 0
+            and finalCallPlan.operand0 != finalCallPlan.operand1)
+                -> if {
+            finalCallPlan.operand0 => finalCallPlanTail!
+            false => finalCallPlanContainsSecond!
+            true => finalCallPlanOpen!
+            0 => finalCallPlanSteps!
+            (finalCallPlanOpen! and finalCallPlanSteps! < (results! -> len))
+                -> while {
+                finalCallPlanTail! == finalCallPlan.operand1
+                    -> if {
+                    true => finalCallPlanContainsSecond!
+                    false => finalCallPlanOpen!
+                } else {
+                    results![finalCallPlanTail!].nextOperand >= 0
+                        -> if {
+                        results![finalCallPlanTail!].nextOperand => finalCallPlanTail!
+                    } else {
+                        false => finalCallPlanOpen!
+                    }
+                }
+                finalCallPlanSteps! + 1 => finalCallPlanSteps!
+            }
+            not finalCallPlanContainsSecond! -> if {
+                results![finalCallPlanTail!] => finalCallPlanTailNode!
+                finalCallPlan.operand1 => finalCallPlanTailNode!.nextOperand
+                finalCallPlanTailNode! => results![finalCallPlanTail!]
+            }
+        }
+        finalCallPlanIndex! + 1 => finalCallPlanIndex!
     }
     results!
 }

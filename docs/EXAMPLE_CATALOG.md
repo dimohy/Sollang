@@ -1,11 +1,11 @@
 # Example and test catalog
 
-Updated: 2026-08-18
+Updated: 2026-08-20
 
 Sollang keeps learning-oriented examples separate from exhaustive regression
 fixtures. The inventory table below is measured from the current runner
 inputs: user examples remain a learning track, while the complete logical
-catalog is the 985 executed regressions plus 274 diagnostics.
+catalog is the 997 executed regressions plus 274 diagnostics.
 
 ## User examples
 
@@ -30,17 +30,17 @@ regression counterpart.
 
 ## Regression inventory
 
-| Kind | Location | Count |
-| --- | --- | ---: |
-| User examples | `examples/user/` | 20 |
-| Regression cases | `examples/regression/expected/*.stdout.txt` | 987 |
-| Diagnostic cases | test runner | 274 |
-| Complete logical catalog | test runner | 1,261 |
-| Flow Junctions positive fixtures | `examples/regression/788-844*.slg` | 57 |
-| Flow Junctions diagnostic fixtures | `examples/regression/diagnostics/` | 26 |
-| Flow Junctions physical fixtures | positive + diagnostic | 83 |
-| Flow Junctions independently counted logical cases | coverage matrix | 114 |
-| Browser playground catalog | `app/samples.ts` | 43 (42 runnable + 1 target diagnostic) |
+| Kind                                               | Location                                      |                                  Count |
+| -------------------------------------------------- | --------------------------------------------- | -------------------------------------: |
+| User examples                                      | `examples/user/`                            |                                     20 |
+| Regression cases                                   | `examples/regression/expected/*.stdout.txt` |                                    997 |
+| Diagnostic cases                                   | test runner                                   |                                    274 |
+| Complete logical catalog                           | test runner                                   |                                  1,271 |
+| Flow Junctions positive fixtures                   | `examples/regression/788-844*.slg`          |                                     57 |
+| Flow Junctions diagnostic fixtures                 | `examples/regression/diagnostics/`          |                                     26 |
+| Flow Junctions physical fixtures                   | positive + diagnostic                         |                                     83 |
+| Flow Junctions independently counted logical cases | coverage matrix                               |                                    114 |
+| Browser playground catalog                         | `app/samples.ts`                            | 46 (45 runnable + 1 target diagnostic) |
 
 The catalog counts logical test cases, not every supporting file. Source lists,
 LLVM assertions, expected diagnostics, module fragments, projects, and other
