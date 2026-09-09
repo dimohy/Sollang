@@ -6,6 +6,7 @@ import sollang.compiler.ir.stream as streamIr
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.semantic.composite_types as compositeTypes
 import sollang.compiler.semantic.library_imports as libraryImports
 import sollang.compiler.semantic.modules as modules
@@ -14,36 +15,200 @@ import sollang.compiler.semantic.nominal_types as nominalTypes
 import sollang.compiler.semantic.ownership_check as ownershipCheck
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
 import sollang.compiler.syntax as syntax
+public struct InitializerDiagnostic {
+    public code: Int
+    public sourceModule: Int
+    public astNode: Int
+    public fieldOrdinal: Int
+}
+
 public struct EmitContext {
-    sources: [Text; ~]
-    ranges: [analysis.SourceAnalysisRange; ~]
-    nodes: [ast.AstNode; ~]
-    tokens: [syntax.SyntaxToken; ~]
-    symbols: [symbols.Symbol; ~]
-    calls: [calls.ModuleCallResolution; ~]
-    libraries: libraryImports.LibraryCatalog
-    libraryCalls: [libraryImports.LibraryFunctionResolution; ~]
-    libraryCallDiagnostics: [libraryImports.LibraryCallDiagnostic; ~]
-    interpolationRanges: [interpolation.InterpolationSourceRange; ~]
-    interpolations: [interpolation.InterpolationNode; ~]
-    ir: [typedIr.TypedIrNode; ~]
-    streamPlan: streamIr.StreamPlan
-    moves: [typedIr.MoveEvent; ~]
-    nominal: [nominalTypes.NominalType; ~]
-    composite: [compositeTypes.CompositeType; ~]
-    modules: [modules.ModuleIdentity; ~]
-    imports: [modules.ImportEdge; ~]
-    resolvedImports: [moduleResolve.ResolvedImport; ~]
-    types: [typeIds.SemanticType; ~]
-    fields: [typeIds.NominalField; ~]
-    typeSizes: [Int; ~]
-    typeAligns: [Int; ~]
-    typeLayoutStatuses: [Int; ~]
-    typeTraits: [Int; ~]
-    pointerBitWidth: Int
-    supportsComputePool: Bool
-    expectedPathStyle: Int
-    usesConcurrentStreamJoins: Bool
-    ownershipDiagnostics: [ownershipCheck.OwnershipDiagnostic; ~]
+    public initializerDiagnostics: [InitializerDiagnostic; ~]
+    public sources: [Text; ~]
+    public ranges: [analysis.SourceAnalysisRange; ~]
+    public nodes: [ast.AstNode; ~]
+    public constantLiterals: [constantLowering.Literal; ~]
+    public constantFailures: [constantLowering.Failure; ~]
+    public tokens: [syntax.SyntaxToken; ~]
+    public symbols: [symbols.Symbol; ~]
+    public calls: [calls.ModuleCallResolution; ~]
+    public finalCallResolvedByAst: [Bool; ~]
+    public libraries: libraryImports.LibraryCatalog
+    public libraryCalls: [libraryImports.LibraryFunctionResolution; ~]
+    public libraryCallDiagnostics: [libraryImports.LibraryCallDiagnostic; ~]
+    public interpolationRanges: [interpolation.InterpolationSourceRange; ~]
+    public interpolations: [interpolation.InterpolationNode; ~]
+    public ir: [typedIr.TypedIrNode; ~]
+    public genericCallPlans: [typedIr.GenericCallPlan; ~]
+    public genericBodies: typedIr.GenericBodyBindings
+    public streamPlan: streamIr.StreamPlan
+    public moves: [typedIr.MoveEvent; ~]
+    public nominal: [nominalTypes.NominalType; ~]
+    public composite: [compositeTypes.CompositeType; ~]
+    public modules: [modules.ModuleIdentity; ~]
+    public imports: [modules.ImportEdge; ~]
+    public resolvedImports: [moduleResolve.ResolvedImport; ~]
+    public types: [typeIds.SemanticType; ~]
+    public typeReferences: [typeIds.TypeReference; ~]
+    public typeTerms: [typeTerms.TypeTerm; ~]
+    public fields: [typeIds.NominalField; ~]
+    public typeSizes: [Int; ~]
+    public typeAligns: [Int; ~]
+    public typeLayoutStatuses: [Int; ~]
+    public typeTraits: [Int; ~]
+    public pointerBitWidth: Int
+    public targetArchitecture: Int
+    public cpuDispatchPolicy: Int
+    public requiredCpuFeatures: UInt64
+    public allowedCpuFeatures: UInt64
+    public forbiddenCpuFeatures: UInt64
+    public supportsComputePool: Bool
+    public expectedPathStyle: Int
+    public usesConcurrentStreamJoins: Bool
+    public ownershipDiagnostics: [ownershipCheck.OwnershipDiagnostic; ~]
+}
+
+public genericFunctionForCall context: ref EmitContext, callIndex: Int -> Int {
+    callIndex >= 0 and callIndex < (context.genericBodies.functionsByCall -> len)
+        -> if { context.genericBodies.functionsByCall[callIndex] } else { -1 }
+}
+
+public isGenericInstance context: ref EmitContext, functionIndex: Int -> Bool {
+    functionIndex >= 0 and functionIndex < (context.genericBodies.templatesByFunction -> len)
+        -> if { context.genericBodies.templatesByFunction[functionIndex] >= 0 } else { false }
+}
+
+# A projected callback feeds yield directly into emit; an observation or
+# predicate emits its retained input instead. Bool alone cannot distinguish them.
+public streamStageEmitsCallback context: ref EmitContext, stageIndex: Int -> Bool {
+    context.streamPlan.stages[stageIndex] => stage
+    stage.flags == 3 -> if { true -> return }
+    stage.targetModule < 0 or stage.targetSymbol < 0
+        -> if { false -> return }
+    context.ranges[stage.targetModule] => range
+    context.symbols[range.symbolStart + stage.targetSymbol].astNode => functionAst
+    0 => emitIndex!
+    emitIndex! < range.astCount -> while {
+        context.nodes[range.astStart + emitIndex!] => emitNode
+        emitNode.kind == 16 and emitNode.payloadToken >= 0 and emitNode.parent >= 0 and context.nodes[range.astStart + emitNode.parent].kind == 10
+            -> if {
+                context.tokens[range.tokenStart + emitNode.payloadToken] => token
+                context.sources[stage.targetModule] -> slice(token.span.start, token.span.length) => name
+                name == "emit" -> if {
+                    emitIndex! => owner!
+                    owner! >= 0 and owner! != functionAst -> while {
+                        context.nodes[range.astStart + owner!].parent => owner!
+                    }
+                    owner! == functionAst -> if {
+                        emitNode.parent => flowAst
+                        0 => yieldIndex!
+                        yieldIndex! < range.astCount -> while {
+                            context.nodes[range.astStart + yieldIndex!] => yieldNode
+                            yieldNode.kind == 16 and yieldNode.payloadToken >= 0 and yieldNode.parent >= 0 and context.nodes[range.astStart + yieldNode.parent].kind == 10
+                                -> if {
+                                    context.tokens[range.tokenStart + yieldNode.payloadToken] => yieldToken
+                                    context.sources[stage.targetModule] -> slice(yieldToken.span.start, yieldToken.span.length) => yieldName
+                                    yieldName == "yield" -> if {
+                                        yieldIndex! => ancestor!
+                                        ancestor! >= 0 and ancestor! != flowAst and ancestor! != functionAst
+                                            -> while {
+                                                context.nodes[range.astStart + ancestor!].parent => ancestor!
+                                            }
+                                        ancestor! == flowAst -> if { true -> return }
+                                    }
+                                }
+                            yieldIndex! + 1 => yieldIndex!
+                        }
+                    }
+                }
+            }
+        emitIndex! + 1 => emitIndex!
+    }
+    false
+}
+
+# Resolve the retained value from preceding value-producing stages. Slices and
+# observation callbacks retain the input; a callback's own result is downstream.
+public streamStageInputValue context: ref EmitContext, pipelineIndex: Int, stageIndex: Int -> Int {
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    -1 => value!
+    pipeline.status == 3 -> if { pipeline.source0 => value! }
+    pipeline.stageStart => priorIndex!
+    priorIndex! < stageIndex -> while {
+        context.streamPlan.stages[priorIndex!] => prior
+        prior.callbackRoot >= 0 and prior.flags != 4 and prior.flags != 5
+            -> if {
+                context.ir[prior.callbackRoot] => result
+                prior.flags == 3 or (result.typeId >= 0 and result.typeId == context.ir[prior.callIr].typeId)
+                    -> if {
+                        result.typeOrigin != 1 or result.typeSymbol != 23 or (context -> streamStageEmitsCallback(priorIndex!))
+                            -> if { prior.callbackRoot => value! }
+                    }
+            }
+        priorIndex! + 1 => priorIndex!
+    }
+    value!
+}
+
+
+public struct StreamCallbackInput {
+    public valueIr: Int
+    public typeId: Int
+    public kind: Int
+}
+
+# kind: 0 unresolved, 1 pipeline source, 2 flatMap inner, 3 prior callback value.
+public streamCallbackInput context: ref EmitContext, pipelineIndex: Int, sourceModule: Int, roleSymbol: Int -> StreamCallbackInput {
+    StreamCallbackInput { valueIr: -1, typeId: -1, kind: 0 } => missing
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    pipeline.stageStart => stageIndex!
+    stageIndex! < pipeline.stageStart + pipeline.stageCount
+        -> while {
+            context.streamPlan.stages[stageIndex!] => stage
+            context.ir[stage.callIr] => call
+            context.ranges[call.sourceModule] => range
+            sourceModule == call.sourceModule and roleSymbol >= 0 and roleSymbol < range.symbolCount
+                -> if {
+                    context.symbols[range.symbolStart + roleSymbol] => role
+                    role.kind == 35 and role.parent >= 0 -> if {
+                        context.symbols[range.symbolStart + role.parent] => scope
+                        scope.kind == 48 and scope.astNode == call.astNode
+                            -> if {
+                                -1 => firstRole!
+                                0 => symbolIndex!
+                                symbolIndex! < range.symbolCount and firstRole! < 0
+                                    -> while {
+                                        context.symbols[range.symbolStart + symbolIndex!] => candidate
+                                        candidate.kind == 35 and candidate.parent == role.parent
+                                            -> if { symbolIndex! => firstRole! }
+                                        symbolIndex! + 1 => symbolIndex!
+                                    }
+                                # Role symbols are visited in reverse binder order.
+                                stage.flags == 3 and roleSymbol == firstRole! => inner
+                                context -> streamStageInputValue(pipelineIndex, stageIndex!) => prior
+                                not inner and prior >= 0 -> if {
+                                    StreamCallbackInput { valueIr: prior, typeId: context.ir[prior].typeId, kind: 3 } -> return
+                                }
+                                inner or pipeline.status == 0 -> if {
+                                    0 => typeIndex!
+                                    typeIndex! < (context.types -> len) -> while {
+                                        context.types[typeIndex!] => valueType
+                                        valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 2
+                                            -> if {
+                                                1 => kind!
+                                                inner -> if { 2 => kind! }
+                                                StreamCallbackInput { valueIr: -1, typeId: typeIndex!, kind: kind! } -> return
+                                            }
+                                        typeIndex! + 1 => typeIndex!
+                                    }
+                                }
+                                missing -> return
+                            }
+                    }
+                }
+            stageIndex! + 1 => stageIndex!
+        }
+    missing
 }

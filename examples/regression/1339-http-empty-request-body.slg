@@ -1,0 +1,89 @@
+import std.net as net
+import std.net.http as http
+import std.net.http.body as body
+import std.net.http.response as response
+import std.net.http.server as server
+import std.net.socket as socket
+
+completeEmptyRequest request: move server.Request, policy: body.BodyPolicy, output: mut [UInt8; ~] -> Result<server.Request, server.Error> uses Network {
+    request -> openBody(policy, 16)? => reader!
+    reader! -> readInto(output)? => progress
+    progress.complete
+        and progress.consumed == 0
+        and progress.produced == 0
+        -> unless {
+            Result<server.Request, server.Error>.Err(server.Error.BodyLengthMismatch) -> return
+        }
+    reader! -> finish
+}
+
+main {
+    net.loopback(43184) -> unified => endpoint
+    http.limits(1_024, 256, 16, 64, 512) -> when {
+        Err(_) { "http-empty-request-body=setup-failed" -> println }
+        Ok(requestLimits) => body.BodyLimits {
+            maxEncodedBytes: 256
+            maxDecodedBytes: 256
+            maxChunkLineBytes: 64
+            maxTrailerBytes: 64
+            maxTrailerFields: 4
+        } -> policy -> when {
+            Err(_) { "http-empty-request-body=setup-failed" -> println }
+            Ok(bodyPolicy) => server.ServerOptions {
+                listener: socket.ListenOptions {
+                    endpoint: endpoint
+                    backlog: 8
+                    reuseAddress: true
+                }
+                requestLimits: requestLimits
+            } -> listen -> when {
+                Err(_) { "http-empty-request-body=listen-failed" -> println }
+                Ok(service) => endpoint -> connect -> when {
+                    Err(_) { "http-empty-request-body=connect-failed" -> println }
+                    Ok(client) => client -> sendText("GET /empty HTTP/1.1\r\nHost: loopback\r\n\r\n") -> when {
+                        Err(_) { "http-empty-request-body=send-failed" -> println }
+                        Ok(_) => service -> accept -> when {
+                            Err(_) { "http-empty-request-body=accept-failed" -> println }
+                            Ok(connection) => connection -> readRequest -> when {
+                                Err(_) { "http-empty-request-body=read-failed" -> println }
+                                Ok(request) {
+                                    [UInt8; ~] => decoded!
+                                    request -> completeEmptyRequest(bodyPolicy, decoded!) -> when {
+                                        Err(_) { "http-empty-request-body=decode-failed" -> println }
+                                        Ok(completedRequest) => response.ResponseLimits {
+                                            maxHeadBytes: 512
+                                            maxFieldCount: 8
+                                            maxFieldNameBytes: 64
+                                            maxFieldValueBytes: 256
+                                        } -> policy -> when {
+                                            Err(_) { "http-empty-request-body=response-policy-failed" -> println }
+                                            Ok(responsePolicy) => responsePolicy -> response("GET", completedRequest.head.version, 204, "No Content", 0, response.ConnectionMode.Close) -> when {
+                                                Err(_) { "http-empty-request-body=response-head-failed" -> println }
+                                                Ok(writer) => writer -> finish -> when {
+                                                    Err(_) { "http-empty-request-body=response-finish-failed" -> println }
+                                                    Ok(head) {
+                                                        [UInt8; ~] => responseBody
+                                                        completedRequest -> respond(head, responseBody) -> when {
+                                                            Err(_) { "http-empty-request-body=respond-failed" -> println }
+                                                            Ok(_) {
+                                                                client -> close
+                                                                service -> close
+                                                                (decoded! -> len) == 0
+                                                                    -> if { "http-empty-request-body=ok" } else { "http-empty-request-body=failed" }
+                                                                    -> println
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

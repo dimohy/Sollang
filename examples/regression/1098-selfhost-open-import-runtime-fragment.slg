@@ -1,0 +1,36 @@
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    """"
+        import sample.api
+
+        main {
+            41 -> work => answer
+            answer -> println
+        }
+    """" => consumerSource
+
+    """"
+        namespace sample.api
+
+        public identity value: Int -> Int => value
+    """" => publicSource
+
+    """"
+        namespace sample.api
+
+        public work value: Int -> Int = intrinsic
+    """" => runtimeSource
+
+    [consumerSource, publicSource, runtimeSource; ~]
+        -> semanticContext.prepare => prepared
+    0 => workCalls!
+    0 => failedCalls!
+    prepared.calls -> each call {
+        (call.sourceModule == 0 and call.targetSourceModule == 2)
+            -> if { workCalls! + 1 => workCalls! }
+        (call.sourceModule == 0 and call.status != 0)
+            -> if { failedCalls! + 1 => failedCalls! }
+    }
+    "runtime-fragment=$(workCalls!),failed=$(failedCalls!)" -> println
+}

@@ -1,0 +1,245 @@
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.command as commands
+import std.compress.brotli.literal_context as contexts
+import std.compress.brotli.prefix_code as codes
+import std.compress.brotli.prefix_table as prefix
+
+struct ReadState {
+    window: prefix.Window
+    position: prefix.Position
+}
+
+allByte values: [UInt8], expected: UInt8 -> Bool {
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] == expected -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+driveCommand reader: move commands.Reader, window: prefix.Window, input: [UInt8], position: prefix.Position -> Bool {
+    reader => reader!
+    window => window!
+    position => position!
+    0 => attempts!
+    attempts! < 32 -> while {
+        reader! -> read(window!) -> when {
+            Err(_) { false -> return }
+            Ok(progress) {
+                progress -> when {
+                    NeedMore(_) {
+                        (window! -> available) + 1 => required
+                        window! -> fill(input, position!, required) -> when {
+                            Err(_) { false -> return }
+                            Ok(next) { next => position! }
+                        }
+                    }
+                    Ready {
+                        reader! -> finish -> when {
+                            Err(_) { false -> return }
+                            Ok(streamed) {
+                                streamed -> intoOutput => output
+                                (output -> len) == 100
+                                    and (output -> allByte(97))
+                                    and position!.byteIndex == 7
+                                    and position!.bitIndex == 2
+                                    and (window! -> available) == 0
+                                    => valid
+                                valid -> return
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        attempts! + 1 => attempts!
+    }
+    false
+}
+
+checkCommand parsed: move headers.Parsed, window: prefix.Window, input: [UInt8], position: prefix.Position -> Bool {
+    commands.Limits {
+        maxOutputBytes: 1_024
+        maxCommands: 64
+        maxWindowBytes: 4_194_288
+    } -> executor(parsed, 100) -> when {
+        Err(_) { false }
+        Ok(executor) {
+            executor -> reader([UInt8; ~]) -> when {
+                Err(_) { false }
+                Ok(reader) { reader -> driveCommand(window, input, position) }
+            }
+        }
+    }
+}
+
+readTree tree: mut headers.TreeReader, description: move codes.DescriptionReader, window: prefix.Window, input: [UInt8], position: prefix.Position -> Result<ReadState, Int> {
+    description => description!
+    window => window!
+    position => position!
+    0 => attempts!
+    attempts! < 256 -> while {
+        description! -> read(window!) -> when {
+            Err(_) { Result<ReadState, Int>.Err(1) -> return }
+            Ok(progress) {
+                progress -> when {
+                    NeedMore(_) {
+                        (window! -> available) + 1 => required
+                        window! -> fill(input, position!, required) -> when {
+                            Err(_) { Result<ReadState, Int>.Err(2) -> return }
+                            Ok(next) { next => position! }
+                        }
+                    }
+                    Ready {
+                        description! -> intoTable -> when {
+                            Err(_) { Result<ReadState, Int>.Err(3) -> return }
+                            Ok(table) {
+                                tree -> installTree(table) -> when {
+                                    Err(_) { Result<ReadState, Int>.Err(4) -> return }
+                                    Ok(_) {
+                                        Result<ReadState, Int>.Ok(ReadState {
+                                            window: window!
+                                            position: position!
+                                        }) -> return
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        attempts! + 1 => attempts!
+    }
+    Result<ReadState, Int>.Err(5)
+}
+
+checkTrees tree: move headers.TreeReader, window: prefix.Window, input: [UInt8], position: prefix.Position -> Bool {
+    tree => tree!
+    window => window!
+    position => position!
+    0 => group!
+    group! < 3 -> while {
+        tree! -> next -> when {
+            Err(_) { false -> return }
+            Ok(progress) {
+                progress -> when {
+                    NeedTree(index) {
+                        index == 0 -> unless { false -> return }
+                        tree! -> prefixDescription -> when {
+                            Err(_) { false -> return }
+                            Ok(description) {
+                                tree! -> readTree(description, window!, input, position!) -> when {
+                                    Err(_) { false -> return }
+                                    Ok(state) {
+                                        state.window => window!
+                                        state.position => position!
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ready { false -> return }
+                }
+            }
+        }
+        group! + 1 => group!
+    }
+    tree! -> next -> when {
+        Err(_) { false }
+        Ok(progress) {
+            progress -> when {
+                NeedTree(_) { false }
+                Ready { true }
+            }
+        }
+    } => ready
+    ready -> unless { false -> return }
+    tree! -> finish(position!) -> when {
+        Err(_) { false }
+        Ok(parsed) {
+            position!.byteIndex == 6
+                and position!.bitIndex == 5
+                and (window! -> available) == 0
+                and (parsed.literalTrees -> len) == 1
+                and (parsed.commandTrees -> len) == 1
+                and (parsed.distanceTrees -> len) == 1
+                and (parsed.literalTrees[0] -> entryCount) > 0
+                and (parsed.commandTrees[0] -> entryCount) > 0
+                and (parsed.distanceTrees[0] -> entryCount) > 0
+                => treesValid
+            treesValid -> unless { false -> return }
+            parsed -> checkCommand(window!, input, position!)
+        }
+    }
+}
+
+check parser: headers.Parser -> Bool {
+    [headers.BlockStream; ~] => blockStreams!
+    0 => index!
+    index! < 3 -> while {
+        blockStreams! -> push(headers.BlockStream {
+            typeCount: 1
+            initialLength: 268_435_456
+            typeTable: headers.TableSlot.Absent
+            lengthTable: headers.TableSlot.Absent
+        })
+        index! + 1 => index!
+    }
+    [Int; ~] => literalMap!
+    0 => literalIndex!
+    literalIndex! < 64 -> while {
+        literalMap! -> push(0)
+        literalIndex! + 1 => literalIndex!
+    }
+    [Int; ~] => distanceMap!
+    0 => distanceIndex!
+    distanceIndex! < 4 -> while {
+        distanceMap! -> push(0)
+        distanceIndex! + 1 => distanceIndex!
+    }
+    [contexts.Mode; ~] => contextModes!
+    contextModes! -> push(contexts.Mode.Utf8)
+    headers.ContextPrelude {
+        blockStreams: blockStreams!
+        distancePostfixBits: 3
+        directDistanceCodes: 136
+        distanceCodeCount: 520
+        contextModes: contextModes!
+        literalContextMap: literalMap!
+        distanceContextMap: distanceMap!
+        literalTreeCount: 1
+        distanceTreeCount: 1
+    } => context
+    context -> treeReader(parser) -> when {
+        Err(_) { false }
+        Ok(tree) {
+            prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+                Err(_) { false }
+                Ok(window) {
+                    [UInt8(248), 37, 194, 2, 177, 64, 160, 3] => input
+                    tree -> checkTrees(
+                    window,
+                    input,
+                    prefix.Position { byteIndex: 1, bitIndex: 5 }
+                    )
+                }
+            }
+        }
+    }
+}
+
+main {
+    headers.Limits {
+        maxBlockTypes: 256
+        maxBlockLength: 16_793_840
+        maxContextEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Err(_) { "tree-reader=false" -> println }
+        Ok(parser) { "tree-reader=$(parser -> check)" -> println }
+    }
+}

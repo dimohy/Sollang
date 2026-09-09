@@ -10,18 +10,18 @@ import sys.file as file
 # lowering slices will add declaration/expression payload tables without
 # introducing per-node heap allocation.
 public struct AstNode {
-    kind: Int
-    parent: Int
-    cstRuleId: Int
-    operatorKind: Int
-    payloadToken: Int
-    secondaryToken: Int
-    tertiaryToken: Int
-    flags: Int
-    firstToken: Int
-    tokenCount: Int
-    start: UIntSize
-    length: UIntSize
+    public kind: Int
+    public parent: Int
+    public cstRuleId: Int
+    public operatorKind: Int
+    public payloadToken: Int
+    public secondaryToken: Int
+    public tertiaryToken: Int
+    public flags: Int
+    public firstToken: Int
+    public tokenCount: Int
+    public start: UIntSize
+    public length: UIntSize
 }
 
 struct LowerRequest {
@@ -53,193 +53,193 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
             pipeline.firstToken + pipeline.tokenCount => tokenEnd
             tokenIndex! < tokenEnd -> while {
                 tokens[tokenIndex!] => token
-                (groupDepth! == 0 and token.kind == grammar.tokenIdArrow())
+                groupDepth! == 0 and token.kind == grammar.tokenIdArrow()
                     -> if {
-                    arrows! -> push(tokenIndex!)
-                }
-                (groupDepth! == 0 and token.kind == grammar.tokenIdLeftBrace())
+                        arrows! -> push(tokenIndex!)
+                    }
+                groupDepth! == 0 and token.kind == grammar.tokenIdLeftBrace()
                     -> if {
-                    stageBodyCount! + 1 => stageBodyCount!
-                }
-                (token.kind == grammar.tokenIdLeftParen() or token.kind == grammar.tokenIdLeftBracket() or token.kind == grammar.tokenIdLeftBrace())
+                        stageBodyCount! + 1 => stageBodyCount!
+                    }
+                token.kind == grammar.tokenIdLeftParen() or token.kind == grammar.tokenIdLeftBracket() or token.kind == grammar.tokenIdLeftBrace()
                     -> if {
-                    groupDepth! + 1 => groupDepth!
-                }
-                (token.kind == grammar.tokenIdRightParen() or token.kind == grammar.tokenIdRightBracket() or token.kind == grammar.tokenIdRightBrace())
+                        groupDepth! + 1 => groupDepth!
+                    }
+                token.kind == grammar.tokenIdRightParen() or token.kind == grammar.tokenIdRightBracket() or token.kind == grammar.tokenIdRightBrace()
                     -> if {
-                    groupDepth! - 1 => groupDepth!
-                }
+                        groupDepth! - 1 => groupDepth!
+                    }
                 tokenIndex! + 1 => tokenIndex!
             }
 
-            ((arrows! -> len) > 1 and stageBodyCount! > 1)
+            (arrows! -> len) > 1 and stageBodyCount! > 1
                 -> if {
-                [Int; ~] => stageNodes!
-                0 => stageIndex!
-                stageIndex! < Int(arrows! -> len) -> while {
-                    stageIndex! == Int(arrows! -> len) - 1 -> if {
-                        stageNodes! -> push(pipelineIndex!)
-                    } else {
-                        expanded! -> len => syntheticIndex
-                        stageNodes! -> push(syntheticIndex)
-                        expanded! -> push(AstNode {
-                            kind: 48
-                            parent: -1
-                            cstRuleId: pipeline.cstRuleId
-                            operatorKind: pipeline.operatorKind
-                            payloadToken: -1
-                            secondaryToken: -1
-                            tertiaryToken: -1
-                            flags: pipeline.flags
-                            firstToken: pipeline.firstToken
-                            tokenCount: 0
-                            start: pipeline.start
-                            length: 0
-                        })
-                    }
-                    stageIndex! + 1 => stageIndex!
-                }
-
-                0 => stageFixIndex!
-                stageFixIndex! < Int(stageNodes! -> len) -> while {
-                    stageNodes![stageFixIndex!] => stageNodeIndex
-                    expanded![stageNodeIndex] => stage!
-                    stageFixIndex! == Int(stageNodes! -> len) - 1
-                        -> if {
-                        pipeline.parent => stage!.parent
-                    } else {
-                        stageNodes![stageFixIndex! + 1] => stage!.parent
-                    }
-
-                    arrows![stageFixIndex!] => stageArrow
-                    tokenEnd => stageTokenEnd!
-                    stageFixIndex! + 1 < Int(arrows! -> len) -> if {
-                        arrows![stageFixIndex! + 1] => stageTokenEnd!
-                    }
-                    stageTokenEnd! => stageEndToken
-                    tokens[stageEndToken - 1].span.start + tokens[stageEndToken - 1].span.length => stageEnd!
-                    stageFixIndex! + 1 < Int(arrows! -> len) -> if {
-                        tokens[stageTokenEnd!].span.start => stageEnd!
-                    }
-                    stageEnd! - pipeline.start => stage!.length
-                    stageTokenEnd! - pipeline.firstToken => stage!.tokenCount
-
-                    -1 => targetPath!
-                    UIntSize(0) => targetStart!
-                    0 => childSearch!
-                    childSearch! < originalNodeCount -> while {
-                        expanded![childSearch!] => child
-                        (child.parent == pipelineIndex! and child.kind == 16 and child.start > tokens[stageArrow].span.start and child.start < stageEnd!)
-                            -> if {
-                            (targetPath! < 0 or child.start < targetStart!)
-                                -> if {
-                                childSearch! => targetPath!
-                                child.start => targetStart!
-                            }
-                        }
-                        childSearch! + 1 => childSearch!
-                    }
-                    targetPath! >= 0 -> if {
-                        expanded![targetPath!] => target!
-                        target!.payloadToken => stage!.payloadToken
-                        stageNodeIndex => target!.parent
-                        target! => expanded![targetPath!]
-
-                        # Callback parameter names live after the target and its
-                        # optional call arguments, before the stage body brace.
-                        target!.firstToken + target!.tokenCount => roleToken!
-                        0 => roleGroupDepth!
-                        false => roleBodyReached!
-                        [Int; ~] => roleNames!
-                        (roleToken! < stageTokenEnd! and not roleBodyReached!)
-                            -> while {
-                            tokens[roleToken!] => roleCandidate
-                            (roleGroupDepth! == 0 and roleCandidate.kind == grammar.tokenIdLeftBrace())
-                                -> if {
-                                true => roleBodyReached!
-                            } else {
-                                (roleCandidate.kind == grammar.tokenIdLeftParen() or roleCandidate.kind == grammar.tokenIdLeftBracket() or roleCandidate.kind == grammar.tokenIdLess())
-                                    -> if {
-                                    roleGroupDepth! + 1 => roleGroupDepth!
-                                }
-                                (roleCandidate.kind == grammar.tokenIdRightParen() or roleCandidate.kind == grammar.tokenIdRightBracket() or roleCandidate.kind == grammar.tokenIdGreater())
-                                    -> if {
-                                    roleGroupDepth! - 1 => roleGroupDepth!
-                                }
-                                (roleGroupDepth! == 0 and roleCandidate.kind == grammar.tokenIdIdentifier())
-                                    -> if {
-                                    roleNames! -> push(roleToken!)
-                                }
-                            }
-                            roleToken! + 1 => roleToken!
-                        }
-                        (roleNames! -> len) > 0 -> if {
-                            roleNames![0] => stage!.tertiaryToken
-                        }
-                        # Additional callback inputs (scan and future arities)
-                        # are ordinary synthetic parameter AST nodes.
-                        1 => additionalRoleIndex!
-                        additionalRoleIndex! < Int(roleNames! -> len)
-                            -> while {
-                            roleNames![additionalRoleIndex!] => additionalRoleToken
+                    [Int; ~] => stageNodes!
+                    0 => stageIndex!
+                    stageIndex! < Int(arrows! -> len) -> while {
+                        stageIndex! == Int(arrows! -> len) - 1 -> if {
+                            stageNodes! -> push(pipelineIndex!)
+                        } else {
+                            expanded! -> len => syntheticIndex
+                            stageNodes! -> push(syntheticIndex)
                             expanded! -> push(AstNode {
-                                kind: 60
-                                parent: stageNodeIndex
+                                kind: 48
+                                parent: -1
                                 cstRuleId: pipeline.cstRuleId
-                                operatorKind: -1
-                                payloadToken: additionalRoleToken
+                                operatorKind: pipeline.operatorKind
+                                payloadToken: -1
                                 secondaryToken: -1
                                 tertiaryToken: -1
-                                flags: 0
-                                firstToken: additionalRoleToken
-                                tokenCount: 1
-                                start: tokens[additionalRoleToken].span.start
-                                length: tokens[additionalRoleToken].span.length
+                                flags: pipeline.flags
+                                firstToken: pipeline.firstToken
+                                tokenCount: 0
+                                start: pipeline.start
+                                length: 0
                             })
-                            additionalRoleIndex! + 1 => additionalRoleIndex!
                         }
-                    } else {
-                        # take(count) and skip(count) are grammar-level slice
-                        # stages and therefore have no Path child. Preserve the
-                        # identifier on the synthetic stage so normal imported
-                        # function resolution and stream planning see the same
-                        # target metadata as every other stage.
-                        stageArrow + 1 => sliceTargetToken!
-                        (sliceTargetToken! < stageTokenEnd! and stage!.payloadToken < 0)
-                            -> while {
-                            tokens[sliceTargetToken!].kind == grammar.tokenIdIdentifier()
-                                -> if {
-                                sliceTargetToken! => stage!.payloadToken
-                            }
-                            sliceTargetToken! + 1 => sliceTargetToken!
-                        }
+                        stageIndex! + 1 => stageIndex!
                     }
 
-                    # Direct children belong either to the source of the first
-                    # stage or to the argument/callback region of this stage.
-                    0 => reparentSearch!
-                    reparentSearch! < originalNodeCount -> while {
-                        expanded![reparentSearch!] => child!
-                        child!.parent == pipelineIndex! -> if {
-                            false => belongsToStage!
-                            stageFixIndex! == 0 -> if {
-                                child!.start < tokens[arrows![0]].span.start -> if { true => belongsToStage! }
+                    0 => stageFixIndex!
+                    stageFixIndex! < Int(stageNodes! -> len) -> while {
+                        stageNodes![stageFixIndex!] => stageNodeIndex
+                        expanded![stageNodeIndex] => stage!
+                        stageFixIndex! == Int(stageNodes! -> len) - 1
+                            -> if {
+                                pipeline.parent => stage!.parent
+                            } else {
+                                stageNodes![stageFixIndex! + 1] => stage!.parent
                             }
-                            (child!.start > tokens[stageArrow].span.start and child!.start < stageEnd!)
-                                -> if {
-                                true => belongsToStage!
-                            }
-                            belongsToStage! -> if {
-                                stageNodeIndex => child!.parent
-                                child! => expanded![reparentSearch!]
-                            }
+
+                        arrows![stageFixIndex!] => stageArrow
+                        tokenEnd => stageTokenEnd!
+                        stageFixIndex! + 1 < Int(arrows! -> len) -> if {
+                            arrows![stageFixIndex! + 1] => stageTokenEnd!
                         }
-                        reparentSearch! + 1 => reparentSearch!
+                        stageTokenEnd! => stageEndToken
+                        tokens[stageEndToken - 1].span.start + tokens[stageEndToken - 1].span.length => stageEnd!
+                        stageFixIndex! + 1 < Int(arrows! -> len) -> if {
+                            tokens[stageTokenEnd!].span.start => stageEnd!
+                        }
+                        stageEnd! - pipeline.start => stage!.length
+                        stageTokenEnd! - pipeline.firstToken => stage!.tokenCount
+
+                        -1 => targetPath!
+                        UIntSize(0) => targetStart!
+                        0 => childSearch!
+                        childSearch! < originalNodeCount -> while {
+                            expanded![childSearch!] => child
+                            child.parent == pipelineIndex! and child.kind == 16 and child.start > tokens[stageArrow].span.start and child.start < stageEnd!
+                                -> if {
+                                    targetPath! < 0 or child.start < targetStart!
+                                        -> if {
+                                            childSearch! => targetPath!
+                                            child.start => targetStart!
+                                        }
+                                }
+                            childSearch! + 1 => childSearch!
+                        }
+                        targetPath! >= 0 -> if {
+                            expanded![targetPath!] => target!
+                            target!.payloadToken => stage!.payloadToken
+                            stageNodeIndex => target!.parent
+                            target! => expanded![targetPath!]
+
+                            # Callback parameter names live after the target and its
+                            # optional call arguments, before the stage body brace.
+                            target!.firstToken + target!.tokenCount => roleToken!
+                            0 => roleGroupDepth!
+                            false => roleBodyReached!
+                            [Int; ~] => roleNames!
+                            roleToken! < stageTokenEnd! and not roleBodyReached!
+                                -> while {
+                                    tokens[roleToken!] => roleCandidate
+                                    roleGroupDepth! == 0 and roleCandidate.kind == grammar.tokenIdLeftBrace()
+                                        -> if {
+                                            true => roleBodyReached!
+                                        } else {
+                                            roleCandidate.kind == grammar.tokenIdLeftParen() or roleCandidate.kind == grammar.tokenIdLeftBracket() or roleCandidate.kind == grammar.tokenIdLess()
+                                                -> if {
+                                                    roleGroupDepth! + 1 => roleGroupDepth!
+                                                }
+                                            roleCandidate.kind == grammar.tokenIdRightParen() or roleCandidate.kind == grammar.tokenIdRightBracket() or roleCandidate.kind == grammar.tokenIdGreater()
+                                                -> if {
+                                                    roleGroupDepth! - 1 => roleGroupDepth!
+                                                }
+                                            roleGroupDepth! == 0 and roleCandidate.kind == grammar.tokenIdIdentifier()
+                                                -> if {
+                                                    roleNames! -> push(roleToken!)
+                                                }
+                                        }
+                                    roleToken! + 1 => roleToken!
+                                }
+                            (roleNames! -> len) > 0 -> if {
+                                roleNames![0] => stage!.tertiaryToken
+                            }
+                            # Additional callback inputs (scan and future arities)
+                            # are ordinary synthetic parameter AST nodes.
+                            1 => additionalRoleIndex!
+                            additionalRoleIndex! < Int(roleNames! -> len)
+                                -> while {
+                                    roleNames![additionalRoleIndex!] => additionalRoleToken
+                                    expanded! -> push(AstNode {
+                                        kind: 60
+                                        parent: stageNodeIndex
+                                        cstRuleId: pipeline.cstRuleId
+                                        operatorKind: -1
+                                        payloadToken: additionalRoleToken
+                                        secondaryToken: -1
+                                        tertiaryToken: -1
+                                        flags: 0
+                                        firstToken: additionalRoleToken
+                                        tokenCount: 1
+                                        start: tokens[additionalRoleToken].span.start
+                                        length: tokens[additionalRoleToken].span.length
+                                    })
+                                    additionalRoleIndex! + 1 => additionalRoleIndex!
+                                }
+                        } else {
+                            # take(count) and skip(count) are grammar-level slice
+                            # stages and therefore have no Path child. Preserve the
+                            # identifier on the synthetic stage so normal imported
+                            # function resolution and stream planning see the same
+                            # target metadata as every other stage.
+                            stageArrow + 1 => sliceTargetToken!
+                            sliceTargetToken! < stageTokenEnd! and stage!.payloadToken < 0
+                                -> while {
+                                    tokens[sliceTargetToken!].kind == grammar.tokenIdIdentifier()
+                                        -> if {
+                                            sliceTargetToken! => stage!.payloadToken
+                                        }
+                                    sliceTargetToken! + 1 => sliceTargetToken!
+                                }
+                        }
+
+                        # Direct children belong either to the source of the first
+                        # stage or to the argument/callback region of this stage.
+                        0 => reparentSearch!
+                        reparentSearch! < originalNodeCount -> while {
+                            expanded![reparentSearch!] => child!
+                            child!.parent == pipelineIndex! -> if {
+                                false => belongsToStage!
+                                stageFixIndex! == 0 -> if {
+                                    child!.start < tokens[arrows![0]].span.start -> if { true => belongsToStage! }
+                                }
+                                child!.start > tokens[stageArrow].span.start and child!.start < stageEnd!
+                                    -> if {
+                                        true => belongsToStage!
+                                    }
+                                belongsToStage! -> if {
+                                    stageNodeIndex => child!.parent
+                                    child! => expanded![reparentSearch!]
+                                }
+                            }
+                            reparentSearch! + 1 => reparentSearch!
+                        }
+                        stage! => expanded![stageNodeIndex]
+                        stageFixIndex! + 1 => stageFixIndex!
                     }
-                    stage! => expanded![stageNodeIndex]
-                    stageFixIndex! + 1 => stageFixIndex!
                 }
-            }
         }
         pipelineIndex! + 1 => pipelineIndex!
     }
@@ -273,8 +273,8 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 81 stream join policy target, 82 postfix result propagation.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream,
 # 128 native ABI declaration, 512 COM declaration, 32768 status/out native
-# Result declaration. Struct flag 256 marks an
-# explicit `abi struct`; 65536 marks a native affine handle. COM class flags:
+# Result declaration. Struct flag 256 marks an explicit `abi struct`, and 65536
+# marks a native affine handle. COM class flags:
 # 1024 STA, 2048 MTA. Synthetic
 # self-host function flags: 4096 activation, 8192 clone, 16384 receiver,
 # 131072 checked QueryInterface.
@@ -305,7 +305,6 @@ classifyRule rule: Int -> Int {
         -> if { 69 => kind! }
     rule == grammar.ruleIdMainBlock() -> if { 8 => kind! }
     rule == grammar.ruleIdBindingStatement() -> if { 9 => kind! }
-    rule == grammar.ruleIdFlowExpression() -> if { 10 => kind! }
     rule == grammar.ruleIdControlFlowExpression()
         -> if { 10 => kind! }
     rule == grammar.ruleIdFlowTargetCall() -> if { 11 => kind! }
@@ -346,7 +345,7 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdPostfixExpression() -> if { 36 => kind! }
     rule == grammar.ruleIdArrayExpression() -> if { 37 => kind! }
     rule == grammar.ruleIdDictionaryExpression() -> if { 38 => kind! }
-    rule == grammar.ruleIdStructLiteralExpression()
+    rule == grammar.ruleIdStructLiteralExpression() or rule == grammar.ruleIdContextualStructLiteral()
         -> if { 39 => kind! }
     rule == grammar.ruleIdProductExpression() -> if { 71 => kind! }
     rule == grammar.ruleIdProductElement() -> if { 72 => kind! }
@@ -375,7 +374,7 @@ classifyRule rule: Int -> Int {
         -> if { 55 => kind! }
     rule == grammar.ruleIdWhenFlowTarget() -> if { 56 => kind! }
     rule == grammar.ruleIdWhenExpression() -> if { 57 => kind! }
-    (rule == grammar.ruleIdWhenArm() or rule == grammar.ruleIdSubjectWhenArm())
+    rule == grammar.ruleIdWhenArm() or rule == grammar.ruleIdSubjectWhenArm()
         -> if { 58 => kind! }
     rule == grammar.ruleIdEnumPattern() -> if { 59 => kind! }
     rule == grammar.ruleIdAdditionalFunctionInput()
@@ -398,6 +397,8 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdPartitionWhenArm() -> if { 79 => kind! }
     rule == grammar.ruleIdPartitionElseArm() -> if { 80 => kind! }
     rule == grammar.ruleIdStreamJoinFlowTarget() -> if { 81 => kind! }
+    rule == grammar.ruleIdCompileTimeEachExpression()
+        -> if { 83 => kind! }
     rule == grammar.ruleIdProductType() -> if { 12 => kind! }
     rule == grammar.ruleIdProductTypeField() -> if { 12 => kind! }
     kind! => selected
@@ -426,16 +427,24 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     cstIndex! < greenCount -> while {
         green[cstIndex!] => node
         node.ruleId -> classifyRule => astKind!
-        (node.ruleId == grammar.ruleIdTypeName() and node.parent >= 0 and green[node.parent].ruleId == grammar.ruleIdBlockFunctionBody())
+        node.ruleId == grammar.ruleIdTypeName() and node.parent >= 0 and green[node.parent].ruleId == grammar.ruleIdBlockFunctionBody()
             -> if {
-            12 => astKind!
-        }
+                12 => astKind!
+            }
         -1 => operatorKind!
         -1 => operatorPayloadToken!
+        node.ruleId == grammar.ruleIdContextualStructLiteral() and node.parent >= 0
+            -> if {
+                # The explicit array element name supplies the nominal identity;
+                # initializer spans and field children remain unchanged.
+                green[node.parent].firstToken => contextualTypeToken!
+                contextualTypeToken! < (tokens -> len) and tokens[contextualTypeToken!].kind != grammar.tokenIdIdentifier()
+                    -> while { contextualTypeToken! + 1 => contextualTypeToken! }
+                contextualTypeToken! => operatorPayloadToken!
+            }
         [Int; ~] => postfixKinds!
         [Int; ~] => postfixOperatorTokens!
         [Int; ~] => postfixBoundaryTokens!
-        false => postfixHasIndex!
         false => flowHasTry!
         -1 => flowTryToken!
         node.firstToken => operatorTokenIndex!
@@ -447,199 +456,241 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             false => operatorFollowsDot!
             operatorTokenIndex! > node.firstToken -> if {
                 operatorTokenIndex! - 1 => operatorPreviousToken!
-                (operatorPreviousToken! >= node.firstToken
+                operatorPreviousToken! >= node.firstToken
                     and (tokens[operatorPreviousToken!].kind == grammar.triviaIdWhitespace()
-                        or tokens[operatorPreviousToken!].kind == grammar.triviaIdComment()))
-                            -> while {
-                    operatorPreviousToken! - 1 => operatorPreviousToken!
-                }
-                (operatorPreviousToken! >= node.firstToken
-                    and tokens[operatorPreviousToken!].kind == grammar.tokenIdDot())
-                        -> if {
-                    true => operatorFollowsDot!
-                }
+                    or tokens[operatorPreviousToken!].kind == grammar.triviaIdComment())
+                    -> while {
+                        operatorPreviousToken! - 1 => operatorPreviousToken!
+                    }
+                operatorPreviousToken! >= node.firstToken
+                    and tokens[operatorPreviousToken!].kind == grammar.tokenIdDot()
+                    -> if {
+                        true => operatorFollowsDot!
+                    }
             }
             operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 18 and (candidateOperator == grammar.tokenIdEqualEqual() or candidateOperator == grammar.tokenIdBangEqual())
                 -> if {
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdValueFlowComparisonExpression() and (candidateOperator == grammar.tokenIdEqualEqual() or candidateOperator == grammar.tokenIdBangEqual())
+                -> if {
+                    18 => astKind!
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
             operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 19 and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
                 -> if {
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
-            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 20 and (candidateOperator == grammar.tokenIdPlus() or candidateOperator == grammar.tokenIdMinus())
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdValueFlowComparisonExpression() and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
                 -> if {
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
+                    19 => astKind!
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            operatorPayloadToken! < 0
+                and operatorGroupDepth! == 0
+                and astKind! == 20
+                and operatorTokenIndex! != node.firstToken
+                and (candidateOperator == grammar.tokenIdPlus() or candidateOperator == grammar.tokenIdMinus())
+                -> if {
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
             operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 21 and (candidateOperator == grammar.tokenIdStar() or candidateOperator == grammar.tokenIdSlash() or candidateOperator == grammar.tokenIdPercent())
                 -> if {
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
             operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 22 and operatorTokenIndex! == node.firstToken and (candidateOperator == grammar.tokenIdMinus() or candidateOperator == grammar.tokenIdBang())
                 -> if {
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
             operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 70 and (candidateOperator == grammar.tokenIdEqualEqual() or candidateOperator == grammar.tokenIdBangEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreater() or candidateOperator == grammar.tokenIdGreaterEqual())
                 -> if {
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            operatorGroupDepth! == 0
+                and (node.ruleId == grammar.ruleIdFlowExpression()
+                or node.ruleId == grammar.ruleIdValueFlowExpression())
+                and candidateOperator == grammar.tokenIdArrow()
+                -> if {
+                    # An outer FlowExpression is a transparent grammar envelope
+                    # when its arrow belongs to a nested logical/value operand.
+                    # Preserve exactly one semantic flow owner per arrow.
+                    false => arrowOwnedByDirectChild!
+                    cstIndex! + 1 < greenCount -> if {
+                        # Green nodes are preorder. The first child is the
+                        # expression prefix and is therefore adjacent to its
+                        # flow envelope; later direct children start after the
+                        # arrow and cannot own it.
+                        green[cstIndex! + 1] => arrowPrefixChild
+                        arrowPrefixChild.parent == cstIndex!
+                            and operatorTokenIndex! >= arrowPrefixChild.firstToken
+                            and operatorTokenIndex! < arrowPrefixChild.firstToken + arrowPrefixChild.tokenCount
+                            -> if {
+                                true => arrowOwnedByDirectChild!
+                            }
+                    }
+                    not arrowOwnedByDirectChild! -> if {
+                        10 => astKind!
+                    }
+                }
             operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 63 and (candidateOperator == grammar.tokenIdRange() or candidateOperator == grammar.tokenIdRangeUntil())
                 -> if {
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
-            (operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdDot())
-                -> if {
-                postfixKinds! -> push(36)
-                postfixOperatorTokens! -> push(operatorTokenIndex!)
-                postfixBoundaryTokens! -> push(operatorTokenIndex!)
-                36 => astKind!
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
-            (operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdLeftBracket() and operatorTokenIndex! > node.firstToken)
-                -> if {
-                operatorTokenIndex! => postfixBoundaryToken!
-                operatorTokenIndex! - 1 => postfixPreviousToken!
-                (postfixPreviousToken! >= node.firstToken and (tokens[postfixPreviousToken!].kind == grammar.triviaIdWhitespace() or tokens[postfixPreviousToken!].kind == grammar.triviaIdComment()))
-                    -> while {
-                    postfixPreviousToken! - 1 => postfixPreviousToken!
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
                 }
-                (postfixPreviousToken! >= node.firstToken and tokens[postfixPreviousToken!].kind == grammar.tokenIdBang())
-                    -> if { postfixPreviousToken! => postfixBoundaryToken! }
-                postfixKinds! -> push(41)
-                postfixOperatorTokens! -> push(operatorTokenIndex!)
-                postfixBoundaryTokens! -> push(postfixBoundaryToken!)
-                true => postfixHasIndex!
-                41 => astKind!
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
-            (operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdQuestion())
+            operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdDot()
                 -> if {
-                postfixKinds! -> push(82)
-                postfixOperatorTokens! -> push(operatorTokenIndex!)
-                postfixBoundaryTokens! -> push(operatorTokenIndex!)
-                82 => astKind!
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-            }
-            (operatorGroupDepth! == 0
+                    postfixKinds! -> push(36)
+                    postfixOperatorTokens! -> push(operatorTokenIndex!)
+                    postfixBoundaryTokens! -> push(operatorTokenIndex!)
+                    36 => astKind!
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdLeftBracket() and operatorTokenIndex! > node.firstToken
+                -> if {
+                    operatorTokenIndex! => postfixBoundaryToken!
+                    operatorTokenIndex! - 1 => postfixPreviousToken!
+                    postfixPreviousToken! >= node.firstToken and (tokens[postfixPreviousToken!].kind == grammar.triviaIdWhitespace() or tokens[postfixPreviousToken!].kind == grammar.triviaIdComment())
+                        -> while {
+                            postfixPreviousToken! - 1 => postfixPreviousToken!
+                        }
+                    postfixPreviousToken! >= node.firstToken and tokens[postfixPreviousToken!].kind == grammar.tokenIdBang()
+                        -> if { postfixPreviousToken! => postfixBoundaryToken! }
+                    postfixKinds! -> push(41)
+                    postfixOperatorTokens! -> push(operatorTokenIndex!)
+                    postfixBoundaryTokens! -> push(postfixBoundaryToken!)
+                    41 => astKind!
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdQuestion()
+                -> if {
+                    postfixKinds! -> push(82)
+                    postfixOperatorTokens! -> push(operatorTokenIndex!)
+                    postfixBoundaryTokens! -> push(operatorTokenIndex!)
+                    82 => astKind!
+                    candidateOperator => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            operatorGroupDepth! == 0
                 and (node.ruleId == grammar.ruleIdFlowExpression()
-                    or node.ruleId == grammar.ruleIdControlFlowExpression())
-                and candidateOperator == grammar.tokenIdQuestion())
-                    -> if {
-                false => flowQuestionOwnedByPostfix!
-                0 => flowQuestionCstSearch!
-                (flowQuestionCstSearch! < greenCount and not flowQuestionOwnedByPostfix!)
-                    -> while {
-                    green[flowQuestionCstSearch!] => flowQuestionCst
-                    (flowQuestionCst.ruleId == grammar.ruleIdPostfixExpression()
-                        and operatorTokenIndex! >= flowQuestionCst.firstToken
-                        and operatorTokenIndex! < flowQuestionCst.firstToken + flowQuestionCst.tokenCount)
-                            -> if {
-                        flowQuestionCst.parent => flowQuestionAncestor!
-                        (flowQuestionAncestor! >= 0 and flowQuestionAncestor! != cstIndex!)
-                            -> while { green[flowQuestionAncestor!].parent => flowQuestionAncestor! }
-                        flowQuestionAncestor! == cstIndex!
-                            -> if { true => flowQuestionOwnedByPostfix! }
+                or node.ruleId == grammar.ruleIdValueFlowExpression()
+                or node.ruleId == grammar.ruleIdControlFlowExpression())
+                and candidateOperator == grammar.tokenIdQuestion()
+                -> if {
+                    false => flowQuestionOwnedByPostfix!
+                    0 => flowQuestionCstSearch!
+                    flowQuestionCstSearch! < greenCount and not flowQuestionOwnedByPostfix!
+                        -> while {
+                            green[flowQuestionCstSearch!] => flowQuestionCst
+                            flowQuestionCst.ruleId == grammar.ruleIdPostfixExpression()
+                                and operatorTokenIndex! >= flowQuestionCst.firstToken
+                                and operatorTokenIndex! < flowQuestionCst.firstToken + flowQuestionCst.tokenCount
+                                -> if {
+                                    flowQuestionCst.parent => flowQuestionAncestor!
+                                    flowQuestionAncestor! >= 0 and flowQuestionAncestor! != cstIndex!
+                                        -> while { green[flowQuestionAncestor!].parent => flowQuestionAncestor! }
+                                    flowQuestionAncestor! == cstIndex!
+                                        -> if { true => flowQuestionOwnedByPostfix! }
+                                }
+                            flowQuestionCstSearch! + 1 => flowQuestionCstSearch!
+                        }
+                    not flowQuestionOwnedByPostfix! -> if {
+                        true => flowHasTry!
+                        operatorTokenIndex! => flowTryToken!
                     }
-                    flowQuestionCstSearch! + 1 => flowQuestionCstSearch!
                 }
-                not flowQuestionOwnedByPostfix! -> if {
-                    true => flowHasTry!
-                    operatorTokenIndex! => flowTryToken!
-                }
-            }
-            (operatorGroupDepth! == 0 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 2)
+            operatorGroupDepth! == 0 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 2
                 -> if {
-                source -> byte(candidateToken.span.start) => shortKeywordByte0
-                source -> byte(candidateToken.span.start + 1) => shortKeywordByte1
-                (operatorPayloadToken! < 0 and astKind! == 24 and not operatorFollowsDot! and shortKeywordByte0 == 111 and shortKeywordByte1 == 114)
-                    -> if {
-                    -24 => operatorKind!
-                    operatorTokenIndex! => operatorPayloadToken!
+                    source -> byte(candidateToken.span.start) => shortKeywordByte0
+                    source -> byte(candidateToken.span.start + 1) => shortKeywordByte1
+                    operatorPayloadToken! < 0 and astKind! == 24 and not operatorFollowsDot! and shortKeywordByte0 == 111 and shortKeywordByte1 == 114
+                        -> if {
+                            -24 => operatorKind!
+                            operatorTokenIndex! => operatorPayloadToken!
+                        }
                 }
-            }
-            (operatorGroupDepth! == 0 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 3)
+            operatorGroupDepth! == 0 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 3
                 -> if {
-                source -> byte(candidateToken.span.start) => longKeywordByte0
-                source -> byte(candidateToken.span.start + 1) => longKeywordByte1
-                source -> byte(candidateToken.span.start + 2) => longKeywordByte2
-                (operatorPayloadToken! < 0 and astKind! == 25 and not operatorFollowsDot! and longKeywordByte0 == 97 and longKeywordByte1 == 110 and longKeywordByte2 == 100)
-                    -> if {
-                    -25 => operatorKind!
-                    operatorTokenIndex! => operatorPayloadToken!
+                    source -> byte(candidateToken.span.start) => longKeywordByte0
+                    source -> byte(candidateToken.span.start + 1) => longKeywordByte1
+                    source -> byte(candidateToken.span.start + 2) => longKeywordByte2
+                    operatorPayloadToken! < 0 and astKind! == 25 and not operatorFollowsDot! and longKeywordByte0 == 97 and longKeywordByte1 == 110 and longKeywordByte2 == 100
+                        -> if {
+                            -25 => operatorKind!
+                            operatorTokenIndex! => operatorPayloadToken!
+                        }
+                    operatorPayloadToken! < 0 and astKind! == 22 and not operatorFollowsDot! and longKeywordByte0 == 110 and longKeywordByte1 == 111 and longKeywordByte2 == 116
+                        -> if {
+                            -26 => operatorKind!
+                            operatorTokenIndex! => operatorPayloadToken!
+                        }
+                    astKind! == 22 and not operatorFollowsDot! and longKeywordByte0 == 98 and longKeywordByte1 == 111 and longKeywordByte2 == 120
+                        -> if {
+                            23 => astKind!
+                            -27 => operatorKind!
+                            operatorTokenIndex! => operatorPayloadToken!
+                        }
                 }
-                (operatorPayloadToken! < 0 and astKind! == 22 and not operatorFollowsDot! and longKeywordByte0 == 110 and longKeywordByte1 == 111 and longKeywordByte2 == 116)
-                    -> if {
-                    -26 => operatorKind!
-                    operatorTokenIndex! => operatorPayloadToken!
-                }
-                (astKind! == 22 and not operatorFollowsDot! and longKeywordByte0 == 98 and longKeywordByte1 == 111 and longKeywordByte2 == 120)
-                    -> if {
-                    23 => astKind!
-                    -27 => operatorKind!
-                    operatorTokenIndex! => operatorPayloadToken!
-                }
-            }
-            (operatorGroupDepth! == 0 and astKind! == 46 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 5)
+            operatorGroupDepth! == 0 and astKind! == 46 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 5
                 -> if {
-                source -> byte(candidateToken.span.start) => guardBreakByte0
-                source -> byte(candidateToken.span.start + 1) => guardBreakByte1
-                source -> byte(candidateToken.span.start + 2) => guardBreakByte2
-                source -> byte(candidateToken.span.start + 3) => guardBreakByte3
-                source -> byte(candidateToken.span.start + 4) => guardBreakByte4
-                (guardBreakByte0 == 98 and guardBreakByte1 == 114 and guardBreakByte2 == 101 and guardBreakByte3 == 97 and guardBreakByte4 == 107)
-                    -> if {
-                    0 => operatorKind!
-                    operatorTokenIndex! => operatorPayloadToken!
+                    source -> byte(candidateToken.span.start) => guardBreakByte0
+                    source -> byte(candidateToken.span.start + 1) => guardBreakByte1
+                    source -> byte(candidateToken.span.start + 2) => guardBreakByte2
+                    source -> byte(candidateToken.span.start + 3) => guardBreakByte3
+                    source -> byte(candidateToken.span.start + 4) => guardBreakByte4
+                    guardBreakByte0 == 98 and guardBreakByte1 == 114 and guardBreakByte2 == 101 and guardBreakByte3 == 97 and guardBreakByte4 == 107
+                        -> if {
+                            0 => operatorKind!
+                            operatorTokenIndex! => operatorPayloadToken!
+                        }
                 }
-            }
-            (operatorGroupDepth! == 0 and astKind! == 42 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 6)
+            operatorGroupDepth! == 0 and astKind! == 42 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 6
                 -> if {
-                source -> byte(candidateToken.span.start) => unlessByte0
-                source -> byte(candidateToken.span.start + 1) => unlessByte1
-                source -> byte(candidateToken.span.start + 2) => unlessByte2
-                source -> byte(candidateToken.span.start + 3) => unlessByte3
-                source -> byte(candidateToken.span.start + 4) => unlessByte4
-                source -> byte(candidateToken.span.start + 5) => unlessByte5
-                (unlessByte0 == 117 and unlessByte1 == 110 and unlessByte2 == 108 and unlessByte3 == 101 and unlessByte4 == 115 and unlessByte5 == 115)
-                    -> if {
-                    -28 => operatorKind!
-                    operatorTokenIndex! => operatorPayloadToken!
+                    source -> byte(candidateToken.span.start) => unlessByte0
+                    source -> byte(candidateToken.span.start + 1) => unlessByte1
+                    source -> byte(candidateToken.span.start + 2) => unlessByte2
+                    source -> byte(candidateToken.span.start + 3) => unlessByte3
+                    source -> byte(candidateToken.span.start + 4) => unlessByte4
+                    source -> byte(candidateToken.span.start + 5) => unlessByte5
+                    unlessByte0 == 117 and unlessByte1 == 110 and unlessByte2 == 108 and unlessByte3 == 101 and unlessByte4 == 115 and unlessByte5 == 115
+                        -> if {
+                            -28 => operatorKind!
+                            operatorTokenIndex! => operatorPayloadToken!
+                        }
                 }
-            }
-            (operatorGroupDepth! == 0 and astKind! == 46 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 8)
+            operatorGroupDepth! == 0 and astKind! == 46 and candidateOperator == grammar.tokenIdIdentifier() and candidateToken.span.length == 8
                 -> if {
-                source -> byte(candidateToken.span.start) => guardContinueByte0
-                source -> byte(candidateToken.span.start + 1) => guardContinueByte1
-                source -> byte(candidateToken.span.start + 2) => guardContinueByte2
-                source -> byte(candidateToken.span.start + 3) => guardContinueByte3
-                source -> byte(candidateToken.span.start + 4) => guardContinueByte4
-                source -> byte(candidateToken.span.start + 5) => guardContinueByte5
-                source -> byte(candidateToken.span.start + 6) => guardContinueByte6
-                source -> byte(candidateToken.span.start + 7) => guardContinueByte7
-                (guardContinueByte0 == 99 and guardContinueByte1 == 111 and guardContinueByte2 == 110 and guardContinueByte3 == 116 and guardContinueByte4 == 105 and guardContinueByte5 == 110 and guardContinueByte6 == 117 and guardContinueByte7 == 101)
-                    -> if {
-                    1 => operatorKind!
-                    operatorTokenIndex! => operatorPayloadToken!
+                    source -> byte(candidateToken.span.start) => guardContinueByte0
+                    source -> byte(candidateToken.span.start + 1) => guardContinueByte1
+                    source -> byte(candidateToken.span.start + 2) => guardContinueByte2
+                    source -> byte(candidateToken.span.start + 3) => guardContinueByte3
+                    source -> byte(candidateToken.span.start + 4) => guardContinueByte4
+                    source -> byte(candidateToken.span.start + 5) => guardContinueByte5
+                    source -> byte(candidateToken.span.start + 6) => guardContinueByte6
+                    source -> byte(candidateToken.span.start + 7) => guardContinueByte7
+                    guardContinueByte0 == 99 and guardContinueByte1 == 111 and guardContinueByte2 == 110 and guardContinueByte3 == 116 and guardContinueByte4 == 105 and guardContinueByte5 == 110 and guardContinueByte6 == 117 and guardContinueByte7 == 101
+                        -> if {
+                            1 => operatorKind!
+                            operatorTokenIndex! => operatorPayloadToken!
+                        }
                 }
-            }
-            (candidateOperator == grammar.tokenIdLeftParen() or candidateOperator == grammar.tokenIdLeftBracket() or candidateOperator == grammar.tokenIdLeftBrace())
+            candidateOperator == grammar.tokenIdLeftParen() or candidateOperator == grammar.tokenIdLeftBracket() or candidateOperator == grammar.tokenIdLeftBrace()
                 -> if {
-                operatorGroupDepth! + 1 => operatorGroupDepth!
-            }
-            (candidateOperator == grammar.tokenIdRightParen() or candidateOperator == grammar.tokenIdRightBracket() or candidateOperator == grammar.tokenIdRightBrace())
+                    operatorGroupDepth! + 1 => operatorGroupDepth!
+                }
+            candidateOperator == grammar.tokenIdRightParen() or candidateOperator == grammar.tokenIdRightBracket() or candidateOperator == grammar.tokenIdRightBrace()
                 -> if {
-                operatorGroupDepth! - 1 => operatorGroupDepth!
-            }
+                    operatorGroupDepth! - 1 => operatorGroupDepth!
+                }
             operatorTokenIndex! + 1 => operatorTokenIndex!
         }
         operatorPayloadToken! < 0 -> if {
@@ -669,7 +720,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         astKind! >= 0 -> if {
             -1 => astParent!
             node.parent => parentCst!
-            (parentCst! >= 0 and astParent! < 0) -> while {
+            parentCst! >= 0 and astParent! < 0 -> while {
                 cstToAst![parentCst!] => mappedParent
                 mappedParent >= 0 -> if {
                     mappedParent => astParent!
@@ -679,15 +730,15 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
             node.firstToken => astFirstToken!
             node.tokenCount => astTokenCount!
-            (astTokenCount! > 0 and (tokens[astFirstToken!].kind == grammar.triviaIdWhitespace() or tokens[astFirstToken!].kind == grammar.triviaIdComment()))
+            astTokenCount! > 0 and (tokens[astFirstToken!].kind == grammar.triviaIdWhitespace() or tokens[astFirstToken!].kind == grammar.triviaIdComment())
                 -> while {
-                astFirstToken! + 1 => astFirstToken!
-                astTokenCount! - 1 => astTokenCount!
-            }
-            (astTokenCount! > 0 and (tokens[astFirstToken! + astTokenCount! - 1].kind == grammar.triviaIdWhitespace() or tokens[astFirstToken! + astTokenCount! - 1].kind == grammar.triviaIdComment()))
+                    astFirstToken! + 1 => astFirstToken!
+                    astTokenCount! - 1 => astTokenCount!
+                }
+            astTokenCount! > 0 and (tokens[astFirstToken! + astTokenCount! - 1].kind == grammar.triviaIdWhitespace() or tokens[astFirstToken! + astTokenCount! - 1].kind == grammar.triviaIdComment())
                 -> while {
-                astTokenCount! - 1 => astTokenCount!
-            }
+                    astTokenCount! - 1 => astTokenCount!
+                }
             node.start => astStart!
             UIntSize(0) => astLength!
             astTokenCount! > 0 -> if {
@@ -716,55 +767,59 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             ast! -> len => astIndex
             ast! -> push(astNode)
             astIndex => cstToAst![cstIndex!]
-            ((postfixKinds! -> len) > 1 and postfixHasIndex!)
+            # Every runtime postfix projection keeps its preceding prefix.
+            # Pure member/member paths need the same base -> field -> field
+            # topology as member/index paths; qualified callees remain
+            # distinguished later by their exact resolved path identity.
+            (postfixKinds! -> len) > 1
                 -> if {
-                [Int; ~] => postfixPrefixNodes!
-                missingNode => postfixLastPrefixNode!
-                0 => postfixPrefixIndex!
-                postfixPrefixIndex! < (postfixKinds! -> len) - 1
-                    -> while {
-                    postfixBoundaryTokens![postfixPrefixIndex! + 1] => postfixPrefixEndToken!
-                    (postfixPrefixEndToken! > astFirstToken! and (tokens[postfixPrefixEndToken! - 1].kind == grammar.triviaIdWhitespace() or tokens[postfixPrefixEndToken! - 1].kind == grammar.triviaIdComment()))
+                    [Int; ~] => postfixPrefixNodes!
+                    missingNode => postfixLastPrefixNode!
+                    0 => postfixPrefixIndex!
+                    postfixPrefixIndex! < (postfixKinds! -> len) - 1
                         -> while {
-                        postfixPrefixEndToken! - 1 => postfixPrefixEndToken!
-                    }
-                    tokens[postfixPrefixEndToken! - 1] => postfixPrefixLastToken
-                    ast! -> len => postfixPrefixNode
-                    ast! -> push(AstNode {
-                        kind: postfixKinds![postfixPrefixIndex!]
-                        parent: -1
-                        cstRuleId: node.ruleId
-                        operatorKind: postfixKinds![postfixPrefixIndex!] == 36
-                            -> if { grammar.tokenIdDot() } else { grammar.tokenIdLeftBracket() }
-                        payloadToken: postfixOperatorTokens![postfixPrefixIndex!]
-                        secondaryToken: -1
-                        tertiaryToken: -1
-                        flags: 0
-                        firstToken: astFirstToken!
-                        tokenCount: postfixPrefixEndToken! - astFirstToken!
-                        start: astStart!
-                        length: postfixPrefixLastToken.span.start + postfixPrefixLastToken.span.length - astStart!
-                    })
-                    postfixPrefixNodes! -> push(postfixPrefixNode)
-                    postfixPrefixNode => postfixLastPrefixNode!
-                    postfixFixupParents! -> push(astIndex)
-                    postfixFixupNodes! -> push(postfixPrefixNode)
-                    postfixPrefixIndex! == 0 -> if { postfixFixupStarts! -> push(astStart!) } else { postfixFixupStarts! -> push(tokens[postfixBoundaryTokens![postfixPrefixIndex!]].span.start) }
-                    postfixFixupEnds! -> push(tokens[postfixBoundaryTokens![postfixPrefixIndex! + 1]].span.start)
-                    postfixPrefixIndex! + 1 => postfixPrefixIndex!
+                            postfixBoundaryTokens![postfixPrefixIndex! + 1] => postfixPrefixEndToken!
+                            postfixPrefixEndToken! > astFirstToken! and (tokens[postfixPrefixEndToken! - 1].kind == grammar.triviaIdWhitespace() or tokens[postfixPrefixEndToken! - 1].kind == grammar.triviaIdComment())
+                                -> while {
+                                    postfixPrefixEndToken! - 1 => postfixPrefixEndToken!
+                                }
+                            tokens[postfixPrefixEndToken! - 1] => postfixPrefixLastToken
+                            ast! -> len => postfixPrefixNode
+                            ast! -> push(AstNode {
+                                kind: postfixKinds![postfixPrefixIndex!]
+                                parent: -1
+                                cstRuleId: node.ruleId
+                                operatorKind: postfixKinds![postfixPrefixIndex!] == 36
+                                    -> if { grammar.tokenIdDot() } else { grammar.tokenIdLeftBracket() }
+                                payloadToken: postfixOperatorTokens![postfixPrefixIndex!]
+                                secondaryToken: -1
+                                tertiaryToken: -1
+                                flags: 0
+                                firstToken: astFirstToken!
+                                tokenCount: postfixPrefixEndToken! - astFirstToken!
+                                start: astStart!
+                                length: postfixPrefixLastToken.span.start + postfixPrefixLastToken.span.length - astStart!
+                            })
+                            postfixPrefixNodes! -> push(postfixPrefixNode)
+                            postfixPrefixNode => postfixLastPrefixNode!
+                            postfixFixupParents! -> push(astIndex)
+                            postfixFixupNodes! -> push(postfixPrefixNode)
+                            postfixPrefixIndex! == 0 -> if { postfixFixupStarts! -> push(astStart!) } else { postfixFixupStarts! -> push(tokens[postfixBoundaryTokens![postfixPrefixIndex!]].span.start) }
+                            postfixFixupEnds! -> push(tokens[postfixBoundaryTokens![postfixPrefixIndex! + 1]].span.start)
+                            postfixPrefixIndex! + 1 => postfixPrefixIndex!
+                        }
+                    0 => postfixParentIndex!
+                    postfixParentIndex! < (postfixPrefixNodes! -> len)
+                        -> while {
+                            ast![postfixPrefixNodes![postfixParentIndex!]] => postfixPrefixAst!
+                            postfixParentIndex! + 1 < (postfixPrefixNodes! -> len)
+                                -> if { postfixPrefixNodes![postfixParentIndex! + 1] => postfixPrefixAst!.parent }
+                            postfixPrefixAst! => ast![postfixPrefixNodes![postfixParentIndex!]]
+                            postfixParentIndex! + 1 => postfixParentIndex!
+                        }
+                    postfixOuterParents! -> push(astIndex)
+                    postfixOuterNodes! -> push(postfixLastPrefixNode!)
                 }
-                0 => postfixParentIndex!
-                postfixParentIndex! < (postfixPrefixNodes! -> len)
-                    -> while {
-                    ast![postfixPrefixNodes![postfixParentIndex!]] => postfixPrefixAst!
-                    postfixParentIndex! + 1 < (postfixPrefixNodes! -> len)
-                        -> if { postfixPrefixNodes![postfixParentIndex! + 1] => postfixPrefixAst!.parent }
-                    postfixPrefixAst! => ast![postfixPrefixNodes![postfixParentIndex!]]
-                    postfixParentIndex! + 1 => postfixParentIndex!
-                }
-                postfixOuterParents! -> push(astIndex)
-                postfixOuterNodes! -> push(postfixLastPrefixNode!)
-            }
             # Flow-level propagation belongs to FlowExpression in the grammar,
             # whereas call-level propagation belongs to PostfixExpression.
             # Preserve the flow AST used by normalized-call resolution and add
@@ -797,30 +852,30 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     0 => postfixFixup!
     postfixFixup! < (postfixFixupParents! -> len)
         -> while {
-        postfixFixupParents![postfixFixup!] => postfixFixupParent
-        postfixFixupNodes![postfixFixup!] => postfixFixupNode
-        postfixFixupStarts![postfixFixup!] => postfixFixupStart
-        postfixFixupEnds![postfixFixup!] => postfixFixupEnd
-        0 => postfixFixupChild!
-        postfixFixupChild! < (ast! -> len) -> while {
-            ast![postfixFixupChild!] => postfixFixupChildNode!
-            (postfixFixupChildNode!.parent == postfixFixupParent and postfixFixupChildNode!.start >= postfixFixupStart and postfixFixupChildNode!.start < postfixFixupEnd)
-                -> if {
-                postfixFixupNode => postfixFixupChildNode!.parent
-                postfixFixupChildNode! => ast![postfixFixupChild!]
+            postfixFixupParents![postfixFixup!] => postfixFixupParent
+            postfixFixupNodes![postfixFixup!] => postfixFixupNode
+            postfixFixupStarts![postfixFixup!] => postfixFixupStart
+            postfixFixupEnds![postfixFixup!] => postfixFixupEnd
+            0 => postfixFixupChild!
+            postfixFixupChild! < (ast! -> len) -> while {
+                ast![postfixFixupChild!] => postfixFixupChildNode!
+                postfixFixupChildNode!.parent == postfixFixupParent and postfixFixupChildNode!.start >= postfixFixupStart and postfixFixupChildNode!.start < postfixFixupEnd
+                    -> if {
+                        postfixFixupNode => postfixFixupChildNode!.parent
+                        postfixFixupChildNode! => ast![postfixFixupChild!]
+                    }
+                postfixFixupChild! + 1 => postfixFixupChild!
             }
-            postfixFixupChild! + 1 => postfixFixupChild!
+            postfixFixup! + 1 => postfixFixup!
         }
-        postfixFixup! + 1 => postfixFixup!
-    }
     0 => postfixOuterFixup!
     postfixOuterFixup! < (postfixOuterParents! -> len)
         -> while {
-        ast![postfixOuterNodes![postfixOuterFixup!]] => postfixOuterNode!
-        postfixOuterParents![postfixOuterFixup!] => postfixOuterNode!.parent
-        postfixOuterNode! => ast![postfixOuterNodes![postfixOuterFixup!]]
-        postfixOuterFixup! + 1 => postfixOuterFixup!
-    }
+            ast![postfixOuterNodes![postfixOuterFixup!]] => postfixOuterNode!
+            postfixOuterParents![postfixOuterFixup!] => postfixOuterNode!.parent
+            postfixOuterNode! => ast![postfixOuterNodes![postfixOuterFixup!]]
+            postfixOuterFixup! + 1 => postfixOuterFixup!
+        }
 
     # The grammar keeps repeated infix operands flat. Normalize them into an
     # explicit left-associative binary tree so typed IR never drops the third
@@ -829,83 +884,83 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     0 => infixIndex!
     infixIndex! < infixAstCount -> while {
         ast![infixIndex!] => infixNode!
-        (infixNode!.kind >= 18 and infixNode!.kind <= 25)
+        infixNode!.kind >= 18 and infixNode!.kind <= 25
             -> if {
-            [Int; ~] => infixChildren!
-            0 => infixChildSearch!
-            infixChildSearch! < infixAstCount -> while {
-                ast![infixChildSearch!].parent == infixIndex!
-                    -> if { infixChildren! -> push(infixChildSearch!) }
-                infixChildSearch! + 1 => infixChildSearch!
-            }
-            (infixChildren! -> len) > 2 -> if {
-                infixChildren![0] => infixLeft!
-                1 => infixChildIndex!
-                infixChildIndex! < (infixChildren! -> len) - 1
-                    -> while {
-                    infixChildren![infixChildIndex!] => infixRight
-                    ast![infixLeft!] => infixLeftNode!
-                    ast![infixRight] => infixRightNode!
-                    infixChildren![infixChildIndex! - 1] => infixPrevious
-                    ast![infixPrevious] => infixPreviousNode
-                    infixPreviousNode.firstToken + infixPreviousNode.tokenCount => infixOperatorSearch!
-                    infixNode!.operatorKind => nestedInfixOperator!
-                    infixNode!.payloadToken => nestedInfixPayload!
-                    infixOperatorSearch! < infixRightNode!.firstToken
+                [Int; ~] => infixChildren!
+                0 => infixChildSearch!
+                infixChildSearch! < infixAstCount -> while {
+                    ast![infixChildSearch!].parent == infixIndex!
+                        -> if { infixChildren! -> push(infixChildSearch!) }
+                    infixChildSearch! + 1 => infixChildSearch!
+                }
+                (infixChildren! -> len) > 2 -> if {
+                    infixChildren![0] => infixLeft!
+                    1 => infixChildIndex!
+                    infixChildIndex! < (infixChildren! -> len) - 1
                         -> while {
-                        tokens[infixOperatorSearch!].kind => infixCandidateOperator
-                        (infixCandidateOperator != grammar.triviaIdWhitespace() and infixCandidateOperator != grammar.triviaIdComment())
-                            -> if {
-                            infixCandidateOperator => nestedInfixOperator!
-                            infixNode!.kind == 24 -> if { -24 => nestedInfixOperator! }
-                            infixNode!.kind == 25 -> if { -25 => nestedInfixOperator! }
-                            infixOperatorSearch! => nestedInfixPayload!
+                            infixChildren![infixChildIndex!] => infixRight
+                            ast![infixLeft!] => infixLeftNode!
+                            ast![infixRight] => infixRightNode!
+                            infixChildren![infixChildIndex! - 1] => infixPrevious
+                            ast![infixPrevious] => infixPreviousNode
+                            infixPreviousNode.firstToken + infixPreviousNode.tokenCount => infixOperatorSearch!
+                            infixNode!.operatorKind => nestedInfixOperator!
+                            infixNode!.payloadToken => nestedInfixPayload!
+                            infixOperatorSearch! < infixRightNode!.firstToken
+                                -> while {
+                                    tokens[infixOperatorSearch!].kind => infixCandidateOperator
+                                    infixCandidateOperator != grammar.triviaIdWhitespace() and infixCandidateOperator != grammar.triviaIdComment()
+                                        -> if {
+                                            infixCandidateOperator => nestedInfixOperator!
+                                            infixNode!.kind == 24 -> if { -24 => nestedInfixOperator! }
+                                            infixNode!.kind == 25 -> if { -25 => nestedInfixOperator! }
+                                            infixOperatorSearch! => nestedInfixPayload!
+                                        }
+                                    infixOperatorSearch! + 1 => infixOperatorSearch!
+                                }
+                            ast! -> len => nestedInfixIndex
+                            nestedInfixIndex => infixLeftNode!.parent
+                            nestedInfixIndex => infixRightNode!.parent
+                            infixLeftNode! => ast![infixLeft!]
+                            infixRightNode! => ast![infixRight]
+                            ast! -> push(AstNode {
+                                kind: infixNode!.kind
+                                parent: infixIndex!
+                                cstRuleId: infixNode!.cstRuleId
+                                operatorKind: nestedInfixOperator!
+                                payloadToken: nestedInfixPayload!
+                                secondaryToken: infixNode!.secondaryToken
+                                tertiaryToken: infixNode!.tertiaryToken
+                                flags: infixNode!.flags
+                                firstToken: infixLeftNode!.firstToken
+                                tokenCount: infixRightNode!.firstToken + infixRightNode!.tokenCount - infixLeftNode!.firstToken
+                                start: infixLeftNode!.start
+                                length: infixRightNode!.start + infixRightNode!.length - infixLeftNode!.start
+                            })
+                            nestedInfixIndex => infixLeft!
+                            infixChildIndex! + 1 => infixChildIndex!
                         }
-                        infixOperatorSearch! + 1 => infixOperatorSearch!
-                    }
-                    ast! -> len => nestedInfixIndex
-                    nestedInfixIndex => infixLeftNode!.parent
-                    nestedInfixIndex => infixRightNode!.parent
-                    infixLeftNode! => ast![infixLeft!]
-                    infixRightNode! => ast![infixRight]
-                    ast! -> push(AstNode {
-                        kind: infixNode!.kind
-                        parent: infixIndex!
-                        cstRuleId: infixNode!.cstRuleId
-                        operatorKind: nestedInfixOperator!
-                        payloadToken: nestedInfixPayload!
-                        secondaryToken: infixNode!.secondaryToken
-                        tertiaryToken: infixNode!.tertiaryToken
-                        flags: infixNode!.flags
-                        firstToken: infixLeftNode!.firstToken
-                        tokenCount: infixRightNode!.firstToken + infixRightNode!.tokenCount - infixLeftNode!.firstToken
-                        start: infixLeftNode!.start
-                        length: infixRightNode!.start + infixRightNode!.length - infixLeftNode!.start
-                    })
-                    nestedInfixIndex => infixLeft!
-                    infixChildIndex! + 1 => infixChildIndex!
+                    (infixChildren! -> len) - 1 => rootRightChildIndex
+                    infixChildren![rootRightChildIndex] => rootRightChild
+                    infixChildren![rootRightChildIndex - 1] => rootPreviousChild
+                    ast![rootRightChild] => rootRightNode
+                    ast![rootPreviousChild] => rootPreviousNode
+                    rootPreviousNode.firstToken + rootPreviousNode.tokenCount => rootOperatorSearch!
+                    rootOperatorSearch! < rootRightNode.firstToken
+                        -> while {
+                            tokens[rootOperatorSearch!].kind => rootCandidateOperator
+                            rootCandidateOperator != grammar.triviaIdWhitespace() and rootCandidateOperator != grammar.triviaIdComment()
+                                -> if {
+                                    rootCandidateOperator => infixNode!.operatorKind
+                                    infixNode!.kind == 24 -> if { -24 => infixNode!.operatorKind }
+                                    infixNode!.kind == 25 -> if { -25 => infixNode!.operatorKind }
+                                    rootOperatorSearch! => infixNode!.payloadToken
+                                }
+                            rootOperatorSearch! + 1 => rootOperatorSearch!
+                        }
+                    infixNode! => ast![infixIndex!]
                 }
-                (infixChildren! -> len) - 1 => rootRightChildIndex
-                infixChildren![rootRightChildIndex] => rootRightChild
-                infixChildren![rootRightChildIndex - 1] => rootPreviousChild
-                ast![rootRightChild] => rootRightNode
-                ast![rootPreviousChild] => rootPreviousNode
-                rootPreviousNode.firstToken + rootPreviousNode.tokenCount => rootOperatorSearch!
-                rootOperatorSearch! < rootRightNode.firstToken
-                    -> while {
-                    tokens[rootOperatorSearch!].kind => rootCandidateOperator
-                    (rootCandidateOperator != grammar.triviaIdWhitespace() and rootCandidateOperator != grammar.triviaIdComment())
-                        -> if {
-                        rootCandidateOperator => infixNode!.operatorKind
-                        infixNode!.kind == 24 -> if { -24 => infixNode!.operatorKind }
-                        infixNode!.kind == 25 -> if { -25 => infixNode!.operatorKind }
-                        rootOperatorSearch! => infixNode!.payloadToken
-                    }
-                    rootOperatorSearch! + 1 => rootOperatorSearch!
-                }
-                infixNode! => ast![infixIndex!]
             }
-        }
         infixIndex! + 1 => infixIndex!
     }
 
@@ -927,18 +982,18 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             0 => flowGroupDepth!
             flowTokenIndex! < flowTokenEnd -> while {
                 tokens[flowTokenIndex!].kind => flowTokenKind
-                (flowGroupDepth! == 0 and flowTokenKind == grammar.tokenIdArrow())
+                flowGroupDepth! == 0 and flowTokenKind == grammar.tokenIdArrow()
                     -> if {
-                    flowArrows! -> push(flowTokenIndex!)
-                }
-                (flowTokenKind == grammar.tokenIdLeftParen() or flowTokenKind == grammar.tokenIdLeftBracket() or flowTokenKind == grammar.tokenIdLeftBrace())
+                        flowArrows! -> push(flowTokenIndex!)
+                    }
+                flowTokenKind == grammar.tokenIdLeftParen() or flowTokenKind == grammar.tokenIdLeftBracket() or flowTokenKind == grammar.tokenIdLeftBrace()
                     -> if {
-                    flowGroupDepth! + 1 => flowGroupDepth!
-                }
-                (flowTokenKind == grammar.tokenIdRightParen() or flowTokenKind == grammar.tokenIdRightBracket() or flowTokenKind == grammar.tokenIdRightBrace())
+                        flowGroupDepth! + 1 => flowGroupDepth!
+                    }
+                flowTokenKind == grammar.tokenIdRightParen() or flowTokenKind == grammar.tokenIdRightBracket() or flowTokenKind == grammar.tokenIdRightBrace()
                     -> if {
-                    flowGroupDepth! - 1 => flowGroupDepth!
-                }
+                        flowGroupDepth! - 1 => flowGroupDepth!
+                    }
                 flowTokenIndex! + 1 => flowTokenIndex!
             }
             (flowArrows! -> len) > 1 -> if {
@@ -947,15 +1002,15 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 nestedFlowIndex! < (flowArrows! -> len) - 1 -> while {
                     flowArrows![nestedFlowIndex! + 1] => nestedFlowNextArrow
                     nestedFlowNextArrow => nestedFlowEndToken!
-                    (nestedFlowEndToken! > flowNode.firstToken and (tokens[nestedFlowEndToken! - 1].kind == grammar.triviaIdWhitespace() or tokens[nestedFlowEndToken! - 1].kind == grammar.triviaIdComment()))
+                    nestedFlowEndToken! > flowNode.firstToken and (tokens[nestedFlowEndToken! - 1].kind == grammar.triviaIdWhitespace() or tokens[nestedFlowEndToken! - 1].kind == grammar.triviaIdComment())
                         -> while {
-                        nestedFlowEndToken! - 1 => nestedFlowEndToken!
-                    }
+                            nestedFlowEndToken! - 1 => nestedFlowEndToken!
+                        }
                     flowIndex! => nestedFlowParent!
                     nestedFlowIndex! + 1 < (flowArrows! -> len) - 1
                         -> if {
-                        nestedFlowStart + nestedFlowIndex! + 1 => nestedFlowParent!
-                    }
+                            nestedFlowStart + nestedFlowIndex! + 1 => nestedFlowParent!
+                        }
                     tokens[nestedFlowEndToken! - 1] => nestedFlowLastToken
                     ast! -> push(AstNode {
                         kind: 10
@@ -983,8 +1038,8 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                         flowArrowSearch! < (flowArrows! -> len) -> while {
                             flowArrows![flowArrowSearch!] < flowChild!.firstToken
                                 -> if {
-                                flowChildSegment! + 1 => flowChildSegment!
-                            }
+                                    flowChildSegment! + 1 => flowChildSegment!
+                                }
                             flowArrowSearch! + 1 => flowArrowSearch!
                         }
                         flowChildSegment! < (flowArrows! -> len) -> if {
@@ -1016,34 +1071,34 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             parameterTokenIndex! < parameterTokenEnd -> while {
                 tokens[parameterTokenIndex!].kind == grammar.tokenIdColon()
                     -> if {
-                    true => parameterAfterColon!
-                }
+                        true => parameterAfterColon!
+                    }
                 tokens[parameterTokenIndex!].kind == grammar.tokenIdIdentifier()
                     -> if {
-                    parameterNameFound! -> if {
-                        parameterAfterColon! -> if {
-                            tokens[parameterTokenIndex!] => parameterModifier
-                            parameterModifier.span.length == 4 -> if {
-                                source -> byte(parameterModifier.span.start) => parameterMove0
-                                source -> byte(parameterModifier.span.start + 1) => parameterMove1
-                                source -> byte(parameterModifier.span.start + 2) => parameterMove2
-                                source -> byte(parameterModifier.span.start + 3) => parameterMove3
-                                (parameterMove0 == 109 and parameterMove1 == 111 and parameterMove2 == 118 and parameterMove3 == 101)
-                                    -> if { 1 => declaration!.flags }
+                        parameterNameFound! -> if {
+                            parameterAfterColon! -> if {
+                                tokens[parameterTokenIndex!] => parameterModifier
+                                parameterModifier.span.length == 4 -> if {
+                                    source -> byte(parameterModifier.span.start) => parameterMove0
+                                    source -> byte(parameterModifier.span.start + 1) => parameterMove1
+                                    source -> byte(parameterModifier.span.start + 2) => parameterMove2
+                                    source -> byte(parameterModifier.span.start + 3) => parameterMove3
+                                    parameterMove0 == 109 and parameterMove1 == 111 and parameterMove2 == 118 and parameterMove3 == 101
+                                        -> if { 1 => declaration!.flags }
+                                }
+                                parameterModifier.span.length == 3 -> if {
+                                    source -> byte(parameterModifier.span.start) => parameterMut0
+                                    source -> byte(parameterModifier.span.start + 1) => parameterMut1
+                                    source -> byte(parameterModifier.span.start + 2) => parameterMut2
+                                    parameterMut0 == 109 and parameterMut1 == 117 and parameterMut2 == 116
+                                        -> if { 2 => declaration!.flags }
+                                }
                             }
-                            parameterModifier.span.length == 3 -> if {
-                                source -> byte(parameterModifier.span.start) => parameterMut0
-                                source -> byte(parameterModifier.span.start + 1) => parameterMut1
-                                source -> byte(parameterModifier.span.start + 2) => parameterMut2
-                                (parameterMut0 == 109 and parameterMut1 == 117 and parameterMut2 == 116)
-                                    -> if { 2 => declaration!.flags }
-                            }
+                        } else {
+                            parameterTokenIndex! => declaration!.payloadToken
+                            true => parameterNameFound!
                         }
-                    } else {
-                        parameterTokenIndex! => declaration!.payloadToken
-                        true => parameterNameFound!
                     }
-                }
                 parameterTokenIndex! + 1 => parameterTokenIndex!
             }
         }
@@ -1056,22 +1111,22 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             nativeHeaderToken! < nativeHeaderEnd -> while {
                 tokens[nativeHeaderToken!].kind == grammar.tokenIdLeftBrace()
                     -> if {
-                    nativeHeaderEnd => nativeHeaderToken!
-                } else {
-                    (tokens[nativeHeaderToken!].kind == grammar.tokenIdIdentifier() and nativeAliasToken! < 0)
-                        -> if {
-                        nativeKeywordSeen! -> if {
-                            nativeHeaderToken! => nativeAliasToken!
-                        } else {
-                            true => nativeKeywordSeen!
-                        }
+                        nativeHeaderEnd => nativeHeaderToken!
+                    } else {
+                        tokens[nativeHeaderToken!].kind == grammar.tokenIdIdentifier() and nativeAliasToken! < 0
+                            -> if {
+                                nativeKeywordSeen! -> if {
+                                    nativeHeaderToken! => nativeAliasToken!
+                                } else {
+                                    true => nativeKeywordSeen!
+                                }
+                            }
+                        tokens[nativeHeaderToken!].kind == grammar.tokenIdString() and nativeLibraryToken! < 0
+                            -> if {
+                                nativeHeaderToken! => nativeLibraryToken!
+                            }
+                        nativeHeaderToken! + 1 => nativeHeaderToken!
                     }
-                    (tokens[nativeHeaderToken!].kind == grammar.tokenIdString() and nativeLibraryToken! < 0)
-                        -> if {
-                        nativeHeaderToken! => nativeLibraryToken!
-                    }
-                    nativeHeaderToken! + 1 => nativeHeaderToken!
-                }
             }
             nativeAliasToken! => declaration!.payloadToken
             nativeLibraryToken! => declaration!.secondaryToken
@@ -1083,18 +1138,18 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             declaration!.firstToken => libraryImportToken!
             declaration!.firstToken + declaration!.tokenCount => libraryImportEnd
             libraryImportToken! < libraryImportEnd -> while {
-                (tokens[libraryImportToken!].kind == grammar.tokenIdIdentifier() and libraryAliasToken! < 0)
+                tokens[libraryImportToken!].kind == grammar.tokenIdIdentifier() and libraryAliasToken! < 0
                     -> if {
-                    libraryKeywordSeen! -> if {
-                        libraryImportToken! => libraryAliasToken!
-                    } else {
-                        true => libraryKeywordSeen!
+                        libraryKeywordSeen! -> if {
+                            libraryImportToken! => libraryAliasToken!
+                        } else {
+                            true => libraryKeywordSeen!
+                        }
                     }
-                }
-                (tokens[libraryImportToken!].kind == grammar.tokenIdString() and libraryPathToken! < 0)
+                tokens[libraryImportToken!].kind == grammar.tokenIdString() and libraryPathToken! < 0
                     -> if {
-                    libraryImportToken! => libraryPathToken!
-                }
+                        libraryImportToken! => libraryPathToken!
+                    }
                 libraryImportToken! + 1 => libraryImportToken!
             }
             libraryAliasToken! => declaration!.payloadToken
@@ -1109,15 +1164,15 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             nativeHandleToken! < nativeHandleTokenEnd -> while {
                 tokens[nativeHandleToken!].kind == grammar.tokenIdIdentifier()
                     -> if {
-                    nativeHandleIdentifierOrdinal! == 1 -> if {
-                        nativeHandleToken! => nativeHandleNameToken!
+                        nativeHandleIdentifierOrdinal! == 1 -> if {
+                            nativeHandleToken! => nativeHandleNameToken!
+                        }
+                        nativeHandleIdentifierOrdinal! + 1 => nativeHandleIdentifierOrdinal!
                     }
-                    nativeHandleIdentifierOrdinal! + 1 => nativeHandleIdentifierOrdinal!
-                }
                 tokens[nativeHandleToken!].kind == grammar.tokenIdString()
                     -> if {
-                    nativeHandleToken! => nativeHandleDropToken!
-                }
+                        nativeHandleToken! => nativeHandleDropToken!
+                    }
                 nativeHandleToken! + 1 => nativeHandleToken!
             }
             nativeHandleNameToken! => declaration!.payloadToken
@@ -1134,37 +1189,37 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             comHeaderToken! < comHeaderEnd -> while {
                 tokens[comHeaderToken!].kind == grammar.tokenIdLeftBrace()
                     -> if {
-                    comHeaderEnd => comHeaderToken!
-                } else {
-                    tokens[comHeaderToken!].kind == grammar.tokenIdIdentifier()
-                        -> if {
-                        comIdentifierOrdinal! == 1 -> if { comHeaderToken! => comAliasToken! }
-                        tokens[comHeaderToken!] => comHeaderIdentifier
-                        comHeaderIdentifier.span.length == 3 -> if {
-                            source -> byte(comHeaderIdentifier.span.start) => comMode0
-                            source -> byte(comHeaderIdentifier.span.start + 1) => comMode1
-                            source -> byte(comHeaderIdentifier.span.start + 2) => comMode2
-                            (comMode0 == 115 and comMode1 == 116 and comMode2 == 97)
-                                -> if {
-                                declaration!.flags + 1024 => declaration!.flags
+                        comHeaderEnd => comHeaderToken!
+                    } else {
+                        tokens[comHeaderToken!].kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                comIdentifierOrdinal! == 1 -> if { comHeaderToken! => comAliasToken! }
+                                tokens[comHeaderToken!] => comHeaderIdentifier
+                                comHeaderIdentifier.span.length == 3 -> if {
+                                    source -> byte(comHeaderIdentifier.span.start) => comMode0
+                                    source -> byte(comHeaderIdentifier.span.start + 1) => comMode1
+                                    source -> byte(comHeaderIdentifier.span.start + 2) => comMode2
+                                    comMode0 == 115 and comMode1 == 116 and comMode2 == 97
+                                        -> if {
+                                            declaration!.flags + 1024 => declaration!.flags
+                                        }
+                                    comMode0 == 109 and comMode1 == 116 and comMode2 == 97
+                                        -> if {
+                                            declaration!.flags + 2048 => declaration!.flags
+                                        }
+                                }
+                                comIdentifierOrdinal! + 1 => comIdentifierOrdinal!
                             }
-                            (comMode0 == 109 and comMode1 == 116 and comMode2 == 97)
-                                -> if {
-                                declaration!.flags + 2048 => declaration!.flags
+                        tokens[comHeaderToken!].kind == grammar.tokenIdString()
+                            -> if {
+                                comClassToken! < 0 -> if {
+                                    comHeaderToken! => comClassToken!
+                                } else {
+                                    comServerToken! < 0 -> if { comHeaderToken! => comServerToken! }
+                                }
                             }
-                        }
-                        comIdentifierOrdinal! + 1 => comIdentifierOrdinal!
+                        comHeaderToken! + 1 => comHeaderToken!
                     }
-                    tokens[comHeaderToken!].kind == grammar.tokenIdString()
-                        -> if {
-                        comClassToken! < 0 -> if {
-                            comHeaderToken! => comClassToken!
-                        } else {
-                            comServerToken! < 0 -> if { comHeaderToken! => comServerToken! }
-                        }
-                    }
-                    comHeaderToken! + 1 => comHeaderToken!
-                }
             }
             comAliasToken! => declaration!.payloadToken
             comClassToken! => declaration!.secondaryToken
@@ -1178,109 +1233,109 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             comInterfaceToken! < comInterfaceEnd -> while {
                 tokens[comInterfaceToken!].kind == grammar.tokenIdLeftBrace()
                     -> if {
-                    comInterfaceEnd => comInterfaceToken!
-                } else {
-                    tokens[comInterfaceToken!].kind == grammar.tokenIdIdentifier()
-                        -> if {
-                        comInterfaceIdentifierOrdinal! == 1 -> if { comInterfaceToken! => declaration!.payloadToken }
-                        comInterfaceIdentifierOrdinal! + 1 => comInterfaceIdentifierOrdinal!
+                        comInterfaceEnd => comInterfaceToken!
+                    } else {
+                        tokens[comInterfaceToken!].kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                comInterfaceIdentifierOrdinal! == 1 -> if { comInterfaceToken! => declaration!.payloadToken }
+                                comInterfaceIdentifierOrdinal! + 1 => comInterfaceIdentifierOrdinal!
+                            }
+                        tokens[comInterfaceToken!].kind == grammar.tokenIdString() and declaration!.secondaryToken < 0
+                            -> if {
+                                comInterfaceToken! => declaration!.secondaryToken
+                            }
+                        comInterfaceToken! + 1 => comInterfaceToken!
                     }
-                    (tokens[comInterfaceToken!].kind == grammar.tokenIdString() and declaration!.secondaryToken < 0)
-                        -> if {
-                        comInterfaceToken! => declaration!.secondaryToken
-                    }
-                    comInterfaceToken! + 1 => comInterfaceToken!
-                }
             }
         }
         declaration!.cstRuleId == grammar.ruleIdComMethodDeclaration()
             -> if {
-            declaration!.flags + 128 + 512 => declaration!.flags
-            declaration!.firstToken => comMethodToken!
-            declaration!.firstToken + declaration!.tokenCount => comMethodEnd
-            false => comMethodNameFound!
-            comMethodToken! < comMethodEnd -> while {
-                (not comMethodNameFound! and tokens[comMethodToken!].kind == grammar.tokenIdIdentifier())
-                    -> if {
-                    comMethodToken! => declaration!.payloadToken
-                    true => comMethodNameFound!
+                declaration!.flags + 128 + 512 => declaration!.flags
+                declaration!.firstToken => comMethodToken!
+                declaration!.firstToken + declaration!.tokenCount => comMethodEnd
+                false => comMethodNameFound!
+                comMethodToken! < comMethodEnd -> while {
+                    not comMethodNameFound! and tokens[comMethodToken!].kind == grammar.tokenIdIdentifier()
+                        -> if {
+                            comMethodToken! => declaration!.payloadToken
+                            true => comMethodNameFound!
+                        }
+                    tokens[comMethodToken!].kind == grammar.tokenIdNumber()
+                        -> if {
+                            comMethodToken! => declaration!.tertiaryToken
+                        }
+                    comMethodToken! + 1 => comMethodToken!
                 }
-                tokens[comMethodToken!].kind == grammar.tokenIdNumber()
-                    -> if {
-                    comMethodToken! => declaration!.tertiaryToken
-                }
-                comMethodToken! + 1 => comMethodToken!
             }
-        }
         declaration!.cstRuleId == grammar.ruleIdNativeFunctionDeclaration()
             -> if {
-            declaration!.flags + 128 => declaration!.flags
-            tokens[declaration!.firstToken] => nativeFirstToken
-            (nativeFirstToken.kind == grammar.tokenIdIdentifier()
-                and nativeFirstToken.span.length == 3
-                and (source -> byte(nativeFirstToken.span.start)) == 116
-                and (source -> byte(nativeFirstToken.span.start + 1)) == 114
-                and (source -> byte(nativeFirstToken.span.start + 2)) == 121)
+                declaration!.flags + 128 => declaration!.flags
+                tokens[declaration!.firstToken] => nativeFirstToken
+                nativeFirstToken.kind == grammar.tokenIdIdentifier()
+                    and nativeFirstToken.span.length == 3
+                    and (source -> byte(nativeFirstToken.span.start)) == 116
+                    and (source -> byte(nativeFirstToken.span.start + 1)) == 114
+                    and (source -> byte(nativeFirstToken.span.start + 2)) == 121
                     -> if {
-                declaration!.flags + 32768 => declaration!.flags
-                declaration!.firstToken + 1 => nativeTryNameToken!
-                nativeTryNameToken! < declaration!.firstToken + declaration!.tokenCount
-                    -> while {
-                    tokens[nativeTryNameToken!].kind == grammar.tokenIdIdentifier()
-                        -> if {
-                        nativeTryNameToken! => declaration!.payloadToken
-                        declaration!.firstToken + declaration!.tokenCount => nativeTryNameToken!
-                    } else {
-                        nativeTryNameToken! + 1 => nativeTryNameToken!
-                    }
-                }
-            }
-        }
-        (declaration!.kind == 1 or declaration!.kind == 2 or declaration!.kind == 6 or declaration!.kind == 7)
-            -> if {
-            false => pathPayloadFound!
-            0 => childIndex!
-            childIndex! < astCount -> while {
-                ast![childIndex!] => child
-                not pathPayloadFound! -> if {
-                    (child.parent == declarationIndex! and child.kind == 16)
-                        -> if {
-                        child.payloadToken => declaration!.payloadToken
-                        true => pathPayloadFound!
-                    }
-                }
-                childIndex! + 1 => childIndex!
-            }
-        }
-        (declaration!.kind == 3 or declaration!.kind == 4 or declaration!.kind == 5 or declaration!.kind == 50)
-            -> if {
-            declaration!.firstToken => headerToken!
-            declaration!.firstToken + declaration!.tokenCount => headerEnd
-            headerToken! < headerEnd -> while {
-                tokens[headerToken!].kind == grammar.tokenIdLeftBrace()
-                    -> if {
-                    headerEnd => headerToken!
-                } else {
-                    tokens[headerToken!].kind == grammar.tokenIdIdentifier()
-                        -> if {
-                        declaration!.kind == 3 -> if {
-                            tokens[headerToken!] => structHeaderIdentifier
-                            structHeaderIdentifier.span.length == 3 -> if {
-                                source -> byte(structHeaderIdentifier.span.start) => abiByte0
-                                source -> byte(structHeaderIdentifier.span.start + 1) => abiByte1
-                                source -> byte(structHeaderIdentifier.span.start + 2) => abiByte2
-                                (abiByte0 == 97 and abiByte1 == 98 and abiByte2 == 105)
+                        declaration!.flags + 32768 => declaration!.flags
+                        declaration!.firstToken + 1 => nativeTryNameToken!
+                        nativeTryNameToken! < declaration!.firstToken + declaration!.tokenCount
+                            -> while {
+                                tokens[nativeTryNameToken!].kind == grammar.tokenIdIdentifier()
                                     -> if {
-                                    declaration!.flags + 256 => declaration!.flags
-                                }
+                                        nativeTryNameToken! => declaration!.payloadToken
+                                        declaration!.firstToken + declaration!.tokenCount => nativeTryNameToken!
+                                    } else {
+                                        nativeTryNameToken! + 1 => nativeTryNameToken!
+                                    }
                             }
-                        }
-                        headerToken! => declaration!.payloadToken
                     }
-                    headerToken! + 1 => headerToken!
+            }
+        declaration!.kind == 1 or declaration!.kind == 2 or declaration!.kind == 6 or declaration!.kind == 7
+            -> if {
+                false => pathPayloadFound!
+                0 => childIndex!
+                childIndex! < astCount -> while {
+                    ast![childIndex!] => child
+                    not pathPayloadFound! -> if {
+                        child.parent == declarationIndex! and child.kind == 16
+                            -> if {
+                                child.payloadToken => declaration!.payloadToken
+                                true => pathPayloadFound!
+                            }
+                    }
+                    childIndex! + 1 => childIndex!
                 }
             }
-        }
+        declaration!.kind == 3 or declaration!.kind == 4 or declaration!.kind == 5 or declaration!.kind == 50
+            -> if {
+                declaration!.firstToken => headerToken!
+                declaration!.firstToken + declaration!.tokenCount => headerEnd
+                headerToken! < headerEnd -> while {
+                    tokens[headerToken!].kind == grammar.tokenIdLeftBrace()
+                        -> if {
+                            headerEnd => headerToken!
+                        } else {
+                            tokens[headerToken!].kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    declaration!.kind == 3 -> if {
+                                        tokens[headerToken!] => structHeaderIdentifier
+                                        structHeaderIdentifier.span.length == 3 -> if {
+                                            source -> byte(structHeaderIdentifier.span.start) => abiByte0
+                                            source -> byte(structHeaderIdentifier.span.start + 1) => abiByte1
+                                            source -> byte(structHeaderIdentifier.span.start + 2) => abiByte2
+                                            abiByte0 == 97 and abiByte1 == 98 and abiByte2 == 105
+                                                -> if {
+                                                    declaration!.flags + 256 => declaration!.flags
+                                                }
+                                        }
+                                    }
+                                    headerToken! => declaration!.payloadToken
+                                }
+                            headerToken! + 1 => headerToken!
+                        }
+                }
+            }
         declaration!.kind == 51 -> if {
             -1 => operationNameToken!
             -1 => operationInputToken!
@@ -1289,260 +1344,287 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             operationToken! < operationEnd -> while {
                 tokens[operationToken!].kind == grammar.tokenIdColon()
                     -> if {
-                    operationEnd => operationToken!
-                } else {
-                    tokens[operationToken!].kind == grammar.tokenIdIdentifier()
-                        -> if {
-                        operationNameToken! < 0 -> if {
-                            operationToken! => operationNameToken!
-                        } else {
-                            operationInputToken! < 0 -> if { operationToken! => operationInputToken! }
-                        }
+                        operationEnd => operationToken!
+                    } else {
+                        tokens[operationToken!].kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                operationNameToken! < 0 -> if {
+                                    operationToken! => operationNameToken!
+                                } else {
+                                    operationInputToken! < 0 -> if { operationToken! => operationInputToken! }
+                                }
+                            }
+                        operationToken! + 1 => operationToken!
                     }
-                    operationToken! + 1 => operationToken!
-                }
             }
             operationNameToken! => declaration!.payloadToken
             operationInputToken! => declaration!.secondaryToken
         }
-        (declaration!.kind == 28 or declaration!.kind == 30)
+        declaration!.kind == 28 or declaration!.kind == 30
             -> if {
-            declaration!.firstToken => associatedToken!
-            declaration!.firstToken + declaration!.tokenCount => associatedEnd
-            associatedToken! < associatedEnd -> while {
-                tokens[associatedToken!].kind == grammar.tokenIdEqual()
-                    -> if {
-                    associatedEnd => associatedToken!
-                } else {
-                    tokens[associatedToken!].kind == grammar.tokenIdIdentifier()
+                declaration!.firstToken => associatedToken!
+                declaration!.firstToken + declaration!.tokenCount => associatedEnd
+                associatedToken! < associatedEnd -> while {
+                    tokens[associatedToken!].kind == grammar.tokenIdEqual()
                         -> if {
-                        associatedToken! => declaration!.payloadToken
-                    }
-                    associatedToken! + 1 => associatedToken!
+                            associatedEnd => associatedToken!
+                        } else {
+                            tokens[associatedToken!].kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    associatedToken! => declaration!.payloadToken
+                                }
+                            associatedToken! + 1 => associatedToken!
+                        }
                 }
             }
-        }
-        (declaration!.kind == 7 or declaration!.kind == 29 or declaration!.kind == 31)
+        declaration!.kind == 7 or declaration!.kind == 29 or declaration!.kind == 31
             -> if {
-            declaration!.kind == 31 -> if {
-                declaration!.firstToken => methodNameToken!
-                declaration!.firstToken + declaration!.tokenCount => methodNameEnd
-                methodNameToken! < methodNameEnd -> while {
-                    tokens[methodNameToken!].kind == grammar.tokenIdColon()
-                        -> if {
-                        methodNameEnd => methodNameToken!
-                    } else {
-                        tokens[methodNameToken!].kind == grammar.tokenIdIdentifier()
+                declaration!.kind == 31 -> if {
+                    declaration!.firstToken => methodNameToken!
+                    declaration!.firstToken + declaration!.tokenCount => methodNameEnd
+                    methodNameToken! < methodNameEnd -> while {
+                        tokens[methodNameToken!].kind == grammar.tokenIdColon()
+                            or tokens[methodNameToken!].kind == grammar.tokenIdLess()
                             -> if {
-                            methodNameToken! => declaration!.payloadToken
-                        }
-                        methodNameToken! + 1 => methodNameToken!
-                    }
-                }
-            }
-            -1 => signatureArrowToken!
-            declaration!.firstToken => signatureToken!
-            declaration!.firstToken + declaration!.tokenCount => signatureEnd
-            false => afterColon!
-            true => firstParameterHeader!
-            signatureToken! < signatureEnd -> while {
-                tokens[signatureToken!].kind == grammar.tokenIdComma()
-                    -> if {
-                    false => firstParameterHeader!
-                }
-                tokens[signatureToken!].kind == grammar.tokenIdColon()
-                    -> if {
-                    true => afterColon!
-                    signatureToken! + 1 => signatureToken!
-                } else {
-                    tokens[signatureToken!].kind == grammar.tokenIdArrow()
-                        -> if {
-                        signatureToken! => signatureArrowToken!
-                        signatureToken! + 1 => asyncToken!
-                        (asyncToken! < signatureEnd and (tokens[asyncToken!].kind == grammar.triviaIdWhitespace() or tokens[asyncToken!].kind == grammar.triviaIdComment()))
-                            -> while {
-                            asyncToken! + 1 => asyncToken!
-                        }
-                        asyncToken! < signatureEnd -> if {
-                            tokens[asyncToken!] => asyncName
-                            (asyncName.kind == grammar.tokenIdIdentifier() and asyncName.span.length == 5)
-                                -> if {
-                                source -> byte(asyncName.span.start) => asyncByte0
-                                source -> byte(asyncName.span.start + 1) => asyncByte1
-                                source -> byte(asyncName.span.start + 2) => asyncByte2
-                                source -> byte(asyncName.span.start + 3) => asyncByte3
-                                source -> byte(asyncName.span.start + 4) => asyncByte4
-                                (asyncByte0 == 97 and asyncByte1 == 115 and asyncByte2 == 121 and asyncByte3 == 110 and asyncByte4 == 99)
-                                    -> if {
-                                    declaration!.flags + 8 => declaration!.flags
-                                }
-                            }
-                            (asyncName.kind == grammar.tokenIdIdentifier() and asyncName.span.length == 6)
-                                -> if {
-                                source -> byte(asyncName.span.start) => streamByte0
-                                source -> byte(asyncName.span.start + 1) => streamByte1
-                                source -> byte(asyncName.span.start + 2) => streamByte2
-                                source -> byte(asyncName.span.start + 3) => streamByte3
-                                source -> byte(asyncName.span.start + 4) => streamByte4
-                                source -> byte(asyncName.span.start + 5) => streamByte5
-                                (streamByte0 == 115 and streamByte1 == 116 and streamByte2 == 114 and streamByte3 == 101 and streamByte4 == 97 and streamByte5 == 109)
-                                    -> if {
-                                    declaration!.flags + 64 => declaration!.flags
-                                }
-                            }
-                        }
-                        signatureEnd => signatureToken!
-                    } else {
-                        tokens[signatureToken!].kind == grammar.tokenIdIdentifier()
-                            -> if {
-                            afterColon! -> if {
-                                firstParameterHeader! -> if {
-                                    tokens[signatureToken!] => modifierToken
-                                    false => ownershipKeyword!
-                                    modifierToken.span.length == 4 -> if {
-                                        source -> byte(modifierToken.span.start) => moveByte0
-                                        source -> byte(modifierToken.span.start + 1) => moveByte1
-                                        source -> byte(modifierToken.span.start + 2) => moveByte2
-                                        source -> byte(modifierToken.span.start + 3) => moveByte3
-                                        (moveByte0 == 109 and moveByte1 == 111 and moveByte2 == 118 and moveByte3 == 101)
-                                            -> if {
-                                            declaration!.flags / 4 * 4 + 1 => declaration!.flags
-                                            true => ownershipKeyword!
-                                        }
-                                    }
-                                    modifierToken.span.length == 3 -> if {
-                                        source -> byte(modifierToken.span.start) => mutByte0
-                                        source -> byte(modifierToken.span.start + 1) => mutByte1
-                                        source -> byte(modifierToken.span.start + 2) => mutByte2
-                                        (mutByte0 == 109 and mutByte1 == 117 and mutByte2 == 116)
-                                            -> if {
-                                            declaration!.flags / 4 * 4 + 2 => declaration!.flags
-                                            true => ownershipKeyword!
-                                        }
-                                    }
-                                    (not ownershipKeyword! and modifierToken.span.length == 4)
-                                        -> if {
-                                        source -> byte(modifierToken.span.start) => selfByte0
-                                        source -> byte(modifierToken.span.start + 1) => selfByte1
-                                        source -> byte(modifierToken.span.start + 2) => selfByte2
-                                        source -> byte(modifierToken.span.start + 3) => selfByte3
-                                        (selfByte0 == 115 and selfByte1 == 101 and selfByte2 == 108 and selfByte3 == 102)
-                                            -> if {
-                                            signatureToken! => declaration!.secondaryToken
-                                        }
-                                    }
-                                }
+                                methodNameEnd => methodNameToken!
                             } else {
-                                signatureToken! != declaration!.payloadToken -> if {
-                                    signatureToken! => declaration!.secondaryToken
-                                }
+                                tokens[methodNameToken!].kind == grammar.tokenIdIdentifier()
+                                    -> if {
+                                        methodNameToken! => declaration!.payloadToken
+                                    }
+                                methodNameToken! + 1 => methodNameToken!
                             }
-                        }
-                        signatureToken! + 1 => signatureToken!
                     }
                 }
-            }
-            declaration!.kind == 7 -> if {
-                declaration!.start + declaration!.length => declarationBodyStart!
-                0 => declarationBodySearch!
-                declarationBodySearch! < (ast! -> len) -> while {
-                    ast![declarationBodySearch!] => declarationBodyCandidate
-                    (declarationBodyCandidate.parent == declarationIndex! and signatureArrowToken! >= 0 and declarationBodyCandidate.start > tokens[signatureArrowToken!].span.start and declarationBodyCandidate.kind != 12 and declarationBodyCandidate.kind != 17 and declarationBodyCandidate.start < declarationBodyStart!)
+                -1 => signatureArrowToken!
+                declaration!.firstToken => signatureToken!
+                declaration!.firstToken + declaration!.tokenCount => signatureEnd
+                false => afterColon!
+                true => firstParameterHeader!
+                signatureToken! < signatureEnd -> while {
+                    tokens[signatureToken!].kind == grammar.tokenIdComma()
                         -> if {
-                        declarationBodyCandidate.start => declarationBodyStart!
-                    }
-                    declarationBodySearch! + 1 => declarationBodySearch!
-                }
-                0 => declarationTypeCount!
-                UIntSize(0) => firstDeclarationTypeStart!
-                0 => declarationTypeSearch!
-                declarationTypeSearch! < (ast! -> len) -> while {
-                    ast![declarationTypeSearch!] => declarationTypeCandidate
-                    declarationTypeCandidate.kind == 12 -> if {
-                        declarationTypeCandidate.parent => declarationTypeAncestor!
-                        false => declarationTypeBelongs!
-                        false => declarationTypeNested!
-                        (declarationTypeAncestor! >= 0 and not declarationTypeBelongs! and not declarationTypeNested!)
-                            -> while {
-                            declarationTypeAncestor! == declarationIndex!
+                            false => firstParameterHeader!
+                        }
+                    tokens[signatureToken!].kind == grammar.tokenIdColon()
+                        -> if {
+                            true => afterColon!
+                            signatureToken! + 1 => signatureToken!
+                        } else {
+                            tokens[signatureToken!].kind == grammar.tokenIdArrow()
                                 -> if {
-                                true => declarationTypeBelongs!
-                            } else {
-                                ast![declarationTypeAncestor!].kind == 7 -> if {
-                                    true => declarationTypeNested!
+                                    signatureToken! => signatureArrowToken!
+                                    signatureToken! + 1 => asyncToken!
+                                    asyncToken! < signatureEnd and (tokens[asyncToken!].kind == grammar.triviaIdWhitespace() or tokens[asyncToken!].kind == grammar.triviaIdComment())
+                                        -> while {
+                                            asyncToken! + 1 => asyncToken!
+                                        }
+                                    asyncToken! < signatureEnd -> if {
+                                        tokens[asyncToken!] => asyncName
+                                        asyncName.kind == grammar.tokenIdIdentifier() and asyncName.span.length == 5
+                                            -> if {
+                                                source -> byte(asyncName.span.start) => asyncByte0
+                                                source -> byte(asyncName.span.start + 1) => asyncByte1
+                                                source -> byte(asyncName.span.start + 2) => asyncByte2
+                                                source -> byte(asyncName.span.start + 3) => asyncByte3
+                                                source -> byte(asyncName.span.start + 4) => asyncByte4
+                                                asyncByte0 == 97 and asyncByte1 == 115 and asyncByte2 == 121 and asyncByte3 == 110 and asyncByte4 == 99
+                                                    -> if {
+                                                        declaration!.flags + 8 => declaration!.flags
+                                                    }
+                                            }
+                                        asyncName.kind == grammar.tokenIdIdentifier() and asyncName.span.length == 6
+                                            -> if {
+                                                source -> byte(asyncName.span.start) => streamByte0
+                                                source -> byte(asyncName.span.start + 1) => streamByte1
+                                                source -> byte(asyncName.span.start + 2) => streamByte2
+                                                source -> byte(asyncName.span.start + 3) => streamByte3
+                                                source -> byte(asyncName.span.start + 4) => streamByte4
+                                                source -> byte(asyncName.span.start + 5) => streamByte5
+                                                streamByte0 == 115 and streamByte1 == 116 and streamByte2 == 114 and streamByte3 == 101 and streamByte4 == 97 and streamByte5 == 109
+                                                    -> if {
+                                                        declaration!.flags + 64 => declaration!.flags
+                                                    }
+                                            }
+                                    }
+                                    signatureEnd => signatureToken!
                                 } else {
-                                    ast![declarationTypeAncestor!].parent => declarationTypeAncestor!
+                                    tokens[signatureToken!].kind == grammar.tokenIdIdentifier()
+                                        -> if {
+                                            afterColon! -> if {
+                                                firstParameterHeader! -> if {
+                                                    tokens[signatureToken!] => modifierToken
+                                                    false => ownershipKeyword!
+                                                    modifierToken.span.length == 4 -> if {
+                                                        source -> byte(modifierToken.span.start) => moveByte0
+                                                        source -> byte(modifierToken.span.start + 1) => moveByte1
+                                                        source -> byte(modifierToken.span.start + 2) => moveByte2
+                                                        source -> byte(modifierToken.span.start + 3) => moveByte3
+                                                        moveByte0 == 109 and moveByte1 == 111 and moveByte2 == 118 and moveByte3 == 101
+                                                            -> if {
+                                                                declaration!.flags / 4 * 4 + 1 => declaration!.flags
+                                                                true => ownershipKeyword!
+                                                            }
+                                                    }
+                                                    modifierToken.span.length == 3 -> if {
+                                                        source -> byte(modifierToken.span.start) => mutByte0
+                                                        source -> byte(modifierToken.span.start + 1) => mutByte1
+                                                        source -> byte(modifierToken.span.start + 2) => mutByte2
+                                                        mutByte0 == 109 and mutByte1 == 117 and mutByte2 == 116
+                                                            -> if {
+                                                                declaration!.flags / 4 * 4 + 2 => declaration!.flags
+                                                                true => ownershipKeyword!
+                                                            }
+                                                    }
+                                                    not ownershipKeyword! and modifierToken.span.length == 4
+                                                        -> if {
+                                                            source -> byte(modifierToken.span.start) => selfByte0
+                                                            source -> byte(modifierToken.span.start + 1) => selfByte1
+                                                            source -> byte(modifierToken.span.start + 2) => selfByte2
+                                                            source -> byte(modifierToken.span.start + 3) => selfByte3
+                                                            selfByte0 == 115 and selfByte1 == 101 and selfByte2 == 108 and selfByte3 == 102
+                                                                -> if {
+                                                                    signatureToken! => declaration!.secondaryToken
+                                                                }
+                                                        }
+                                                }
+                                            } else {
+                                                signatureToken! != declaration!.payloadToken -> if {
+                                                    signatureToken! => declaration!.secondaryToken
+                                                }
+                                            }
+                                        }
+                                    signatureToken! + 1 => signatureToken!
                                 }
-                            }
                         }
-                        (declarationTypeBelongs! and declarationTypeCandidate.start < declarationBodyStart!)
-                            -> if {
-                            declarationTypeCount! == 0 -> if { declarationTypeCandidate.start => firstDeclarationTypeStart! }
-                            declarationTypeCount! + 1 => declarationTypeCount!
-                        }
-                    }
-                    declarationTypeSearch! + 1 => declarationTypeSearch!
                 }
-                declaration!.secondaryToken >= 0 -> if {
-                    declarationTypeCount! == 0 -> if { declaration!.flags + 48 => declaration!.flags }
-                    (declarationTypeCount! == 1 and signatureArrowToken! >= 0)
-                        -> if {
-                        firstDeclarationTypeStart! < tokens[signatureArrowToken!].span.start
-                            -> if {
-                            declaration!.flags + 32 => declaration!.flags
-                        } else {
-                            declaration!.flags + 16 => declaration!.flags
-                        }
-                    }
-                } else {
-                    declarationTypeCount! == 0 -> if { declaration!.flags + 32 => declaration!.flags }
-                }
-            }
-        }
-        ((declaration!.kind == 7 and declaration!.flags / 128 % 2 == 0) or declaration!.kind == 31)
-            -> if {
-            declaration!.firstToken => blockHeaderToken!
-            declaration!.firstToken + declaration!.tokenCount => blockHeaderEnd
-            false => blockKeywordFound!
-            false => blockNameFound!
-            false => blockSignatureArrowSeen!
-            (blockHeaderToken! < blockHeaderEnd and not blockNameFound!)
-                -> while {
-                tokens[blockHeaderToken!].kind == grammar.tokenIdLeftBrace()
+                declaration!.kind == 7 or declaration!.kind == 31
                     -> if {
-                    blockHeaderEnd => blockHeaderToken!
-                } else {
-                    tokens[blockHeaderToken!].kind == grammar.tokenIdArrow()
-                        -> if {
-                        true => blockSignatureArrowSeen!
-                    }
-                    tokens[blockHeaderToken!].kind == grammar.tokenIdIdentifier()
-                        -> if {
-                        tokens[blockHeaderToken!] => blockHeaderIdentifier
-                        (blockSignatureArrowSeen! and not blockKeywordFound!)
-                            -> if {
-                            blockHeaderIdentifier.span.length == 5 -> if {
-                                source -> byte(blockHeaderIdentifier.span.start) => blockByte0
-                                source -> byte(blockHeaderIdentifier.span.start + 1) => blockByte1
-                                source -> byte(blockHeaderIdentifier.span.start + 2) => blockByte2
-                                source -> byte(blockHeaderIdentifier.span.start + 3) => blockByte3
-                                source -> byte(blockHeaderIdentifier.span.start + 4) => blockByte4
-                                (blockByte0 == 98 and blockByte1 == 108 and blockByte2 == 111 and blockByte3 == 99 and blockByte4 == 107)
-                                    -> if {
-                                    true => blockKeywordFound!
+                        declaration!.firstToken => methodIntrinsicToken!
+                        declaration!.firstToken + declaration!.tokenCount => methodIntrinsicEnd
+                        false => methodIntrinsicEqual!
+                        methodIntrinsicToken! < methodIntrinsicEnd -> while {
+                            tokens[methodIntrinsicToken!] => methodHeaderToken
+                            methodHeaderToken.kind == grammar.tokenIdEqual()
+                                -> if {
+                                    true => methodIntrinsicEqual!
+                                } else {
+                                    methodIntrinsicEqual!
+                                        and methodHeaderToken.kind == grammar.tokenIdIdentifier()
+                                        and methodHeaderToken.span.length == 9
+                                        and (source -> byte(methodHeaderToken.span.start)) == 105
+                                        and (source -> byte(methodHeaderToken.span.start + 1)) == 110
+                                        and (source -> byte(methodHeaderToken.span.start + 2)) == 116
+                                        and (source -> byte(methodHeaderToken.span.start + 3)) == 114
+                                        and (source -> byte(methodHeaderToken.span.start + 4)) == 105
+                                        and (source -> byte(methodHeaderToken.span.start + 5)) == 110
+                                        and (source -> byte(methodHeaderToken.span.start + 6)) == 115
+                                        and (source -> byte(methodHeaderToken.span.start + 7)) == 105
+                                        and (source -> byte(methodHeaderToken.span.start + 8)) == 99
+                                        -> if {
+                                            declaration!.flags + 128 => declaration!.flags
+                                            methodIntrinsicEnd => methodIntrinsicToken!
+                                        } else {
+                                            methodHeaderToken.kind != grammar.triviaIdWhitespace()
+                                                and methodHeaderToken.kind != grammar.triviaIdComment()
+                                                -> if { false => methodIntrinsicEqual! }
+                                        }
                                 }
-                            }
-                        } else {
-                            blockKeywordFound! -> if {
-                            blockHeaderToken! => declaration!.tertiaryToken
-                            true => blockNameFound!
-                            }
+                            methodIntrinsicToken! + 1 => methodIntrinsicToken!
                         }
                     }
-                    blockHeaderToken! + 1 => blockHeaderToken!
+                declaration!.kind == 7 -> if {
+                    declaration!.start + declaration!.length => declarationBodyStart!
+                    0 => declarationBodySearch!
+                    declarationBodySearch! < (ast! -> len) -> while {
+                        ast![declarationBodySearch!] => declarationBodyCandidate
+                        declarationBodyCandidate.parent == declarationIndex! and signatureArrowToken! >= 0 and declarationBodyCandidate.start > tokens[signatureArrowToken!].span.start and declarationBodyCandidate.kind != 12 and declarationBodyCandidate.kind != 17 and declarationBodyCandidate.start < declarationBodyStart!
+                            -> if {
+                                declarationBodyCandidate.start => declarationBodyStart!
+                            }
+                        declarationBodySearch! + 1 => declarationBodySearch!
+                    }
+                    false => declarationHasInputType!
+                    false => declarationHasResultType!
+                    0 => declarationTypeSearch!
+                    declarationTypeSearch! < (ast! -> len) -> while {
+                        ast![declarationTypeSearch!] => declarationTypeCandidate
+                        declarationTypeCandidate.kind == 12 -> if {
+                            declarationTypeCandidate.parent => declarationTypeAncestor!
+                            false => declarationTypeBelongs!
+                            false => declarationTypeNested!
+                            declarationTypeAncestor! >= 0 and not declarationTypeBelongs! and not declarationTypeNested!
+                                -> while {
+                                    declarationTypeAncestor! == declarationIndex!
+                                        -> if {
+                                            true => declarationTypeBelongs!
+                                        } else {
+                                            ast![declarationTypeAncestor!].kind == 7 -> if {
+                                                true => declarationTypeNested!
+                                            } else {
+                                                ast![declarationTypeAncestor!].parent => declarationTypeAncestor!
+                                            }
+                                        }
+                                }
+                            declarationTypeBelongs! and declarationTypeCandidate.start < declarationBodyStart!
+                                -> if {
+                                    signatureArrowToken! >= 0 -> if {
+                                        declarationTypeCandidate.start < tokens[signatureArrowToken!].span.start
+                                            -> if { true => declarationHasInputType! } else { true => declarationHasResultType! }
+                                    }
+                                }
+                        }
+                        declarationTypeSearch! + 1 => declarationTypeSearch!
+                    }
+                    declaration!.secondaryToken >= 0 and not declarationHasInputType!
+                        -> if { declaration!.flags + 16 => declaration!.flags }
+                    not declarationHasResultType! -> if { declaration!.flags + 32 => declaration!.flags }
                 }
             }
-        }
+        (declaration!.kind == 7 and declaration!.flags / 128 % 2 == 0) or declaration!.kind == 31
+            -> if {
+                declaration!.firstToken => blockHeaderToken!
+                declaration!.firstToken + declaration!.tokenCount => blockHeaderEnd
+                false => blockKeywordFound!
+                false => blockNameFound!
+                false => blockSignatureArrowSeen!
+                blockHeaderToken! < blockHeaderEnd and not blockNameFound!
+                    -> while {
+                        tokens[blockHeaderToken!].kind == grammar.tokenIdLeftBrace()
+                            -> if {
+                                blockHeaderEnd => blockHeaderToken!
+                            } else {
+                                tokens[blockHeaderToken!].kind == grammar.tokenIdArrow()
+                                    -> if {
+                                        true => blockSignatureArrowSeen!
+                                    }
+                                tokens[blockHeaderToken!].kind == grammar.tokenIdIdentifier()
+                                    -> if {
+                                        tokens[blockHeaderToken!] => blockHeaderIdentifier
+                                        blockSignatureArrowSeen! and not blockKeywordFound!
+                                            -> if {
+                                                blockHeaderIdentifier.span.length == 5 -> if {
+                                                    source -> byte(blockHeaderIdentifier.span.start) => blockByte0
+                                                    source -> byte(blockHeaderIdentifier.span.start + 1) => blockByte1
+                                                    source -> byte(blockHeaderIdentifier.span.start + 2) => blockByte2
+                                                    source -> byte(blockHeaderIdentifier.span.start + 3) => blockByte3
+                                                    source -> byte(blockHeaderIdentifier.span.start + 4) => blockByte4
+                                                    blockByte0 == 98 and blockByte1 == 108 and blockByte2 == 111 and blockByte3 == 99 and blockByte4 == 107
+                                                        -> if {
+                                                            true => blockKeywordFound!
+                                                        }
+                                                }
+                                            } else {
+                                                blockKeywordFound! -> if {
+                                                    blockHeaderToken! => declaration!.tertiaryToken
+                                                    true => blockNameFound!
+                                                }
+                                            }
+                                    }
+                                blockHeaderToken! + 1 => blockHeaderToken!
+                            }
+                    }
+            }
         declaration!.kind == 9 -> if {
             declaration!.firstToken => bindingToken!
             declaration!.firstToken + declaration!.tokenCount => bindingEnd
@@ -1550,41 +1632,41 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             0 => bindingGroupDepth!
             bindingToken! < bindingEnd -> while {
                 tokens[bindingToken!] => bindingCandidate
-                (bindingCandidate.kind == grammar.tokenIdFatArrow() and bindingGroupDepth! == 0)
+                bindingCandidate.kind == grammar.tokenIdFatArrow() and bindingGroupDepth! == 0
                     -> if {
-                    true => afterFatArrow!
-                    bindingToken! + 1 => bindingToken!
-                } else {
-                    (afterFatArrow! and bindingGroupDepth! == 0) -> if {
-                        bindingCandidate.kind == grammar.tokenIdIdentifier()
-                            -> if {
-                            bindingToken! => declaration!.payloadToken
-                            bindingEnd => bindingToken!
+                        true => afterFatArrow!
+                        bindingToken! + 1 => bindingToken!
+                    } else {
+                        afterFatArrow! and bindingGroupDepth! == 0 -> if {
+                            bindingCandidate.kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    bindingToken! => declaration!.payloadToken
+                                    bindingEnd => bindingToken!
+                                } else {
+                                    bindingToken! + 1 => bindingToken!
+                                }
                         } else {
+                            bindingCandidate.kind == grammar.tokenIdLeftParen() or bindingCandidate.kind == grammar.tokenIdLeftBracket() or bindingCandidate.kind == grammar.tokenIdLeftBrace()
+                                -> if {
+                                    bindingGroupDepth! + 1 => bindingGroupDepth!
+                                }
+                            bindingCandidate.kind == grammar.tokenIdRightParen() or bindingCandidate.kind == grammar.tokenIdRightBracket() or bindingCandidate.kind == grammar.tokenIdRightBrace()
+                                -> if {
+                                    bindingGroupDepth! - 1 => bindingGroupDepth!
+                                }
                             bindingToken! + 1 => bindingToken!
                         }
-                    } else {
-                        (bindingCandidate.kind == grammar.tokenIdLeftParen() or bindingCandidate.kind == grammar.tokenIdLeftBracket() or bindingCandidate.kind == grammar.tokenIdLeftBrace())
-                            -> if {
-                            bindingGroupDepth! + 1 => bindingGroupDepth!
-                        }
-                        (bindingCandidate.kind == grammar.tokenIdRightParen() or bindingCandidate.kind == grammar.tokenIdRightBracket() or bindingCandidate.kind == grammar.tokenIdRightBrace())
-                            -> if {
-                            bindingGroupDepth! - 1 => bindingGroupDepth!
-                        }
-                        bindingToken! + 1 => bindingToken!
                     }
-                }
             }
             declaration!.payloadToken + 1 => bindingSuffixToken!
-            (bindingSuffixToken! < bindingEnd and (tokens[bindingSuffixToken!].kind == grammar.triviaIdWhitespace() or tokens[bindingSuffixToken!].kind == grammar.triviaIdComment()))
+            bindingSuffixToken! < bindingEnd and (tokens[bindingSuffixToken!].kind == grammar.triviaIdWhitespace() or tokens[bindingSuffixToken!].kind == grammar.triviaIdComment())
                 -> while {
-                bindingSuffixToken! + 1 => bindingSuffixToken!
-            }
-            (bindingSuffixToken! < bindingEnd and tokens[bindingSuffixToken!].kind == grammar.tokenIdBang())
+                    bindingSuffixToken! + 1 => bindingSuffixToken!
+                }
+            bindingSuffixToken! < bindingEnd and tokens[bindingSuffixToken!].kind == grammar.tokenIdBang()
                 -> if {
-                1 => declaration!.flags
-            }
+                    1 => declaration!.flags
+                }
         }
         declaration!.kind == 61 -> if {
             declaration!.firstToken => stateBindingToken!
@@ -1595,20 +1677,20 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             stateBindingToken! < stateBindingEnd -> while {
                 tokens[stateBindingToken!].kind == grammar.tokenIdIdentifier()
                     -> if {
-                    stateBindingToken! => declaration!.payloadToken
-                }
+                        stateBindingToken! => declaration!.payloadToken
+                    }
                 stateBindingToken! + 1 => stateBindingToken!
             }
             declaration!.payloadToken >= 0 -> if {
                 declaration!.payloadToken + 1 => stateBindingSuffixToken!
-                (stateBindingSuffixToken! < stateBindingEnd and (tokens[stateBindingSuffixToken!].kind == grammar.triviaIdWhitespace() or tokens[stateBindingSuffixToken!].kind == grammar.triviaIdComment()))
+                stateBindingSuffixToken! < stateBindingEnd and (tokens[stateBindingSuffixToken!].kind == grammar.triviaIdWhitespace() or tokens[stateBindingSuffixToken!].kind == grammar.triviaIdComment())
                     -> while {
-                    stateBindingSuffixToken! + 1 => stateBindingSuffixToken!
-                }
-                (stateBindingSuffixToken! < stateBindingEnd and tokens[stateBindingSuffixToken!].kind == grammar.tokenIdBang())
+                        stateBindingSuffixToken! + 1 => stateBindingSuffixToken!
+                    }
+                stateBindingSuffixToken! < stateBindingEnd and tokens[stateBindingSuffixToken!].kind == grammar.tokenIdBang()
                     -> if {
-                    1 => declaration!.flags
-                }
+                        1 => declaration!.flags
+                    }
             }
         }
         declaration!.kind == 48 -> if {
@@ -1620,60 +1702,70 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             false => roleBodySeen!
             0 => roleBraceDepth!
             false => afterRoleDot!
+            0 => roleParenDepth!
             roleToken! < roleEnd -> while {
-                tokens[roleToken!].kind == grammar.tokenIdLeftBrace()
-                    -> if {
-                    true => roleBodySeen!
-                    roleBraceDepth! + 1 => roleBraceDepth!
+                not roleBodySeen! -> if {
+                    tokens[roleToken!].kind == grammar.tokenIdLeftParen()
+                        -> if { roleParenDepth! + 1 => roleParenDepth! }
+                    tokens[roleToken!].kind == grammar.tokenIdRightParen()
+                        -> if { roleParenDepth! - 1 => roleParenDepth! }
                 }
-                tokens[roleToken!].kind == grammar.tokenIdRightBrace()
+                roleNameFound! and roleParenDepth! == 0 and tokens[roleToken!].kind == grammar.tokenIdLeftBrace()
                     -> if {
-                    roleBraceDepth! - 1 => roleBraceDepth!
-                }
-                (not roleBodySeen! and tokens[roleToken!].kind == grammar.tokenIdArrow())
+                        true => roleBodySeen!
+                        roleBraceDepth! + 1 => roleBraceDepth!
+                    }
+                roleBodySeen! and tokens[roleToken!].kind == grammar.tokenIdRightBrace()
                     -> if {
-                    not roleNameFound! -> if { true => afterRoleArrow! }
-                }
-                (afterRoleArrow! and not roleBodySeen! and tokens[roleToken!].kind == grammar.tokenIdDot())
+                        roleBraceDepth! - 1 => roleBraceDepth!
+                    }
+                not roleBodySeen! and roleParenDepth! == 0 and tokens[roleToken!].kind == grammar.tokenIdArrow()
                     -> if {
-                    true => afterRoleDot!
-                }
-                (afterRoleArrow! and not roleBodySeen! and tokens[roleToken!].kind == grammar.tokenIdIdentifier())
+                        true => afterRoleArrow!
+                        false => roleNameFound!
+                        false => afterRoleDot!
+                        -1 => declaration!.tertiaryToken
+                    }
+                afterRoleArrow! and not roleBodySeen! and tokens[roleToken!].kind == grammar.tokenIdDot()
                     -> if {
-                    not roleNameFound! -> if {
-                        roleToken! => declaration!.payloadToken
-                        true => roleNameFound!
-                    } else {
-                        afterRoleDot! -> if {
+                        true => afterRoleDot!
+                    }
+                afterRoleArrow! and not roleBodySeen! and roleParenDepth! == 0 and tokens[roleToken!].kind == grammar.tokenIdIdentifier()
+                    -> if {
+                        not roleNameFound! -> if {
                             roleToken! => declaration!.payloadToken
+                            true => roleNameFound!
                         } else {
-                            declaration!.tertiaryToken < 0 -> if { roleToken! => declaration!.tertiaryToken }
+                            afterRoleDot! -> if {
+                                roleToken! => declaration!.payloadToken
+                            } else {
+                                declaration!.tertiaryToken < 0 -> if { roleToken! => declaration!.tertiaryToken }
+                            }
                         }
+                        false => afterRoleDot!
                     }
-                    false => afterRoleDot!
-                }
-                (roleNameFound! and roleBodySeen! and roleBraceDepth! == 0 and tokens[roleToken!].kind == grammar.tokenIdFatArrow())
+                roleNameFound! and roleBodySeen! and roleBraceDepth! == 0 and tokens[roleToken!].kind == grammar.tokenIdFatArrow()
                     -> if {
-                    true => afterRoleResultArrow!
-                } else {
-                    (afterRoleResultArrow! and tokens[roleToken!].kind == grammar.tokenIdIdentifier())
-                        -> if {
-                        roleToken! => declaration!.secondaryToken
-                        false => afterRoleResultArrow!
+                        true => afterRoleResultArrow!
+                    } else {
+                        afterRoleResultArrow! and tokens[roleToken!].kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                roleToken! => declaration!.secondaryToken
+                                false => afterRoleResultArrow!
+                            }
                     }
-                }
                 roleToken! + 1 => roleToken!
             }
             declaration!.secondaryToken >= 0 -> if {
                 declaration!.secondaryToken + 1 => roleSuffixToken!
-                (roleSuffixToken! < roleEnd and (tokens[roleSuffixToken!].kind == grammar.triviaIdWhitespace() or tokens[roleSuffixToken!].kind == grammar.triviaIdComment()))
+                roleSuffixToken! < roleEnd and (tokens[roleSuffixToken!].kind == grammar.triviaIdWhitespace() or tokens[roleSuffixToken!].kind == grammar.triviaIdComment())
                     -> while {
-                    roleSuffixToken! + 1 => roleSuffixToken!
-                }
-                (roleSuffixToken! < roleEnd and tokens[roleSuffixToken!].kind == grammar.tokenIdBang())
+                        roleSuffixToken! + 1 => roleSuffixToken!
+                    }
+                roleSuffixToken! < roleEnd and tokens[roleSuffixToken!].kind == grammar.tokenIdBang()
                     -> if {
-                    1 => declaration!.flags
-                }
+                        1 => declaration!.flags
+                    }
             }
         }
         declaration!.kind == 64 -> if {
@@ -1687,18 +1779,18 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
             foldCommaToken! >= 0 -> if {
                 foldCommaToken! - 1 => foldAccumulatorToken!
-                (foldAccumulatorToken! >= declaration!.firstToken and (tokens[foldAccumulatorToken!].kind == grammar.triviaIdWhitespace() or tokens[foldAccumulatorToken!].kind == grammar.triviaIdComment()))
+                foldAccumulatorToken! >= declaration!.firstToken and (tokens[foldAccumulatorToken!].kind == grammar.triviaIdWhitespace() or tokens[foldAccumulatorToken!].kind == grammar.triviaIdComment())
                     -> while {
-                    foldAccumulatorToken! - 1 => foldAccumulatorToken!
-                }
+                        foldAccumulatorToken! - 1 => foldAccumulatorToken!
+                    }
                 tokens[foldAccumulatorToken!].kind == grammar.tokenIdIdentifier()
                     -> if { foldAccumulatorToken! => declaration!.secondaryToken }
                 foldCommaToken! + 1 => foldItemToken!
-                (foldItemToken! < foldEnd and (tokens[foldItemToken!].kind == grammar.triviaIdWhitespace() or tokens[foldItemToken!].kind == grammar.triviaIdComment()))
+                foldItemToken! < foldEnd and (tokens[foldItemToken!].kind == grammar.triviaIdWhitespace() or tokens[foldItemToken!].kind == grammar.triviaIdComment())
                     -> while {
-                    foldItemToken! + 1 => foldItemToken!
-                }
-                (foldItemToken! < foldEnd and tokens[foldItemToken!].kind == grammar.tokenIdIdentifier())
+                        foldItemToken! + 1 => foldItemToken!
+                    }
+                foldItemToken! < foldEnd and tokens[foldItemToken!].kind == grammar.tokenIdIdentifier()
                     -> if { foldItemToken! => declaration!.tertiaryToken }
             }
         }
@@ -1709,14 +1801,14 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             assignmentToken! < assignmentEnd -> while {
                 tokens[assignmentToken!].kind == grammar.tokenIdFatArrow()
                     -> if {
-                    true => afterAssignmentArrow!
-                } else {
-                    (afterAssignmentArrow! and tokens[assignmentToken!].kind == grammar.tokenIdIdentifier())
-                        -> if {
-                        assignmentToken! => declaration!.payloadToken
-                        assignmentEnd => assignmentToken!
+                        true => afterAssignmentArrow!
+                    } else {
+                        afterAssignmentArrow! and tokens[assignmentToken!].kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                assignmentToken! => declaration!.payloadToken
+                                assignmentEnd => assignmentToken!
+                            }
                     }
-                }
                 assignmentToken! + 1 => assignmentToken!
             }
         }
@@ -1730,24 +1822,24 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             fieldAssignmentToken! < fieldAssignmentEnd -> while {
                 tokens[fieldAssignmentToken!].kind == grammar.tokenIdFatArrow()
                     -> if {
-                    true => afterFieldAssignmentArrow!
-                } else {
-                    (afterFieldAssignmentArrow! and declaration!.payloadToken < 0 and tokens[fieldAssignmentToken!].kind == grammar.tokenIdIdentifier())
-                        -> if {
-                        fieldAssignmentToken! => declaration!.payloadToken
-                        1 => declaration!.flags
-                    }
-                    (afterFieldAssignmentArrow! and tokens[fieldAssignmentToken!].kind == grammar.tokenIdDot())
-                        -> if {
-                        true => afterFieldAssignmentDot!
+                        true => afterFieldAssignmentArrow!
                     } else {
-                        (afterFieldAssignmentDot! and tokens[fieldAssignmentToken!].kind == grammar.tokenIdIdentifier())
+                        afterFieldAssignmentArrow! and declaration!.payloadToken < 0 and tokens[fieldAssignmentToken!].kind == grammar.tokenIdIdentifier()
                             -> if {
-                            fieldAssignmentToken! => declaration!.secondaryToken
-                            fieldAssignmentEnd => fieldAssignmentToken!
-                        }
+                                fieldAssignmentToken! => declaration!.payloadToken
+                                1 => declaration!.flags
+                            }
+                        afterFieldAssignmentArrow! and tokens[fieldAssignmentToken!].kind == grammar.tokenIdDot()
+                            -> if {
+                                true => afterFieldAssignmentDot!
+                            } else {
+                                afterFieldAssignmentDot! and tokens[fieldAssignmentToken!].kind == grammar.tokenIdIdentifier()
+                                    -> if {
+                                        fieldAssignmentToken! => declaration!.secondaryToken
+                                        fieldAssignmentEnd => fieldAssignmentToken!
+                                    }
+                            }
                     }
-                }
                 fieldAssignmentToken! + 1 => fieldAssignmentToken!
             }
         }
@@ -1759,65 +1851,75 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             declaration!.firstToken => genericToken!
             genericToken! < declaration!.firstToken + declaration!.tokenCount
                 -> while {
-                tokens[genericToken!].kind == grammar.tokenIdComma()
-                    -> if {
-                    genericCommaCount! + 1 => genericCommaCount!
-                } else {
-                    tokens[genericToken!].kind == grammar.tokenIdIdentifier()
+                    tokens[genericToken!].kind == grammar.tokenIdComma()
                         -> if {
-                        (genericCommaCount! == 0 and firstGenericToken! < 0)
-                            -> if {
-                            genericToken! => firstGenericToken!
+                            genericCommaCount! + 1 => genericCommaCount!
+                        } else {
+                            tokens[genericToken!].kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    genericCommaCount! == 0 and firstGenericToken! < 0
+                                        -> if {
+                                            genericToken! => firstGenericToken!
+                                        }
+                                    genericCommaCount! == 1 and secondGenericToken! < 0
+                                        -> if {
+                                            genericToken! => secondGenericToken!
+                                        }
+                                    genericCommaCount! == 2 and thirdGenericToken! < 0
+                                        -> if {
+                                            genericToken! => thirdGenericToken!
+                                        }
+                                }
                         }
-                        (genericCommaCount! == 1 and secondGenericToken! < 0)
-                            -> if {
-                            genericToken! => secondGenericToken!
-                        }
-                        (genericCommaCount! == 2 and thirdGenericToken! < 0)
-                            -> if {
-                            genericToken! => thirdGenericToken!
-                        }
-                    }
+                    genericToken! + 1 => genericToken!
                 }
-                genericToken! + 1 => genericToken!
-            }
             firstGenericToken! => declaration!.payloadToken
             secondGenericToken! => declaration!.secondaryToken
             thirdGenericToken! => declaration!.tertiaryToken
         }
-        ((declaration!.kind >= 3 and declaration!.kind <= 7) or declaration!.kind == 31 or declaration!.kind == 50)
-            -> if {
-            declaration!.firstToken => visibilityToken!
-            true => findingVisibility!
-            (visibilityToken! < declaration!.firstToken + declaration!.tokenCount and findingVisibility!)
+        declaration!.kind == 26 -> if {
+            declaration!.firstToken => fieldNameToken!
+            declaration!.firstToken + declaration!.tokenCount => fieldNameEnd
+            fieldNameToken! < fieldNameEnd and tokens[fieldNameToken!].kind != grammar.tokenIdColon()
                 -> while {
-                tokens[visibilityToken!].kind == grammar.triviaIdWhitespace()
-                    -> if {
-                    visibilityToken! + 1 => visibilityToken!
-                } else {
-                    tokens[visibilityToken!].kind == grammar.triviaIdComment()
-                        -> if {
-                        visibilityToken! + 1 => visibilityToken!
-                    } else {
-                        false => findingVisibility!
-                    }
+                    tokens[fieldNameToken!].kind == grammar.tokenIdIdentifier()
+                        -> if { fieldNameToken! => declaration!.payloadToken }
+                    fieldNameToken! + 1 => fieldNameToken!
                 }
-            }
-            tokens[visibilityToken!] => visibilityName
-            (visibilityName.kind == grammar.tokenIdIdentifier() and visibilityName.span.length == 6)
-                -> if {
-                source -> byte(visibilityName.span.start) => publicByte0
-                source -> byte(visibilityName.span.start + 1) => publicByte1
-                source -> byte(visibilityName.span.start + 2) => publicByte2
-                source -> byte(visibilityName.span.start + 3) => publicByte3
-                source -> byte(visibilityName.span.start + 4) => publicByte4
-                source -> byte(visibilityName.span.start + 5) => publicByte5
-                (publicByte0 == 112 and publicByte1 == 117 and publicByte2 == 98 and publicByte3 == 108 and publicByte4 == 105 and publicByte5 == 99)
-                    -> if {
-                    declaration!.flags + 4 => declaration!.flags
-                }
-            }
         }
+        (declaration!.kind >= 3 and declaration!.kind <= 7) or declaration!.kind == 26 or declaration!.kind == 31 or declaration!.kind == 50
+            -> if {
+                declaration!.firstToken => visibilityToken!
+                true => findingVisibility!
+                visibilityToken! < declaration!.firstToken + declaration!.tokenCount and findingVisibility!
+                    -> while {
+                        tokens[visibilityToken!].kind == grammar.triviaIdWhitespace()
+                            -> if {
+                                visibilityToken! + 1 => visibilityToken!
+                            } else {
+                                tokens[visibilityToken!].kind == grammar.triviaIdComment()
+                                    -> if {
+                                        visibilityToken! + 1 => visibilityToken!
+                                    } else {
+                                        false => findingVisibility!
+                                    }
+                            }
+                    }
+                tokens[visibilityToken!] => visibilityName
+                visibilityName.kind == grammar.tokenIdIdentifier() and visibilityName.span.length == 6
+                    -> if {
+                        source -> byte(visibilityName.span.start) => publicByte0
+                        source -> byte(visibilityName.span.start + 1) => publicByte1
+                        source -> byte(visibilityName.span.start + 2) => publicByte2
+                        source -> byte(visibilityName.span.start + 3) => publicByte3
+                        source -> byte(visibilityName.span.start + 4) => publicByte4
+                        source -> byte(visibilityName.span.start + 5) => publicByte5
+                        publicByte0 == 112 and publicByte1 == 117 and publicByte2 == 98 and publicByte3 == 108 and publicByte4 == 105 and publicByte5 == 99
+                            -> if {
+                                declaration!.flags + 4 => declaration!.flags
+                            }
+                    }
+            }
         declaration!.kind == 55 -> if {
             -1 => constructorDot!
             declaration!.firstToken => constructorToken!
@@ -1828,13 +1930,13 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     -> if { constructorAngleDepth! + 1 => constructorAngleDepth! }
                 tokens[constructorToken!].kind == grammar.tokenIdGreater()
                     -> if { constructorAngleDepth! - 1 => constructorAngleDepth! }
-                (constructorDot! < 0 and constructorAngleDepth! == 0 and tokens[constructorToken!].kind == grammar.tokenIdDot())
+                constructorDot! < 0 and constructorAngleDepth! == 0 and tokens[constructorToken!].kind == grammar.tokenIdDot()
                     -> if { constructorToken! => constructorDot! }
                 constructorToken! + 1 => constructorToken!
             }
             constructorDot! >= 0 -> if {
                 constructorDot! + 1 => constructorName!
-                (constructorName! < constructorEnd and (tokens[constructorName!].kind == grammar.triviaIdWhitespace() or tokens[constructorName!].kind == grammar.triviaIdComment()))
+                constructorName! < constructorEnd and (tokens[constructorName!].kind == grammar.triviaIdWhitespace() or tokens[constructorName!].kind == grammar.triviaIdComment())
                     -> while { constructorName! + 1 => constructorName! }
                 constructorName! < constructorEnd -> if { constructorName! => declaration!.payloadToken }
             }
@@ -1852,12 +1954,12 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     -> if { false => patternInsidePayload! }
                 tokens[patternToken!].kind == grammar.tokenIdIdentifier()
                     -> if {
-                    patternInsidePayload! -> if {
-                        patternBinding! < 0 -> if { patternToken! => patternBinding! }
-                    } else {
-                        patternToken! => patternVariant!
+                        patternInsidePayload! -> if {
+                            patternBinding! < 0 -> if { patternToken! => patternBinding! }
+                        } else {
+                            patternToken! => patternVariant!
+                        }
                     }
-                }
                 patternToken! + 1 => patternToken!
             }
             patternVariant! => declaration!.payloadToken

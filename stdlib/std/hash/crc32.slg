@@ -1,0 +1,67 @@
+namespace std.hash.crc32
+
+public enum Polynomial {
+    Ieee
+    Castagnoli
+}
+
+public struct Hasher {
+    public policy: Polynomial
+    public state: UInt32
+}
+
+xor32 left: UInt32, right: UInt32 -> UInt32 {
+    UInt32(0) => result!
+    UInt32(1) => place!
+    0 => index!
+    index! < 32 -> while {
+        (left / place!) % 2 != (right / place!) % 2
+            -> if { result! + place! => result! }
+        index! + 1 => index!
+        index! < 32 -> if { place! * 2 => place! }
+    }
+    result!
+}
+
+polynomial policy: Polynomial -> UInt32 => policy -> when {
+    Ieee { 3_988_292_384 }
+    Castagnoli { 2_197_175_160 }
+}
+
+impl Polynomial {
+    public hasher: self -> Hasher => Hasher {
+        policy: self
+        state: 4_294_967_295
+    }
+
+    public checksum: self, input: [UInt8] -> UInt32 {
+        self -> hasher => hasher!
+        hasher! -> write(input)
+        hasher! -> checksum
+    }
+}
+
+impl Hasher {
+    public write: mut self, input: [UInt8] -> Unit {
+        self.policy -> polynomial => divisor
+        0 => inputIndex!
+        inputIndex! < (input -> len) -> while {
+            self.state -> xor32(UInt32(input[inputIndex!])) => next!
+            0 => bitIndex!
+            bitIndex! < 8 -> while {
+                next! % 2 == 1 -> if {
+                    (next! / 2) -> xor32(divisor) => next!
+                } else {
+                    next! / 2 => next!
+                }
+                bitIndex! + 1 => bitIndex!
+            }
+            next! => self.state
+            inputIndex! + 1 => inputIndex!
+        }
+    }
+
+    public checksum: self -> UInt32 => self.state -> xor32(4_294_967_295)
+
+    public reset: mut self -> Unit { 4_294_967_295 => self.state }
+}

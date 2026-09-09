@@ -94,5 +94,42 @@ main {
     }
     """ -> countE19 => sendable
 
-    "direct=$direct, transitive=$transitive, nested=$nested, sendable=$sendable" -> println
+    # A runtime-provided sys.file module may be absent from this checked source
+    # closure. Its exact qualified SourceText identity is still recursively
+    # shareable through a readonly reference.
+    """
+    import sys.file as file
+
+    struct Sources {
+        values: [file.SourceText; ~]
+    }
+
+    inspect sources: ref Sources -> [Int; ~] {
+        [1, 2, 3; ~] => values!
+        values! -> parallel value {
+            value + Int(sources.values -> len)
+        } => shifted!
+        shifted!
+    }
+    """ -> countE19 => qualifiedSourceText
+
+    # A matching type suffix under another unresolved module must not inherit
+    # sys.file's intrinsic sharing identity.
+    """
+    import other as file
+
+    struct Sources {
+        values: [file.SourceText; ~]
+    }
+
+    inspect sources: ref Sources -> [Int; ~] {
+        [1, 2, 3; ~] => values!
+        values! -> parallel value {
+            value + Int(sources.values -> len)
+        } => shifted!
+        shifted!
+    }
+    """ -> countE19 => unrelatedSourceText
+
+    "direct=$direct, transitive=$transitive, nested=$nested, sendable=$sendable, qualifiedSourceText=$qualifiedSourceText, unrelatedSourceText=$unrelatedSourceText" -> println
 }

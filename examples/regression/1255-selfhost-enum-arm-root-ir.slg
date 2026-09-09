@@ -1,0 +1,57 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        namespace test.contexts
+
+        public enum Mode {
+            Lsb6
+            Msb6
+            Utf8
+            Signed
+        }
+
+        impl Mode {
+            public id: self, lastByte: UInt8, secondLastByte: UInt8 -> Int => self -> when {
+                Lsb6 { Int(lastByte) % 64 }
+                Msb6 { Int(lastByte) / 4 }
+                Utf8 { 2 + Int(secondLastByte) }
+                Signed { Int(lastByte) + Int(secondLastByte) }
+            }
+        }
+
+        """,
+        """
+        namespace test.consumer
+
+        import test.contexts as contexts
+
+        select value: Int -> contexts.Mode {
+            [contexts.Mode; ~] => values!
+            0 => index!
+            index! < 1 -> while {
+                value -> when {
+                    == 0 { contexts.Mode.Lsb6 }
+                    == 1 { contexts.Mode.Msb6 }
+                    == 2 { contexts.Mode.Utf8 }
+                    else { contexts.Mode.Signed }
+                } => selected
+                values! -> push(selected)
+                index! + 1 => index!
+            }
+            values![0]
+        }
+
+        main { }
+        """; ~
+    ] => sources
+    sources -> typedIr.lower => ir
+    0 => index!
+    ir -> each node {
+        index! >= 6 -> if {
+            "ir=$(node.kind),parent=$(node.parent),type=$(node.typeId),op=$(node.opcode),a=$(node.operand0),b=$(node.operand1)" -> println
+        }
+        index! + 1 => index!
+    }
+}

@@ -1,0 +1,30 @@
+# A projected collection take has control-flow lowering. The following member
+# assignment must wait for its canonical binary RHS and payload length value.
+struct Payload {
+    data: [UInt8; ~]
+}
+
+struct Queue {
+    pending: [Payload; ~]
+    bytes: UInt64
+}
+
+consume queue: mut Queue -> Payload {
+    true -> while {
+        (queue.pending -> len) > 0 -> if {
+            queue.pending -> take(0) => value
+            queue.bytes - UInt64(value.data -> len) => queue.bytes
+            value -> return
+        }
+    }
+    Payload { data: [] }
+}
+
+main {
+    Queue {
+        pending: [Payload { data: [7, 8, 9; ~] }; ~]
+        bytes: 5
+    } => queue!
+    consume(queue!) => value
+    queue!.bytes -> println
+}

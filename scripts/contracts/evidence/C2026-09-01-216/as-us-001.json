@@ -1,0 +1,82 @@
+{
+  "ruleId": "AS-US-001",
+  "traceAuthority": "orchestrator",
+  "orchestratorEvidence": {
+    "runner": "agentic-shaping-orchestrator",
+    "runId": "C2026-09-01-216-structured-and-applied",
+    "targetRepository": "P:/MyWorks/Sollang",
+    "targetRevision": "1af49d7312ee8267977d2fca155b37223a273ebe",
+    "inputFingerprint": "B4A60F72B17893F5B694BABD5ADC7EC8770C6B69C86B14A882A5A7F2D28ADECB",
+    "executedCommands": [
+      {
+        "purpose": "baseline",
+        "command": "dotnet run --project tests/Sollang.ExampleTests -c Release -- --exact 365-selfhost-llvm-stage2-single-smoke --exact 366-selfhost-llvm-stage2-multi-file-smoke --suite selfhost --jobs 2",
+        "exitCode": 1,
+        "expectedExitCode": 1,
+        "outputSha256": "AAF991B67A63E636954A9FB9F9002D0615EBDBD133E8C32E1572DE113EF84F3F"
+      },
+      {
+        "purpose": "validator",
+        "command": "dotnet run --project tests/Sollang.ExampleTests -c Release -- --exact 365-selfhost-llvm-stage2-single-smoke --exact 366-selfhost-llvm-stage2-multi-file-smoke --suite selfhost --jobs 2",
+        "exitCode": 0,
+        "expectedExitCode": 0,
+        "outputSha256": "ABBD9B7917FFF2A41358856E8840D8B99BAA2C9BC4A0AFAC8C84ED528C466B04"
+      },
+      {
+        "purpose": "consumer",
+        "command": "dotnet run --project tests/Sollang.ExampleTests -c Release -- --exact 365-selfhost-llvm-stage2-single-smoke --exact 366-selfhost-llvm-stage2-multi-file-smoke --suite selfhost --jobs 2",
+        "exitCode": 0,
+        "expectedExitCode": 0,
+        "outputSha256": "ABBD9B7917FFF2A41358856E8840D8B99BAA2C9BC4A0AFAC8C84ED528C466B04"
+      },
+      {
+        "purpose": "candidate",
+        "command": "dotnet run --project tests/Sollang.ExampleTests -c Release -- --exact 365-selfhost-llvm-stage2-single-smoke --exact 366-selfhost-llvm-stage2-multi-file-smoke --suite selfhost --jobs 2",
+        "exitCode": 0,
+        "expectedExitCode": 0,
+        "outputSha256": "ABBD9B7917FFF2A41358856E8840D8B99BAA2C9BC4A0AFAC8C84ED528C466B04"
+      }
+    ]
+  },
+  "signal": {
+    "id": "C2026-09-01-216",
+    "durable": true,
+    "machineDecidable": true,
+    "sourceEvidence": [
+      "The frozen 365 and 366 baselines use Text only for construction and output, yet self-host LLVM emits an unused text equality helper.",
+      "The Stage2 ManagedRecovery smoke detects the over-emission as exact managed/self-host LLVM drift before promotion."
+    ]
+  },
+  "decision": {
+    "structured": true,
+    "claimLevel": "structured-and-applied",
+    "reason": "Text equality runtime support is emitted only when an exact binary equality or Text-key container consumer is reachable.",
+    "asset": {
+      "kind": "invariant",
+      "authorityPath": "selfhost/llvm/text/runtime_preamble.slg",
+      "inputFingerprint": "B4A60F72B17893F5B694BABD5ADC7EC8770C6B69C86B14A882A5A7F2D28ADECB",
+      "validatorEvidence": [
+        "365 and 366 omit the helper; 1327 emits and executes Text equality; structural contracts reject the broad usesText predicate."
+      ]
+    },
+    "application": {
+      "productionPathChanged": true,
+      "consumerEvidence": [
+        "The frozen 365 and 366 self-host exact-output command now exits zero."
+      ]
+    },
+    "measurementPlan": {
+      "metric": "lateFailures",
+      "measurementCommand": "pwsh -NoProfile -File scripts/measure-compiler-defect-late-failures.ps1 -DefectId C2026-09-01-216",
+      "baselineEvidence": [
+        "C2026-09-01-216 baseline receipt exits 1 as expected."
+      ],
+      "candidateEvidence": [
+        "C2026-09-01-216 candidate receipt exits zero on the frozen focused command."
+      ],
+      "measuredInputFingerprint": "B4A60F72B17893F5B694BABD5ADC7EC8770C6B69C86B14A882A5A7F2D28ADECB"
+    }
+  },
+  "currentTaskComplete": true,
+  "forbiddenActions": []
+}

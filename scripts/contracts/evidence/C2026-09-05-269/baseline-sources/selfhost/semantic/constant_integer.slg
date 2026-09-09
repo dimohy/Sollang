@@ -1,0 +1,99 @@
+namespace sollang.compiler.semantic.constant_integer
+
+# Constant evaluation must report arithmetic failure before emitting a value.
+public enum Operator {
+    Add
+    Subtract
+    Multiply
+    Divide
+    Remainder
+}
+
+public enum Error {
+    Overflow
+    DivisionByZero
+}
+
+maximum: -> Long => 9_223_372_036_854_775_807
+minimum: -> Long => -9_223_372_036_854_775_807 - Long(1)
+
+add left: Long, right: Long -> Result<Long, Error> {
+    (right > 0 and left > maximum() - right)
+        or (right < 0 and left < minimum() - right)
+        -> if {
+            Error.Overflow -> Result<Long, Error>.Err
+        } else {
+            left + right -> Result<Long, Error>.Ok
+        }
+}
+
+subtract left: Long, right: Long -> Result<Long, Error> {
+    (right < 0 and left > maximum() + right)
+        or (right > 0 and left < minimum() + right)
+        -> if {
+            Error.Overflow -> Result<Long, Error>.Err
+        } else {
+            left - right -> Result<Long, Error>.Ok
+        }
+}
+
+multiply left: Long, right: Long -> Result<Long, Error> {
+    left == 0 or right == 0 -> if {
+        0 -> Result<Long, Error>.Ok
+    } else {
+        false => overflow!
+        left > 0 -> if {
+            right > 0 -> if {
+                left > maximum() / right => overflow!
+            } else {
+                right < minimum() / left => overflow!
+            }
+        } else {
+            right > 0 -> if {
+                left < minimum() / right => overflow!
+            } else {
+                left < maximum() / right => overflow!
+            }
+        }
+        overflow! -> if {
+            Error.Overflow -> Result<Long, Error>.Err
+        } else {
+            left * right -> Result<Long, Error>.Ok
+        }
+    }
+}
+
+divide left: Long, right: Long -> Result<Long, Error> {
+    right == 0 -> if {
+        Error.DivisionByZero -> Result<Long, Error>.Err
+    } else {
+        left == minimum() and right == -1 -> if {
+            Error.Overflow -> Result<Long, Error>.Err
+        } else {
+            left / right -> Result<Long, Error>.Ok
+        }
+    }
+}
+
+remainder left: Long, right: Long -> Result<Long, Error> {
+    right == 0 -> if {
+        Error.DivisionByZero -> Result<Long, Error>.Err
+    } else {
+        # Match the managed constant evaluator's signed division overflow.
+        left == minimum() and right == -1 -> if {
+            Error.Overflow -> Result<Long, Error>.Err
+        } else {
+            left % right -> Result<Long, Error>.Ok
+        }
+    }
+}
+
+public evaluateBinary left: Long, right: Long, operation: Operator -> Result<Long, Error> {
+    operation -> when {
+        Operator.Add => left -> add(right)
+        Operator.Subtract => left -> subtract(right)
+        Operator.Multiply => left -> multiply(right)
+        Operator.Divide => left -> divide(right)
+        Operator.Remainder => left -> remainder(right)
+    }
+}

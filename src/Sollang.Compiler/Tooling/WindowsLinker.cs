@@ -171,7 +171,10 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             GetConsoleMode
             WriteConsoleW
             CreateProcessW
+            GetProcessId
             GetExitCodeProcess
+            TerminateProcess
+            CreatePipe
             ReadFile
             GetOverlappedResult
             WriteFile
@@ -179,6 +182,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             CreateFileW
             CloseHandle
             GetCurrentProcess
+            GetCurrentProcessId
             DuplicateHandle
             SetFilePointerEx
             GetFileSizeEx
@@ -192,10 +196,14 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             MoveFileExA
             UnmapViewOfFile
             GetTickCount64
+            GetSystemTimePreciseAsFileTime
             Sleep
             GetCommandLineW
             WideCharToMultiByte
             MultiByteToWideChar
+            GetEnvironmentStringsW
+            FreeEnvironmentStringsW
+            CompareStringOrdinal
             GetEnvironmentVariableW
             GetLastError
             SetLastError
@@ -319,18 +327,28 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             WSACleanup
             WSAGetLastError
             WSASocketW
+            WSADuplicateSocketW
             closesocket
             bind
             getsockname
+            getpeername
             listen
             accept
             connect
             recv
+            WSARecv
             send
+            WSASend
             recvfrom
+            WSARecvFrom
             sendto
             shutdown
             setsockopt
+            getsockopt
+            ioctlsocket
+            WSAPoll
+            GetAddrInfoW
+            FreeAddrInfoW
             inet_pton
             inet_ntop
             """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));

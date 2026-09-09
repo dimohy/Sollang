@@ -1,0 +1,60 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# A Text returned from a projected SourceText field keeps the complete
+# aggregate owner alive. The embedded invalid program must produce E21 instead
+# of reaching LLVM with a dangling pointer.
+
+main {
+    [
+        """
+        import sys.file as file
+
+        struct Head {
+            source: file.SourceText
+        }
+
+        struct Request {
+            bytes: [UInt8; ~]
+            head: Head
+        }
+
+        impl Head {
+            text: self -> Text => self.source -> slice(UIntSize(0), UIntSize(1))
+        }
+
+        consume request: move Request -> Unit {
+            request.bytes -> len -> println
+        }
+
+        main {
+            [UInt8; ~] => bytes!
+            bytes! -> push(65)
+            bytes! -> file.borrowBytes => source
+            Request {
+                bytes: bytes!
+                head: Head { source: source }
+            } => request!
+            request!.head -> text => view
+            request! -> consume
+            view -> len -> println
+        }
+        """,
+        """
+        namespace sys.file
+
+        public struct SourceText {
+            public token: UInt64
+        }
+
+        public borrowBytes bytes: ref [UInt8; ~] -> SourceText = intrinsic
+        """; ~
+    ] => sources
+    sources -> semanticContext.prepare => snapshot
+    snapshot -> ownershipCheck.analyzeContext => errors
+    0 => conflicts!
+    errors -> each error {
+        error.code == 21 -> if { conflicts! + 1 => conflicts! }
+    }
+    "projected borrow conflicts=$(conflicts!)" -> println
+}

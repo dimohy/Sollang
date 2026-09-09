@@ -2,35 +2,70 @@ param(
     [string]$Distribution = "Ubuntu",
     [ValidateRange(1, 64)]
     [int]$Jobs = 4,
-    [switch]$Rebuild
+    [switch]$Rebuild,
+    [switch]$ResumeCandidate
 )
 
 $ErrorActionPreference = "Stop"
+if ($Rebuild -and $ResumeCandidate) {
+    throw "-Rebuild and -ResumeCandidate are mutually exclusive"
+}
 
 . (Join-Path $PSScriptRoot "selfhost-verification-lock.ps1")
+. (Join-Path $PSScriptRoot "verification-process.ps1")
+. (Join-Path $PSScriptRoot "stage2-artifact-receipt.ps1")
+. (Join-Path $PSScriptRoot "stage3-seed-provenance.ps1")
+. (Join-Path $PSScriptRoot "input-fingerprint-stability.ps1")
 $selfHostVerificationLock = Enter-SelfHostVerificationLock
 try {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+& (Join-Path $PSScriptRoot "verify-quic-frame-consumers.ps1") -RepositoryRoot $repoRoot -Jobs 3
+& (Join-Path $PSScriptRoot "verify-gzip-stream-api-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-zstd-foundation-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-brotli-foundation-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-http-body-framing-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-http-response-writing-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-http-request-writing-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-http-client-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-http-server-contract.ps1") -RepositoryRoot $repoRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
-$runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
 $manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
-$stage1Path = Join-Path $artifactsDir "selfhost-sollangc-driver.exe"
+$stage1Path = Join-Path $repoRoot "artifacts\incremental-selfhost\selfhost-slg-seed.exe"
+$stage1ReceiptPath = Join-Path $repoRoot "artifacts\incremental-selfhost\selfhost-slg-seed.sha256"
 $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2-linux.ll"
 $stage2BitcodePath = Join-Path $artifactsDir "selfhost-stage2-linux.bc"
 $stage2ObjectPath = Join-Path $artifactsDir "selfhost-stage2-linux.o"
 $stage2Path = Join-Path $artifactsDir "selfhost-stage2-linux"
+$stage2FingerprintPath = Join-Path $artifactsDir "selfhost-stage2-linux.inputs.sha256"
+$stage2ArtifactReceiptPath = Join-Path $artifactsDir "selfhost-stage2-linux.outputs.sha256"
+$publishedStage2LlvmPath = $stage2LlvmPath
+$publishedStage2BitcodePath = $stage2BitcodePath
+$publishedStage2ObjectPath = $stage2ObjectPath
+$publishedStage2Path = $stage2Path
+$stage2WasRebuilt = $false
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAsPath = Join-Path $llvmDir "bin\llvm-as.exe"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
+& (Join-Path $PSScriptRoot "verify-source-manifest-closure.ps1") `
+    -Manifest @($manifestPath, $runtimeManifestPath) `
+    -RepositoryRoot $repoRoot
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
+$compilerSources = Get-Content $manifestPath |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
 $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $subjectWhenDirectResultSource = Join-Path $repoRoot "examples\user\670-inclusive-and-half-open-ranges.slg"
+$resultPropagationControlSource = Join-Path $repoRoot "examples\regression\1017-quic-friendly-ipv4-endpoints.slg"
+$setKeyOnlySource = Join-Path $repoRoot "examples\regression\854-set-key-only.slg"
+$setKeyOnlyExpectedPath = Join-Path $repoRoot "examples\regression\expected\854-set-key-only.stdout.txt"
+$setKeyOnlyForbiddenPath = Join-Path $repoRoot "examples\regression\expected\854-set-key-only.selfhost.llvm.not-contains.txt"
+$stdlibRoot = Join-Path $repoRoot "stdlib"
 $directoryCreateSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-directory-create.slg"
 $pathNormalizeResultSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-path-normalize-result.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
@@ -53,9 +88,26 @@ $referenceStoredArraySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fi
 $referenceEnumEscapeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-enum-escape.slg"
 $referenceArrayEscapeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-array-escape.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
-$expectedStage2Bytes = 19994874L
+$expectedStage2Bytes = if (Test-Stage2ArtifactReceipt `
+        -LlvmPath $stage2LlvmPath `
+        -BitcodePath $stage2BitcodePath `
+        -ExecutablePath $stage2Path `
+        -AdditionalArtifacts @{ object = $stage2ObjectPath } `
+        -ReceiptPath $stage2ArtifactReceiptPath) {
+    (Get-Item -LiteralPath $stage2LlvmPath).Length
+} else {
+    $windowsStage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2.ll"
+    if (Test-Path -LiteralPath $windowsStage2LlvmPath) {
+        (Get-Item -LiteralPath $windowsStage2LlvmPath).Length
+    } else {
+        19994874L
+    }
+}
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
+& (Join-Path $PSScriptRoot "verify-verification-process-contract.ps1") `
+    -IncludeWsl `
+    -Distribution $Distribution
 
 function Convert-ToWslPath {
     param([string]$Path)
@@ -93,7 +145,7 @@ function Assert-ProcessSucceeded {
         [string]$Description
     )
 
-    $Process.WaitForExit()
+    Wait-VerificationProcess $Process $Description
     $Process.Refresh()
     if ($Process.ExitCode -ne 0) {
         $details = if (Test-Path $ErrorPath) { Get-Content $ErrorPath -Raw } else { "" }
@@ -109,17 +161,39 @@ function Get-NormalizedHash {
     return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes))
 }
 
+function Get-ContentFingerprint {
+    param([string[]]$Paths)
+
+    $hash = [System.Security.Cryptography.IncrementalHash]::CreateHash(
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+    foreach ($path in $Paths) {
+        $relative = [System.IO.Path]::GetRelativePath($repoRoot, $path).Replace("\", "/")
+        $hash.AppendData([System.Text.Encoding]::UTF8.GetBytes("$relative`0"))
+        $hash.AppendData([System.IO.File]::ReadAllBytes($path))
+    }
+    return [Convert]::ToHexString($hash.GetHashAndReset())
+}
+
+function Get-LinuxStage2InputFingerprint {
+    $paths = @($stage1Path, $manifestPath, $runtimeManifestPath)
+    $paths += $compilerSources
+    $paths += $compilerRuntimeSources
+    return Get-ContentFingerprint $paths
+}
+
 function Test-Stage2IsCurrent {
-    if ($Rebuild -or -not (Test-Path $stage2Path) -or -not (Test-Path $stage2LlvmPath)) {
+    if ($Rebuild -or
+        -not (Test-Stage2ArtifactReceipt `
+            -LlvmPath $stage2LlvmPath `
+            -BitcodePath $stage2BitcodePath `
+            -ExecutablePath $stage2Path `
+            -AdditionalArtifacts @{ object = $stage2ObjectPath } `
+            -ReceiptPath $stage2ArtifactReceiptPath)) {
         return $false
     }
 
-    $stage2Time = (Get-Item $stage2Path).LastWriteTimeUtc
-    $inputs = @($stage1Path, $manifestPath, $runtimeManifestPath) + $compilerRuntimeSources
-    $inputs += Get-Content $manifestPath |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        ForEach-Object { Join-Path $repoRoot $_.Trim() }
-    return -not ($inputs | Where-Object { (Get-Item $_).LastWriteTimeUtc -gt $stage2Time })
+    return (Test-Path -LiteralPath $stage2FingerprintPath) -and
+        [System.IO.File]::ReadAllText($stage2FingerprintPath).Trim() -ceq (Get-LinuxStage2InputFingerprint)
 }
 
 function Build-And-ExecuteLinuxLlvm {
@@ -132,6 +206,7 @@ function Build-And-ExecuteLinuxLlvm {
     $bitcodePath = Join-Path $artifactsDir "$Name.bc"
     $objectPath = Join-Path $artifactsDir "$Name.o"
     $executablePath = Join-Path $artifactsDir $Name
+    & (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure.ps1") -LlvmPath $LlvmPath
     & $llvmAsPath $LlvmPath -o $bitcodePath
     if ($LASTEXITCODE -ne 0) { throw "llvm-as failed for $Name" }
     & $clangPath --target=x86_64-unknown-linux-gnu -c $LlvmPath -O0 -o $objectPath
@@ -144,14 +219,40 @@ function Build-And-ExecuteLinuxLlvm {
     }
 }
 
-Write-Host "[linux-stage2 1/6] Bootstrap or reuse the native stage-1 compiler."
-& dotnet run --project $runnerProject -c Release -- `
-    --exact 365-selfhost-llvm-stage2-single-smoke `
-    --exact 366-selfhost-llvm-stage2-multi-file-smoke `
-    --jobs 2
+Write-Host "[linux-stage2 1/6] Verify the receipt-bound SLG feedback seed."
+if (-not (Test-Path -LiteralPath $stage1Path) -or (Get-Item -LiteralPath $stage1Path).Length -eq 0) {
+    throw "verified Stage3 SLG seed is missing: $stage1Path; complete the Windows Stage3 fixed point first"
+}
+if (-not (Test-Path -LiteralPath $stage1ReceiptPath)) {
+    throw "verified Stage3 SLG seed receipt is missing: $stage1ReceiptPath"
+}
+$recordedStage1Hash = [System.IO.File]::ReadAllText($stage1ReceiptPath).Trim()
+$actualStage1Hash = (Get-FileHash -LiteralPath $stage1Path -Algorithm SHA256).Hash
+if ($recordedStage1Hash -cne $actualStage1Hash) {
+    throw "Stage3 SLG seed differs from its verification receipt: expected $recordedStage1Hash, actual $actualStage1Hash"
+}
+Assert-VerifiedStage3SeedProvenance `
+    -RepositoryRoot $repoRoot `
+    -SeedPath $stage1Path `
+    -Target windows | Out-Null
+Write-Host "[linux-stage2 1/6] PASS SLG-first seed $actualStage1Hash."
+
+& (Join-Path $PSScriptRoot "verify-native-exact-fixture.ps1") `
+    -Compiler $stage1Path `
+    -Label "linux-stage1-seed" `
+    -Fixture "1217-selfhost-late-indexed-array-type-contract" `
+    -Platform linux `
+    -Distribution $Distribution `
+    -LlvmRoot $llvmDir `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory (Join-Path $artifactsDir "linux-stage1-seed-exact") `
+    -Jobs $Jobs `
+    -CompilerHost windows `
+    -CompilationMode raw-llvm `
+    -AdditionalSource $compilerRuntimeSources
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-if (-not (Test-Path $stage1Path)) { throw "stage-1 compiler was not produced: $stage1Path" }
-Write-Host "[linux-stage2 1/6] PASS native stage 1."
+Write-Host "[linux-stage2 1/6] PASS late indexed-array semantic seed gate."
 
 $directoryCreateTarget = Join-Path $artifactsDir "stage2-directory-create"
 if (Test-Path -LiteralPath $directoryCreateTarget) {
@@ -186,43 +287,91 @@ Write-Host "[linux-stage2 2/6] Build or reuse the complete Linux stage-2 compile
 if (Test-Stage2IsCurrent) {
     Write-Host "[linux-stage2 2/6] REUSE current Linux stage 2."
 } else {
-    $sourcePaths = Get-Content $manifestPath |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
-    $sourcePaths += $compilerRuntimeSources | ForEach-Object { (Resolve-Path $_).Path }
-    $sourceLineCount = ($sourcePaths | ForEach-Object { [System.IO.File]::ReadAllLines($_).LongLength } | Measure-Object -Sum).Sum
-    $stage2ErrorPath = Join-Path $artifactsDir "selfhost-stage2-linux.err.log"
-    $stage2Started = Get-Date
-    $lastAnalysisHeartbeat = -1
-    Write-Host ("[linux-stage2 2/6] phase 1/2 analyze {0:N0} source files / {1:N0} lines" -f $sourcePaths.Count, $sourceLineCount)
-    $stage2Process = Invoke-ProcessToFile `
-        -FilePath $stage1Path `
-        -ArgumentList (@("linux", "--jobs", $Jobs.ToString()) + $sourcePaths) `
-        -OutputPath $stage2LlvmPath `
-        -ErrorPath $stage2ErrorPath
-    while (-not $stage2Process.HasExited) {
-        Start-Sleep -Seconds 2
-        $bytes = if (Test-Path $stage2LlvmPath) { (Get-Item $stage2LlvmPath).Length } else { 0L }
-        if ($bytes -eq 0L) {
-            $elapsed = [int]((Get-Date) - $stage2Started).TotalSeconds
-            $heartbeat = [Math]::Floor($elapsed / 10)
-            if ($heartbeat -gt $lastAnalysisHeartbeat) {
-                Write-Host ("[linux-stage2 2/6] phase 1/2 analyze active ({0:N0}s elapsed)" -f $elapsed)
-                $lastAnalysisHeartbeat = $heartbeat
-            }
-        } else {
-            $percent = [Math]::Min(100.0, 100.0 * $bytes / $expectedStage2Bytes)
-            Write-Host ("[linux-stage2 2/6] phase 2/2 LLVM {0:N0} bytes ({1:N1}%)" -f $bytes, $percent)
+    $stage2CandidateLlvmPath = Get-CandidateArtifactPath $stage2LlvmPath
+    $stage2CandidateBitcodePath = Get-CandidateArtifactPath $stage2BitcodePath
+    $stage2CandidateObjectPath = Get-CandidateArtifactPath $stage2ObjectPath
+    $stage2CandidatePath = "$stage2Path.candidate"
+    $stage2CandidateFingerprintPath = Get-CandidateArtifactPath $stage2FingerprintPath
+    $stage2CandidateArtifactReceiptPath = Get-CandidateArtifactPath $stage2ArtifactReceiptPath
+    if ($ResumeCandidate) {
+        if (-not (Test-Stage2ArtifactReceipt `
+                -LlvmPath $stage2CandidateLlvmPath `
+                -BitcodePath $stage2CandidateBitcodePath `
+                -ExecutablePath $stage2CandidatePath `
+                -AdditionalArtifacts @{ object = $stage2CandidateObjectPath } `
+                -ReceiptPath $stage2CandidateArtifactReceiptPath) -or
+            -not (Test-Path -LiteralPath $stage2CandidateFingerprintPath) -or
+            [System.IO.File]::ReadAllText($stage2CandidateFingerprintPath).Trim() -cne (Get-LinuxStage2InputFingerprint)) {
+            throw "Linux Stage2 candidate artifacts do not match their input/output receipts; rebuild without -ResumeCandidate"
         }
-        $stage2Process.Refresh()
+        Write-Host "[linux-stage2 2/6] RESUME receipt-bound Linux Stage2 candidate."
+    } else {
+        Remove-Item -LiteralPath $stage2CandidateLlvmPath, $stage2CandidateBitcodePath, $stage2CandidateObjectPath, $stage2CandidatePath, $stage2CandidateFingerprintPath, $stage2CandidateArtifactReceiptPath -ErrorAction SilentlyContinue
+        $sourcePaths = @($compilerSources + ($compilerRuntimeSources | ForEach-Object { (Resolve-Path $_).Path }))
+        $sourceLineCount = ($sourcePaths | ForEach-Object { [System.IO.File]::ReadAllLines($_).LongLength } | Measure-Object -Sum).Sum
+        $stage2ErrorPath = Join-Path $artifactsDir "selfhost-stage2-linux.err.log"
+        $stage2TimeoutMilliseconds = 3600000
+        $stage2Started = [DateTimeOffset]::Now
+        $lastAnalysisHeartbeat = -1
+        $lastEmissionHeartbeat = -1
+        $lastReportedBytes = -1L
+        Write-Host ("[linux-stage2 2/6] phase 1/2 analyze {0:N0} source files / {1:N0} lines" -f $sourcePaths.Count, $sourceLineCount)
+        $stage2Process = Invoke-ProcessToFile `
+            -FilePath $stage1Path `
+            -ArgumentList (@("linux", "--jobs", $Jobs.ToString()) + $sourcePaths) `
+            -OutputPath $stage2CandidateLlvmPath `
+            -ErrorPath $stage2ErrorPath
+        while (-not $stage2Process.HasExited) {
+            Start-Sleep -Seconds 2
+            $stage2Process.Refresh()
+            if (([DateTimeOffset]::Now - $stage2Started).TotalMilliseconds -gt $stage2TimeoutMilliseconds) {
+                Wait-VerificationProcess `
+                    -Process $stage2Process `
+                    -Description "Linux stage-2 LLVM emission" `
+                    -TimeoutMilliseconds $stage2TimeoutMilliseconds `
+                    -TimeoutStartedAt $stage2Started
+            }
+            $elapsed = [int]([DateTimeOffset]::Now - $stage2Started).TotalSeconds
+            $cpuSeconds = [int]$stage2Process.TotalProcessorTime.TotalSeconds
+            $workingMiB = [int]($stage2Process.WorkingSet64 / 1MB)
+            $bytes = if (Test-Path $stage2CandidateLlvmPath) { (Get-Item $stage2CandidateLlvmPath).Length } else { 0L }
+            if ($bytes -eq 0L) {
+                $heartbeat = [Math]::Floor($elapsed / 60)
+                if ($heartbeat -gt $lastAnalysisHeartbeat) {
+                    Write-Host ("[linux-stage2 2/6] phase 1/2 analyze active ({0:N0}s elapsed, {1:N0}s CPU, {2:N0} MiB)" -f $elapsed, $cpuSeconds, $workingMiB)
+                    $lastAnalysisHeartbeat = $heartbeat
+                }
+            } else {
+                $emissionHeartbeat = [Math]::Floor($elapsed / 60)
+                if ($bytes -ne $lastReportedBytes -or $emissionHeartbeat -gt $lastEmissionHeartbeat) {
+                    $percent = [Math]::Min(100.0, 100.0 * $bytes / $expectedStage2Bytes)
+                    Write-Host ("[linux-stage2 2/6] phase 2/2 LLVM {0:N0} bytes ({1:N1}%); {2:N0}s elapsed, {3:N0}s CPU, {4:N0} MiB" -f $bytes, $percent, $elapsed, $cpuSeconds, $workingMiB)
+                    $lastReportedBytes = $bytes
+                    $lastEmissionHeartbeat = $emissionHeartbeat
+                }
+            }
+        }
+        Assert-ProcessSucceeded $stage2Process $stage2ErrorPath "Linux stage-2 LLVM emission"
+        & (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure.ps1") -LlvmPath $stage2CandidateLlvmPath
+        & $llvmAsPath $stage2CandidateLlvmPath -o $stage2CandidateBitcodePath
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $clangPath --target=x86_64-unknown-linux-gnu -c $stage2CandidateLlvmPath -O1 -o $stage2CandidateObjectPath
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage2CandidateObjectPath) -pthread -o (Convert-ToWslPath $stage2CandidatePath)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Write-Stage2ArtifactReceipt `
+            -LlvmPath $stage2CandidateLlvmPath `
+            -BitcodePath $stage2CandidateBitcodePath `
+            -ExecutablePath $stage2CandidatePath `
+            -AdditionalArtifacts @{ object = $stage2CandidateObjectPath } `
+            -ReceiptPath $stage2CandidateArtifactReceiptPath
+        [System.IO.File]::WriteAllText($stage2CandidateFingerprintPath, (Get-LinuxStage2InputFingerprint))
     }
-    Assert-ProcessSucceeded $stage2Process $stage2ErrorPath "Linux stage-2 LLVM emission"
-    & $llvmAsPath $stage2LlvmPath -o $stage2BitcodePath
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $clangPath --target=x86_64-unknown-linux-gnu -c $stage2LlvmPath -O1 -o $stage2ObjectPath
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage2ObjectPath) -pthread -o (Convert-ToWslPath $stage2Path)
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $stage2LlvmPath = $stage2CandidateLlvmPath
+    $stage2BitcodePath = $stage2CandidateBitcodePath
+    $stage2ObjectPath = $stage2CandidateObjectPath
+    $stage2Path = $stage2CandidatePath
+    $stage2WasRebuilt = $true
 }
 Write-Host "[linux-stage2 2/6] PASS $((Get-Item $stage2LlvmPath).Length) LLVM bytes."
 
@@ -293,13 +442,132 @@ $codegenStage1Text = ([System.IO.File]::ReadAllText($codegenStage1Output)).Trim(
 $codegenStage2Text = ([System.IO.File]::ReadAllText($codegenStage2Output)).Trim()
 if ($codegenStage1Text -ne "codegen units = 0,2,6") { throw "Linux stage-1 canonical codegen units differed: $codegenStage1Text" }
 if ($codegenStage2Text -ne $codegenStage1Text) { throw "Linux stage-2 canonical codegen units differed: $codegenStage2Text" }
+$setStage1Llvm = Join-Path $artifactsDir "linux-stage2-check-set-stage1.ll"
+$setStage2Llvm = Join-Path $artifactsDir "linux-stage2-check-set-stage2.ll"
+$setStage1Error = Join-Path $artifactsDir "linux-stage2-check-set-stage1.err"
+$setStage2Error = Join-Path $artifactsDir "linux-stage2-check-set-stage2.err"
+$setStage1 = Invoke-ProcessToFile $stage1Path @("linux", $setKeyOnlySource) $setStage1Llvm $setStage1Error
+$setStage2 = Invoke-ProcessToFile "wsl.exe" @("-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux", (Convert-ToWslPath $setKeyOnlySource)) $setStage2Llvm $setStage2Error
+Assert-ProcessSucceeded $setStage1 $setStage1Error "Linux stage-1 Set intrinsic emission"
+Assert-ProcessSucceeded $setStage2 $setStage2Error "Linux stage-2 Set intrinsic emission"
+$setStage1Hash = Get-NormalizedHash $setStage1Llvm
+$setStage2Hash = Get-NormalizedHash $setStage2Llvm
+if ($setStage1Hash -ne $setStage2Hash) { throw "Linux Set intrinsic LLVM differs: stage1=$setStage1Hash stage2=$setStage2Hash" }
+$setStage2Text = [System.IO.File]::ReadAllText($setStage2Llvm)
+foreach ($forbiddenPattern in ([System.IO.File]::ReadAllLines($setKeyOnlyForbiddenPath) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+    if ($setStage2Text.Contains($forbiddenPattern.Trim(), [System.StringComparison]::Ordinal)) {
+        throw "Linux stage-2 Set intrinsic LLVM contains forbidden text '$($forbiddenPattern.Trim())'"
+    }
+}
 Write-Host "[linux-stage2 4/6] PASS $multiStage2Hash"
 
 Write-Host "[linux-stage2 5/6] Assemble, link, and execute both Linux stage-2 products."
 Build-And-ExecuteLinuxLlvm $singleStage2Llvm "linux-stage2-check-single" "stage2-single-ok"
 Build-And-ExecuteLinuxLlvm $multiStage2Llvm "linux-stage2-check-multi" "stage2-multi-ok"
 Build-And-ExecuteLinuxLlvm $subjectWhenStage2Llvm "linux-stage2-check-subject-when-direct-result" "6,3,inclusive"
-Write-Host "[linux-stage2 5/6] PASS Linux stage-2 products execute."
+$setExpected = [System.IO.File]::ReadAllText($setKeyOnlyExpectedPath).Replace("`r`n", "`n").TrimEnd("`n")
+Build-And-ExecuteLinuxLlvm $setStage2Llvm "linux-stage2-check-set" $setExpected
+$resultPropagationExecutable = Join-Path $artifactsDir "linux-stage2-check-result-propagation-control"
+$resultPropagationLlvm = $resultPropagationExecutable + ".ll"
+$resultPropagationOutput = Join-Path $artifactsDir "linux-stage2-check-result-propagation-control.stdout.txt"
+$resultPropagationError = Join-Path $artifactsDir "linux-stage2-check-result-propagation-control.stderr.txt"
+Remove-Item -LiteralPath $resultPropagationExecutable, $resultPropagationLlvm -ErrorAction SilentlyContinue
+$resultPropagationProcess = Invoke-ProcessToFile "wsl.exe" @(
+    "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path),
+    "build", (Convert-ToWslPath $resultPropagationControlSource),
+    "-o", (Convert-ToWslPath $resultPropagationExecutable),
+    "--target", "linux-x64",
+    "--stdlib", (Convert-ToWslPath $stdlibRoot),
+    "--jobs", $Jobs.ToString([System.Globalization.CultureInfo]::InvariantCulture),
+    "-O1", "--keep-temps"
+) $resultPropagationOutput $resultPropagationError
+Assert-ProcessSucceeded $resultPropagationProcess $resultPropagationError "Linux stage-2 Result propagation control-order native build"
+if (-not (Test-Path $resultPropagationLlvm) -or -not (Test-Path $resultPropagationExecutable)) {
+    throw "Linux stage-2 Result propagation control-order build did not retain LLVM and executable artifacts"
+}
+& (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure.ps1") -LlvmPath $resultPropagationLlvm
+& $llvmAsPath $resultPropagationLlvm -o ($resultPropagationExecutable + ".bc")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$resultPropagationActual = (& wsl.exe -d $Distribution -- (Convert-ToWslPath $resultPropagationExecutable) | Out-String).TrimEnd("`r", "`n")
+if ($LASTEXITCODE -ne 0 -or $resultPropagationActual -ne "quic-endpoint=ok") {
+    throw "Linux stage-2 Result propagation control-order execution failed: expected 'quic-endpoint=ok', actual '$resultPropagationActual'"
+}
+& (Join-Path $PSScriptRoot "verify-native-socket-timeouts.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Platform linux `
+    -Distribution $Distribution `
+    -LlvmRoot $llvmDir `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory $artifactsDir `
+    -Jobs $Jobs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot "verify-native-mutable-parameter-indexing-batch.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Platform linux `
+    -Distribution $Distribution `
+    -LlvmRoot $llvmDir `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory $artifactsDir `
+    -Jobs $Jobs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot "verify-native-interpolation-reference-arguments.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Platform linux `
+    -Distribution $Distribution `
+    -LlvmRoot $llvmDir `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory $artifactsDir `
+    -Jobs $Jobs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot "verify-native-projected-reference-places.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Platform linux `
+    -Distribution $Distribution `
+    -LlvmRoot $llvmDir `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory $artifactsDir `
+    -Jobs $Jobs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot "verify-linux-process-child-lifecycle.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Distribution $Distribution `
+    -LlvmHome (Join-Path $repoRoot ".tools\llvm-22.1.8") `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory $artifactsDir `
+    -Jobs $Jobs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot "verify-native-quic-endpoint-ownership-linux.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Distribution $Distribution `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory $artifactsDir `
+    -Jobs $Jobs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot "verify-native-exact-fixture-batch.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Platform linux `
+    -Distribution $Distribution `
+    -LlvmRoot $llvmDir `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory $artifactsDir `
+    -Jobs $Jobs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "[linux-stage2 5/6] PASS Linux stage-2 products, Set intrinsics, Result propagation, and process Child lifecycle execute."
 
 Write-Host "[linux-stage2 6/6] Enforce production ownership diagnostics E17 through E23."
 foreach ($conflict in @(
@@ -322,7 +590,7 @@ foreach ($conflict in @(
         @($stage1Diagnostic, $stage1DiagnosticOutput, "stage1"),
         @($stage2Diagnostic, $stage2DiagnosticOutput, "stage2")
     )) {
-        $candidate[0].WaitForExit()
+        Wait-VerificationProcess $candidate[0] "$($candidate[2]) borrow-conflict diagnostic"
         $candidate[0].Refresh()
         if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a $($conflict[1])-origin move with a live borrowed Text view" }
         $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
@@ -347,7 +615,7 @@ foreach ($candidate in @(
     @($stage1PartialMove, $stage1PartialMoveOutput, "stage1"),
     @($stage2PartialMove, $stage2PartialMoveOutput, "stage2")
 )) {
-    $candidate[0].WaitForExit()
+    Wait-VerificationProcess $candidate[0] "$($candidate[2]) partial-move diagnostic"
     $candidate[0].Refresh()
     if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a reachable whole-owner use after a partial move" }
     $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
@@ -371,7 +639,7 @@ foreach ($candidate in @(
     @($stage1BranchPartialMove, $stage1BranchPartialMoveOutput, "stage1"),
     @($stage2BranchPartialMove, $stage2BranchPartialMoveOutput, "stage2")
 )) {
-    $candidate[0].WaitForExit()
+    Wait-VerificationProcess $candidate[0] "$($candidate[2]) branch-partial-move diagnostic"
     $candidate[0].Refresh()
     if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a branch that exits with a partial move" }
     $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
@@ -395,7 +663,7 @@ foreach ($candidate in @(
     @($stage1ParallelCapture, $stage1ParallelCaptureOutput, "stage1"),
     @($stage2ParallelCapture, $stage2ParallelCaptureOutput, "stage2")
 )) {
-    $candidate[0].WaitForExit()
+    Wait-VerificationProcess $candidate[0] "$($candidate[2]) mutable parallel-capture diagnostic"
     $candidate[0].Refresh()
     if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a transitive mutable parallel capture" }
     $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
@@ -419,7 +687,7 @@ foreach ($candidate in @(
     @($stage1NonSendableCapture, $stage1NonSendableCaptureOutput, "stage1"),
     @($stage2NonSendableCapture, $stage2NonSendableCaptureOutput, "stage2")
 )) {
-    $candidate[0].WaitForExit()
+    Wait-VerificationProcess $candidate[0] "$($candidate[2]) non-sendable parallel-capture diagnostic"
     $candidate[0].Refresh()
     if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a transitive non-sendable parallel capture" }
     $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
@@ -442,11 +710,11 @@ foreach ($candidate in @(
     @($stage1Reference, $stage1ReferenceOutput, "stage1"),
     @($stage2Reference, $stage2ReferenceOutput, "stage2")
 )) {
-    $candidate[0].WaitForExit()
+    Wait-VerificationProcess $candidate[0] "$($candidate[2]) temporary-reference diagnostic"
     $candidate[0].Refresh()
     if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a temporary readonly-reference argument" }
     $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
-    if ($diagnosticText -notmatch 'error\[E22\].*readonly reference argument requires stable immutable storage') {
+    if ($diagnosticText -notmatch 'error\[E22\].*requires an addressable owner or reference; literals and temporary values cannot be borrowed') {
         throw "$($candidate[2]) did not emit ownership diagnostic E22: '$diagnosticText'"
     }
     if ($diagnosticText -match '^target (datalayout|triple)') {
@@ -473,7 +741,7 @@ foreach ($referenceConflict in @(
         @($stage1Reference, $stage1ReferenceOutput, "stage1"),
         @($stage2Reference, $stage2ReferenceOutput, "stage2")
     )) {
-        $candidate[0].WaitForExit()
+        Wait-VerificationProcess $candidate[0] "$($candidate[2]) $($referenceConflict[1])-reference diagnostic"
         $candidate[0].Refresh()
         if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted owner $($referenceConflict[1]) with a live readonly reference" }
         $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
@@ -503,7 +771,7 @@ foreach ($referenceEscape in @(
         @($stage1AggregateEscape, $stage1AggregateEscapeOutput, $stage1AggregateEscapeError, "stage-1"),
         @($stage2AggregateEscape, $stage2AggregateEscapeOutput, $stage2AggregateEscapeError, "stage-2")
     )) {
-        $candidate[0].WaitForExit()
+        Wait-VerificationProcess $candidate[0] "$($candidate[3]) $($referenceEscape[1])-escape diagnostic"
         $candidate[0].Refresh()
         $diagnosticText = (Get-Content $candidate[1] -Raw) + (Get-Content $candidate[2] -Raw)
         if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[3]) accepted returned $($referenceEscape[1]) containing a callee-owned readonly reference" }
@@ -516,6 +784,67 @@ foreach ($referenceEscape in @(
     }
 }
 Write-Host "[linux-stage2 6/6] PASS E17-E23 ownership violations block LLVM emission in stage-1 and stage-2."
+& (Join-Path $PSScriptRoot "verify-selfhost-unresolved-call-diagnostic.ps1") `
+    -Compiler $stage1Path `
+    -Label "linux-stage1" `
+    -Target linux `
+    -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-selfhost-result-propagation-diagnostics.ps1") `
+    -Compiler $stage1Path `
+    -Label "linux-stage1" `
+    -Target linux `
+    -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-selfhost-private-field-diagnostics.ps1") `
+    -Compiler $stage1Path `
+    -Label "linux-stage1" `
+    -Target linux `
+    -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-selfhost-unresolved-call-diagnostic.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Target linux `
+    -Distribution $Distribution `
+    -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-selfhost-result-propagation-diagnostics.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Target linux `
+    -Distribution $Distribution `
+    -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-selfhost-private-field-diagnostics.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Target linux `
+    -Distribution $Distribution `
+    -RepositoryRoot $repoRoot
+Write-Host "[linux-stage2 6/6] PASS unresolved calls, invalid Result propagation, and private-field access remain blocked before LLVM in stage-1 and stage-2."
+if ($stage2WasRebuilt) {
+    if (-not (Test-Stage2ArtifactReceipt `
+            -LlvmPath $stage2LlvmPath `
+            -BitcodePath $stage2BitcodePath `
+            -ExecutablePath $stage2Path `
+            -AdditionalArtifacts @{ object = $stage2ObjectPath } `
+            -ReceiptPath $stage2CandidateArtifactReceiptPath)) {
+        throw "Linux Stage2 candidate artifacts differ from their completion receipt"
+    }
+    Assert-InputFingerprintStable `
+        -ExpectedFingerprint ([System.IO.File]::ReadAllText($stage2CandidateFingerprintPath)) `
+        -CurrentFingerprint (Get-LinuxStage2InputFingerprint) `
+        -Phase "Linux Stage2"
+    Move-Item -LiteralPath $stage2LlvmPath -Destination $publishedStage2LlvmPath -Force
+    Move-Item -LiteralPath $stage2BitcodePath -Destination $publishedStage2BitcodePath -Force
+    Move-Item -LiteralPath $stage2ObjectPath -Destination $publishedStage2ObjectPath -Force
+    Move-Item -LiteralPath $stage2Path -Destination $publishedStage2Path -Force
+    Write-Stage2ArtifactReceipt `
+        -LlvmPath $publishedStage2LlvmPath `
+        -BitcodePath $publishedStage2BitcodePath `
+        -ExecutablePath $publishedStage2Path `
+        -AdditionalArtifacts @{ object = $publishedStage2ObjectPath } `
+        -ReceiptPath $stage2ArtifactReceiptPath
+    Move-Item -LiteralPath $stage2CandidateFingerprintPath -Destination $stage2FingerprintPath -Force
+    Remove-Item -LiteralPath $stage2CandidateArtifactReceiptPath -ErrorAction SilentlyContinue
+    Write-Host "[linux-stage2 promotion] PASS input fingerprint and output receipts published last."
+}
 }
 finally {
     Release-SelfHostVerificationLock $selfHostVerificationLock

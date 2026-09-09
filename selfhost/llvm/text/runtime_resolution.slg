@@ -1,0 +1,201 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.environment_runtime as environmentRuntime
+import sollang.compiler.llvm.emitter.socket_runtime as socketRuntime
+import sollang.compiler.llvm.emitter.dns_runtime as dnsRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sollang.compiler.source_style as sourceStyle
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+import sys.runtime as runtime
+
+
+runtimeFunctionRef runtimeModule: Int, expectedName: Text, context: ref emitterContext.EmitContext -> llvmRuntime.RuntimeFunctionRef {
+    llvmRuntime.RuntimeFunctionRef { module: -1, symbol: -1 } => matched!
+    UInt64(0) => runtimePathHash!
+    false => runtimePathFound!
+    0 => identityIndex!
+    identityIndex! < (context.modules -> len) -> while {
+        context.modules[identityIndex!] => identity
+        identity.sourceIndex == runtimeModule -> if {
+            identity.pathHash => runtimePathHash!
+            true => runtimePathFound!
+        }
+        identityIndex! + 1 => identityIndex!
+    }
+    0 => fragmentIndex!
+    runtimePathFound! and fragmentIndex! < (context.modules -> len) and matched!.symbol < 0
+        -> while {
+            context.modules[fragmentIndex!] => fragment
+            fragment.pathHash == runtimePathHash! -> if {
+                fragment.sourceIndex => fragmentModule
+                context.ranges[fragmentModule] => fragmentRange
+                0 => symbolIndex!
+                symbolIndex! < fragmentRange.symbolCount and matched!.symbol < 0
+                    -> while {
+                        context.symbols[fragmentRange.symbolStart + symbolIndex!] => candidate
+                        candidate.parent < 0 and candidate.nameToken >= 0 and candidate.nameToken < fragmentRange.tokenCount
+                            -> if {
+                                context.tokens[fragmentRange.tokenStart + candidate.nameToken] => nameToken
+                                expectedName -> len => expectedLength
+                                nameToken.span.length == expectedLength => matches!
+                                UIntSize(0) => byteIndex!
+                                matches! and byteIndex! < expectedLength -> while {
+                                    (context.sources[fragmentModule] -> byte(nameToken.span.start + byteIndex!)) != (expectedName -> byte(byteIndex!))
+                                        -> if { false => matches! }
+                                    byteIndex! + 1 => byteIndex!
+                                }
+                                matches! -> if {
+                                    llvmRuntime.RuntimeFunctionRef { module: fragmentModule, symbol: symbolIndex! } => matched!
+                                }
+                            }
+                        symbolIndex! + 1 => symbolIndex!
+                    }
+            }
+            fragmentIndex! + 1 => fragmentIndex!
+        }
+    matched!
+}
+
+isRuntimeSourceModule sourceModule: Int, context: ref emitterContext.EmitContext -> Bool {
+    false => runtimeSource!
+    0 => moduleIndex!
+    moduleIndex! < (context.modules -> len) and not runtimeSource!
+        -> while {
+            context.modules[moduleIndex!] => identity
+            identity.sourceIndex == sourceModule and identity.pathHash == 12254170256457402476
+                -> if { true => runtimeSource! }
+            moduleIndex! + 1 => moduleIndex!
+        }
+    runtimeSource!
+}
+
+runtimeFunctionSymbols runtimeModule: Int, context: ref emitterContext.EmitContext -> llvmRuntime.RuntimeFunctionSymbols {
+    runtimeModule -> runtimeFunctionRef("secureRandomBytes", context) => secureRandomBytes
+    -1 => secureRandomBytesType!
+    0 => secureRandomFunctionSearch!
+    secureRandomFunctionSearch! < (context.ir -> len)
+        -> while {
+            context.ir[secureRandomFunctionSearch!] => candidate
+            ((candidate.kind == 0
+                and candidate.sourceModule == secureRandomBytes.module)
+                or (candidate.kind == 6
+                and candidate.targetModule == secureRandomBytes.module))
+                and candidate.symbol == secureRandomBytes.symbol
+                and candidate.typeId >= 0
+                -> if {
+                    candidate.typeId => secureRandomBytesType!
+                }
+            secureRandomFunctionSearch! + 1 => secureRandomFunctionSearch!
+        }
+    llvmRuntime.RuntimeFunctionSymbols {
+        printRef: runtimeModule -> runtimeFunctionRef("print", context)
+        printlnRef: runtimeModule -> runtimeFunctionRef("println", context)
+        readIntRef: runtimeModule -> runtimeFunctionRef("readInt", context)
+        seedRandomRef: runtimeModule -> runtimeFunctionRef("seedRandom", context)
+        randomBelowRef: runtimeModule -> runtimeFunctionRef("randomBelow", context)
+        secureRandomBytesRef: secureRandomBytes
+        secureRandomBytesType: secureRandomBytesType!
+        openIntWriterRef: runtimeModule -> runtimeFunctionRef("openIntWriter", context)
+        writeIntRef: runtimeModule -> runtimeFunctionRef("writeInt", context)
+        closeIntWriterRef: runtimeModule -> runtimeFunctionRef("closeIntWriter", context)
+        openIntReaderRef: runtimeModule -> runtimeFunctionRef("openIntReader", context)
+        closestIntRef: runtimeModule -> runtimeFunctionRef("closestInt", context)
+        closeIntReaderRef: runtimeModule -> runtimeFunctionRef("closeIntReader", context)
+        nowMillisRef: runtimeModule -> runtimeFunctionRef("nowMillis", context)
+        utcNowMillisRef: runtimeModule -> runtimeFunctionRef("utcNowMillis", context)
+        eprintlnRef: runtimeModule -> runtimeFunctionRef("eprintln", context)
+        flushStandardOutputRef: runtimeModule -> runtimeFunctionRef("flushStandardOutput", context)
+    }
+}
+
+
+
+runtimeModuleSource context: ref emitterContext.EmitContext -> Int {
+    -1 => runtimeModule!
+    0 => moduleIndex!
+    moduleIndex! < (context.modules -> len) and runtimeModule! < 0
+        -> while {
+            context.modules[moduleIndex!] => identity
+            identity.pathHash == 12254170256457402476
+                -> if { identity.sourceIndex => runtimeModule! }
+            moduleIndex! + 1 => moduleIndex!
+        }
+    runtimeModule!
+}
+
+runtimeRefMissing target: llvmRuntime.RuntimeFunctionRef -> Bool {
+    target.module < 0 or target.symbol < 0
+}
+
+missingRuntimeFunction context: ref emitterContext.EmitContext -> Text {
+    context -> runtimeModuleSource => runtimeModule
+    runtimeModule < 0 -> if { "" -> return }
+    runtimeModule -> runtimeFunctionSymbols(context) => functions
+    functions.printRef -> runtimeRefMissing -> if { "print" -> return }
+    functions.printlnRef -> runtimeRefMissing -> if { "println" -> return }
+    functions.readIntRef -> runtimeRefMissing -> if { "readInt" -> return }
+    functions.seedRandomRef -> runtimeRefMissing -> if { "seedRandom" -> return }
+    functions.randomBelowRef -> runtimeRefMissing
+        -> if { "randomBelow" -> return }
+    functions.openIntWriterRef -> runtimeRefMissing
+        -> if { "openIntWriter" -> return }
+    functions.writeIntRef -> runtimeRefMissing -> if { "writeInt" -> return }
+    functions.closeIntWriterRef -> runtimeRefMissing
+        -> if { "closeIntWriter" -> return }
+    functions.openIntReaderRef -> runtimeRefMissing
+        -> if { "openIntReader" -> return }
+    functions.closestIntRef -> runtimeRefMissing -> if { "closestInt" -> return }
+    functions.closeIntReaderRef -> runtimeRefMissing
+        -> if { "closeIntReader" -> return }
+    functions.nowMillisRef -> runtimeRefMissing -> if { "nowMillis" -> return }
+    functions.utcNowMillisRef -> runtimeRefMissing
+        -> if { "utcNowMillis" -> return }
+    functions.eprintlnRef -> runtimeRefMissing -> if { "eprintln" -> return }
+    functions.flushStandardOutputRef -> runtimeRefMissing
+        -> if { "flushStandardOutput" -> return }
+    ""
+}
+
+runtimeAbiDiagnosticCount context: ref emitterContext.EmitContext -> Int {
+    context -> missingRuntimeFunction => missing
+    (missing -> len) > 0 -> if { 1 } else { 0 }
+}
+
+emitRuntimeAbiDiagnostic context: ref emitterContext.EmitContext -> Unit uses Console {
+    context -> missingRuntimeFunction => missing
+    (missing -> len) > 0 -> if {
+        "; sollang compiler error S049: logical module 'sys.runtime' cannot resolve required function '$missing' to a concrete fragment module and symbol; define it exactly once in a 'namespace sys.runtime' source under sys/runtime/**, keep that source in the compiler runtime manifest, and rebuild instead of emitting an invalid s-1 LLVM symbol" -> println
+    }
+}

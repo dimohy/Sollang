@@ -1,0 +1,39 @@
+# Signed constant arithmetic has explicit overflow and division failure results.
+import sollang.compiler.semantic.constant_integer as constant
+
+show label: Text, left: Long, right: Long, operation: constant.Operator -> Unit uses Console {
+    left -> constant.evaluateBinary(right, operation) -> when {
+        Ok(value) { "$label=$value" -> println }
+        Err(error) {
+            error -> when {
+                Overflow { "$label=overflow" -> println }
+                DivisionByZero { "$label=division-by-zero" -> println }
+            }
+        }
+    }
+}
+
+main {
+    Long(9_223_372_036_854_775_807) => maximum
+    -maximum - Long(1) => minimum
+    "add" -> show(19, 23, constant.Operator.Add)
+    "subtract" -> show(-19, 23, constant.Operator.Subtract)
+    "multiply" -> show(-6, -7, constant.Operator.Multiply)
+    "divide" -> show(-43, 2, constant.Operator.Divide)
+    "remainder" -> show(-43, 2, constant.Operator.Remainder)
+    "maximum" -> show(maximum, 0, constant.Operator.Add)
+    "minimum" -> show(minimum, 1, constant.Operator.Multiply)
+    "zero" -> show(minimum, 0, constant.Operator.Multiply)
+    "add-high" -> show(maximum, 1, constant.Operator.Add)
+    "add-low" -> show(minimum, -1, constant.Operator.Add)
+    "subtract-high" -> show(maximum, -1, constant.Operator.Subtract)
+    "subtract-low" -> show(minimum, 1, constant.Operator.Subtract)
+    "multiply-positive" -> show(maximum, 2, constant.Operator.Multiply)
+    "multiply-negative" -> show(minimum, 2, constant.Operator.Multiply)
+    "multiply-negate" -> show(minimum, -1, constant.Operator.Multiply)
+    "multiply-reversed" -> show(-1, minimum, constant.Operator.Multiply)
+    "divide-zero" -> show(42, 0, constant.Operator.Divide)
+    "divide-overflow" -> show(minimum, -1, constant.Operator.Divide)
+    "remainder-zero" -> show(42, 0, constant.Operator.Remainder)
+    "remainder-overflow" -> show(minimum, -1, constant.Operator.Remainder)
+}

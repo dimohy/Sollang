@@ -1,0 +1,184 @@
+import std.compress.brotli.command as commands
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.literal_context as contexts
+import std.compress.brotli.prefix_table as prefix
+
+struct ReadOutput {
+    output: [UInt8; ~]
+    stalls: Int
+}
+
+zeros count: Int -> [Int; ~] {
+    [Int; ~] => values!
+    0 => index!
+    index! < count -> while {
+        values! -> push(0)
+        index! + 1 => index!
+    }
+    values!
+}
+
+bytes count: Int, value: UInt8 -> [UInt8; ~] {
+    [UInt8; ~] => values!
+    0 => index!
+    index! < count -> while {
+        values! -> push(value)
+        index! + 1 => index!
+    }
+    values!
+}
+
+singleTable symbol: Int, symbolCount: Int -> Result<prefix.Table, prefix.Error> {
+    symbolCount -> zeros => lengths!
+    1 => lengths![symbol]
+    prefix.Limits { maxSymbols: 704, maxTableEntries: 1_080 } -> builder? => builder
+    builder -> table(lengths!, 1)
+}
+
+blockStream: -> Result<headers.BlockStream, prefix.Error> {
+    0 -> singleTable(4)? => typeTable
+    0 -> singleTable(26)? => lengthTable
+    Result<headers.BlockStream, prefix.Error>.Ok(headers.BlockStream {
+        typeCount: 2
+        initialLength: 0
+        typeTable: headers.TableSlot.Present(typeTable)
+        lengthTable: headers.TableSlot.Present(lengthTable)
+    })
+}
+
+header commandSymbol: Int, distanceSymbol: Int -> Result<headers.Parsed, prefix.Error> {
+    blockStream()? => literalBlocks
+    blockStream()? => commandBlocks
+    blockStream()? => distanceBlocks
+    97 -> singleTable(256)? => literalTree0
+    97 -> singleTable(256)? => literalTree1
+    commandSymbol -> singleTable(704)? => commandTree0
+    commandSymbol -> singleTable(704)? => commandTree1
+    distanceSymbol -> singleTable(17)? => distanceTree0
+    distanceSymbol -> singleTable(17)? => distanceTree1
+    128 -> zeros => literalMap
+    8 -> zeros => distanceMap
+    Result<headers.Parsed, prefix.Error>.Ok(headers.Parsed {
+        blockStreams: [literalBlocks, commandBlocks, distanceBlocks; ~]
+        distancePostfixBits: 0
+        directDistanceCodes: 16
+        distanceCodeCount: 17
+        contextModes: [contexts.Mode.Lsb6, contexts.Mode.Lsb6; ~]
+        literalContextMap: literalMap
+        distanceContextMap: distanceMap
+        literalTrees: [literalTree0, literalTree1; ~]
+        commandTrees: [commandTree0, commandTree1; ~]
+        distanceTrees: [distanceTree0, distanceTree1; ~]
+        position: prefix.Position { byteIndex: 0, bitIndex: 0 }
+    })
+}
+
+emptyReadOutput: -> ReadOutput => ReadOutput { output: [UInt8; ~], stalls: 0 }
+
+readOutput executor: move commands.Executor, history: move [UInt8; ~] -> Result<ReadOutput, commands.Error> {
+    executor -> reader(history)? => reader!
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+        Err(_) { Result<ReadOutput, commands.Error>.Ok(emptyReadOutput()) -> return }
+        Ok(window) {
+            window => window!
+            prefix.Position { byteIndex: 0, bitIndex: 0 } => position!
+            0 => stalls!
+            0 => attempts!
+            false => ready!
+            not ready! and attempts! < 8 -> while {
+                (window! -> available) + 1 => required
+                window! -> fill([0], position!, required) -> when {
+                    Err(_) { Result<ReadOutput, commands.Error>.Ok(emptyReadOutput()) -> return }
+                    Ok(next) { next => position! }
+                }
+                reader! -> read(window!)? => progress
+                progress -> when {
+                    NeedMore(bits) {
+                        bits > 0 -> unless { Result<ReadOutput, commands.Error>.Ok(emptyReadOutput()) -> return }
+                        stalls! + 1 => stalls!
+                    }
+                    Ready { true => ready! }
+                }
+                attempts! + 1 => attempts!
+            }
+            ready! -> unless { Result<ReadOutput, commands.Error>.Ok(emptyReadOutput()) -> return }
+            reader! -> finish? => streamed
+            Result<ReadOutput, commands.Error>.Ok(ReadOutput {
+                output: streamed -> intoOutput
+                stalls: stalls!
+            })
+        }
+    }
+}
+
+main {
+    commands.Limits {
+        maxOutputBytes: 1_024
+        maxCommands: 8
+        maxWindowBytes: 4_194_288
+    } => limits
+
+    false => literalOk!
+    136 -> header(0) -> when {
+        Err(_) { }
+        Ok(header) {
+            limits -> executor(header, 1) -> when {
+                Err(_) { }
+                Ok(executor) {
+                    executor -> readOutput([UInt8; ~]) -> when {
+                        Err(_) { }
+                        Ok(read) {
+                            (read.output -> len) == 1 and read.output[0] == 97 and read.stalls == 3 => literalOk!
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false => distanceOk!
+    128 -> header(0) -> when {
+        Err(_) { }
+        Ok(header) {
+            limits -> executor(header, 2) -> when {
+                Err(_) { }
+                Ok(executor) {
+                    executor -> readOutput(16 -> bytes(97)) -> when {
+                        Err(_) { }
+                        Ok(read) {
+                            (read.output -> len) == 18
+                                and read.output[16] == 97
+                                and read.output[17] == 97
+                                and read.stalls == 3 => distanceOk!
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false => dictionaryOk!
+    130 -> header(16) -> when {
+        Err(_) { }
+        Ok(header) {
+            limits -> executor(header, 4) -> when {
+                Err(_) { }
+                Ok(executor) {
+                    executor -> readOutput([UInt8; ~]) -> when {
+                        Err(_) { }
+                        Ok(read) {
+                            (read.output -> len) == 4
+                                and read.output[0] == 116
+                                and read.output[1] == 105
+                                and read.output[2] == 109
+                                and read.output[3] == 101
+                                and read.stalls == 4 => dictionaryOk!
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    "block-switch=$(literalOk!):$(distanceOk!):$(dictionaryOk!)" -> println
+}

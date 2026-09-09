@@ -1,0 +1,167 @@
+# Pure Zstandard raw/RLE frames remain bounded, incremental, and transactional.
+import std.compress.zstd as zstd
+import std.compress.zstd.error as zstd_errors
+
+kindCode kind: zstd_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    InputLimitExceeded { 1 }
+    OutputLimitExceeded { 2 }
+    WindowLimitExceeded { 3 }
+    FrameLimitExceeded { 4 }
+    SkippableLimitExceeded { 5 }
+    TruncatedInput { 6 }
+    InvalidMagic { 7 }
+    InvalidHeader { 8 }
+    UnsupportedDictionary { 9 }
+    ChecksumMismatch { 10 }
+    UnsupportedCompressedBlock { 11 }
+    InvalidBlock { 12 }
+    SizeMismatch { 13 }
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+failsWith result: Result<[UInt8; ~], zstd.Error>, expectedKind: Int -> Bool {
+    result -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == expectedKind }
+    }
+}
+
+printCheck label: Text, value: Bool -> Unit uses Console {
+    "$(label)=$(value)" -> println
+}
+
+decodeBytewise codec: zstd.Codec, input: [UInt8], expected: [UInt8] -> Result<Bool, zstd.Error> {
+    codec -> decoder? => decoder!
+    0 => index!
+    index! < (input -> len) -> while {
+        [input[index!]] => chunk
+        decoder! -> write(chunk)? => accepted
+        accepted == 1 -> unless { Result<Bool, zstd.Error>.Ok(false) -> return }
+        index! + 1 => index!
+    }
+    [UInt8; ~] => output!
+    decoder! -> finish(output!)? => written
+    Result<Bool, zstd.Error>.Ok(
+    written == (expected -> len) and (output! -> matches(expected)))
+}
+
+run: -> Result<Unit, zstd.Error> uses Console {
+    zstd.Limits {
+        maxEncodedBytes: 512
+        maxDecodedBytes: 256
+        maxWindowBytes: 256
+        maxFrames: 2
+        maxSkippableFrameBytes: 8
+    } -> codec(zstd.FrameOptions { checksum: true })? => codec
+
+    [UInt8(97), 98, 99] => source
+    codec -> compress(source)? => encoded
+    [UInt8(40), 181, 47, 253, 36, 3, 24, 0, 0, 97, 98, 99, 1, 0, 0, 153, 9, 119, 173]
+        => expectedEncoding
+    printCheck("encoded", encoded -> matches(expectedEncoding))
+    [UInt8(40), 181, 47, 253, 32, 3, 25, 0, 0, 97, 98, 99] => finalRaw
+    codec -> decompress(finalRaw)? => finalRawOutput
+    printCheck("raw-final", finalRawOutput -> matches(source))
+    codec -> decompress(encoded)? => roundtrip
+    printCheck("roundtrip", roundtrip -> matches(source))
+
+    # Python 3.14 compression.zstd independently produced this checked frame.
+    [UInt8(40), 181, 47, 253, 36, 3, 25, 0, 0, 97, 98, 99, 153, 9, 119, 173]
+        => checkedFrame
+    codec -> decompress(checkedFrame)? => checkedOutput
+    printCheck("checksum", checkedOutput -> matches(source))
+    [UInt8(40), 181, 47, 253, 36, 3, 25, 0, 0, 97, 98, 99, 153, 9, 119, 154]
+        => damagedChecksum
+    printCheck("checksum-reject", codec -> decompress(damagedChecksum) -> failsWith(10))
+
+    codec -> decoder? => checkedDecoder!
+    [UInt8(40), 181, 47, 253, 36, 3, 25, 0, 0, 97, 98, 99, 153, 9, 119, 154]
+        => transactionalChecksum
+    checkedDecoder! -> write(transactionalChecksum)? => checkedAccepted
+    [UInt8; ~] => checkedDestination!
+    checkedDestination! -> push(7)
+    checkedDecoder! -> finish(checkedDestination!) -> when {
+        Ok(_) { printCheck("checksum-transactional", false) }
+        Err(error) {
+            printCheck(
+            "checksum-transactional",
+            (error.kind -> kindCode) == 10
+                and (checkedDestination! -> len) == 1 and checkedDestination![0] == 7)
+        }
+    }
+
+    # Independent RFC 8878 single-segment RLE frame: five 'A' bytes.
+    [UInt8(40), 181, 47, 253, 32, 5, 43, 0, 0, 65] => rleFrame
+    [UInt8(65), 65, 65, 65, 65] => rleExpected
+    codec -> decompress(rleFrame)? => rleOutput
+    printCheck("rle", rleOutput -> matches(rleExpected))
+
+    # A bounded skippable frame may precede an ordinary data frame.
+    [UInt8(
+    80), 42, 77, 24, 2, 0, 0, 0, 170, 187,
+    40, 181, 47, 253, 32, 3, 25, 0, 0, 97, 98, 99
+    ] => skippedThenRaw
+    codec -> decompress(skippedThenRaw)? => skippedOutput
+    printCheck("skippable", skippedOutput -> matches(source))
+
+    codec -> decodeBytewise(skippedThenRaw, source)? => bytewise
+    printCheck("bytewise", bytewise)
+
+    zstd.Limits {
+        maxEncodedBytes: 512
+        maxDecodedBytes: 256
+        maxWindowBytes: 4
+        maxFrames: 1
+        maxSkippableFrameBytes: 1
+    } -> codec(zstd.FrameOptions { checksum: false })? => strictCodec
+    printCheck(
+    "window-limit",
+    strictCodec -> decompress(rleFrame) -> failsWith(3))
+    printCheck(
+    "skippable-limit",
+    strictCodec -> decompress(skippedThenRaw) -> failsWith(5))
+
+    [UInt8(
+    40), 181, 47, 253, 32, 3, 25, 0, 0, 97, 98, 99,
+    40, 181, 47, 253, 32, 3, 25, 0, 0, 97, 98, 99
+    ] => twoFrames
+    printCheck("frame-limit", strictCodec -> decompress(twoFrames) -> failsWith(4))
+
+    [UInt8(40), 181, 47, 253, 32, 1, 13, 0, 0, 0] => compressedBlock
+    printCheck(
+    "compressed-invalid",
+    codec -> decompress(compressedBlock) -> failsWith(12))
+
+    codec -> decoder? => failing!
+    [UInt8(9), 9, 9, 9] => invalidMagic
+    failing! -> write(invalidMagic)? => accepted
+    [UInt8; ~] => unchanged!
+    unchanged! -> push(7)
+    failing! -> finish(unchanged!) -> when {
+        Ok(_) { printCheck("transactional", false) }
+        Err(error) {
+            printCheck(
+            "transactional",
+            (error.kind -> kindCode) == 7
+                and (unchanged! -> len) == 1 and unchanged![0] == 7)
+        }
+    }
+    Result<Unit, zstd.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) { }
+        Err(error) { "error=$(error.kind -> kindCode)@$(error.offset)" -> println }
+    }
+}

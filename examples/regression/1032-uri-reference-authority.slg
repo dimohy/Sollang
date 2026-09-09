@@ -1,0 +1,64 @@
+import std.uri as uri
+
+describe reference: uri.Reference -> Unit uses Console {
+    reference.scheme.present -> if {
+        reference -> schemeText => scheme
+        "scheme=$scheme" -> println
+    } else { "scheme=relative" -> println }
+    reference.authority -> when {
+        Present(authority) {
+            authority.host -> when {
+                Registered(value) {
+                    reference -> registeredName => name
+                    "host=$name" -> println
+                }
+                Ipv4(value) { "host=ipv4" -> println }
+                Ipv6(value) { "host=ipv6" -> println }
+            }
+            "port=$(authority -> portOr(0))" -> println
+        }
+        Absent { "host=none" -> println }
+    }
+    reference -> pathText => path
+    "path=$path" -> println
+    reference.query.present -> if {
+        reference -> queryText => query
+        "query=$query" -> println
+    } else { "query=none" -> println }
+    reference.fragment.present -> if {
+        reference -> fragmentText => fragment
+        "fragment=$fragment" -> println
+    } else { "fragment=none" -> println }
+}
+
+run: -> Result<Unit, uri.Error> uses Console {
+    uri.parse("https://user@example.com:8443/a%2Fb?q=x/y#frag", 128)? => absolute
+    absolute -> describe
+    uri.parse("http://[2001:db8::1]:443/", 128)? => ipv6
+    ipv6 -> describe
+    uri.parse("http://u@127.0.0.1:80/x", 128)? => ipv4
+    ipv4 -> describe
+    uri.parse("../a/b?x", 32)? => relative
+    relative -> describe
+
+    uri.parse("/a%2", 16) -> when {
+        Ok(value) { "unexpected" -> println }
+        Err(error) { "percent=$(error.offset)" -> println }
+    }
+    uri.parse("http://x:70000/", 32) -> when {
+        Ok(value) { "unexpected" -> println }
+        Err(error) { "port-error=$(error.offset)" -> println }
+    }
+    uri.parse("http://999.1/", 32) -> when {
+        Ok(value) { "unexpected" -> println }
+        Err(error) { "host-error=$(error.offset)" -> println }
+    }
+    Result<Unit, uri.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected-error=$(error.offset)" -> println }
+    }
+}

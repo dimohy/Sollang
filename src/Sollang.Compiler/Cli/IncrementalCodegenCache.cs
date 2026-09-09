@@ -574,6 +574,12 @@ internal sealed class IncrementalCodegenCache
                 yield return method.Name;
                 yield return ((int)method.SelfOwnership).ToString(CultureInfo.InvariantCulture);
                 yield return method.ReturnType;
+                yield return method.AdditionalParameters.Count.ToString(CultureInfo.InvariantCulture);
+                foreach (var parameter in method.AdditionalParameters)
+                {
+                    yield return parameter.TypeName;
+                    yield return ((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture);
+                }
             }
         }
         foreach (var function in program.Functions.Where(static value => value.IsPublic)
@@ -781,13 +787,17 @@ internal sealed class IncrementalCodegenCache
 
     private static string Hex(ulong value) => value.ToString("x16", CultureInfo.InvariantCulture);
 
-    private static string TargetName(CompilationTarget target) => target switch
+    private static string TargetName(CompilationTarget target)
     {
-        CompilationTarget.WindowsX64 => "windows-x64",
-        CompilationTarget.LinuxX64 => "linux-x64",
-        CompilationTarget.Wasm32Browser => "wasm32-browser",
-        _ => throw new ArgumentOutOfRangeException(nameof(target))
-    };
+        var platform = target switch
+        {
+            CompilationTarget.WindowsX64 => "windows-x64",
+            CompilationTarget.LinuxX64 => "linux-x64",
+            CompilationTarget.Wasm32Browser => "wasm32-browser",
+            _ => throw new ArgumentOutOfRangeException(nameof(target))
+        };
+        return $"{platform}.{TargetContract.For(target).CacheKey}";
+    }
 
     private static string SanitizeFileName(string value)
     {

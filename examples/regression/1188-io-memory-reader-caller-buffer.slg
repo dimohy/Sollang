@@ -1,0 +1,60 @@
+import std.io as io
+
+# Caller-buffer reads allocate no result payload and exact failure mutates nothing.
+run: -> Result<Bool, io.Error> uses Console {
+    io.memoryReader([10, 20, 30, 40], 3)? => reader!
+
+    [UInt8; ~] => first!
+    first! -> push(0)
+    first! -> push(0)
+    first! -> push(0)
+    reader! -> readInto(first!)? => firstCount
+    "read=$firstCount,$(first![0]),$(first![1]),$(first![2]),pos=$(reader! -> position)" -> println
+
+    [UInt8; ~] => oversized!
+    oversized! -> push(80)
+    oversized! -> push(81)
+    oversized! -> push(82)
+    oversized! -> push(83)
+    reader! -> readInto(oversized!) -> when {
+        Ok(count) { "unexpected-oversized=$count" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                InvalidLimit {
+                    "limit@$(failure -> errorOffset),pos=$(reader! -> position),dst=$(oversized![0]),$(oversized![3])" -> println
+                }
+                else { "wrong-limit-error" -> println }
+            }
+        }
+    }
+
+    reader! -> seek(3)?
+    [UInt8; ~] => exact!
+    exact! -> push(90)
+    exact! -> push(91)
+    reader! -> readExactInto(exact!) -> when {
+        Ok(count) { "unexpected-exact=$count" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                UnexpectedEnd {
+                    "short@$(failure -> errorOffset),pos=$(reader! -> position),dst=$(exact![0]),$(exact![1])" -> println
+                }
+                else { "wrong-error" -> println }
+            }
+        }
+    }
+
+    reader! -> seek(4)?
+    [UInt8; ~] => endBuffer!
+    endBuffer! -> push(77)
+    reader! -> readInto(endBuffer!)? => endCount
+    "end=$endCount,dst=$(endBuffer![0]),pos=$(reader! -> position)" -> println
+    Result<Bool, io.Error>.Ok(true)
+}
+
+main {
+    run() -> when {
+        Ok(value) { }
+        Err(failure) { "unexpected-error@$(failure -> errorOffset)" -> println }
+    }
+}

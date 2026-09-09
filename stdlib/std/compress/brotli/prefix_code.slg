@@ -1,0 +1,758 @@
+namespace std.compress.brotli.prefix_code
+
+import std.compress.brotli.prefix_code as model
+import std.compress.brotli.prefix_code.error as errors
+import std.compress.brotli.prefix_table as prefix
+import std.compress.brotli.prefix_table.error as prefix_errors
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxAlphabetSize: Int
+    public maxTableEntries: Int
+}
+
+public struct Parser {
+    public builder: prefix.Builder
+    public maxAlphabetSize: Int
+}
+
+public struct Parsed {
+    public table: prefix.Table
+    public position: prefix.Position
+}
+
+public enum FixedCodeLengthPhase {
+    Low
+    Third
+    Fourth
+    Finished
+}
+
+public struct FixedCodeLengthReader {
+    public phase: FixedCodeLengthPhase
+    public value: Int
+}
+
+public enum FixedCodeLengthRead {
+    NeedMore(Int)
+    Ready(Int)
+}
+
+public enum DescriptionPhase {
+    Marker
+    SimpleCount
+    SimpleSymbol
+    SimpleSelector
+    ComplexCodeLengths
+    ComplexSymbols
+    ComplexRepeatBits
+    Finished
+}
+
+public enum DescriptionTable {
+    Empty
+    Built(prefix.Table)
+}
+
+# DescriptionReader is the resumable prefix-description owner. Simple and
+# complex descriptions converge on the same bounded prefix table without
+# retaining caller input.
+public struct DescriptionReader {
+    public builder: prefix.Builder
+    public maxAlphabetSize: Int
+    public alphabetSize: Int
+    public rootBits: Int
+    public phase: DescriptionPhase
+    public symbolCount: Int
+    public symbolBits: Int
+    public symbolIndex: Int
+    public symbols: [Int; ~]
+    public lengths: [Int; ~]
+    public codeLengthReader: FixedCodeLengthReader
+    public codeLengthLengths: [Int; ~]
+    public codeLengthIndex: Int
+    public codeLengthSpace: Int
+    public codeLengthCount: Int
+    public codeLengthTable: DescriptionTable
+    public outputIndex: Int
+    public previousLength: Int
+    public repeatCount: Int
+    public repeatLength: Int
+    public outputSpace: Int
+    public pendingRepeatSymbol: Int
+    public table: DescriptionTable
+}
+
+public enum DescriptionRead {
+    NeedMore(Int)
+    Ready
+}
+
+struct Bits {
+    value: Int
+    position: prefix.Position
+}
+
+errorParser kind: errors.Kind, offset: UIntSize -> Result<Parser, Error> {
+    Result<Parser, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorParsed kind: errors.Kind, offset: UIntSize -> Result<Parsed, Error> {
+    Result<Parsed, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBits kind: errors.Kind, offset: UIntSize -> Result<Bits, Error> {
+    Result<Bits, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorFixedCodeLengthRead kind: errors.Kind, offset: UIntSize -> Result<FixedCodeLengthRead, Error> {
+    Result<FixedCodeLengthRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDescriptionReader kind: errors.Kind, offset: UIntSize -> Result<DescriptionReader, Error> {
+    Result<DescriptionReader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDescriptionRead kind: errors.Kind, offset: UIntSize -> Result<DescriptionRead, Error> {
+    Result<DescriptionRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDescriptionTable kind: errors.Kind, offset: UIntSize -> Result<prefix.Table, Error> {
+    Result<prefix.Table, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+powerOfTwo exponent: Int -> Int {
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+appendZeros values: mut [Int; ~], count: Int -> Unit {
+    0 => index!
+    index! < count -> while {
+        values -> push(0)
+        index! + 1 => index!
+    }
+}
+
+setSymbolLength lengths: mut [Int; ~], symbols: [Int], index: Int, length: Int -> Unit {
+    symbols[index] => symbol
+    length => lengths[symbol]
+}
+
+setLengthAt lengths: mut [Int; ~], index: Int, length: Int -> Unit {
+    length => lengths[index]
+}
+
+codeLengthOrder index: Int -> Int => index -> when {
+    == 0 { 1 }
+    == 1 { 2 }
+    == 2 { 3 }
+    == 3 { 4 }
+    == 4 { 0 }
+    == 5 { 5 }
+    == 6 { 17 }
+    == 7 { 6 }
+    == 8 { 16 }
+    == 9 { 7 }
+    == 10 { 8 }
+    == 11 { 9 }
+    == 12 { 10 }
+    == 13 { 11 }
+    == 14 { 12 }
+    == 15 { 13 }
+    == 16 { 14 }
+    else { 15 }
+}
+
+mapPrefixError kind: prefix_errors.Kind -> errors.Kind => kind -> when {
+    InvalidLimit { errors.Kind.InvalidLimit }
+    InvalidCodeLength { errors.Kind.InvalidCodeSpace }
+    InvalidCodeSpace { errors.Kind.InvalidCodeSpace }
+    TableLimitExceeded { errors.Kind.TableLimitExceeded }
+    TruncatedInput { errors.Kind.TruncatedInput }
+}
+
+readBits input: [UInt8], position: prefix.Position, width: Int -> Result<Bits, Error> {
+    position.byteIndex => byteIndex!
+    position.bitIndex => bitIndex!
+    0 => value!
+    1 => place!
+    0 => read!
+    read! < width -> while {
+        byteIndex! < (input -> len)
+            -> unless { errorBits(errors.Kind.TruncatedInput, UIntSize(byteIndex!)) -> return }
+        (Int(input[byteIndex!]) / (bitIndex! -> powerOfTwo)) % 2 => bit
+        bit == 1 -> if { value! + place! => value! }
+        place! * 2 => place!
+        read! + 1 => read!
+        bitIndex! + 1 => bitIndex!
+        bitIndex! == 8 -> if {
+            0 => bitIndex!
+            byteIndex! + 1 => byteIndex!
+        }
+    }
+    Result<Bits, Error>.Ok(Bits {
+        value: value!
+        position: prefix.Position { byteIndex: byteIndex!, bitIndex: bitIndex! }
+    })
+}
+
+readFixedCodeLength input: [UInt8], position: prefix.Position -> Result<Bits, Error> {
+    input -> readBits(position, 2)? => low
+    low.value == 0 -> if { Result<Bits, Error>.Ok(Bits { value: 0, position: low.position }) -> return }
+    low.value == 1 -> if { Result<Bits, Error>.Ok(Bits { value: 4, position: low.position }) -> return }
+    low.value == 2 -> if { Result<Bits, Error>.Ok(Bits { value: 3, position: low.position }) -> return }
+    input -> readBits(low.position, 1)? => third
+    third.value == 0 -> if { Result<Bits, Error>.Ok(Bits { value: 2, position: third.position }) -> return }
+    input -> readBits(third.position, 1)? => fourth
+    fourth.value == 0 -> if { 1 } else { 5 } => value
+    Result<Bits, Error>.Ok(Bits { value: value, position: fourth.position })
+}
+
+buildTable parser: ref Parser, lengths: [Int], rootBits: Int -> Result<prefix.Table, Error> {
+    parser.builder -> table(lengths, rootBits) -> when {
+        Ok(table) { Result<prefix.Table, Error>.Ok(table) }
+        Err(error) {
+            Result<prefix.Table, Error>.Err(Error {
+                kind: error.kind -> mapPrefixError
+                offset: error.offset
+            })
+        }
+    }
+}
+
+readSymbol table: ref prefix.Table, input: [UInt8], position: prefix.Position -> Result<prefix.Decoded, Error> {
+    table -> read(input, position) -> when {
+        Ok(decoded) { Result<prefix.Decoded, Error>.Ok(decoded) }
+        Err(error) {
+            Result<prefix.Decoded, Error>.Err(Error {
+                kind: error.kind -> mapPrefixError
+                offset: error.offset
+            })
+        }
+    }
+}
+
+impl Limits {
+    public parser: self -> Result<Parser, Error> {
+        self.maxAlphabetSize > 0 and self.maxAlphabetSize <= 704 and self.maxTableEntries > 0
+            -> unless { errorParser(errors.Kind.InvalidLimit, 0) -> return }
+        prefix.Limits {
+            maxSymbols: self.maxAlphabetSize
+            maxTableEntries: self.maxTableEntries
+        } -> builder -> when {
+            Ok(builder) {
+                Result<Parser, Error>.Ok(Parser {
+                    builder: builder
+                    maxAlphabetSize: self.maxAlphabetSize
+                })
+            }
+            Err(error) { errorParser(error.kind -> mapPrefixError, error.offset) }
+        }
+    }
+}
+
+impl Parser {
+    public fixedCodeLengthReader: self -> FixedCodeLengthReader {
+        FixedCodeLengthReader {
+            phase: model.FixedCodeLengthPhase.Low
+            value: 0
+        }
+    }
+
+    public descriptionReader: self, alphabetSize: Int, rootBits: Int -> Result<DescriptionReader, Error> {
+        alphabetSize > 0 and alphabetSize <= self.maxAlphabetSize and rootBits > 0 and rootBits <= 15
+            -> unless { errorDescriptionReader(errors.Kind.InvalidLimit, UIntSize(alphabetSize)) -> return }
+        alphabetSize - 1 => maximum!
+        0 => symbolBits!
+        maximum! > 0 -> while {
+            maximum! / 2 => maximum!
+            symbolBits! + 1 => symbolBits!
+        }
+        [Int; ~] => lengths!
+        lengths! -> appendZeros(alphabetSize)
+        [Int; ~] => codeLengthLengths!
+        codeLengthLengths! -> appendZeros(18)
+        Result<DescriptionReader, Error>.Ok(DescriptionReader {
+            builder: self.builder
+            maxAlphabetSize: self.maxAlphabetSize
+            alphabetSize: alphabetSize
+            rootBits: rootBits
+            phase: model.DescriptionPhase.Marker
+            symbolCount: 0
+            symbolBits: symbolBits!
+            symbolIndex: 0
+            symbols: [Int; ~]
+            lengths: lengths!
+            codeLengthReader: FixedCodeLengthReader {
+                phase: model.FixedCodeLengthPhase.Low
+                value: 0
+            }
+            codeLengthLengths: codeLengthLengths!
+            codeLengthIndex: 0
+            codeLengthSpace: 32
+            codeLengthCount: 0
+            codeLengthTable: model.DescriptionTable.Empty
+            outputIndex: 0
+            previousLength: 8
+            repeatCount: 0
+            repeatLength: 0
+            outputSpace: 32_768
+            pendingRepeatSymbol: -1
+            table: model.DescriptionTable.Empty
+        })
+    }
+
+    public parse: self, input: [UInt8], position: prefix.Position, alphabetSize: Int, rootBits: Int -> Result<Parsed, Error> {
+        alphabetSize > 0 and alphabetSize <= self.maxAlphabetSize
+            -> unless { errorParsed(errors.Kind.InvalidLimit, UIntSize(alphabetSize)) -> return }
+        input -> readBits(position, 2)? => marker
+        [Int; ~] => lengths!
+        lengths! -> appendZeros(alphabetSize)
+        marker.value == 1 -> if {
+            input -> readBits(marker.position, 2)? => symbolCountBits
+            symbolCountBits.value + 1 => symbolCount
+            alphabetSize - 1 => maximum!
+            0 => symbolBits!
+            maximum! > 0 -> while {
+                maximum! / 2 => maximum!
+                symbolBits! + 1 => symbolBits!
+            }
+            [Int; ~] => symbols!
+            0 => symbolIndex!
+            symbolCountBits.position => current!
+            symbolIndex! < symbolCount -> while {
+                input -> readBits(current!, symbolBits!)? => symbol
+                symbol.value < alphabetSize
+                    -> unless { errorParsed(errors.Kind.InvalidSymbol, UIntSize(symbol.value)) -> return }
+                symbol.value => normalized
+                0 => previous!
+                previous! < (symbols! -> len) -> while {
+                    symbols![previous!] != normalized
+                        -> unless { errorParsed(errors.Kind.DuplicateSymbol, UIntSize(normalized)) -> return }
+                    previous! + 1 => previous!
+                }
+                symbols! -> push(normalized)
+                symbol.position => current!
+                symbolIndex! + 1 => symbolIndex!
+            }
+            0 => symbolIndex!
+            symbolIndex! < symbolCount -> while {
+                2 => lengths![symbols![symbolIndex!]]
+                symbolIndex! + 1 => symbolIndex!
+            }
+            1 => lengths![symbols![0]]
+            symbolCount == 2 -> if { 1 => lengths![symbols![1]] }
+            symbolCount == 4 -> if {
+                input -> readBits(current!, 1)? => selector
+                selector.position => current!
+                selector.value == 1 -> if {
+                    3 => lengths![symbols![2]]
+                    3 => lengths![symbols![3]]
+                } else {
+                    2 => lengths![symbols![0]]
+                }
+            }
+            self -> buildTable(lengths!, rootBits)? => table
+            Result<Parsed, Error>.Ok(Parsed { table: table, position: current! }) -> return
+        }
+
+        [Int; ~] => codeLengthLengths!
+        codeLengthLengths! -> appendZeros(18)
+        32 => codeSpace!
+        0 => codeCount!
+        marker.value => codeIndex!
+        marker.position => current!
+        codeIndex! < 18 and codeSpace! > 0 -> while {
+            input -> readFixedCodeLength(current!)? => codeLength
+            codeLength.position => current!
+            codeIndex! -> codeLengthOrder => orderedIndex
+            codeLength.value => codeLengthLengths![orderedIndex]
+            codeLength.value != 0 -> if {
+                codeSpace! - 32 / (codeLength.value -> powerOfTwo) => codeSpace!
+                codeCount! + 1 => codeCount!
+            }
+            codeIndex! + 1 => codeIndex!
+        }
+        codeCount! == 1 or codeSpace! == 0
+            -> unless { errorParsed(errors.Kind.InvalidCodeSpace, UIntSize(codeIndex!)) -> return }
+        self -> buildTable(codeLengthLengths!, 5)? => codeLengthTable
+
+        0 => outputIndex!
+        8 => previousLength!
+        0 => repeat!
+        0 => repeatLength!
+        32_768 => outputSpace!
+        outputIndex! < alphabetSize and outputSpace! > 0
+            -> while {
+                codeLengthTable -> readSymbol(input, current!)? => decoded
+                decoded.position => current!
+                decoded.symbol < 16 -> if {
+                    0 => repeat!
+                    decoded.symbol => lengths![outputIndex!]
+                    outputIndex! + 1 => outputIndex!
+                    decoded.symbol != 0 -> if {
+                        decoded.symbol => previousLength!
+                        outputSpace! - (15 - decoded.symbol -> powerOfTwo) => outputSpace!
+                    }
+                } else {
+                    decoded.symbol - 14 => extraWidth
+                    decoded.symbol == 16 -> if { previousLength! } else { 0 } => nextRepeatLength
+                    repeatLength! != nextRepeatLength -> if {
+                        0 => repeat!
+                        nextRepeatLength => repeatLength!
+                    }
+                    repeat! => oldRepeat
+                    repeat! > 0 -> if { (repeat! - 2) * (extraWidth -> powerOfTwo) => repeat! }
+                    input -> readBits(current!, extraWidth)? => extra
+                    extra.position => current!
+                    repeat! + extra.value + 3 => repeat!
+                    repeat! - oldRepeat => delta
+                    outputIndex! + delta <= alphabetSize
+                        -> unless { errorParsed(errors.Kind.InvalidCodeSpace, UIntSize(outputIndex! + delta)) -> return }
+                    0 => repeated!
+                    repeated! < delta -> while {
+                        repeatLength! => lengths![outputIndex!]
+                        outputIndex! + 1 => outputIndex!
+                        repeated! + 1 => repeated!
+                    }
+                    repeatLength! != 0 -> if {
+                        outputSpace! - delta * ((15 - repeatLength!) -> powerOfTwo) => outputSpace!
+                    }
+                }
+                outputSpace! >= 0
+                    -> unless { errorParsed(errors.Kind.InvalidCodeSpace, UIntSize(outputIndex!)) -> return }
+            }
+        outputSpace! == 0
+            -> unless { errorParsed(errors.Kind.InvalidCodeSpace, UIntSize(outputIndex!)) -> return }
+        self -> buildTable(lengths!, rootBits)? => table
+        Result<Parsed, Error>.Ok(Parsed { table: table, position: current! })
+    }
+}
+
+impl DescriptionReader {
+    public read: mut self, window: mut prefix.Window -> Result<DescriptionRead, Error> {
+        true -> while {
+            self.phase -> when {
+                Marker {
+                    window -> read(2) -> when {
+                        Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                        Ok(bits) {
+                            bits -> when {
+                                Incomplete(missing) { Result<DescriptionRead, Error>.Ok(model.DescriptionRead.NeedMore(missing)) -> return }
+                                Complete(marker) {
+                                    marker == 1 -> if {
+                                        model.DescriptionPhase.SimpleCount => self.phase
+                                    } else {
+                                        Int(marker) => self.codeLengthIndex
+                                        model.DescriptionPhase.ComplexCodeLengths => self.phase
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                SimpleCount {
+                    window -> read(2) -> when {
+                        Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                        Ok(bits) {
+                            bits -> when {
+                                Incomplete(missing) { Result<DescriptionRead, Error>.Ok(model.DescriptionRead.NeedMore(missing)) -> return }
+                                Complete(count) {
+                                    Int(count) + 1 => self.symbolCount
+                                    0 => self.symbolIndex
+                                    model.DescriptionPhase.SimpleSymbol => self.phase
+                                }
+                            }
+                        }
+                    }
+                }
+                SimpleSymbol {
+                    self.symbolIndex < self.symbolCount -> if {
+                        window -> read(self.symbolBits) -> when {
+                            Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                            Ok(bits) {
+                                bits -> when {
+                                    Incomplete(missing) { Result<DescriptionRead, Error>.Ok(model.DescriptionRead.NeedMore(missing)) -> return }
+                                    Complete(encoded) {
+                                        Int(encoded) < self.alphabetSize
+                                            -> unless { errorDescriptionRead(errors.Kind.InvalidSymbol, UIntSize(encoded)) -> return }
+                                        Int(encoded) => symbol
+                                        0 => previous!
+                                        previous! < (self.symbols -> len) -> while {
+                                            self.symbols[previous!] != symbol
+                                                -> unless { errorDescriptionRead(errors.Kind.DuplicateSymbol, UIntSize(symbol)) -> return }
+                                            previous! + 1 => previous!
+                                        }
+                                        self.symbols -> push(symbol)
+                                        self.symbolIndex + 1 => self.symbolIndex
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.symbolIndex == self.symbolCount -> if {
+                        0 => index!
+                        index! < self.symbolCount -> while {
+                            self.lengths -> setSymbolLength(self.symbols, index!, 2)
+                            index! + 1 => index!
+                        }
+                        self.lengths -> setSymbolLength(self.symbols, 0, 1)
+                        self.symbolCount == 2 -> if { self.lengths -> setSymbolLength(self.symbols, 1, 1) }
+                        self.symbolCount == 4 -> if {
+                            model.DescriptionPhase.SimpleSelector => self.phase
+                        } else {
+                            self.builder -> table(self.lengths, self.rootBits) -> when {
+                                Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                                Ok(table) { model.DescriptionTable.Built(table) => self.table }
+                            }
+                            model.DescriptionPhase.Finished => self.phase
+                        }
+                    }
+                }
+                SimpleSelector {
+                    window -> read(1) -> when {
+                        Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                        Ok(bits) {
+                            bits -> when {
+                                Incomplete(missing) { Result<DescriptionRead, Error>.Ok(model.DescriptionRead.NeedMore(missing)) -> return }
+                                Complete(selector) {
+                                    selector == 1 -> if {
+                                        self.lengths -> setSymbolLength(self.symbols, 2, 3)
+                                        self.lengths -> setSymbolLength(self.symbols, 3, 3)
+                                    } else {
+                                        self.lengths -> setSymbolLength(self.symbols, 0, 2)
+                                    }
+                                    self.builder -> table(self.lengths, self.rootBits) -> when {
+                                        Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                                        Ok(table) { model.DescriptionTable.Built(table) => self.table }
+                                    }
+                                    model.DescriptionPhase.Finished => self.phase
+                                }
+                            }
+                        }
+                    }
+                }
+                ComplexCodeLengths {
+                    self.codeLengthIndex < 18 and self.codeLengthSpace > 0
+                        -> if {
+                            self.codeLengthReader -> read(window) -> when {
+                                Err(error) { Result<DescriptionRead, Error>.Err(error) -> return }
+                                Ok(progress) {
+                                    progress -> when {
+                                        NeedMore(bits) { Result<DescriptionRead, Error>.Ok(model.DescriptionRead.NeedMore(bits)) -> return }
+                                        Ready(length) {
+                                            self.codeLengthIndex -> codeLengthOrder => orderedIndex
+                                            self.codeLengthLengths -> setLengthAt(orderedIndex, length)
+                                            length != 0 -> if {
+                                                self.codeLengthSpace - 32 / (length -> powerOfTwo) => self.codeLengthSpace
+                                                self.codeLengthSpace >= 0
+                                                    -> unless { errorDescriptionRead(errors.Kind.InvalidCodeSpace, UIntSize(self.codeLengthIndex)) -> return }
+                                                self.codeLengthCount + 1 => self.codeLengthCount
+                                            }
+                                            self.codeLengthIndex + 1 => self.codeLengthIndex
+                                            FixedCodeLengthReader {
+                                                phase: model.FixedCodeLengthPhase.Low
+                                                value: 0
+                                            } => self.codeLengthReader
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    self.codeLengthIndex >= 18 or self.codeLengthSpace == 0
+                        -> if {
+                            self.codeLengthCount == 1 or self.codeLengthSpace == 0
+                                -> unless { errorDescriptionRead(errors.Kind.InvalidCodeSpace, UIntSize(self.codeLengthIndex)) -> return }
+                            self.builder -> table(self.codeLengthLengths, 5) -> when {
+                                Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                                Ok(table) { model.DescriptionTable.Built(table) => self.codeLengthTable }
+                            }
+                            model.DescriptionPhase.ComplexSymbols => self.phase
+                        }
+                }
+                ComplexSymbols {
+                    self.outputIndex < self.alphabetSize and self.outputSpace > 0
+                        -> if {
+                            self.codeLengthTable -> when {
+                                Empty { errorDescriptionRead(errors.Kind.InvalidCodeSpace, UIntSize(self.outputIndex)) -> return }
+                                Built(table) {
+                                    window -> symbol(table) -> when {
+                                        Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                                        Ok(probed) {
+                                            probed -> when {
+                                                NeedMore(bits) { Result<DescriptionRead, Error>.Ok(model.DescriptionRead.NeedMore(bits)) -> return }
+                                                Ready(decoded) {
+                                                    decoded.symbol < 16 -> if {
+                                                        0 => self.repeatCount
+                                                        self.lengths -> setLengthAt(self.outputIndex, decoded.symbol)
+                                                        self.outputIndex + 1 => self.outputIndex
+                                                        decoded.symbol != 0 -> if {
+                                                            decoded.symbol => self.previousLength
+                                                            self.outputSpace - ((15 - decoded.symbol) -> powerOfTwo) => self.outputSpace
+                                                            self.outputSpace >= 0
+                                                                -> unless { errorDescriptionRead(errors.Kind.InvalidCodeSpace, UIntSize(self.outputIndex)) -> return }
+                                                        }
+                                                    } else {
+                                                        decoded.symbol => self.pendingRepeatSymbol
+                                                        model.DescriptionPhase.ComplexRepeatBits => self.phase
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    self.outputIndex >= self.alphabetSize or self.outputSpace == 0
+                        -> if {
+                            self.outputSpace == 0
+                                -> unless { errorDescriptionRead(errors.Kind.InvalidCodeSpace, UIntSize(self.outputIndex)) -> return }
+                            self.builder -> table(self.lengths, self.rootBits) -> when {
+                                Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                                Ok(table) { model.DescriptionTable.Built(table) => self.table }
+                            }
+                            model.DescriptionPhase.Finished => self.phase
+                        }
+                }
+                ComplexRepeatBits {
+                    self.pendingRepeatSymbol - 14 => extraWidth
+                    window -> read(extraWidth) -> when {
+                        Err(error) { errorDescriptionRead(error.kind -> mapPrefixError, error.offset) -> return }
+                        Ok(bits) {
+                            bits -> when {
+                                Incomplete(missing) { Result<DescriptionRead, Error>.Ok(model.DescriptionRead.NeedMore(missing)) -> return }
+                                Complete(extra) {
+                                    self.pendingRepeatSymbol == 16 -> if { self.previousLength } else { 0 } => nextRepeatLength
+                                    self.repeatLength != nextRepeatLength -> if {
+                                        0 => self.repeatCount
+                                        nextRepeatLength => self.repeatLength
+                                    }
+                                    self.repeatCount => oldRepeat
+                                    self.repeatCount > 0 -> if {
+                                        (self.repeatCount - 2) * (extraWidth -> powerOfTwo) => self.repeatCount
+                                    }
+                                    self.repeatCount + Int(extra) + 3 => self.repeatCount
+                                    self.repeatCount - oldRepeat => delta
+                                    self.outputIndex + delta <= self.alphabetSize
+                                        -> unless { errorDescriptionRead(errors.Kind.InvalidCodeSpace, UIntSize(self.outputIndex + delta)) -> return }
+                                    0 => repeated!
+                                    repeated! < delta -> while {
+                                        self.lengths -> setLengthAt(self.outputIndex, self.repeatLength)
+                                        self.outputIndex + 1 => self.outputIndex
+                                        repeated! + 1 => repeated!
+                                    }
+                                    self.repeatLength != 0 -> if {
+                                        self.outputSpace - delta * ((15 - self.repeatLength) -> powerOfTwo) => self.outputSpace
+                                        self.outputSpace >= 0
+                                            -> unless { errorDescriptionRead(errors.Kind.InvalidCodeSpace, UIntSize(self.outputIndex)) -> return }
+                                    }
+                                    -1 => self.pendingRepeatSymbol
+                                    model.DescriptionPhase.ComplexSymbols => self.phase
+                                }
+                            }
+                        }
+                    }
+                }
+                Finished { Result<DescriptionRead, Error>.Ok(model.DescriptionRead.Ready) -> return }
+            }
+        }
+        errorDescriptionRead(errors.Kind.InvalidCodeSpace, 0)
+    }
+
+    public takeTable: mut self -> Result<prefix.Table, Error> {
+        self.table => stored
+        model.DescriptionTable.Empty => self.table
+        stored -> when {
+            Empty { errorDescriptionTable(errors.Kind.InvalidCodeSpace, 0) }
+            Built(table) { Result<prefix.Table, Error>.Ok(table) }
+        }
+    }
+
+    public intoTable: move self -> Result<prefix.Table, Error> {
+        self => reader!
+        reader! -> takeTable
+    }
+}
+
+impl FixedCodeLengthReader {
+    public read: mut self, window: mut prefix.Window -> Result<FixedCodeLengthRead, Error> {
+        true -> while {
+            self.phase -> when {
+                Low {
+                    window -> read(2) -> when {
+                        Err(error) { errorFixedCodeLengthRead(error.kind -> mapPrefixError, error.offset) -> return }
+                        Ok(read) {
+                            read -> when {
+                                Incomplete(bits) { Result<FixedCodeLengthRead, Error>.Ok(model.FixedCodeLengthRead.NeedMore(bits)) -> return }
+                                Complete(value) {
+                                    value == 0 -> if { 0 } else {
+                                        value == 1 -> if { 4 } else {
+                                            value == 2 -> if { 3 } else { -1 }
+                                        }
+                                    } => decoded
+                                    decoded >= 0 -> if {
+                                        decoded => self.value
+                                        model.FixedCodeLengthPhase.Finished => self.phase
+                                        Result<FixedCodeLengthRead, Error>.Ok(model.FixedCodeLengthRead.Ready(decoded)) -> return
+                                    } else {
+                                        model.FixedCodeLengthPhase.Third => self.phase
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Third {
+                    window -> read(1) -> when {
+                        Err(error) { errorFixedCodeLengthRead(error.kind -> mapPrefixError, error.offset) -> return }
+                        Ok(read) {
+                            read -> when {
+                                Incomplete(bits) { Result<FixedCodeLengthRead, Error>.Ok(model.FixedCodeLengthRead.NeedMore(bits)) -> return }
+                                Complete(value) {
+                                    value == 0 -> if {
+                                        2 => self.value
+                                        model.FixedCodeLengthPhase.Finished => self.phase
+                                        Result<FixedCodeLengthRead, Error>.Ok(model.FixedCodeLengthRead.Ready(2)) -> return
+                                    } else {
+                                        model.FixedCodeLengthPhase.Fourth => self.phase
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Fourth {
+                    window -> read(1) -> when {
+                        Err(error) { errorFixedCodeLengthRead(error.kind -> mapPrefixError, error.offset) -> return }
+                        Ok(read) {
+                            read -> when {
+                                Incomplete(bits) { Result<FixedCodeLengthRead, Error>.Ok(model.FixedCodeLengthRead.NeedMore(bits)) -> return }
+                                Complete(value) {
+                                    value == 0 -> if { 1 } else { 5 } => decoded
+                                    decoded => self.value
+                                    model.FixedCodeLengthPhase.Finished => self.phase
+                                    Result<FixedCodeLengthRead, Error>.Ok(model.FixedCodeLengthRead.Ready(decoded)) -> return
+                                }
+                            }
+                        }
+                    }
+                }
+                Finished { Result<FixedCodeLengthRead, Error>.Ok(model.FixedCodeLengthRead.Ready(self.value)) -> return }
+            }
+        }
+        # The phase enum is exhaustive and every terminal branch returns. This
+        # tail exists only because the current semantic checker does not yet
+        # prove that a literal-true loop cannot fall through.
+        errorFixedCodeLengthRead(errors.Kind.InvalidCodeSpace, 0)
+    }
+}

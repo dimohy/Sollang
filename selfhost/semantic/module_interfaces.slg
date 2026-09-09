@@ -10,14 +10,14 @@ import sys.file as file
 # and their signature-bearing members. Consumers therefore survive body-only
 # edits, but never reuse an interface after a public ABI change.
 public struct ModuleFingerprint {
-    sourceIndex: Int
-    moduleHash: UInt64
-    sourceHash: UInt64
-    interfaceHash: UInt64
-    implementationHash: UInt64
-    importHash: UInt64
-    publicSymbolCount: Int
-    importCount: Int
+    public sourceIndex: Int
+    public moduleHash: UInt64
+    public sourceHash: UInt64
+    public interfaceHash: UInt64
+    public implementationHash: UInt64
+    public importHash: UInt64
+    public publicSymbolCount: Int
+    public importCount: Int
 }
 
 # Canonical interface words are retained alongside their lookup hash. Every
@@ -26,10 +26,10 @@ public struct ModuleFingerprint {
 # locating an entry by
 # interfaceHash, so a hash collision can never silently accept a different API.
 public struct ModuleInterfaces {
-    interfaceHashes: [UInt64; ~]
-    wordStarts: [Int; ~]
-    wordLengths: [Int; ~]
-    words: [UInt64; ~]
+    public interfaceHashes: [UInt64; ~]
+    public wordStarts: [Int; ~]
+    public wordLengths: [Int; ~]
+    public words: [UInt64; ~]
 }
 
 mix hash: UInt64, value: UInt64 -> UInt64 {
@@ -112,13 +112,13 @@ hashSymbol package: analysis.PackageAnalysis, sourceIndex: Int, symbolIndex: Int
     declaration.firstToken + declaration.tokenCount => tokenEnd!
     tokenIndex! < tokenEnd! -> while {
         package.tokens[sourceRange.tokenStart + tokenIndex!] => token
-        (token.kind == grammar.tokenIdLeftBrace() or token.kind == grammar.tokenIdFatArrow())
+        token.kind == grammar.tokenIdLeftBrace() or token.kind == grammar.tokenIdFatArrow()
             -> if {
-            tokenIndex! => tokenEnd!
-        } else {
-            package -> hashToken(sourceIndex, tokenIndex!, hash!) => hash!
-            tokenIndex! + 1 => tokenIndex!
-        }
+                tokenIndex! => tokenEnd!
+            } else {
+                package -> hashToken(sourceIndex, tokenIndex!, hash!) => hash!
+                tokenIndex! + 1 => tokenIndex!
+            }
     }
     hash!
 }
@@ -154,15 +154,15 @@ public interfacesAnalyzed package: analysis.PackageAnalysis -> ModuleInterfaces 
             package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
             rootSymbol.flags / 4 % 2 == 1 => exportedRoot
             false => signatureSymbol!
-            (exportedRoot and symbolIndex! == rootSymbolIndex!)
+            exportedRoot and symbolIndex! == rootSymbolIndex!
                 -> if { true => signatureSymbol! }
-            (exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5))
+            exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)
                 -> if {
-                (symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34)
-                    -> if { true => signatureSymbol! }
-            }
-            (exportedRoot and rootSymbol.kind == 7) -> if {
-                (symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35)
+                    symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34
+                        -> if { true => signatureSymbol! }
+                }
+            exportedRoot and rootSymbol.kind == 7 -> if {
+                symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35
                     -> if { true => signatureSymbol! }
             }
             signatureSymbol! -> if { publicSymbolCount! + 1 => publicSymbolCount! }
@@ -174,59 +174,59 @@ public interfacesAnalyzed package: analysis.PackageAnalysis -> ModuleInterfaces 
         0 => canonicalSymbolIndex!
         canonicalSymbolIndex! < sourceRange.symbolCount
             -> while {
-            package.symbols[sourceRange.symbolStart + canonicalSymbolIndex!] => symbol
-            canonicalSymbolIndex! => rootSymbolIndex!
-            symbol.parent => parentSymbol!
-            parentSymbol! >= 0 -> while {
-                parentSymbol! => rootSymbolIndex!
-                package.symbols[sourceRange.symbolStart + parentSymbol!].parent => parentSymbol!
-            }
-            package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
-            rootSymbol.flags / 4 % 2 == 1 => exportedRoot
-            false => signatureSymbol!
-            (exportedRoot and canonicalSymbolIndex! == rootSymbolIndex!)
-                -> if { true => signatureSymbol! }
-            (exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5))
-                -> if {
-                (symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34)
-                    -> if { true => signatureSymbol! }
-            }
-            (exportedRoot and rootSymbol.kind == 7) -> if {
-                (symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35)
-                    -> if { true => signatureSymbol! }
-            }
-            signatureSymbol! -> if {
-                words! -> push(UInt64(publicOrdinal! + 1))
-                words! -> push(UInt64(symbol.kind + 1))
-                words! -> push(UInt64(symbol.flags + 1))
-                package.nodes[sourceRange.astStart + symbol.astNode] => declaration
-                declaration.firstToken => tokenIndex!
-                declaration.firstToken + declaration.tokenCount => tokenEnd!
-                tokenIndex! < tokenEnd! -> while {
-                    package.tokens[sourceRange.tokenStart + tokenIndex!] => token
-                    (token.kind == grammar.tokenIdLeftBrace() or token.kind == grammar.tokenIdFatArrow())
-                        -> if {
-                        tokenIndex! => tokenEnd!
-                    } else {
-                        (token.kind == grammar.triviaIdWhitespace() or token.kind == grammar.triviaIdComment())
-                            -> unless {
-                            words! -> push(UInt64(token.kind + 1))
-                            words! -> push(UInt64(token.span.length))
-                            UIntSize(0) => tokenByteIndex!
-                            tokenByteIndex! < token.span.length -> while {
-                                package.sources[sourceIndex!] -> byte(token.span.start + tokenByteIndex!) => tokenByte
-                                words! -> push(UInt64(tokenByte))
-                                tokenByteIndex! + 1 => tokenByteIndex!
-                            }
-                        }
-                        tokenIndex! + 1 => tokenIndex!
-                    }
+                package.symbols[sourceRange.symbolStart + canonicalSymbolIndex!] => symbol
+                canonicalSymbolIndex! => rootSymbolIndex!
+                symbol.parent => parentSymbol!
+                parentSymbol! >= 0 -> while {
+                    parentSymbol! => rootSymbolIndex!
+                    package.symbols[sourceRange.symbolStart + parentSymbol!].parent => parentSymbol!
                 }
-                words! -> push(18446744073709551615)
-                publicOrdinal! + 1 => publicOrdinal!
+                package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
+                rootSymbol.flags / 4 % 2 == 1 => exportedRoot
+                false => signatureSymbol!
+                exportedRoot and canonicalSymbolIndex! == rootSymbolIndex!
+                    -> if { true => signatureSymbol! }
+                exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)
+                    -> if {
+                        symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34
+                            -> if { true => signatureSymbol! }
+                    }
+                exportedRoot and rootSymbol.kind == 7 -> if {
+                    symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35
+                        -> if { true => signatureSymbol! }
+                }
+                signatureSymbol! -> if {
+                    words! -> push(UInt64(publicOrdinal! + 1))
+                    words! -> push(UInt64(symbol.kind + 1))
+                    words! -> push(UInt64(symbol.flags + 1))
+                    package.nodes[sourceRange.astStart + symbol.astNode] => declaration
+                    declaration.firstToken => tokenIndex!
+                    declaration.firstToken + declaration.tokenCount => tokenEnd!
+                    tokenIndex! < tokenEnd! -> while {
+                        package.tokens[sourceRange.tokenStart + tokenIndex!] => token
+                        token.kind == grammar.tokenIdLeftBrace() or token.kind == grammar.tokenIdFatArrow()
+                            -> if {
+                                tokenIndex! => tokenEnd!
+                            } else {
+                                token.kind == grammar.triviaIdWhitespace() or token.kind == grammar.triviaIdComment()
+                                    -> unless {
+                                        words! -> push(UInt64(token.kind + 1))
+                                        words! -> push(UInt64(token.span.length))
+                                        UIntSize(0) => tokenByteIndex!
+                                        tokenByteIndex! < token.span.length -> while {
+                                            package.sources[sourceIndex!] -> byte(token.span.start + tokenByteIndex!) => tokenByte
+                                            words! -> push(UInt64(tokenByte))
+                                            tokenByteIndex! + 1 => tokenByteIndex!
+                                        }
+                                    }
+                                tokenIndex! + 1 => tokenIndex!
+                            }
+                    }
+                    words! -> push(18446744073709551615)
+                    publicOrdinal! + 1 => publicOrdinal!
+                }
+                canonicalSymbolIndex! + 1 => canonicalSymbolIndex!
             }
-            canonicalSymbolIndex! + 1 => canonicalSymbolIndex!
-        }
 
         words! -> hashWords => interfaceHash
         interfaceHashes! -> push(interfaceHash)
@@ -262,18 +262,18 @@ public sameInterface left: ModuleInterfaces, leftIndex: Int, right: ModuleInterf
     left.interfaceHashes[leftIndex] == right.interfaceHashes[rightIndex] => matches!
     left.wordLengths[leftIndex] == right.wordLengths[rightIndex]
         -> unless {
-        false => matches!
-    }
+            false => matches!
+        }
     matches! -> if {
         left.wordStarts[leftIndex] => leftStart
         right.wordStarts[rightIndex] => rightStart
         left.wordLengths[leftIndex] => length
         0 => index!
-        (matches! and index! < length) -> while {
+        matches! and index! < length -> while {
             left.words[leftStart + index!] == right.words[rightStart + index!]
                 -> unless {
-                false => matches!
-            }
+                    false => matches!
+                }
             index! + 1 => index!
         }
     }
@@ -294,9 +294,9 @@ public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerpri
         tokenIndex! < sourceRange.tokenCount -> while {
             package.tokens[sourceRange.tokenStart + tokenIndex!] => implementationToken
             false => skipImplementationToken!
-            (implementationToken.kind == grammar.triviaIdWhitespace() or implementationToken.kind == grammar.triviaIdComment())
+            implementationToken.kind == grammar.triviaIdWhitespace() or implementationToken.kind == grammar.triviaIdComment()
                 -> if { true => skipImplementationToken! }
-            (implementationToken.kind == grammar.tokenIdNewLine() and lastImplementationKind! == grammar.tokenIdNewLine())
+            implementationToken.kind == grammar.tokenIdNewLine() and lastImplementationKind! == grammar.tokenIdNewLine()
                 -> if { true => skipImplementationToken! }
             not skipImplementationToken! -> if {
                 package -> hashToken(sourceIndex!, tokenIndex!, implementationHash!) => implementationHash!
@@ -318,15 +318,15 @@ public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerpri
             package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
             rootSymbol.flags / 4 % 2 == 1 => exportedRoot
             false => signatureSymbol!
-            (exportedRoot and symbolIndex! == rootSymbolIndex!)
+            exportedRoot and symbolIndex! == rootSymbolIndex!
                 -> if { true => signatureSymbol! }
-            (exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5))
+            exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)
                 -> if {
-                (symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34)
-                    -> if { true => signatureSymbol! }
-            }
-            (exportedRoot and rootSymbol.kind == 7) -> if {
-                (symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35)
+                    symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34
+                        -> if { true => signatureSymbol! }
+                }
+            exportedRoot and rootSymbol.kind == 7 -> if {
+                symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35
                     -> if { true => signatureSymbol! }
             }
             signatureSymbol! -> if {

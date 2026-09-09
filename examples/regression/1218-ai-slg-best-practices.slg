@@ -1,0 +1,104 @@
+# AI practice fixture: data, abstraction, flow, ownership, concurrency, and errors.
+import std.sequence
+
+struct Counter {
+    value: Int
+}
+
+enum Priority {
+    Low
+    High(Int)
+}
+
+trait Magnitude {
+    magnitude: self -> Int
+}
+
+double value: Int -> Int => value * 2
+
+square value: Int -> Int => value * value
+
+classify score: Int -> Int {
+    score -> when {
+        90..100 => 3
+        80..89 => 2
+        else => 1
+    }
+}
+
+incrementAsync value: Int -> async Int {
+    value + 1
+}
+
+impl Counter {
+    public next: mut self -> Int {
+        self.value + 1 => next
+        next => self.value
+        next
+    }
+}
+
+impl Magnitude for Counter {
+    magnitude: self -> Int => self.value
+}
+
+readMagnitude<T> value: T -> Int where T: Magnitude {
+    value -> Magnitude.magnitude
+}
+
+priorityValue priority: Priority -> Int {
+    priority -> when {
+        Low => 1
+        High(value) { value }
+    }
+}
+
+positive value: Int -> Result<Int, Text> {
+    value > 0 -> unless {
+        Result<Int, Text>.Err("positive value required") -> return
+    }
+    Result<Int, Text>.Ok(value)
+}
+
+total: -> Result<Int, Text> {
+    Counter { value: 0 } => counter!
+    [10, 20, 30; ~] => values!
+    22 => values![1]
+    counter! -> next => first
+    counter! -> next => second
+    values![0] + values![1] + values![2] -> positive? => sum
+    Result<Int, Text>.Ok(first + second + sum)
+}
+
+main {
+    total() -> when {
+        Ok(value) {
+            5 -> branch {
+                doubled: -> double
+                squared: -> square
+            } => sequential
+            7 -> parallel branch {
+                doubled: ref -> double
+                squared: ref -> square
+            } => parallel
+            95 -> classify => grade
+            Counter { value: 4 } -> readMagnitude => magnitude
+            Priority.High(5) -> priorityValue => priority
+            10 -> incrementAsync => task
+            task -> await => incremented
+            0 => streamTotal!
+            1..100
+                -> map item { item * 2 }
+                -> filter item { item % 3 == 0 }
+                -> take(3)
+                -> each item {
+                    streamTotal! + item => streamTotal!
+                }
+            sequential.doubled + sequential.squared => sequentialTotal
+            parallel.doubled + parallel.squared => parallelTotal
+            value + sequentialTotal + parallelTotal + grade + magnitude + priority + incremented + streamTotal! => featureTotal
+            "best-practice=$featureTotal" -> println
+        }
+        Err(message) { message -> println }
+    }
+}

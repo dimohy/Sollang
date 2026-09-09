@@ -1,0 +1,144 @@
+# RFC 8878 compressed blocks may contain raw or RLE literals and zero sequences.
+import std.compress.zstd as zstd
+import std.compress.zstd.error as zstd_errors
+
+kindCode kind: zstd_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    InputLimitExceeded { 1 }
+    OutputLimitExceeded { 2 }
+    WindowLimitExceeded { 3 }
+    FrameLimitExceeded { 4 }
+    SkippableLimitExceeded { 5 }
+    TruncatedInput { 6 }
+    InvalidMagic { 7 }
+    InvalidHeader { 8 }
+    UnsupportedDictionary { 9 }
+    ChecksumMismatch { 10 }
+    UnsupportedCompressedBlock { 11 }
+    InvalidBlock { 12 }
+    SizeMismatch { 13 }
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+uniform bytes: [UInt8], value: UInt8, count: Int -> Bool {
+    (bytes -> len) == count -> unless { false -> return }
+    0 => index!
+    index! < count -> while {
+        bytes[index!] == value -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+decodeBytewise codec: zstd.Codec, input: [UInt8], expected: [UInt8] -> Result<Bool, zstd.Error> {
+    codec -> decoder? => decoder!
+    0 => index!
+    index! < (input -> len) -> while {
+        [input[index!]] => chunk
+        decoder! -> write(chunk)? => accepted
+        accepted == 1 -> unless { Result<Bool, zstd.Error>.Ok(false) -> return }
+        index! + 1 => index!
+    }
+    [UInt8; ~] => output!
+    decoder! -> finish(output!)? => written
+    output! -> matches(expected) => contentMatches
+    Result<Bool, zstd.Error>.Ok(written == (expected -> len) and contentMatches)
+}
+
+rejects codec: zstd.Codec, input: [UInt8], expectedKind: Int -> Result<Bool, zstd.Error> {
+    codec -> decoder? => decoder!
+    decoder! -> write(input)? => accepted
+    [UInt8(9); ~] => output!
+    decoder! -> finish(output!) -> when {
+        Ok(_) { Result<Bool, zstd.Error>.Ok(false) }
+        Err(error) {
+            Result<Bool, zstd.Error>.Ok(
+                (error.kind -> kindCode) == expectedKind
+                    and (output! -> len) == 1
+                    and output![0] == 9)
+            }
+        }
+}
+
+run: -> Result<Unit, zstd.Error> uses Console {
+    zstd.Limits {
+        maxEncodedBytes: 128
+        maxDecodedBytes: 32
+        maxWindowBytes: 1_024
+        maxFrames: 1
+        maxSkippableFrameBytes: 0
+    } -> codec(zstd.FrameOptions { checksum: false })? => codec
+
+    # A 1 KiB window, last compressed block, raw literals "hello", zero sequences.
+    [UInt8(40), 181, 47, 253, 0, 0, 61, 0, 0, 40, 104, 101, 108, 108, 111, 0]
+        => rawLiteralsFrame
+    [UInt8(104), 101, 108, 108, 111] => hello
+    codec -> decodeBytewise(rawLiteralsFrame, hello)? => rawDecoded
+    "zstd-compressed-raw=$(rawDecoded)" -> println
+
+    # RLE literals regenerate five bytes before the zero-sequence section.
+    [UInt8(40), 181, 47, 253, 0, 0, 29, 0, 0, 41, 97, 0] => rleLiteralsFrame
+    [UInt8(97), 97, 97, 97, 97] => repeated
+    codec -> decodeBytewise(rleLiteralsFrame, repeated)? => rleDecoded
+    "zstd-compressed-rle=$(rleDecoded)" -> println
+
+    zstd.Limits {
+        maxEncodedBytes: 256
+        maxDecodedBytes: 5_000
+        maxWindowBytes: 8_192
+        maxFrames: 1
+        maxSkippableFrameBytes: 0
+    } -> codec(zstd.FrameOptions { checksum: false })? => largeCodec
+    # Two-byte literal-size header: 32 raw bytes followed by zero sequences.
+    [UInt8(40), 181, 47, 253, 0, 24, 29, 1, 0, 4, 2; ~] => mediumHeaderFrame!
+    0 => mediumIndex!
+    mediumIndex! < 32 -> while {
+        mediumHeaderFrame! -> push(98)
+        mediumIndex! + 1 => mediumIndex!
+    }
+    mediumHeaderFrame! -> push(0)
+    largeCodec -> decompress(mediumHeaderFrame!)? => mediumOutput
+    "zstd-size-header-12=$(mediumOutput -> uniform(98, 32))" -> println
+
+    # Three-byte literal-size header: one byte regenerates to 4096 RLE bytes.
+    [UInt8(40), 181, 47, 253, 0, 24, 45, 0, 0, 13, 0, 1, 99, 0] => longHeaderFrame
+    largeCodec -> decompress(longHeaderFrame)? => longOutput
+    "zstd-size-header-20=$(longOutput -> uniform(99, 4_096))" -> println
+
+    zstd.Limits {
+        maxEncodedBytes: 128
+        maxDecodedBytes: 32
+        maxWindowBytes: 8_192
+        maxFrames: 1
+        maxSkippableFrameBytes: 0
+    } -> codec(zstd.FrameOptions { checksum: false })? => boundedCodec
+    boundedCodec -> rejects(longHeaderFrame, 2)? => outputLimit
+    "zstd-output-limit=$(outputLimit)" -> println
+
+    # FSE-compressed Huffman weights remain an explicit capability error.
+    [UInt8(40), 181, 47, 253, 0, 0, 53, 0, 0, 18, 128, 0, 1, 0, 0] => fseWeightFrame
+    codec -> rejects(fseWeightFrame, 11)? => fseWeightExplicit
+    "zstd-huffman-explicit=$(fseWeightExplicit)" -> println
+    # A nonzero sequence header with no modes or bitstream is malformed input.
+    [UInt8(40), 181, 47, 253, 0, 0, 21, 0, 0, 0, 1] => sequenceFrame
+    codec -> rejects(sequenceFrame, 12)? => sequenceInvalid
+    "zstd-sequence-invalid=$(sequenceInvalid)" -> println
+
+    Result<Unit, zstd.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(error) { "zstd-error=$(error.kind -> kindCode)" -> println }
+    }
+}

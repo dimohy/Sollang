@@ -1,0 +1,34 @@
+import sys.file as file
+import sys.process as process
+import sys.runtime as runtime
+
+# One Command instance owns child-only stdin, stdout, and stderr file policies.
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 1 -> if {
+        file.readStandardInput() => input
+        (input -> len) > 0 -> if {
+            "stdout child" -> println
+            "stderr child" -> runtime.eprintln
+        }
+    } else {
+        "examples/regression/01-function-basic-hello.slg" => inputPath
+        "artifacts/example-tests/1179-process-stdio-stdout.txt" => outputPath
+        "artifacts/example-tests/1179-process-stdio-stderr.txt" => errorPath
+        process.command(arguments[0]) => command!
+        command! -> arg("--child")
+        command! -> stdin(process.Input.File(inputPath))
+        command! -> stdout(process.Output.File(outputPath))
+        command! -> stderr(process.Output.File(errorPath))
+        command! -> status -> when {
+            Result<process.ExitStatus, Text>.Ok(status) {
+                outputPath -> file.mapText => output
+                errorPath -> file.mapText => error
+                "status=$(status -> exitCode) stdout=$(output -> len) stderr=$(error -> len)" -> println
+            }
+            Result<process.ExitStatus, Text>.Err(error) {
+                "error=$error" -> println
+            }
+        }
+    }
+}

@@ -1,0 +1,386 @@
+namespace std.net.http.client
+
+import std.net as net
+import std.net.http as http
+import std.net.http.body as body
+import std.net.http.error as errors
+import std.net.http.request as request
+import std.net.http.client as model
+import std.net.socket as socket
+
+# Synchronous HTTP/1.1 connection owner. One Client can have only one
+# outstanding Exchange, and only a completely consumed response can return a
+# reusable Client. DNS, TLS, redirects, decompression, and protocol downgrade
+# remain explicit later layers.
+public struct ClientOptions {
+    public endpoint: net.Endpoint
+    public parser: http.Parser
+    public bodyPolicy: body.BodyPolicy
+    public maxHeadBytes: Int
+    public bodyBufferBytes: Int
+}
+
+public enum Error {
+    Http(http.Error)
+    Socket(socket.SocketError)
+    PeerClosed
+    InvalidBufferSize
+    RequestBodyLengthMismatch
+    InformationalResponseUnsupported
+    BodyNotComplete
+    UnexpectedResponseBytes
+}
+
+public struct Client {
+    public transport: socket.TcpStream
+    public parser: http.Parser
+    public bodyPolicy: body.BodyPolicy
+    public maxHeadBytes: Int
+    public bodyBufferBytes: Int
+}
+
+public struct Exchange {
+    public transport: socket.TcpStream
+    public parser: http.Parser
+    public bodyPolicy: body.BodyPolicy
+    public maxHeadBytes: Int
+    public bodyBufferBytes: Int
+    public semantics: request.ResponseSemantics
+    public requestConnection: request.ConnectionMode
+}
+
+public struct Response {
+    public transport: socket.TcpStream
+    public parser: http.Parser
+    public bodyPolicy: body.BodyPolicy
+    public maxHeadBytes: Int
+    public bodyBufferBytes: Int
+    public semantics: request.ResponseSemantics
+    public requestConnection: request.ConnectionMode
+    public bytes: [UInt8; ~]
+    public head: http.ResponseHead
+    public bodyCursor: UIntSize
+}
+
+public struct ResponseBody {
+    public transport: socket.TcpStream
+    public parser: http.Parser
+    public bodyPolicy: body.BodyPolicy
+    public maxHeadBytes: Int
+    public bodyBufferBytes: Int
+    public bytes: [UInt8; ~]
+    public bodyCursor: UIntSize
+    public input: [UInt8; ~]
+    public inputCursor: UIntSize
+    public decoder: body.BodyDecoder
+    public reusable: Bool
+    public untilClose: Bool
+    public eof: Bool
+}
+
+public enum ResponseOutcome {
+    Closed
+    Reusable(Client)
+}
+
+httpError kind: errors.Kind, offset: UIntSize -> Error {
+    model.Error.Http(http.Error { kind: kind, offset: offset })
+}
+
+responseAllowsPersistence head: ref http.ResponseHead -> Result<Bool, Error> {
+    false => closes!
+    false => keepsAlive!
+    0 => index!
+    index! < (head -> fieldCount) -> while {
+        head -> fieldNameIs(index!, "Connection") -> if {
+            head -> fieldValueHasToken(index!, "close") -> when {
+                Err(error) { Result<Bool, Error>.Err(model.Error.Http(error)) -> return }
+                Ok(found) { found -> if { true => closes! } }
+            }
+            head -> fieldValueHasToken(index!, "keep-alive") -> when {
+                Err(error) { Result<Bool, Error>.Err(model.Error.Http(error)) -> return }
+                Ok(found) { found -> if { true => keepsAlive! } }
+            }
+        }
+        index! + 1 => index!
+    }
+    closes! -> if { Result<Bool, Error>.Ok(false) -> return }
+    head.version -> when {
+        Http11 { Result<Bool, Error>.Ok(true) }
+        Http10 { Result<Bool, Error>.Ok(keepsAlive!) }
+    }
+}
+
+clientDecoder plan: body.BodyPlan -> Result<body.BodyDecoder, Error> {
+    plan -> decoder -> when {
+        Err(error) { Result<body.BodyDecoder, Error>.Err(model.Error.Http(error)) }
+        Ok(value) { Result<body.BodyDecoder, Error>.Ok(value) }
+    }
+}
+
+readResponseFresh exchange: move Exchange -> Result<Response, Error> uses Network {
+    exchange => state
+    [UInt8; ~] => bytes!
+    bytes! -> reserve(state.maxHeadBytes)
+    true -> while {
+        state.parser -> parseResponseBytes(bytes!) -> when {
+            Ok(head) {
+                head.status >= 100 and head.status < 200 -> if {
+                    Result<Response, Error>.Err(model.Error.InformationalResponseUnsupported) -> return
+                }
+                head.bodyStart => bodyCursor
+                Result<Response, Error>.Ok(Response {
+                    transport: state.transport
+                    parser: state.parser
+                    bodyPolicy: state.bodyPolicy
+                    maxHeadBytes: state.maxHeadBytes
+                    bodyBufferBytes: state.bodyBufferBytes
+                    semantics: state.semantics
+                    requestConnection: state.requestConnection
+                    bytes: bytes!
+                    head: head
+                    bodyCursor: bodyCursor
+                }) -> return
+            }
+            Err(error) => error.kind -> when {
+                UnexpectedEnd {
+                    UIntSize(bytes! -> len) >= UIntSize(state.maxHeadBytes)
+                        -> if {
+                            Result<Response, Error>.Err(httpError(errors.Kind.HeadLimitExceeded, UIntSize(state.maxHeadBytes))) -> return
+                        }
+                    state.transport -> receiveAppend(bytes!) -> when {
+                        Err(socketError) { Result<Response, Error>.Err(model.Error.Socket(socketError)) -> return }
+                        Ok(received) => received == 0 -> if {
+                            Result<Response, Error>.Err(model.Error.PeerClosed) -> return
+                        }
+                    }
+                }
+                else { Result<Response, Error>.Err(model.Error.Http(error)) -> return }
+            }
+        }
+    }
+    Result<Response, Error>.Err(model.Error.PeerClosed)
+}
+
+impl ClientOptions {
+    public connect: self -> Result<Client, Error> uses Network {
+        self.maxHeadBytes > 0 and self.bodyBufferBytes > 0
+            -> unless {
+                Result<Client, Error>.Err(model.Error.InvalidBufferSize) -> return
+            }
+        self.endpoint -> connect -> when {
+            Err(error) { Result<Client, Error>.Err(model.Error.Socket(error)) }
+            Ok(transport) => Result<Client, Error>.Ok(Client {
+                transport: transport
+                parser: self.parser
+                bodyPolicy: self.bodyPolicy
+                maxHeadBytes: self.maxHeadBytes
+                bodyBufferBytes: self.bodyBufferBytes
+            })
+        }
+    }
+}
+
+impl Client {
+    public localEndpoint: self -> Result<net.Endpoint, Error> uses Network {
+        self.transport -> localEndpoint -> when {
+            Err(error) { Result<net.Endpoint, Error>.Err(model.Error.Socket(error)) }
+            Ok(endpoint) { Result<net.Endpoint, Error>.Ok(endpoint) }
+        }
+    }
+
+    public remoteEndpoint: self -> Result<net.Endpoint, Error> uses Network {
+        self.transport -> remoteEndpoint -> when {
+            Err(error) { Result<net.Endpoint, Error>.Err(model.Error.Socket(error)) }
+            Ok(endpoint) { Result<net.Endpoint, Error>.Ok(endpoint) }
+        }
+    }
+
+    public send: move self, head: move request.RequestHead, content: ref [UInt8; ~] -> Result<Exchange, Error> uses Network {
+        head.bodyLength == UIntSize(content -> len) -> unless {
+            Result<Exchange, Error>.Err(model.Error.RequestBodyLengthMismatch) -> return
+        }
+        head -> responseSemantics => semantics
+        head.connection => requestConnection
+        head -> intoBytes => headBytes
+        self.transport -> sendAll(headBytes) -> when {
+            Err(error) { Result<Exchange, Error>.Err(model.Error.Socket(error)) -> return }
+            Ok(_) { }
+        }
+        (content -> len) > 0 -> if {
+            self.transport -> sendAll(content) -> when {
+                Err(error) { Result<Exchange, Error>.Err(model.Error.Socket(error)) -> return }
+                Ok(_) { }
+            }
+        }
+        Result<Exchange, Error>.Ok(Exchange {
+            transport: self.transport
+            parser: self.parser
+            bodyPolicy: self.bodyPolicy
+            maxHeadBytes: self.maxHeadBytes
+            bodyBufferBytes: self.bodyBufferBytes
+            semantics: semantics
+            requestConnection: requestConnection
+        })
+    }
+
+    public close: move self -> Unit uses Network {
+        self.transport -> close
+    }
+}
+
+impl Exchange {
+    public receive: move self -> Result<Response, Error> uses Network => self -> readResponseFresh
+}
+
+impl Response {
+    public status: self -> Int => self.head.status
+    public reasonText: self -> Text => self.head -> reasonText
+    public fieldCount: self -> Int => self.head -> fieldCount
+    public fieldName: self, index: Int -> Text => self.head -> fieldName(index)
+    public fieldValue: self, index: Int -> Text => self.head -> fieldValue(index)
+    public fieldNameIs: self, index: Int, name: Text -> Bool => self.head -> fieldNameIs(index, name)
+
+    public localEndpoint: self -> Result<net.Endpoint, Error> uses Network {
+        self.transport -> localEndpoint -> when {
+            Err(error) { Result<net.Endpoint, Error>.Err(model.Error.Socket(error)) }
+            Ok(endpoint) { Result<net.Endpoint, Error>.Ok(endpoint) }
+        }
+    }
+
+    public remoteEndpoint: self -> Result<net.Endpoint, Error> uses Network {
+        self.transport -> remoteEndpoint -> when {
+            Err(error) { Result<net.Endpoint, Error>.Err(model.Error.Socket(error)) }
+            Ok(endpoint) { Result<net.Endpoint, Error>.Ok(endpoint) }
+        }
+    }
+
+    public openBody: move self -> Result<ResponseBody, Error> {
+        self => response
+        response.semantics -> when {
+            Standard { response.bodyPolicy -> responseContext("GET") }
+            Head { response.bodyPolicy -> responseContext("HEAD") }
+            Connect { response.bodyPolicy -> responseContext("CONNECT") }
+        } => context
+        context -> plan(response.head) -> when {
+            Err(error) { Result<ResponseBody, Error>.Err(model.Error.Http(error)) -> return }
+            Ok(value) { value }
+        } => plan
+        plan.framing -> when {
+            UntilClose { true }
+            else { false }
+        } => untilClose
+        plan -> clientDecoder? => decoder
+        response.head -> responseAllowsPersistence -> when {
+            Err(error) { Result<ResponseBody, Error>.Err(error) -> return }
+            Ok(value) { value }
+        } => responsePersistent
+        response.requestConnection -> when {
+            Persistent { true }
+            Close { false }
+        } => requestPersistent
+        [UInt8; ~] => input!
+        input! -> reserve(response.bodyBufferBytes)
+        Result<ResponseBody, Error>.Ok(ResponseBody {
+            transport: response.transport
+            parser: response.parser
+            bodyPolicy: response.bodyPolicy
+            maxHeadBytes: response.maxHeadBytes
+            bodyBufferBytes: response.bodyBufferBytes
+            bytes: response.bytes
+            bodyCursor: response.bodyCursor
+            input: input!
+            inputCursor: 0
+            decoder: decoder
+            reusable: requestPersistent and responsePersistent and not untilClose
+            untilClose: untilClose
+            eof: false
+        })
+    }
+}
+
+impl ResponseBody {
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<body.BodyProgress, Error> uses Network {
+        self.bodyCursor < UIntSize(self.bytes -> len)
+            -> if {
+                UIntSize(self.bytes -> len) - self.bodyCursor => available
+                self.decoder -> writeRange(self.bytes, self.bodyCursor, available, output) -> when {
+                    Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Http(error)) -> return }
+                    Ok(progress) {
+                        self.bodyCursor + progress.consumed => self.bodyCursor
+                        Result<body.BodyProgress, Error>.Ok(progress) -> return
+                    }
+                }
+            }
+        self.inputCursor < UIntSize(self.input -> len)
+            -> if {
+                UIntSize(self.input -> len) - self.inputCursor => available
+                self.decoder -> writeRange(self.input, self.inputCursor, available, output) -> when {
+                    Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Http(error)) -> return }
+                    Ok(progress) {
+                        self.inputCursor + progress.consumed => self.inputCursor
+                        Result<body.BodyProgress, Error>.Ok(progress) -> return
+                    }
+                }
+            }
+        self.decoder -> writeRange(self.input, self.inputCursor, 0, output) -> when {
+            Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Http(error)) -> return }
+            Ok(progress) => progress.complete -> if {
+                Result<body.BodyProgress, Error>.Ok(progress) -> return
+            }
+        }
+        self.transport -> receiveInto(self.input) -> when {
+            Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Socket(error)) -> return }
+            Ok(received) {
+                received == 0 -> if {
+                    self.untilClose -> if {
+                        true => self.eof
+                        Result<body.BodyProgress, Error>.Ok(body.BodyProgress {
+                            consumed: 0
+                            produced: 0
+                            complete: true
+                        }) -> return
+                    }
+                    Result<body.BodyProgress, Error>.Err(model.Error.PeerClosed) -> return
+                }
+                0 => self.inputCursor
+                self.decoder -> writeRange(self.input, 0, received, output) -> when {
+                    Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Http(error)) -> return }
+                    Ok(progress) {
+                        progress.consumed => self.inputCursor
+                        Result<body.BodyProgress, Error>.Ok(progress) -> return
+                    }
+                }
+            }
+        }
+        Result<body.BodyProgress, Error>.Err(model.Error.PeerClosed)
+    }
+
+    public finish: move self -> Result<ResponseOutcome, Error> uses Network {
+        self.decoder -> completion -> when {
+            Err(_) { Result<ResponseOutcome, Error>.Err(model.Error.BodyNotComplete) -> return }
+            Ok(_) { }
+        }
+        self.untilClose and not self.eof -> if {
+            Result<ResponseOutcome, Error>.Err(model.Error.BodyNotComplete) -> return
+        }
+        UIntSize(self.bytes -> len) - self.bodyCursor => initialLeftover
+        UIntSize(self.input -> len) - self.inputCursor => receivedLeftover
+        initialLeftover > 0 or receivedLeftover > 0 => hasLeftover
+        self.reusable and hasLeftover
+            -> if {
+                Result<ResponseOutcome, Error>.Err(model.Error.UnexpectedResponseBytes) -> return
+            }
+        self.reusable -> if {
+            Result<ResponseOutcome, Error>.Ok(model.ResponseOutcome.Reusable(Client {
+                transport: self.transport
+                parser: self.parser
+                bodyPolicy: self.bodyPolicy
+                maxHeadBytes: self.maxHeadBytes
+                bodyBufferBytes: self.bodyBufferBytes
+            })) -> return
+        }
+        self.transport -> close
+        Result<ResponseOutcome, Error>.Ok(model.ResponseOutcome.Closed)
+    }
+}

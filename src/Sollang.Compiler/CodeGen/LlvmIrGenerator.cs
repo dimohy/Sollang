@@ -9,7 +9,11 @@ internal static class LlvmIrGenerator
         CompilationTarget target,
         bool sharedLibrary = false)
     {
-        return new LlvmEmitter(program, LlvmRuntimePlatform.Create(target), sharedLibrary).Emit();
+        return new LlvmEmitter(
+            program,
+            LlvmRuntimePlatform.Create(target),
+            TargetContract.For(target),
+            sharedLibrary).Emit();
     }
 
     public static void WriteProgram(
@@ -19,7 +23,11 @@ internal static class LlvmIrGenerator
         bool sharedLibrary = false)
     {
         var output = new TextWriterOutputSink(writer);
-        new LlvmEmitter(program, LlvmRuntimePlatform.Create(target), sharedLibrary).Emit(output);
+        new LlvmEmitter(
+            program,
+            LlvmRuntimePlatform.Create(target),
+            TargetContract.For(target),
+            sharedLibrary).Emit(output);
     }
 
     public static LlvmCodegenOutput GenerateUnits(
@@ -28,6 +36,10 @@ internal static class LlvmIrGenerator
         LlvmCodegenReuse reuse,
         bool sharedLibrary = false)
     {
-        return new LlvmEmitter(program, LlvmRuntimePlatform.Create(target), sharedLibrary).EmitUnits(reuse);
+        return new LlvmEmitter(
+            program,
+            LlvmRuntimePlatform.Create(target),
+            TargetContract.For(target),
+            sharedLibrary).EmitUnits(reuse);
     }
 }

@@ -1,14 +1,16 @@
 import sys.io
-import sys.socket as socket
+import std.net.socket as socket
+import std.net as net
 
 # Connects before accept so the kernel listen backlog provides the rendezvous.
-# An unused sys.quic declaration must not make this program load its adapter.
-sendPing endpoint: socket.Endpoint -> Result<Bool, socket.SocketError> uses Network {
-    socket.connect(endpoint)? => connection
+# An unused std.net.quic declaration must not make this program load its adapter.
+sendPing endpoint: net.Endpoint -> Result<Bool, socket.SocketError> uses Network {
+    endpoint -> connect? => connection
     [UInt8; ~] => empty
-    socket.send(connection, empty)? => emptyCount
-    socket.sendText(connection, "ping")? => count
-    socket.shutdown(connection)?
+    connection -> send(empty)? => emptyCount
+    connection -> sendText("ping")? => count
+    connection -> shutdown(socket.ShutdownDirection.Both)?
+    connection -> close
     Result<Bool, socket.SocketError>.Ok(emptyCount == 0 and count == 4)
 }
 
@@ -19,16 +21,18 @@ struct Roundtrip {
     last: UInt32
 }
 
-runRoundtrip endpoint: socket.Endpoint -> Result<Roundtrip, socket.SocketError> uses Network {
+runRoundtrip endpoint: net.Endpoint -> Result<Roundtrip, socket.SocketError> uses Network {
     socket.ListenOptions {
         endpoint: endpoint
         backlog: 8
         reuseAddress: true
     } => options
-    socket.listen(options)? => listener
+    options -> listen? => listener
     sendPing(endpoint)? => sent
-    socket.accept(listener)? => connection
-    socket.receive(connection, 16)? => bytes
+    listener -> accept? => connection
+    connection -> receive(16)? => bytes
+    connection -> close
+    listener -> close
     Result<Roundtrip, socket.SocketError>.Ok(Roundtrip {
         sent: sent
         count: bytes -> len
@@ -38,7 +42,7 @@ runRoundtrip endpoint: socket.Endpoint -> Result<Roundtrip, socket.SocketError> 
 }
 
 main {
-    socket.Endpoint { address: "127.0.0.1", port: 43175 } => endpoint
+    net.loopback(43175) -> unified => endpoint
     endpoint -> runRoundtrip -> when {
         Ok(roundtrip) {
             roundtrip.sent -> if { "true" } else { "false" } => sentText

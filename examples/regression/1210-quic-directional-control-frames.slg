@@ -1,0 +1,86 @@
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+
+# RESET_STREAM and STOP_SENDING retain distinct frame kinds, exact stream IDs,
+# application error codes, and the RESET final size through the RFC 9000 wire form.
+verifyResetStream: -> Result<Bool, errors.Error> {
+    frames.Value.ResetStream(frames.ResetStream {
+        id: 4
+        applicationErrorCode: 4_660
+        finalSize: 4_611_686_018_427_387_903
+    }) -> frames.encodeValue? => encoded
+    frames.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        ResetStream(value) {
+            value.id == 4
+                and value.applicationErrorCode == 4_660
+                and value.finalSize == 4_611_686_018_427_387_903
+                and decoded.nextOffset == UIntSize(encoded -> len)
+                -> unless { Result<Bool, errors.Error>.Ok(false) -> return }
+        }
+        else { Result<Bool, errors.Error>.Ok(false) -> return }
+    }
+    frames.Value.ResetStream(frames.ResetStream {
+        id: 0
+        applicationErrorCode: 0
+        finalSize: 4_611_686_018_427_387_904
+    }) -> frames.encodeValue -> when {
+        Ok(unexpected) { Result<Bool, errors.Error>.Ok(false) -> return }
+        Err(value) {
+            value.kind -> when {
+                Encoding {}
+                else { Result<Bool, errors.Error>.Ok(false) -> return }
+            }
+            value.code == 4_611_686_018_427_387_904
+                -> unless { Result<Bool, errors.Error>.Ok(false) -> return }
+        }
+    }
+    frames.decode([4, 0, 0], 0) -> when {
+        Ok(unexpected) { Result<Bool, errors.Error>.Ok(false) }
+        Err(value) {
+            value.kind -> when {
+                Truncated { Result<Bool, errors.Error>.Ok(value.code == 3) }
+                else { Result<Bool, errors.Error>.Ok(false) }
+            }
+        }
+    }
+}
+
+verifyStopSending: -> Result<Bool, errors.Error> {
+    frames.Value.StopSending(frames.StopSending {
+        id: 8
+        applicationErrorCode: 4_611_686_018_427_387_903
+    }) -> frames.encodeValue? => encoded
+    frames.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        StopSending(value) {
+            value.id == 8
+                and value.applicationErrorCode == 4_611_686_018_427_387_903
+                and decoded.nextOffset == UIntSize(encoded -> len)
+                -> unless { Result<Bool, errors.Error>.Ok(false) -> return }
+        }
+        else { Result<Bool, errors.Error>.Ok(false) -> return }
+    }
+    frames.decode([5, 0], 0) -> when {
+        Ok(unexpected) { Result<Bool, errors.Error>.Ok(false) }
+        Err(value) {
+            value.kind -> when {
+                Truncated { Result<Bool, errors.Error>.Ok(value.code == 2) }
+                else { Result<Bool, errors.Error>.Ok(false) }
+            }
+        }
+    }
+}
+
+verify: -> Result<Bool, errors.Error> {
+    verifyResetStream()? => resetStream
+    verifyStopSending()? => stopSending
+    Result<Bool, errors.Error>.Ok(resetStream and stopSending)
+}
+
+main {
+    verify() -> when {
+        Ok(valid) { "quic-directional-frames=$valid" -> println }
+        Err(value) { "quic-directional-frames-error=$(value.code)" -> println }
+    }
+}

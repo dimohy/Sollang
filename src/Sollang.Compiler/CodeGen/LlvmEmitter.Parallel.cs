@@ -145,8 +145,18 @@ internal sealed partial class LlvmEmitter
             : specialization.ReturnType == BoundType.DynamicIntArray
                 ? 4
                 : _program.Types.GetDynamicArray(specialization.ReturnType).ElementAlignment;
+        if (!_program.StableCallSiteIdentities.TryGetValue(block, out var callSiteIdentity))
+        {
+            throw new SollangException("parallel callback has no stable call-site identity");
+        }
         var callbackName = "sollang_parallel_callback_"
-            + _parallelCallbacks.Count.ToString(CultureInfo.InvariantCulture);
+            + LlvmCodegenUnit.StableIdentity(callSiteIdentity)
+                .ToString(CultureInfo.InvariantCulture);
+        if (_parallelCallbacks.Values.Any(callback => callback.Name == callbackName))
+        {
+            throw new SollangException(
+                $"parallel callback identity collision for '{callSiteIdentity}'");
+        }
         var captures = CapturedBindingsForFunction(target);
         var additionalArguments = additionalArgumentExpressions
             .Zip(

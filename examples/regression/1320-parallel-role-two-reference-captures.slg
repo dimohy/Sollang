@@ -1,0 +1,34 @@
+struct Context {
+    lower: Int
+}
+
+struct State {
+    upper: Int
+}
+
+within value: Int, context: ref Context, state: ref State -> Bool {
+    value >= context.lower and value <= state.upper
+}
+
+shift value: Int, context: ref Context, state: ref State -> Int {
+    value + context.lower + state.upper
+}
+
+run values: [Int; ~], context: ref Context -> [Int; ~] {
+    State { upper: 4 } => state
+    values -> parallel value {
+        true and (value -> within(context, state))
+            -> if {
+                value -> shift(context, state)
+            } else {
+                value -> shift(context, state)
+            }
+    } => shifted
+    shifted
+}
+
+main {
+    Context { lower: 1 } => context
+    [1, 5; ~] -> run(context) => shifted
+    "$(shifted[0]),$(shifted[1])" -> println
+}

@@ -1,0 +1,106 @@
+import sollang.compiler.semantic.context as semanticContext
+
+struct SnapshotSummary {
+    sources: Int
+    ranges: Int
+    calls: Int
+    resolved: Int
+}
+
+snapshotSummary source: Text -> SnapshotSummary {
+    [source,; ~] -> semanticContext.prepare => prepared
+    0 => resolved!
+    0 => callIndex!
+    callIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[callIndex!].status == 0
+            -> if { resolved! + 1 => resolved! }
+        callIndex! + 1 => callIndex!
+    }
+    SnapshotSummary {
+        sources: prepared.package.sources -> len
+        ranges: prepared.package.ranges -> len
+        calls: prepared.calls -> len
+        resolved: resolved!
+    }
+}
+
+# Keep each front-end feature in a cumulative source so a failure identifies
+# the first semantic boundary that diverges between Stage3 and the C# oracle.
+main {
+    """"
+        namespace sample.base
+
+        main {
+            "ready" -> println
+        }
+    """" => baseSource
+    baseSource -> snapshotSummary => baseSummary
+
+    """"
+        namespace sample.constructor
+
+        enum Outcome {
+            Ok(Text)
+            Err(Text)
+        }
+
+        outcome: -> Outcome => Outcome.Ok("ready")
+    """" => constructorSource
+    constructorSource -> snapshotSummary => constructorSummary
+
+    """"
+        namespace sample.call
+
+        enum Outcome {
+            Ok(Text)
+            Err(Text)
+        }
+
+        outcome: -> Outcome => Outcome.Ok("ready")
+
+        main {
+            outcome()
+        }
+    """" => callSource
+    callSource -> snapshotSummary => callSummary
+
+    """"
+        namespace sample.control
+
+        enum Outcome {
+            Ok(Text)
+            Err(Text)
+        }
+
+        outcome: -> Outcome => Outcome.Ok("ready")
+
+        main {
+            outcome() -> when {
+                Ok(value) { value }
+                Err(error) { error }
+            }
+        }
+    """" => controlSource
+    controlSource -> snapshotSummary => controlSummary
+
+    """"
+        namespace sample.trailing
+
+        enum Outcome {
+            Ok(Text)
+            Err(Text)
+        }
+
+        outcome: -> Outcome => Outcome.Ok("ready")
+
+        main {
+            outcome() -> when {
+                Ok(value) { value }
+                Err(error) { error }
+            } -> println
+        }
+    """" => trailingSource
+    trailingSource -> snapshotSummary => trailingSummary
+
+    "prepare=$(baseSummary.sources):$(baseSummary.ranges):$(baseSummary.calls):$(baseSummary.resolved),$(constructorSummary.sources):$(constructorSummary.ranges):$(constructorSummary.calls):$(constructorSummary.resolved),$(callSummary.sources):$(callSummary.ranges):$(callSummary.calls):$(callSummary.resolved),$(controlSummary.sources):$(controlSummary.ranges):$(controlSummary.calls):$(controlSummary.resolved),$(trailingSummary.sources):$(trailingSummary.ranges):$(trailingSummary.calls):$(trailingSummary.resolved)" -> println
+}

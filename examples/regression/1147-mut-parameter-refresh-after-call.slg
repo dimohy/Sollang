@@ -1,0 +1,27 @@
+struct Document {
+    uri: [UInt8; ~]
+    text: [UInt8; ~]
+}
+
+upsert documents: mut [Document; ~], uri: move [UInt8; ~], text: move [UInt8; ~] -> Int {
+    documents -> len => index
+    documents -> push(Document { uri: uri, text: text })
+    index
+}
+
+documentTextLength document: ref Document -> Int {
+    document.text -> len
+}
+
+dispatch documents: mut [Document; ~] -> Int {
+    [UInt8(1); ~] => uri
+    [UInt8(2), 3; ~] => text
+    documents -> upsert(uri, text) => index
+    documents[index] -> documentTextLength
+}
+
+main {
+    [Document; ~] => documents!
+    documents! -> dispatch => length
+    "$(length),$(documents! -> len)" -> println
+}

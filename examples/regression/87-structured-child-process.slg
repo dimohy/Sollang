@@ -6,10 +6,14 @@ exitText code: Int -> Text => code -> when {
     else => "exit nonzero"
 }
 
-describe result: Result<Int, Text> -> Text {
+describe result: Result<process.ExitStatus, Text> -> Text {
     result -> when {
-        Result<Int, Text>.Ok(code) => code -> exitText
-        Result<Int, Text>.Err(error) => error
+        Result<process.ExitStatus, Text>.Ok(status) => status -> succeeded -> if {
+            status -> exitCode -> exitText
+        } else {
+            "exit nonzero"
+        }
+        Result<process.ExitStatus, Text>.Err(error) => error
     }
 }
 
@@ -22,11 +26,15 @@ main {
         "child $spaced" -> println
         "child $unicode" -> println
     } else {
-        [args[0], "--child", "space value", "한글"; ~] => childArgv
-        childArgv -> process.run -> describe => status
+        process.command(args[0]) => command!
+        ["--child", "space value"; ~] => childArgs!
+        command! -> args(childArgs!)
+        command! -> arg("한글")
+        "argv $(command! -> argumentCount)" -> println
+        command! -> status -> describe => status
         status -> println
-        ["sollang-definitely-missing-executable"; ~] => missingArgv
-        missingArgv -> process.run -> describe => missing
+        process.command("sollang-definitely-missing-executable") => missingCommand
+        missingCommand -> status -> describe => missing
         missing -> println
     }
 }

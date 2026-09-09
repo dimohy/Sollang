@@ -1,0 +1,88 @@
+import std.encoding.binary as binary
+import std.encoding.binary.error as errors
+
+run: -> Result<Bool, binary.Error> uses Console {
+    binary.ByteOrder.Big -> writer(64)? => writer!
+    [UInt8; ~] => bytes!
+    writer! -> writeUInt16(4_660, bytes!)? => be16Written
+    writer! -> writeUInt32(2_305_843_009, bytes!)? => be32Written
+    writer! -> writeUInt64(18_446_744_073_709_551_615, bytes!)? => be64Written
+    writer! -> writeVarint(0, bytes!)? => zeroWritten
+    writer! -> writeVarint(127, bytes!)? => oneWritten
+    writer! -> writeVarint(128, bytes!)? => twoWritten
+    writer! -> writeVarint(18_446_744_073_709_551_615, bytes!)? => maxWritten
+    "written=$be16Written,$be32Written,$be64Written,$zeroWritten,$oneWritten,$twoWritten,$maxWritten" -> println
+    "prefix=$(bytes![0]),$(bytes![1]),$(bytes![2]),$(bytes![3]),$(bytes![4]),$(bytes![5])" -> println
+
+    binary.ByteOrder.Big -> reader => reader!
+    reader! -> readUInt16(bytes!)? => be16
+    reader! -> readUInt32(bytes!)? => be32
+    reader! -> readUInt64(bytes!)? => be64
+    reader! -> readVarint(bytes!)? => zero
+    reader! -> readVarint(bytes!)? => one
+    reader! -> readVarint(bytes!)? => two
+    reader! -> readVarint(bytes!)? => maximum
+    "read=$be16,$be32,$be64,$zero,$one,$two,$maximum,$(reader! -> remaining(bytes!))" -> println
+
+    binary.ByteOrder.Little -> writer(2)? => littleWriter!
+    [UInt8; ~] => littleBytes!
+    littleWriter! -> writeUInt16(4_660, littleBytes!)? => littleWritten
+    "little=$littleWritten,$(littleBytes![0]),$(littleBytes![1])" -> println
+
+    binary.ByteOrder.Little -> writer(1)? => limited!
+    [UInt8; ~] => limitedOutput!
+    limited! -> writeUInt16(4_660, limitedOutput!) -> when {
+        Ok(value) { "limit=unexpected-$value" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                OutputLimitExceeded { "limit=output@$(failure -> errorOffset),$(limited! -> byteCount)" -> println }
+                else { "limit=wrong" -> println }
+            }
+        }
+    }
+
+    [UInt8(1)] => truncatedInput
+    binary.ByteOrder.Big -> reader => truncated!
+    truncated! -> readUInt16(truncatedInput) -> when {
+        Ok(value) { "truncated=unexpected-$value" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                TruncatedInput { "truncated=$(failure -> errorOffset),$(truncated! -> byteOffset)" -> println }
+                else { "truncated=wrong" -> println }
+            }
+        }
+    }
+
+    [UInt8(128), 0] => nonCanonicalInput
+    binary.ByteOrder.Big -> reader => nonCanonical!
+    nonCanonical! -> readVarint(nonCanonicalInput) -> when {
+        Ok(value) { "canonical=unexpected-$value" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                NonCanonicalVarint { "canonical=$(failure -> errorOffset),$(nonCanonical! -> byteOffset)" -> println }
+                else { "canonical=wrong" -> println }
+            }
+        }
+    }
+
+    [UInt8(255), 255, 255, 255, 255, 255, 255, 255, 255, 2]
+        => overflowInput
+    binary.ByteOrder.Big -> reader => overflow!
+    overflow! -> readVarint(overflowInput) -> when {
+        Ok(value) { "overflow=unexpected-$value" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                VarintOverflow { "overflow=$(failure -> errorOffset),$(overflow! -> byteOffset)" -> println }
+                else { "overflow=wrong" -> println }
+            }
+        }
+    }
+    Result<Bool, binary.Error>.Ok(true)
+}
+
+main {
+    run() -> when {
+        Ok(value) { }
+        Err(failure) { "unexpected-error=$(failure -> errorOffset)" -> println }
+    }
+}

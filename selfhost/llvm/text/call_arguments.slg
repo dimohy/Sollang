@@ -1,0 +1,1847 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.runtime as runtime
+
+textLiteralStart request: TextLiteralRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> UIntSize {
+    context -> literalStart(request.sourceModule, request.token)
+}
+textLiteralEnd request: TextLiteralRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> UIntSize {
+    context -> literalEnd(request.sourceModule, request.token)
+}
+textLiteralLength request: TextLiteralRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> UIntSize {
+    context -> literalLength(request.sourceModule, request.token)
+}
+decimalTokenValue sourceModule: Int, tokenIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ranges[sourceModule] => decimalRange
+    context.tokens[decimalRange.tokenStart + tokenIndex] => decimalToken
+    0 => value!
+    UIntSize(0) => digit!
+    digit! < decimalToken.span.length -> while {
+        context.sources[sourceModule] -> byte(decimalToken.span.start + digit!) => character
+        value! * 10 + Int(character - 48) => value!
+        digit! + 1 => digit!
+    }
+    value!
+}
+emitGuidConstant sourceModule: Int, tokenIndex: Int, interfaceGuid: Bool, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ranges[sourceModule] => guidRange
+    TextLiteralRequest { sourceModule: sourceModule, token: context.tokens[guidRange.tokenStart + tokenIndex] } => guid
+    guid -> textLiteralStart(context, state) => guidStart
+    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 0, 8) => part0
+    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 9, 4) => part1
+    context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 14, 4) => part2
+    interfaceGuid -> if {
+        "@sollang_com_iid_m$(sourceModule)_s$(ownerIndex)" -> print
+    } else {
+        "@sollang_com_clsid_m$(sourceModule)_a$(ownerIndex)" -> print
+    }
+    " = private constant { i32, i16, i16, [8 x i8] } { i32 $part0, i16 $part1, i16 $part2, [8 x i8] [i8 " -> print
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 19, 2)) -> writeDecimal
+    ", i8 " -> print
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 21, 2)) -> writeDecimal
+    ", i8 " -> print
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 24, 2)) -> writeDecimal
+    ", i8 " -> print
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 26, 2)) -> writeDecimal
+    ", i8 " -> print
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 28, 2)) -> writeDecimal
+    ", i8 " -> print
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 30, 2)) -> writeDecimal
+    ", i8 " -> print
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 32, 2)) -> writeDecimal
+    ", i8 " -> print
+    Int(context.sources[sourceModule] -> comRuntime.guidPart(guidStart, 34, 2)) -> writeDecimal
+    "] }" -> println
+}
+emitIntegerPromotion request: IntegerPromotionRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
+    context.ir[request.operandIndex] => operand
+    operand -> integerNodeWidth(context, state) => operandWidth
+    (operandWidth > 0 and operandWidth < request.targetWidth and operand.kind != 3 and operand.kind != 4) => promoted
+    promoted -> if {
+        "  %v$(request.expressionIndex)_" -> print
+        request.right -> if { "right" -> print } else { "left" -> print }
+        "_wide = " -> print
+        operand -> integerNodeSigned(context, state)
+            -> if { "sext" -> print } else { "zext" -> print }
+        " i$(operandWidth) " -> print
+        false => parameterOperand!
+        request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and operand.kind == 5 and operand.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
+            -> if { true => parameterOperand! }
+        parameterOperand! -> if { "%arg" -> print } else { "%v$(request.operandIndex)" -> print }
+        " to i$(request.targetWidth)" -> println
+    }
+    promoted
+}
+sourceNode node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> ast.AstNode {
+    context.nodes[context.ranges[node.sourceModule].astStart + node.astNode]
+}
+findAdditionalParameterOrdinal parameterIndex: Int, symbol: Int, candidateOrdinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    symbol => ordinalSymbol
+    candidateOrdinal => ordinalCandidate
+    parameterIndex < 0 -> if { -1 } else {
+        context.ir[parameterIndex] => parameter
+        parameter.symbol == ordinalSymbol -> if { ordinalCandidate } else {
+            parameter.nextOperand -> findAdditionalParameterOrdinal(ordinalSymbol, ordinalCandidate + 1, context, state)
+        }
+    }
+}
+referenceMemberPathDepth placeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[placeIndex] => memberPlace
+    0 => depth!
+    memberPlace.kind == 13 -> if {
+        memberPlace.operand0 => memberBaseIndex!
+        memberBaseIndex! >= 0 and context.ir[memberBaseIndex!].kind == 13
+            -> while {
+                context.ir[memberBaseIndex!].operand0 => memberBaseIndex!
+            }
+        memberPlace -> sourceNode(context, state) => memberPlaceAst
+        context.ir[memberBaseIndex!] -> sourceNode(context, state) => memberBaseAst
+        memberBaseAst.start + memberBaseAst.length => memberBaseEnd
+        memberPlaceAst.firstToken => memberTokenIndex!
+        memberTokenIndex! < memberPlaceAst.firstToken + memberPlaceAst.tokenCount
+            -> while {
+                context.tokens[context.ranges[memberPlace.sourceModule].tokenStart + memberTokenIndex!] => memberToken
+                memberToken.span.start >= memberBaseEnd and memberToken.kind == grammar.tokenIdIdentifier()
+                    -> if {
+                        depth! + 1 => depth!
+                    }
+                memberTokenIndex! + 1 => memberTokenIndex!
+            }
+        # A member IR node is itself one projection even when its AST range is
+        # narrowed to only the member token and the token walk cannot see the
+        # base/member boundary.
+        depth! == 0 -> if { 1 => depth! }
+    }
+    depth!
+}
+referencePlaceAddressDepth placeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[placeIndex].kind == 15 -> if { 1 } else {
+        placeIndex -> referenceMemberPathDepth(context, state) => addressDepth!
+        placeIndex + 0 => addressBase!
+        addressBase! >= 0 and context.ir[addressBase!].kind == 13
+            -> while {
+                context.ir[addressBase!].operand0 => addressBase!
+            }
+        addressBase! >= 0 and context.ir[addressBase!].kind == 15
+            -> if { addressDepth! + 1 => addressDepth! }
+        addressDepth!
+    }
+}
+referenceMemberHasIndexedBase placeIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    placeIndex => base!
+    base! >= 0 and context.ir[base!].kind == 13
+        -> while { context.ir[base!].operand0 => base! }
+    base! >= 0 and context.ir[base!].kind == 15
+}
+functionCapturePositionForBinding rootBinding: Int, ownerIndex: Int, state: ref CoreEmitterState -> Int {
+    -1 => position!
+    false => rootInsideOwner!
+    ownerIndex >= 0 and rootBinding >= 0 -> if {
+        rootBinding > ownerIndex and rootBinding < state.frozenFunctionEnds[ownerIndex]
+            -> if { true => rootInsideOwner! }
+    }
+    ownerIndex >= 0 and rootBinding >= 0 and not rootInsideOwner!
+        -> if {
+            state.frozenFunctionCaptureOffsets[ownerIndex] => captureOffset
+            0 => captureIndex!
+            captureIndex! < state.frozenFunctionCaptureCounts[ownerIndex] and position! < 0
+                -> while {
+                    state.frozenFunctionCaptureValues[captureOffset + captureIndex!] == rootBinding
+                        -> if { captureIndex! => position! }
+                    captureIndex! + 1 => captureIndex!
+                }
+        }
+    position!
+}
+# Direct collection iteration already provides the element's canonical address.
+# Match the lexical role owner, including an outer role used in a nested loop;
+# a range or planned stream value does not promise this storage.
+directEachRoleAddressOwner rootRead: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => owner!
+    rootRead >= 0 -> if {
+        context.ir[rootRead] => role
+        role.kind == 5 and role.operand0 < 0 and role.symbol >= 0
+            and role.sourceModule >= 0 and role.sourceModule < (context.ranges -> len)
+            -> if {
+                context.ranges[role.sourceModule] => range
+                role.symbol < range.symbolCount -> if {
+                    context.symbols[range.symbolStart + role.symbol] => symbol
+                    role.parent => ancestor!
+                    symbol.kind == 35 -> if {
+                        ancestor! >= 0 and owner! < 0 -> while {
+                            context.ir[ancestor!] => candidate
+                            candidate.kind == 6 and candidate.opcode == -208
+                                and candidate.sourceModule == role.sourceModule
+                                and candidate.astNode == symbol.astNode
+                                and candidate.operand0 >= 0
+                                and context.ir[candidate.operand0].kind != 31
+                                and (ancestor! -> plannedStreamPipeline(context, state)) < 0
+                                -> if { ancestor! => owner! }
+                            candidate.parent => ancestor!
+                        }
+                    }
+                }
+            }
+    }
+    owner!
+}
+referenceRootHasAddress rootBinding: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => addressable!
+    rootBinding >= 0 -> if {
+        (rootBinding -> directEachRoleAddressOwner(context, state)) >= 0
+            -> if { true => addressable! }
+        context.ir[rootBinding] => root
+        root.typeId >= 0
+            and context.types[root.typeId].kind == 8
+            and not (root.kind == 10 and root.flags % 2 == 1)
+            -> if { true => addressable! }
+        # Only pointer-backed mutable parameters already have one canonical
+        # address. Growable arrays use the split mutable-container ABI and
+        # reconstruct an SSA array value; a direct readonly borrow of that
+        # value must materialize a call-scoped record instead of treating
+        # `%arg` as a pointer.
+        root.kind == 10
+            and (rootBinding -> mutableBorrowParameterOrdinal(ownerIndex, context, state)) >= 0
+            and (root -> mutableBorrowUsesStructPointer(context))
+            -> if { true => addressable! }
+        root.kind == 17 and root.flags == 1
+            -> if {
+                rootBinding -> mutableBindingRoot(context, state) => mutableRoot
+                mutableRoot == rootBinding -> if { true => addressable! }
+            }
+        rootBinding -> functionCapturePositionForBinding(ownerIndex, state) => capturedRootPosition
+        capturedRootPosition >= 0
+            and ((root -> ownsType)
+            or (root.typeId >= 0 and context.types[root.typeId].kind == 8))
+            -> if { true => addressable! }
+    }
+    addressable!
+}
+referenceRootStorageType rootBinding: Int, context: ref emitterContext.EmitContext -> Int {
+    context.ir[rootBinding].typeId => storageType!
+    storageType! >= 0 and context.types[storageType!].kind == 8
+        -> if { context.types[storageType!].first => storageType! }
+    storageType!
+}
+referenceRootValueIndex rootBinding: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    # Enum payload bindings are materialized SSA values themselves; unlike an
+    # ordinary local binding they intentionally have no initializer operand.
+    rootBinding => valueIndex!
+    context.ir[rootBinding].kind != 29
+        -> if { context.ir[rootBinding].operand0 -> aggregateValueIndex(context, state) => valueIndex! }
+    valueIndex!
+}
+writeReferenceRootAddress rootBinding: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    rootBinding -> directEachRoleAddressOwner(context, state) => eachOwner
+    eachOwner >= 0 -> if {
+        "%each$(eachOwner)_item_ptr" -> print
+        return
+    }
+    rootBinding -> functionCapturePositionForBinding(ownerIndex, state) => capturedRootPosition
+    capturedRootPosition >= 0 -> if {
+        "%capture_$(capturedRootPosition)" -> print
+    }
+    capturedRootPosition < 0 and context.ir[rootBinding].kind == 10
+        -> if {
+            rootBinding -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => referenceMutableOrdinal
+            referenceMutableOrdinal >= 0 and (context.ir[rootBinding] -> mutableBorrowUsesStructPointer(context))
+                -> if { referenceMutableOrdinal -> writeMutableStructParameterPointer } else {
+                    ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].operand1 >= 0 and context.ir[context.ir[ownerIndex].operand1].symbol == context.ir[rootBinding].symbol
+                        -> if {
+                            "%arg" -> print
+                        } else {
+                            ownerIndex -> additionalParameterOrdinal(context.ir[rootBinding].symbol, context, state) => referenceParameterOrdinal
+                            "%arg$(referenceParameterOrdinal)" -> print
+                        }
+                }
+        }
+    capturedRootPosition < 0 and context.ir[rootBinding].kind != 10
+        -> if {
+            context.ir[rootBinding].typeId >= 0 and context.types[context.ir[rootBinding].typeId].kind == 8
+                -> if {
+                    rootBinding -> referenceRootValueIndex(context, state) => referenceRootValue
+                    referenceRootValue -> writeValue(ownerIndex, context, state)
+                } else {
+                    rootBinding -> mutableBindingRoot(context, state) => referenceMutableRoot
+                    "%slot$(referenceMutableRoot)" -> print
+                }
+        }
+}
+writeReferenceRootParameterValue rootBinding: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    ownerIndex >= 0
+        and context.ir[ownerIndex].kind == 0
+        and context.ir[ownerIndex].operand1 >= 0
+        and context.ir[context.ir[ownerIndex].operand1].symbol == context.ir[rootBinding].symbol
+        -> if {
+            "%arg" -> print
+        } else {
+            ownerIndex -> additionalParameterOrdinal(context.ir[rootBinding].symbol, context, state) => referenceParameterOrdinal
+            "%arg$(referenceParameterOrdinal)" -> print
+        }
+}
+emitMutableReferencePlace placeIndex: Int, rootBinding: Int, callIndex: Int, ordinal: Int, ownerIndex: Int, whileIndex: Int, temporaryRoot: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    context.ir[placeIndex].kind == 15 -> if {
+        placeIndex -> emitMutableReferenceIndexPlace(rootBinding, callIndex, ordinal, ownerIndex, whileIndex, temporaryRoot, context, state)
+    } else {
+        placeIndex -> emitMutableReferenceMemberPlace(rootBinding, callIndex, ordinal, ownerIndex, temporaryRoot, context, state)
+    }
+}
+emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int, ordinal: Int, ownerIndex: Int, whileIndex: Int, temporaryRoot: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    context.ir[placeIndex] => indexedPlace
+    context.ir[indexedPlace.operand1] => referenceIndex
+    callIndex + 0 => referenceCallIndex
+    ordinal + 0 => referenceArgumentOrdinal
+    ownerIndex + 0 => referenceOwnerIndex
+    0 => indexedBaseProjectionDepth!
+    indexedPlace.operand0 >= 0 and context.ir[indexedPlace.operand0].kind == 13
+        -> if {
+            indexedPlace.operand0 -> emitMutableReferenceMemberPlace(
+            rootBinding,
+            callIndex,
+            ordinal,
+            ownerIndex,
+            temporaryRoot,
+            context,
+            state) => indexedBaseProjectionDepth!
+        }
+    rootBinding -> mutableBorrowParameterOrdinal(referenceOwnerIndex, context, state) => referenceMutableParameterOrdinal
+    -1 => referenceMutableParameterIndex!
+    referenceMutableParameterOrdinal >= 0 -> if {
+        context -> parameterIndexAtOrdinal(referenceOwnerIndex, referenceMutableParameterOrdinal) => referenceMutableParameterIndex!
+    }
+    (referenceMutableParameterIndex! >= 0
+        and not (context.ir[referenceMutableParameterIndex!] -> mutableBorrowUsesStructPointer(context))) => referenceRootIsMutableContainer
+    (rootBinding >= 0
+        and context.ir[rootBinding].kind == 10
+        and context.ir[rootBinding].typeId >= 0
+        and context.types[context.ir[rootBinding].typeId].kind == 3
+        and not referenceRootIsMutableContainer) => referenceRootIsValueParameter
+    indexedBaseProjectionDepth! == 0 and (referenceRootIsValueParameter or referenceRootIsMutableContainer)
+        -> unless {
+            "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_array = load %sollang.array.i32, ptr " -> print
+            indexedBaseProjectionDepth! > 0
+                -> if {
+                    "%callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_place$(indexedBaseProjectionDepth! - 1)" -> print
+                } else {
+                    rootBinding -> writeReferenceRootAddress(referenceOwnerIndex, context, state)
+                }
+            ", align 8" -> println
+        }
+    indexedBaseProjectionDepth! == 0 and referenceRootIsMutableContainer
+        -> if {
+            "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data = load ptr, ptr " -> print
+            referenceMutableParameterOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(referenceMutableParameterOrdinal)_mut_ptr_addr" -> print }
+            ", align 8" -> println
+            "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_length = load i64, ptr " -> print
+            referenceMutableParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(referenceMutableParameterOrdinal)_mut_len_addr" -> print }
+            ", align 8" -> println
+        } else {
+            "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data = extractvalue %sollang.array.i32 " -> print
+            indexedBaseProjectionDepth! == 0 and referenceRootIsValueParameter
+                -> if {
+                    rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
+                } else {
+                    "%callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_array" -> print
+                }
+            ", 0" -> println
+            "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_length = extractvalue %sollang.array.i32 " -> print
+            indexedBaseProjectionDepth! == 0 and referenceRootIsValueParameter
+                -> if {
+                    rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
+                } else {
+                    "%callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_array" -> print
+                }
+            ", 1" -> println
+        }
+    referenceIndex -> integerNodeWidth(context, state) => referenceIndexWidth
+    referenceIndex.kind != 3 and referenceIndexWidth > 0 and referenceIndexWidth < 64
+        -> if {
+            "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index = " -> print
+            referenceIndex -> integerNodeSigned(context, state)
+                -> if { "sext " -> print } else { "zext " -> print }
+            referenceIndex -> writeIrType(context, state)
+            " " -> print
+            whileIndex >= 0 -> if {
+                WhileValueRequest { whileIndex: whileIndex, ownerIndex: referenceOwnerIndex, nodeIndex: indexedPlace.operand1 } -> writeWhileValue(context, state)
+            } else {
+                referenceOwnerIndex >= 0 and context.ir[referenceOwnerIndex].kind == 0 and context.ir[referenceOwnerIndex].operand1 >= 0 and referenceIndex.kind == 5 and referenceIndex.symbol == context.ir[context.ir[referenceOwnerIndex].operand1].symbol
+                    -> if { "%arg" -> print } else { "%v$(indexedPlace.operand1)" -> print }
+            }
+            " to i64" -> println
+        }
+    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_in_bounds = icmp ult i64 " -> print
+    referenceIndex.kind == 3 -> if {
+        referenceIndex -> writeIntegerLiteral(context, state)
+    } else {
+        referenceIndexWidth > 0 and referenceIndexWidth < 64
+            -> if { "%callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index" -> print } else {
+                whileIndex >= 0 -> if {
+                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: referenceOwnerIndex, nodeIndex: indexedPlace.operand1 } -> writeWhileValue(context, state)
+                } else {
+                    referenceOwnerIndex >= 0 and context.ir[referenceOwnerIndex].kind == 0 and context.ir[referenceOwnerIndex].operand1 >= 0 and referenceIndex.kind == 5 and referenceIndex.symbol == context.ir[context.ir[referenceOwnerIndex].operand1].symbol
+                        -> if { "%arg" -> print } else { "%v$(indexedPlace.operand1)" -> print }
+                }
+            }
+    }
+    ", %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_length" -> println
+    "  br i1 %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_in_bounds, label %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index_ok, label %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index_fail" -> println
+    "callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index_fail:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index_ok:" -> println
+    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_place$(indexedBaseProjectionDepth!) = getelementptr " -> print
+    indexedPlace -> writeIrType(context, state)
+    ", ptr %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data, i64 " -> print
+    referenceIndex.kind == 3 -> if {
+        referenceIndex -> writeIntegerLiteral(context, state)
+        "" -> println
+    } else {
+        referenceIndexWidth > 0 and referenceIndexWidth < 64
+            -> if { "%callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_index" -> println } else {
+                whileIndex >= 0 -> if {
+                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: referenceOwnerIndex, nodeIndex: indexedPlace.operand1 } -> writeWhileValue(context, state)
+                    "" -> println
+                } else {
+                    referenceOwnerIndex >= 0 and context.ir[referenceOwnerIndex].kind == 0 and context.ir[referenceOwnerIndex].operand1 >= 0 and referenceIndex.kind == 5 and referenceIndex.symbol == context.ir[context.ir[referenceOwnerIndex].operand1].symbol
+                        -> if { "%arg" -> println } else { "%v$(indexedPlace.operand1)" -> println }
+                }
+            }
+    }
+    indexedBaseProjectionDepth! + 1
+}
+emitMutableReferenceMemberPlace placeIndex: Int, rootBinding: Int, callIndex: Int, ordinal: Int, ownerIndex: Int, temporaryRoot: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    context.ir[placeIndex] => memberPlace
+    placeIndex -> referenceMemberPathDepth(context, state) => memberDepth
+    memberDepth == 0 -> if { 0 } else {
+        memberDepth == 1
+            and memberPlace.symbol >= 0
+            and memberPlace.operand0 >= 0
+            and context.ir[memberPlace.operand0].kind != 15
+            -> if {
+                context.ir[rootBinding].typeId => directOwnerType!
+                directOwnerType! >= 0 and context.types[directOwnerType!].kind == 8
+                    -> if { context.types[directOwnerType!].first => directOwnerType! }
+                "  %callref$(callIndex)_arg$(ordinal)_place0 = getelementptr inbounds " -> print
+                directOwnerType! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                temporaryRoot -> if {
+                    "%callref$(callIndex)_arg$(ordinal)" -> print
+                } else {
+                    rootBinding -> writeReferenceRootAddress(ownerIndex, context, state)
+                }
+                ", i32 0, i32 " -> print
+                memberPlace.symbol -> writeDecimalLine
+                1
+            } else {
+                memberPlace.operand0 => memberBaseIndex!
+                memberBaseIndex! >= 0 and context.ir[memberBaseIndex!].kind == 13
+                    -> while {
+                        context.ir[memberBaseIndex!].operand0 => memberBaseIndex!
+                    }
+                memberPlace -> sourceNode(context, state) => memberPlaceAst
+                context.ir[memberBaseIndex!] -> sourceNode(context, state) => memberBaseAst
+                memberBaseAst.start + memberBaseAst.length => memberBaseEnd
+                0 => memberProjectionOrdinal!
+                context.ir[rootBinding].typeId => memberOwnerType!
+                context.ir[rootBinding].kind == 10 and memberOwnerType! >= 0 and context.types[memberOwnerType!].kind == 8
+                    -> if {
+                        context.types[memberOwnerType!].first => memberOwnerType!
+                    }
+                memberBaseIndex! >= 0 and context.ir[memberBaseIndex!].kind == 15
+                    -> if {
+                        memberBaseIndex! -> emitMutableReferenceIndexPlace(rootBinding, callIndex, ordinal, ownerIndex, -1, temporaryRoot, context, state) => memberProjectionOrdinal!
+                        context.ir[memberBaseIndex!].typeId => memberOwnerType!
+                    }
+                memberPlaceAst.firstToken => memberTokenIndex!
+                memberTokenIndex! < memberPlaceAst.firstToken + memberPlaceAst.tokenCount
+                    -> while {
+                        context.tokens[context.ranges[memberPlace.sourceModule].tokenStart + memberTokenIndex!] => memberToken
+                        memberToken.span.start >= memberBaseEnd and memberToken.kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                -1 => memberFieldOrdinal!
+                                -1 => memberFieldType!
+                                0 => memberFieldSearch!
+                                memberFieldSearch! < (context.fields -> len)
+                                    -> while {
+                                        context.fields[memberFieldSearch!] => memberField
+                                        memberField.status == 0 and memberField.ownerType == memberOwnerType!
+                                            -> if {
+                                                context.ranges[memberField.sourceModule] => memberFieldRange
+                                                context.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
+                                                context.tokens[memberFieldRange.tokenStart + memberFieldSymbol.nameToken] => memberFieldNameToken
+                                                memberToken.span.length == memberFieldNameToken.span.length => memberFieldMatches!
+                                                UIntSize(0) => memberFieldByte!
+                                                memberFieldMatches! and memberFieldByte! < memberToken.span.length
+                                                    -> while {
+                                                        (context.sources[memberPlace.sourceModule] -> byte(memberToken.span.start + memberFieldByte!)) != (context.sources[memberField.sourceModule] -> byte(memberFieldNameToken.span.start + memberFieldByte!))
+                                                            -> if {
+                                                                false => memberFieldMatches!
+                                                            }
+                                                        memberFieldByte! + 1 => memberFieldByte!
+                                                    }
+                                                memberFieldMatches! -> if {
+                                                    memberField.ordinal => memberFieldOrdinal!
+                                                    memberField.fieldType => memberFieldType!
+                                                }
+                                            }
+                                        memberFieldSearch! + 1 => memberFieldSearch!
+                                    }
+                                memberFieldOrdinal! >= 0 -> if {
+                                    "  %callref" -> print
+                                    callIndex -> writeDecimal
+                                    "_arg" -> print
+                                    ordinal -> writeDecimal
+                                    "_place" -> print
+                                    memberProjectionOrdinal! -> writeDecimal
+                                    " = getelementptr inbounds " -> print
+                                    memberOwnerType! -> writeSemanticTypeId(context, state)
+                                    ", ptr " -> print
+                                    memberProjectionOrdinal! == 0 -> if {
+                                        temporaryRoot -> if {
+                                            "%callref$(callIndex)_arg$(ordinal)" -> print
+                                        } else {
+                                            rootBinding -> writeReferenceRootAddress(ownerIndex, context, state)
+                                        }
+                                    } else {
+                                        "%callref" -> print
+                                        callIndex -> writeDecimal
+                                        "_arg" -> print
+                                        ordinal -> writeDecimal
+                                        "_place" -> print
+                                        memberProjectionOrdinal! - 1 -> writeDecimal
+                                    }
+                                    ", i32 0, i32 " -> print
+                                    memberFieldOrdinal! -> writeDecimalLine
+                                    memberFieldType! => memberOwnerType!
+                                    memberProjectionOrdinal! + 1 => memberProjectionOrdinal!
+                                }
+                            }
+                        memberTokenIndex! + 1 => memberTokenIndex!
+                    }
+                memberProjectionOrdinal!
+            }
+    }
+}
+additionalParameterOrdinal functionIndex: Int, symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[functionIndex].nextOperand -> findAdditionalParameterOrdinal(symbol, 1, context, state)
+}
+referenceParameterValueIsMaterialized valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => materialized!
+    valueIndex >= 0
+        and ownerIndex >= 0
+        and ownerIndex < (context.ir -> len)
+        -> if {
+            context.ir[valueIndex] => value
+            value.kind == 5 and (value -> referenceValueTypeId(context, state)) >= 0
+                -> if {
+                    (valueIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state)) >= 0
+                        -> if { true => materialized! } else {
+                            context.ir[ownerIndex] => owner
+                            owner.kind == 0 and owner.operand1 >= 0
+                                -> if {
+                                    value.symbol == context.ir[owner.operand1].symbol
+                                        -> if { true => materialized! } else {
+                                            (ownerIndex -> additionalParameterOrdinal(value.symbol, context, state)) >= 0
+                                                -> if { true => materialized! }
+                                        }
+                                }
+                        }
+                }
+        }
+    materialized!
+}
+writeReferencePlaceValue functionIndex: Int, valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => referenceFunction
+    context.ir[valueIndex] => referenceValue
+    false => wroteParameter!
+    referenceValue.kind == 10 and referenceFunction.operand1 >= 0
+        -> if {
+            referenceFunction.operand1 == valueIndex
+                -> if {
+                    "%arg" -> print
+                    true => wroteParameter!
+                } else {
+                    functionIndex -> additionalParameterOrdinal(referenceValue.symbol, context, state) => declaredReferenceParameterOrdinal
+                    declaredReferenceParameterOrdinal >= 1 -> if {
+                        "%arg" -> print
+                        declaredReferenceParameterOrdinal -> writeDecimal
+                        true => wroteParameter!
+                    }
+                }
+        }
+    referenceValue.kind == 5 and referenceFunction.operand1 >= 0
+        -> if {
+            referenceValue.symbol == context.ir[referenceFunction.operand1].symbol
+                -> if {
+                    "%arg" -> print
+                    true => wroteParameter!
+                } else {
+                    functionIndex -> additionalParameterOrdinal(referenceValue.symbol, context, state) => referenceParameterOrdinal
+                    referenceParameterOrdinal >= 1 -> if {
+                        "%arg" -> print
+                        referenceParameterOrdinal -> writeDecimal
+                        true => wroteParameter!
+                    }
+                }
+        }
+    not wroteParameter!
+        and referenceValue.kind == 13
+        and referenceValue.operand0 >= 0
+        and context.ir[referenceValue.operand0].typeId >= 0
+        and context.types[context.ir[referenceValue.operand0].typeId].kind == 8
+        -> if {
+            "%v$(valueIndex)_address" -> print
+            true => wroteParameter!
+        }
+    not wroteParameter! -> if {
+        "%v" -> print
+        valueIndex -> writeDecimal
+    }
+}
+writeForwardedReferenceValue ownerIndex: Int, valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    # A readonly-reference name can be a use of a local binding whose
+    # initializer is the pointer-producing call.  The name-use node itself has
+    # no LLVM definition; resolve the exact binding edge before printing the
+    # pointer.  Projections retain their own materialized place address.
+    valueIndex -> referencePlaceRootBindingForEmission(ownerIndex, context, state) => rootBinding
+    (context.ir[valueIndex].kind == 5 or context.ir[valueIndex].kind == 17) and rootBinding >= 0
+        -> if {
+            rootBinding -> writeReferenceRootAddress(ownerIndex, context, state)
+        } else {
+            ownerIndex -> writeReferencePlaceValue(valueIndex, context, state)
+        }
+}
+callArgumentNeedsIntegerPromotion argumentIndex: Int, callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    false => needsPromotion!
+    parameterIndex >= 0 -> if {
+        argumentIndex -> aggregateValueIndex(context, state) => valueIndex
+        context.ir[valueIndex] => value
+        context.ir[parameterIndex] => parameter
+        value -> integerNodeWidth(context, state) => valueWidth
+        parameter -> integerNodeWidth(context, state) => parameterWidth
+        value.kind != 3
+            and value.kind != 4
+            and valueWidth > 0
+            and parameterWidth > 0
+            and valueWidth != parameterWidth -> if { true => needsPromotion! }
+    }
+    needsPromotion!
+}
+callArgumentNeedsReferenceValueLoad argumentIndex: Int, callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => needsLoad!
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    parameterIndex >= 0 and argumentIndex >= 0 -> if {
+        argumentIndex -> aggregateValueIndex(context, state) => valueIndex
+        context.ir[valueIndex] -> referenceValueTypeId(context, state) => referencedTypeId
+        referencedTypeId >= 0
+            and (referencedTypeId == context.ir[parameterIndex].typeId
+            or (context.ir[parameterIndex].typeId >= 0
+            and (referencedTypeId -> sameNominalTypeIdentity(context.ir[parameterIndex].typeId, context))))
+            -> if { true => needsLoad! }
+    }
+    needsLoad!
+}
+callArgumentProjectionValueTypeId argumentIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    argumentIndex -> aggregateValueIndex(context, state) => valueIndex
+    context.ir[valueIndex].typeId => valueTypeId!
+    valueIndex -> canonicalMemberValueTypeId(context, state) => canonicalValueTypeId
+    canonicalValueTypeId >= 0 -> if { canonicalValueTypeId => valueTypeId! }
+    valueTypeId! >= 0
+        and valueTypeId! < (context.types -> len)
+        and context.types[valueTypeId!].kind == 8
+        -> if { context.types[valueTypeId!].first => valueTypeId! }
+    valueTypeId!
+}
+callArgumentNeedsSliceProjection argumentIndex: Int, callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => needsProjection!
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    parameterIndex >= 0 and argumentIndex >= 0 -> if {
+        context.ir[parameterIndex] => parameter
+        argumentIndex -> callArgumentProjectionValueTypeId(context, state) => valueTypeId
+        valueTypeId >= 0
+            and valueTypeId < (context.types -> len)
+            and parameter.typeId >= 0
+            and parameter.typeId < (context.types -> len)
+            and context.types[valueTypeId].kind == 3
+            and context.types[parameter.typeId].kind == 2
+            -> if { true => needsProjection! }
+    }
+    needsProjection!
+}
+emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    argumentIndex >= 0
+        and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
+        or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+        and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)))
+        -> if {
+            argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
+                -> if {
+                    argumentIndex -> aggregateValueIndex(context, state) => referenceValueIndex
+                    callIndex -> callTargetParameter(ordinal, context, state) => referenceParameterIndex
+                    context.ir[referenceParameterIndex] => referenceParameter
+                    "  %call$(callIndex)_arg$(ordinal)_reference_value = load " -> print
+                    referenceParameter -> writeIrType(context, state)
+                    ", ptr " -> print
+                    ownerIndex -> writeReferencePlaceValue(referenceValueIndex, context, state)
+                    ", align $(context.typeAligns[referenceParameter.typeId])" -> println
+                }
+            argumentIndex -> callArgumentNeedsIntegerPromotion(callIndex, ordinal, context, state)
+                -> if {
+                    argumentIndex -> aggregateValueIndex(context, state) => valueIndex
+                    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+                    context.ir[valueIndex] => value
+                    context.ir[parameterIndex] => parameter
+                    value -> integerNodeWidth(context, state) => valueWidth
+                    parameter -> integerNodeWidth(context, state) => parameterWidth
+                    "  %call$(callIndex)_arg$(ordinal)_integer = " -> print
+                    parameterWidth < valueWidth -> if { "trunc " -> print } else { value -> integerNodeSigned(context, state)
+                            -> if { "sext " -> print } else { "zext " -> print } }
+                    value -> writeIrType(context, state)
+                    " " -> print
+                    valueIndex -> writeValue(ownerIndex, context, state)
+                    " to " -> print
+                    parameter -> writeIrType(context, state)
+                    "" -> println
+                }
+            argumentIndex -> callArgumentNeedsSliceProjection(callIndex, ordinal, context, state)
+                -> if {
+                    argumentIndex -> aggregateValueIndex(context, state) => sliceValueIndex
+                    argumentIndex -> callArgumentProjectionValueTypeId(context, state) => sliceValueTypeId
+                    context.types[sliceValueTypeId].kind == 4 -> if {
+                        "  %call$(callIndex)_arg$(ordinal)_slice_storage = alloca " -> print
+                        sliceValueTypeId -> writeSemanticTypeId(context, state)
+                        ", align $(context.typeAligns[sliceValueTypeId])" -> println
+                        "  store " -> print
+                        sliceValueTypeId -> writeSemanticTypeId(context, state)
+                        " %v$(sliceValueIndex), ptr %call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[sliceValueTypeId])" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[sliceValueTypeId].length), 1" -> println
+                    } else {
+                        "  %call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 %v$(sliceValueIndex), 0" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 %v$(sliceValueIndex), 1" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_data, 0" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 %call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
+                    }
+                }
+            context.ir[argumentIndex].nextOperand -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
+        }
+}
+writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    ownerIndex => callOwnerIndex
+    argumentIndex -> writeCallArgumentTypeAndValue(callIndex, ownerIndex, ordinal, context, state) => nativeArgumentHandled
+    not nativeArgumentHandled -> if {
+        argumentIndex -> aggregateValueIndex(context, state) => argumentValueIndex
+        context.ir[argumentValueIndex] => argument
+        callIndex -> callTargetParameter(ordinal, context, state) => argumentParameterIndex
+        false => argumentNeedsReferenceSlot!
+        argumentParameterIndex >= 0 -> if {
+            context.ir[argumentParameterIndex] => argumentParameter
+            argumentParameter.typeId >= 0 and context.types[argumentParameter.typeId].kind == 8 and not (argument.typeId >= 0 and context.types[argument.typeId].kind == 8)
+                -> if { true => argumentNeedsReferenceSlot! }
+            (context.ir[callIndex] -> targetsNativeFunction(context, state)) and argumentParameter.flags / 2 % 2 == 1 and (context -> diagnostics.nativeAbiStructTypeSafe(argumentParameter.typeId, 0))
+                -> if { true => argumentNeedsReferenceSlot! }
+        }
+        false => argumentIsMutableBorrow!
+        false => argumentIsMutableStructBorrow!
+        argumentParameterIndex >= 0
+            and context.ir[argumentParameterIndex].flags / 2 % 2 == 1
+            and not (context.ir[callIndex] -> targetsNativeFunction(context, state))
+            -> if {
+                true => argumentIsMutableBorrow!
+                context.ir[argumentParameterIndex] -> mutableBorrowUsesStructPointer(context)
+                    -> if { true => argumentIsMutableStructBorrow! }
+            }
+        argumentIsMutableBorrow! -> if {
+            argumentIsMutableStructBorrow! -> if {
+                "ptr %callmut$(callIndex)_arg$(ordinal)" -> print
+            } else {
+                "%sollang.mutable_container %callmut$(callIndex)_arg$(ordinal)" -> print
+            }
+        } else {
+            argumentNeedsReferenceSlot! -> if {
+                "ptr %callref$(callIndex)_arg$(ordinal)_address" -> print
+            } else {
+                argumentParameterIndex >= 0 -> if {
+                    context.ir[argumentParameterIndex] -> writeIrType(context, state)
+                } else {
+                    argument -> writeIrType(context, state)
+                }
+                " " -> print
+                (context.ir[callIndex] -> targetsNativeFunction(context, state)) and argumentParameterIndex >= 0
+                    -> if {
+                        context.ir[argumentParameterIndex] => nativeScalarParameter
+                        nativeScalarParameter.typeId >= 0 -> if {
+                            context.types[nativeScalarParameter.typeId] => nativeScalarParameterType
+                            nativeScalarParameterType.kind == 1 and nativeScalarParameterType.origin == 1 and (nativeScalarParameterType.symbol == 3 or nativeScalarParameterType.symbol == 4)
+                                -> if { "signext " -> print }
+                            nativeScalarParameterType.kind == 1 and nativeScalarParameterType.origin == 1 and (nativeScalarParameterType.symbol == 8 or nativeScalarParameterType.symbol == 9)
+                                -> if { "zeroext " -> print }
+                        }
+                    }
+                argumentIndex -> callArgumentNeedsIntegerPromotion(callIndex, ordinal, context, state)
+                    -> if {
+                        "%call$(callIndex)_arg$(ordinal)_integer" -> print
+                    } else {
+                        argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
+                            -> if {
+                                "%call$(callIndex)_arg$(ordinal)_reference_value" -> print
+                            } else {
+                                argumentIndex -> callArgumentNeedsSliceProjection(callIndex, ordinal, context, state)
+                                    -> if {
+                                        "%call$(callIndex)_arg$(ordinal)_slice" -> print
+                                    } else {
+                                        argumentIndex -> transientTextArgumentSource(callIndex, ordinal, context, state) => transientTextSource
+                                        transientTextSource >= 0 -> if {
+                                            "%calltext$(callIndex)_arg$(ordinal)" -> print
+                                        } else {
+                                            argument.kind == 2 -> if {
+                                                callOwnerIndex >= 0 and context.ir[callOwnerIndex].kind == 0
+                                                    -> if {
+                                                        "%v$(argumentValueIndex)" -> print
+                                                    } else {
+                                                        argument -> sourceToken(context, state) => textArgumentToken
+                                                        Int(TextLiteralRequest { sourceModule: argument.sourceModule, token: textArgumentToken } -> textLiteralLength(context, state)) => textArgumentLength
+                                                        "{ ptr @sollang_str_$(argumentIndex), i64 $textArgumentLength }" -> print
+                                                    }
+                                            } else {
+                                                argument.kind == 3 or argument.kind == 4 -> if {
+                                                    argument -> sourceToken(context, state) => literalArgumentToken
+                                                    argument.kind == 3 -> if {
+                                                        argument -> writeIntegerLiteral(context, state)
+                                                        argument.typeSymbol == 19 or argument.typeSymbol == 20 or argument.typeSymbol == 21 or argument.typeSymbol == 22
+                                                            -> if {
+                                                                false => nativeFloatSeparator!
+                                                                literalArgumentToken.span.start => nativeFloatByte!
+                                                                nativeFloatByte! < literalArgumentToken.span.start + literalArgumentToken.span.length
+                                                                    -> while {
+                                                                        context.sources[argument.sourceModule] -> byte(nativeFloatByte!) => nativeFloatCharacter
+                                                                        nativeFloatCharacter == 46 or nativeFloatCharacter == 69 or nativeFloatCharacter == 101
+                                                                            -> if { true => nativeFloatSeparator! }
+                                                                        nativeFloatByte! + 1 => nativeFloatByte!
+                                                                    }
+                                                                not nativeFloatSeparator! -> if { ".0" -> print }
+                                                            }
+                                                    } else {
+                                                        (context.sources[argument.sourceModule] -> byte(literalArgumentToken.span.start)) == 116
+                                                            -> if { "1" -> print } else { "0" -> print }
+                                                    }
+                                                } else {
+                                                    false => forwardedReferenceArgument!
+                                                    context.ir[argumentIndex] => forwardedReferenceSource
+                                                    forwardedReferenceSource -> effectiveTypeId(context, state) => forwardedReferenceSourceTypeId
+                                                    argumentParameterIndex >= 0
+                                                        and context.ir[argumentParameterIndex].typeId >= 0
+                                                        and context.types[context.ir[argumentParameterIndex].typeId].kind == 8
+                                                        and forwardedReferenceSourceTypeId >= 0
+                                                        and context.types[forwardedReferenceSourceTypeId].kind == 8
+                                                        -> if { true => forwardedReferenceArgument! }
+                                                    false => primaryParameterArgument!
+                                                    callOwnerIndex >= 0 and context.ir[callOwnerIndex].kind == 0 and context.ir[callOwnerIndex].operand1 >= 0 and argument.kind == 5 and argument.symbol == context.ir[context.ir[callOwnerIndex].operand1].symbol
+                                                        -> if { true => primaryParameterArgument! }
+                                                    argumentValueIndex -> mutableBorrowParameterOrdinal(callOwnerIndex, context, state) => liveMutableParameterOrdinal
+                                                    forwardedReferenceArgument! -> if {
+                                                        callOwnerIndex -> writeForwardedReferenceValue(argumentValueIndex, context, state)
+                                                    } else {
+                                                        liveMutableParameterOrdinal >= 0 -> if {
+                                                            "%v$(argumentValueIndex)" -> print
+                                                        } else {
+                                                            primaryParameterArgument! -> if { "%arg" -> print } else { "%v$(argumentValueIndex)" -> print }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                            }
+                    }
+            }
+        }
+    }
+}
+emitCallArgumentChain argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, separator: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    callIndex => chainCallIndex
+    ownerIndex => chainOwnerIndex
+    separator => chainSeparator
+    # A block call's body shares the call AST parent and therefore participates
+    # in the generic sibling chain, but it is not a runtime ABI argument. Once
+    # a concrete function target is known, parameter metadata is authoritative
+    # and terminates the chain before that body result. Unresolved intrinsics
+    # retain their explicit operands because they intentionally have no
+    # function-body parameter IR.
+    argumentIndex >= 0
+        and ((chainCallIndex -> callTargetParameter(ordinal, context, state)) >= 0
+        or (not (chainCallIndex -> callHasResolvedFunctionTarget(context, state))
+        and (context.ir[argumentIndex].parent == chainCallIndex or argumentIndex == context.ir[chainCallIndex].operand0)))
+        -> if {
+            chainSeparator -> if { ", " -> print }
+            argumentIndex -> writeCallArgument(chainCallIndex, chainOwnerIndex, ordinal, context, state)
+            context.ir[argumentIndex].nextOperand -> emitCallArgumentChain(chainCallIndex, chainOwnerIndex, ordinal + 1, true, context, state)
+        }
+}
+branchStageFlowIndex callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[callIndex] => call
+    -1 => flowIndex!
+    call.parent >= 0 and context.ir[call.parent].kind == 39
+        -> if {
+            context.ir[call.parent] => arm
+            arm.parent >= 0 and (context.ir[arm.parent].kind == 37 or context.ir[arm.parent].kind == 38)
+                -> if {
+                    context.ir[arm.parent].operand1 => flowIndex!
+                    call -> sourceStart(context, state) => callStart
+                    UIntSize(0) => previousStart!
+                    0 => candidateIndex!
+                    candidateIndex! < (context.ir -> len) -> while {
+                        context.ir[candidateIndex!] => candidate
+                        candidate.kind == 6 and candidate.parent == call.parent and candidateIndex! != callIndex
+                            -> if {
+                                candidate -> sourceStart(context, state) => candidateStart
+                                candidateStart < callStart and (flowIndex! == context.ir[arm.parent].operand1 or candidateStart > previousStart!)
+                                    -> if {
+                                        candidateIndex! => flowIndex!
+                                        candidateStart => previousStart!
+                                    }
+                            }
+                        candidateIndex! + 1 => candidateIndex!
+                    }
+                }
+        }
+    flowIndex!
+}
+emitCompileTimeValueArguments callIndex: Int, hasRuntimeArgument: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => genericCall
+    CallEnvironmentRequest { callerIndex: -1, callIndex: callIndex, targetModule: genericCall.targetModule, targetSymbol: genericCall.symbol, hasArgument: genericCall.operand0 >= 0 } -> targetFunctionIndex(context, state) => genericTargetFunction
+    genericTargetFunction >= 0 -> if {
+        context.ranges[genericCall.sourceModule] => genericCallRange
+        context.nodes[genericCallRange.astStart + genericCall.astNode] => genericCallAst
+        genericCallAst.firstToken => genericTokenIndex!
+        genericCallAst.firstToken + genericCallAst.tokenCount => genericTokenEnd
+        false => inGenericArguments!
+        false => emittedGenericArgument!
+        context.ir[genericTargetFunction].operand1 => genericParameterIndex!
+        0 => genericParameterOrdinal!
+        genericParameterIndex! >= 0 -> while {
+            context.ir[genericParameterIndex!] => genericParameter
+            false => valueGenericParameter!
+            genericParameter.symbol >= 0
+                and genericParameter.sourceModule >= 0
+                and genericParameter.sourceModule < (context.ranges -> len)
+                -> if {
+                    context.ranges[genericParameter.sourceModule] => genericParameterRange
+                    genericParameter.symbol < genericParameterRange.symbolCount
+                        and context.symbols[genericParameterRange.symbolStart + genericParameter.symbol].kind == 32
+                        -> if {
+                            true => valueGenericParameter!
+                        }
+                }
+            valueGenericParameter! -> if {
+                -1 => genericNumberToken!
+                genericTokenIndex! < genericTokenEnd and genericNumberToken! < 0
+                    -> while {
+                        context.tokens[genericCallRange.tokenStart + genericTokenIndex!] => genericToken
+                        genericToken.kind == grammar.tokenIdLess() -> if { true => inGenericArguments! }
+                        inGenericArguments! and genericToken.kind == grammar.tokenIdNumber()
+                            -> if { genericTokenIndex! => genericNumberToken! }
+                        genericToken.kind == grammar.tokenIdGreater()
+                            -> if { false => inGenericArguments! }
+                        genericTokenIndex! + 1 => genericTokenIndex!
+                    }
+                genericNumberToken! >= 0 -> if {
+                    hasRuntimeArgument or emittedGenericArgument!
+                        -> if { ", " -> print }
+                    genericParameter -> writeIrType(context, state)
+                    " " -> print
+                    context.tokens[genericCallRange.tokenStart + genericNumberToken!] => genericNumber
+                    genericNumber.span.start => genericNumberByte!
+                    genericNumber.span.start + genericNumber.span.length => genericNumberEnd
+                    genericNumberByte! < genericNumberEnd -> while {
+                        context.sources[genericCall.sourceModule] -> byte(genericNumberByte!) => genericNumberCharacter
+                        genericNumberCharacter != 95 -> if {
+                            context.sources[genericCall.sourceModule] -> slice(genericNumberByte!, 1) -> print
+                        }
+                        genericNumberByte! + 1 => genericNumberByte!
+                    }
+                    true => emittedGenericArgument!
+                }
+            }
+            genericParameterOrdinal! == 0 -> if {
+                context.ir[genericTargetFunction].nextOperand => genericParameterIndex!
+            } else {
+                genericParameter.nextOperand => genericParameterIndex!
+            }
+            genericParameterOrdinal! + 1 => genericParameterOrdinal!
+        }
+    }
+}
+emitCallArguments callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => call
+    false => hasLeadingArgument!
+    (call -> targetsNativeFunction(context, state)) and call.typeId >= 0 and (context -> diagnostics.nativeAbiStructTypeSafe(call.typeId, 0)) and (call.typeId -> nativeAggregateIndirect(context, state))
+        -> if {
+            "ptr sret(" -> print
+            call -> writeIrType(context, state)
+            ") %native_result_slot_$(callIndex)" -> print
+            true => hasLeadingArgument!
+        }
+    callIndex -> branchStageFlowIndex(context, state) => branchFlowIndex
+    branchFlowIndex >= 0 -> if {
+        hasLeadingArgument! -> if { ", " -> print }
+        branchFlowIndex -> writeCallArgument(callIndex, ownerIndex, 0, context, state)
+        call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 1, true, context, state)
+    } else {
+        call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 0, hasLeadingArgument!, context, state)
+    }
+    (hasLeadingArgument! or branchFlowIndex >= 0 or call.operand0 >= 0) => hasRuntimeArgument
+    callIndex -> emitCompileTimeValueArguments(hasRuntimeArgument, context, state)
+    call -> nativeTrySuccessTypeId(context, state) => nativeTryOutputType
+    nativeTryOutputType > 0 -> if {
+        (callIndex -> callTargetParameter(0, context, state)) >= 0
+            -> if { ", " -> print }
+        "ptr %native_try_out_$(callIndex)" -> print
+    }
+}
+parallelAdditionalArgumentStart callIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    context.ir[callIndex].operand0 => argumentIndex!
+    argumentIndex! >= 0
+        and context.ir[argumentIndex!].parent == callIndex
+        and (argumentIndex! -> structuredParallelRoleOwner(context)) >= 0
+        -> if { context.ir[argumentIndex!].nextOperand => argumentIndex! }
+    argumentIndex!
+}
+parallelAdditionalArgumentCount callIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    0 => count!
+    callIndex -> parallelAdditionalArgumentStart(context) => argumentIndex!
+    argumentIndex! >= 0 and context.ir[argumentIndex!].parent == callIndex
+        -> while {
+            count! + 1 => count!
+            context.ir[argumentIndex!].nextOperand => argumentIndex!
+        }
+    count!
+}
+writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "{ " -> print
+    0 => fieldIndex!
+    fieldIndex! < (captures -> len) -> while {
+        fieldIndex! > 0 -> if { ", " -> print }
+        context.ir[captures[fieldIndex!]] => capture
+        capture -> ownsType -> if { "ptr" -> print } else { capture -> writeIrType(context, state) }
+        fieldIndex! + 1 => fieldIndex!
+    }
+    callIndex -> parallelAdditionalArgumentStart(context) => argumentIndex!
+    1 => parameterOrdinal!
+    argumentIndex! >= 0 and context.ir[argumentIndex!].parent == callIndex
+        -> while {
+            fieldIndex! > 0 -> if { ", " -> print }
+            callIndex -> callTargetParameter(parameterOrdinal!, context, state) => parameterIndex
+            parameterIndex >= 0 -> if {
+                context.ir[parameterIndex] -> writeIrType(context, state)
+            } else {
+                context.ir[argumentIndex!] -> writeIrType(context, state)
+            }
+            fieldIndex! + 1 => fieldIndex!
+            parameterOrdinal! + 1 => parameterOrdinal!
+            context.ir[argumentIndex!].nextOperand => argumentIndex!
+        }
+    " }" -> print
+}
+emitParallelCaptureEnvironment parallelIndex: Int, bodyCallIndex: Int, ownerIndex: Int, captures: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
+    bodyCallIndex -> parallelAdditionalArgumentCount(context) => additionalCount
+    captures -> len => captureCount
+    captureCount + additionalCount => fieldCount
+    fieldCount > 0 -> if {
+        bodyCallIndex -> parallelAdditionalArgumentStart(context) -> emitReferenceArgumentValues(bodyCallIndex, ownerIndex, 1, context, state)
+        "  %v$(parallelIndex)_capture_environment = alloca " -> print
+        bodyCallIndex -> writeParallelCaptureType(captures, context, state)
+        ", align 8" -> println
+        0 => captureIndex!
+        captureIndex! < (captures -> len) -> while {
+            "  %v$(parallelIndex)_capture_address_$(captureIndex!) = getelementptr " -> print
+            bodyCallIndex -> writeParallelCaptureType(captures, context, state)
+            ", ptr %v$(parallelIndex)_capture_environment, i32 0, i32 $(captureIndex!)" -> println
+            captures[captureIndex!] => captureBindingIndex
+            context.ir[captureBindingIndex] => captureBinding
+            "  store " -> print
+            captureBinding -> ownsType -> if {
+                "ptr " -> print
+                CaptureValueRequest { callerIndex: ownerIndex, callIndex: parallelIndex, bindingIndex: captureBindingIndex, captureIndex: captureIndex! } -> emitCapturePointer(context, state)
+                ", ptr %v$(parallelIndex)_capture_address_$(captureIndex!), align 8" -> println
+            } else {
+                captureBinding -> writeIrType(context, state)
+                " " -> print
+                CaptureValueRequest { callerIndex: ownerIndex, callIndex: parallelIndex, bindingIndex: captureBindingIndex, captureIndex: captureIndex! } -> emitCaptureValue(context, state)
+                ", ptr %v$(parallelIndex)_capture_address_$(captureIndex!), align " -> print
+                captureBinding -> storageAlign(context, state) -> writeDecimalLine
+            }
+            captureIndex! + 1 => captureIndex!
+        }
+        bodyCallIndex -> parallelAdditionalArgumentStart(context) => argumentIndex!
+        0 => argumentOrdinal!
+        argumentIndex! >= 0 and context.ir[argumentIndex!].parent == bodyCallIndex
+            -> while {
+                captureCount + argumentOrdinal! => environmentIndex
+                bodyCallIndex -> callTargetParameter(argumentOrdinal! + 1, context, state) => parameterIndex
+                "  %v$(parallelIndex)_capture_address_$(environmentIndex) = getelementptr " -> print
+                bodyCallIndex -> writeParallelCaptureType(captures, context, state)
+                ", ptr %v$(parallelIndex)_capture_environment, i32 0, i32 $(environmentIndex)" -> println
+                "  store " -> print
+                argumentIndex! -> writeCallArgument(bodyCallIndex, ownerIndex, argumentOrdinal! + 1, context, state)
+                ", ptr %v$(parallelIndex)_capture_address_$(environmentIndex), align " -> print
+                parameterIndex >= 0 -> if {
+                    context.ir[parameterIndex] -> storageAlign(context, state) -> writeDecimalLine
+                } else {
+                    context.ir[argumentIndex!] -> storageAlign(context, state) -> writeDecimalLine
+                }
+                argumentOrdinal! + 1 => argumentOrdinal!
+                context.ir[argumentIndex!].nextOperand => argumentIndex!
+            }
+    }
+    fieldCount > 0
+}
+nativeWindowsDirectAggregateWidth typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => width!
+    typeId >= 0 and typeId < (context.typeSizes -> len) and (context -> diagnostics.nativeAbiStructTypeSafe(typeId, 0))
+        -> if {
+            context.typeSizes[typeId] => size
+            size == 1 -> if { 8 => width! }
+            size == 2 -> if { 16 => width! }
+            size == 4 -> if { 32 => width! }
+            size == 8 -> if { 64 => width! }
+        }
+    width!
+}
+nativeAbiFieldTypeAt ownerType: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => fieldType!
+    0 => fieldIndex!
+    fieldIndex! < (context.fields -> len) -> while {
+        context.fields[fieldIndex!] => field
+        field.status == 0 and field.ownerType == ownerType and field.ordinal == ordinal
+            -> if { field.fieldType => fieldType! }
+        fieldIndex! + 1 => fieldIndex!
+    }
+    fieldType!
+}
+nativeAbiFieldCount ownerType: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => count!
+    0 => fieldIndex!
+    fieldIndex! < (context.fields -> len) -> while {
+        context.fields[fieldIndex!] => field
+        field.status == 0 and field.ownerType == ownerType
+            -> if { count! + 1 => count! }
+        fieldIndex! + 1 => fieldIndex!
+    }
+    count!
+}
+nativeAbiFieldOffset ownerType: Int, targetOrdinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => offset!
+    0 => ordinal!
+    ordinal! <= targetOrdinal -> while {
+        ownerType -> nativeAbiFieldTypeAt(ordinal!, context, state) => fieldType
+        fieldType >= 0 -> if {
+            context.typeAligns[fieldType] => fieldAlign
+            ((offset! + fieldAlign - 1) / fieldAlign) * fieldAlign => offset!
+            ordinal! < targetOrdinal -> if { offset! + context.typeSizes[fieldType] => offset! }
+        }
+        ordinal! + 1 => ordinal!
+    }
+    offset!
+}
+nativeSysVEightbyteClass typeId: Int, eightbyte: Int, baseOffset: Int, depth: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => result!
+    depth < 32 and typeId >= 0 and typeId < (context.types -> len)
+        -> if {
+            typeId -> nativeAbiFieldCount(context, state) => fieldCount
+            0 => ordinal!
+            ordinal! < fieldCount -> while {
+                typeId -> nativeAbiFieldTypeAt(ordinal!, context, state) => fieldTypeId
+                fieldTypeId >= 0 -> if {
+                    baseOffset + (typeId -> nativeAbiFieldOffset(ordinal!, context, state)) => fieldOffset
+                    context.types[fieldTypeId] => fieldType
+                    context -> diagnostics.nativeAbiStructTypeSafe(fieldTypeId, depth + 1)
+                        -> if {
+                            fieldTypeId -> nativeSysVEightbyteClass(eightbyte, fieldOffset, depth + 1, context, state) => nestedClass
+                            result! == 3 or nestedClass == 3 -> if { 3 => result! } else {
+                                result! == 1 or nestedClass == 1 -> if { 1 => result! } else {
+                                    nestedClass == 2 -> if { 2 => result! }
+                                }
+                            }
+                        } else {
+                            context.typeSizes[fieldTypeId] => fieldSize
+                            context.typeAligns[fieldTypeId] => fieldAlign
+                            fieldOffset / 8 => fieldFirstEightbyte
+                            (fieldOffset + fieldSize - 1) / 8 => fieldLastEightbyte
+                            eightbyte >= fieldFirstEightbyte and eightbyte <= fieldLastEightbyte
+                                -> if {
+                                    fieldOffset % fieldAlign != 0 or fieldFirstEightbyte != fieldLastEightbyte
+                                        -> if {
+                                            3 => result!
+                                        } else {
+                                            1 => fieldClass!
+                                            fieldType.kind == 1 and fieldType.origin == 1 and (fieldType.symbol == 20 or fieldType.symbol == 21)
+                                                -> if { 2 => fieldClass! }
+                                            result! == 1 or fieldClass! == 1 -> if { 1 => result! } else { 2 => result! }
+                                        }
+                                }
+                        }
+                }
+                ordinal! + 1 => ordinal!
+            }
+        }
+    result!
+}
+nativeSysVEightbyteMeaningfulEnd typeId: Int, eightbyte: Int, baseOffset: Int, depth: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    eightbyte * 8 => result!
+    depth < 32 and typeId >= 0 and typeId < (context.types -> len)
+        -> if {
+            typeId -> nativeAbiFieldCount(context, state) => fieldCount
+            0 => ordinal!
+            ordinal! < fieldCount -> while {
+                typeId -> nativeAbiFieldTypeAt(ordinal!, context, state) => fieldTypeId
+                fieldTypeId >= 0 -> if {
+                    baseOffset + (typeId -> nativeAbiFieldOffset(ordinal!, context, state)) => fieldOffset
+                    context -> diagnostics.nativeAbiStructTypeSafe(fieldTypeId, depth + 1)
+                        -> if {
+                            fieldTypeId -> nativeSysVEightbyteMeaningfulEnd(eightbyte, fieldOffset, depth + 1, context, state) => nestedEnd
+                            nestedEnd > result! -> if { nestedEnd => result! }
+                        } else {
+                            context.typeSizes[fieldTypeId] => fieldSize
+                            fieldOffset / 8 == eightbyte -> if {
+                                fieldOffset + fieldSize => fieldEnd
+                                fieldEnd > result! -> if { fieldEnd => result! }
+                            }
+                        }
+                }
+                ordinal! + 1 => ordinal!
+            }
+        }
+    result!
+}
+nativeSysVEightbyteHasFloat64 typeId: Int, eightbyte: Int, baseOffset: Int, depth: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => found!
+    depth < 32 and typeId >= 0 and typeId < (context.types -> len)
+        -> if {
+            typeId -> nativeAbiFieldCount(context, state) => fieldCount
+            0 => ordinal!
+            ordinal! < fieldCount -> while {
+                typeId -> nativeAbiFieldTypeAt(ordinal!, context, state) => fieldTypeId
+                fieldTypeId >= 0 -> if {
+                    baseOffset + (typeId -> nativeAbiFieldOffset(ordinal!, context, state)) => fieldOffset
+                    context.types[fieldTypeId] => fieldType
+                    context -> diagnostics.nativeAbiStructTypeSafe(fieldTypeId, depth + 1)
+                        -> if {
+                            fieldTypeId -> nativeSysVEightbyteHasFloat64(eightbyte, fieldOffset, depth + 1, context, state)
+                                -> if { true => found! }
+                        } else {
+                            fieldOffset / 8 == eightbyte and fieldType.kind == 1 and fieldType.origin == 1 and fieldType.symbol == 21
+                                -> if { true => found! }
+                        }
+                }
+                ordinal! + 1 => ordinal!
+            }
+        }
+    found!
+}
+nativeSysVAggregateIndirect typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => indirect!
+    typeId < 0 or typeId >= (context.typeSizes -> len) or context.typeSizes[typeId] > 16
+        -> if {
+            true => indirect!
+        } else {
+            (typeId -> nativeSysVEightbyteClass(0, 0, 0, context, state)) == 3
+                -> if { true => indirect! }
+            context.typeSizes[typeId] > 8 and (typeId -> nativeSysVEightbyteClass(1, 0, 0, context, state)) == 3
+                -> if { true => indirect! }
+        }
+    indirect!
+}
+nativeSysVRegistersUsed callIndex: Int, beforeOrdinal: Int, requestedClass: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[callIndex] => call
+    0 => integerUsed!
+    0 => sseUsed!
+    call.typeId >= 0 and (context -> diagnostics.nativeAbiStructTypeSafe(call.typeId, 0)) and (call.typeId -> nativeSysVAggregateIndirect(context, state))
+        -> if {
+            1 => integerUsed!
+        }
+    0 => parameterOrdinal!
+    parameterOrdinal! < beforeOrdinal -> while {
+        callIndex -> callTargetParameter(parameterOrdinal!, context, state) => parameterIndex
+        parameterIndex >= 0 -> if {
+            context.ir[parameterIndex] => parameter
+            false => byValueAbiStruct!
+            parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0
+                -> if {
+                    context -> diagnostics.nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+                }
+            byValueAbiStruct! -> if {
+                not (parameter.typeId -> nativeSysVAggregateIndirect(context, state))
+                    -> if {
+                        0 => aggregateInteger!
+                        0 => aggregateSse!
+                        parameter.typeId -> nativeSysVEightbyteClass(0, 0, 0, context, state) => firstClass
+                        firstClass == 1 -> if { 1 => aggregateInteger! }
+                        firstClass == 2 -> if { 1 => aggregateSse! }
+                        context.typeSizes[parameter.typeId] > 8 -> if {
+                            parameter.typeId -> nativeSysVEightbyteClass(1, 0, 0, context, state) => secondClass
+                            secondClass == 1 -> if { aggregateInteger! + 1 => aggregateInteger! }
+                            secondClass == 2 -> if { aggregateSse! + 1 => aggregateSse! }
+                        }
+                        integerUsed! + aggregateInteger! <= 6 and sseUsed! + aggregateSse! <= 8
+                            -> if {
+                                integerUsed! + aggregateInteger! => integerUsed!
+                                sseUsed! + aggregateSse! => sseUsed!
+                            }
+                    }
+            } else {
+                false => isSse!
+                parameter.typeId >= 0 -> if {
+                    context.types[parameter.typeId] => parameterType
+                    parameterType.kind == 1 and parameterType.origin == 1 and parameterType.symbol >= 19 and parameterType.symbol <= 22
+                        -> if { true => isSse! }
+                }
+                isSse! -> if {
+                    sseUsed! < 8 -> if { sseUsed! + 1 => sseUsed! }
+                } else {
+                    integerUsed! < 6 -> if { integerUsed! + 1 => integerUsed! }
+                }
+            }
+        }
+        parameterOrdinal! + 1 => parameterOrdinal!
+    }
+    requestedClass == 1 -> if { integerUsed! } else { sseUsed! }
+}
+nativeSysVArgumentIndirect callIndex: Int, ordinal: Int, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    typeId -> nativeSysVAggregateIndirect(context, state) => indirect!
+    not indirect! -> if {
+        0 => integerNeeded!
+        0 => sseNeeded!
+        typeId -> nativeSysVEightbyteClass(0, 0, 0, context, state) => firstClass
+        firstClass == 1 -> if { 1 => integerNeeded! }
+        firstClass == 2 -> if { 1 => sseNeeded! }
+        context.typeSizes[typeId] > 8 -> if {
+            typeId -> nativeSysVEightbyteClass(1, 0, 0, context, state) => secondClass
+            secondClass == 1 -> if { integerNeeded! + 1 => integerNeeded! }
+            secondClass == 2 -> if { sseNeeded! + 1 => sseNeeded! }
+        }
+        callIndex -> nativeSysVRegistersUsed(ordinal, 1, context, state) => integerUsed
+        callIndex -> nativeSysVRegistersUsed(ordinal, 2, context, state) => sseUsed
+        integerUsed + integerNeeded! > 6 or sseUsed + sseNeeded! > 8
+            -> if { true => indirect! }
+    }
+    indirect!
+}
+nativeAggregateIndirect typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.expectedPathStyle == 1 -> if {
+        context.typeSizes[typeId] > 8
+    } else {
+        typeId -> nativeSysVAggregateIndirect(context, state)
+    }
+}
+writeNativeSysVCoercionType typeId: Int, eightbyte: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    typeId -> nativeSysVEightbyteClass(eightbyte, 0, 0, context, state) => abiClass
+    typeId -> nativeSysVEightbyteMeaningfulEnd(eightbyte, 0, 0, context, state) => meaningfulEnd
+    meaningfulEnd - eightbyte * 8 => byteCount!
+    byteCount! < 1 -> if { 1 => byteCount! }
+    byteCount! > 8 -> if { 8 => byteCount! }
+    abiClass == 2 -> if {
+        typeId -> nativeSysVEightbyteHasFloat64(eightbyte, 0, 0, context, state)
+            -> if {
+                "double" -> print
+            } else {
+                byteCount! <= 4 -> if { "float" -> print } else { "<2 x float>" -> print }
+            }
+    } else {
+        byteCount! <= 1 -> if { "i8" -> print } else {
+            byteCount! <= 2 -> if { "i16" -> print } else {
+                byteCount! <= 4 -> if { "i32" -> print } else { "i64" -> print }
+            }
+        }
+    }
+}
+emitNativeWindowsArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    parameterIndex >= 0 and argumentIndex >= 0 -> if {
+        context.ir[parameterIndex] => parameter
+        false => byValueAbiStruct!
+        parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0
+            -> if {
+                context -> diagnostics.nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+            }
+        byValueAbiStruct! -> if {
+            parameter.typeId -> nativeWindowsDirectAggregateWidth(context, state) => directWidth
+            "  %native_arg_$(callIndex)_$(ordinal) = alloca " -> print
+            parameter -> writeIrType(context, state)
+            ", align " -> print
+            directWidth == 0 -> if { "16" -> println } else { parameter -> storageAlign(context, state) -> writeDecimalLine }
+            "  store " -> print
+            parameter -> writeIrType(context, state)
+            " " -> print
+            argumentIndex -> writeValue(ownerIndex, context, state)
+            ", ptr %native_arg_$(callIndex)_$(ordinal), align " -> print
+            parameter -> storageAlign(context, state) -> writeDecimalLine
+            directWidth > 0 -> if {
+                "  %native_arg_bits_$(callIndex)_$(ordinal) = load i$(directWidth), ptr %native_arg_$(callIndex)_$(ordinal), align " -> print
+                parameter -> storageAlign(context, state) -> writeDecimalLine
+            }
+        }
+    }
+}
+emitNativeWindowsArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or (argumentIndex == context.ir[callIndex].operand0 and (context.ir[argumentIndex].kind == 18 or context.ir[argumentIndex].kind == 27)))
+        -> if {
+            argumentIndex -> emitNativeWindowsArgumentValue(callIndex, ownerIndex, ordinal, context, state)
+            context.ir[argumentIndex].nextOperand -> emitNativeWindowsArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
+        }
+}
+emitNativeWindowsCallValues callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => call
+    context.expectedPathStyle == 1 and (call -> targetsNativeFunction(context, state))
+        -> if {
+            call.typeId >= 0 and (context -> diagnostics.nativeAbiStructTypeSafe(call.typeId, 0))
+                -> if {
+                    call.typeId -> nativeWindowsDirectAggregateWidth(context, state) => resultWidth
+                    "  %native_result_slot_$(callIndex) = alloca " -> print
+                    call -> writeIrType(context, state)
+                    ", align " -> print
+                    resultWidth == 0 -> if { "16" -> println } else { call -> storageAlign(context, state) -> writeDecimalLine }
+                }
+            call.operand0 -> emitNativeWindowsArgumentValues(callIndex, ownerIndex, 0, context, state)
+        }
+}
+emitNativeSysVArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    parameterIndex >= 0 and argumentIndex >= 0 -> if {
+        context.ir[parameterIndex] => parameter
+        false => byValueAbiStruct!
+        parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0
+            -> if {
+                context -> diagnostics.nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+            }
+        byValueAbiStruct! -> if {
+            callIndex -> nativeSysVArgumentIndirect(ordinal, parameter.typeId, context, state) => indirect
+            indirect -> if {
+                "  %native_arg_$(callIndex)_$(ordinal) = alloca " -> print
+                parameter -> writeIrType(context, state)
+                ", align " -> print
+                parameter -> storageAlign(context, state) -> writeDecimalLine
+                "  store " -> print
+                parameter -> writeIrType(context, state)
+                " " -> print
+                argumentIndex -> writeValue(ownerIndex, context, state)
+                ", ptr %native_arg_$(callIndex)_$(ordinal), align " -> print
+                parameter -> storageAlign(context, state) -> writeDecimalLine
+            } else {
+                "  %native_arg_storage_$(callIndex)_$(ordinal) = alloca [2 x i64], align 8" -> println
+                "  store [2 x i64] zeroinitializer, ptr %native_arg_storage_$(callIndex)_$(ordinal), align 8" -> println
+                "  store " -> print
+                parameter -> writeIrType(context, state)
+                " " -> print
+                argumentIndex -> writeValue(ownerIndex, context, state)
+                ", ptr %native_arg_storage_$(callIndex)_$(ordinal), align " -> print
+                parameter -> storageAlign(context, state) -> writeDecimalLine
+                "  %native_arg_part_$(callIndex)_$(ordinal)_0 = load " -> print
+                parameter.typeId -> writeNativeSysVCoercionType(0, context, state)
+                ", ptr %native_arg_storage_$(callIndex)_$(ordinal), align " -> print
+                parameter -> storageAlign(context, state) -> writeDecimalLine
+                context.typeSizes[parameter.typeId] > 8 -> if {
+                    "  %native_arg_part_ptr_$(callIndex)_$(ordinal)_1 = getelementptr i8, ptr %native_arg_storage_$(callIndex)_$(ordinal), i64 8" -> println
+                    "  %native_arg_part_$(callIndex)_$(ordinal)_1 = load " -> print
+                    parameter.typeId -> writeNativeSysVCoercionType(1, context, state)
+                    ", ptr %native_arg_part_ptr_$(callIndex)_$(ordinal)_1, align 8" -> println
+                }
+            }
+        }
+    }
+}
+emitNativeSysVArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or (argumentIndex == context.ir[callIndex].operand0 and (context.ir[argumentIndex].kind == 18 or context.ir[argumentIndex].kind == 27)))
+        -> if {
+            argumentIndex -> emitNativeSysVArgumentValue(callIndex, ownerIndex, ordinal, context, state)
+            context.ir[argumentIndex].nextOperand -> emitNativeSysVArgumentValues(callIndex, ownerIndex, ordinal + 1, context, state)
+        }
+}
+emitNativeSysVCallValues callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => call
+    context.expectedPathStyle == 0 and (call -> targetsNativeFunction(context, state))
+        -> if {
+            call.typeId >= 0 and (context -> diagnostics.nativeAbiStructTypeSafe(call.typeId, 0))
+                -> if {
+                    call.typeId -> nativeSysVAggregateIndirect(context, state) => indirect
+                    indirect -> if {
+                        "  %native_result_slot_$(callIndex) = alloca " -> print
+                        call -> writeIrType(context, state)
+                        ", align " -> print
+                        call -> storageAlign(context, state) -> writeDecimalLine
+                    } else {
+                        "  %native_result_slot_$(callIndex) = alloca [2 x i64], align 8" -> println
+                        "  store [2 x i64] zeroinitializer, ptr %native_result_slot_$(callIndex), align 8" -> println
+                    }
+                }
+            call.operand0 -> emitNativeSysVArgumentValues(callIndex, ownerIndex, 0, context, state)
+        }
+}
+emitNativeCallValues callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.expectedPathStyle == 1 -> if {
+        callIndex -> emitNativeWindowsCallValues(ownerIndex, context, state)
+    } else {
+        callIndex -> emitNativeSysVCallValues(ownerIndex, context, state)
+    }
+    context.ir[callIndex] => nativeTryCall
+    nativeTryCall -> nativeTrySuccessTypeId(context, state) => nativeTryOutputType
+    nativeTryOutputType > 0 -> if {
+        "  %native_try_out_$(callIndex) = alloca " -> print
+        nativeTryOutputType -> writeSemanticTypeId(context, state)
+        ", align " -> print
+        context.typeAligns[nativeTryOutputType] -> writeDecimalLine
+        "  store " -> print
+        nativeTryOutputType -> writeSemanticTypeId(context, state)
+        " zeroinitializer, ptr %native_try_out_$(callIndex), align " -> print
+        context.typeAligns[nativeTryOutputType] -> writeDecimalLine
+    }
+}
+writeCallArgumentTypeAndValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
+    false => handled!
+    context.expectedPathStyle == 1 and (context.ir[callIndex] -> targetsNativeFunction(context, state))
+        -> if {
+            callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+            parameterIndex >= 0 -> if {
+                context.ir[parameterIndex] => parameter
+                false => byValueAbiStruct!
+                parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0
+                    -> if {
+                        context -> diagnostics.nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+                    }
+                byValueAbiStruct! -> if {
+                    parameter.typeId -> nativeWindowsDirectAggregateWidth(context, state) => directWidth
+                    directWidth > 0 -> if {
+                        "i$(directWidth) %native_arg_bits_$(callIndex)_$(ordinal)" -> print
+                    } else {
+                        "ptr %native_arg_$(callIndex)_$(ordinal)" -> print
+                    }
+                    true => handled!
+                }
+            }
+        }
+    context.expectedPathStyle == 0 and (context.ir[callIndex] -> targetsNativeFunction(context, state))
+        -> if {
+            callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+            parameterIndex >= 0 -> if {
+                context.ir[parameterIndex] => parameter
+                false => byValueAbiStruct!
+                parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0
+                    -> if {
+                        context -> diagnostics.nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+                    }
+                byValueAbiStruct! -> if {
+                    callIndex -> nativeSysVArgumentIndirect(ordinal, parameter.typeId, context, state) => indirect
+                    indirect -> if {
+                        "ptr byval(" -> print
+                        parameter -> writeIrType(context, state)
+                        ") align " -> print
+                        parameter -> storageAlign(context, state) -> writeDecimal
+                        " %native_arg_$(callIndex)_$(ordinal)" -> print
+                    } else {
+                        parameter.typeId -> writeNativeSysVCoercionType(0, context, state)
+                        " %native_arg_part_$(callIndex)_$(ordinal)_0" -> print
+                        context.typeSizes[parameter.typeId] > 8 -> if {
+                            ", " -> print
+                            parameter.typeId -> writeNativeSysVCoercionType(1, context, state)
+                            " %native_arg_part_$(callIndex)_$(ordinal)_1" -> print
+                        }
+                    }
+                    true => handled!
+                }
+            }
+        }
+    handled!
+}
+writeCallResultPrefix callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => call
+    call -> targetsNativeTry(context, state) => nativeTryCall
+    nativeTryCall -> if {
+        "  %native_try_status_$(callIndex) = call i32" -> print
+    } else {
+        false => nativeAggregateResult!
+        0 => nativeAggregateWidth!
+        (call -> targetsNativeFunction(context, state)) and call.typeId >= 0
+            -> if {
+                context -> diagnostics.nativeAbiStructTypeSafe(call.typeId, 0) => nativeAggregateResult!
+                nativeAggregateResult! and context.expectedPathStyle == 1
+                    -> if { call.typeId -> nativeWindowsDirectAggregateWidth(context, state) => nativeAggregateWidth! }
+            }
+        nativeAggregateResult! -> if {
+            context.expectedPathStyle == 1 -> if {
+                nativeAggregateWidth! > 0 -> if {
+                    "  %native_result_bits_$(callIndex) = call i$(nativeAggregateWidth!)" -> print
+                } else {
+                    "  call void" -> print
+                }
+            } else {
+                call.typeId -> nativeSysVAggregateIndirect(context, state)
+                    -> if {
+                        "  call void" -> print
+                    } else {
+                        "  %native_result_bits_$(callIndex) = call " -> print
+                        context.typeSizes[call.typeId] > 8 -> if {
+                            "{ " -> print
+                            call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                            ", " -> print
+                            call.typeId -> writeNativeSysVCoercionType(1, context, state)
+                            " }" -> print
+                        } else {
+                            call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                        }
+                    }
+            }
+        } else {
+            call.typeOrigin == 1 and call.typeSymbol == 0
+                -> if { "  call " -> print } else { "  %v$(callIndex) = call " -> print }
+            call -> targetsNativeFunction(context, state)
+                -> if {
+                    call.typeId >= 0 -> if {
+                        context.types[call.typeId] => nativeScalarResultType
+                        nativeScalarResultType.kind == 1 and nativeScalarResultType.origin == 1 and (nativeScalarResultType.symbol == 3 or nativeScalarResultType.symbol == 4)
+                            -> if { "signext " -> print }
+                        nativeScalarResultType.kind == 1 and nativeScalarResultType.origin == 1 and (nativeScalarResultType.symbol == 8 or nativeScalarResultType.symbol == 9)
+                            -> if { "zeroext " -> print }
+                    }
+                }
+            call -> writeIrType(context, state)
+        }
+    }
+}
+# A borrowed call keeps an unnamed owning producer alive until the call returns.
+# Named places keep their enclosing lifetime. Consuming formals take the owner;
+# fixed-array formals take elements but leave promoted backing with the caller.
+emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, droppedOwners: mut [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    parameterIndex < 0 -> if { return }
+    context.ir[parameterIndex] => parameter
+    context.ir[argumentIndex] => argument
+    argument.kind == 5 or argument.kind == 13 or argument.kind == 15 or argument.kind == 17
+        -> if { return }
+    argumentIndex -> aggregateValueIndex(context, state) => valueIndex
+    context.ir[valueIndex] => value
+    value.kind == 6 or value.kind == 12 or value.kind == 14
+        or value.kind == 16 or value.kind == 26
+        or (value.kind == 9 and value.opcode == -27) => owningProducer
+    not owningProducer or value.typeId < 0 or value.typeId >= (context.types -> len)
+        -> if { return }
+    value.kind == 6 -> if {
+        (value -> targetsNativeFunction(context, state))
+            or not (valueIndex -> callHasResolvedFunctionTarget(context, state))
+            -> if { return }
+    }
+    false => dropFixedBacking!
+    value.kind == 6 and context.types[value.typeId].kind == 4
+        and parameter.typeId >= 0 and parameter.typeId < (context.types -> len)
+        -> if {
+            context.types[parameter.typeId] => parameterType
+            (parameterType.kind == 2 and parameter.flags % 4 == 0)
+                or (parameterType.kind == 4 and parameter.flags % 4 <= 1)
+                -> if { true => dropFixedBacking! }
+        }
+    parameter.flags % 4 == 0 and context.typeTraits[value.typeId] % 2 == 1
+        and context.types[value.typeId].kind != 4 => dropBorrowedOwner
+    not dropFixedBacking! and not dropBorrowedOwner
+        -> if { return }
+    droppedOwners -> each droppedOwner {
+        droppedOwner == valueIndex -> if { return }
+    }
+    dropFixedBacking! -> if {
+        "  %call$(callIndex)_temporary$(ordinal) = extractvalue { ptr, i64 } %v$(valueIndex), 0" -> println
+        context.typeTraits[value.typeId] % 2 == 1 and parameter.flags % 2 == 0
+            -> if {
+                "  %call$(callIndex)_temporary$(ordinal)_value = load " -> print
+                value.typeId -> writeSemanticTypeId(context, state)
+                ", ptr %call$(callIndex)_temporary$(ordinal), align " -> print
+                context.typeAligns[value.typeId] -> writeDecimalLine
+                "  call void @sollang_drop_t$(value.typeId)(" -> print
+                value.typeId -> writeSemanticTypeId(context, state)
+                " %call$(callIndex)_temporary$(ordinal)_value)" -> println
+            }
+        "  call void @free(ptr %call$(callIndex)_temporary$(ordinal))" -> println
+    } else {
+        "  call void @sollang_drop_t$(value.typeId)(" -> print
+        value.typeId -> writeSemanticTypeId(context, state)
+        " %v$(valueIndex))" -> println
+    }
+    droppedOwners -> push(valueIndex)
+}
+emitCallTemporaryDrops callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    [Int; ~] => droppedOwners!
+    callIndex -> branchStageFlowIndex(context, state) => flowIndex
+    0 => ordinal!
+    flowIndex >= 0 -> if {
+        flowIndex -> emitCallTemporaryDrop(callIndex, 0, droppedOwners!, context, state)
+        1 => ordinal!
+    }
+    context.ir[callIndex].operand0 => argumentIndex!
+    argumentIndex! >= 0 and (callIndex -> callTargetParameter(ordinal!, context, state)) >= 0
+        -> while {
+            argumentIndex! -> emitCallTemporaryDrop(callIndex, ordinal!, droppedOwners!, context, state)
+            context.ir[argumentIndex!].nextOperand => argumentIndex!
+            ordinal! + 1 => ordinal!
+        }
+}
+emitCallResultFinish callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => call
+    call -> targetsNativeTry(context, state) => nativeTryCall
+    nativeTryCall -> if {
+        call -> nativeTrySuccessTypeId(context, state) => nativeTrySuccessType
+        "  %native_try_ok_$(callIndex) = icmp eq i32 %native_try_status_$(callIndex), 0" -> println
+        "  %native_try_result_slot_$(callIndex) = alloca " -> print
+        call -> writeIrType(context, state)
+        ", align 8" -> println
+        "  store " -> print
+        call -> writeIrType(context, state)
+        " zeroinitializer, ptr %native_try_result_slot_$(callIndex), align 8" -> println
+        "  %native_try_tag_addr_$(callIndex) = getelementptr inbounds " -> print
+        call -> writeIrType(context, state)
+        ", ptr %native_try_result_slot_$(callIndex), i32 0, i32 0" -> println
+        "  %native_try_tag_$(callIndex) = select i1 %native_try_ok_$(callIndex), i32 0, i32 1" -> println
+        "  store i32 %native_try_tag_$(callIndex), ptr %native_try_tag_addr_$(callIndex), align 4" -> println
+        "  %native_try_payload_$(callIndex) = getelementptr inbounds " -> print
+        call -> writeIrType(context, state)
+        ", ptr %native_try_result_slot_$(callIndex), i32 0, i32 1" -> println
+        "  br i1 %native_try_ok_$(callIndex), label %native_try_success_$(callIndex), label %native_try_error_$(callIndex)" -> println
+        "native_try_success_$(callIndex):" -> println
+        nativeTrySuccessType > 0 -> if {
+            "  %native_try_value_$(callIndex) = load " -> print
+            nativeTrySuccessType -> writeSemanticTypeId(context, state)
+            ", ptr %native_try_out_$(callIndex), align " -> print
+            context.typeAligns[nativeTrySuccessType] -> writeDecimalLine
+            context -> nativeHandleType(nativeTrySuccessType)
+                -> if { callIndex -> emitNativeHandleValidation(true) }
+            "  store " -> print
+            nativeTrySuccessType -> writeSemanticTypeId(context, state)
+            " %native_try_value_$(callIndex), ptr %native_try_payload_$(callIndex), align " -> print
+            context.typeAligns[nativeTrySuccessType] -> writeDecimalLine
+        }
+        "  br label %native_try_end_$(callIndex)" -> println
+        "native_try_error_$(callIndex):" -> println
+        "  store i32 %native_try_status_$(callIndex), ptr %native_try_payload_$(callIndex), align 4" -> println
+        "  br label %native_try_end_$(callIndex)" -> println
+        "native_try_end_$(callIndex):" -> println
+        "  %v$(callIndex) = load " -> print
+        call -> writeIrType(context, state)
+        ", ptr %native_try_result_slot_$(callIndex), align 8" -> println
+    } else {
+        (call -> targetsNativeFunction(context, state)) and call.typeId >= 0 and (context -> diagnostics.nativeAbiStructTypeSafe(call.typeId, 0))
+            -> if {
+                context.expectedPathStyle == 1 -> if {
+                    call.typeId -> nativeWindowsDirectAggregateWidth(context, state) => resultWidth
+                    resultWidth > 0 -> if {
+                        "  store i$(resultWidth) %native_result_bits_$(callIndex), ptr %native_result_slot_$(callIndex), align " -> print
+                        call -> storageAlign(context, state) -> writeDecimalLine
+                    }
+                    "  %v$(callIndex) = load " -> print
+                    call -> writeIrType(context, state)
+                    ", ptr %native_result_slot_$(callIndex), align " -> print
+                    call -> storageAlign(context, state) -> writeDecimalLine
+                } else {
+                    call.typeId -> nativeSysVAggregateIndirect(context, state) => indirect
+                    not indirect -> if {
+                        context.typeSizes[call.typeId] > 8 -> if {
+                            "  %native_result_part_$(callIndex)_0 = extractvalue { " -> print
+                            call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                            ", " -> print
+                            call.typeId -> writeNativeSysVCoercionType(1, context, state)
+                            " } %native_result_bits_$(callIndex), 0" -> println
+                            "  %native_result_part_$(callIndex)_1 = extractvalue { " -> print
+                            call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                            ", " -> print
+                            call.typeId -> writeNativeSysVCoercionType(1, context, state)
+                            " } %native_result_bits_$(callIndex), 1" -> println
+                            "  store " -> print
+                            call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                            " %native_result_part_$(callIndex)_0, ptr %native_result_slot_$(callIndex), align 8" -> println
+                            "  %native_result_part_ptr_$(callIndex)_1 = getelementptr i8, ptr %native_result_slot_$(callIndex), i64 8" -> println
+                            "  store " -> print
+                            call.typeId -> writeNativeSysVCoercionType(1, context, state)
+                            " %native_result_part_$(callIndex)_1, ptr %native_result_part_ptr_$(callIndex)_1, align 8" -> println
+                        } else {
+                            "  store " -> print
+                            call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                            " %native_result_bits_$(callIndex), ptr %native_result_slot_$(callIndex), align 8" -> println
+                        }
+                    }
+                    "  %v$(callIndex) = load " -> print
+                    call -> writeIrType(context, state)
+                    ", ptr %native_result_slot_$(callIndex), align " -> print
+                    call -> storageAlign(context, state) -> writeDecimalLine
+                }
+            }
+        (call -> targetsNativeFunction(context, state)) and (context -> nativeHandleType(call.typeId))
+            -> if { callIndex -> emitNativeHandleValidation(false) }
+    }
+    callIndex -> emitCallTemporaryDrops(context, state)
+}
+
+# Pattern payloads are owned values but do not have ordinary mutable-binding
+# slots. A transfer can occur only on one nested control path, so retain a
+# per-arm runtime liveness bit and clear it exactly after the consuming call or
+# aggregate constructor has completed.
+emitCompletedPatternBindingTransferMarks transferIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    transferIndex => transferOwner!
+    transferOwner! >= 0 and context.ir[transferOwner!].kind != 0
+        -> while { context.ir[transferOwner!].parent => transferOwner! }
+    0 => moveIndex!
+    moveIndex! < (context.moves -> len) -> while {
+        context.moves[moveIndex!] => moveEvent
+        (moveEvent.siteIr -> nearestCompletedTransferOwner(context, state)) == transferIndex
+            => transferContainsMove
+        transferContainsMove
+            and moveEvent.bindingIr >= 0
+            and moveEvent.bindingIr < (context.ir -> len)
+            and context.ir[moveEvent.bindingIr].kind == 29
+            -> if {
+                "  store i1 false, ptr %v$(moveEvent.bindingIr)_owned, align 1" -> println
+            }
+        # Aggregate cleanup already owns both complete and partial parameter
+        # transfers at this boundary. Calls, enums and member stores use this
+        # marker; they must not duplicate that aggregate-specific handler.
+        transferContainsMove
+            and transferOwner! >= 0
+            and moveEvent.memberIr < 0
+            and moveEvent.sourceModule == context.ir[transferOwner!].sourceModule
+            and (moveEvent.siteIr -> nearestAggregateTransferOwner(context, state)) < 0
+            -> if {
+                context -> parameterIndexForFunction(transferOwner!, moveEvent.symbol)
+                    => transferredParameter
+                transferredParameter >= 0
+                    and (transferredParameter -> moveParameterNeedsPathOwnershipFlag(transferOwner!, context, state))
+                    -> if {
+                        "  store i1 false, ptr %arg$(transferredParameter)_owned, align 1" -> println
+                    }
+            }
+        moveIndex! + 1 => moveIndex!
+    }
+}

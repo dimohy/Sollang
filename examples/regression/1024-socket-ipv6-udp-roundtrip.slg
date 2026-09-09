@@ -1,0 +1,32 @@
+import std.net as net
+import sys.io
+import std.net.socket as socket
+
+ipv6Roundtrip: -> Result<Bool, socket.SocketError> uses Network {
+    socket.DatagramBindOptions {
+        endpoint: net.Endpoint.V6(net.loopbackIpv6(0))
+        reuseAddress: true
+    } -> bind? => server
+    server -> localPort? => serverPort
+    socket.DatagramBindOptions {
+        endpoint: net.Endpoint.V6(net.loopbackIpv6(0))
+        reuseAddress: true
+    } -> bind? => client
+    [UInt8(105), 112, 118, 54; ~] => payload
+    client -> sendTo(net.Endpoint.V6(net.loopbackIpv6(serverPort)), payload)? => sent
+    server -> receiveFrom(16)? => received
+    Result<Bool, socket.SocketError>.Ok(
+        sent == 4
+            and (received.source -> isIpv6)
+            and (received.source -> port) > 0
+            and (received.bytes -> len) == 4
+            and received.bytes[0] == 105
+            and received.bytes[3] == 54)
+}
+
+main {
+    ipv6Roundtrip() -> when {
+        Ok(valid) { valid -> if { "socket-ipv6=true" } else { "socket-ipv6=false" } -> println }
+        Err(error) { "socket-ipv6-error=$(error.code)" -> println }
+    }
+}

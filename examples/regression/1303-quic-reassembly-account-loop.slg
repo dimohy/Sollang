@@ -1,0 +1,18 @@
+import std.net.quic.frame as frames
+import std.net.quic.reassembly
+import std.net.quic.stream_state as streams
+
+main {
+    reassembly.initial() => queue!
+    queue! -> push(frames.Stream {
+        id: 0
+        offset: 0
+        fin: true
+        data: [1, 2; ~]
+    })
+    streams.initialReceiveFlow(16) => flow
+    queue! -> account(0, flow) -> when {
+        Ok(accounted) { "quic-account=$(accounted.flow.highestReceived)" -> println }
+        Err(error) { "quic-account-error=$(error.code)" -> println }
+    }
+}

@@ -1,0 +1,89 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    """
+    struct Probed {
+        symbol: Int
+        consumed: Int
+    }
+
+    enum Probe {
+        NeedMore(Int)
+        Ready(Probed)
+    }
+
+    struct Error {
+        code: Int
+    }
+
+    struct Window {
+        available: Int
+    }
+
+    probe ready: Bool -> Result<Probe, Error> {
+        ready -> if {
+            Result<Probe, Error>.Ok(Probe.Ready(Probed { symbol: 42, consumed: 3 }))
+        } else {
+            Result<Probe, Error>.Ok(Probe.NeedMore(1))
+        }
+    }
+
+    impl Window {
+        readSymbol: mut self, ready: Bool -> Result<Probe, Error> {
+            probe(ready)? => probed
+            probed -> when {
+                NeedMore(bits) { Result<Probe, Error>.Ok(Probe.NeedMore(bits)) }
+                Ready(decoded) {
+                    self.available - decoded.consumed => self.available
+                    Result<Probe, Error>.Ok(Probe.Ready(decoded))
+                }
+            }
+        }
+    }
+
+    main {
+        Window { available: 8 } => window!
+        window! -> readSymbol(true) -> when {
+            Err(error) { "error=$(error.code)" -> println }
+            Ok(probed) => probed -> when {
+                NeedMore(bits) { "need=$bits" -> println }
+                Ready(decoded) { "symbol=$(decoded.symbol),remaining=$(window!.available)" -> println }
+            }
+        }
+    }
+    """ => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> expressionTypeIds.resolveContext => types
+    context -> typedIr.lowerResolvedContext(types) => ir
+    0 => typeIndex!
+    types.types -> each type {
+        "type=$(typeIndex!),kind=$(type.kind),origin=$(type.origin),module=$(type.module),symbol=$(type.symbol),first=$(type.first),second=$(type.second),status=$(type.status)" -> println
+        typeIndex! + 1 => typeIndex!
+    }
+    context.package.ranges[0] => sourceRange
+    types.expressions -> each expression {
+        expression.sourceModule == 0 and (expression.astNode == 176 or expression.astNode == 183) -> if {
+            "expression=$(expression.astNode),type=$(expression.typeId),status=$(expression.status)" -> println
+        }
+    }
+    0 => symbolIndex!
+    symbolIndex! < sourceRange.symbolCount -> while {
+        context.package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
+        symbol.kind == 26 or symbol.kind == 27 -> if {
+            symbol.typeNode >= 0 -> if { types.referenceIndexByTypeAst[sourceRange.astStart + symbol.typeNode] } else { -1 } => referenceIndex
+            referenceIndex >= 0 -> if { types.references[referenceIndex].typeId } else { -1 } => referenceType
+            referenceIndex >= 0 -> if { types.references[referenceIndex].typeAst } else { -1 } => referenceAst
+            "symbol=$(symbolIndex!),kind=$(symbol.kind),parent=$(symbol.parent),ast=$(symbol.astNode),typeNode=$(symbol.typeNode),reference=$(referenceIndex):$(referenceType):$(referenceAst)" -> println
+        }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    0 => index!
+    ir -> each node {
+        "ir=$(index!),kind=$(node.kind),parent=$(node.parent),type=$(node.typeId),symbol=$(node.symbol),a=$(node.operand0),b=$(node.operand1),ast=$(node.astNode)" -> println
+        index! + 1 => index!
+    }
+    "count=$(index!)" -> println
+}

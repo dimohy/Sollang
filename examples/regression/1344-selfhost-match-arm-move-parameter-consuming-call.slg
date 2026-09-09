@@ -1,0 +1,26 @@
+enum Mode {
+    Buffered
+    Fresh
+}
+
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+consume owner: move Owner -> Result<Int, Int> {
+    Result<Int, Int>.Ok(owner.bytes -> len)
+}
+
+forward mode: Mode, owner: move Owner -> Result<Int, Int> {
+    mode -> when {
+        Buffered { owner -> consume }
+        Fresh { owner -> consume }
+    }
+}
+
+main {
+    forward(Mode.Buffered, Owner { bytes: [1, 2, 3; ~] }) -> when {
+        Err(_) { "match-arm-consuming-call=false" -> println }
+        Ok(count) { "match-arm-consuming-call=$(count == 3)" -> println }
+    }
+}

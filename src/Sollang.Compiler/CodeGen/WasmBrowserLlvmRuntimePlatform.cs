@@ -124,9 +124,14 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare void @exit(i32)");
         }
         functions.AppendLine("declare i32 @sollang_browser_write(ptr, i32)");
+        if (UsesStandardError)
+        {
+            functions.AppendLine("declare i32 @sollang_browser_eprint(ptr, i32)");
+        }
         functions.AppendLine("declare i32 @sollang_browser_read(ptr, i32)");
         functions.AppendLine("declare void @sollang_browser_panic(ptr, i32)");
         functions.AppendLine("declare i64 @sollang_browser_now_millis()");
+        functions.AppendLine("declare i64 @sollang_browser_utc_now_millis()");
         functions.AppendLine("declare i32 @sollang_browser_source_count()");
         functions.AppendLine("declare i32 @sollang_browser_source_pointer(i32)");
         functions.AppendLine("declare i32 @sollang_browser_source_length(i32)");
@@ -166,6 +171,12 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
             define internal i64 @sollang_now_millis() #0 {
             entry:
               %millis = call i64 @sollang_browser_now_millis()
+              ret i64 %millis
+            }
+
+            define internal i64 @sollang_utc_now_millis() #0 {
+            entry:
+              %millis = call i64 @sollang_browser_utc_now_millis()
               ret i64 %millis
             }
 
@@ -216,6 +227,31 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
             }
 
             """);
+        if (UsesStandardError)
+        {
+            functions.AppendLine("""
+                define internal i32 @sollang_write_stderr(ptr %data, i64 %len64, ptr %written) #0 {
+                entry:
+                  %too_large = icmp ugt i64 %len64, 2147483647
+                  br i1 %too_large, label %fail, label %write
+
+                write:
+                  %len = trunc i64 %len64 to i32
+                  %ok = call i32 @sollang_browser_eprint(ptr %data, i32 %len)
+                  %is_ok = icmp ne i32 %ok, 0
+                  br i1 %is_ok, label %success, label %fail
+
+                success:
+                  store i32 %len, ptr %written, align 4
+                  ret i32 1
+
+                fail:
+                  store i32 0, ptr %written, align 4
+                  ret i32 0
+                }
+
+                """);
+        }
     }
 
     public override void EmitFilePrimitives(StringBuilder functions)

@@ -1,0 +1,28 @@
+struct Flow {
+    consumed: Int
+}
+
+struct State {
+    flow: Flow
+}
+
+advance flow: Flow, amount: Int -> Result<Flow, Int> {
+    Result<Flow, Int>.Ok(Flow { consumed: flow.consumed + amount })
+}
+
+apply state: mut State -> Result<Unit, Int> {
+    state.flow -> advance(2) -> when {
+        Ok(next) { next }
+        Err(error) { Result<Unit, Int>.Err(error) -> return }
+    } => state.flow
+    state.flow.consumed == 3 -> unless { Result<Unit, Int>.Err(9) -> return }
+    Result<Unit, Int>.Ok
+}
+
+main {
+    State { flow: Flow { consumed: 1 } } => state!
+    state! -> apply -> when {
+        Ok(done) { "ok" -> println }
+        Err(error) { "error=$error" -> println }
+    }
+}

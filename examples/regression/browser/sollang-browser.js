@@ -27,6 +27,9 @@ async function runSollang() {
       },
       sollang_browser_now_millis() {
         return BigInt(Math.trunc(performance.now()));
+      },
+      sollang_browser_utc_now_millis() {
+        return BigInt(Date.now());
       }
     }
   };

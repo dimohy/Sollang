@@ -1,0 +1,191 @@
+namespace std.io
+
+import std.io as model
+
+public enum ErrorKind {
+    InvalidLimit
+    UnexpectedEnd
+    OutputLimitExceeded
+    InvalidPosition
+}
+
+public struct Error {
+    public kind: ErrorKind
+    public offset: UIntSize
+}
+
+# End is distinct from a zero-sized request. Bytes owns the returned chunk, so
+# it can safely outlive the reader without retaining a hidden borrow.
+public enum Read {
+    Bytes([UInt8; ~])
+    End
+}
+
+# MemoryReader owns its backing bytes. Reads advance an explicit cursor and
+# never perform an unbounded read. readExact is transactional on failure.
+public struct MemoryReader {
+    public bytes: [UInt8; ~]
+    public offset: Int
+    public maxReadBytes: Int
+}
+
+# write exposes partial progress; writeAll is the checked all-or-nothing helper.
+public struct MemoryWriter {
+    public bytes: [UInt8; ~]
+    public maxOutputBytes: Int
+}
+
+error kind: ErrorKind, offset: UIntSize -> Error => Error {
+    kind: kind
+    offset: offset
+}
+
+appendRange source: [UInt8], start: Int, count: Int, output: mut [UInt8; ~] -> Unit {
+    output -> reserve((output -> len) + count)
+    0 => index!
+    index! < count -> while {
+        output -> push(source[start + index!])
+        index! + 1 => index!
+    }
+}
+
+public memoryReader bytes: move [UInt8; ~], maxReadBytes: Int -> Result<MemoryReader, Error> {
+    maxReadBytes >= 0 -> unless {
+        Result<MemoryReader, Error>.Err(error(model.ErrorKind.InvalidLimit, 0)) -> return
+    }
+    Result<MemoryReader, Error>.Ok(MemoryReader {
+        bytes: bytes
+        offset: 0
+        maxReadBytes: maxReadBytes
+    })
+}
+
+public memoryWriter maxOutputBytes: Int -> Result<MemoryWriter, Error> {
+    maxOutputBytes >= 0 -> unless {
+        Result<MemoryWriter, Error>.Err(error(model.ErrorKind.InvalidLimit, 0)) -> return
+    }
+    Result<MemoryWriter, Error>.Ok(MemoryWriter {
+        bytes: [UInt8; ~]
+        maxOutputBytes: maxOutputBytes
+    })
+}
+
+impl Error {
+    public errorKind: self -> ErrorKind => self.kind
+
+    public errorOffset: self -> UIntSize => self.offset
+}
+
+impl MemoryReader {
+    public position: self -> UIntSize => UIntSize(self.offset)
+
+    public remaining: self -> Int => (self.bytes -> len) - self.offset
+
+    public isEnd: self -> Bool => self.offset == (self.bytes -> len)
+
+    # The caller owns and sizes output. A successful transfer performs no
+    # allocation; zero means either an empty destination or end of input.
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        (output -> len) <= self.maxReadBytes -> unless {
+            Result<Int, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+        }
+        self -> remaining => available
+        (output -> len) < available -> if { output -> len } else { available } => count
+        0 => index!
+        index! < count -> while {
+            self.bytes[self.offset + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.offset + count => self.offset
+        Result<Int, Error>.Ok(count)
+    }
+
+    # Failure is transactional: validate the configured limit and full source
+    # range before mutating either the destination or the reader cursor.
+    public readExactInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        (output -> len) <= self.maxReadBytes -> unless {
+            Result<Int, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+        }
+        (output -> len) <= (self -> remaining) -> unless {
+            Result<Int, Error>.Err(error(model.ErrorKind.UnexpectedEnd, UIntSize(self.offset))) -> return
+        }
+        0 => index!
+        index! < (output -> len) -> while {
+            self.bytes[self.offset + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.offset + (output -> len) => self.offset
+        Result<Int, Error>.Ok(output -> len)
+    }
+
+    public read: mut self, maxBytes: Int -> Result<Read, Error> {
+        maxBytes >= 0 and maxBytes <= self.maxReadBytes
+            -> unless {
+                Result<Read, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+            }
+        self -> isEnd -> if { Result<Read, Error>.Ok(model.Read.End) -> return }
+
+        self -> remaining => available
+        maxBytes < available -> if { maxBytes } else { available } => count
+        [UInt8; ~] => chunk!
+        appendRange(self.bytes, self.offset, count, chunk!)
+        self.offset + count => self.offset
+        Result<Read, Error>.Ok(model.Read.Bytes(chunk!))
+    }
+
+    public readExact: mut self, count: Int -> Result<[UInt8; ~], Error> {
+        count >= 0 and count <= self.maxReadBytes -> unless {
+            Result<[UInt8; ~], Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+        }
+        count <= (self -> remaining) -> unless {
+            Result<[UInt8; ~], Error>.Err(error(model.ErrorKind.UnexpectedEnd, UIntSize(self.offset))) -> return
+        }
+        [UInt8; ~] => chunk!
+        appendRange(self.bytes, self.offset, count, chunk!)
+        self.offset + count => self.offset
+        Result<[UInt8; ~], Error>.Ok(chunk!)
+    }
+
+    public seek: mut self, position: UIntSize -> Result<Unit, Error> {
+        position <= UIntSize(self.bytes -> len) -> unless {
+            Result<Unit, Error>.Err(error(model.ErrorKind.InvalidPosition, position)) -> return
+        }
+        Int(position) => self.offset
+        Result<Unit, Error>.Ok
+    }
+
+    public intoBytes: move self -> [UInt8; ~] {
+        self.bytes => bytes
+        bytes
+    }
+}
+
+impl MemoryWriter {
+    public byteCount: self -> Int => self.bytes -> len
+
+    public remainingCapacity: self -> Int => self.maxOutputBytes - (self.bytes -> len)
+
+    public write: mut self, input: [UInt8] -> Int {
+        self -> remainingCapacity => available
+        (input -> len) < available -> if { input -> len } else { available } => count
+        appendRange(input, 0, count, self.bytes)
+        count
+    }
+
+    public writeAll: mut self, input: [UInt8] -> Result<Int, Error> {
+        (input -> len) <= (self -> remainingCapacity)
+            -> unless {
+                Result<Int, Error>.Err(
+                error(model.ErrorKind.OutputLimitExceeded, UIntSize(self.bytes -> len))) -> return
+            }
+        appendRange(input, 0, input -> len, self.bytes)
+        Result<Int, Error>.Ok(input -> len)
+    }
+
+    public flush: self -> Unit { }
+
+    public intoBytes: move self -> [UInt8; ~] {
+        self.bytes => bytes
+        bytes
+    }
+}

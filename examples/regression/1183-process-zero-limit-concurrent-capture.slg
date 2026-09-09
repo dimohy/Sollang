@@ -1,0 +1,33 @@
+import sys.process as process
+import sys.runtime as runtime
+
+# Zero limits still drain both pipes and report discarded bytes as truncation.
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 1 -> if {
+        0 => index!
+        index! < 4096 -> while {
+            "stderr-zero-limit-payload" -> runtime.eprintln
+            index! + 1 => index!
+        }
+        0 => index!
+        index! < 4096 -> while {
+            "stdout-zero-limit-payload" -> println
+            index! + 1 => index!
+        }
+    } else {
+        process.command(arguments[0]) => command!
+        command! -> arg("--child")
+        command! -> collect(process.CaptureLimits {
+            standardOutputBytes: UIntSize(0)
+            standardErrorBytes: UIntSize(0)
+        }) -> when {
+            Result<process.CapturedOutput, Text>.Ok(output) {
+                "status=$(output.status -> exitCode) stdout=$(output.standardOutput -> len) stderr=$(output.standardError -> len) stdout-truncated=$(output.standardOutputTruncated) stderr-truncated=$(output.standardErrorTruncated)" -> println
+            }
+            Result<process.CapturedOutput, Text>.Err(error) {
+                "error=$error" -> println
+            }
+        }
+    }
+}

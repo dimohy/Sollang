@@ -2,6 +2,7 @@ namespace sollang.compiler.semantic.analysis
 
 import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.semantic.resolve as resolution
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_terms as typeTerms
@@ -13,36 +14,42 @@ import sys.file as file
 # symbol, or resolved name remains source-local; SourceAnalysisRange maps that
 # local index space onto the package arrays without nested owned containers.
 public struct SourceAnalysisRange {
-    sourceModule: Int
-    astStart: Int
-    astCount: Int
-    tokenStart: Int
-    tokenCount: Int
-    symbolStart: Int
-    symbolCount: Int
-    nameStart: Int
-    nameCount: Int
-    termStart: Int
-    termCount: Int
-    typeStart: Int
-    typeCount: Int
+    public sourceModule: Int
+    public astStart: Int
+    public astCount: Int
+    public tokenStart: Int
+    public tokenCount: Int
+    public symbolStart: Int
+    public symbolCount: Int
+    public nameStart: Int
+    public nameCount: Int
+    public termStart: Int
+    public termCount: Int
+    public typeStart: Int
+    public typeCount: Int
+    public literalStart: Int
+    public literalCount: Int
+    public constantFailureStart: Int
+    public constantFailureCount: Int
 }
 
 public struct PackageAnalysis {
-    sources: [file.SourceText; ~]
-    entrySourceModule: Int
-    ranges: [SourceAnalysisRange; ~]
-    nodes: [ast.AstNode; ~]
-    tokens: [syntax.SyntaxToken; ~]
-    symbols: [symbols.Symbol; ~]
-    names: [resolution.ResolvedName; ~]
-    terms: [typeTerms.TypeTerm; ~]
-    typeUses: [types.TypeUse; ~]
+    public sources: [file.SourceText; ~]
+    public entrySourceModule: Int
+    public ranges: [SourceAnalysisRange; ~]
+    public nodes: [ast.AstNode; ~]
+    public tokens: [syntax.SyntaxToken; ~]
+    public symbols: [symbols.Symbol; ~]
+    public names: [resolution.ResolvedName; ~]
+    public terms: [typeTerms.TypeTerm; ~]
+    public typeUses: [types.TypeUse; ~]
+    public constantLiterals: [constantLowering.Literal; ~]
+    public constantFailures: [constantLowering.Failure; ~]
 }
 
 withSelectedFunctionFlag symbol: symbols.Symbol, selected: Bool -> symbols.Symbol {
     symbol.flags => flags!
-    (selected and ((flags! / 4) % 2) == 0) -> if { flags! + 4 => flags! }
+    selected and ((flags! / 4) % 2) == 0 -> if { flags! + 4 => flags! }
     symbols.Symbol {
         kind: symbol.kind
         parent: symbol.parent
@@ -62,89 +69,58 @@ withSelectedFunctionFlag symbol: symbols.Symbol, selected: Bool -> symbols.Symbo
 # later consumes these products in source-index order, so scheduling never
 # changes public symbol, token, or type identities.
 public struct SourceAnalysis {
-    nodes: [ast.AstNode; ~]
-    tokens: [syntax.SyntaxToken; ~]
-    symbols: [symbols.Symbol; ~]
-    names: [resolution.ResolvedName; ~]
-    terms: [typeTerms.TypeTerm; ~]
-    typeUses: [types.TypeUse; ~]
+    public nodes: [ast.AstNode; ~]
+    public tokens: [syntax.SyntaxToken; ~]
+    public symbols: [symbols.Symbol; ~]
+    public names: [resolution.ResolvedName; ~]
+    public terms: [typeTerms.TypeTerm; ~]
+    public typeUses: [types.TypeUse; ~]
+    public constantLiterals: [constantLowering.Literal; ~]
+    public constantFailures: [constantLowering.Failure; ~]
+}
+
+failedSource failure: constantLowering.Failure -> SourceAnalysis {
+    [constantLowering.Failure; ~] => failures!
+    failures! -> push(failure)
+    SourceAnalysis {
+        nodes: [ast.AstNode; ~]
+        tokens: [syntax.SyntaxToken; ~]
+        symbols: [symbols.Symbol; ~]
+        names: [resolution.ResolvedName; ~]
+        terms: [typeTerms.TypeTerm; ~]
+        typeUses: [types.TypeUse; ~]
+        constantLiterals: [constantLowering.Literal; ~]
+        constantFailures: failures!
+    }
 }
 
 public analyzeSource sourceText: file.SourceText -> SourceAnalysis {
     sourceText -> len => sourceLength
     sourceText -> slice(UIntSize(0), sourceLength) => source
-    source -> ast.lower => sourceNodes
+    source -> ast.lower -> constantLowering.lower(source) -> when {
+        Ok(lowered) { lowered }
+        Err(failure) { failure -> failedSource -> return }
+    } => lowered
     source -> lexer.lex => sourceTokens
-    sourceNodes -> symbols.collectPrepared => sourceSymbols
-    resolution.ResolutionRequest {
-        source: source
-        nodes: sourceNodes
-        symbols: sourceSymbols
-        tokens: sourceTokens
-    } => resolutionRequest
-    resolutionRequest -> resolution.resolvePrepared => sourceNames
-
-    [ast.AstNode; ~] => termNodes!
-    0 => termNodeIndex!
-    termNodeIndex! < (resolutionRequest.nodes -> len)
-        -> while {
-        resolutionRequest.nodes[termNodeIndex!] => node
-        termNodes! -> push(node)
-        termNodeIndex! + 1 => termNodeIndex!
-    }
-    [syntax.SyntaxToken; ~] => termTokens!
-    0 => termTokenIndex!
-    termTokenIndex! < (resolutionRequest.tokens -> len)
-        -> while {
-        resolutionRequest.tokens[termTokenIndex!] => token
-        termTokens! -> push(token)
-        termTokenIndex! + 1 => termTokenIndex!
-    }
-    typeTerms.TypeTermRequest {
-        source: source
-        nodes: termNodes!
-        tokens: termTokens!
-    } => termRequest
-    termRequest -> typeTerms.lowerPrepared => sourceTerms
-    termRequest -> types.canonicalizePrepared => sourceTypeUses
-
-    [ast.AstNode; ~] => resultNodes!
-    0 => resultNodeIndex!
-    resultNodeIndex! < (resolutionRequest.nodes -> len)
-        -> while {
-        resolutionRequest.nodes[resultNodeIndex!] => node
-        resultNodes! -> push(node)
-        resultNodeIndex! + 1 => resultNodeIndex!
-    }
-    [syntax.SyntaxToken; ~] => resultTokens!
-    0 => resultTokenIndex!
-    resultTokenIndex! < (resolutionRequest.tokens -> len)
-        -> while {
-        resolutionRequest.tokens[resultTokenIndex!] => token
-        resultTokens! -> push(token)
-        resultTokenIndex! + 1 => resultTokenIndex!
-    }
-    [symbols.Symbol; ~] => resultSymbols!
-    0 => resultSymbolIndex!
-    resultSymbolIndex! < (resolutionRequest.symbols -> len)
-        -> while {
-        resolutionRequest.symbols[resultSymbolIndex!] => symbol
-        resultSymbols! -> push(symbol)
-        resultSymbolIndex! + 1 => resultSymbolIndex!
-    }
+    lowered.nodes -> symbols.collectPrepared => sourceSymbols
+    source -> resolution.resolvePrepared(lowered.nodes, sourceSymbols, sourceTokens) => sourceNames
+    source -> typeTerms.lowerPrepared(lowered.nodes, sourceTokens) => sourceTerms
+    source -> types.canonicalizePrepared(lowered.nodes, sourceTokens) => sourceTypeUses
 
     SourceAnalysis {
-        nodes: resultNodes!
-        tokens: resultTokens!
-        symbols: resultSymbols!
+        nodes: lowered.nodes
+        tokens: sourceTokens
+        symbols: sourceSymbols
         names: sourceNames
         terms: sourceTerms
         typeUses: sourceTypeUses
+        constantLiterals: lowered.literals
+        constantFailures: [constantLowering.Failure; ~]
     } => result
     result
 }
 
-analyzeSelectedSources sources: move [file.SourceText; ~], selectedSourceIndices: [Int; ~], selectedSymbolIndices: [Int; ~] -> PackageAnalysis {
+assembleSelectedSources sources: move [file.SourceText; ~], sourceAnalyses: move [SourceAnalysis; ~], selectedSourceIndices: [Int; ~], selectedSymbolIndices: [Int; ~] -> PackageAnalysis {
     [SourceAnalysisRange; ~] => ranges!
     [ast.AstNode; ~] => nodes!
     [syntax.SyntaxToken; ~] => tokens!
@@ -152,11 +128,11 @@ analyzeSelectedSources sources: move [file.SourceText; ~], selectedSourceIndices
     [resolution.ResolvedName; ~] => names!
     [typeTerms.TypeTerm; ~] => terms!
     [types.TypeUse; ~] => typeUses!
+    [constantLowering.Literal; ~] => constantLiterals!
+    [constantLowering.Failure; ~] => constantFailures!
 
     0 => sourceIndex!
-    sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] -> analyzeSource => sourceAnalysis
-
+    sourceAnalyses -> each sourceAnalysis {
         SourceAnalysisRange {
             sourceModule: sourceIndex!
             astStart: nodes! -> len
@@ -171,59 +147,65 @@ analyzeSelectedSources sources: move [file.SourceText; ~], selectedSourceIndices
             termCount: Int(sourceAnalysis.terms -> len)
             typeStart: typeUses! -> len
             typeCount: Int(sourceAnalysis.typeUses -> len)
+            literalStart: constantLiterals! -> len
+            literalCount: sourceAnalysis.constantLiterals -> len
+            constantFailureStart: constantFailures! -> len
+            constantFailureCount: sourceAnalysis.constantFailures -> len
         } => range
         ranges! -> push(range)
+        sourceAnalysis.constantLiterals -> each literal { constantLiterals! -> push(literal) }
+        sourceAnalysis.constantFailures -> each failure { constantFailures! -> push(failure) }
         0 => nodeCopyIndex93!
         nodeCopyIndex93! < (sourceAnalysis.nodes -> len)
             -> while {
-            (sourceAnalysis.nodes)[nodeCopyIndex93!] => node
-            nodes! -> push(node)
-            nodeCopyIndex93! + 1 => nodeCopyIndex93!
-        }
+                (sourceAnalysis.nodes)[nodeCopyIndex93!] => node
+                nodes! -> push(node)
+                nodeCopyIndex93! + 1 => nodeCopyIndex93!
+            }
         0 => tokenCopyIndex94!
         tokenCopyIndex94! < (sourceAnalysis.tokens -> len)
             -> while {
-            (sourceAnalysis.tokens)[tokenCopyIndex94!] => token
-            tokens! -> push(token)
-            tokenCopyIndex94! + 1 => tokenCopyIndex94!
-        }
+                (sourceAnalysis.tokens)[tokenCopyIndex94!] => token
+                tokens! -> push(token)
+                tokenCopyIndex94! + 1 => tokenCopyIndex94!
+            }
         0 => symbolCopyIndex95!
         symbolCopyIndex95! < (sourceAnalysis.symbols -> len)
             -> while {
-            (sourceAnalysis.symbols)[symbolCopyIndex95!] => symbol
-            false => selected!
-            0 => selectedIndex!
-            selectedIndex! < (selectedSourceIndices -> len)
-                -> while {
-                (selectedSourceIndices[selectedIndex!] == sourceIndex! and selectedSymbolIndices[selectedIndex!] == symbolCopyIndex95!)
-                    -> if { true => selected! }
-                selectedIndex! + 1 => selectedIndex!
+                (sourceAnalysis.symbols)[symbolCopyIndex95!] => symbol
+                false => selected!
+                0 => selectedIndex!
+                selectedIndex! < (selectedSourceIndices -> len)
+                    -> while {
+                        selectedSourceIndices[selectedIndex!] == sourceIndex! and selectedSymbolIndices[selectedIndex!] == symbolCopyIndex95!
+                            -> if { true => selected! }
+                        selectedIndex! + 1 => selectedIndex!
+                    }
+                symbol -> withSelectedFunctionFlag(selected!) => promotedSymbol
+                symbolTable! -> push(promotedSymbol)
+                symbolCopyIndex95! + 1 => symbolCopyIndex95!
             }
-            symbol -> withSelectedFunctionFlag(selected!) => promotedSymbol
-            symbolTable! -> push(promotedSymbol)
-            symbolCopyIndex95! + 1 => symbolCopyIndex95!
-        }
         0 => nameCopyIndex96!
         nameCopyIndex96! < (sourceAnalysis.names -> len)
             -> while {
-            (sourceAnalysis.names)[nameCopyIndex96!] => name
-            names! -> push(name)
-            nameCopyIndex96! + 1 => nameCopyIndex96!
-        }
+                (sourceAnalysis.names)[nameCopyIndex96!] => name
+                names! -> push(name)
+                nameCopyIndex96! + 1 => nameCopyIndex96!
+            }
         0 => termCopyIndex97!
         termCopyIndex97! < (sourceAnalysis.terms -> len)
             -> while {
-            (sourceAnalysis.terms)[termCopyIndex97!] => term
-            terms! -> push(term)
-            termCopyIndex97! + 1 => termCopyIndex97!
-        }
+                (sourceAnalysis.terms)[termCopyIndex97!] => term
+                terms! -> push(term)
+                termCopyIndex97! + 1 => termCopyIndex97!
+            }
         0 => typeUseCopyIndex98!
         typeUseCopyIndex98! < (sourceAnalysis.typeUses -> len)
             -> while {
-            (sourceAnalysis.typeUses)[typeUseCopyIndex98!] => typeUse
-            typeUses! -> push(typeUse)
-            typeUseCopyIndex98! + 1 => typeUseCopyIndex98!
-        }
+                (sourceAnalysis.typeUses)[typeUseCopyIndex98!] => typeUse
+                typeUses! -> push(typeUse)
+                typeUseCopyIndex98! + 1 => typeUseCopyIndex98!
+            }
         sourceIndex! + 1 => sourceIndex!
     }
 
@@ -239,14 +221,39 @@ analyzeSelectedSources sources: move [file.SourceText; ~], selectedSourceIndices
         names: names!
         terms: terms!
         typeUses: typeUses!
+        constantLiterals: constantLiterals!
+        constantFailures: constantFailures!
     } => result
     result
+}
+
+analyzeSelectedSources sources: move [file.SourceText; ~], selectedSourceIndices: [Int; ~], selectedSymbolIndices: [Int; ~] -> PackageAnalysis {
+    [SourceAnalysis; ~] => sourceAnalyses!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] -> analyzeSource => sourceAnalysis
+        sourceAnalyses! -> push(sourceAnalysis)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources -> assembleSelectedSources(sourceAnalyses!, selectedSourceIndices, selectedSymbolIndices)
 }
 
 public analyzeSources sources: move [file.SourceText; ~] -> PackageAnalysis {
     [Int; ~] => selectedSourceIndices
     [Int; ~] => selectedSymbolIndices
     sources -> analyzeSelectedSources(selectedSourceIndices, selectedSymbolIndices)
+}
+
+# Native compiler entrypoints use the worker-transfer contract proved by
+# SourceAnalysis: each worker borrows one mapped source and returns a fully
+# owned result. Package assembly remains ordered and deterministic.
+public analyzeSourcesParallel sources: move [file.SourceText; ~] -> PackageAnalysis {
+    sources -> parallel sourceText {
+        sourceText -> analyzeSource
+    } => sourceAnalyses
+    [Int; ~] => selectedSourceIndices
+    [Int; ~] => selectedSymbolIndices
+    sources -> assembleSelectedSources(sourceAnalyses, selectedSourceIndices, selectedSymbolIndices)
 }
 
 public analyzeTestSources sources: move [file.SourceText; ~], selectedSourceIndices: [Int; ~], selectedSymbolIndices: [Int; ~] -> PackageAnalysis {

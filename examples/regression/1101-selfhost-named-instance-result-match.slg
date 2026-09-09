@@ -1,0 +1,92 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A named inherent receiver owns the following Result match even when the call
+# AST begins after the surrounding flow. The final call must provide both the
+# canonical enum subject and the exact success payload type.
+main {
+    """"
+        namespace sample
+
+        struct Buffer {
+            count: Int
+        }
+
+        impl Buffer {
+            insert: mut self, value: Int -> Result<Int, Text> {
+                value >= 0 -> if {
+                    value + self.count -> Result<Int, Text>.Ok
+                } else {
+                    Result<Int, Text>.Err("negative")
+                }
+            }
+        }
+
+        main {
+            Buffer { count: 1 } => buffer!
+            buffer! -> insert(2) -> when {
+                Ok(value) { "$value" -> println }
+                Err(error) { error -> println }
+            }
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    false => subjectValid!
+    false => payloadValid!
+    true => argumentPlanValid!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.kind == 27
+            and node.operand0 >= 0
+            and ir[node.operand0].kind == 6
+            and ir[node.operand0].typeOrigin == 4
+            and ir[node.operand0].typeSymbol == 1)
+            -> if { true => subjectValid! }
+        (node.kind == 6
+            and node.operand0 >= 0
+            and node.operand1 >= 0
+            and node.operand1 < (ir -> len)
+            and (ir[node.operand1].kind == 18
+            or ir[node.operand1].kind == 27
+            or ir[node.operand1].kind == 33
+            or ir[node.operand1].kind == 34)
+            and ir[node.operand1].operand0 == node.operand0)
+            -> if { false => argumentPlanValid! }
+        (node.kind == 6
+            and node.symbol < 0
+            and node.targetModule < 0
+            and node.opcode == -1
+            and node.operand0 >= 0
+            and (ir[node.operand0].kind == 18
+            or ir[node.operand0].kind == 27
+            or ir[node.operand0].kind == 33
+            or ir[node.operand0].kind == 34))
+            -> if { false => argumentPlanValid! }
+        (node.kind == 29
+            and node.parent >= 0
+            and ir[node.parent].kind == 19
+            and ir[node.parent].opcode == 0
+            and ir[node.parent].parent >= 0
+            and ir[ir[node.parent].parent].kind == 27
+            and ir[ir[node.parent].parent].operand0 >= 0)
+            -> if {
+                ir[ir[node.parent].parent].operand0 => payloadSubjectIndex
+                ir[payloadSubjectIndex].typeId => payloadSubjectTypeId
+                (payloadSubjectTypeId >= 0
+                    and context.semantic.types[payloadSubjectTypeId].kind == 7
+                    and context.semantic.types[payloadSubjectTypeId].origin == 4
+                    and context.semantic.types[payloadSubjectTypeId].symbol == 1
+                    and node.typeId == context.semantic.types[payloadSubjectTypeId].first)
+                    -> if { true => payloadValid! }
+            }
+        index! + 1 => index!
+    }
+    subjectValid! and payloadValid! and argumentPlanValid! -> if {
+        "named instance Result match = valid" -> println
+    } else {
+        "named instance Result match = invalid" -> println
+    }
+}

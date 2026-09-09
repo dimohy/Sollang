@@ -1,0 +1,163 @@
+import std.net as net
+import std.net.http as http
+import std.net.http.body as body
+import std.net.http.response as response
+import std.net.http.server as server
+import std.net.socket as socket
+
+# Two pipelined requests share one affine connection. The first response returns
+# that connection; the second response closes it explicitly through its head.
+completeRequest request: move server.Request, policy: body.BodyPolicy -> Result<server.Request, server.Error> uses Network {
+    [UInt8; ~] => output!
+    request -> openBody(policy, 64)? => reader!
+    false => complete!
+    not complete! -> while {
+        reader! -> readInto(output!)? => progress
+        progress.complete => complete!
+    }
+    reader! -> finish
+}
+
+responseHead method: Text, version: http.Version, length: UIntSize, connection: response.ConnectionMode -> Result<response.ResponseHead, http.Error> {
+    response.ResponseLimits {
+        maxHeadBytes: 512
+        maxFieldCount: 8
+        maxFieldNameBytes: 64
+        maxFieldValueBytes: 256
+    } -> policy? => policy
+    policy -> response(method, version, 200, "OK", length, connection)? => writer
+    writer -> finish
+}
+
+readAll connection: move socket.TcpStream -> Result<[UInt8; ~], socket.SocketError> uses Network {
+    [UInt8; ~] => bytes!
+    bytes! -> reserve(512)
+    false => complete!
+    not complete! -> while {
+        connection -> receiveAppend(bytes!)? => received
+        received == 0 -> if { true => complete! }
+    }
+    connection -> close
+    Result<[UInt8; ~], socket.SocketError>.Ok(bytes!)
+}
+
+responseCount bytes: ref [UInt8; ~] -> Int {
+    0 => count!
+    0 => index!
+    index! + 8 <= (bytes -> len) -> while {
+        bytes[index!] == 72
+            and bytes[index! + 1] == 84
+            and bytes[index! + 2] == 84
+            and bytes[index! + 3] == 80
+            and bytes[index! + 4] == 47
+            and bytes[index! + 5] == 49
+            and bytes[index! + 6] == 46
+            and bytes[index! + 7] == 49
+            -> if { count! + 1 => count! }
+        index! + 1 => index!
+    }
+    count!
+}
+
+main {
+    net.loopback(43184) -> unified => endpoint
+    http.limits(1_024, 256, 16, 64, 512) -> when {
+        Err(_) { "http-persistent-pipeline=setup-failed" -> println }
+        Ok(requestLimits) => body.BodyLimits {
+            maxEncodedBytes: 256
+            maxDecodedBytes: 256
+            maxChunkLineBytes: 64
+            maxTrailerBytes: 64
+            maxTrailerFields: 4
+        } -> policy -> when {
+            Err(_) { "http-persistent-pipeline=setup-failed" -> println }
+            Ok(bodyPolicy) => server.ServerOptions {
+                listener: socket.ListenOptions {
+                    endpoint: endpoint
+                    backlog: 8
+                    reuseAddress: true
+                }
+                requestLimits: requestLimits
+            } -> listen -> when {
+                Err(_) { "http-persistent-pipeline=listen-failed" -> println }
+                Ok(service) => endpoint -> connect -> when {
+                    Err(_) { "http-persistent-pipeline=connect-failed" -> println }
+                    Ok(client) => client -> sendText("GET /one HTTP/1.1\r\nHost: loopback\r\n\r\nGET /two HTTP/1.1\r\nHost: loopback\r\n\r\n") -> when {
+                        Err(_) { "http-persistent-pipeline=send-failed" -> println }
+                        Ok(_) => service -> accept -> when {
+                            Err(_) { "http-persistent-pipeline=accept-failed" -> println }
+                            Ok(connection) => connection -> readRequest -> when {
+                                Err(_) { "http-persistent-pipeline=first-read-failed" -> println }
+                                Ok(first) {
+                                    first.head -> targetText == "/one" => firstMatches
+                                    first -> completeRequest(bodyPolicy) -> when {
+                                        Err(_) { "http-persistent-pipeline=first-body-failed" -> println }
+                                        Ok(completedFirst) {
+                                            completedFirst.head -> methodText => firstMethod
+                                            completedFirst.head.version => firstVersion
+                                            responseHead(firstMethod, firstVersion, 3, response.ConnectionMode.Persistent) -> when {
+                                                Err(_) { "http-persistent-pipeline=first-head-failed" -> println }
+                                                Ok(firstHead) {
+                                                    [UInt8(111), 110, 101; ~] => firstBody
+                                                    completedFirst -> respond(firstHead, firstBody) -> when {
+                                                        Err(_) { "http-persistent-pipeline=first-respond-failed" -> println }
+                                                        Ok(firstOutcome) => firstOutcome -> when {
+                                                            Closed { "http-persistent-pipeline=closed-early" -> println }
+                                                            Reusable(next) => next -> readRequest -> when {
+                                                                Err(_) { "http-persistent-pipeline=second-read-failed" -> println }
+                                                                Ok(second) {
+                                                                    second.head -> targetText == "/two" => secondMatches
+                                                                    second -> completeRequest(bodyPolicy) -> when {
+                                                                        Err(_) { "http-persistent-pipeline=second-body-failed" -> println }
+                                                                        Ok(completedSecond) {
+                                                                            completedSecond.head -> methodText => secondMethod
+                                                                            completedSecond.head.version => secondVersion
+                                                                            responseHead(secondMethod, secondVersion, 3, response.ConnectionMode.Close) -> when {
+                                                                                Err(_) { "http-persistent-pipeline=second-head-failed" -> println }
+                                                                                Ok(secondHead) {
+                                                                                    [UInt8(116), 119, 111; ~] => secondBody
+                                                                                    completedSecond -> respond(secondHead, secondBody) -> when {
+                                                                                        Err(_) { "http-persistent-pipeline=second-respond-failed" -> println }
+                                                                                        Ok(secondOutcome) => secondOutcome -> when {
+                                                                                            Reusable(unexpected) {
+                                                                                                unexpected -> close
+                                                                                                "http-persistent-pipeline=reused-late" -> println
+                                                                                            }
+                                                                                            Closed => client -> readAll -> when {
+                                                                                                Err(_) { "http-persistent-pipeline=client-read-failed" -> println }
+                                                                                                Ok(received) {
+                                                                                                    service -> close
+                                                                                                    received -> responseCount == 2
+                                                                                                        and firstMatches
+                                                                                                        and secondMatches
+                                                                                                        and (received -> len) >= 3
+                                                                                                        and received[(received -> len) - 3] == 116
+                                                                                                        and received[(received -> len) - 2] == 119
+                                                                                                        and received[(received -> len) - 1] == 111
+                                                                                                        -> if { "http-persistent-pipeline=ok" } else { "http-persistent-pipeline=failed" }
+                                                                                                        -> println
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

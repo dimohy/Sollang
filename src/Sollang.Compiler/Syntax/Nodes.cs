@@ -8,7 +8,15 @@ internal sealed record SollangProgram(
     IReadOnlyList<TraitDeclaration> Traits,
     IReadOnlyList<FunctionDeclaration> Functions,
     IReadOnlyList<Statement> Statements,
-    IReadOnlyList<NativeLibraryImport>? NativeLibraries = null);
+    IReadOnlyList<NativeLibraryImport>? NativeLibraries = null,
+    IReadOnlyList<SourceStyleNote>? StyleNotes = null);
+
+internal sealed record SourceStyleNote(
+    string Code,
+    string ModuleName,
+    int Line,
+    int Column,
+    string Message);
 
 internal sealed record ImportDeclaration(
     IReadOnlyList<string> Path,
@@ -36,7 +44,12 @@ internal sealed record StructDeclaration(
     ComInterfaceMetadata? ComInterface = null,
     NativeHandleMetadata? NativeHandle = null);
 
-internal sealed record StructFieldDeclaration(string Name, string TypeName, int Line, int Column);
+internal sealed record StructFieldDeclaration(
+    string Name,
+    string TypeName,
+    int Line,
+    int Column,
+    bool IsPublic = false);
 
 internal sealed record EnumDeclaration(
     string Name,
@@ -64,7 +77,8 @@ internal sealed record TraitMethodDeclaration(
     FunctionInputOwnership SelfOwnership,
     string ReturnType,
     int Line,
-    int Column);
+    int Column,
+    IReadOnlyList<FunctionParameterDeclaration> AdditionalParameters);
 
 internal sealed record GenericParameterDeclaration(
     string Name,
@@ -215,8 +229,11 @@ internal sealed record BlockFunctionCallStatement(
     bool UsesDefaultItemName,
     bool ResultIsSynthetic = false,
     IReadOnlyList<Expression>? Arguments = null,
-    IReadOnlyList<string>? AdditionalItemNames = null)
-    : Statement;
+    IReadOnlyList<string>? AdditionalItemNames = null, FlowTarget? SourceFlowTarget = null)
+    : Statement
+{
+    public object ResolutionSite => SourceFlowTarget ?? (object)this;
+}
 
 internal sealed record BlockFunctionPipelineStatement(
     IReadOnlyList<BlockFunctionCallStatement> Calls,
@@ -347,7 +364,8 @@ internal sealed record FlowTarget(
     string? TypeArgument,
     int? CompileTimeValueArgument,
     int Line,
-    int Column);
+    int Column,
+    IReadOnlyList<OpenImportCandidate>? OpenImportCandidates = null);
 
 internal enum BranchInputMode
 {

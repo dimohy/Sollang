@@ -1,0 +1,32 @@
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+# The self-host semantic pass must replace a provisional scalar array entry
+# after indexed-path inference, before Typed IR observes the literal.
+main {
+    [
+    """
+    main {
+        [UInt8(65), 66, 67] => source
+        [source[1]] => chunk
+        "$(chunk -> len)" -> println
+    }
+    """; ~
+    ] -> expressionTypeIds.resolve => resolved
+    false => checked!
+    resolved.expressions -> each expression {
+        expression.sourceModule == 0
+            and expression.status == 0
+            and expression.typeId >= 0 -> if {
+                resolved.types[expression.typeId] => arrayType
+                arrayType.kind == 4
+                    and arrayType.length == 1
+                    and arrayType.first >= 0 -> if {
+                        resolved.types[arrayType.first] => elementType
+                        elementType.kind == 1
+                            and elementType.origin == 1
+                            and elementType.symbol == 8 -> if { true => checked! }
+                    }
+            }
+    }
+    checked! -> if { "late-indexed-array-type=true" } else { "late-indexed-array-type=false" } -> println
+}

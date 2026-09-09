@@ -1,0 +1,1688 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.expression_types as expressionTypes
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as semanticTypes
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+# Lower one ordinary function body through an explicit borrowed work-unit
+# boundary. The caller retains orchestration and final canonicalization.
+lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], resolvedNames: ref [resolution.ResolvedName; ~], resolvedSymbolByAst: ref [Int; ~], resolvedQualifiedByAst: ref [Bool; ~], qualifiedFunctionPathByAst: ref [Bool; ~], qualifiedValueVariantIndexByAst: ref [Int; ~], localMemberByParentAst: ref [Bool; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], sourceIndex: Int, symbolIndex: Int, functionIr: Int, resultRootAst: Int, returnIr: Int, functionResultTypeId: Int, functionNodeStart: Int, functionNodeEnd: Int, parameterSymbol: Int, parameterTypeId: Int -> Unit {
+    prepared.package.ranges[sourceIndex] => sourceRange
+    prepared.package.sources[sourceIndex] -> len => sourceLength
+    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    prepared.package.symbols[sourceRange.symbolStart + symbolIndex] => function
+    functionNodeStart => expressionNodePosition!
+    expressionNodePosition! < functionNodeEnd -> while {
+        frozenFunctionNodeIndices[expressionNodePosition!] => expressionAstIndex
+        prepared.package.nodes[sourceRange.astStart + expressionAstIndex] => expression
+        true => expressionBelongsToFunction
+        frozenInferredIndexByAst[sourceRange.astStart + expressionAstIndex] => expressionTypeIndex
+        frozenRecursiveTypeByAst[sourceRange.astStart + expressionAstIndex] => recursiveExpressionTypeId!
+        false => exactTerminalFlow!
+        expression.kind == 10 and functionResultTypeId >= 0
+            -> if {
+                frozenRecursiveSemanticTypes[functionResultTypeId] => terminalFunctionResult
+                terminalFunctionResult.kind == 7
+                    and terminalFunctionResult.origin == 4
+                    and (terminalFunctionResult.symbol == 0 or terminalFunctionResult.symbol == 1)
+                    and expression.cstRuleId == grammar.ruleIdValueFlowExpression()
+                    -> if {
+                        source -> standardGenericEnumFlowVariantToken(
+                        prepared.package.tokens,
+                        sourceRange.tokenStart,
+                        expression
+                        ) => terminalFlowVariantToken
+                        terminalFlowVariantToken >= 0 -> if {
+                            expressionAstIndex => terminalFlowAncestor!
+                            terminalFlowAncestor! >= 0 and not exactTerminalFlow!
+                                -> while {
+                                    terminalFlowAncestor! == resultRootAst
+                                        -> if { true => exactTerminalFlow! } else {
+                                            prepared.package.nodes[sourceRange.astStart + terminalFlowAncestor!].parent
+                                                => terminalFlowAncestor!
+                                        }
+                                }
+                        }
+                    }
+            }
+        exactTerminalFlow! -> if {
+            functionResultTypeId => recursiveExpressionTypeId!
+        }
+        1 => expressionTypeOrigin!
+        -1 => expressionTypeModule!
+        0 => expressionTypeSymbol!
+        expressionTypeIndex >= 0 -> if {
+            inferred[expressionTypeIndex] => legacyExpressionType
+            legacyExpressionType.origin => expressionTypeOrigin!
+            legacyExpressionType.targetModule => expressionTypeModule!
+            legacyExpressionType.targetSymbol => expressionTypeSymbol!
+        }
+        recursiveExpressionTypeId! >= 0 -> if {
+            frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => recursiveExpressionType
+            recursiveExpressionType.origin => expressionTypeOrigin!
+            recursiveExpressionType.module => expressionTypeModule!
+            recursiveExpressionType.symbol => expressionTypeSymbol!
+            (recursiveExpressionType.kind >= 2 and recursiveExpressionType.kind <= 6) or recursiveExpressionType.kind == 8
+                -> if {
+                    10 + recursiveExpressionType.kind => expressionTypeOrigin!
+                }
+            recursiveExpressionType.kind == 2 or recursiveExpressionType.kind == 3 or recursiveExpressionType.kind == 4 or recursiveExpressionType.kind == 6 or recursiveExpressionType.kind == 8
+                -> if {
+                    recursiveExpressionType.first >= 0 -> if {
+                        frozenRecursiveSemanticTypes[recursiveExpressionType.first].module => expressionTypeModule!
+                        frozenRecursiveSemanticTypes[recursiveExpressionType.first].symbol => expressionTypeSymbol!
+                    }
+                }
+            recursiveExpressionType.kind == 5 -> if {
+                recursiveExpressionType.first >= 0 -> if { frozenRecursiveSemanticTypes[recursiveExpressionType.first].symbol => expressionTypeModule! }
+                recursiveExpressionType.second >= 0 -> if { frozenRecursiveSemanticTypes[recursiveExpressionType.second].symbol => expressionTypeSymbol! }
+            }
+        }
+        false => knownPatternReference!
+        -1 => patternTypeAst!
+        expression.kind == 59 -> if { expressionAstIndex => patternTypeAst! }
+        expression.kind == 15 -> if {
+            0 => patternNameResolutionSearch!
+            patternNameResolutionSearch! < (resolvedNames -> len)
+                -> while {
+                    resolvedNames[patternNameResolutionSearch!] => patternResolvedName
+                    patternResolvedName.astNode == expressionAstIndex
+                        -> if {
+                            prepared.package.symbols[sourceRange.symbolStart + patternResolvedName.symbol] => patternResolvedSymbol
+                            prepared.package.nodes[sourceRange.astStart + patternResolvedSymbol.astNode].kind == 59
+                                -> if { patternResolvedSymbol.astNode => patternTypeAst! }
+                        }
+                    patternNameResolutionSearch! + 1 => patternNameResolutionSearch!
+                }
+        }
+        # Name resolution is authoritative for pattern payload
+        # uses even when nominal payload typing is deferred. Keep
+        # the value node independently of whether its consumer is
+        # a function call or an enum constructor.
+        expression.kind == 15 and patternTypeAst! >= 0
+            -> if { true => knownPatternReference! }
+        patternTypeAst! >= 0 -> if {
+            prepared.package.nodes[sourceRange.astStart + patternTypeAst!] => patternTypeNode
+            patternTypeNode.parent => patternArmAst!
+            patternArmAst! >= 0 and prepared.package.nodes[sourceRange.astStart + patternArmAst!].kind == 70
+                -> if {
+                    prepared.package.nodes[sourceRange.astStart + patternArmAst!].parent => patternArmAst!
+                }
+            prepared.package.nodes[sourceRange.astStart + patternArmAst!].parent => patternMatchAst
+            prepared.package.nodes[sourceRange.astStart + patternMatchAst].parent => patternFlowAst
+            patternFlowAst => patternSubjectFlowAst
+            -1 => patternSubjectTypeId!
+            UIntSize(0) => patternSubjectStart!
+            functionNodeStart => patternSubjectPosition!
+            patternSubjectPosition! < functionNodeEnd
+                -> while {
+                    frozenFunctionNodeIndices[patternSubjectPosition!] => patternSubjectSearch
+                    prepared.package.nodes[sourceRange.astStart + patternSubjectSearch] => patternSubjectAst
+                    frozenRecursiveTypeByAst[sourceRange.astStart + patternSubjectSearch] => patternSubjectCandidateType!
+                    patternSubjectCandidateType! < 0 -> if {
+                        0 => generatedPatternCallSearch!
+                        generatedPatternCallSearch! < (prepared.calls -> len)
+                            -> while {
+                                prepared.calls[generatedPatternCallSearch!] => generatedPatternCall
+                                false => generatedPatternCallBelongs!
+                                generatedPatternCall.sourceModule == sourceIndex and generatedPatternCall.callAst >= 0 and generatedPatternCall.callAst < sourceRange.astCount
+                                    -> if {
+                                        generatedPatternCall.callAst => generatedPatternCallAncestor!
+                                        generatedPatternCallAncestor! >= 0 and not generatedPatternCallBelongs!
+                                            -> while {
+                                                generatedPatternCallAncestor! == patternSubjectSearch
+                                                    -> if {
+                                                        true => generatedPatternCallBelongs!
+                                                    } else {
+                                                        prepared.package.nodes[sourceRange.astStart + generatedPatternCallAncestor!].parent => generatedPatternCallAncestor!
+                                                    }
+                                            }
+                                    }
+                                generatedPatternCall.status == 0
+                                    and generatedPatternCall.sourceModule == sourceIndex
+                                    and generatedPatternCallBelongs!
+                                    and generatedPatternCall.targetSourceModule >= 0
+                                    and generatedPatternCall.functionSymbol >= 0
+                                    -> if {
+                                        generatedPatternCall.targetSourceModule -> functionResultTypeId(generatedPatternCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCandidateType!
+                                    }
+                                generatedPatternCallSearch! + 1 => generatedPatternCallSearch!
+                            }
+                        0 => localPatternFunctionSearch!
+                        localPatternFunctionSearch! < (resolvedNames -> len)
+                            -> while {
+                                resolvedNames[localPatternFunctionSearch!] => localPatternFunctionName
+                                localPatternFunctionName.astNode => localPatternFunctionAncestor!
+                                false => localPatternFunctionBelongs!
+                                localPatternFunctionAncestor! >= 0 and not localPatternFunctionBelongs!
+                                    -> while {
+                                        localPatternFunctionAncestor! == patternSubjectSearch
+                                            -> if {
+                                                true => localPatternFunctionBelongs!
+                                            } else {
+                                                prepared.package.nodes[sourceRange.astStart + localPatternFunctionAncestor!].parent => localPatternFunctionAncestor!
+                                            }
+                                    }
+                                localPatternFunctionBelongs! -> if {
+                                    prepared.package.symbols[sourceRange.symbolStart + localPatternFunctionName.symbol] => localPatternFunction
+                                    localPatternFunction.kind == 7 or localPatternFunction.kind == 31
+                                        -> if {
+                                            sourceIndex -> functionResultTypeId(localPatternFunctionName.symbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCandidateType!
+                                        }
+                                }
+                                localPatternFunctionSearch! + 1 => localPatternFunctionSearch!
+                            }
+                    }
+                    patternSubjectAst.parent == patternSubjectFlowAst => patternSubjectBelongs!
+                    not patternSubjectBelongs! and patternSubjectAst.parent >= 0
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + patternSubjectAst.parent] => patternSubjectOwner
+                            patternSubjectOwner.kind == 10
+                                and patternSubjectOwner.parent == patternSubjectFlowAst
+                                and patternSubjectOwner.start == patternSubjectAst.start
+                                and patternSubjectOwner.length == patternSubjectAst.length
+                                -> if { true => patternSubjectBelongs! }
+                        }
+                    # A transparent value-flow owner can carry a
+                    # provisional Unit type at the same source
+                    # start as its resolved call child. Imported
+                    # instance calls can also remain unresolved in
+                    # the semantic call table until their earlier
+                    # receiver has been lowered. For an exact
+                    # subject shape the already-resolved Typed IR
+                    # call result is the nearest authority, followed
+                    # by the semantic call's declared result.
+                    patternSubjectBelongs! -> if {
+                        0 => patternSubjectIrSearch!
+                        patternSubjectIrSearch! < (nodes -> len) -> while {
+                            nodes[patternSubjectIrSearch!] => patternSubjectIr
+                            (patternSubjectIr.kind == 6 or patternSubjectIr.kind == 9)
+                                and patternSubjectIr.sourceModule == sourceIndex
+                                and patternSubjectIr.astNode >= 0
+                                and patternSubjectIr.typeId >= 0
+                                -> if {
+                                    prepared.package.nodes[sourceRange.astStart + patternSubjectIr.astNode] => patternSubjectIrAst
+                                    patternSubjectIr.astNode == patternSubjectSearch
+                                        or (patternSubjectIrAst.parent == patternSubjectSearch
+                                        and patternSubjectIrAst.start == patternSubjectAst.start
+                                        and patternSubjectIrAst.length == patternSubjectAst.length)
+                                        -> if { patternSubjectIr.typeId => patternSubjectCandidateType! }
+                                }
+                            patternSubjectIrSearch! + 1 => patternSubjectIrSearch!
+                        }
+                        0 => patternSubjectCallSearch!
+                        patternSubjectCallSearch! < (prepared.calls -> len)
+                            -> while {
+                                prepared.calls[patternSubjectCallSearch!] => patternSubjectCall
+                                patternSubjectCall.status == 0
+                                    and patternSubjectCall.sourceModule == sourceIndex
+                                    and patternSubjectCall.callAst >= 0
+                                    and patternSubjectCall.callAst < sourceRange.astCount
+                                    and patternSubjectCall.targetSourceModule >= 0
+                                    and patternSubjectCall.functionSymbol >= 0
+                                    -> if {
+                                        prepared.package.nodes[sourceRange.astStart + patternSubjectCall.callAst] => patternSubjectCallAst
+                                        patternSubjectCall.callAst == patternSubjectSearch
+                                            or (patternSubjectCallAst.parent == patternSubjectSearch
+                                            and patternSubjectCallAst.start == patternSubjectAst.start
+                                            and patternSubjectCallAst.length == patternSubjectAst.length)
+                                            -> if {
+                                                patternSubjectCall.targetSourceModule -> functionResultTypeId(patternSubjectCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternSubjectCallTypeId
+                                                patternSubjectCallTypeId >= 0 -> if { patternSubjectCallTypeId => patternSubjectCandidateType! }
+                                            }
+                                    }
+                                patternSubjectCallSearch! + 1 => patternSubjectCallSearch!
+                            }
+                    }
+                    patternSubjectBelongs! and patternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start and patternSubjectCandidateType! >= 0 and (frozenRecursiveSemanticTypes[patternSubjectCandidateType!].kind == 7 or frozenRecursiveSemanticTypes[patternSubjectCandidateType!].kind == 1)
+                        -> if {
+                            patternSubjectTypeId! < 0 or patternSubjectAst.start > patternSubjectStart!
+                                -> if {
+                                    patternSubjectCandidateType! => patternSubjectTypeId!
+                                    patternSubjectAst.start => patternSubjectStart!
+                                }
+                        }
+                    patternSubjectPosition! + 1 => patternSubjectPosition!
+                }
+            # The semantic call table is the final subject-type
+            # authority. A normalized nullary call can own the flow
+            # AST itself; an ordinary call can sit directly below
+            # it or below the one exact same-span value-flow owner.
+            # Keep those shapes equivalent without spelling or
+            # ancestry searches.
+            patternSubjectTypeId! < 0 -> if {
+                UIntSize(0) => patternCallStart!
+                0 => patternCallSearch!
+                patternCallSearch! < (prepared.calls -> len) -> while {
+                    prepared.calls[patternCallSearch!] => patternCall
+                    patternCall.status == 0
+                        and patternCall.sourceModule == sourceIndex
+                        and patternCall.callAst >= 0
+                        and patternCall.callAst < sourceRange.astCount
+                        and patternCall.targetSourceModule >= 0
+                        and patternCall.functionSymbol >= 0
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + patternCall.callAst] => patternCallAst
+                            patternCall.callAst == patternSubjectFlowAst
+                                or patternCallAst.parent == patternSubjectFlowAst
+                                => patternCallBelongs!
+                            not patternCallBelongs! and patternCallAst.parent >= 0
+                                -> if {
+                                    prepared.package.nodes[sourceRange.astStart + patternCallAst.parent] => patternCallOwner
+                                    patternCallOwner.kind == 10
+                                        and patternCallOwner.parent == patternSubjectFlowAst
+                                        and patternCallOwner.start == patternCallAst.start
+                                        and patternCallOwner.length == patternCallAst.length
+                                        -> if { true => patternCallBelongs! }
+                                }
+                            patternCallBelongs!
+                                and patternCallAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start
+                                and (patternSubjectTypeId! < 0 or patternCallAst.start > patternCallStart!)
+                                -> if {
+                                    patternCall.targetSourceModule -> functionResultTypeId(patternCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => patternCallTypeId
+                                    patternCallTypeId >= 0 -> if {
+                                        patternCallTypeId => patternSubjectTypeId!
+                                        patternCallAst.start => patternCallStart!
+                                    }
+                                }
+                        }
+                    patternCallSearch! + 1 => patternCallSearch!
+                }
+            }
+            patternSubjectTypeId! >= 0 -> if {
+                frozenRecursiveSemanticTypes[patternSubjectTypeId!] => patternSubjectType
+                prepared.package.tokens[sourceRange.tokenStart + patternTypeNode.payloadToken] => patternVariantToken
+                patternSubjectType.kind == 7 -> if {
+                    patternSubjectType.first => recursiveExpressionTypeId!
+                    (source -> byte(patternVariantToken.span.start)) == 69
+                        -> if { patternSubjectType.second => recursiveExpressionTypeId! }
+                } else {
+                    sourceIndex -> nominalVariantPayloadTypeId(patternSubjectType, patternVariantToken, prepared, recursiveTypes) => recursiveExpressionTypeId!
+                }
+                recursiveExpressionTypeId! >= 0 -> if {
+                    frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => patternPayloadType
+                    patternPayloadType.origin => expressionTypeOrigin!
+                    patternPayloadType.module => expressionTypeModule!
+                    patternPayloadType.symbol => expressionTypeSymbol!
+                    true => knownPatternReference!
+                }
+            }
+        }
+        false => knownParameterReference!
+        parameterSymbol => knownParameterReferenceSymbol!
+        expression.kind == 15 and parameterSymbol >= 0 and parameterTypeId >= 0
+            -> if {
+                prepared.package.symbols[sourceRange.symbolStart + parameterSymbol] => functionParameterSymbol
+                prepared.package.tokens[sourceRange.tokenStart + functionParameterSymbol.nameToken] => functionParameterName
+                prepared.package.tokens[sourceRange.tokenStart + expression.payloadToken] => expressionParameterName
+                functionParameterName.span.length == expressionParameterName.span.length => sameParameterName!
+                UIntSize(0) => parameterNameByte!
+                sameParameterName! and parameterNameByte! < functionParameterName.span.length
+                    -> while {
+                        (source -> byte(functionParameterName.span.start + parameterNameByte!)) != (source -> byte(expressionParameterName.span.start + parameterNameByte!))
+                            -> if { false => sameParameterName! }
+                        parameterNameByte! + 1 => parameterNameByte!
+                    }
+                functionParameterSymbol.flags / 262144 % 2 == 1
+                    -> if {
+                        expressionParameterName.span.length == 2 => sameParameterName!
+                        (sameParameterName!
+                            and (source -> byte(expressionParameterName.span.start)) == 105
+                            and (source -> byte(expressionParameterName.span.start + 1)) == 116) => sameParameterName!
+                    }
+                sameParameterName! -> if {
+                    true => knownParameterReference!
+                    parameterSymbol => knownParameterReferenceSymbol!
+                    parameterTypeId => recursiveExpressionTypeId!
+                    frozenRecursiveSemanticTypes[parameterTypeId] => knownParameterType
+                    knownParameterType.origin => expressionTypeOrigin!
+                    knownParameterType.module => expressionTypeModule!
+                    knownParameterType.symbol => expressionTypeSymbol!
+                }
+            }
+        expression.kind == 15 and not knownParameterReference!
+            -> if {
+                -1 => additionalParameterReferenceSymbol!
+                prepared.package.tokens[sourceRange.tokenStart + expression.payloadToken] => additionalParameterExpressionName
+                0 => additionalParameterSymbolSearch!
+                additionalParameterSymbolSearch! < sourceRange.symbolCount
+                    -> while {
+                        prepared.package.symbols[sourceRange.symbolStart + additionalParameterSymbolSearch!] => additionalParameterSymbolCandidate
+                        additionalParameterSymbolCandidate.kind == 35
+                            and additionalParameterSymbolCandidate.parent == symbolIndex
+                            -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + additionalParameterSymbolCandidate.nameToken] => additionalParameterCandidateName
+                                additionalParameterExpressionName.span.length == additionalParameterCandidateName.span.length => additionalParameterNameEqual!
+                                UIntSize(0) => additionalParameterNameByte!
+                                additionalParameterNameEqual! and additionalParameterNameByte! < additionalParameterExpressionName.span.length
+                                    -> while {
+                                        (source -> byte(additionalParameterExpressionName.span.start + additionalParameterNameByte!)) != (source -> byte(additionalParameterCandidateName.span.start + additionalParameterNameByte!))
+                                            -> if {
+                                                false => additionalParameterNameEqual!
+                                            }
+                                        additionalParameterNameByte! + 1 => additionalParameterNameByte!
+                                    }
+                                additionalParameterNameEqual! -> if {
+                                    additionalParameterSymbolSearch! => additionalParameterReferenceSymbol!
+                                }
+                            }
+                        additionalParameterSymbolSearch! + 1 => additionalParameterSymbolSearch!
+                    }
+                additionalParameterReferenceSymbol! >= 0 -> if {
+                    functionIr + 1 => additionalParameterIrSearch!
+                    additionalParameterIrSearch! < (nodes -> len)
+                        -> while {
+                            nodes[additionalParameterIrSearch!] => additionalParameterIrCandidate
+                            additionalParameterIrCandidate.kind == 10
+                                and additionalParameterIrCandidate.parent == functionIr
+                                and additionalParameterIrCandidate.symbol == additionalParameterReferenceSymbol!
+                                and additionalParameterIrCandidate.typeId >= 0
+                                -> if {
+                                    true => knownParameterReference!
+                                    additionalParameterReferenceSymbol! => knownParameterReferenceSymbol!
+                                    additionalParameterIrCandidate.typeId => recursiveExpressionTypeId!
+                                    frozenRecursiveSemanticTypes[additionalParameterIrCandidate.typeId] => knownAdditionalParameterType
+                                    knownAdditionalParameterType.origin => expressionTypeOrigin!
+                                    knownAdditionalParameterType.module => expressionTypeModule!
+                                    knownAdditionalParameterType.symbol => expressionTypeSymbol!
+                                }
+                            additionalParameterIrSearch! + 1 => additionalParameterIrSearch!
+                        }
+                }
+            }
+        false => knownLocalBindingReference!
+        -1 => knownLocalBindingSymbol!
+        expression.kind == 15 -> if {
+            0 => localBindingNameSearch!
+            localBindingNameSearch! < (resolvedNames -> len)
+                -> while {
+                    resolvedNames[localBindingNameSearch!] => localBindingName
+                    localBindingName.astNode == expressionAstIndex
+                        -> if {
+                            prepared.package.symbols[sourceRange.symbolStart + localBindingName.symbol] => localBindingSymbol
+                            localBindingSymbol.kind == 9
+                                or localBindingSymbol.kind == 61
+                                or localBindingSymbol.kind == 35
+                                -> if {
+                                    true => knownLocalBindingReference!
+                                    localBindingName.symbol => knownLocalBindingSymbol!
+                                }
+                        }
+                    localBindingNameSearch! + 1 => localBindingNameSearch!
+                }
+            # Stream state names are mutable local bindings. Their
+            # uses can be absent from the general resolved-name
+            # table, so resolve them against the nearest preceding
+            # state binding in this function's canonical IR.
+            not knownLocalBindingReference! and expression.payloadToken >= 0
+                -> if {
+                    prepared.package.tokens[sourceRange.tokenStart + expression.payloadToken] => localStateUseName
+                    nodes -> len => localStateBindingSearch!
+                    localStateBindingSearch! > 0 and not knownLocalBindingReference!
+                        -> while {
+                            localStateBindingSearch! - 1 => localStateBindingSearch!
+                            nodes[localStateBindingSearch!] => localStateBinding
+                            localStateBinding.kind == 17
+                                and localStateBinding.sourceModule == sourceIndex
+                                and localStateBinding.symbol >= 0
+                                and localStateBinding.payloadToken >= 0
+                                and prepared.package.symbols[sourceRange.symbolStart + localStateBinding.symbol].kind == 61
+                                -> if {
+                                    prepared.package.tokens[sourceRange.tokenStart + localStateBinding.payloadToken] => localStateBindingName
+                                    localStateUseName.span.length == localStateBindingName.span.length => localStateNamesEqual!
+                                    UIntSize(0) => localStateNameByte!
+                                    localStateNamesEqual! and localStateNameByte! < localStateUseName.span.length
+                                        -> while {
+                                            (source -> byte(localStateUseName.span.start + localStateNameByte!)) != (source -> byte(localStateBindingName.span.start + localStateNameByte!))
+                                                -> if { false => localStateNamesEqual! }
+                                            localStateNameByte! + 1 => localStateNameByte!
+                                        }
+                                    localStateNamesEqual! -> if {
+                                        true => knownLocalBindingReference!
+                                        localStateBinding.symbol => knownLocalBindingSymbol!
+                                    }
+                                }
+                        }
+                }
+            knownLocalBindingReference! -> if {
+                nodes -> len => localBindingIrLimit
+                0 => localBindingIrSearch!
+                localBindingIrSearch! < localBindingIrLimit -> while {
+                    nodes[localBindingIrSearch!] => localBindingIr
+                    localBindingIr.kind == 17
+                        and localBindingIr.sourceModule == sourceIndex
+                        and localBindingIr.symbol == knownLocalBindingSymbol!
+                        -> if {
+                            localBindingIr.typeOrigin => expressionTypeOrigin!
+                            localBindingIr.typeModule => expressionTypeModule!
+                            localBindingIr.typeSymbol => expressionTypeSymbol!
+                            localBindingIr.typeId => recursiveExpressionTypeId!
+                        }
+                    localBindingIrSearch! + 1 => localBindingIrSearch!
+                }
+            }
+        }
+        false => knownCallExpression!
+        false => unresolvedCallExpression!
+        prepared.callIndexByAst[sourceRange.astStart + expressionAstIndex] => knownCallIndex
+        knownCallIndex >= 0 -> if {
+            prepared.calls[knownCallIndex] => knownCall
+            knownCall.sourceModule == sourceIndex and knownCall.callAst == expressionAstIndex and knownCall.status == 2
+                -> if { true => unresolvedCallExpression! }
+            knownCall.sourceModule == sourceIndex and knownCall.callAst == expressionAstIndex and knownCall.status == 0
+                -> if {
+                    true => knownCallExpression!
+                    knownCall.targetSourceModule >= 0 and knownCall.functionSymbol >= 0
+                        -> if {
+                            prepared.package.ranges[knownCall.targetSourceModule] => knownCallTargetRange
+                            prepared.package.symbols[knownCallTargetRange.symbolStart + knownCall.functionSymbol] => knownCallFunction
+                            knownCall.targetSourceModule -> functionResultTypeId(knownCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => declaredCallResultTypeId
+                            declaredCallResultTypeId >= 0 -> if {
+                                recursiveExpressionTypeId! < 0
+                                    or not frozenRecursiveSemanticTypes[declaredCallResultTypeId].containsParameter
+                                    -> if { declaredCallResultTypeId => recursiveExpressionTypeId! }
+                            }
+                            recursiveExpressionTypeId! >= 0 -> if {
+                                frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => knownCallType
+                                knownCallType.origin => expressionTypeOrigin!
+                                knownCallType.module => expressionTypeModule!
+                                knownCallType.symbol => expressionTypeSymbol!
+                                knownCallType.kind == 7 -> if {
+                                    17 => expressionTypeOrigin!
+                                    knownCallType.first >= 0 -> if {
+                                        frozenRecursiveSemanticTypes[knownCallType.first].module => expressionTypeModule!
+                                        frozenRecursiveSemanticTypes[knownCallType.first].symbol => expressionTypeSymbol!
+                                    }
+                                }
+                            } else {
+                                knownCallFunction.typeNode => knownCallResultAst!
+                                knownCallFunction.secondaryTypeNode >= 0 -> if { knownCallFunction.secondaryTypeNode => knownCallResultAst! }
+                                0 => knownCallTypeSearch!
+                                knownCallTypeSearch! < (prepared.nominal -> len)
+                                    -> while {
+                                        prepared.nominal[knownCallTypeSearch!] => knownCallType
+                                        knownCallType.sourceModule == knownCall.targetSourceModule and knownCallType.typeAst == knownCallResultAst! and knownCallType.status == 0
+                                            -> if {
+                                                knownCallType.origin => expressionTypeOrigin!
+                                                knownCallType.targetModule => expressionTypeModule!
+                                                knownCallType.targetSymbol => expressionTypeSymbol!
+                                            }
+                                        knownCallTypeSearch! + 1 => knownCallTypeSearch!
+                                    }
+                            }
+                        } else {
+                            knownCall.functionSymbol == -103
+                                or knownCall.functionSymbol == -105
+                                or knownCall.functionSymbol == -110
+                                or knownCall.functionSymbol == -115 -> if {
+                                    1 => expressionTypeOrigin!
+                                    -1 => expressionTypeModule!
+                                    2 => expressionTypeSymbol!
+                                }
+                            knownCall.functionSymbol == -112 -> if {
+                                1 => expressionTypeOrigin!
+                                -1 => expressionTypeModule!
+                                9 => expressionTypeSymbol!
+                            }
+                        }
+                }
+        }
+        expression.kind == 48 -> if {
+            true => knownCallExpression!
+            1 => expressionTypeOrigin!
+            -1 => expressionTypeModule!
+            0 => expressionTypeSymbol!
+        }
+        false => knownNumericExpression!
+        expression.kind == 20 or expression.kind == 21
+            -> if {
+                frozenNearestLegacyIndexByAst[sourceRange.astStart + expressionAstIndex] => knownNumericIndex
+                knownNumericIndex >= 0 -> if {
+                    inferred[knownNumericIndex] => knownNumericCandidate
+                    true => knownNumericExpression!
+                    knownNumericCandidate.origin => expressionTypeOrigin!
+                    knownNumericCandidate.targetModule => expressionTypeModule!
+                    knownNumericCandidate.targetSymbol => expressionTypeSymbol!
+                }
+            }
+        expression.kind == 22 -> if {
+            0 => unaryChildSearch!
+            unaryChildSearch! < sourceRange.astCount and not knownNumericExpression!
+                -> while {
+                    prepared.package.nodes[sourceRange.astStart + unaryChildSearch!] => unaryChild
+                    unaryChild.parent == expressionAstIndex -> if {
+                        frozenRecursiveTypeByAst[sourceRange.astStart + unaryChildSearch!] => unaryChildTypeId
+                        unaryChildTypeId >= 0 -> if {
+                            unaryChildTypeId => recursiveExpressionTypeId!
+                            frozenRecursiveSemanticTypes[unaryChildTypeId] => unaryChildType
+                            unaryChildType.origin => expressionTypeOrigin!
+                            unaryChildType.module => expressionTypeModule!
+                            unaryChildType.symbol => expressionTypeSymbol!
+                            true => knownNumericExpression!
+                        }
+                    }
+                    unaryChildSearch! + 1 => unaryChildSearch!
+                }
+        }
+        (expression.kind == 18 or expression.kind == 19 or expression.kind == 24 or expression.kind == 25 or expression.kind == 70 or (expression.kind == 22 and expression.operatorKind == -26)) => knownBooleanExpression
+        knownBooleanExpression -> if {
+            1 => expressionTypeOrigin!
+            -1 => expressionTypeModule!
+            23 => expressionTypeSymbol!
+            -1 => recursiveExpressionTypeId!
+        }
+        false => knownPushExpression!
+        false => knownTakeExpression!
+        -1 => takeElementTypeId!
+        false => knownPutExpression!
+        -223 => putOpcode!
+        false => knownCapacityExpression!
+        false => knownReserveExpression!
+        false => knownBitSetExpression!
+        -1 => bitSetOpcode!
+        false => knownDequeExpression!
+        -1 => dequeOpcode!
+        -1 => dequeElementTypeId!
+        false => knownHeapExpression!
+        -1 => heapOpcode!
+        -1 => heapElementTypeId!
+        false => knownSetExpression!
+        false => insertIntrinsicSpelling!
+        -1 => setOpcode!
+        false => knownMapTextExpression!
+        false => knownMapPathExpression!
+        false => knownBorrowTextExpression!
+        false => knownMaterializeExpression!
+        false => knownDynExpression!
+        false => knownDynDispatchExpression!
+        false => knownStreamFlowExpression!
+        expression.kind == 53 => knownIndexAssignment
+        expression.kind == 54 => knownMemberAssignment
+        expression.kind == 10 or expression.kind == 11
+            -> if {
+                source -> flowIntrinsicOpcode(prepared.package.tokens, sourceRange.tokenStart, expression) => flowOpcode
+                flowOpcode == -255 -> if { true => insertIntrinsicSpelling! }
+                flowOpcode == -204 -> if { true => knownPushExpression! }
+                flowOpcode == -213 -> if {
+                    0 => takeReceiverSearch!
+                    takeReceiverSearch! < sourceRange.astCount -> while {
+                        prepared.package.nodes[sourceRange.astStart + takeReceiverSearch!] => takeReceiverCandidate
+                        frozenRecursiveTypeByAst[sourceRange.astStart + takeReceiverSearch!] => takeReceiverTypeId!
+                        takeReceiverCandidate.parent == expressionAstIndex and takeReceiverTypeId! >= 0
+                            -> if {
+                                frozenRecursiveSemanticTypes[takeReceiverTypeId!] => takeReceiverType!
+                                takeReceiverType!.kind == 8 -> if {
+                                    takeReceiverType!.first => takeReceiverTypeId!
+                                    frozenRecursiveSemanticTypes[takeReceiverTypeId!] => takeReceiverType!
+                                }
+                                takeReceiverType!.kind == 3 or takeReceiverType!.kind == 4 or takeReceiverType!.kind == 12
+                                    -> if {
+                                        takeReceiverType!.first => takeElementTypeId!
+                                        true => knownTakeExpression!
+                                    }
+                                takeReceiverType!.kind == 5 -> if {
+                                    takeReceiverType!.second => takeElementTypeId!
+                                    true => knownTakeExpression!
+                                }
+                            }
+                        takeReceiverSearch! + 1 => takeReceiverSearch!
+                    }
+                }
+                flowOpcode == -223 or flowOpcode == -303 -> if {
+                    true => knownPutExpression!
+                    flowOpcode => putOpcode!
+                    flowOpcode == -303 -> if {
+                        1 => expressionTypeOrigin!
+                        -1 => expressionTypeModule!
+                        23 => expressionTypeSymbol!
+                        -1 => recursiveExpressionTypeId!
+                    }
+                }
+                flowOpcode == -236 -> if { true => knownCapacityExpression! }
+                flowOpcode == -271 -> if {
+                    -1 => reserveReceiverTypeId!
+                    UIntSize(0) => reserveReceiverStart!
+                    false => reserveReceiverFound!
+                    0 => reserveReceiverSearch!
+                    reserveReceiverSearch! < sourceRange.astCount
+                        -> while {
+                            prepared.package.nodes[sourceRange.astStart + reserveReceiverSearch!] => reserveReceiverCandidate
+                            frozenRecursiveTypeByAst[sourceRange.astStart + reserveReceiverSearch!] => reserveReceiverCandidateType
+                            reserveReceiverCandidate.parent == expressionAstIndex
+                                and reserveReceiverCandidateType >= 0
+                                and (not reserveReceiverFound!
+                                or reserveReceiverCandidate.start < reserveReceiverStart!)
+                                -> if {
+                                    reserveReceiverCandidateType => reserveReceiverTypeId!
+                                    reserveReceiverCandidate.start => reserveReceiverStart!
+                                    true => reserveReceiverFound!
+                                }
+                            reserveReceiverSearch! + 1 => reserveReceiverSearch!
+                        }
+                    reserveReceiverTypeId! >= 0
+                        and frozenRecursiveSemanticTypes[reserveReceiverTypeId!].kind == 8
+                        -> if {
+                            frozenRecursiveSemanticTypes[reserveReceiverTypeId!].first => reserveReceiverTypeId!
+                        }
+                    reserveReceiverTypeId! >= 0
+                        and frozenRecursiveSemanticTypes[reserveReceiverTypeId!].kind == 3
+                        -> if { true => knownReserveExpression! }
+                }
+                flowOpcode == -201 or (flowOpcode <= -241 and flowOpcode >= -244)
+                    -> if {
+                        -1 => bitSetReceiverTypeId!
+                        UIntSize(0) => bitSetReceiverStart!
+                        false => bitSetReceiverFound!
+                        0 => bitSetReceiverSearch!
+                        bitSetReceiverSearch! < sourceRange.astCount
+                            -> while {
+                                prepared.package.nodes[sourceRange.astStart + bitSetReceiverSearch!] => bitSetReceiverCandidate
+                                frozenRecursiveTypeByAst[sourceRange.astStart + bitSetReceiverSearch!] => bitSetReceiverCandidateType
+                                bitSetReceiverCandidate.parent == expressionAstIndex and bitSetReceiverCandidateType >= 0 and (not bitSetReceiverFound! or bitSetReceiverCandidate.start < bitSetReceiverStart!)
+                                    -> if {
+                                        bitSetReceiverCandidateType => bitSetReceiverTypeId!
+                                        bitSetReceiverCandidate.start => bitSetReceiverStart!
+                                        true => bitSetReceiverFound!
+                                    }
+                                bitSetReceiverSearch! + 1 => bitSetReceiverSearch!
+                            }
+                        bitSetReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[bitSetReceiverTypeId!].kind == 8
+                            -> if {
+                                frozenRecursiveSemanticTypes[bitSetReceiverTypeId!].first => bitSetReceiverTypeId!
+                            }
+                        bitSetReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[bitSetReceiverTypeId!].kind == 14
+                            -> if {
+                                true => knownBitSetExpression!
+                                flowOpcode == -201 -> if { -245 => bitSetOpcode! } else { flowOpcode => bitSetOpcode! }
+                            }
+                    }
+                flowOpcode <= -246 and flowOpcode >= -251 -> if {
+                    -1 => dequeReceiverTypeId!
+                    UIntSize(0) => dequeReceiverStart!
+                    false => dequeReceiverFound!
+                    0 => dequeReceiverSearch!
+                    dequeReceiverSearch! < sourceRange.astCount -> while {
+                        prepared.package.nodes[sourceRange.astStart + dequeReceiverSearch!] => dequeReceiverCandidate
+                        frozenRecursiveTypeByAst[sourceRange.astStart + dequeReceiverSearch!] => dequeReceiverCandidateType
+                        dequeReceiverCandidate.parent == expressionAstIndex and dequeReceiverCandidateType >= 0 and (not dequeReceiverFound! or dequeReceiverCandidate.start < dequeReceiverStart!)
+                            -> if {
+                                dequeReceiverCandidateType => dequeReceiverTypeId!
+                                dequeReceiverCandidate.start => dequeReceiverStart!
+                                true => dequeReceiverFound!
+                            }
+                        dequeReceiverSearch! + 1 => dequeReceiverSearch!
+                    }
+                    dequeReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[dequeReceiverTypeId!].kind == 8
+                        -> if { frozenRecursiveSemanticTypes[dequeReceiverTypeId!].first => dequeReceiverTypeId! }
+                    dequeReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[dequeReceiverTypeId!].kind == 7 and frozenRecursiveSemanticTypes[dequeReceiverTypeId!].origin == 4 and frozenRecursiveSemanticTypes[dequeReceiverTypeId!].symbol == 6
+                        -> if {
+                            true => knownDequeExpression!
+                            flowOpcode => dequeOpcode!
+                            frozenRecursiveSemanticTypes[dequeReceiverTypeId!].first => dequeElementTypeId!
+                        }
+                }
+                flowOpcode == -204 or flowOpcode == -253 or flowOpcode == -254 or flowOpcode == -255 or flowOpcode == -243 or flowOpcode == -257
+                    -> if {
+                        -1 => collectionReceiverTypeId!
+                        UIntSize(0) => collectionReceiverStart!
+                        false => collectionReceiverFound!
+                        0 => collectionReceiverSearch!
+                        collectionReceiverSearch! < sourceRange.astCount
+                            -> while {
+                                prepared.package.nodes[sourceRange.astStart + collectionReceiverSearch!] => collectionReceiverCandidate
+                                frozenRecursiveTypeByAst[sourceRange.astStart + collectionReceiverSearch!] => collectionReceiverCandidateType
+                                collectionReceiverCandidate.parent == expressionAstIndex and collectionReceiverCandidateType >= 0 and (not collectionReceiverFound! or collectionReceiverCandidate.start < collectionReceiverStart!)
+                                    -> if {
+                                        collectionReceiverCandidateType => collectionReceiverTypeId!
+                                        collectionReceiverCandidate.start => collectionReceiverStart!
+                                        true => collectionReceiverFound!
+                                    }
+                                collectionReceiverSearch! + 1 => collectionReceiverSearch!
+                            }
+                        collectionReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[collectionReceiverTypeId!].kind == 8
+                            -> if { frozenRecursiveSemanticTypes[collectionReceiverTypeId!].first => collectionReceiverTypeId! }
+                        collectionReceiverTypeId! >= 0 -> if {
+                            frozenRecursiveSemanticTypes[collectionReceiverTypeId!] => collectionReceiverType
+                            collectionReceiverType.kind == 7 and collectionReceiverType.origin == 4 and collectionReceiverType.symbol == 7 and (flowOpcode == -204 or flowOpcode == -253 or flowOpcode == -254)
+                                -> if {
+                                    true => knownHeapExpression!
+                                    flowOpcode == -204 -> if { -252 => heapOpcode! } else { flowOpcode => heapOpcode! }
+                                    collectionReceiverType.first => heapElementTypeId!
+                                    false => knownPushExpression!
+                                }
+                            collectionReceiverType.kind == 7 and collectionReceiverType.origin == 4 and collectionReceiverType.symbol == 5 and (flowOpcode == -255 or flowOpcode == -243 or flowOpcode == -257)
+                                -> if {
+                                    true => knownSetExpression!
+                                    flowOpcode == -243 -> if { -256 => setOpcode! } else { flowOpcode => setOpcode! }
+                                }
+                        }
+                    }
+                flowOpcode == -205 -> if { true => knownMapTextExpression! }
+                flowOpcode == -214 -> if { true => knownMapPathExpression! }
+                flowOpcode == -206 -> if { true => knownBorrowTextExpression! }
+                flowOpcode == -229 -> if { true => knownMaterializeExpression! }
+                flowOpcode == -224 -> if { true => knownDynExpression! }
+                flowOpcode == -227 or flowOpcode == -228 -> if { true => knownStreamFlowExpression! }
+                expression.firstToken => knownDynTokenSearch!
+                knownDynTokenSearch! < expression.firstToken + expression.tokenCount
+                    -> while {
+                        prepared.package.tokens[sourceRange.tokenStart + knownDynTokenSearch!] => knownDynToken
+                        knownDynToken.kind == grammar.tokenIdIdentifier() and knownDynToken.span.length == 3 and (source -> byte(knownDynToken.span.start)) == 100 and (source -> byte(knownDynToken.span.start + 1)) == 121 and (source -> byte(knownDynToken.span.start + 2)) == 110
+                            -> if { true => knownDynExpression! }
+                        knownDynTokenSearch! + 1 => knownDynTokenSearch!
+                    }
+                false => knownDynDispatchPath!
+                -1 => knownDynDispatchTraitToken!
+                -1 => knownDynDispatchMethodToken!
+                0 => knownDynDispatchPathSearch!
+                knownDynDispatchPathSearch! < sourceRange.astCount
+                    -> while {
+                        prepared.package.nodes[sourceRange.astStart + knownDynDispatchPathSearch!] => knownDynDispatchPath
+                        knownDynDispatchPath.kind == 16 and knownDynDispatchPath.parent == expressionAstIndex
+                            -> if {
+                                knownDynDispatchPath.firstToken => knownDynDispatchTokenSearch!
+                                knownDynDispatchTokenSearch! < knownDynDispatchPath.firstToken + knownDynDispatchPath.tokenCount
+                                    -> while {
+                                        prepared.package.tokens[sourceRange.tokenStart + knownDynDispatchTokenSearch!] => knownDynDispatchToken
+                                        knownDynDispatchToken.kind == grammar.tokenIdIdentifier()
+                                            -> if {
+                                                knownDynDispatchMethodToken! >= 0 -> if { knownDynDispatchMethodToken! => knownDynDispatchTraitToken! }
+                                                knownDynDispatchTokenSearch! => knownDynDispatchMethodToken!
+                                            }
+                                        knownDynDispatchTokenSearch! + 1 => knownDynDispatchTokenSearch!
+                                    }
+                                0 => knownDynDispatchTraitModuleSearch!
+                                knownDynDispatchTraitModuleSearch! < (prepared.package.sources -> len)
+                                    -> while {
+                                        prepared.package.ranges[knownDynDispatchTraitModuleSearch!] => knownDynDispatchTraitRange
+                                        prepared.package.sources[knownDynDispatchTraitModuleSearch!] -> len => knownDynDispatchTraitSourceLength
+                                        prepared.package.sources[knownDynDispatchTraitModuleSearch!] -> slice(UIntSize(0), knownDynDispatchTraitSourceLength) => knownDynDispatchTraitSource
+                                        0 => knownDynDispatchTraitSearch!
+                                        knownDynDispatchTraitSearch! < knownDynDispatchTraitRange.symbolCount
+                                            -> while {
+                                                prepared.package.symbols[knownDynDispatchTraitRange.symbolStart + knownDynDispatchTraitSearch!] => knownDynDispatchTrait
+                                                knownDynDispatchTrait.kind == 5 and knownDynDispatchTraitToken! >= 0 and knownDynDispatchMethodToken! >= 0
+                                                    -> if {
+                                                        prepared.package.tokens[knownDynDispatchTraitRange.tokenStart + knownDynDispatchTrait.nameToken] => knownDynDispatchDeclaredName
+                                                        prepared.package.tokens[sourceRange.tokenStart + knownDynDispatchTraitToken!] => knownDynDispatchRequestedName
+                                                        knownDynDispatchDeclaredName.span.length == knownDynDispatchRequestedName.span.length => knownDynDispatchNameEqual!
+                                                        UIntSize(0) => knownDynDispatchNameByte!
+                                                        knownDynDispatchNameEqual! and knownDynDispatchNameByte! < knownDynDispatchDeclaredName.span.length
+                                                            -> while {
+                                                                (knownDynDispatchTraitSource -> byte(knownDynDispatchDeclaredName.span.start + knownDynDispatchNameByte!)) != (source -> byte(knownDynDispatchRequestedName.span.start + knownDynDispatchNameByte!))
+                                                                    -> if { false => knownDynDispatchNameEqual! }
+                                                                knownDynDispatchNameByte! + 1 => knownDynDispatchNameByte!
+                                                            }
+                                                        knownDynDispatchNameEqual! -> if { true => knownDynDispatchPath! }
+                                                    }
+                                                knownDynDispatchTraitSearch! + 1 => knownDynDispatchTraitSearch!
+                                            }
+                                        knownDynDispatchTraitModuleSearch! + 1 => knownDynDispatchTraitModuleSearch!
+                                    }
+                            }
+                        knownDynDispatchPathSearch! + 1 => knownDynDispatchPathSearch!
+                    }
+                -1 => knownDynDispatchSourceSymbol!
+                0 => knownDynDispatchSourceSearch!
+                knownDynDispatchSourceSearch! < sourceRange.astCount
+                    -> while {
+                        prepared.package.nodes[sourceRange.astStart + knownDynDispatchSourceSearch!] => knownDynDispatchSource
+                        knownDynDispatchSource.kind == 15 and knownDynDispatchSource.parent == expressionAstIndex
+                            -> if {
+                                resolvedSymbolByAst[knownDynDispatchSourceSearch!] => knownDynDispatchSourceSymbol!
+                            }
+                        knownDynDispatchSourceSearch! + 1 => knownDynDispatchSourceSearch!
+                    }
+                false => knownDynDispatchSource!
+                knownDynDispatchSourceSymbol! >= 0 -> if {
+                    prepared.package.symbols[sourceRange.symbolStart + knownDynDispatchSourceSymbol!] => knownDynDispatchSourceBinding
+                    prepared.package.nodes[sourceRange.astStart + knownDynDispatchSourceBinding.astNode] => knownDynDispatchSourceDeclaration
+                    knownDynDispatchSourceDeclaration.firstToken => knownDynDispatchSourceTokenSearch!
+                    knownDynDispatchSourceTokenSearch! < knownDynDispatchSourceDeclaration.firstToken + knownDynDispatchSourceDeclaration.tokenCount
+                        -> while {
+                            prepared.package.tokens[sourceRange.tokenStart + knownDynDispatchSourceTokenSearch!] => knownDynDispatchSourceToken
+                            knownDynDispatchSourceToken.kind == grammar.tokenIdIdentifier() and knownDynDispatchSourceToken.span.length == 3 and (source -> byte(knownDynDispatchSourceToken.span.start)) == 100 and (source -> byte(knownDynDispatchSourceToken.span.start + 1)) == 121 and (source -> byte(knownDynDispatchSourceToken.span.start + 2)) == 110
+                                -> if { true => knownDynDispatchSource! }
+                            knownDynDispatchSourceTokenSearch! + 1 => knownDynDispatchSourceTokenSearch!
+                        }
+                }
+                knownDynDispatchPath! and knownDynDispatchSource!
+                    -> if {
+                        true => knownDynDispatchExpression!
+                        1 => expressionTypeOrigin!
+                        -1 => expressionTypeModule!
+                        2 => expressionTypeSymbol!
+                        0 => knownDynDispatchIntTypeSearch!
+                        knownDynDispatchIntTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                            -> while {
+                                frozenRecursiveSemanticTypes[knownDynDispatchIntTypeSearch!] => knownDynDispatchIntType
+                                knownDynDispatchIntType.status == 0 and knownDynDispatchIntType.kind == 1 and knownDynDispatchIntType.origin == 1 and knownDynDispatchIntType.symbol == 2
+                                    -> if { knownDynDispatchIntTypeSearch! => recursiveExpressionTypeId! }
+                                knownDynDispatchIntTypeSearch! + 1 => knownDynDispatchIntTypeSearch!
+                            }
+                    }
+                knownDynDispatchPath! and not knownDynDispatchSource!
+                    -> if {
+                        true => knownDynDispatchExpression!
+                        -1 => knownStaticDispatchMethodSymbol!
+                        0 => knownStaticDispatchSymbolSearch!
+                        knownStaticDispatchSymbolSearch! < sourceRange.symbolCount
+                            -> while {
+                                prepared.package.symbols[sourceRange.symbolStart + knownStaticDispatchSymbolSearch!] => knownStaticDispatchMethod
+                                knownStaticDispatchMethod.kind == 31 and knownStaticDispatchMethod.parent >= 0 and knownDynDispatchTraitToken! >= 0 and knownDynDispatchMethodToken! >= 0
+                                    -> if {
+                                        prepared.package.tokens[sourceRange.tokenStart + knownStaticDispatchMethod.nameToken] => knownStaticDispatchDeclaredMethod
+                                        prepared.package.tokens[sourceRange.tokenStart + knownDynDispatchMethodToken!] => knownStaticDispatchRequestedMethod
+                                        knownStaticDispatchDeclaredMethod.span.length == knownStaticDispatchRequestedMethod.span.length => knownStaticDispatchMethodEqual!
+                                        UIntSize(0) => knownStaticDispatchMethodByte!
+                                        knownStaticDispatchMethodEqual! and knownStaticDispatchMethodByte! < knownStaticDispatchDeclaredMethod.span.length
+                                            -> while {
+                                                (source -> byte(knownStaticDispatchDeclaredMethod.span.start + knownStaticDispatchMethodByte!)) != (source -> byte(knownStaticDispatchRequestedMethod.span.start + knownStaticDispatchMethodByte!))
+                                                    -> if { false => knownStaticDispatchMethodEqual! }
+                                                knownStaticDispatchMethodByte! + 1 => knownStaticDispatchMethodByte!
+                                            }
+                                        prepared.package.symbols[sourceRange.symbolStart + knownStaticDispatchMethod.parent] => knownStaticDispatchImpl
+                                        prepared.package.tokens[sourceRange.tokenStart + knownDynDispatchTraitToken!] => knownStaticDispatchRequestedTrait
+                                        false => knownStaticDispatchTraitEqual!
+                                        prepared.package.nodes[sourceRange.astStart + knownStaticDispatchImpl.astNode] => knownStaticDispatchImplAst
+                                        knownStaticDispatchImplAst.firstToken => knownStaticDispatchImplTokenSearch!
+                                        knownStaticDispatchImplTokenSearch! < knownStaticDispatchImplAst.firstToken + knownStaticDispatchImplAst.tokenCount
+                                            -> while {
+                                                prepared.package.tokens[sourceRange.tokenStart + knownStaticDispatchImplTokenSearch!] => knownStaticDispatchTraitToken
+                                                knownStaticDispatchTraitToken.kind == grammar.tokenIdIdentifier()
+                                                    -> if {
+                                                        knownStaticDispatchTraitToken.span.length == knownStaticDispatchRequestedTrait.span.length => knownStaticDispatchHeaderEqual!
+                                                        UIntSize(0) => knownStaticDispatchHeaderByte!
+                                                        knownStaticDispatchHeaderEqual! and knownStaticDispatchHeaderByte! < knownStaticDispatchTraitToken.span.length
+                                                            -> while {
+                                                                (source -> byte(knownStaticDispatchTraitToken.span.start + knownStaticDispatchHeaderByte!)) != (source -> byte(knownStaticDispatchRequestedTrait.span.start + knownStaticDispatchHeaderByte!))
+                                                                    -> if { false => knownStaticDispatchHeaderEqual! }
+                                                                knownStaticDispatchHeaderByte! + 1 => knownStaticDispatchHeaderByte!
+                                                            }
+                                                        knownStaticDispatchHeaderEqual! -> if { true => knownStaticDispatchTraitEqual! }
+                                                    }
+                                                knownStaticDispatchImplTokenSearch! + 1 => knownStaticDispatchImplTokenSearch!
+                                            }
+                                        knownStaticDispatchMethodEqual! and knownStaticDispatchTraitEqual!
+                                            -> if { knownStaticDispatchSymbolSearch! => knownStaticDispatchMethodSymbol! }
+                                    }
+                                knownStaticDispatchSymbolSearch! + 1 => knownStaticDispatchSymbolSearch!
+                            }
+                        0 => knownStaticDispatchFunctionSearch!
+                        knownStaticDispatchFunctionSearch! < (nodes -> len)
+                            -> while {
+                                nodes[knownStaticDispatchFunctionSearch!] => knownStaticDispatchFunction
+                                knownStaticDispatchFunction.kind == 0 and knownStaticDispatchFunction.sourceModule == sourceIndex and knownStaticDispatchFunction.symbol == knownStaticDispatchMethodSymbol!
+                                    -> if {
+                                        knownStaticDispatchFunction.typeOrigin => expressionTypeOrigin!
+                                        knownStaticDispatchFunction.typeModule => expressionTypeModule!
+                                        knownStaticDispatchFunction.typeSymbol => expressionTypeSymbol!
+                                        knownStaticDispatchFunction.typeId => recursiveExpressionTypeId!
+                                    }
+                                knownStaticDispatchFunctionSearch! + 1 => knownStaticDispatchFunctionSearch!
+                            }
+                    }
+            }
+        knownPushExpression! -> if {
+            1 => expressionTypeOrigin!
+            -1 => expressionTypeModule!
+            0 => expressionTypeSymbol!
+        }
+        knownTakeExpression! -> if {
+            takeElementTypeId! => recursiveExpressionTypeId!
+            frozenRecursiveSemanticTypes[takeElementTypeId!] => takeElementType
+            takeElementType.origin => expressionTypeOrigin!
+            takeElementType.module => expressionTypeModule!
+            takeElementType.symbol => expressionTypeSymbol!
+        }
+        knownMapTextExpression! or knownMapPathExpression!
+            -> if {
+                1 => expressionTypeOrigin!
+                -1 => expressionTypeModule!
+                24 => expressionTypeSymbol!
+            }
+        knownBorrowTextExpression! -> if {
+            1 => expressionTypeOrigin!
+            -1 => expressionTypeModule!
+            24 => expressionTypeSymbol!
+        }
+        knownMaterializeExpression! -> if {
+            1 => expressionTypeOrigin!
+            -1 => expressionTypeModule!
+            1 => expressionTypeSymbol!
+        }
+        knownBitSetExpression! -> if {
+            bitSetOpcode! == -243 -> if {
+                1 => expressionTypeOrigin!
+                -1 => expressionTypeModule!
+                23 => expressionTypeSymbol!
+                23 => recursiveExpressionTypeId!
+            } else {
+                bitSetOpcode! == -244 or bitSetOpcode! == -245
+                    -> if {
+                        1 => expressionTypeOrigin!
+                        -1 => expressionTypeModule!
+                        2 => expressionTypeSymbol!
+                        2 => recursiveExpressionTypeId!
+                    } else {
+                        1 => expressionTypeOrigin!
+                        -1 => expressionTypeModule!
+                        0 => expressionTypeSymbol!
+                        0 => recursiveExpressionTypeId!
+                    }
+            }
+        }
+        knownDequeExpression! -> if {
+            dequeOpcode! == -246 or dequeOpcode! == -247
+                -> if {
+                    1 => expressionTypeOrigin!
+                    -1 => expressionTypeModule!
+                    0 => expressionTypeSymbol!
+                    0 => recursiveExpressionTypeId!
+                } else {
+                    dequeElementTypeId! => recursiveExpressionTypeId!
+                    frozenRecursiveSemanticTypes[dequeElementTypeId!] => dequeElementType
+                    dequeElementType.origin => expressionTypeOrigin!
+                    dequeElementType.module => expressionTypeModule!
+                    dequeElementType.symbol => expressionTypeSymbol!
+                }
+        }
+        knownHeapExpression! -> if {
+            heapOpcode! == -252 -> if {
+                1 => expressionTypeOrigin!
+                -1 => expressionTypeModule!
+                0 => expressionTypeSymbol!
+                0 => recursiveExpressionTypeId!
+            } else {
+                heapElementTypeId! => recursiveExpressionTypeId!
+                frozenRecursiveSemanticTypes[heapElementTypeId!] => heapElementType
+                heapElementType.origin => expressionTypeOrigin!
+                heapElementType.module => expressionTypeModule!
+                heapElementType.symbol => expressionTypeSymbol!
+            }
+        }
+        knownSetExpression! -> if {
+            1 => expressionTypeOrigin!
+            -1 => expressionTypeModule!
+            23 => expressionTypeSymbol!
+            23 => recursiveExpressionTypeId!
+        }
+        expressionBelongsToFunction -> if {
+            expression.kind == 42 or expression.kind == 43 or expression.kind == 44 or expression.kind == 45 or expression.kind == 46 or expression.kind == 47 or expression.kind == 58 or expression.kind == 62 or expression.kind == 82
+                -> if {
+                    nodes -> len => controlIr
+                    controlIr => astToIr[expressionAstIndex]
+                    18 => controlKind!
+                    expression.kind == 43 -> if { 19 => controlKind! }
+                    expression.kind == 44 -> if { 20 => controlKind! }
+                    expression.kind == 45 -> if { 21 => controlKind! }
+                    expression.kind == 46 -> if { 22 => controlKind! }
+                    expression.kind == 47 -> if { 23 => controlKind! }
+                    expression.kind == 58 -> if { 19 => controlKind! }
+                    expression.kind == 62 or expression.kind == 82
+                        -> if { 30 => controlKind! }
+                    -1 => controlOpcode!
+                    expression.kind == 42 -> if { expression.operatorKind => controlOpcode! }
+                    expression.kind == 45 -> if {
+                        0 => controlOpcode!
+                        (source -> byte(expression.start)) == 99 -> if { 1 => controlOpcode! }
+                    }
+                    expression.kind == 46 -> if { expression.operatorKind => controlOpcode! }
+                    expression.kind == 58 -> if {
+                        functionNodeStart => patternNodePosition!
+                        patternNodePosition! < functionNodeEnd -> while {
+                            frozenFunctionNodeIndices[patternNodePosition!] => patternSearch
+                            prepared.package.nodes[sourceRange.astStart + patternSearch] => patternCandidate
+                            patternCandidate.kind == 59 and patternCandidate.parent == expressionAstIndex
+                                -> if {
+                                    prepared.package.tokens[sourceRange.tokenStart + patternCandidate.payloadToken] => patternVariant
+                                    source -> byte(patternVariant.span.start) => patternVariantInitial
+                                    patternVariantInitial == 69 or patternVariantInitial == 83
+                                        -> if { 1 => controlOpcode! } else { 0 => controlOpcode! }
+                                    sourceIndex -> nominalVariantTag(patternVariant, prepared) => nominalTag
+                                    nominalTag >= 0 -> if { nominalTag => controlOpcode! }
+                                }
+                            patternNodePosition! + 1 => patternNodePosition!
+                        }
+                    }
+                    expressionTypeOrigin! => controlTypeOrigin
+                    expressionTypeModule! => controlTypeModule
+                    expressionTypeSymbol! => controlTypeSymbol
+                    -1 => controlTypeKind!
+                    0 => controlTypeFlags!
+                    recursiveExpressionTypeId! >= 0 -> if {
+                        frozenRecursiveSemanticTypes[recursiveExpressionTypeId!].kind => controlTypeKind!
+                        recursiveTypeFlags[recursiveExpressionTypeId!] => controlTypeFlags!
+                    }
+                    nodes -> push(TypedIrNode {
+                        kind: controlKind!
+                        parent: returnIr
+                        sourceModule: sourceIndex
+                        astNode: expressionAstIndex
+                        symbol: -1
+                        targetModule: sourceIndex
+                        typeOrigin: controlTypeOrigin
+                        typeModule: controlTypeModule
+                        typeSymbol: controlTypeSymbol
+                        typeId: recursiveExpressionTypeId!
+                        typeKind: controlTypeKind!
+                        typeFlags: controlTypeFlags!
+                        payloadToken: expression.payloadToken
+                        opcode: controlOpcode!
+                        operand0: -1
+                        operand1: -1
+                        nextOperand: -1
+                        flags: expression.flags
+                    })
+                } else {
+                    false => unresolvedLibraryInvocation!
+                    false => resolvedQualifiedLeaf!
+                    false => contextualNullaryOption!
+                    expression.payloadToken => contextualOptionVariantToken!
+                    expression.kind == 11 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 36 and not knownCallExpression!
+                        -> if {
+                            true => unresolvedLibraryInvocation!
+                            resolvedQualifiedByAst[expressionAstIndex]
+                                or resolvedQualifiedByAst[expression.parent]
+                                -> if {
+                                    false => unresolvedLibraryInvocation!
+                                    true => resolvedQualifiedLeaf!
+                                }
+                            prepared.package.nodes[sourceRange.astStart + expression.parent] => contextualOptionPath
+                            contextualOptionPath.firstToken => contextualOptionTokenSearch!
+                            contextualOptionTokenSearch! < contextualOptionPath.firstToken + contextualOptionPath.tokenCount
+                                -> while {
+                                    prepared.package.tokens[sourceRange.tokenStart + contextualOptionTokenSearch!].kind == grammar.tokenIdIdentifier()
+                                        -> if {
+                                            contextualOptionTokenSearch! => contextualOptionVariantToken!
+                                        }
+                                    contextualOptionTokenSearch! + 1 => contextualOptionTokenSearch!
+                                }
+                            contextualOptionVariantToken! >= 0 -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + contextualOptionVariantToken!] => contextualOptionVariant
+                                contextualOptionVariant.span.length == 4 -> if {
+                                    (source -> byte(contextualOptionVariant.span.start)) == 78
+                                        and (source -> byte(contextualOptionVariant.span.start + 1)) == 111
+                                        and (source -> byte(contextualOptionVariant.span.start + 2)) == 110
+                                        and (source -> byte(contextualOptionVariant.span.start + 3)) == 101
+                                        -> if {
+                                            true => contextualNullaryOption!
+                                            false => unresolvedLibraryInvocation!
+                                            expression.parent => contextualOptionOwnerAst!
+                                            -1 => contextualOptionOwnerIr!
+                                            contextualOptionOwnerAst! >= 0 and contextualOptionOwnerIr! < 0
+                                                -> while {
+                                                    astToIr[contextualOptionOwnerAst!] >= 0 -> if {
+                                                        astToIr[contextualOptionOwnerAst!] => contextualOptionCandidateIr
+                                                        nodes[contextualOptionCandidateIr].typeId >= 0
+                                                            -> if {
+                                                                contextualOptionCandidateIr => contextualOptionOwnerIr!
+                                                            }
+                                                    }
+                                                    contextualOptionOwnerIr! < 0 -> if {
+                                                        prepared.package.nodes[sourceRange.astStart + contextualOptionOwnerAst!].parent => contextualOptionOwnerAst!
+                                                    }
+                                                }
+                                            contextualOptionOwnerIr! >= 0 -> if {
+                                                nodes[contextualOptionOwnerIr!] => contextualOptionOwner
+                                                contextualOptionOwner.typeOrigin => expressionTypeOrigin!
+                                                contextualOptionOwner.typeModule => expressionTypeModule!
+                                                contextualOptionOwner.typeSymbol => expressionTypeSymbol!
+                                                contextualOptionOwner.typeId => recursiveExpressionTypeId!
+                                            }
+                                            contextualOptionOwnerIr! < 0 and functionResultTypeId >= 0
+                                                -> if {
+                                                    frozenRecursiveSemanticTypes[functionResultTypeId] => contextualOptionFunctionResult
+                                                    contextualOptionFunctionResult.origin => expressionTypeOrigin!
+                                                    contextualOptionFunctionResult.module => expressionTypeModule!
+                                                    contextualOptionFunctionResult.symbol => expressionTypeSymbol!
+                                                    functionResultTypeId => recursiveExpressionTypeId!
+                                                }
+                                        }
+                                }
+                            }
+                        }
+                    # A library flow call is resolved from package metadata after
+                    # base Typed IR lowering. Preserve the syntactic invocation as
+                    # a call node so that projection can attach its canonical ABI
+                    # target; an unresolved non-library path remains a diagnostic.
+                    -1 => unresolvedFlowOpcode!
+                    expression.kind == 10 -> if {
+                        source -> flowIntrinsicOpcode(
+                        prepared.package.tokens,
+                        sourceRange.tokenStart,
+                        expression
+                        ) => unresolvedFlowOpcode!
+                    }
+                    expression.kind == 10
+                        and not knownCallExpression!
+                        and unresolvedFlowOpcode! == -1
+                        and unresolvedCallExpression!
+                        -> if {
+                            true => unresolvedLibraryInvocation!
+                        }
+                    false => knownLocalMemberExpression!
+                    false => knownIndexedMemberExpression!
+                    false => knownCallResultMemberExpression!
+                    expression.kind == 36 -> if {
+                        false => memberPathIsResolvedCallee!
+                        expression.parent >= 0
+                            and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 11
+                            -> if {
+                                prepared.callIndexByAst[sourceRange.astStart + expression.parent] => memberParentCallIndex
+                                memberParentCallIndex >= 0 -> if {
+                                    prepared.calls[memberParentCallIndex] => memberParentCall
+                                    memberParentCall.status == 0
+                                        and memberParentCall.sourceModule == sourceIndex
+                                        and memberParentCall.callAst == expression.parent
+                                        -> if { true => memberPathIsResolvedCallee! }
+                                }
+                            }
+                        functionNodeStart => indexedMemberBasePosition!
+                        indexedMemberBasePosition! < functionNodeEnd
+                            -> while {
+                                frozenFunctionNodeIndices[indexedMemberBasePosition!] => indexedMemberBaseSearch
+                                prepared.package.nodes[sourceRange.astStart + indexedMemberBaseSearch] => indexedMemberBase
+                                indexedMemberBase.parent == expressionAstIndex and indexedMemberBase.kind == 41
+                                    -> if {
+                                        true => knownIndexedMemberExpression!
+                                    }
+                                indexedMemberBasePosition! + 1 => indexedMemberBasePosition!
+                            }
+                        prepared.callResultMemberByAst[sourceRange.astStart + expressionAstIndex]
+                            and not memberPathIsResolvedCallee!
+                            -> if { true => knownCallResultMemberExpression! }
+                        localMemberByParentAst[expressionAstIndex] => knownLocalMemberExpression!
+                    }
+                    false => knownPartitionItem!
+                    expression.kind == 15 and expressionTypeIndex >= 0
+                        -> if {
+                            expression.parent => partitionItemAncestor!
+                            partitionItemAncestor! >= 0 and not knownPartitionItem!
+                                -> while {
+                                    prepared.package.nodes[sourceRange.astStart + partitionItemAncestor!].kind == 78
+                                        -> if { true => knownPartitionItem! } else { prepared.package.nodes[sourceRange.astStart + partitionItemAncestor!].parent => partitionItemAncestor! }
+                                }
+                        }
+                    -1 => flowEmissionOpcode!
+                    expression.kind == 10 or expression.kind == 11
+                        -> if {
+                            source -> flowIntrinsicOpcode(prepared.package.tokens, sourceRange.tokenStart, expression) => flowEmissionOpcode!
+                        }
+                    # Intrinsic spellings are contextual. Once semantic call
+                    # resolution found the exact receiver method, its call ABI
+                    # is the sole lowering authority; do not also emit the
+                    # spelling-based intrinsic for the same expression.
+                    knownCallExpression! -> if { -1 => flowEmissionOpcode! }
+                    prepared.controlProducerWrapperByAst[sourceRange.astStart + expressionAstIndex] => knownControlProducerWrapperExpression
+                    (not resolvedQualifiedLeaf! or knownCallResultMemberExpression! or knownPartitionItem! or flowEmissionOpcode! == -213 or knownControlProducerWrapperExpression) and (contextualNullaryOption! or expressionTypeIndex >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownLocalBindingReference! or knownPatternReference! or unresolvedLibraryInvocation! or unresolvedCallExpression! or insertIntrinsicSpelling! or flowEmissionOpcode! == -213 or knownControlProducerWrapperExpression or expression.kind == 22 or knownLocalMemberExpression! or knownIndexedMemberExpression! or knownCallResultMemberExpression! or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or expression.kind == 57 or expression.kind == 59 or expression.kind == 71 or expression.kind == 73 or expression.kind == 74 or expression.kind == 75 or expression.kind == 76 or expression.kind == 78 or expression.kind == 79 or expression.kind == 80 or expression.kind == 81 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownTakeExpression! or knownPutExpression! or knownCapacityExpression! or knownReserveExpression! or knownBitSetExpression! or knownDequeExpression! or knownHeapExpression! or knownSetExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownMaterializeExpression! or knownDynExpression! or knownDynDispatchExpression! or knownStreamFlowExpression! or knownIndexAssignment or knownMemberAssignment)
+                        -> if {
+                            9 => expressionKind!
+                            expression.kind == 13 -> if { 2 => expressionKind! }
+                            expression.kind == 14 -> if { 3 => expressionKind! }
+                            expression.kind == 15 -> if {
+                                5 => expressionKind!
+                                expressionTypeOrigin! == 1 and expressionTypeSymbol! == 23
+                                    -> if {
+                                        true => expressionIsBoolLiteral!
+                                        resolvedSymbolByAst[expressionAstIndex] >= 0
+                                            -> if { false => expressionIsBoolLiteral! }
+                                        expressionIsBoolLiteral! -> if { 4 => expressionKind! }
+                                    }
+                            }
+                            expression.kind == 11 or expression.kind == 48 or (expression.kind == 10 and (unresolvedLibraryInvocation! or unresolvedCallExpression! or insertIntrinsicSpelling!))
+                                -> if { 6 => expressionKind! }
+                            contextualNullaryOption! -> if { 26 => expressionKind! }
+                            expression.kind == 22 -> if { 7 => expressionKind! }
+                            expression.kind >= 18 and expression.kind <= 21
+                                -> if { 8 => expressionKind! }
+                            expression.kind == 24 or expression.kind == 25
+                                -> if { 8 => expressionKind! }
+                            expression.kind == 70 -> if { 8 => expressionKind! }
+                            expression.kind == 39 -> if { 12 => expressionKind! }
+                            expression.kind == 36 -> if { 13 => expressionKind! }
+                            expression.kind == 37 -> if { 14 => expressionKind! }
+                            expression.kind == 38 -> if { 16 => expressionKind! }
+                            expression.kind == 41 -> if { 15 => expressionKind! }
+                            expression.kind == 53 -> if { 24 => expressionKind! }
+                            expression.kind == 54 -> if { 25 => expressionKind! }
+                            expression.kind == 55 -> if { 26 => expressionKind! }
+                            expression.kind == 56 -> if { 27 => expressionKind! }
+                            expression.kind == 59 -> if { 29 => expressionKind! }
+                            expression.kind == 63 -> if { 31 => expressionKind! }
+                            expression.kind == 64 -> if { 32 => expressionKind! }
+                            expression.kind == 57 -> if { 33 => expressionKind! }
+                            expression.kind == 71 -> if { 35 => expressionKind! }
+                            expression.kind == 73 -> if { 37 => expressionKind! }
+                            expression.kind == 74 -> if { 38 => expressionKind! }
+                            expression.kind == 75 -> if { 39 => expressionKind! }
+                            expression.kind == 78 -> if { 40 => expressionKind! }
+                            expression.kind == 79 -> if { 41 => expressionKind! }
+                            expression.kind == 80 -> if { 42 => expressionKind! }
+                            expression.kind == 81 -> if { 43 => expressionKind! }
+                            expression.kind == 76 -> if { 36 => expressionKind! }
+                            prepared.callIndexByAst[sourceRange.astStart + expressionAstIndex] => propertyCallIndex
+                            propertyCallIndex >= 0 -> if {
+                                prepared.calls[propertyCallIndex] => propertyCall
+                                propertyCall.sourceModule == sourceIndex and propertyCall.callAst == expressionAstIndex and propertyCall.status == 0
+                                    -> if { 6 => expressionKind! }
+                            }
+                            false => transparentExpression!
+                            expression.kind >= 18 and expression.kind <= 21
+                                -> if {
+                                    functionNodeStart => transparentChildPosition!
+                                    transparentChildPosition! < functionNodeEnd
+                                        -> while {
+                                            frozenFunctionNodeIndices[transparentChildPosition!] => transparentChildSearch
+                                            prepared.package.nodes[sourceRange.astStart + transparentChildSearch] => transparentChild
+                                            transparentChild.parent == expressionAstIndex and transparentChild.start == expression.start and transparentChild.length == expression.length
+                                                -> if { true => transparentExpression! }
+                                            transparentChildPosition! + 1 => transparentChildPosition!
+                                        }
+                                }
+                            expression.kind == 36 -> if {
+                                qualifiedFunctionPathByAst[expressionAstIndex]
+                                    or prepared.qualifiedFunctionByParentAst[sourceRange.astStart + expressionAstIndex] >= 0
+                                    => qualifiedFunctionPath
+                                qualifiedFunctionPath and not knownCallResultMemberExpression!
+                                    -> if {
+                                        prepared.callIndexByAst[sourceRange.astStart + expression.parent] => qualifiedFunctionParentCallIndex
+                                        qualifiedFunctionParentCallIndex >= 0 -> if {
+                                            prepared.calls[qualifiedFunctionParentCallIndex] => qualifiedFunctionParentCall
+                                            qualifiedFunctionParentCall.status == 0
+                                                and qualifiedFunctionParentCall.sourceModule == sourceIndex
+                                                and qualifiedFunctionParentCall.callAst == expression.parent
+                                                -> if {
+                                                    true => transparentExpression!
+                                                }
+                                        }
+                                        functionNodeStart => qualifiedFunctionCallChildPosition!
+                                        qualifiedFunctionCallChildPosition! < functionNodeEnd
+                                            -> while {
+                                                frozenFunctionNodeIndices[qualifiedFunctionCallChildPosition!] => qualifiedFunctionCallChildSearch
+                                                prepared.package.nodes[sourceRange.astStart + qualifiedFunctionCallChildSearch] => qualifiedFunctionCallChild
+                                                qualifiedFunctionCallChild.kind == 11
+                                                    and qualifiedFunctionCallChild.cstRuleId == grammar.ruleIdCallExpression()
+                                                    and qualifiedFunctionCallChild.start == expression.start
+                                                    and qualifiedFunctionCallChild.length == expression.length
+                                                    -> if {
+                                                        true => transparentExpression!
+                                                    }
+                                                qualifiedFunctionCallChildPosition! + 1 => qualifiedFunctionCallChildPosition!
+                                            }
+                                    }
+                            }
+                            not transparentExpression! -> if {
+                                nodes -> len => expressionIr
+                                expressionIr => astToIr[expressionAstIndex]
+                                -1 => expressionSymbol!
+                                knownParameterReference! -> if { knownParameterReferenceSymbol! => expressionSymbol! }
+                                knownLocalBindingReference! -> if { knownLocalBindingSymbol! => expressionSymbol! }
+                                -1 => expressionTargetModule!
+                                expression.flags => expressionFlags!
+                                expression.operatorKind => expressionOpcode!
+                                expressionKind! == 16 -> if {
+                                    source -> dictionaryCapacityHint(expression) => expressionOpcode!
+                                }
+                                expressionKind! == 14 -> if {
+                                    source -> arrayCapacityHint(expression) => arrayCapacityOpcode
+                                    arrayCapacityOpcode >= 0 -> if { arrayCapacityOpcode => expressionOpcode! }
+                                }
+                                expressionKind! == 13 -> if {
+                                    qualifiedValueVariantIndexByAst[expressionAstIndex] => valuePathIndex
+                                    valuePathIndex >= 0 -> if {
+                                        prepared.qualified[valuePathIndex] => valuePath
+                                        prepared.modules[valuePath.targetModule].sourceIndex => valueTargetSource
+                                        26 => expressionKind!
+                                        valuePath.targetSymbol => expressionSymbol!
+                                        valueTargetSource => expressionTargetModule!
+                                    }
+                                }
+                                expression.kind == 10 or expression.kind == 11
+                                    -> if {
+                                        knownDynExpression! -> if { -224 => expressionOpcode! }
+                                        expression.kind == 10 or expression.kind == 11
+                                            -> if {
+                                                flowEmissionOpcode! == -213 -> if { flowEmissionOpcode! => expressionOpcode! }
+                                            }
+                                        functionNodeStart => intrinsicChildPosition!
+                                        intrinsicChildPosition! < functionNodeEnd
+                                            -> while {
+                                                frozenFunctionNodeIndices[intrinsicChildPosition!] => intrinsicChildSearch
+                                                prepared.package.nodes[sourceRange.astStart + intrinsicChildSearch] => intrinsicChild
+                                                intrinsicChild.parent == expressionAstIndex and intrinsicChild.kind == 16
+                                                    -> if {
+                                                        IntrinsicNameRequest { source: source, token: prepared.package.tokens[sourceRange.tokenStart + intrinsicChild.payloadToken] } -> intrinsicOpcode => expressionIntrinsicOpcode
+                                                        expressionIntrinsicOpcode <= -201
+                                                            and expressionIntrinsicOpcode >= -240
+                                                            and expressionIntrinsicOpcode == flowEmissionOpcode!
+                                                            -> if { expressionIntrinsicOpcode => expressionOpcode! }
+                                                    }
+                                                intrinsicChildPosition! + 1 => intrinsicChildPosition!
+                                            }
+                                        expressionOpcode! == -224 -> if {
+                                            -1 => dynTraitToken!
+                                            false => afterDynKeyword!
+                                            expression.firstToken => dynTokenSearch!
+                                            dynTokenSearch! < expression.firstToken + expression.tokenCount
+                                                -> while {
+                                                    prepared.package.tokens[sourceRange.tokenStart + dynTokenSearch!] => dynToken
+                                                    afterDynKeyword! and dynTraitToken! < 0 and dynToken.kind == grammar.tokenIdIdentifier()
+                                                        -> if {
+                                                            dynTokenSearch! => dynTraitToken!
+                                                        }
+                                                    dynToken.kind == grammar.tokenIdIdentifier() and dynToken.span.length == 3 and (source -> byte(dynToken.span.start)) == 100 and (source -> byte(dynToken.span.start + 1)) == 121 and (source -> byte(dynToken.span.start + 2)) == 110
+                                                        -> if {
+                                                            true => afterDynKeyword!
+                                                        }
+                                                    dynTokenSearch! + 1 => dynTokenSearch!
+                                                }
+                                            -1 => dynTraitSymbol!
+                                            0 => dynTraitSearch!
+                                            dynTraitSearch! < sourceRange.symbolCount -> while {
+                                                prepared.package.symbols[sourceRange.symbolStart + dynTraitSearch!] => dynTraitCandidate
+                                                dynTraitCandidate.kind == 5 and dynTraitToken! >= 0
+                                                    -> if {
+                                                        prepared.package.tokens[sourceRange.tokenStart + dynTraitCandidate.nameToken] => dynDeclaredName
+                                                        prepared.package.tokens[sourceRange.tokenStart + dynTraitToken!] => dynRequestedName
+                                                        dynDeclaredName.span.length == dynRequestedName.span.length => dynNameEqual!
+                                                        UIntSize(0) => dynNameByte!
+                                                        dynNameEqual! and dynNameByte! < dynDeclaredName.span.length
+                                                            -> while {
+                                                                (source -> byte(dynDeclaredName.span.start + dynNameByte!)) != (source -> byte(dynRequestedName.span.start + dynNameByte!))
+                                                                    -> if { false => dynNameEqual! }
+                                                                dynNameByte! + 1 => dynNameByte!
+                                                            }
+                                                        dynNameEqual! -> if { dynTraitSearch! => dynTraitSymbol! }
+                                                    }
+                                                dynTraitSearch! + 1 => dynTraitSearch!
+                                            }
+                                            dynTraitSymbol! >= 0 -> if {
+                                                9 => expressionKind!
+                                                16 => expressionTypeOrigin!
+                                                sourceIndex => expressionTypeModule!
+                                                dynTraitSymbol! => expressionTypeSymbol!
+                                                -1 => recursiveExpressionTypeId!
+                                            }
+                                        } else {
+                                            expressionOpcode! == -1 -> if {
+                                                -1 => dispatchTraitToken!
+                                                -1 => dispatchMethodToken!
+                                                prepared.directFlowTargetPathByAst[sourceRange.astStart + expressionAstIndex] => dispatchPathAst
+                                                0 => dispatchTokenEnd!
+                                                0 => dispatchTokenSearch!
+                                                dispatchPathAst >= 0 -> if {
+                                                    prepared.package.nodes[sourceRange.astStart + dispatchPathAst] => dispatchPath
+                                                    dispatchPath.firstToken => dispatchTokenSearch!
+                                                    dispatchPath.firstToken + dispatchPath.tokenCount => dispatchTokenEnd!
+                                                }
+                                                dispatchTokenSearch! < dispatchTokenEnd!
+                                                    -> while {
+                                                        prepared.package.tokens[sourceRange.tokenStart + dispatchTokenSearch!] => dispatchToken
+                                                        dispatchToken.kind == grammar.tokenIdIdentifier() and dispatchToken.span.start >= expression.start and dispatchToken.span.start < expression.start + expression.length
+                                                            -> if {
+                                                                dispatchMethodToken! >= 0 -> if { dispatchMethodToken! => dispatchTraitToken! }
+                                                                dispatchTokenSearch! => dispatchMethodToken!
+                                                            }
+                                                        dispatchTokenSearch! + 1 => dispatchTokenSearch!
+                                                    }
+                                                false => dispatchTraitFound!
+                                                -1 => dispatchTraitSource!
+                                                0 => dispatchTraitModuleSearch!
+                                                dispatchTraitModuleSearch! < (prepared.package.sources -> len)
+                                                    -> while {
+                                                        prepared.package.ranges[dispatchTraitModuleSearch!] => dispatchCandidateRange
+                                                        prepared.package.sources[dispatchTraitModuleSearch!] -> len => dispatchCandidateLength
+                                                        prepared.package.sources[dispatchTraitModuleSearch!] -> slice(UIntSize(0), dispatchCandidateLength) => dispatchCandidateSource
+                                                        0 => dispatchTraitSearch!
+                                                        dispatchTraitSearch! < dispatchCandidateRange.symbolCount
+                                                            -> while {
+                                                                prepared.package.symbols[dispatchCandidateRange.symbolStart + dispatchTraitSearch!] => dispatchTraitCandidate
+                                                                dispatchTraitCandidate.kind == 5 and dispatchTraitToken! >= 0
+                                                                    -> if {
+                                                                        prepared.package.tokens[dispatchCandidateRange.tokenStart + dispatchTraitCandidate.nameToken] => dispatchDeclaredName
+                                                                        prepared.package.tokens[sourceRange.tokenStart + dispatchTraitToken!] => dispatchRequestedName
+                                                                        dispatchDeclaredName.span.length == dispatchRequestedName.span.length => dispatchNameEqual!
+                                                                        UIntSize(0) => dispatchNameByte!
+                                                                        dispatchNameEqual! and dispatchNameByte! < dispatchDeclaredName.span.length
+                                                                            -> while {
+                                                                                (dispatchCandidateSource -> byte(dispatchDeclaredName.span.start + dispatchNameByte!)) != (source -> byte(dispatchRequestedName.span.start + dispatchNameByte!))
+                                                                                    -> if { false => dispatchNameEqual! }
+                                                                                dispatchNameByte! + 1 => dispatchNameByte!
+                                                                            }
+                                                                        dispatchNameEqual! -> if {
+                                                                            true => dispatchTraitFound!
+                                                                            dispatchTraitModuleSearch! => dispatchTraitSource!
+                                                                        }
+                                                                    }
+                                                                dispatchTraitSearch! + 1 => dispatchTraitSearch!
+                                                            }
+                                                        dispatchTraitModuleSearch! + 1 => dispatchTraitModuleSearch!
+                                                    }
+                                                dispatchTraitFound! and dispatchMethodToken! >= 0
+                                                    -> if {
+                                                        9 => expressionKind!
+                                                        dispatchTraitSource! == sourceIndex -> if {
+                                                            -225 => expressionOpcode!
+                                                            1 => expressionTypeOrigin!
+                                                            -1 => expressionTypeModule!
+                                                            2 => expressionTypeSymbol!
+                                                            -1 => recursiveExpressionTypeId!
+                                                            0 => dispatchIntTypeSearch!
+                                                            dispatchIntTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                                                                -> while {
+                                                                    frozenRecursiveSemanticTypes[dispatchIntTypeSearch!] => dispatchIntType
+                                                                    dispatchIntType.status == 0 and dispatchIntType.kind == 1 and dispatchIntType.origin == 1 and dispatchIntType.symbol == 2
+                                                                        -> if { dispatchIntTypeSearch! => recursiveExpressionTypeId! }
+                                                                    dispatchIntTypeSearch! + 1 => dispatchIntTypeSearch!
+                                                                }
+                                                        } else {
+                                                            -226 => expressionOpcode!
+                                                        }
+                                                    }
+                                            }
+                                        }
+                                        knownPushExpression! -> if { -204 => expressionOpcode! }
+                                        knownPutExpression! -> if { putOpcode! => expressionOpcode! }
+                                        knownCapacityExpression! and expressionKind! == 9
+                                            -> if { -236 => expressionOpcode! }
+                                        knownReserveExpression! -> if { -271 => expressionOpcode! }
+                                        knownBitSetExpression! -> if { bitSetOpcode! => expressionOpcode! }
+                                        knownDequeExpression! -> if { dequeOpcode! => expressionOpcode! }
+                                        knownHeapExpression! -> if { heapOpcode! => expressionOpcode! }
+                                        knownSetExpression! -> if { setOpcode! => expressionOpcode! }
+                                        insertIntrinsicSpelling! and not knownSetExpression!
+                                            -> if { -1 => expressionOpcode! }
+                                        knownMapTextExpression! -> if { -205 => expressionOpcode! }
+                                        knownMapPathExpression! -> if { -214 => expressionOpcode! }
+                                        knownBorrowTextExpression! -> if { -206 => expressionOpcode! }
+                                        knownMaterializeExpression! -> if { -229 => expressionOpcode! }
+                                    }
+                                expression.kind == 48 -> if {
+                                    expression.payloadToken >= 0 -> if {
+                                        prepared.package.tokens[sourceRange.tokenStart + expression.payloadToken] => streamSliceToken
+                                        IntrinsicNameRequest { source: source, token: streamSliceToken } -> streamSliceOpcode => expressionStreamSliceOpcode
+                                        expressionStreamSliceOpcode != -1
+                                            -> if { expressionStreamSliceOpcode => expressionOpcode! }
+                                    }
+                                    expression.firstToken => roleTokenIndex!
+                                    roleTokenIndex! < expression.firstToken + expression.tokenCount
+                                        -> while {
+                                            prepared.package.tokens[sourceRange.tokenStart + roleTokenIndex!] => roleToken
+                                            roleToken.kind == grammar.tokenIdIdentifier()
+                                                -> if {
+                                                    IntrinsicNameRequest { source: source, token: roleToken } -> intrinsicOpcode => roleOpcode
+                                                    roleOpcode == -207 or roleOpcode == -208 or roleOpcode == -209
+                                                        -> if { roleOpcode => expressionOpcode! }
+                                                }
+                                            roleTokenIndex! + 1 => roleTokenIndex!
+                                        }
+                                }
+                                expressionKind! == 5 -> if {
+                                    resolvedSymbolByAst[expressionAstIndex] => expressionSymbol!
+                                }
+                                expressionKind! == 29 -> if {
+                                    0 => patternBindingSymbolSearch!
+                                    patternBindingSymbolSearch! < sourceRange.symbolCount
+                                        -> while {
+                                            prepared.package.symbols[sourceRange.symbolStart + patternBindingSymbolSearch!] => patternBindingSymbol
+                                            patternBindingSymbol.kind == 35 and patternBindingSymbol.astNode == expressionAstIndex
+                                                -> if { patternBindingSymbolSearch! => expressionSymbol! }
+                                            patternBindingSymbolSearch! + 1 => patternBindingSymbolSearch!
+                                        }
+                                }
+                                false => targetlessBuiltinTypeApplication!
+                                -1 => builtinTypeApplicationSymbol!
+                                expression.payloadToken >= 0 -> if {
+                                    prepared.package.tokens[sourceRange.tokenStart + expression.payloadToken] => builtinTypeApplicationName
+                                    source -> expressionTypes.builtinTypeApplicationSymbol(builtinTypeApplicationName) => builtinTypeApplicationSymbol!
+                                }
+                                expressionTypeIndex >= 0 -> if {
+                                    inferred[expressionTypeIndex] -> isTargetlessBuiltinTypeApplication(builtinTypeApplicationSymbol!) => targetlessBuiltinTypeApplication!
+                                }
+                                prepared.callIndexByAst[sourceRange.astStart + expressionAstIndex] => resolvedCallIndex
+                                resolvedCallIndex >= 0 and expression.kind == 10
+                                    -> if {
+                                        prepared.calls[resolvedCallIndex] => directResolvedFlowCall
+                                        directResolvedFlowCall.sourceModule == sourceIndex
+                                            and directResolvedFlowCall.callAst == expressionAstIndex
+                                            and directResolvedFlowCall.status == 0
+                                            -> if { false => targetlessBuiltinTypeApplication! }
+                                    }
+                                prepared.qualifiedFunctionByParentAst[sourceRange.astStart + expressionAstIndex] => directQualifiedCallIndex
+                                directQualifiedCallIndex >= 0
+                                    and expression.kind == 10
+                                    -> if { false => targetlessBuiltinTypeApplication! }
+                                expressionKind! == 6 and not targetlessBuiltinTypeApplication!
+                                    -> if {
+                                        resolvedCallIndex >= 0 -> if {
+                                            prepared.calls[resolvedCallIndex] => resolvedCall
+                                            resolvedCall.sourceModule == sourceIndex and resolvedCall.callAst == expressionAstIndex and resolvedCall.status == 0
+                                                -> if {
+                                                    resolvedCall.functionSymbol => expressionSymbol!
+                                                    resolvedCall.targetSourceModule => expressionTargetModule!
+                                                    resolvedCall.functionSymbol >= 0 and resolvedCall.targetSourceModule >= 0
+                                                        -> if {
+                                                            prepared.package.ranges[resolvedCall.targetSourceModule] => expressionTargetRange
+                                                            prepared.package.symbols[expressionTargetRange.symbolStart + resolvedCall.functionSymbol] => expressionTargetFunction
+                                                            (expressionTargetFunction.flags / 8) % 2 == 1 and (expressionFlags! / 8) % 2 == 0
+                                                                -> if {
+                                                                    expressionFlags! + 8 => expressionFlags!
+                                                                }
+                                                        } else {
+                                                            resolvedCall.functionSymbol == -115 -> if {
+                                                                1 => expressionTypeOrigin!
+                                                                -1 => expressionTypeModule!
+                                                                2 => expressionTypeSymbol!
+                                                            }
+                                                        }
+                                                }
+                                        }
+                                        directQualifiedCallIndex >= 0
+                                            and expressionSymbol! == -1
+                                            and (expression.kind == 10 or expression.kind == 11)
+                                            -> if {
+                                                prepared.qualified[directQualifiedCallIndex] => directQualifiedCall
+                                                prepared.modules[directQualifiedCall.targetModule].sourceIndex => directQualifiedCallSource
+                                                prepared.package.ranges[directQualifiedCallSource] => directQualifiedCallRange
+                                                prepared.package.symbols[directQualifiedCallRange.symbolStart + directQualifiedCall.targetSymbol] => directQualifiedCallSymbol
+                                                directQualifiedCallSymbol.kind == 7 -> if {
+                                                    directQualifiedCall.targetSymbol => expressionSymbol!
+                                                    directQualifiedCallSource => expressionTargetModule!
+                                                    directQualifiedCallSource -> functionResultTypeId(directQualifiedCall.targetSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => directQualifiedCallResultTypeId
+                                                    directQualifiedCallResultTypeId >= 0 -> if {
+                                                        frozenRecursiveSemanticTypes[directQualifiedCallResultTypeId] => directQualifiedCallResultType
+                                                        directQualifiedCallResultTypeId => recursiveExpressionTypeId!
+                                                        directQualifiedCallResultType.origin => expressionTypeOrigin!
+                                                        directQualifiedCallResultType.module => expressionTypeModule!
+                                                        directQualifiedCallResultType.symbol => expressionTypeSymbol!
+                                                    }
+                                                }
+                                            }
+                                    }
+                                -1 => standardFlowVariantToken!
+                                expression.kind == 10 and recursiveExpressionTypeId! >= 0
+                                    and not (expressionKind! == 6
+                                    and expressionTargetModule! >= 0
+                                    and expressionSymbol! >= 0)
+                                    -> if {
+                                        frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => standardFlowEnumType
+                                        standardFlowEnumType.kind == 7
+                                            and standardFlowEnumType.origin == 4
+                                            and (standardFlowEnumType.symbol == 0 or standardFlowEnumType.symbol == 1)
+                                            -> if {
+                                                source -> standardGenericEnumFlowVariantToken(prepared.package.tokens, sourceRange.tokenStart, expression) => standardFlowVariantToken!
+                                            }
+                                    }
+                                standardFlowVariantToken! >= 0 -> if {
+                                    prepared.package.tokens[sourceRange.tokenStart + standardFlowVariantToken!] => standardFlowVariant
+                                    frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => standardFlowEnumType
+                                    sourceIndex -> nominalVariantTagForType(standardFlowEnumType, standardFlowVariant, prepared) => standardFlowVariantTag
+                                    standardFlowVariantTag >= 0 -> if {
+                                        26 => expressionKind!
+                                        standardFlowVariantTag => expressionOpcode!
+                                    }
+                                }
+                                -1 => expressionTypeKind!
+                                0 => expressionTypeFlags!
+                                recursiveExpressionTypeId! >= 0 -> if {
+                                    frozenRecursiveSemanticTypes[recursiveExpressionTypeId!].kind => expressionTypeKind!
+                                    recursiveTypeFlags[recursiveExpressionTypeId!] => expressionTypeFlags!
+                                }
+                                expressionKind! == 14 and expressionTypeKind! == 12
+                                    -> if {
+                                        frozenRecursiveSemanticTypes[recursiveExpressionTypeId!].length => expressionOpcode!
+                                    }
+                                expressionKind! == 16 and expressionTypeKind! == 13
+                                    -> if {
+                                        frozenRecursiveSemanticTypes[recursiveExpressionTypeId!].length => expressionOpcode!
+                                    }
+                                expressionOpcode! == -224 -> if { 1 => expressionTypeFlags! }
+                                expression.payloadToken => expressionPayloadToken!
+                                standardFlowVariantToken! >= 0 -> if { standardFlowVariantToken! => expressionPayloadToken! }
+                                contextualNullaryOption! -> if {
+                                    contextualOptionVariantToken! => expressionPayloadToken!
+                                }
+                                nodes -> push(TypedIrNode {
+                                    kind: expressionKind!
+                                    parent: returnIr
+                                    sourceModule: sourceIndex
+                                    astNode: expressionAstIndex
+                                    symbol: expressionSymbol!
+                                    targetModule: expressionTargetModule!
+                                    typeOrigin: expressionTypeOrigin!
+                                    typeModule: expressionTypeModule!
+                                    typeSymbol: expressionTypeSymbol!
+                                    typeId: recursiveExpressionTypeId!
+                                    typeKind: expressionTypeKind!
+                                    typeFlags: expressionTypeFlags!
+                                    payloadToken: expressionPayloadToken!
+                                    opcode: expressionOpcode!
+                                    operand0: -1
+                                    operand1: -1
+                                    nextOperand: -1
+                                    flags: expressionFlags!
+                                })
+                            }
+                        }
+                }
+        }
+        expressionNodePosition! + 1 => expressionNodePosition!
+    }
+}

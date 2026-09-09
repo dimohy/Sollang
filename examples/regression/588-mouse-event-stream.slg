@@ -1,17 +1,26 @@
 # Move or click once in the console. The affine EventStream is dropped
 # immediately after the first callback, restoring the previous console mode.
-import sys.event
+import sys.input.mouse
 
-passThrough events: move EventStream<MouseEvent> -> EventStream<MouseEvent> {
+passThrough events: move EventStream<mouse.Event> -> EventStream<mouse.Event> {
     events
 }
 
-main {
-    32 -> event.mouseEvents(event.EventOverflowPolicy.CoalesceMotion) => rawEvents
+run: -> Result<Unit, mouse.Error> uses Console {
+    32 -> mouse.source(mouse.OverflowPolicy.CoalesceMotion)? => source
+    source -> events => rawEvents
     rawEvents -> passThrough => events
 
     events -> each event {
         "mouse $(event.x),$(event.y)" -> println
         stop
+    }
+    Result<Unit, mouse.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(unit) { }
+        Err(error) { "mouse source capacity=$(error.invalidCapacity)" -> println }
     }
 }

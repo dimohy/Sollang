@@ -1,0 +1,65 @@
+# zstd 1.5.x independently emits FSE_Compressed_Mode for all sequence tables.
+import std.compress.zstd as zstd
+import std.crypto.sha256 as sha256
+
+matches bytes: [UInt8], expected: [UInt8] -> Bool {
+    (bytes -> len) == (expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (expected -> len) -> while {
+        bytes[index!] == expected[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+run: -> Result<Unit, zstd.Error> uses Console {
+    zstd.Limits {
+        maxEncodedBytes: 512
+        maxDecodedBytes: 4_096
+        maxWindowBytes: 2_097_152
+        maxFrames: 1
+        maxSkippableFrameBytes: 0
+    } -> codec(zstd.FrameOptions { checksum: false })? => codec
+
+    [UInt8(
+    40), 181, 47, 253, 0, 88, 101, 9, 0, 116, 6, 97, 98, 99, 100, 101,
+    102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
+    118, 119, 120, 121, 122, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
+    76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 48,
+    49, 50, 51, 52, 53, 54, 55, 56, 57, 95, 45, 107, 108, 109, 110, 102,
+    103, 104, 105, 117, 118, 119, 120, 50, 51, 52, 89, 90, 82, 83, 48, 49,
+    50, 97, 98, 99, 100, 51, 52, 53, 51, 52, 75, 76, 77, 78, 98, 99,
+    100, 101, 97, 168, 145, 135, 205, 253, 127, 3, 32, 66, 98, 24, 83, 243,
+    17, 100, 16, 197, 136, 98, 204, 41, 102, 213, 3, 1, 229, 32, 107, 8,
+    21, 137, 54, 83, 218, 61, 35, 204, 72, 84, 216, 79, 0, 195, 82, 228,
+    203, 185, 74, 224, 27, 240, 50, 4, 114, 244, 244, 51, 116, 215, 120, 132,
+    64, 20, 198, 125, 223, 7, 32, 115, 42, 194, 183, 177, 202, 66, 128, 70,
+    209, 120, 46, 167, 216, 25, 144, 34, 55, 10, 2, 210, 255, 4, 5, 142,
+    178, 35, 142, 20, 194, 164, 18, 129, 40, 74, 72, 34, 170, 30, 99, 228,
+    28, 100, 139, 94, 72, 25, 135, 169, 89, 61, 196, 228, 181, 143, 128, 252,
+    86, 70, 36, 15, 11, 155, 2, 64, 189, 161, 246, 61, 102, 241, 181, 125,
+    247, 67, 11, 54, 14, 243, 11, 251, 49, 34, 66, 45, 167, 10, 27, 137,
+    192, 200, 51, 69, 226, 246, 185, 114, 145, 51, 11, 167, 132, 151, 101, 249,
+    228, 137, 131, 108, 166, 143, 125, 147, 199, 133, 105, 128, 245, 106, 94, 140,
+    24, 96, 6, 161, 10
+    ] => encoded
+    codec -> decompress(encoded)? => output
+    sha256.create() => digestHasher!
+    digestHasher! -> update(output)
+    digestHasher! -> finish => digest
+    [UInt8(197), 28, 142, 184, 54, 43, 189, 7,
+    136, 39, 33, 224, 244, 237, 148, 1,
+    225, 22, 189, 215, 66, 72, 131, 226,
+    209, 86, 107, 31, 71, 13, 112, 60] => expectedDigest
+    digest -> matches(expectedDigest) => digestMatches
+    (output -> len) == 1_296 and digestMatches => valid
+    "zstd-compressed-fse=$valid" -> println
+    Result<Unit, zstd.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(error) { "zstd-compressed-fse-error=$(error.offset)" -> println }
+    }
+}

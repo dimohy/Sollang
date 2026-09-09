@@ -1,0 +1,33 @@
+enum Parsed {
+    Good(Int)
+    Bad(Int)
+}
+
+enum Output {
+    Ok(Int)
+    Err(Int)
+}
+
+# A branch whose nested match always returns does not contribute a value to the
+# if. The sole continuing branch determines the function-result expression.
+finish useParsed: Bool, parsed: Parsed -> Output {
+    useParsed -> if {
+        parsed -> when {
+            Good(value) { Output.Ok(value) -> return }
+            Bad(error) { Output.Err(error) -> return }
+        }
+    } else {
+        Output.Ok(9)
+    }
+}
+
+main {
+    true -> finish(Parsed.Good(7)) -> when {
+        Ok(value) { "terminating-then=$value" -> println }
+        Err(error) { "terminating-then-error=$error" -> println }
+    }
+    false -> finish(Parsed.Bad(3)) -> when {
+        Ok(value) { "continuing-else=$value" -> println }
+        Err(error) { "continuing-else-error=$error" -> println }
+    }
+}

@@ -1,0 +1,463 @@
+namespace std.net.http
+
+import std.net.http.error as errors
+import std.net.http as model
+import sys.file as file
+
+# Pure RFC 9110/9112 HTTP/1.x head parsing. This layer does not open sockets,
+# resolve names, follow redirects, decode bodies, or infer timeout policy.
+# Field lines remain ordered spans so duplicates such as Set-Cookie are never
+# collapsed into a dictionary.
+public enum Version {
+    Http10
+    Http11
+}
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxHeadBytes: Int
+    public maxStartLineBytes: Int
+    public maxFieldCount: Int
+    public maxFieldNameBytes: Int
+    public maxFieldValueBytes: Int
+}
+
+public struct Span {
+    public start: UIntSize
+    public length: UIntSize
+}
+
+public struct Field {
+    public name: Span
+    public value: Span
+}
+
+public struct Parser {
+    public limits: Limits
+}
+
+public struct RequestHead {
+    public source: file.SourceText
+    public method: Span
+    public target: Span
+    public version: Version
+    public fields: [Field; ~]
+    public bodyStart: UIntSize
+}
+
+public struct ResponseHead {
+    public source: file.SourceText
+    public version: Version
+    public status: Int
+    public reason: Span
+    public fields: [Field; ~]
+    public bodyStart: UIntSize
+}
+
+struct ParsedFields {
+    fields: [Field; ~]
+    bodyStart: UIntSize
+}
+
+errorLimits kind: errors.Kind, offset: UIntSize -> Result<Limits, Error> {
+    Result<Limits, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorParser kind: errors.Kind, offset: UIntSize -> Result<Parser, Error> {
+    Result<Parser, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorRequest kind: errors.Kind, offset: UIntSize -> Result<RequestHead, Error> {
+    Result<RequestHead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorResponse kind: errors.Kind, offset: UIntSize -> Result<ResponseHead, Error> {
+    Result<ResponseHead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorFields kind: errors.Kind, offset: UIntSize -> Result<ParsedFields, Error> {
+    Result<ParsedFields, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorOffset kind: errors.Kind, offset: UIntSize -> Result<UIntSize, Error> {
+    Result<UIntSize, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBool kind: errors.Kind, offset: UIntSize -> Result<Bool, Error> {
+    Result<Bool, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+span start: UIntSize, end: UIntSize -> Span => Span {
+    start: start
+    length: end - start
+}
+
+isTchar byte: UInt8 -> Bool {
+    (byte >= 48 and byte <= 57)
+        or (byte >= 65 and byte <= 90)
+        or (byte >= 97 and byte <= 122)
+        or byte == 33
+        or byte == 35
+        or byte == 36
+        or byte == 37
+        or byte == 38
+        or byte == 39
+        or byte == 42
+        or byte == 43
+        or byte == 45
+        or byte == 46
+        or byte == 94
+        or byte == 95
+        or byte == 96
+        or byte == 124
+        or byte == 126
+}
+
+isFieldValueByte byte: UInt8 -> Bool {
+    byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+}
+
+isReasonByte byte: UInt8 -> Bool => byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+
+asciiEqualAt source: ref file.SourceText, start: UIntSize, expected: Text -> Bool {
+    start + (expected -> len) <= (source -> len) -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < (expected -> len) -> while {
+        (source -> byte(start + index!)) == (expected -> byte(index!))
+            -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+asciiEqualIgnoreCase source: ref file.SourceText, value: Span, expected: Text -> Bool {
+    value.length == (expected -> len) -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < value.length -> while {
+        source -> byte(value.start + index!) => left!
+        expected -> byte(index!) => right!
+        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
+        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! == right! -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+listValueHasToken source: ref file.SourceText, value: Span, expected: Text -> Result<Bool, Error> {
+    value.length > 0 -> unless {
+        errorBool(errors.Kind.InvalidFieldValue, value.start) -> return
+    }
+    UIntSize(0) => index!
+    false => matched!
+    index! < value.length -> while {
+        index! < value.length
+            and ((source -> byte(value.start + index!)) == 32 or (source -> byte(value.start + index!)) == 9)
+            -> while { index! + 1 => index! }
+        index! < value.length -> unless {
+            errorBool(errors.Kind.InvalidFieldValue, value.start + index!) -> return
+        }
+        index! => tokenStart
+        index! < value.length and ((source -> byte(value.start + index!)) -> isTchar)
+            -> while { index! + 1 => index! }
+        index! > tokenStart -> unless {
+            errorBool(errors.Kind.InvalidFieldValue, value.start + index!) -> return
+        }
+        index! => tokenEnd
+        source -> asciiEqualIgnoreCase(Span {
+            start: value.start + tokenStart
+            length: tokenEnd - tokenStart
+        }, expected) -> if { true => matched! }
+        index! < value.length
+            and ((source -> byte(value.start + index!)) == 32 or (source -> byte(value.start + index!)) == 9)
+            -> while { index! + 1 => index! }
+        index! < value.length -> if {
+            (source -> byte(value.start + index!)) == 44 -> unless {
+                errorBool(errors.Kind.InvalidFieldValue, value.start + index!) -> return
+            }
+            index! + 1 => index!
+            index! < value.length -> unless {
+                errorBool(errors.Kind.InvalidFieldValue, value.start + index!) -> return
+            }
+        }
+    }
+    Result<Bool, Error>.Ok(matched!)
+}
+
+lineEnd source: ref file.SourceText, start: UIntSize, headEnd: UIntSize -> Result<UIntSize, Error> {
+    start => index!
+    index! < headEnd -> while {
+        source -> byte(index!) => byte
+        byte == 13 -> if {
+            index! + 1 < headEnd and (source -> byte(index! + 1)) == 10
+                -> if { Result<UIntSize, Error>.Ok(index!) -> return }
+            errorOffset(errors.Kind.BareCarriageReturn, index!) -> return
+        }
+        byte == 10 -> if { errorOffset(errors.Kind.BareLineFeed, index!) -> return }
+        index! + 1 => index!
+    }
+    headEnd < (source -> len) -> if {
+        errorOffset(errors.Kind.HeadLimitExceeded, headEnd)
+    } else {
+        errorOffset(errors.Kind.UnexpectedEnd, headEnd)
+    }
+}
+
+parseVersion source: ref file.SourceText, start: UIntSize, end: UIntSize -> Result<Version, Error> {
+    end - start == 8 -> unless {
+        Result<Version, Error>.Err(Error { kind: errors.Kind.InvalidVersion, offset: start }) -> return
+    }
+    source -> asciiEqualAt(start, "HTTP/1.0") -> if {
+        Result<Version, Error>.Ok(model.Version.Http10) -> return
+    }
+    source -> asciiEqualAt(start, "HTTP/1.1") -> if {
+        Result<Version, Error>.Ok(model.Version.Http11) -> return
+    }
+    Result<Version, Error>.Err(Error { kind: errors.Kind.InvalidVersion, offset: start })
+}
+
+parseFields source: ref file.SourceText, start: UIntSize, headEnd: UIntSize, limits: Limits -> Result<ParsedFields, Error> {
+    [Field; ~] => fields!
+    start => lineStart!
+    lineStart! < headEnd -> while {
+        source -> lineEnd(lineStart!, headEnd)? => end
+        end == lineStart! -> if {
+            Result<ParsedFields, Error>.Ok(ParsedFields {
+                fields: fields!
+                bodyStart: end + 2
+            }) -> return
+        }
+        (source -> byte(lineStart!)) == 32 or (source -> byte(lineStart!)) == 9
+            -> if { errorFields(errors.Kind.ObsoleteLineFolding, lineStart!) -> return }
+        (fields! -> len) < limits.maxFieldCount -> unless {
+            errorFields(errors.Kind.FieldCountLimitExceeded, lineStart!) -> return
+        }
+
+        lineStart! => colon!
+        colon! < end and (source -> byte(colon!)) != 58
+            -> while {
+                (source -> byte(colon!)) -> isTchar -> unless {
+                    errorFields(errors.Kind.InvalidFieldName, colon!) -> return
+                }
+                colon! + 1 => colon!
+            }
+        colon! < end and colon! > lineStart! -> unless {
+            errorFields(errors.Kind.InvalidFieldName, lineStart!) -> return
+        }
+        Int(colon! - lineStart!) <= limits.maxFieldNameBytes
+            -> unless {
+                errorFields(errors.Kind.FieldNameLimitExceeded, lineStart!) -> return
+            }
+
+        colon! + 1 => valueStart!
+        valueStart! < end
+            and ((source -> byte(valueStart!)) == 32 or (source -> byte(valueStart!)) == 9)
+            -> while { valueStart! + 1 => valueStart! }
+        end => valueEnd!
+        valueEnd! > valueStart!
+            and ((source -> byte(valueEnd! - 1)) == 32 or (source -> byte(valueEnd! - 1)) == 9)
+            -> while { valueEnd! - 1 => valueEnd! }
+        Int(valueEnd! - valueStart!) <= limits.maxFieldValueBytes
+            -> unless {
+                errorFields(errors.Kind.FieldValueLimitExceeded, valueStart!) -> return
+            }
+        valueStart! => valueIndex!
+        valueIndex! < valueEnd! -> while {
+            (source -> byte(valueIndex!)) -> isFieldValueByte
+                -> unless {
+                    errorFields(errors.Kind.InvalidFieldValue, valueIndex!) -> return
+                }
+            valueIndex! + 1 => valueIndex!
+        }
+        fields! -> push(Field {
+            name: span(lineStart!, colon!)
+            value: span(valueStart!, valueEnd!)
+        })
+        end + 2 => lineStart!
+    }
+    headEnd < (source -> len) -> if {
+        errorFields(errors.Kind.HeadLimitExceeded, headEnd)
+    } else {
+        errorFields(errors.Kind.UnexpectedEnd, headEnd)
+    }
+}
+
+public limits maxHeadBytes: Int, maxStartLineBytes: Int, maxFieldCount: Int, maxFieldNameBytes: Int, maxFieldValueBytes: Int -> Result<Limits, Error> {
+    maxHeadBytes >= 4
+        and maxStartLineBytes > 0
+        and maxStartLineBytes + 4 <= maxHeadBytes
+        and maxFieldCount >= 0
+        and maxFieldNameBytes > 0
+        and maxFieldValueBytes >= 0
+        -> unless { errorLimits(errors.Kind.InvalidLimit, 0) -> return }
+    Result<Limits, Error>.Ok(Limits {
+        maxHeadBytes: maxHeadBytes
+        maxStartLineBytes: maxStartLineBytes
+        maxFieldCount: maxFieldCount
+        maxFieldNameBytes: maxFieldNameBytes
+        maxFieldValueBytes: maxFieldValueBytes
+    })
+}
+
+public parser limits: Limits -> Result<Parser, Error> {
+    limits.maxHeadBytes >= 4
+        and limits.maxStartLineBytes > 0
+        and limits.maxStartLineBytes + 4 <= limits.maxHeadBytes
+        and limits.maxFieldCount >= 0
+        and limits.maxFieldNameBytes > 0
+        and limits.maxFieldValueBytes >= 0
+        -> unless { errorParser(errors.Kind.InvalidLimit, 0) -> return }
+    Result<Parser, Error>.Ok(Parser { limits: limits })
+}
+
+parseRequestSource parser: Parser, source: move file.SourceText -> Result<RequestHead, Error> {
+    source -> len => length
+    length < UIntSize(parser.limits.maxHeadBytes)
+        -> if { length } else { UIntSize(parser.limits.maxHeadBytes) } => headEnd
+    source -> lineEnd(0, headEnd)? => startLineEnd
+    Int(startLineEnd) <= parser.limits.maxStartLineBytes
+        -> unless {
+            errorRequest(errors.Kind.StartLineLimitExceeded, startLineEnd) -> return
+        }
+
+    UIntSize(0) => firstSpace!
+    firstSpace! < startLineEnd and (source -> byte(firstSpace!)) != 32
+        -> while {
+            (source -> byte(firstSpace!)) -> isTchar -> unless {
+                errorRequest(errors.Kind.InvalidMethod, firstSpace!) -> return
+            }
+            firstSpace! + 1 => firstSpace!
+        }
+    firstSpace! > 0 and firstSpace! < startLineEnd
+        -> unless {
+            errorRequest(errors.Kind.InvalidMethod, firstSpace!) -> return
+        }
+    firstSpace! + 1 => secondSpace!
+    secondSpace! < startLineEnd and (source -> byte(secondSpace!)) != 32
+        -> while {
+            source -> byte(secondSpace!) => byte
+            byte > 32 and byte != 127 -> unless {
+                errorRequest(errors.Kind.InvalidTarget, secondSpace!) -> return
+            }
+            secondSpace! + 1 => secondSpace!
+        }
+    secondSpace! > firstSpace! + 1 and secondSpace! < startLineEnd
+        -> unless {
+            errorRequest(errors.Kind.InvalidTarget, secondSpace!) -> return
+        }
+    secondSpace! + 1 < startLineEnd -> unless {
+        errorRequest(errors.Kind.InvalidVersion, secondSpace! + 1) -> return
+    }
+    secondSpace! + 1 => versionStart
+    source -> parseVersion(versionStart, startLineEnd)? => version
+    source -> parseFields(startLineEnd + 2, headEnd, parser.limits)? => parsed
+    Result<RequestHead, Error>.Ok(RequestHead {
+        source: source
+        method: span(0, firstSpace!)
+        target: span(firstSpace! + 1, secondSpace!)
+        version: version
+        fields: parsed.fields
+        bodyStart: parsed.bodyStart
+    })
+}
+
+parseResponseSource parser: Parser, source: move file.SourceText -> Result<ResponseHead, Error> {
+    source -> len => length
+    length < UIntSize(parser.limits.maxHeadBytes)
+        -> if { length } else { UIntSize(parser.limits.maxHeadBytes) } => headEnd
+    source -> lineEnd(0, headEnd)? => startLineEnd
+    Int(startLineEnd) <= parser.limits.maxStartLineBytes
+        -> unless {
+            errorResponse(errors.Kind.StartLineLimitExceeded, startLineEnd) -> return
+        }
+    startLineEnd >= 12 and (source -> byte(8)) == 32
+        -> unless {
+            errorResponse(errors.Kind.InvalidStatus, 0) -> return
+        }
+    source -> parseVersion(0, 8)? => version
+    source -> byte(9) => hundreds
+    source -> byte(10) => tens
+    source -> byte(11) => ones
+    hundreds >= 48 and hundreds <= 57
+        and tens >= 48 and tens <= 57
+        and ones >= 48 and ones <= 57
+        -> unless { errorResponse(errors.Kind.InvalidStatus, 9) -> return }
+    startLineEnd == 12 or (source -> byte(12)) == 32
+        -> unless {
+            errorResponse(errors.Kind.InvalidStatus, 12) -> return
+        }
+    startLineEnd == 12 -> if { UIntSize(12) } else { UIntSize(13) } => reasonStart
+    reasonStart => reasonIndex!
+    reasonIndex! < startLineEnd -> while {
+        (source -> byte(reasonIndex!)) -> isReasonByte
+            -> unless {
+                errorResponse(errors.Kind.InvalidReason, reasonIndex!) -> return
+            }
+        reasonIndex! + 1 => reasonIndex!
+    }
+    source -> parseFields(startLineEnd + 2, headEnd, parser.limits)? => parsed
+    Result<ResponseHead, Error>.Ok(ResponseHead {
+        source: source
+        version: version
+        status: Int(hundreds - 48) * 100 + Int(tens - 48) * 10 + Int(ones - 48)
+        reason: span(reasonStart, startLineEnd)
+        fields: parsed.fields
+        bodyStart: parsed.bodyStart
+    })
+}
+
+impl Parser {
+    public parseRequest: self, text: Text -> Result<RequestHead, Error> {
+        text -> file.borrowText => source
+        parseRequestSource(self, source)
+    }
+
+    public parseRequestBytes: self, bytes: ref [UInt8; ~] -> Result<RequestHead, Error> {
+        bytes -> file.borrowBytes => source
+        parseRequestSource(self, source)
+    }
+
+    # Parses one contiguous range without copying it. Returned spans are
+    # relative to the range, while the caller retains the complete byte owner.
+    public parseRequestBytesRange: self, bytes: ref [UInt8; ~], start: UIntSize, length: UIntSize -> Result<RequestHead, Error> {
+        UIntSize(bytes -> len) => available
+        start <= available and length <= available - start
+            -> unless { errorRequest(errors.Kind.InvalidBodyRange, start) -> return }
+        bytes -> file.borrowBytes => source
+        source -> slice(start, length) => text
+        text -> file.borrowText => rangedSource
+        parseRequestSource(self, rangedSource)
+    }
+
+    public parseResponse: self, text: Text -> Result<ResponseHead, Error> {
+        text -> file.borrowText => source
+        parseResponseSource(self, source)
+    }
+
+    public parseResponseBytes: self, bytes: ref [UInt8; ~] -> Result<ResponseHead, Error> {
+        bytes -> file.borrowBytes => source
+        parseResponseSource(self, source)
+    }
+}
+
+impl RequestHead {
+    public methodText: self -> Text => self.source -> slice(self.method.start, self.method.length)
+    public targetText: self -> Text => self.source -> slice(self.target.start, self.target.length)
+    public fieldCount: self -> Int => self.fields -> len
+    public fieldName: self, index: Int -> Text => self.source -> slice(self.fields[index].name.start, self.fields[index].name.length)
+    public fieldValue: self, index: Int -> Text => self.source -> slice(self.fields[index].value.start, self.fields[index].value.length)
+    public fieldNameIs: self, index: Int, name: Text -> Bool => self.source -> asciiEqualIgnoreCase(self.fields[index].name, name)
+}
+
+impl ResponseHead {
+    public reasonText: self -> Text => self.source -> slice(self.reason.start, self.reason.length)
+    public fieldCount: self -> Int => self.fields -> len
+    public fieldName: self, index: Int -> Text => self.source -> slice(self.fields[index].name.start, self.fields[index].name.length)
+    public fieldValue: self, index: Int -> Text => self.source -> slice(self.fields[index].value.start, self.fields[index].value.length)
+    public fieldNameIs: self, index: Int, name: Text -> Bool => self.source -> asciiEqualIgnoreCase(self.fields[index].name, name)
+    public fieldValueHasToken: self, index: Int, token: Text -> Result<Bool, Error> => self.source -> listValueHasToken(self.fields[index].value, token)
+}

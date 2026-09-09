@@ -1,0 +1,66 @@
+import std.net.quic as quic
+
+# One Endpoint must queue connection A traffic while Listener accepts B, then
+# keep both accepted Connections usable after the Listener is closed.
+routeTwoConnections: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificateA
+    identity -> certificate? => certificateB
+
+    quic.bind(quic.loopback(0))? => clientEndpointA!
+    quic.bind(quic.loopback(0))? => clientEndpointB!
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    serverEndpoint! -> listen(identity)? => listener!
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+
+    clientEndpointA! -> connect(serverAddress, certificateA)? => clientConnectionA!
+    listener! -> accept(serverEndpoint!)? => serverConnectionA!
+    clientConnectionA! -> openBi(clientEndpointA!)? => clientStreamA!
+    clientStreamA! -> send(clientConnectionA!, clientEndpointA!, [65])? => sentA
+
+    clientEndpointB! -> connect(serverAddress, certificateB)? => clientConnectionB!
+    listener! -> accept(serverEndpoint!)? => serverConnectionB!
+    listener! -> close(serverEndpoint!)
+
+    serverConnectionA! -> acceptBi(serverEndpoint!)? => serverStreamA!
+    serverStreamA! -> receive(serverConnectionA!, serverEndpoint!, 8)? => receivedA
+
+    clientConnectionB! -> openBi(clientEndpointB!)? => clientStreamB!
+    clientStreamB! -> send(clientConnectionB!, clientEndpointB!, [66])? => sentB
+    serverConnectionB! -> acceptBi(serverEndpoint!)? => serverStreamB!
+    serverStreamB! -> receive(serverConnectionB!, serverEndpoint!, 8)? => receivedB
+
+    serverStreamA! -> send(serverConnectionA!, serverEndpoint!, [97])? => replySentA
+    serverStreamB! -> send(serverConnectionB!, serverEndpoint!, [98])? => replySentB
+    clientStreamA! -> receive(clientConnectionA!, clientEndpointA!, 8)? => replyA
+    clientStreamB! -> receive(clientConnectionB!, clientEndpointB!, 8)? => replyB
+
+    sentA == 1
+        and sentB == 1
+        and replySentA == 1
+        and replySentB == 1
+        and (receivedA -> len) == 1
+        and receivedA[0] == 65
+        and (receivedB -> len) == 1
+        and receivedB[0] == 66
+        and (replyA -> len) == 1
+        and replyA[0] == 97
+        and (replyB -> len) == 1
+        and replyB[0] == 98 => routed
+
+    clientConnectionA! -> close(clientEndpointA!, 0)?
+    clientConnectionB! -> close(clientEndpointB!, 0)?
+    serverConnectionA! -> close(serverEndpoint!, 0)?
+    serverConnectionB! -> close(serverEndpoint!, 0)?
+    clientEndpointA! -> close
+    clientEndpointB! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(routed)
+}
+
+main {
+    routeTwoConnections() -> when {
+        Ok(routed) { "quic-two-routes=$routed" -> println }
+        Err(error) { "quic-two-routes-error=$(error.code)" -> println }
+    }
+}

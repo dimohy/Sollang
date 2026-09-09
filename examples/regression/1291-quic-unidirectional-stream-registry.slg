@@ -1,0 +1,44 @@
+import std.net.quic.error as errors
+import std.net.quic.stream_state as streams
+
+printPeer identity: Option<streams.StreamIdentity> -> Unit uses Console {
+    identity -> when {
+        Some(value) { "peer-uni=$(value.id)" -> println }
+        None { "peer-uni=none" -> println }
+    }
+}
+
+verify: -> Result<Unit, errors.Error> uses Console {
+    streams.initialStreamRegistry(false, 4, 4, 4, 0, 4, 4)? => closed!
+    closed! -> openUnidirectional -> when {
+        Ok(value) { "missing-uni-zero-limit" -> println }
+        Err(error) { "uni-zero=$(error.code)" -> println }
+    }
+    closed! -> onPeerUnidirectionalLimit(2)?
+    closed! -> openUnidirectional? => clientFirst
+    closed! -> openUnidirectional? => clientSecond
+    closed! -> openUnidirectional -> when {
+        Ok(value) { "missing-uni-client-limit" -> println }
+        Err(error) { "uni-client=$(clientFirst.id),$(clientSecond.id),$(error.code)" -> println }
+    }
+
+    streams.initialStreamRegistry(true, 4, 4, 4, 2, 4, 4)? => server!
+    server! -> openUnidirectional? => serverFirst
+    server! -> openUnidirectional? => serverSecond
+    "uni-server=$(serverFirst.id),$(serverSecond.id)" -> println
+
+    server! -> discoverPeerUnidirectional(10)?
+    server! -> discoverPeerUnidirectional(6)?
+    server! -> nextPeerUnidirectional -> printPeer
+    server! -> nextPeerUnidirectional -> printPeer
+    server! -> nextPeerUnidirectional -> printPeer
+    server! -> nextPeerUnidirectional -> printPeer
+    Result<Unit, errors.Error>.Ok
+}
+
+main {
+    verify() -> when {
+        Ok(done) {}
+        Err(error) { "unexpected=$(error.code)" -> println }
+    }
+}

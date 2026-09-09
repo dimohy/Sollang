@@ -1,0 +1,32 @@
+# Replacing a field without extracting it first must release its previous value.
+struct Table {
+    data: [Int; ~]
+}
+
+enum Slot {
+    Empty
+    Built(Table)
+}
+
+struct Reader {
+    table: Slot
+}
+
+replace reader: mut Reader -> Unit {
+    Slot.Built(Table { data: [43] }) => reader.table
+}
+
+inspect reader: Reader -> Int {
+    reader.table -> when {
+        Empty { 0 }
+        Built(value) { value.data[0] }
+    }
+}
+
+main {
+    Reader {
+        table: Slot.Built(Table { data: [42] })
+    } => reader!
+    reader! -> replace
+    reader! -> inspect -> println
+}

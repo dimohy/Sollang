@@ -11,43 +11,43 @@ import sys.path as path
 # Interface strings remain spans into sources[interfaceIndex]; only the path
 # required by the operating system is materialized.
 public struct LibraryBinding {
-    sourceModule: Int
-    astNode: Int
-    aliasToken: Int
-    interfaceIndex: Int
-    status: Int
-    errorOffset: UIntSize
+    public sourceModule: Int
+    public astNode: Int
+    public aliasToken: Int
+    public interfaceIndex: Int
+    public status: Int
+    public errorOffset: UIntSize
 }
 
 public struct LibraryCatalog {
-    diagnosticCount: Int
-    bindings: [LibraryBinding; ~]
-    sources: [file.SourceText; ~]
-    interfaces: [interfaces.LibraryInterface; ~]
-    runtimeLibraries: [path.Path; ~]
+    public diagnosticCount: Int
+    public bindings: [LibraryBinding; ~]
+    public sources: [file.SourceText; ~]
+    public interfaces: [interfaces.LibraryInterface; ~]
+    public runtimeLibraries: [path.Path; ~]
 }
 
 public struct LibraryFunctionResolution {
-    sourceModule: Int
-    pathAst: Int
-    bindingIndex: Int
-    exportIndex: Int
-    status: Int
+    public sourceModule: Int
+    public pathAst: Int
+    public bindingIndex: Int
+    public exportIndex: Int
+    public status: Int
 }
 
 public struct LibraryCallDiagnostic {
-    sourceModule: Int
-    pathAst: Int
+    public sourceModule: Int
+    public pathAst: Int
     # 1 projection missing, 2 argument count, 3 argument type.
-    code: Int
-    expected: Int
-    actual: Int
+    public code: Int
+    public expected: Int
+    public actual: Int
 }
 
 public struct LibraryAnalysis {
-    package: analysis.PackageAnalysis
-    catalog: LibraryCatalog
-    resolutions: [LibraryFunctionResolution; ~]
+    public package: analysis.PackageAnalysis
+    public catalog: LibraryCatalog
+    public resolutions: [LibraryFunctionResolution; ~]
 }
 
 struct ManifestPath {
@@ -94,12 +94,12 @@ manifestPath sourcePath: Text, source: Text, token: syntax.SyntaxToken, target: 
     valid! -> if {
         (source -> byte(token.span.start)) != 34 -> if { false => valid! }
         (source -> byte(literalEnd)) != 34 -> if { false => valid! }
-        (token.span.length >= 6
+        token.span.length >= 6
             and (source -> byte(token.span.start + 1)) == 34
-            and (source -> byte(token.span.start + 2)) == 34)
-                -> if {
-            false => valid!
-        }
+            and (source -> byte(token.span.start + 2)) == 34
+            -> if {
+                false => valid!
+            }
     }
     not valid! -> if { 1 => status! }
 
@@ -130,8 +130,8 @@ manifestPath sourcePath: Text, source: Text, token: syntax.SyntaxToken, target: 
             sourceIndex! < (sourcePath -> len) -> while {
                 (sourcePath -> byte(sourceIndex!)) -> isSeparator(style)
                     -> if {
-                    sourceIndex! + 1 => directoryEnd!
-                }
+                        sourceIndex! + 1 => directoryEnd!
+                    }
                 sourceIndex! + 1 => sourceIndex!
             }
             UIntSize(0) => directoryIndex!
@@ -142,62 +142,62 @@ manifestPath sourcePath: Text, source: Text, token: syntax.SyntaxToken, target: 
         }
 
         literalStart => literalIndex!
-        (status! == 0 and literalIndex! < literalEnd)
+        status! == 0 and literalIndex! < literalEnd
             -> while {
-            source -> byte(literalIndex!) => current
-            current == 92 -> if {
-                literalIndex! + 1 => literalIndex!
-                literalIndex! < literalEnd -> if {
-                    source -> byte(literalIndex!) => escaped
-                    escaped == 92 -> if {
-                        bytes! -> push(92)
-                    } else {
-                        escaped == 34 -> if {
-                            bytes! -> push(34)
+                source -> byte(literalIndex!) => current
+                current == 92 -> if {
+                    literalIndex! + 1 => literalIndex!
+                    literalIndex! < literalEnd -> if {
+                        source -> byte(literalIndex!) => escaped
+                        escaped == 92 -> if {
+                            bytes! -> push(92)
                         } else {
-                            escaped == 47 -> if {
-                                bytes! -> push(47)
+                            escaped == 34 -> if {
+                                bytes! -> push(34)
                             } else {
-                                escaped == 117 -> if {
-                                    (literalIndex! + 4 < literalEnd) -> if {
-                                        UInt8(0) => decoded!
-                                        UIntSize(0) => hexIndex!
-                                        (status! == 0 and hexIndex! < 4) -> while {
-                                            source -> byte(literalIndex! + 1 + hexIndex!) => digit
-                                            ((digit >= 48 and digit <= 57)
-                                                or (digit >= 65 and digit <= 70)
-                                                or (digit >= 97 and digit <= 102)) -> if {
-                                                decoded! * 16 + (digit -> hexValue) => decoded!
-                                            } else {
-                                                2 => status!
+                                escaped == 47 -> if {
+                                    bytes! -> push(47)
+                                } else {
+                                    escaped == 117 -> if {
+                                        literalIndex! + 4 < literalEnd -> if {
+                                            UInt8(0) => decoded!
+                                            UIntSize(0) => hexIndex!
+                                            status! == 0 and hexIndex! < 4 -> while {
+                                                source -> byte(literalIndex! + 1 + hexIndex!) => digit
+                                                (digit >= 48 and digit <= 57)
+                                                    or (digit >= 65 and digit <= 70)
+                                                    or (digit >= 97 and digit <= 102) -> if {
+                                                        decoded! * 16 + (digit -> hexValue) => decoded!
+                                                    } else {
+                                                        2 => status!
+                                                    }
+                                                hexIndex! + 1 => hexIndex!
                                             }
-                                            hexIndex! + 1 => hexIndex!
-                                        }
-                                        status! == 0 -> if {
-                                            decoded! >= 32 -> if {
-                                                bytes! -> push(decoded!)
-                                                literalIndex! + 4 => literalIndex!
-                                            } else {
-                                                2 => status!
+                                            status! == 0 -> if {
+                                                decoded! >= 32 -> if {
+                                                    bytes! -> push(decoded!)
+                                                    literalIndex! + 4 => literalIndex!
+                                                } else {
+                                                    2 => status!
+                                                }
                                             }
+                                        } else {
+                                            2 => status!
                                         }
                                     } else {
                                         2 => status!
                                     }
-                                } else {
-                                    2 => status!
                                 }
                             }
                         }
+                    } else {
+                        2 => status!
                     }
                 } else {
-                    2 => status!
+                    current < 32 -> if { 2 => status! } else { bytes! -> push(current) }
                 }
-            } else {
-                current < 32 -> if { 2 => status! } else { bytes! -> push(current) }
+                literalIndex! + 1 => literalIndex!
             }
-            literalIndex! + 1 => literalIndex!
-        }
     }
 
     status! == 0 -> if {
@@ -326,10 +326,10 @@ runtimeLibraryPath manifestPath: path.Path, manifest: Text, libraryFile: interfa
     UIntSize(0) => pathIndex!
     pathIndex! < UIntSize(manifestPath.bytes -> len)
         -> while {
-        manifestPath.bytes[Int(pathIndex!)] => current
-        (current == 47 or current == 92) -> if { Int(pathIndex! + 1) => directoryLength! }
-        pathIndex! + 1 => pathIndex!
-    }
+            manifestPath.bytes[Int(pathIndex!)] => current
+            current == 47 or current == 92 -> if { Int(pathIndex! + 1) => directoryLength! }
+            pathIndex! + 1 => pathIndex!
+        }
     0 => directoryIndex!
     directoryIndex! < directoryLength! -> while {
         bytes! -> push(manifestPath.bytes[directoryIndex!])
@@ -347,11 +347,11 @@ runtimeLibraryPath manifestPath: path.Path, manifest: Text, libraryFile: interfa
 sameTokenText source: Text, left: syntax.SyntaxToken, right: syntax.SyntaxToken -> Bool {
     left.span.length == right.span.length => same!
     UIntSize(0) => index!
-    (same! and index! < left.span.length) -> while {
+    same! and index! < left.span.length -> while {
         (source -> byte(left.span.start + index!)) != (source -> byte(right.span.start + index!))
             -> if {
-            false => same!
-        }
+                false => same!
+            }
         index! + 1 => index!
     }
     same!
@@ -360,11 +360,11 @@ sameTokenText source: Text, left: syntax.SyntaxToken, right: syntax.SyntaxToken 
 tokenEqualsInterfaceSpan source: Text, token: syntax.SyntaxToken, interfaceSource: Text, span: interfaces.MetadataSpan -> Bool {
     token.span.length == span.length => same!
     UIntSize(0) => index!
-    (same! and index! < span.length) -> while {
+    same! and index! < span.length -> while {
         (source -> byte(token.span.start + index!)) != (interfaceSource -> byte(span.start + index!))
             -> if {
-            false => same!
-        }
+                false => same!
+            }
         index! + 1 => index!
     }
     same!
@@ -392,48 +392,48 @@ public resolveQualified package: ref analysis.PackageAnalysis, catalog: ref Libr
                 tokenIndex! < tokenEnd -> while {
                     package.tokens[range.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
                         -> if {
-                        firstIdentifier! < 0 -> if { tokenIndex! => firstIdentifier! }
-                        tokenIndex! => lastIdentifier!
-                    }
+                            firstIdentifier! < 0 -> if { tokenIndex! => firstIdentifier! }
+                            tokenIndex! => lastIdentifier!
+                        }
                     tokenIndex! + 1 => tokenIndex!
                 }
-                (firstIdentifier! >= 0 and lastIdentifier! != firstIdentifier!)
+                firstIdentifier! >= 0 and lastIdentifier! != firstIdentifier!
                     -> if {
-                    package.tokens[range.tokenStart + firstIdentifier!] => aliasReference
-                    package.tokens[range.tokenStart + lastIdentifier!] => memberReference
-                    0 => bindingIndex!
-                    bindingIndex! < (catalog.bindings -> len) -> while {
-                        catalog.bindings[bindingIndex!] => binding
-                        (binding.status == 0 and binding.sourceModule == sourceIndex!)
-                            -> if {
-                            package.tokens[range.tokenStart + binding.aliasToken] => aliasDeclaration
-                            source -> sameTokenText(aliasReference, aliasDeclaration)
+                        package.tokens[range.tokenStart + firstIdentifier!] => aliasReference
+                        package.tokens[range.tokenStart + lastIdentifier!] => memberReference
+                        0 => bindingIndex!
+                        bindingIndex! < (catalog.bindings -> len) -> while {
+                            catalog.bindings[bindingIndex!] => binding
+                            binding.status == 0 and binding.sourceModule == sourceIndex!
                                 -> if {
-                                catalog.sources[binding.interfaceIndex] -> len => interfaceLength
-                                catalog.sources[binding.interfaceIndex] -> slice(UIntSize(0), interfaceLength) => interfaceSource
-                                -1 => matchedExport!
-                                catalog.interfaces[binding.interfaceIndex].exports -> len => exportCount
-                                0 => exportIndex!
-                                exportIndex! < exportCount -> while {
-                                    catalog.interfaces[binding.interfaceIndex].exports[exportIndex!].name => exportName
-                                    source -> tokenEqualsInterfaceSpan(memberReference, interfaceSource, exportName)
+                                    package.tokens[range.tokenStart + binding.aliasToken] => aliasDeclaration
+                                    source -> sameTokenText(aliasReference, aliasDeclaration)
                                         -> if {
-                                        exportIndex! => matchedExport!
-                                    }
-                                    exportIndex! + 1 => exportIndex!
+                                            catalog.sources[binding.interfaceIndex] -> len => interfaceLength
+                                            catalog.sources[binding.interfaceIndex] -> slice(UIntSize(0), interfaceLength) => interfaceSource
+                                            -1 => matchedExport!
+                                            catalog.interfaces[binding.interfaceIndex].exports -> len => exportCount
+                                            0 => exportIndex!
+                                            exportIndex! < exportCount -> while {
+                                                catalog.interfaces[binding.interfaceIndex].exports[exportIndex!].name => exportName
+                                                source -> tokenEqualsInterfaceSpan(memberReference, interfaceSource, exportName)
+                                                    -> if {
+                                                        exportIndex! => matchedExport!
+                                                    }
+                                                exportIndex! + 1 => exportIndex!
+                                            }
+                                            results! -> push(LibraryFunctionResolution {
+                                                sourceModule: sourceIndex!
+                                                pathAst: astIndex!
+                                                bindingIndex: bindingIndex!
+                                                exportIndex: matchedExport!
+                                                status: matchedExport! >= 0 -> if { 0 } else { 2 }
+                                            })
+                                        }
                                 }
-                                results! -> push(LibraryFunctionResolution {
-                                    sourceModule: sourceIndex!
-                                    pathAst: astIndex!
-                                    bindingIndex: bindingIndex!
-                                    exportIndex: matchedExport!
-                                    status: matchedExport! >= 0 -> if { 0 } else { 2 }
-                                })
-                            }
+                            bindingIndex! + 1 => bindingIndex!
                         }
-                        bindingIndex! + 1 => bindingIndex!
                     }
-                }
             }
             astIndex! + 1 => astIndex!
         }
@@ -467,53 +467,53 @@ public load package: ref analysis.PackageAnalysis, sourcePaths: [Text; ~], targe
                     errorOffset: 0
                 } => binding!
                 sourceIndex! < (sourcePaths -> len) -> if {
-                    (node.secondaryToken >= 0 and node.secondaryToken < range.tokenCount)
+                    node.secondaryToken >= 0 and node.secondaryToken < range.tokenCount
                         -> if {
-                        package.tokens[range.tokenStart + node.secondaryToken] => libraryToken
-                        sourcePaths[sourceIndex!] -> manifestPath(source, libraryToken, target, style) => resolved
-                        resolved.status == 0 -> if {
-                            resolved.value -> file.mapPath => manifestSource
-                            manifestSource -> interfaces.parseSource => document
-                            documents! -> len => interfaceIndex
-                            interfaceIndex => binding!.interfaceIndex
-                            manifestSource -> len => manifestLength
-                            manifestSource -> slice(UIntSize(0), manifestLength) => manifestText
-                            resolved.value -> runtimeLibraryPath(manifestText, document.libraryFile) => runtimeLibrary
-                            document.status == 0 -> if {
-                                manifestText -> interfaces.spanEquals(document.target, target)
-                                    -> if {
-                                    0 => exportIndex!
-                                    (binding!.status == 0 and exportIndex! < (document.exports -> len))
-                                        -> while {
-                                        document.exports[exportIndex!] => exported
-                                        manifestText -> abiTypeCode(exported.resultType) => resultTypeCode
-                                        resultTypeCode < 0 -> if { 7 => binding!.status }
-                                        0 => parameterOrdinal!
-                                        (binding!.status == 0 and parameterOrdinal! < exported.parameterCount)
-                                            -> while {
-                                            document.parameters[exported.parameterStart + parameterOrdinal!].typeName => parameterType
-                                            manifestText -> abiTypeCode(parameterType) => parameterTypeCode
-                                            parameterTypeCode < 0 -> if { 7 => binding!.status }
-                                            parameterOrdinal! + 1 => parameterOrdinal!
+                            package.tokens[range.tokenStart + node.secondaryToken] => libraryToken
+                            sourcePaths[sourceIndex!] -> manifestPath(source, libraryToken, target, style) => resolved
+                            resolved.status == 0 -> if {
+                                resolved.value -> file.mapPath => manifestSource
+                                manifestSource -> interfaces.parseSource => document
+                                documents! -> len => interfaceIndex
+                                interfaceIndex => binding!.interfaceIndex
+                                manifestSource -> len => manifestLength
+                                manifestSource -> slice(UIntSize(0), manifestLength) => manifestText
+                                resolved.value -> runtimeLibraryPath(manifestText, document.libraryFile) => runtimeLibrary
+                                document.status == 0 -> if {
+                                    manifestText -> interfaces.spanEquals(document.target, target)
+                                        -> if {
+                                            0 => exportIndex!
+                                            binding!.status == 0 and exportIndex! < (document.exports -> len)
+                                                -> while {
+                                                    document.exports[exportIndex!] => exported
+                                                    manifestText -> abiTypeCode(exported.resultType) => resultTypeCode
+                                                    resultTypeCode < 0 -> if { 7 => binding!.status }
+                                                    0 => parameterOrdinal!
+                                                    binding!.status == 0 and parameterOrdinal! < exported.parameterCount
+                                                        -> while {
+                                                            document.parameters[exported.parameterStart + parameterOrdinal!].typeName => parameterType
+                                                            manifestText -> abiTypeCode(parameterType) => parameterTypeCode
+                                                            parameterTypeCode < 0 -> if { 7 => binding!.status }
+                                                            parameterOrdinal! + 1 => parameterOrdinal!
+                                                        }
+                                                    exportIndex! + 1 => exportIndex!
+                                                }
+                                        } else {
+                                            4 => binding!.status
                                         }
-                                        exportIndex! + 1 => exportIndex!
-                                    }
                                 } else {
-                                    4 => binding!.status
+                                    document.status + 100 => binding!.status
+                                    document.errorOffset => binding!.errorOffset
                                 }
+                                manifestSources! -> push(manifestSource)
+                                documents! -> push(document)
+                                runtimeLibraries! -> push(runtimeLibrary)
                             } else {
-                                document.status + 100 => binding!.status
-                                document.errorOffset => binding!.errorOffset
+                                resolved.status => binding!.status
                             }
-                            manifestSources! -> push(manifestSource)
-                            documents! -> push(document)
-                            runtimeLibraries! -> push(runtimeLibrary)
                         } else {
-                            resolved.status => binding!.status
+                            5 => binding!.status
                         }
-                    } else {
-                        5 => binding!.status
-                    }
                 } else {
                     6 => binding!.status
                 }

@@ -1,0 +1,35 @@
+namespace sys.process
+
+# Compiler/runtime ABI bindings for the public sys.process model. The logical
+# module identity remains sys.process while the physical runtime layer is kept
+# separate from the user-facing type definitions.
+public arguments: -> Arguments uses Process = intrinsic
+
+public environment name: Text -> Option<Text> uses Environment = intrinsic
+
+impl Command {
+    public spawn: move self -> Result<Child, Text> uses Process = intrinsic
+
+    public run: move self -> Result<Int, Text> uses Process = intrinsic
+
+    public runToFile: move self, output: Text -> Result<Int, Text> uses Process, File = intrinsic
+
+    # Overrides stdout and stderr with private pipes, drains both concurrently,
+    # and retains at most the explicitly requested bytes for each stream.
+    public collect: move self, limits: CaptureLimits -> Result<CapturedOutput, Text> uses Process = intrinsic
+}
+
+impl Child {
+    # Pure domain projection. The compiler lowers this directly from the Child
+    # aggregate; it is not an operating-system call or wrapper frame.
+    public id: self -> ProcessId = intrinsic
+
+    public wait: move self -> Result<ExitStatus, Text> uses Process = intrinsic
+}
+
+impl ProcessId {
+    # Transparent numeric observation of the domain value.
+    public asUInt64: self -> UInt64 = intrinsic
+}
+
+public exit code: Int -> Unit uses Process = intrinsic

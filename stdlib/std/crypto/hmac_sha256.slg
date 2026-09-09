@@ -1,0 +1,63 @@
+namespace std.crypto.hmac_sha256
+
+import std.crypto.bits as bits
+import std.crypto.sha256 as sha256
+
+normalizedKey key: [UInt8] -> [UInt8; 64] {
+    [UInt8(0); 64] => normalized!
+    (key -> len) > 64 -> if {
+        sha256.create() => keyHasher!
+        keyHasher! -> update(key)
+        keyHasher! -> finish => hashed
+        0 => hashedIndex!
+        hashedIndex! < (hashed -> len) -> while {
+            hashed[hashedIndex!] => normalized![hashedIndex!]
+            hashedIndex! + 1 => hashedIndex!
+        }
+    } else {
+        0 => keyIndex!
+        keyIndex! < (key -> len) -> while {
+            key[keyIndex!] => normalized![keyIndex!]
+            keyIndex! + 1 => keyIndex!
+        }
+    }
+    normalized!
+}
+
+public struct Hasher {
+    inner: sha256.Hasher
+    outer: sha256.Hasher
+}
+
+public create key: [UInt8] -> Hasher {
+    key -> normalizedKey => pad!
+    0 => index!
+    index! < 64 -> while {
+        UInt8(bits.xor(UInt32(pad![index!]), 54)) => pad![index!]
+        index! + 1 => index!
+    }
+    sha256.create() => inner!
+    inner! -> update(pad!)
+    0 => outerIndex!
+    outerIndex! < 64 -> while {
+        bits.xor(UInt32(pad![outerIndex!]), 54) => keyByte
+        UInt8(bits.xor(keyByte, 92)) => pad![outerIndex!]
+        outerIndex! + 1 => outerIndex!
+    }
+    sha256.create() => outer!
+    outer! -> update(pad!)
+    Hasher { inner: inner!, outer: outer! }
+}
+
+impl Hasher {
+    public update: mut self, source: [UInt8] -> Unit {
+        self.inner -> update(source)
+    }
+
+    public finish: move self -> [UInt8; 32] {
+        self.inner -> finish => innerHash
+        self.outer => outer!
+        outer! -> update(innerHash)
+        outer! -> finish
+    }
+}

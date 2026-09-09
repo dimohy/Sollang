@@ -1,0 +1,55 @@
+import std.uuid
+import std.time as time
+
+# Pure Codec generation accepts caller-owned entropy, while the effectful
+# Generator remains the direct OS clock/random fast path.
+zeros count: Int -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < count -> while {
+        bytes! -> push(0)
+        index! + 1 => index!
+    }
+    bytes!
+}
+
+variantText value: uuid.Variant -> Text => value -> when {
+    Rfc9562 { "rfc9562" }
+    Ncs { "ncs" }
+    Microsoft { "microsoft" }
+    Future { "future" }
+}
+
+main {
+    uuid.codec() => codec
+    16 -> zeros => v4Entropy
+    codec -> v4(v4Entropy) -> when {
+        Ok(value) {
+            "pure-v4=$(value -> version),$(value -> variant -> variantText)" -> println
+        }
+        Err(_) { "pure-v4=error" -> println }
+    }
+
+    1_700_000_000_123 -> time.manualWallClock -> now => instant
+    10 -> zeros => v7Entropy
+    codec -> v7(instant, v7Entropy) -> when {
+        Ok(value) {
+            value -> unixTimestampMilliseconds -> when {
+                Some(timestamp) { "pure-v7=$timestamp" -> println }
+                None { "pure-v7=no-timestamp" -> println }
+            }
+        }
+        Err(_) { "pure-v7=error" -> println }
+    }
+
+    15 -> zeros => shortV4
+    codec -> v4(shortV4) -> when {
+        Ok(_) { "v4-length=accepted" -> println }
+        Err(error) { "v4-length=rejected@$(error -> errorOffset)" -> println }
+    }
+    9 -> zeros => shortV7
+    codec -> v7(instant, shortV7) -> when {
+        Ok(_) { "v7-length=accepted" -> println }
+        Err(error) { "v7-length=rejected@$(error -> errorOffset)" -> println }
+    }
+}

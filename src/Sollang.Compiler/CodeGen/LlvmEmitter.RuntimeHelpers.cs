@@ -10,16 +10,16 @@ internal sealed partial class LlvmEmitter
 {
     private void EmitMouseEventStreamAdapter()
     {
-        if (!_program.Types.TryResolve("sys.event.MouseEvent", out var mouseEventType)
+        if (!_program.Types.TryResolve("sys.input.mouse.Event", out var mouseEventType)
             || !_program.Types.IsStruct(mouseEventType))
         {
-            throw new SollangException("sys.event.mouseEvents requires sys.event.MouseEvent");
+            throw new SollangException("sys.input.mouse.Source.events requires sys.input.mouse.Event");
         }
         var definition = _program.Types.GetStruct(mouseEventType);
         if (definition.Fields.Count != 5
             || !_program.Types.IsEnum(definition.Fields[4].Type))
         {
-            throw new SollangException("sys.event.MouseEvent has an incompatible runtime layout");
+            throw new SollangException("sys.input.mouse.Event has an incompatible runtime layout");
         }
         var structType = LlvmStructType(mouseEventType);
         var enumType = LlvmEnumType(definition.Fields[4].Type);

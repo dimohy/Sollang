@@ -1,5 +1,5 @@
 import sys.io
-import sys.quic as quic
+import std.net.quic as quic
 
 struct Roundtrip {
     streamCount: Int
@@ -12,43 +12,58 @@ struct Roundtrip {
 ping: -> [UInt8] => [112, 105, 110, 103]
 
 runQuic version: UInt32 -> Result<Roundtrip, quic.QuicError> uses Network, Random, Clock {
-    quic.generateIdentity()? => identityA
     quic.generateIdentity()? => identityB
-    quic.certificate(identityA)? => certificateA
-    quic.certificate(identityB)? => certificateB
+    identityB -> certificate? => certificateB
 
-    quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 0 } => localA
-    quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 0 } => localB
-    quic.bind(localA, identityA, certificateB)? => endpointA
-    quic.bind(localB, identityB, certificateA)? => endpointB
+    quic.loopback(0) => localA
+    quic.loopback(0) => localB
+    quic.bind(localA)? => endpointA!
+    quic.bind(localB)? => endpointB!
+    endpointB! -> listen(identityB)? => listener!
 
-    quic.Ipv4Endpoint {
-        a: 127
-        b: 0
-        c: 0
-        d: 1
-        port: quic.localPort(endpointB)
-    } => peerB
-    quic.connectVersion(endpointA, peerB, version)? => connectionA!
-    quic.accept(endpointB)? => connectionB!
+    quic.loopback(endpointB! -> localPort) => peerB
+    endpointA! -> connectVersion(peerB, certificateB, version)? => connectionA!
+    listener! -> accept(endpointB!)? => connectionB!
+    listener! -> close(endpointB!)
+    connectionA! -> localEndpoint => localAActual
+    connectionA! -> remoteEndpoint => remoteBActual
+    connectionB! -> localEndpoint => localBActual
+    connectionB! -> remoteEndpoint => remoteAActual
 
-    quic.openBi(connectionA!)? => channelA!
+    connectionA! -> openBi(endpointA!)? => channelA!
     ping() => pingBytes
-    quic.send(connectionA!, channelA!, pingBytes)? => sent
-    quic.finish(connectionA!, channelA!)?
-    quic.acceptBi(connectionB!)? => channelB!
-    quic.receive(connectionB!, channelB!, 16)? => received
-    quic.receive(connectionB!, channelB!, 16)? => endOfStream
+    channelA! -> send(connectionA!, endpointA!, pingBytes)? => sent
+    channelA! -> finish(connectionA!, endpointA!)?
+    connectionB! -> acceptBi(endpointB!)? => channelB!
+    channelB! -> receive(connectionB!, endpointB!, 16)? => received
+    channelB! -> receive(connectionB!, endpointB!, 16)? => endOfStream
+    channelB! -> receive(connectionB!, endpointB!, 16)? => repeatedEndOfStream
 
-    quic.sendDatagram(connectionA!, pingBytes)?
-    quic.receiveDatagram(connectionB!)? => datagram
-    quic.close(connectionA!, 0)?
+    connectionA! -> sendDatagram(endpointA!, pingBytes)?
+    connectionB! -> receiveDatagram(endpointB!)? => datagram
+    channelA! -> id => streamIdA
+    channelB! -> id => streamIdB
+    channelA! -> isWriteFinished => writeFinished
+    channelB! -> isReadFinished => readFinished
+    writeFinished
+        and readFinished
+        and streamIdA == streamIdB
+        and (localAActual -> port) > 0
+        and (localBActual -> port) > 0
+        and (remoteAActual -> port) == (localAActual -> port)
+        and (remoteBActual -> port) == (localBActual -> port)
+        and (endOfStream -> len) == 0
+        and (repeatedEndOfStream -> len) == 0 => streamFinished
+    connectionA! -> close(endpointA!, 0)?
+    connectionB! -> close(endpointB!, 0)?
+    endpointA! -> close
+    endpointB! -> close
 
     Result<Roundtrip, quic.QuicError>.Ok(Roundtrip {
         streamCount: received -> len
         streamFirst: received[0]
         streamLast: received[3]
-        streamFinished: channelB!.finished and (endOfStream -> len) == 0
+        streamFinished: streamFinished
         datagramCount: datagram -> len
     })
 }

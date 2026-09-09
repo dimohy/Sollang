@@ -1,0 +1,81 @@
+import std.net as net
+import std.net.dns as dns
+
+allLoopback endpoints: ref [net.Endpoint; ~], port: UInt16 -> Bool {
+    (endpoints -> len) > 0 -> unless { false -> return }
+    0 => index!
+    index! < (endpoints -> len) -> while {
+        endpoints[index!] -> when {
+            V4(value) {
+                value.port == port and (value.address -> isLoopback)
+                    -> unless { false -> return }
+            }
+            V6(value) {
+                value.port == port and (value.address -> isLoopback)
+                    -> unless { false -> return }
+            }
+        }
+        index! + 1 => index!
+    }
+    true
+}
+
+allIpv4 endpoints: ref [net.Endpoint; ~] -> Bool {
+    (endpoints -> len) > 0 -> unless { false -> return }
+    0 => index!
+    index! < (endpoints -> len) -> while {
+        endpoints[index!] -> isIpv4 -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+verify: -> Result<Bool, dns.Error> uses Network {
+    dns.resolver(dns.AddressFamily.Any, 16, 253) => resolver
+    resolver -> lookup("localhost", 44_434)? => endpoints
+    endpoints -> allLoopback(44_434) -> unless { Result<Bool, dns.Error>.Ok(false) -> return }
+
+    dns.resolver(dns.AddressFamily.Ipv4Only, 16, 253) => ipv4Resolver
+    ipv4Resolver -> lookup("localhost", 443)? => ipv4Endpoints
+    ipv4Endpoints -> allIpv4 -> unless { Result<Bool, dns.Error>.Ok(false) -> return }
+
+    dns.resolver(dns.AddressFamily.Any, 0, 253) => invalidResolver
+    invalidResolver -> lookup("localhost", 80) -> when {
+        Ok(unexpected) { Result<Bool, dns.Error>.Ok(false) -> return }
+        Err(error) {
+            error.kind -> when {
+                InvalidLimit { }
+                else { Result<Bool, dns.Error>.Ok(false) -> return }
+            }
+        }
+    }
+
+    resolver -> lookup("127.0.0.1", 80) -> when {
+        Ok(unexpected) { Result<Bool, dns.Error>.Ok(false) -> return }
+        Err(error) {
+            error.kind -> when {
+                InvalidHost { }
+                else { Result<Bool, dns.Error>.Ok(false) -> return }
+            }
+        }
+    }
+
+    dns.resolver(dns.AddressFamily.Any, 16, 8) => shortResolver
+    shortResolver -> lookup("localhost", 80) -> when {
+        Ok(unexpected) { Result<Bool, dns.Error>.Ok(false) -> return }
+        Err(error) {
+            error.kind -> when {
+                HostTooLong { }
+                else { Result<Bool, dns.Error>.Ok(false) -> return }
+            }
+        }
+    }
+    Result<Bool, dns.Error>.Ok(true)
+}
+
+main {
+    verify() -> when {
+        Ok(valid) { valid -> if { "dns-system=true" } else { "dns-system=false" } -> println }
+        Err(error) { "dns-error=$(error.code)" -> println }
+    }
+}

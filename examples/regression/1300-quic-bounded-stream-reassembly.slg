@@ -1,0 +1,78 @@
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+import std.net.quic.reassembly
+import std.net.quic.stream_state as streams
+
+run: -> Result<Bool, errors.Error> {
+    reassembly.initial() => queue!
+    queue! -> push(frames.Stream {
+        id: 0
+        offset: 4
+        fin: true
+        data: [5, 6; ~]
+    })
+    queue! -> push(frames.Stream {
+        id: 0
+        offset: 0
+        fin: false
+        data: [1, 2, 3, 4, 5; ~]
+    })
+
+    streams.initialReceiveFlow(16) => flow!
+    queue! -> account(0, flow!)? => firstAccount
+    firstAccount.flow => flow!
+    false => firstCorrect!
+    queue! -> takeContiguous(0, flow!.consumed, 3) -> when {
+        Ok(value) {
+            (value.data -> len) == 3
+                and value.data[0] == 1
+                and value.data[2] == 3 => firstCorrect!
+            flow! -> onConsumed(UInt64(value.data -> len))? => flow!
+        }
+        Err(error) {}
+    }
+
+    queue! -> account(0, flow!)? => secondAccount
+    secondAccount.flow => flow!
+    false => secondCorrect!
+    queue! -> takeContiguous(0, flow!.consumed, 8) -> when {
+        Ok(value) {
+            (value.data -> len) == 2
+                and value.data[0] == 4
+                and value.data[1] == 5 => secondCorrect!
+            flow! -> onConsumed(UInt64(value.data -> len))? => flow!
+        }
+        Err(error) {}
+    }
+
+    false => finalFrame!
+    false => thirdCorrect!
+    queue! -> takeContiguous(0, flow!.consumed, 8) -> when {
+        Ok(value) {
+            value.fin => finalFrame!
+            (value.data -> len) == 1 and value.data[0] == 6 => thirdCorrect!
+            flow! -> onConsumed(UInt64(value.data -> len))? => flow!
+        }
+        Err(error) {}
+    }
+
+    firstAccount.newlyReceived == 6
+        and secondAccount.newlyReceived == 0
+        and firstCorrect!
+        and secondCorrect!
+        and thirdCorrect!
+        and finalFrame!
+        and flow!.finalKnown
+        and flow!.finalSize == 6
+        and flow!.consumed == 6
+        and (queue! -> count) == 0
+        and (queue! -> bytes) == 0 => correct
+    Result<Bool, errors.Error>.Ok(correct)
+}
+
+main {
+    run() -> when {
+        Ok(correct) { "quic-reassembly=$correct" -> println }
+        Err(error) { "quic-reassembly-error=$(error.code)" -> println }
+    }
+}

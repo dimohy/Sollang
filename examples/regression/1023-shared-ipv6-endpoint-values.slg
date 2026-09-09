@@ -1,0 +1,67 @@
+import std.net
+import std.net.parse_error as errors
+
+verify: -> Bool {
+    net.ipv6("2001:db8::1", 44_434) -> when {
+        Ok(endpoint) {
+            endpoint.address.a == 8193
+                and endpoint.address.b == 3512
+                and endpoint.address.c == 0
+                and endpoint.address.g == 0
+                and endpoint.address.h == 1
+                and endpoint.port == 44_434
+                and endpoint.scopeId == 0
+                -> unless { false -> return }
+            endpoint -> net.Ipv6Endpoint.unified => unifiedEndpoint
+            unifiedEndpoint -> net.Endpoint.isIpv6 -> unless { false -> return }
+            endpoint.address -> net.Ipv6Address.isLoopback
+                -> if { false -> return }
+        }
+        Err(error) { false -> return }
+    }
+
+    net.ipv6Scoped("fe80::1234", 8080, 7) -> when {
+        Ok(endpoint) {
+            endpoint.scopeId == 7 -> unless { false -> return }
+            endpoint.address.a == 65152 -> unless { false -> return }
+        }
+        Err(error) { false -> return }
+    }
+
+    net.loopbackIpv6(443) => loopback
+    loopback.address -> net.Ipv6Address.isLoopback
+        -> unless { false -> return }
+    loopback -> net.Ipv6Endpoint.unified => loopbackEndpoint
+    loopbackEndpoint -> net.Endpoint.port => loopbackPort
+    loopbackPort == 443 -> unless { false -> return }
+
+    net.ipv6("2001::db8::1", 1) -> when {
+        Ok(endpoint) { false -> return }
+        Err(error) {
+            error.kind -> when {
+                InvalidPart { error.offset == 10 -> unless { false -> return } }
+                else { false -> return }
+            }
+        }
+    }
+
+    net.ipv6("2001:db8:zz::1", 1) -> when {
+        Ok(endpoint) { false -> return }
+        Err(error) {
+            error.kind -> when {
+                InvalidCharacter { error.offset == 9 -> unless { false -> return } }
+                else { false -> return }
+            }
+        }
+    }
+
+    true
+}
+
+main {
+    verify() -> if {
+        "shared-ipv6-endpoint=ok" -> println
+    } else {
+        "shared-ipv6-endpoint=failed" -> println
+    }
+}

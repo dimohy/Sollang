@@ -4,28 +4,31 @@ import sollang.compiler.ir.typed as typedIr
 # not survive as an unbased member-access node in final Typed IR.
 main {
     [
-        """
-        import sys.process as process
+    """
+    import sys.process as process
 
-        main {
-            sys.process.arguments() => value
-            value -> println
-        }
-        """,
-        """
-        namespace sys.process
+    main {
+        sys.process.arguments() => value
+        value -> println
+    }
+    """,
+    """
+    namespace sys.process
 
-        public arguments: -> Int { 1 }
-        """; ~
+    public arguments: -> Int { 1 }
+    """; ~
     ] => sources
     sources -> typedIr.lower => ir
     0 => calls!
-    0 => unbasedMembers!
+    0 => calleeMembers!
     ir -> each node {
         node.kind == 6 -> if { calls! + 1 => calls! }
-        (node.kind == 13 and node.operand0 < 0) -> if {
-            unbasedMembers! + 1 => unbasedMembers!
+        # The complete namespace-qualified invocation must remain only a call.
+        # A false member can have the call result as a valid base, so count all
+        # member nodes instead of only the formerly unbased shape.
+        node.kind == 13 -> if {
+            calleeMembers! + 1 => calleeMembers!
         }
     }
-    "calls=$(calls!),unbased=$(unbasedMembers!)" -> println
+    "calls=$(calls!),callee-members=$(calleeMembers!)" -> println
 }

@@ -1,0 +1,65 @@
+import std.encoding.base64 as base64
+
+run: -> Result<Unit, base64.Error> uses Console {
+    base64.standard() => standard
+    base64.rawStandard() => raw
+    base64.urlSafe() => url
+    base64.rawUrlSafe() => rawUrl
+
+    standard -> encode([102], 4)? => one
+    standard -> encode([102, 111], 4)? => two
+    standard -> encode([102, 111, 111], 4)? => three
+    raw -> encode([102], 2)? => rawOne
+    url -> encode([251, 255], 4)? => urlTwo
+    rawUrl -> encode([251, 255], 3)? => rawUrlTwo
+    standard -> decode(three, 3)? => decoded
+
+    standard -> encoder(8)? => encoder!
+    [UInt8; ~] => streamed!
+    encoder! -> write([102], streamed!)? => write0
+    encoder! -> write([111, 111, 98], streamed!)? => write1
+    encoder! -> write([97, 114], streamed!)? => write2
+    encoder! -> finish(streamed!)? => finishWritten
+
+    standard -> decoder(3)? => decoder!
+    [UInt8; ~] => decodedStream!
+    decoder! -> write([90], decodedStream!)? => decode0
+    decoder! -> write([109, 57], decodedStream!)? => decode1
+    decoder! -> write([118], decodedStream!)? => decode2
+    decoder! -> finish(decodedStream!)? => decodeFinish
+
+    standard -> decode([90, 109, 36, 61], 3) -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { "invalid=$(error.offset)" -> println }
+    }
+    standard -> decode([90, 103], 1) -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { "padding=$(error.offset)" -> println }
+    }
+    standard -> decode([90, 104, 61, 61], 1) -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { "bits=$(error.offset)" -> println }
+    }
+    standard -> decode([90, 103, 61, 61, 65], 2) -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { "trailing=$(error.offset)" -> println }
+    }
+    standard -> encode([102, 111, 111], 3) -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { "limit=$(error.offset)" -> println }
+    }
+
+    "vectors=$(one[0]),$(one[1]),$(one[2]),$(one[3]);$(two[3]);$(three[3])" -> println
+    "raw=$(rawOne -> len),$(urlTwo[0]),$(urlTwo[1]),$(urlTwo[2]),$(rawUrlTwo -> len)" -> println
+    "decoded=$(decoded -> len),$(decoded[0]),$(decoded[2])" -> println
+    "encode-stream=$write0,$write1,$write2,$finishWritten,$(streamed! -> len),$(streamed![7])" -> println
+    "decode-stream=$decode0,$decode1,$decode2,$decodeFinish,$(decodedStream! -> len),$(decodedStream![2])" -> println
+    Result<Unit, base64.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected failure at $(error.offset)" -> println }
+    }
+}

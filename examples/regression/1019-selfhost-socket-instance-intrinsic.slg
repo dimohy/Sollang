@@ -1,0 +1,106 @@
+import sollang.compiler.ir.typed as typedIr
+
+# The self-host compiler must recognize socket instance methods early enough
+# for a following `when` to receive the canonical Result subject type.
+main {
+    """"
+        namespace sample
+
+        import std.net.socket as socket
+
+        struct Endpoint {
+            socket: socket.UdpSocket
+            port: UInt16
+        }
+
+        struct QuicError {
+            code: Int
+        }
+
+        # Deliberately collides with the socket instance method name. Receiver
+        # type dispatch must win over this unqualified same-module function.
+        localPort endpoint: ref Endpoint -> UInt16 => endpoint.port
+
+        bindEndpoint: -> Result<Endpoint, QuicError> uses Network {
+            socket.DatagramBindOptions {
+                endpoint: socket.SocketEndpoint { address: "127.0.0.1", port: 0 }
+                reuseAddress: true
+            } -> bind -> when {
+                Ok(bound) {
+                    bound -> localPort -> when {
+                        Ok(port) {
+                            Result<Endpoint, QuicError>.Ok(Endpoint { socket: bound, port: port }) -> return
+                        }
+                        Err(portError) { Result<Endpoint, QuicError>.Err(QuicError { code: 1 }) -> return }
+                    }
+                }
+                Err(bindError) { Result<Endpoint, QuicError>.Err(QuicError { code: 2 }) -> return }
+            }
+        }
+
+        main {
+            bindEndpoint()
+        }
+    """" => sampleSource
+    """"
+        namespace std.net.socket
+
+        public struct SocketEndpoint {
+            public address: Text
+            public port: UInt16
+        }
+
+        public struct DatagramBindOptions {
+            public endpoint: SocketEndpoint
+            public reuseAddress: Bool
+        }
+
+        public struct UdpSocket {
+            public token: UInt64
+        }
+
+        public enum SocketError {
+            Failed
+        }
+
+        impl DatagramBindOptions {
+            public bind: self -> Result<UdpSocket, SocketError> uses Network = intrinsic
+        }
+
+        impl UdpSocket {
+            public localPort: self -> Result<UInt16, SocketError> uses Network = intrinsic
+        }
+    """" => socketSource
+    [Text; ~] => sources!
+    0 => fillerIndex!
+    fillerIndex! < 72 -> while {
+        sources! -> push("namespace filler")
+        fillerIndex! + 1 => fillerIndex!
+    }
+    sources! -> push(socketSource)
+    sources! -> push(sampleSource)
+    sources! -> typedIr.lower => ir
+
+    false => sawBind!
+    false => directBind!
+    false => directLocalPort!
+    0 => typedMatches!
+    ir -> each node {
+        ((node.kind == 6 or node.kind == 9) and node.targetModule == 72)
+            -> if {
+            true => sawBind!
+            node.opcode == -265 -> if { true => directBind! }
+            node.opcode == -268 -> if { true => directLocalPort! }
+        }
+        node.kind == 27 -> if {
+            (node.operand0 >= 0 and ir[node.operand0].typeKind == 7)
+                -> if { typedMatches! + 1 => typedMatches! }
+        }
+    }
+
+    sawBind! -> if { "saw=true" } else { "saw=false" } -> println
+    directBind! -> if { "direct=true" } else { "direct=false" } -> println
+    (sawBind! and directBind! and directLocalPort! and typedMatches! == 2)
+        -> if { "socket instance intrinsic = valid" } else { "socket instance intrinsic = invalid" }
+        -> println
+}

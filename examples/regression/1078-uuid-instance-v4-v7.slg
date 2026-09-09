@@ -1,0 +1,38 @@
+import std.uuid
+import std.time as time
+import std.crypto.random as random
+
+# UUID generation owns explicit wall-clock and secure-entropy instances while
+# lowering their marker receivers without heap or virtual dispatch.
+variantText value: uuid.Variant -> Text => value -> when {
+    Rfc9562 { "rfc9562" }
+    Ncs { "ncs" }
+    Microsoft { "microsoft" }
+    Future { "future" }
+}
+
+verify: -> Unit uses Console, Clock, Random {
+    uuid.generator(time.wallClock(), random.secure()) => generator
+    generator -> v4 -> when {
+        Ok(value) {
+            "v4=$(value -> version),$(value -> variant -> variantText)" -> println
+        }
+        Err(_) { "v4=error" -> println }
+    }
+    generator -> v7 -> when {
+        Ok(value) {
+            value -> unixTimestampMilliseconds -> when {
+                Some(timestamp) {
+                    timestamp > 1_577_836_800_000 -> if { "recent" } else { "old" } => age
+                    "v7=$(value -> version),$(value -> variant -> variantText),$age" -> println
+                }
+                None { "v7=no-timestamp" -> println }
+            }
+        }
+        Err(_) { "v7=error" -> println }
+    }
+}
+
+main {
+    verify()
+}

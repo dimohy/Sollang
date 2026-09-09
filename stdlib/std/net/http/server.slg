@@ -1,0 +1,503 @@
+namespace std.net.http.server
+
+import std.net as net
+import std.net.http as http
+import std.net.http.body as body
+import std.net.http.error as errors
+import std.net.http.response as response
+import std.net.http.server as model
+import std.net.socket as socket
+
+# Synchronous HTTP/1.x persistent-connection foundation. Server owns the
+# listener, Connection owns one accepted transport plus unparsed bytes, and
+# Request owns that state until respond closes it or returns the next Connection.
+public struct ServerOptions {
+    public listener: socket.ListenOptions
+    public requestLimits: http.Limits
+}
+
+public enum Error {
+    Http(http.Error)
+    Socket(socket.SocketError)
+    PeerClosed
+    InvalidBodyBufferSize
+    BodyAlreadyRead
+    BodyNotComplete
+    BodyLengthMismatch
+    DiscontiguousLeftover
+    TunnelUnavailable
+}
+
+public struct Server {
+    public listener: socket.TcpListener
+    public parser: http.Parser
+    public maxHeadBytes: Int
+}
+
+public struct Connection {
+    public transport: socket.TcpStream
+    public parser: http.Parser
+    public maxHeadBytes: Int
+    public bytes: [UInt8; ~]
+    public cursor: UIntSize
+}
+
+public enum ResponseOutcome {
+    Closed
+    Reusable(Connection)
+}
+
+public struct Request {
+    public transport: socket.TcpStream
+    public parser: http.Parser
+    public maxHeadBytes: Int
+    public bytes: [UInt8; ~]
+    public head: http.RequestHead
+    public bodyCursor: UIntSize
+    public input: [UInt8; ~]
+    public inputCursor: UIntSize
+    public bodyComplete: Bool
+}
+
+# Affine request-body state. The parsed head keeps borrowing only `bytes`, while
+# later transport reads reuse `input`; neither buffer is copied or reallocated
+# merely to preserve the other one's views.
+public struct RequestBody {
+    public transport: socket.TcpStream
+    public parser: http.Parser
+    public maxHeadBytes: Int
+    public bytes: [UInt8; ~]
+    public head: http.RequestHead
+    public bodyCursor: UIntSize
+    public input: [UInt8; ~]
+    public inputCursor: UIntSize
+    public decoder: body.BodyDecoder
+}
+
+httpError kind: errors.Kind, offset: UIntSize -> Error {
+    model.Error.Http(http.Error { kind: kind, offset: offset })
+}
+
+# Reads a head whose unparsed bytes begin at index zero. Split receives append
+# directly into one bounded owner; no intermediate encoded-input copy exists.
+readFresh connection: move Connection -> Result<Request, Error> uses Network {
+    connection => state!
+    true -> while {
+        state!.parser -> parseRequestBytes(state!.bytes) -> when {
+            Ok(head) {
+                head.bodyStart => bodyCursor
+                Result<Request, Error>.Ok(Request {
+                    transport: state!.transport
+                    parser: state!.parser
+                    maxHeadBytes: state!.maxHeadBytes
+                    bytes: state!.bytes
+                    head: head
+                    bodyCursor: bodyCursor
+                    input: [UInt8; ~]
+                    inputCursor: 0
+                    bodyComplete: false
+                }) -> return
+            }
+            Err(error) => error.kind -> when {
+                UnexpectedEnd {
+                    UIntSize(state!.bytes -> len) >= UIntSize(state!.maxHeadBytes)
+                        -> if {
+                            Result<Request, Error>.Err(httpError(errors.Kind.HeadLimitExceeded, UIntSize(state!.maxHeadBytes))) -> return
+                        }
+                    state!.transport -> receiveAppend(state!.bytes) -> when {
+                        Err(socketError) {
+                            Result<Request, Error>.Err(model.Error.Socket(socketError)) -> return
+                        }
+                        Ok(received) {
+                            received == 0 -> if {
+                                Result<Request, Error>.Err(model.Error.PeerClosed) -> return
+                            }
+                        }
+                    }
+                }
+                else { Result<Request, Error>.Err(model.Error.Http(error)) -> return }
+            }
+        }
+    }
+    Result<Request, Error>.Err(model.Error.PeerClosed)
+}
+
+readEmpty connection: move Connection -> Result<Request, Error> uses Network {
+    connection => state!
+    state!.transport -> receiveInto(state!.bytes) -> when {
+        Err(error) {
+            state! -> close
+            Result<Request, Error>.Err(model.Error.Socket(error)) -> return
+        }
+        Ok(received) {
+            received == 0 -> if {
+                state! -> close
+                Result<Request, Error>.Err(model.Error.PeerClosed) -> return
+            }
+        }
+    }
+    state! -> readFresh
+}
+
+readBuffered connection: move Connection -> Result<Request, Error> uses Network {
+    connection => state
+    state.parser => parser
+    state.maxHeadBytes => maxHeadBytes
+    state.cursor => cursor
+    UIntSize(state.bytes -> len) - cursor => available
+    parser -> parseRequestBytesRange(state.bytes, cursor, available) -> when {
+        Ok(head) {
+            cursor + head.bodyStart => bodyCursor
+            Result<Request, Error>.Ok(Request {
+                transport: state.transport
+                parser: parser
+                maxHeadBytes: maxHeadBytes
+                bytes: state.bytes
+                head: head
+                bodyCursor: bodyCursor
+                input: [UInt8; ~]
+                inputCursor: 0
+                bodyComplete: false
+            }) -> return
+        }
+        Err(error) => error.kind -> when {
+            UnexpectedEnd {
+                available >= UIntSize(maxHeadBytes) -> if {
+                    state -> close
+                    Result<Request, Error>.Err(httpError(errors.Kind.HeadLimitExceeded, UIntSize(maxHeadBytes))) -> return
+                }
+                [UInt8; ~] => compact!
+                compact! -> reserve(maxHeadBytes)
+                cursor => index!
+                index! < UIntSize(state.bytes -> len) -> while {
+                    compact! -> push(state.bytes[Int(index!)])
+                    index! + 1 => index!
+                }
+                Connection {
+                    transport: state.transport
+                    parser: parser
+                    maxHeadBytes: maxHeadBytes
+                    bytes: compact!
+                    cursor: 0
+                } => compacted
+                compacted -> readFresh -> return
+            }
+            else {
+                state -> close
+                Result<Request, Error>.Err(model.Error.Http(error)) -> return
+            }
+        }
+    }
+    Result<Request, Error>.Err(model.Error.PeerClosed)
+}
+
+closeRequest request: move Request -> Unit uses Network {
+    request.transport -> close
+}
+
+reuseInitial request: move Request -> ResponseOutcome {
+    model.ResponseOutcome.Reusable(Connection {
+        transport: request.transport
+        parser: request.parser
+        maxHeadBytes: request.maxHeadBytes
+        bytes: request.bytes
+        cursor: request.bodyCursor
+    })
+}
+
+reuseReceived request: move Request -> ResponseOutcome {
+    request => state
+    state.inputCursor => cursor
+    model.ResponseOutcome.Reusable(Connection {
+        transport: state.transport
+        parser: state.parser
+        maxHeadBytes: state.maxHeadBytes
+        bytes: state.input
+        cursor: cursor
+    })
+}
+
+reuseRequest request: move Request, received: UIntSize -> ResponseOutcome {
+    received -> when {
+        == 0 { request -> reuseInitial }
+        else { request -> reuseReceived }
+    }
+}
+
+impl ServerOptions {
+    public listen: self -> Result<Server, Error> uses Network {
+        http.parser(self.requestLimits) -> when {
+            Err(error) { Result<Server, Error>.Err(model.Error.Http(error)) -> return }
+            Ok(parser) {
+                self.listener -> listen -> when {
+                    Err(error) { Result<Server, Error>.Err(model.Error.Socket(error)) -> return }
+                    Ok(listener) {
+                        Result<Server, Error>.Ok(Server {
+                            listener: listener
+                            parser: parser
+                            maxHeadBytes: self.requestLimits.maxHeadBytes
+                        }) -> return
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Server {
+    # Observes the address and port selected by the operating system without
+    # cloning or exposing the owned listener. This is especially useful when
+    # ListenOptions requests port 0.
+    public localEndpoint: self -> Result<net.Endpoint, Error> uses Network {
+        self.listener -> localEndpoint -> when {
+            Err(error) { Result<net.Endpoint, Error>.Err(model.Error.Socket(error)) }
+            Ok(endpoint) { Result<net.Endpoint, Error>.Ok(endpoint) }
+        }
+    }
+
+    public accept: self -> Result<Connection, Error> uses Network {
+        self.listener -> accept -> when {
+            Err(error) { Result<Connection, Error>.Err(model.Error.Socket(error)) }
+            Ok(transport) {
+                [UInt8; ~] => bytes!
+                bytes! -> reserve(self.maxHeadBytes)
+                Result<Connection, Error>.Ok(Connection {
+                    transport: transport
+                    parser: self.parser
+                    maxHeadBytes: self.maxHeadBytes
+                    bytes: bytes!
+                    cursor: 0
+                })
+            }
+        }
+    }
+
+    public close: move self -> Unit uses Network {
+        self.listener -> close
+    }
+}
+
+impl Connection {
+    # Consumes one connection state and returns one request owner. A complete
+    # pipelined head is parsed in place. Only a head split across the retained
+    # suffix and a later receive is compacted once into a fresh bounded owner.
+    public readRequest: move self -> Result<Request, Error> uses Network {
+        self.cursor <= UIntSize(self.bytes -> len) -> unless {
+            Result<Request, Error>.Err(httpError(errors.Kind.InvalidBodyRange, self.cursor)) -> return
+        }
+        UIntSize(self.bytes -> len) - self.cursor => available
+        available -> when {
+            == 0 { self -> readEmpty -> return }
+            else { self -> readBuffered -> return }
+        }
+        Result<Request, Error>.Err(model.Error.PeerClosed)
+    }
+
+    public close: move self -> Unit uses Network {
+        self.transport -> close
+    }
+}
+
+impl Request {
+    # Request retains the accepted transport, so endpoint observation stays on
+    # the request instance and does not require ambient server state.
+    public localEndpoint: self -> Result<net.Endpoint, Error> uses Network {
+        self.transport -> localEndpoint -> when {
+            Err(error) { Result<net.Endpoint, Error>.Err(model.Error.Socket(error)) }
+            Ok(endpoint) { Result<net.Endpoint, Error>.Ok(endpoint) }
+        }
+    }
+
+    public remoteEndpoint: self -> Result<net.Endpoint, Error> uses Network {
+        self.transport -> remoteEndpoint -> when {
+            Err(error) { Result<net.Endpoint, Error>.Err(model.Error.Socket(error)) }
+            Ok(endpoint) { Result<net.Endpoint, Error>.Ok(endpoint) }
+        }
+    }
+
+    # Consumes the request into an affine body reader. `receiveBytes` is the
+    # exact reusable tail-buffer capacity and must be positive; body limits
+    # remain owned by BodyPolicy/BodyDecoder.
+    public openBody: move self, policy: body.BodyPolicy, receiveBytes: Int -> Result<RequestBody, Error> {
+        self.bodyComplete -> if {
+            Result<RequestBody, Error>.Err(model.Error.BodyAlreadyRead) -> return
+        }
+        receiveBytes > 0 -> unless {
+            Result<RequestBody, Error>.Err(model.Error.InvalidBodyBufferSize) -> return
+        }
+        policy -> request(self.head) -> when {
+            Err(error) { Result<RequestBody, Error>.Err(model.Error.Http(error)) -> return }
+            Ok(plan) => plan -> decoder -> when {
+                Err(error) { Result<RequestBody, Error>.Err(model.Error.Http(error)) -> return }
+                Ok(decoder) {
+                    [UInt8; ~] => input!
+                    input! -> reserve(receiveBytes)
+                    Result<RequestBody, Error>.Ok(RequestBody {
+                        transport: self.transport
+                        parser: self.parser
+                        maxHeadBytes: self.maxHeadBytes
+                        bytes: self.bytes
+                        head: self.head
+                        bodyCursor: self.bodyCursor
+                        input: input!
+                        inputCursor: self.inputCursor
+                        decoder: decoder
+                    }) -> return
+                }
+            }
+        }
+        Result<RequestBody, Error>.Err(model.Error.InvalidBodyBufferSize)
+    }
+
+    # Counts bytes after the completed body without copying or exposing a
+    # borrowed view whose lifetime could outlive this owner.
+    public leftoverCount: self -> UIntSize {
+        self.bodyComplete -> unless { 0 -> return }
+        UIntSize(self.bytes -> len) - self.bodyCursor => initial
+        UIntSize(self.input -> len) - self.inputCursor => received
+        initial + received
+    }
+
+    # ResponseHead keeps framing authority. Close consumes the transport;
+    # persistent mode returns the next affine Connection with every already-read
+    # suffix byte. Body storage is sent directly without an intermediate copy.
+    public respond: move self, head: move response.ResponseHead, body: ref [UInt8; ~] -> Result<ResponseOutcome, Error> uses Network {
+        self => request
+        head.connection -> when {
+            Persistent {
+                request.bodyComplete -> unless {
+                    Result<ResponseOutcome, Error>.Err(model.Error.BodyNotComplete) -> return
+                }
+            }
+            Close { }
+        }
+        head.bodyDisposition -> when {
+            Send {
+                UIntSize(body -> len) == head.bodyLength -> unless {
+                    Result<ResponseOutcome, Error>.Err(model.Error.BodyLengthMismatch) -> return
+                }
+            }
+            Suppress { }
+            Tunnel { Result<ResponseOutcome, Error>.Err(model.Error.TunnelUnavailable) -> return }
+        }
+        UIntSize(request.bytes -> len) - request.bodyCursor => initial
+        UIntSize(request.input -> len) - request.inputCursor => received
+        head.connection -> when {
+            Persistent {
+                initial > 0 and received > 0 -> if {
+                    Result<ResponseOutcome, Error>.Err(model.Error.DiscontiguousLeftover) -> return
+                }
+            }
+            Close { }
+        }
+        head.connection => connectionMode
+        head.bodyDisposition => disposition
+        head -> intoBytes => headBytes
+        request.transport -> sendAll(headBytes) -> when {
+            Err(error) { Result<ResponseOutcome, Error>.Err(model.Error.Socket(error)) -> return }
+            Ok(_) { }
+        }
+        disposition -> when {
+            Send => request.transport -> sendAll(body) -> when {
+                Err(error) { Result<ResponseOutcome, Error>.Err(model.Error.Socket(error)) -> return }
+                Ok(_) { }
+            }
+            Suppress { }
+            Tunnel { }
+        }
+        connectionMode -> when {
+            Close {
+                request -> closeRequest
+                Result<ResponseOutcome, Error>.Ok(model.ResponseOutcome.Closed) -> return
+            }
+            Persistent {
+                request -> reuseRequest(received) => outcome
+                Result<ResponseOutcome, Error>.Ok(outcome) -> return
+            }
+        }
+        Result<ResponseOutcome, Error>.Err(model.Error.PeerClosed)
+    }
+}
+
+impl RequestBody {
+    public leftoverCount: self -> UIntSize {
+        UIntSize(self.bytes -> len) - self.bodyCursor => initial
+        UIntSize(self.input -> len) - self.inputCursor => received
+        initial + received
+    }
+
+    # Returns after decoder progress from existing bytes or after at most one
+    # transport receive. The output and both encoded buffers remain caller/
+    # instance owned; no intermediate body or input allocation is introduced.
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<body.BodyProgress, Error> uses Network {
+        self.bodyCursor < UIntSize(self.bytes -> len)
+            -> if {
+                UIntSize(self.bytes -> len) - self.bodyCursor => available
+                self.decoder -> writeRange(self.bytes, self.bodyCursor, available, output) -> when {
+                    Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Http(error)) -> return }
+                    Ok(progress) {
+                        self.bodyCursor + progress.consumed => self.bodyCursor
+                        Result<body.BodyProgress, Error>.Ok(progress) -> return
+                    }
+                }
+            }
+        self.inputCursor < UIntSize(self.input -> len)
+            -> if {
+                UIntSize(self.input -> len) - self.inputCursor => available
+                self.decoder -> writeRange(self.input, self.inputCursor, available, output) -> when {
+                    Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Http(error)) -> return }
+                    Ok(progress) {
+                        self.inputCursor + progress.consumed => self.inputCursor
+                        Result<body.BodyProgress, Error>.Ok(progress) -> return
+                    }
+                }
+            }
+        # A no-body or zero-length body is already complete even when the head
+        # receive ended exactly at bodyStart. Probe that state without input so
+        # readInto never blocks on an unnecessary transport receive.
+        self.decoder -> writeRange(self.input, self.inputCursor, 0, output) -> when {
+            Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Http(error)) -> return }
+            Ok(progress) {
+                progress.complete -> if {
+                    Result<body.BodyProgress, Error>.Ok(progress) -> return
+                }
+            }
+        }
+        self.transport -> receiveInto(self.input) -> when {
+            Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Socket(error)) -> return }
+            Ok(received) {
+                received == 0 -> if {
+                    Result<body.BodyProgress, Error>.Err(model.Error.PeerClosed) -> return
+                }
+                0 => self.inputCursor
+                self.decoder -> writeRange(self.input, 0, received, output) -> when {
+                    Err(error) { Result<body.BodyProgress, Error>.Err(model.Error.Http(error)) -> return }
+                    Ok(progress) {
+                        progress.consumed => self.inputCursor
+                        Result<body.BodyProgress, Error>.Ok(progress) -> return
+                    }
+                }
+            }
+        }
+        Result<body.BodyProgress, Error>.Err(model.Error.PeerClosed)
+    }
+
+    # Consumes the decoder state and returns response authority only after body
+    # framing is complete. Any over-read suffix remains in the returned Request.
+    public finish: move self -> Result<Request, Error> {
+        self.decoder -> completion -> when {
+            Err(error) { Result<Request, Error>.Err(model.Error.Http(error)) -> return }
+            Ok(_) => Result<Request, Error>.Ok(Request {
+                transport: self.transport
+                parser: self.parser
+                maxHeadBytes: self.maxHeadBytes
+                bytes: self.bytes
+                head: self.head
+                bodyCursor: self.bodyCursor
+                input: self.input
+                inputCursor: self.inputCursor
+                bodyComplete: true
+            })
+        }
+    }
+}

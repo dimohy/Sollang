@@ -1,0 +1,34 @@
+import sys.process as process
+import sys.runtime as runtime
+
+# Bounded collect drains stderr and stdout concurrently and reports truncation.
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 1 -> if {
+        0 => index!
+        index! < 4096 -> while {
+            "stderr-abcdefghijklmnopqrstuvwxyz-0123456789" -> runtime.eprintln
+            index! + 1 => index!
+        }
+        0 => index!
+        index! < 4096 -> while {
+            "stdout-abcdefghijklmnopqrstuvwxyz-0123456789" -> println
+            index! + 1 => index!
+        }
+    } else {
+        process.command(arguments[0]) => command!
+        command! -> arg("--child")
+        command! -> stdin(process.Input.Null)
+        command! -> collect(process.CaptureLimits {
+            standardOutputBytes: UIntSize(97)
+            standardErrorBytes: UIntSize(83)
+        }) -> when {
+            Result<process.CapturedOutput, Text>.Ok(output) {
+                "status=$(output.status -> exitCode) stdout=$(output.standardOutput -> len) stderr=$(output.standardError -> len) stdout-truncated=$(output.standardOutputTruncated) stderr-truncated=$(output.standardErrorTruncated)" -> println
+            }
+            Result<process.CapturedOutput, Text>.Err(error) {
+                "error=$error" -> println
+            }
+        }
+    }
+}

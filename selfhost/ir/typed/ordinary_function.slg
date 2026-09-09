@@ -1,0 +1,989 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.expression_types as expressionTypes
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as semanticTypes
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+# Ordinary source functions borrow the frozen Typed IR indexes explicitly.
+# This static fragment boundary copies no prepared snapshot or owned table.
+lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> SourceTypedIr {
+    [TypedIrNode; ~] => results!
+    request.sourceIndex => sourceIndex
+    prepared.package.sources[sourceIndex] -> len => sourceLength
+    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    prepared.package.ranges[sourceIndex] => sourceRange
+    [resolution.ResolvedName; ~] => resolvedNames!
+    [Int; ~] => resolvedSymbolByAst!
+    [Bool; ~] => resolvedQualifiedByAst!
+    [Bool; ~] => qualifiedFunctionPathByAst!
+    [Int; ~] => qualifiedValueVariantIndexByAst!
+    [Int; ~] => qualifiedIndexByParentAst!
+    0 => resolvedNameIndexSeed!
+    resolvedNameIndexSeed! < sourceRange.astCount
+        -> while {
+            resolvedSymbolByAst! -> push(-1)
+            resolvedQualifiedByAst! -> push(false)
+            qualifiedFunctionPathByAst! -> push(false)
+            qualifiedValueVariantIndexByAst! -> push(-1)
+            qualifiedIndexByParentAst! -> push(-1)
+            resolvedNameIndexSeed! + 1 => resolvedNameIndexSeed!
+        }
+    0 => sourceNameOffset!
+    sourceNameOffset! < sourceRange.nameCount -> while {
+        prepared.package.names[sourceRange.nameStart + sourceNameOffset!] => sourceResolvedName
+        resolvedNames! -> push(sourceResolvedName)
+        sourceResolvedName.astNode >= 0 and sourceResolvedName.astNode < sourceRange.astCount
+            -> if {
+                sourceResolvedName.symbol => resolvedSymbolByAst![sourceResolvedName.astNode]
+            }
+        sourceNameOffset! + 1 => sourceNameOffset!
+    }
+    prepared -> localMemberRoots(resolvedNames!, sourceIndex) => localMemberByParentAst
+    0 => qualifiedIndexBuild!
+    qualifiedIndexBuild! < (prepared.qualified -> len)
+        -> while {
+            prepared.qualified[qualifiedIndexBuild!] => indexedQualified
+            indexedQualified.status == 0
+                and indexedQualified.sourceModule == sourceIndex
+                and indexedQualified.pathAst >= 0
+                and indexedQualified.pathAst < sourceRange.astCount
+                -> if {
+                    true => resolvedQualifiedByAst![indexedQualified.pathAst]
+                    prepared.package.nodes[sourceRange.astStart + indexedQualified.pathAst].parent => indexedQualifiedParent
+                    indexedQualifiedParent >= 0 and indexedQualifiedParent < sourceRange.astCount
+                        -> if {
+                            true => resolvedQualifiedByAst![indexedQualifiedParent]
+                            qualifiedIndexByParentAst![indexedQualifiedParent] < 0
+                                -> if { qualifiedIndexBuild! => qualifiedIndexByParentAst![indexedQualifiedParent] }
+                        }
+                    prepared.modules[indexedQualified.targetModule].sourceIndex => indexedQualifiedTargetSource
+                    prepared.package.ranges[indexedQualifiedTargetSource] => indexedQualifiedTargetRange
+                    prepared.package.symbols[indexedQualifiedTargetRange.symbolStart + indexedQualified.targetSymbol].kind => indexedQualifiedTargetKind
+                    indexedQualifiedTargetKind == 7 -> if {
+                        true => qualifiedFunctionPathByAst![indexedQualified.pathAst]
+                    }
+                    indexedQualifiedTargetKind == 27
+                        -> if { qualifiedIndexBuild! => qualifiedValueVariantIndexByAst![indexedQualified.pathAst] }
+                }
+            qualifiedIndexBuild! + 1 => qualifiedIndexBuild!
+        }
+    request.symbolIndex => symbolIndex
+    prepared.package.symbols[sourceRange.symbolStart + symbolIndex] => function
+    function.kind == 7 or function.kind == 31 -> if {
+        frozenFunctionResultLegacyIndexByAst[sourceRange.astStart + function.astNode] => resultTypeIndex
+        frozenFunctionResultRootAstByAst[sourceRange.astStart + function.astNode] => resultRootAst!
+        # An empty collection literal has no element-driven inference record.
+        # Its declared function result is still authoritative, so preserve
+        # the final direct body child as the structural return root instead
+        # of dropping the entire nullary helper from Typed IR.
+        resultRootAst! < 0 and function.flags / 128 % 2 == 0 and function.typeNode >= 0
+            -> if {
+                UIntSize(0) => declaredBodyBoundary!
+                0 => declaredSignatureSearch!
+                declaredSignatureSearch! < sourceRange.astCount
+                    -> while {
+                        prepared.package.nodes[sourceRange.astStart + declaredSignatureSearch!] => declaredSignatureCandidate
+                        declaredSignatureCandidate.parent == function.astNode
+                            and declaredSignatureCandidate.kind == 17
+                            and declaredSignatureCandidate.start + declaredSignatureCandidate.length > declaredBodyBoundary!
+                            -> if {
+                                declaredSignatureCandidate.start + declaredSignatureCandidate.length => declaredBodyBoundary!
+                            }
+                        declaredSignatureSearch! + 1 => declaredSignatureSearch!
+                    }
+                UIntSize(0) => declaredBodyStart!
+                0 => declaredBodySearch!
+                declaredBodySearch! < sourceRange.astCount -> while {
+                    prepared.package.nodes[sourceRange.astStart + declaredBodySearch!] => declaredBodyCandidate
+                    declaredBodyCandidate.parent == function.astNode
+                        and declaredBodyCandidate.kind != 16
+                        and declaredBodyCandidate.kind != 17
+                        and declaredBodyCandidate.start >= declaredBodyBoundary!
+                        and (resultRootAst! < 0 or declaredBodyCandidate.start >= declaredBodyStart!)
+                        -> if {
+                            declaredBodySearch! => resultRootAst!
+                            declaredBodyCandidate.start => declaredBodyStart!
+                        }
+                    declaredBodySearch! + 1 => declaredBodySearch!
+                }
+            }
+        function.typeNode => declaredResultAst!
+        function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => declaredResultAst! }
+        -1 => functionResultTypeId!
+        function.flags / 32 % 2 == 1 -> if {
+            -1 => declaredResultAst!
+            sourceIndex -> resolvedFunctionResultTypeId(symbolIndex, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => functionResultTypeId!
+        }
+        prepared -> declaredArrayShapeKind(sourceIndex, declaredResultAst!) => declaredResultShapeKind
+        0 => functionResultReferenceSearch!
+        functionResultReferenceSearch! < (recursiveTypes.references -> len)
+            -> while {
+                recursiveTypes.references[functionResultReferenceSearch!] => functionResultReference
+                functionResultReference.status == 0
+                    and functionResultReference.sourceModule == sourceIndex
+                    and functionResultReference.typeAst == declaredResultAst!
+                    and (declaredResultShapeKind < 0
+                    or frozenRecursiveSemanticTypes[functionResultReference.typeId].kind == declaredResultShapeKind)
+                    -> if {
+                        functionResultReference.typeId => functionResultTypeId!
+                    }
+                functionResultReferenceSearch! + 1 => functionResultReferenceSearch!
+            }
+        # A declared Unit function may have an empty block and no result expression.
+        # Preserve its definition and formal parameter contract without inventing
+        # an expression child or admitting an empty non-Unit result.
+        resultRootAst! < 0 and functionResultTypeId! >= 0
+            -> if {
+                frozenRecursiveSemanticTypes[functionResultTypeId!] => declaredEmptyResult
+                declaredEmptyResult.kind == 1 and declaredEmptyResult.origin == 1 and declaredEmptyResult.symbol == 0
+                    -> if { function.astNode => resultRootAst! }
+            }
+        function.flags / 128 % 2 == 1 and resultRootAst! < 0
+            -> if { function.astNode => resultRootAst! }
+        resultTypeIndex >= 0 or function.flags / 128 % 2 == 1 or resultRootAst! >= 0
+            -> if {
+                -1 => functionResultOrigin!
+                -1 => functionResultModule!
+                -1 => functionResultSymbol!
+                function.astNode => resultTypeAstNode!
+                resultTypeIndex >= 0 -> if {
+                    inferred[resultTypeIndex] => resultType
+                    resultType.origin => functionResultOrigin!
+                    resultType.targetModule => functionResultModule!
+                    resultType.targetSymbol => functionResultSymbol!
+                    resultType.astNode => resultTypeAstNode!
+                }
+                declaredResultAst! >= 0 and resultTypeIndex < 0
+                    -> if { declaredResultAst! => resultTypeAstNode! }
+                function.flags / 32768 % 2 == 1 and functionResultTypeId! >= 0
+                    -> if {
+                        functionResultTypeId! => nativeTryFunctionSuccessType
+                        0 => nativeTryFunctionResultSearch!
+                        nativeTryFunctionResultSearch! < (frozenRecursiveSemanticTypes -> len)
+                            -> while {
+                                frozenRecursiveSemanticTypes[nativeTryFunctionResultSearch!] => nativeTryFunctionResultCandidate
+                                nativeTryFunctionResultCandidate.kind == 7
+                                    and nativeTryFunctionResultCandidate.origin == 4
+                                    and nativeTryFunctionResultCandidate.symbol == 1
+                                    and nativeTryFunctionResultCandidate.first == nativeTryFunctionSuccessType
+                                    and nativeTryFunctionResultCandidate.second == 5
+                                    -> if {
+                                        nativeTryFunctionResultSearch! => functionResultTypeId!
+                                    }
+                                nativeTryFunctionResultSearch! + 1 => nativeTryFunctionResultSearch!
+                            }
+                    }
+                -1 => functionResultTypeKind!
+                0 => functionResultTypeFlags!
+                functionResultTypeId! >= 0 -> if {
+                    frozenRecursiveSemanticTypes[functionResultTypeId!] => canonicalFunctionResult
+                    canonicalFunctionResult.origin => functionResultOrigin!
+                    canonicalFunctionResult.module => functionResultModule!
+                    canonicalFunctionResult.symbol => functionResultSymbol!
+                    canonicalFunctionResult.kind => functionResultTypeKind!
+                    recursiveTypeFlags[functionResultTypeId!] => functionResultTypeFlags!
+                    canonicalFunctionResult.kind != 1 -> if {
+                        10 + canonicalFunctionResult.kind => functionResultOrigin!
+                        canonicalFunctionResult.first >= 0 -> if {
+                            frozenRecursiveSemanticTypes[canonicalFunctionResult.first].module => functionResultModule!
+                            frozenRecursiveSemanticTypes[canonicalFunctionResult.first].symbol => functionResultSymbol!
+                        }
+                    }
+                }
+                0 => declaredResultNominalSearch!
+                declaredResultNominalSearch! < (prepared.nominal -> len)
+                    -> while {
+                        prepared.nominal[declaredResultNominalSearch!] => declaredResultNominal
+                        declaredResultNominal.sourceModule == sourceIndex and declaredResultNominal.typeAst == declaredResultAst!
+                            -> if {
+                                declaredResultNominal.origin => functionResultOrigin!
+                                declaredResultNominal.targetModule => functionResultModule!
+                                declaredResultNominal.targetSymbol => functionResultSymbol!
+                            }
+                        declaredResultNominalSearch! + 1 => declaredResultNominalSearch!
+                    }
+                0 => declaredResultCompositeSearch!
+                declaredResultCompositeSearch! < (prepared.composite -> len)
+                    -> while {
+                        prepared.composite[declaredResultCompositeSearch!] => declaredResultComposite
+                        declaredResultComposite.sourceModule == sourceIndex and declaredResultComposite.typeAst == declaredResultAst!
+                            -> if {
+                                10 + declaredResultComposite.kind => functionResultOrigin!
+                                declaredResultComposite.elementModule => functionResultModule!
+                                declaredResultComposite.elementSymbol => functionResultSymbol!
+                            }
+                        declaredResultCompositeSearch! + 1 => declaredResultCompositeSearch!
+                    }
+                function.flags / 512 % 2 == 1
+                    and function.parent >= 0
+                    and (function.flags / 4096 % 2 == 1
+                    or function.flags / 8192 % 2 == 1
+                    or function.flags / 131072 % 2 == 1) -> if {
+                        function.parent => comResultInterfaceSymbol!
+                        function.flags / 131072 % 2 == 1 -> if { function.secondaryTypeNode => comResultInterfaceSymbol! }
+                        -1 => comInterfaceTypeId!
+                        0 => comInterfaceTypeSearch!
+                        comInterfaceTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                            -> while {
+                                frozenRecursiveSemanticTypes[comInterfaceTypeSearch!] => comInterfaceType
+                                comInterfaceType.kind == 9
+                                    and comInterfaceType.origin == 0
+                                    and comInterfaceType.module == sourceIndex
+                                    and comInterfaceType.symbol == comResultInterfaceSymbol!
+                                    -> if {
+                                        comInterfaceTypeSearch! => comInterfaceTypeId!
+                                    }
+                                comInterfaceTypeSearch! + 1 => comInterfaceTypeSearch!
+                            }
+                        -1 => comGeneratedResultTypeId!
+                        function.flags / 4096 % 2 == 1 or function.flags / 131072 % 2 == 1
+                            -> if {
+                                0 => comActivationResultSearch!
+                                comActivationResultSearch! < (frozenRecursiveSemanticTypes -> len)
+                                    -> while {
+                                        frozenRecursiveSemanticTypes[comActivationResultSearch!] => comActivationResultType
+                                        comActivationResultType.kind == 7
+                                            and comActivationResultType.origin == 4
+                                            and comActivationResultType.symbol == 1
+                                            and comActivationResultType.first == comInterfaceTypeId!
+                                            and comActivationResultType.second == 5 -> if {
+                                                comActivationResultSearch! => comGeneratedResultTypeId!
+                                            }
+                                        comActivationResultSearch! + 1 => comActivationResultSearch!
+                                    }
+                            } else {
+                                comInterfaceTypeId! => comGeneratedResultTypeId!
+                            }
+                        comGeneratedResultTypeId! >= 0 -> if {
+                            frozenRecursiveSemanticTypes[comGeneratedResultTypeId!] => comGeneratedResultType
+                            comGeneratedResultTypeId! => functionResultTypeId!
+                            comGeneratedResultType.kind => functionResultTypeKind!
+                            recursiveTypeFlags[comGeneratedResultTypeId!] => functionResultTypeFlags!
+                            comGeneratedResultType.origin => functionResultOrigin!
+                            comGeneratedResultType.module => functionResultModule!
+                            comGeneratedResultType.symbol => functionResultSymbol!
+                            comGeneratedResultType.kind != 1 -> if {
+                                10 + comGeneratedResultType.kind => functionResultOrigin!
+                                comGeneratedResultType.first >= 0 -> if {
+                                    frozenRecursiveSemanticTypes[comGeneratedResultType.first] => comGeneratedResultElement
+                                    comGeneratedResultElement.module => functionResultModule!
+                                    comGeneratedResultElement.symbol => functionResultSymbol!
+                                }
+                            }
+                        }
+                    }
+                -1 => parameterSymbol!
+                -1 => parameterTypeIndex!
+                -1 => parameterReferenceAst!
+                0 => parameterSearch!
+                parameterSearch! < sourceRange.symbolCount -> while {
+                    prepared.package.symbols[sourceRange.symbolStart + parameterSearch!] => parameterCandidate
+                    parameterSymbol! < 0 and parameterCandidate.kind == 35 and parameterCandidate.parent == symbolIndex and parameterCandidate.astNode == function.astNode
+                        -> if { parameterSearch! => parameterSymbol! }
+                    parameterSearch! + 1 => parameterSearch!
+                }
+                parameterSymbol! >= 0 -> if {
+                    0 => parameterNameSearch!
+                    parameterNameSearch! < (resolvedNames! -> len)
+                        -> while {
+                            resolvedNames![parameterNameSearch!] => parameterName
+                            parameterName.symbol == parameterSymbol! -> if {
+                                parameterName.astNode => parameterReferenceAst!
+                                frozenInferredIndexByAst[sourceRange.astStart + parameterName.astNode] => parameterTypeIndex!
+                            }
+                            parameterNameSearch! + 1 => parameterNameSearch!
+                        }
+                }
+                -1 => parameterOrigin!
+                -1 => parameterModule!
+                -1 => parameterTypeSymbol!
+                -1 => parameterTypeId!
+                parameterReferenceAst! >= 0 -> if {
+                    sourceRange.astStart + parameterReferenceAst! => parameterReferenceGlobalAst
+                    frozenRecursiveTypeByAst[parameterReferenceGlobalAst] => parameterTypeId!
+                    parameterTypeId! >= 0 -> if {
+                        frozenRecursiveSemanticTypes[parameterTypeId!] => exactParameterType
+                        exactParameterType.origin => parameterOrigin!
+                        exactParameterType.module => parameterModule!
+                        exactParameterType.symbol => parameterTypeSymbol!
+                    }
+                }
+                parameterTypeIndex! >= 0 and parameterTypeId! < 0
+                    -> if {
+                        inferred[parameterTypeIndex!] => inferredParameterType
+                        inferredParameterType.origin => parameterOrigin!
+                        inferredParameterType.targetModule => parameterModule!
+                        inferredParameterType.targetSymbol => parameterTypeSymbol!
+                    }
+                parameterSymbol! >= 0 and parameterOrigin! < 0
+                    -> if {
+                        prepared.package.symbols[sourceRange.symbolStart + parameterSymbol!] => declaredParameter
+                        declaredParameter.flags / 16384 % 2 == 1 and function.parent >= 0
+                            -> if {
+                                0 => comReceiverTypeSearch!
+                                comReceiverTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                                    -> while {
+                                        frozenRecursiveSemanticTypes[comReceiverTypeSearch!] => comReceiverType
+                                        comReceiverType.kind == 9
+                                            and comReceiverType.origin == 0
+                                            and comReceiverType.module == sourceIndex
+                                            and comReceiverType.symbol == function.parent
+                                            -> if {
+                                                comReceiverTypeSearch! => parameterTypeId!
+                                                comReceiverType.origin => parameterOrigin!
+                                                comReceiverType.module => parameterModule!
+                                                comReceiverType.symbol => parameterTypeSymbol!
+                                            }
+                                        comReceiverTypeSearch! + 1 => comReceiverTypeSearch!
+                                    }
+                            }
+                        0 => declaredNominalSearch!
+                        parameterOrigin! < 0 and declaredNominalSearch! < (prepared.nominal -> len)
+                            -> while {
+                                prepared.nominal[declaredNominalSearch!] => declaredNominal
+                                declaredNominal.sourceModule == sourceIndex and declaredNominal.typeAst == declaredParameter.typeNode
+                                    -> if {
+                                        declaredNominal.origin => parameterOrigin!
+                                        declaredNominal.targetModule => parameterModule!
+                                        declaredNominal.targetSymbol => parameterTypeSymbol!
+                                    }
+                                declaredNominalSearch! + 1 => declaredNominalSearch!
+                            }
+                        parameterOrigin! < 0 -> if {
+                            0 => declaredCompositeSearch!
+                            declaredCompositeSearch! < (prepared.composite -> len)
+                                -> while {
+                                    prepared.composite[declaredCompositeSearch!] => declaredComposite
+                                    declaredComposite.sourceModule == sourceIndex and declaredComposite.typeAst == declaredParameter.typeNode
+                                        -> if {
+                                            10 + declaredComposite.kind => parameterOrigin!
+                                            declaredComposite.elementModule => parameterModule!
+                                            declaredComposite.elementSymbol => parameterTypeSymbol!
+                                        }
+                                    declaredCompositeSearch! + 1 => declaredCompositeSearch!
+                                }
+                        }
+                    }
+                parameterSymbol! >= 0 -> if {
+                    prepared.package.symbols[sourceRange.symbolStart + parameterSymbol!] => canonicalParameter
+                    -1 => parameterReferenceIndex!
+                    canonicalParameter.typeNode >= 0 and canonicalParameter.typeNode < sourceRange.astCount
+                        -> if { recursiveTypes.referenceIndexByTypeAst[sourceRange.astStart + canonicalParameter.typeNode] => parameterReferenceIndex! }
+                    parameterReferenceIndex! >= 0 and recursiveTypes.references[parameterReferenceIndex!].status == 0
+                        -> if { recursiveTypes.references[parameterReferenceIndex!].typeId => parameterTypeId! }
+                    parameterTypeId! < 0 and canonicalParameter.typeNode >= 0
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + canonicalParameter.typeNode] => canonicalParameterTypeAst
+                            -1 => canonicalParameterNameToken!
+                            canonicalParameterTypeAst.firstToken => canonicalParameterTokenIndex!
+                            canonicalParameterTokenIndex! < canonicalParameterTypeAst.firstToken + canonicalParameterTypeAst.tokenCount
+                                -> while {
+                                    prepared.package.tokens[sourceRange.tokenStart + canonicalParameterTokenIndex!] => canonicalParameterToken
+                                    canonicalParameterToken.kind == grammar.tokenIdIdentifier()
+                                        -> if { canonicalParameterTokenIndex! => canonicalParameterNameToken! }
+                                    canonicalParameterTokenIndex! + 1 => canonicalParameterTokenIndex!
+                                }
+                            canonicalParameterNameToken! >= 0 -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + canonicalParameterNameToken!] => canonicalParameterName
+                                canonicalParameterName.span.length == 10 => canonicalParameterIsSourceText!
+                                "SourceText" => canonicalParameterSourceTextName
+                                UIntSize(0) => canonicalParameterSourceTextByte!
+                                canonicalParameterIsSourceText! and canonicalParameterSourceTextByte! < canonicalParameterName.span.length
+                                    -> while {
+                                        (source -> byte(canonicalParameterName.span.start + canonicalParameterSourceTextByte!)) != (canonicalParameterSourceTextName -> byte(canonicalParameterSourceTextByte!))
+                                            -> if { false => canonicalParameterIsSourceText! }
+                                        canonicalParameterSourceTextByte! + 1 => canonicalParameterSourceTextByte!
+                                    }
+                                canonicalParameterIsSourceText! -> if {
+                                    0 => canonicalParameterSourceTextSearch!
+                                    canonicalParameterSourceTextSearch! < (frozenRecursiveSemanticTypes -> len)
+                                        -> while {
+                                            frozenRecursiveSemanticTypes[canonicalParameterSourceTextSearch!] => canonicalParameterSourceText
+                                            canonicalParameterSourceText.kind == 1 and canonicalParameterSourceText.origin == 1 and canonicalParameterSourceText.symbol == 24
+                                                -> if {
+                                                    canonicalParameterSourceTextSearch! => parameterTypeId!
+                                                }
+                                            canonicalParameterSourceTextSearch! + 1 => canonicalParameterSourceTextSearch!
+                                        }
+                                }
+                            }
+                        }
+                    parameterTypeId! >= 0 -> if {
+                        frozenRecursiveSemanticTypes[parameterTypeId!] => canonicalParameterType
+                        canonicalParameterType.origin => parameterOrigin!
+                        canonicalParameterType.module => parameterModule!
+                        canonicalParameterType.symbol => parameterTypeSymbol!
+                        canonicalParameterType.kind != 1 -> if {
+                            10 + canonicalParameterType.kind => parameterOrigin!
+                            canonicalParameterType.first >= 0 -> if {
+                                frozenRecursiveSemanticTypes[canonicalParameterType.first] => canonicalParameterElement
+                                canonicalParameterElement.module => parameterModule!
+                                canonicalParameterElement.symbol => parameterTypeSymbol!
+                            }
+                        }
+                    }
+                }
+                # Inherent impl methods spell only `self`; their receiver type
+                # is the impl owner. Resolve that owner across every fragment
+                # of the same logical namespace and reuse its canonical nominal
+                # type directly. This changes only compile-time tables: the
+                # generated method remains an ordinary direct function call.
+                parameterSymbol! >= 0 and parameterOrigin! < 0 and function.kind == 31 and function.parent >= 0
+                    -> if {
+                        prepared.package.symbols[sourceRange.symbolStart + function.parent] => receiverImpl
+                        # ImplDeclaration owns one Path for inherent impls and
+                        # two for trait impls. The final header Path is the
+                        # concrete receiver; the first may name the trait.
+                        -1 => receiverOwnerPath!
+                        receiverImpl.astNode + 1 => receiverPathSearch!
+                        true => receiverHeaderOpen!
+                        receiverHeaderOpen! and receiverPathSearch! < sourceRange.astCount
+                            -> while {
+                                prepared.package.nodes[sourceRange.astStart + receiverPathSearch!] => receiverPathCandidate
+                                receiverPathCandidate.parent == receiverImpl.astNode
+                                    -> if {
+                                        receiverPathCandidate.kind == 16 -> if {
+                                            receiverPathSearch! => receiverOwnerPath!
+                                        } else { false => receiverHeaderOpen! }
+                                    }
+                                receiverPathSearch! + 1 => receiverPathSearch!
+                            }
+                        prepared.package.nodes[sourceRange.astStart + receiverOwnerPath!].payloadToken => receiverOwnerNameToken
+                        prepared.package.tokens[sourceRange.tokenStart + receiverOwnerNameToken] => receiverImplName
+                        prepared.modules[sourceIndex] => receiverModuleIdentity
+                        -1 => receiverOwnerModule!
+                        -1 => receiverOwnerSymbol!
+                        false => receiverOwnerAmbiguous!
+                        0 => receiverQualifiedSearch!
+                        receiverQualifiedSearch! < (prepared.qualified -> len)
+                            and receiverOwnerModule! < 0
+                            -> while {
+                                prepared.qualified[receiverQualifiedSearch!] => receiverQualified
+                                receiverQualified.sourceModule == sourceIndex
+                                    and receiverQualified.status == 0
+                                    and receiverQualified.pathAst == receiverOwnerPath!
+                                    and receiverQualified.targetModule >= 0
+                                    and receiverQualified.targetModule < (prepared.modules -> len)
+                                    -> if {
+                                        prepared.modules[receiverQualified.targetModule].sourceIndex
+                                            => receiverOwnerModule!
+                                        receiverQualified.targetSymbol => receiverOwnerSymbol!
+                                    }
+                                receiverQualifiedSearch! + 1 => receiverQualifiedSearch!
+                            }
+                        0 => receiverModuleSearch!
+                        receiverModuleSearch! < (prepared.modules -> len) and receiverOwnerModule! < 0
+                            -> while {
+                                prepared.modules[receiverModuleSearch!] => receiverCandidateIdentity
+                                receiverCandidateIdentity.pathHash == receiverModuleIdentity.pathHash
+                                    -> if {
+                                        receiverCandidateIdentity.sourceIndex => receiverCandidateSource
+                                        prepared.package.ranges[receiverCandidateSource] => receiverCandidateRange
+                                        prepared.package.sources[receiverCandidateSource] -> len => receiverCandidateLength
+                                        prepared.package.sources[receiverCandidateSource] -> slice(UIntSize(0), receiverCandidateLength) => receiverCandidateText
+                                        0 => receiverSymbolSearch!
+                                        receiverSymbolSearch! < receiverCandidateRange.symbolCount
+                                            -> while {
+                                                prepared.package.symbols[receiverCandidateRange.symbolStart + receiverSymbolSearch!] => receiverCandidate
+                                                receiverCandidate.parent < 0 and (receiverCandidate.kind == 3 or receiverCandidate.kind == 4)
+                                                    -> if {
+                                                        prepared.package.tokens[receiverCandidateRange.tokenStart + receiverCandidate.nameToken] => receiverCandidateName
+                                                        receiverCandidateName.span.length == receiverImplName.span.length => receiverNameEqual!
+                                                        UIntSize(0) => receiverNameByte!
+                                                        receiverNameEqual! and receiverNameByte! < receiverImplName.span.length
+                                                            -> while {
+                                                                (receiverCandidateText -> byte(receiverCandidateName.span.start + receiverNameByte!)) != (source -> byte(receiverImplName.span.start + receiverNameByte!))
+                                                                    -> if {
+                                                                        false => receiverNameEqual!
+                                                                    }
+                                                                receiverNameByte! + 1 => receiverNameByte!
+                                                            }
+                                                        receiverNameEqual! -> if {
+                                                            receiverOwnerModule! >= 0 -> if {
+                                                                true => receiverOwnerAmbiguous!
+                                                            } else {
+                                                                receiverCandidateSource => receiverOwnerModule!
+                                                                receiverSymbolSearch! => receiverOwnerSymbol!
+                                                            }
+                                                        }
+                                                    }
+                                                receiverSymbolSearch! + 1 => receiverSymbolSearch!
+                                            }
+                                    }
+                                receiverModuleSearch! + 1 => receiverModuleSearch!
+                            }
+                        receiverOwnerModule! >= 0 and not receiverOwnerAmbiguous!
+                            -> if {
+                                0 => receiverTypeSearch!
+                                receiverTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                                    -> while {
+                                        frozenRecursiveSemanticTypes[receiverTypeSearch!] => receiverType
+                                        receiverType.kind == 1
+                                            and (receiverType.origin == 0
+                                            or receiverType.origin == 2)
+                                            and receiverType.module == receiverOwnerModule!
+                                            and receiverType.symbol == receiverOwnerSymbol!
+                                            and receiverType.status == 0
+                                            -> if {
+                                                receiverTypeSearch! => parameterTypeId!
+                                                receiverType.origin => parameterOrigin!
+                                                receiverType.module => parameterModule!
+                                                receiverType.symbol => parameterTypeSymbol!
+                                            }
+                                        receiverTypeSearch! + 1 => receiverTypeSearch!
+                                    }
+                            }
+                    }
+                results! -> len => functionIr
+                functionIr + 1 => returnIr
+                -1 => parameterIr!
+                parameterSymbol! >= 0 and parameterOrigin! >= 0
+                    -> if { returnIr + 1 => parameterIr! }
+                results! -> push(TypedIrNode {
+                    kind: 0
+                    parent: -1
+                    sourceModule: sourceIndex
+                    astNode: function.astNode
+                    symbol: symbolIndex
+                    targetModule: sourceIndex
+                    typeOrigin: functionResultOrigin!
+                    typeModule: functionResultModule!
+                    typeSymbol: functionResultSymbol!
+                    typeId: functionResultTypeId!
+                    typeKind: functionResultTypeKind!
+                    typeFlags: functionResultTypeFlags!
+                    payloadToken: function.nameToken
+                    opcode: -1
+                    operand0: returnIr
+                    operand1: parameterIr!
+                    nextOperand: -1
+                    flags: function.flags
+                })
+                results! -> push(TypedIrNode {
+                    kind: 1
+                    parent: functionIr
+                    sourceModule: sourceIndex
+                    astNode: resultTypeAstNode!
+                    symbol: symbolIndex
+                    targetModule: -1
+                    typeOrigin: functionResultOrigin!
+                    typeModule: functionResultModule!
+                    typeSymbol: functionResultSymbol!
+                    typeId: functionResultTypeId!
+                    typeKind: functionResultTypeKind!
+                    typeFlags: functionResultTypeFlags!
+                    payloadToken: -1
+                    opcode: -1
+                    operand0: -1
+                    operand1: -1
+                    nextOperand: -1
+                    flags: 0
+                })
+                parameterIr! >= 0 -> if {
+                    prepared.package.symbols[sourceRange.symbolStart + parameterSymbol!] => parameter
+                    results! -> push(TypedIrNode {
+                        kind: 10
+                        parent: functionIr
+                        sourceModule: sourceIndex
+                        astNode: parameter.astNode
+                        symbol: parameterSymbol!
+                        targetModule: sourceIndex
+                        typeOrigin: parameterOrigin!
+                        typeModule: parameterModule!
+                        typeSymbol: parameterTypeSymbol!
+                        typeId: parameterTypeId!
+                        typeKind: -1
+                        typeFlags: 0
+                        payloadToken: parameter.nameToken
+                        opcode: -1
+                        operand0: -1
+                        operand1: -1
+                        nextOperand: -1
+                        flags: parameter.flags
+                    })
+                }
+                -1 => firstAdditionalParameterIr!
+                -1 => previousAdditionalParameterIr!
+                0 => additionalParameterSearch!
+                additionalParameterSearch! < sourceRange.symbolCount
+                    -> while {
+                        prepared.package.symbols[sourceRange.symbolStart + additionalParameterSearch!] => additionalParameter
+                        additionalParameter.kind == 35 and additionalParameter.parent == symbolIndex and additionalParameter.astNode != function.astNode
+                            -> if {
+                                -1 => additionalParameterTypeId!
+                                -1 => additionalParameterReferenceIndex!
+                                additionalParameter.typeNode >= 0 and additionalParameter.typeNode < sourceRange.astCount
+                                    -> if { recursiveTypes.referenceIndexByTypeAst[sourceRange.astStart + additionalParameter.typeNode] => additionalParameterReferenceIndex! }
+                                additionalParameterReferenceIndex! >= 0 and recursiveTypes.references[additionalParameterReferenceIndex!].status == 0
+                                    -> if { recursiveTypes.references[additionalParameterReferenceIndex!].typeId => additionalParameterTypeId! }
+                                -1 => additionalParameterOrigin!
+                                -1 => additionalParameterModule!
+                                -1 => additionalParameterTypeSymbol!
+                                -1 => additionalParameterTypeKind!
+                                0 => additionalParameterTypeFlags!
+                                additionalParameterTypeId! >= 0 -> if {
+                                    frozenRecursiveSemanticTypes[additionalParameterTypeId!] => additionalParameterType
+                                    additionalParameterType.origin => additionalParameterOrigin!
+                                    additionalParameterType.module => additionalParameterModule!
+                                    additionalParameterType.symbol => additionalParameterTypeSymbol!
+                                    additionalParameterType.kind => additionalParameterTypeKind!
+                                    recursiveTypeFlags[additionalParameterTypeId!] => additionalParameterTypeFlags!
+                                    additionalParameterType.kind != 1 -> if {
+                                        10 + additionalParameterType.kind => additionalParameterOrigin!
+                                        additionalParameterType.first >= 0 -> if {
+                                            frozenRecursiveSemanticTypes[additionalParameterType.first] => additionalParameterElement
+                                            additionalParameterElement.module => additionalParameterModule!
+                                            additionalParameterElement.symbol => additionalParameterTypeSymbol!
+                                        }
+                                    }
+                                }
+                                additionalParameterOrigin! < 0 -> if {
+                                    0 => additionalParameterNominalSearch!
+                                    additionalParameterNominalSearch! < (prepared.nominal -> len)
+                                        -> while {
+                                            prepared.nominal[additionalParameterNominalSearch!] => additionalParameterNominal
+                                            additionalParameterNominal.sourceModule == sourceIndex and additionalParameterNominal.typeAst == additionalParameter.typeNode
+                                                -> if {
+                                                    additionalParameterNominal.origin => additionalParameterOrigin!
+                                                    additionalParameterNominal.targetModule => additionalParameterModule!
+                                                    additionalParameterNominal.targetSymbol => additionalParameterTypeSymbol!
+                                                }
+                                            additionalParameterNominalSearch! + 1 => additionalParameterNominalSearch!
+                                        }
+                                }
+                                additionalParameterOrigin! < 0 -> if {
+                                    0 => additionalParameterCompositeSearch!
+                                    additionalParameterCompositeSearch! < (prepared.composite -> len)
+                                        -> while {
+                                            prepared.composite[additionalParameterCompositeSearch!] => additionalParameterComposite
+                                            additionalParameterComposite.sourceModule == sourceIndex and additionalParameterComposite.typeAst == additionalParameter.typeNode
+                                                -> if {
+                                                    10 + additionalParameterComposite.kind => additionalParameterOrigin!
+                                                    additionalParameterComposite.elementModule => additionalParameterModule!
+                                                    additionalParameterComposite.elementSymbol => additionalParameterTypeSymbol!
+                                                }
+                                            additionalParameterCompositeSearch! + 1 => additionalParameterCompositeSearch!
+                                        }
+                                }
+                                results! -> len => additionalParameterIr
+                                firstAdditionalParameterIr! < 0 -> if { additionalParameterIr => firstAdditionalParameterIr! }
+                                previousAdditionalParameterIr! >= 0 -> if {
+                                    results![previousAdditionalParameterIr!] => previousAdditionalParameter!
+                                    additionalParameterIr => previousAdditionalParameter!.nextOperand
+                                    previousAdditionalParameter! => results![previousAdditionalParameterIr!]
+                                }
+                                results! -> push(TypedIrNode {
+                                    kind: 10
+                                    parent: functionIr
+                                    sourceModule: sourceIndex
+                                    astNode: additionalParameter.astNode
+                                    symbol: additionalParameterSearch!
+                                    targetModule: sourceIndex
+                                    typeOrigin: additionalParameterOrigin!
+                                    typeModule: additionalParameterModule!
+                                    typeSymbol: additionalParameterTypeSymbol!
+                                    typeId: additionalParameterTypeId!
+                                    typeKind: additionalParameterTypeKind!
+                                    typeFlags: additionalParameterTypeFlags!
+                                    payloadToken: additionalParameter.nameToken
+                                    opcode: -1
+                                    operand0: -1
+                                    operand1: -1
+                                    nextOperand: -1
+                                    flags: additionalParameter.flags
+                                })
+                                additionalParameterIr => previousAdditionalParameterIr!
+                            }
+                        additionalParameterSearch! + 1 => additionalParameterSearch!
+                    }
+                # A compile-time value generic is a value in the function body
+                # but not a source-level runtime parameter. Lower it as a
+                # hidden trailing Int parameter so one generic body can serve
+                # every numeric instantiation without source rewriting.
+                0 => valueGenericSearch!
+                valueGenericSearch! < sourceRange.symbolCount
+                    -> while {
+                        prepared.package.symbols[sourceRange.symbolStart + valueGenericSearch!] => valueGeneric
+                        false => valueGenericUsed!
+                        valueGeneric.kind == 32 and valueGeneric.parent == symbolIndex
+                            -> if {
+                                0 => valueGenericReferenceSearch!
+                                valueGenericReferenceSearch! < (resolvedNames! -> len)
+                                    -> while {
+                                        resolvedNames![valueGenericReferenceSearch!] => valueGenericReference
+                                        valueGenericReference.symbol == valueGenericSearch!
+                                            and prepared.package.nodes[sourceRange.astStart + valueGenericReference.astNode].kind == 15
+                                            -> if {
+                                                true => valueGenericUsed!
+                                            }
+                                        valueGenericReferenceSearch! + 1 => valueGenericReferenceSearch!
+                                    }
+                            }
+                        valueGenericUsed! -> if {
+                            -1 => valueGenericIntTypeId!
+                            0 => valueGenericIntTypeSearch!
+                            valueGenericIntTypeSearch! < (frozenRecursiveSemanticTypes -> len) and valueGenericIntTypeId! < 0
+                                -> while {
+                                    frozenRecursiveSemanticTypes[valueGenericIntTypeSearch!] => valueGenericIntType
+                                    valueGenericIntType.kind == 1 and valueGenericIntType.origin == 1 and valueGenericIntType.symbol == 2
+                                        -> if {
+                                            valueGenericIntTypeSearch! => valueGenericIntTypeId!
+                                        }
+                                    valueGenericIntTypeSearch! + 1 => valueGenericIntTypeSearch!
+                                }
+                            results! -> len => valueGenericIr
+                            firstAdditionalParameterIr! < 0 -> if { valueGenericIr => firstAdditionalParameterIr! }
+                            previousAdditionalParameterIr! >= 0 -> if {
+                                results![previousAdditionalParameterIr!] => previousValueGenericParameter!
+                                valueGenericIr => previousValueGenericParameter!.nextOperand
+                                previousValueGenericParameter! => results![previousAdditionalParameterIr!]
+                            }
+                            results! -> push(TypedIrNode {
+                                kind: 10
+                                parent: functionIr
+                                sourceModule: sourceIndex
+                                astNode: valueGeneric.astNode
+                                symbol: valueGenericSearch!
+                                targetModule: sourceIndex
+                                typeOrigin: 1
+                                typeModule: -1
+                                typeSymbol: 2
+                                typeId: valueGenericIntTypeId!
+                                typeKind: 1
+                                typeFlags: 0
+                                payloadToken: valueGeneric.nameToken
+                                opcode: -1
+                                operand0: -1
+                                operand1: -1
+                                nextOperand: -1
+                                flags: 0
+                            })
+                            valueGenericIr => previousAdditionalParameterIr!
+                        }
+                        valueGenericSearch! + 1 => valueGenericSearch!
+                    }
+                firstAdditionalParameterIr! >= 0 -> if {
+                    results![functionIr] => parameterizedFunction!
+                    firstAdditionalParameterIr! => parameterizedFunction!.nextOperand
+                    parameterizedFunction! => results![functionIr]
+                }
+
+                [Int; ~] => astToIr!
+                0 => astMapIndex!
+                astMapIndex! < sourceRange.astCount -> while {
+                    astToIr! -> push(-1)
+                    astMapIndex! + 1 => astMapIndex!
+                }
+                results! -> len => expressionIrStart
+                sourceRange.astStart + function.astNode => functionGlobalAst
+                frozenFunctionNodeStartsByAst[functionGlobalAst] => functionNodeStart
+                functionNodeStart + frozenFunctionNodeCountsByAst[functionGlobalAst] => functionNodeEnd
+                functionNodeStart => bindingNodePosition!
+                bindingNodePosition! < functionNodeEnd -> while {
+                    frozenFunctionNodeIndices[bindingNodePosition!] => bindingAstIndex
+                    prepared.package.nodes[sourceRange.astStart + bindingAstIndex] => bindingAst
+                    bindingAst.kind == 9 or bindingAst.kind == 61 or (bindingAst.kind == 48 and bindingAst.secondaryToken >= 0)
+                        -> if {
+                            true => bindingBelongsToFunction
+                            bindingBelongsToFunction -> if {
+                                -1 => bindingTypeIndex!
+                                frozenNearestLegacyIndexByAst[sourceRange.astStart + bindingAstIndex] => bindingTypeIndex!
+                                frozenNearestCanonicalTypeByAst[sourceRange.astStart + bindingAstIndex] => bindingCanonicalTypeId!
+                                bindingCanonicalTypeId! < 0 -> if {
+                                    0 => bindingValueTypeSearch!
+                                    bindingValueTypeSearch! < sourceRange.astCount and bindingCanonicalTypeId! < 0
+                                        -> while {
+                                            prepared.package.nodes[sourceRange.astStart + bindingValueTypeSearch!] => bindingValueTypeAst
+                                            bindingValueTypeAst.parent == bindingAstIndex
+                                                and bindingValueTypeAst.start == bindingAst.start
+                                                -> if {
+                                                    frozenRecursiveTypeByAst[sourceRange.astStart + bindingValueTypeSearch!] => bindingValueTypeId
+                                                    bindingValueTypeId >= 0 -> if { bindingValueTypeId => bindingCanonicalTypeId! }
+                                                }
+                                            bindingValueTypeSearch! + 1 => bindingValueTypeSearch!
+                                        }
+                                }
+                                # `source -> yield => accepted` binds the result of
+                                # the caller-supplied block. A flow binding owns the
+                                # yield AST as its value child, while direct role
+                                # invocation uses the role-call AST itself. Both
+                                # operations are Unit-valued at the call site, so
+                                # the declared block-result type is authoritative
+                                # for the response binding.
+                                (bindingAst.kind == 48 and bindingAst.secondaryToken >= 0) => bindingUsesBlockResult!
+                                bindingAst.kind == 9 or bindingAst.kind == 61
+                                    -> if {
+                                        0 => bindingYieldSearch!
+                                        bindingYieldSearch! < sourceRange.astCount and not bindingUsesBlockResult!
+                                            -> while {
+                                                prepared.package.nodes[sourceRange.astStart + bindingYieldSearch!] => bindingYieldCandidate
+                                                bindingYieldCandidate.parent == bindingAstIndex and bindingYieldCandidate.kind == 10
+                                                    -> if {
+                                                        source -> flowIntrinsicOpcode(
+                                                        prepared.package.tokens,
+                                                        sourceRange.tokenStart,
+                                                        bindingYieldCandidate
+                                                        ) => bindingYieldOpcode
+                                                        bindingYieldOpcode == -227 -> if { true => bindingUsesBlockResult! }
+                                                    }
+                                                bindingYieldSearch! + 1 => bindingYieldSearch!
+                                            }
+                                    }
+                                bindingUsesBlockResult! and function.blockResultTypeNode >= 0
+                                    -> if {
+                                        -1 => roleResultReferenceIndex!
+                                        function.blockResultTypeNode < sourceRange.astCount
+                                            -> if { recursiveTypes.referenceIndexByTypeAst[sourceRange.astStart + function.blockResultTypeNode] => roleResultReferenceIndex! }
+                                        roleResultReferenceIndex! >= 0
+                                            and recursiveTypes.references[roleResultReferenceIndex!].status == 0
+                                            and recursiveTypes.references[roleResultReferenceIndex!].typeId >= 0
+                                            -> if { recursiveTypes.references[roleResultReferenceIndex!].typeId => bindingCanonicalTypeId! }
+                                    }
+                                -1 => bindingSymbol!
+                                0 => bindingSymbolSearch!
+                                bindingSymbolSearch! < sourceRange.symbolCount
+                                    -> while {
+                                        (prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 9 or prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 61) and prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].astNode == bindingAstIndex
+                                            -> if { bindingSymbolSearch! => bindingSymbol! }
+                                        bindingSymbolSearch! + 1 => bindingSymbolSearch!
+                                    }
+                                # A mutable rebind inside a stream callback refers
+                                # to the existing outer slot. Its callback-local
+                                # symbol can have no standalone inferred type, so
+                                # recover canonical identity from the nearest prior
+                                # binding with the same source name.
+                                bindingAst.flags == 1 and bindingAst.payloadToken >= 0
+                                    -> if {
+                                        prepared.package.tokens[sourceRange.tokenStart + bindingAst.payloadToken] => mutableBindingName
+                                        results! -> len => previousBindingSearch!
+                                        previousBindingSearch! > 0 -> while {
+                                            previousBindingSearch! - 1 => previousBindingSearch!
+                                            results![previousBindingSearch!] => previousBinding
+                                            previousBinding.kind == 17 and previousBinding.flags == 1 and previousBinding.sourceModule == sourceIndex and previousBinding.payloadToken >= 0
+                                                -> if {
+                                                    prepared.package.tokens[sourceRange.tokenStart + previousBinding.payloadToken] => previousBindingName
+                                                    mutableBindingName.span.length == previousBindingName.span.length => previousBindingEqual!
+                                                    UIntSize(0) => previousBindingByte!
+                                                    previousBindingEqual! and previousBindingByte! < mutableBindingName.span.length
+                                                        -> while {
+                                                            (source -> byte(mutableBindingName.span.start + previousBindingByte!)) != (source -> byte(previousBindingName.span.start + previousBindingByte!))
+                                                                -> if { false => previousBindingEqual! }
+                                                            previousBindingByte! + 1 => previousBindingByte!
+                                                        }
+                                                    previousBindingEqual! -> if {
+                                                        previousBinding.symbol => bindingSymbol!
+                                                        previousBinding.typeId => bindingCanonicalTypeId!
+                                                        0 => previousBindingSearch!
+                                                    }
+                                                }
+                                        }
+                                    }
+                                bindingSymbol! >= 0 -> if {
+                                    prepared.package.symbols[sourceRange.symbolStart + bindingSymbol!] => declaredBindingSymbol
+                                    -1 => bindingDeclaredReferenceIndex!
+                                    declaredBindingSymbol.typeNode >= 0 and declaredBindingSymbol.typeNode < sourceRange.astCount
+                                        -> if { recursiveTypes.referenceIndexByTypeAst[sourceRange.astStart + declaredBindingSymbol.typeNode] => bindingDeclaredReferenceIndex! }
+                                    bindingDeclaredReferenceIndex! >= 0
+                                        -> if { recursiveTypes.references[bindingDeclaredReferenceIndex!].typeId => bindingCanonicalTypeId! }
+                                }
+                                bindingSymbol! >= 0 -> if {
+                                    -1 => bindingOrigin!
+                                    -1 => bindingModule!
+                                    -1 => bindingSymbolType!
+                                    -1 => bindingTypeKind!
+                                    0 => bindingTypeFlags!
+                                    bindingTypeIndex! >= 0 -> if {
+                                        inferred[bindingTypeIndex!] => bindingType
+                                        bindingType.origin => bindingOrigin!
+                                        bindingType.targetModule => bindingModule!
+                                        bindingType.targetSymbol => bindingSymbolType!
+                                    }
+                                    bindingCanonicalTypeId! >= 0 -> if {
+                                        frozenRecursiveSemanticTypes[bindingCanonicalTypeId!] => bindingCanonicalType
+                                        bindingCanonicalType.origin => bindingOrigin!
+                                        bindingCanonicalType.module => bindingModule!
+                                        bindingCanonicalType.symbol => bindingSymbolType!
+                                        bindingCanonicalType.kind => bindingTypeKind!
+                                        recursiveTypeFlags[bindingCanonicalTypeId!] => bindingTypeFlags!
+                                        (bindingCanonicalType.kind >= 2 and bindingCanonicalType.kind <= 6) or bindingCanonicalType.kind == 8
+                                            -> if { 10 + bindingCanonicalType.kind => bindingOrigin! }
+                                        bindingCanonicalType.kind == 2 or bindingCanonicalType.kind == 3 or bindingCanonicalType.kind == 4 or bindingCanonicalType.kind == 6 or bindingCanonicalType.kind == 8
+                                            -> if {
+                                                bindingCanonicalType.first >= 0 -> if {
+                                                    frozenRecursiveSemanticTypes[bindingCanonicalType.first].module => bindingModule!
+                                                    frozenRecursiveSemanticTypes[bindingCanonicalType.first].symbol => bindingSymbolType!
+                                                }
+                                            }
+                                        bindingCanonicalType.kind == 5 -> if {
+                                            bindingCanonicalType.first >= 0 -> if { frozenRecursiveSemanticTypes[bindingCanonicalType.first].symbol => bindingModule! }
+                                            bindingCanonicalType.second >= 0 -> if { frozenRecursiveSemanticTypes[bindingCanonicalType.second].symbol => bindingSymbolType! }
+                                        }
+                                    }
+                                    bindingOrigin! == 13 and bindingSymbol! >= 0
+                                        -> if {
+                                            prepared.package.symbols[sourceRange.symbolStart + bindingSymbol!] => declaredBinding
+                                            0 => declaredBindingTypeSearch!
+                                            declaredBindingTypeSearch! < (prepared.nominal -> len)
+                                                -> while {
+                                                    prepared.nominal[declaredBindingTypeSearch!] => declaredBindingType
+                                                    declaredBindingType.sourceModule == sourceIndex and declaredBindingType.typeAst == declaredBinding.typeNode and declaredBindingType.status == 0
+                                                        -> if {
+                                                            declaredBindingType.targetModule => bindingModule!
+                                                            declaredBindingType.targetSymbol => bindingSymbolType!
+                                                        }
+                                                    declaredBindingTypeSearch! + 1 => declaredBindingTypeSearch!
+                                                }
+                                        }
+                                    results! -> len => bindingIr
+                                    bindingIr => astToIr![bindingAstIndex]
+                                    bindingAst.payloadToken => bindingPayloadToken!
+                                    bindingAst.kind == 48 -> if { bindingAst.secondaryToken => bindingPayloadToken! }
+                                    results! -> push(TypedIrNode {
+                                        kind: 17
+                                        parent: returnIr
+                                        sourceModule: sourceIndex
+                                        astNode: bindingAstIndex
+                                        symbol: bindingSymbol!
+                                        targetModule: sourceIndex
+                                        typeOrigin: bindingOrigin!
+                                        typeModule: bindingModule!
+                                        typeSymbol: bindingSymbolType!
+                                        typeId: bindingCanonicalTypeId!
+                                        typeKind: bindingTypeKind!
+                                        typeFlags: bindingTypeFlags!
+                                        payloadToken: bindingPayloadToken!
+                                        opcode: -1
+                                        operand0: -1
+                                        operand1: -1
+                                        nextOperand: -1
+                                        flags: bindingAst.flags
+                                    })
+                                }
+                            }
+                        }
+                    bindingNodePosition! + 1 => bindingNodePosition!
+                }
+                results! -> lowerOrdinaryFunctionExpressions(astToIr!, resolvedNames!, resolvedSymbolByAst!, resolvedQualifiedByAst!, qualifiedFunctionPathByAst!, qualifiedValueVariantIndexByAst!, localMemberByParentAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
+
+                results! -> finalizeOrdinaryFunctionExpressions(astToIr!, resolvedNames!, prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, symbolIndex, functionIr, expressionIrStart, resultRootAst!, returnIr, functionResultOrigin!, functionResultModule!, functionResultSymbol!, functionResultTypeId!)
+            }
+    }
+    results! -> sourceTypedIr
+}

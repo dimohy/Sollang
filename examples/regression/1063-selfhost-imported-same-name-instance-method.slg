@@ -1,0 +1,56 @@
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    # A qualified factory symbol is not the nominal type of its bound result.
+    # Canonical return types must disambiguate equal method names by owner.
+    """"
+        namespace fixture.clocks
+
+        public struct FirstClock {
+            public ticks: Long
+        }
+
+        public struct SecondClock {
+            public ticks: Long
+        }
+
+        impl FirstClock {
+            public now: self -> Long => self.ticks
+        }
+
+        impl SecondClock {
+            public now: self -> Long => self.ticks
+        }
+
+        public first: -> FirstClock => FirstClock { ticks: 40 }
+        public second: -> SecondClock => SecondClock { ticks: 2 }
+    """" => librarySource
+
+    """"
+        namespace sample
+
+        import fixture.clocks as clocks
+
+        main {
+            clocks.first() => first
+            clocks.second() => second
+            first -> now => left
+            second -> now => right
+            left + right -> println
+        }
+    """" => sampleSource
+
+    [librarySource, sampleSource; ~] -> semanticContext.prepare => prepared
+    0 => resolved!
+    0 => failed!
+    0 => callIndex!
+    callIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[callIndex!] => call
+        call.sourceModule == 1 -> if {
+            call.status == 0 -> if { resolved! + 1 => resolved! }
+            call.status != 0 -> if { failed! + 1 => failed! }
+        }
+        callIndex! + 1 => callIndex!
+    }
+    "same-name-methods=$(resolved!),failed=$(failed!)" -> println
+}

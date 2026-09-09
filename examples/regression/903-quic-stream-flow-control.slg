@@ -1,5 +1,5 @@
-import sys.quic.error as errors
-import sys.quic.stream_state as streams
+import std.net.quic.error as errors
+import std.net.quic.stream_state as streams
 
 verify: -> Result<Bool, errors.Error> uses Console {
     streams.validatePeerOpened(0, true, 1, 1)? => bidirectional
@@ -13,23 +13,55 @@ verify: -> Result<Bool, errors.Error> uses Console {
         Err(error) { "$(error.code)" -> println }
     }
 
-    streams.onReceive(streams.initialReceiveFlow(100), 10, 20, false)? => received
-    streams.onReceive(received, 30, 10, true)? => finished
-    streams.onConsumed(finished, 25)? => consumed
-    streams.onReceive(finished, 40, 1, false) -> when {
+    streams.validatePeerOpened(
+        4_611_686_018_427_387_903,
+        false,
+        1_152_921_504_606_846_976,
+        1_152_921_504_606_846_976)? => finalIdentity
+    streams.validatePeerOpened(
+        4_611_686_018_427_387_904,
+        false,
+        1_152_921_504_606_846_976,
+        1_152_921_504_606_846_976) -> when {
+        Ok(opened) { "missing-stream-id-limit" -> println }
+        Err(error) { "$(finalIdentity.sequence),$(error.code)" -> println }
+    }
+    streams.validatePeerOpened(
+        0,
+        true,
+        1_152_921_504_606_846_977,
+        1) -> when {
+        Ok(opened) { "missing-stream-count-limit" -> println }
+        Err(error) { "$(error.code)" -> println }
+    }
+
+    streams.initialReceiveFlow(100) -> onReceive(10, 20, false)? => received
+    received -> onReceive(30, 10, true)? => finished
+    finished -> onConsumed(25)? => consumed
+    finished -> onReceive(40, 1, false) -> when {
         Ok(state) { "missing-final-size-error" -> println }
         Err(error) { "$(finished.highestReceived),$(finished.finalSize),$(consumed.consumed),$(error.code)" -> println }
     }
+    streams.initialReceiveFlow(4_611_686_018_427_387_903)
+        -> onReceive(4_611_686_018_427_387_903, 1, false) -> when {
+        Ok(state) { "missing-offset-limit" -> println }
+        Err(error) { "$(error.code)" -> println }
+    }
 
-    streams.reserveSend(streams.initialSendFlow(50), 30, false)? => firstSend
-    streams.reserveSend(firstSend, 20, true)? => finalSend
-    streams.reserveSend(finalSend, 0, false) -> when {
+    streams.initialSendFlow(50) -> reserveSend(30, false)? => firstSend
+    firstSend -> reserveSend(20, true)? => finalSend
+    finalSend -> reserveSend(0, false) -> when {
         Ok(state) { "missing-closed-send-error" -> println }
         Err(error) { "$(finalSend.sent),$(finalSend.finalSize),$(error.code)" -> println }
     }
+    streams.initialSendFlow(4_611_686_018_427_387_903)
+        -> reserveSend(4_611_686_018_427_387_904, false) -> when {
+        Ok(state) { "missing-send-offset-limit" -> println }
+        Err(error) { "$(error.code)" -> println }
+    }
 
-    streams.onConnectionReceive(streams.initialConnectionFlow(100, 80), 60)? => connectionReceived
-    streams.reserveConnectionSend(connectionReceived, 70)? => connectionSent
+    streams.initialConnectionFlow(100, 80) -> onReceive(60)? => connectionReceived
+    connectionReceived -> reserveSend(70)? => connectionSent
     "$(connectionSent.received),$(connectionSent.sent)" -> println
     Result<Bool, errors.Error>.Ok(true)
 }

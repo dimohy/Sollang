@@ -1,0 +1,131 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    """"
+        namespace sample
+
+        struct Context { lower: Int }
+        struct State { upper: Int }
+
+        within value: Int, context: ref Context, state: ref State -> Bool {
+            value >= context.lower and value <= state.upper
+        }
+
+        shift value: Int, context: ref Context, state: ref State -> Int {
+            value + context.lower + state.upper
+        }
+
+        borrow value: ref State -> ref State { value }
+
+        run values: [Int; ~], context: ref Context -> [Int; ~] {
+            State { upper: 4 } => stateOwner
+            stateOwner -> borrow => state
+            values -> parallel value {
+                true and (value -> within(context, state))
+                    -> if {
+                        value -> shift(context, state)
+                    } else {
+                        value -> shift(context, state)
+                    }
+            } => shifted
+            shifted
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> expressionTypeIds.resolveContext => types
+    context -> typedIr.lowerResolvedContext(types) => ir
+    context.package.ranges[0] => sourceRange
+    -1 => roleSymbol!
+    0 => symbolOffset!
+    symbolOffset! < sourceRange.symbolCount -> while {
+        context.package.symbols[sourceRange.symbolStart + symbolOffset!] => symbol
+        symbol.kind == 35
+            and symbol.astNode >= 0
+            and context.package.nodes[sourceRange.astStart + symbol.astNode].kind == 48
+            -> if { symbolOffset! => roleSymbol! }
+        symbolOffset! + 1 => symbolOffset!
+    }
+
+    0 => resolvedUses!
+    0 => typedUses!
+    0 => nameOffset!
+    nameOffset! < sourceRange.nameCount -> while {
+        context.package.names[sourceRange.nameStart + nameOffset!].symbol == roleSymbol!
+            -> if { resolvedUses! + 1 => resolvedUses! }
+        nameOffset! + 1 => nameOffset!
+    }
+    0 => typeOffset!
+    typeOffset! < (types.expressions -> len) -> while {
+        types.expressions[typeOffset!] => expressionType
+        expressionType.sourceModule == 0
+            and expressionType.astNode >= 0
+            and context.package.names[sourceRange.nameStart].astNode >= 0
+            -> if {
+                0 => roleNameSearch!
+                roleNameSearch! < sourceRange.nameCount -> while {
+                    context.package.names[sourceRange.nameStart + roleNameSearch!] => roleName
+                    roleName.symbol == roleSymbol! and roleName.astNode == expressionType.astNode
+                        -> if { typedUses! + 1 => typedUses! }
+                    roleNameSearch! + 1 => roleNameSearch!
+                }
+            }
+        typeOffset! + 1 => typeOffset!
+    }
+
+    0 => irUses!
+    0 => wrongRoleTypes!
+    0 => irDefinitions!
+    0 => linkedCalls!
+    0 => completeCalls!
+    -1 => parallelTypeKind!
+    -1 => parallelElementType!
+    -1 => callbackRootKind!
+    -1 => callbackRootType!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        node.sourceModule == 0 and node.kind == 5 and node.symbol == roleSymbol!
+            -> if {
+                irUses! + 1 => irUses!
+                parallelElementType! >= 0 and node.typeId != parallelElementType!
+                    -> if { wrongRoleTypes! + 1 => wrongRoleTypes! }
+            }
+        node.sourceModule == 0
+            and (node.kind == 10 or node.kind == 17 or node.kind == 29)
+            and node.symbol == roleSymbol!
+            -> if { irDefinitions! + 1 => irDefinitions! }
+        node.sourceModule == 0
+            and node.kind == 6
+            and node.opcode == -207
+            and node.operand1 >= 0
+            -> if {
+                node.typeId >= 0 -> if {
+                    types.types[node.typeId].kind => parallelTypeKind!
+                    types.types[node.typeId].first => parallelElementType!
+                }
+                ir[node.operand1].kind => callbackRootKind!
+                ir[node.operand1].typeId => callbackRootType!
+            }
+        node.sourceModule == 0
+            and node.kind == 6
+            and node.operand0 >= 0
+            and ir[node.operand0].sourceModule == 0
+            and ir[node.operand0].symbol == roleSymbol!
+            -> if {
+                linkedCalls! + 1 => linkedCalls!
+                0 => argumentCount!
+                node.operand0 => argumentIndex!
+                argumentIndex! >= 0 -> while {
+                    argumentCount! + 1 => argumentCount!
+                    ir[argumentIndex!].nextOperand => argumentIndex!
+                }
+                argumentCount! == 3 -> if { completeCalls! + 1 => completeCalls! }
+            }
+        irIndex! + 1 => irIndex!
+    }
+    "resolved=$(resolvedUses!),typed=$(typedUses!),uses=$(irUses!),wrong=$(wrongRoleTypes!),definitions=$(irDefinitions!),heads=$(linkedCalls!),complete=$(completeCalls!),parallel=$(parallelTypeKind!):$(parallelElementType!),root=$(callbackRootKind!):$(callbackRootType!)"
+        -> println
+}

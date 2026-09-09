@@ -1,0 +1,45 @@
+# The enum owner must transfer its payload into the projected queue exactly
+# once. Taking it back must not observe a dangling buffer or double-drop it.
+struct Frame {
+    data: [UInt8; ~]
+}
+
+enum Value {
+    Frame(Frame)
+}
+
+struct Queue {
+    frames: [Frame; ~]
+}
+
+enqueue queue: mut Queue, frame: move Frame -> Result<Unit, Text> {
+    queue.frames -> push(frame)
+    Result<Unit, Text>.Ok
+}
+
+inspect frame: Frame -> Int => Int(frame.data[0])
+
+borrowOnly: -> Int {
+    Value.Frame(Frame { data: [7] }) -> when {
+        Frame(frame) { inspect(frame) }
+    }
+}
+
+verify: -> Result<Int, Text> {
+    [Value; ~] => values!
+    values! -> push(Value.Frame(Frame { data: [42] }))
+    Queue { frames: [] } => queue!
+    values! -> take(0) -> when {
+        Frame(frame) { enqueue(queue!, frame)? }
+    }
+    queue!.frames -> take(0) => selected
+    Result<Int, Text>.Ok(Int(selected.data[0]))
+}
+
+main {
+    verify() -> when {
+        Ok(value) { value -> println }
+        Err(error) { error -> println }
+    }
+    borrowOnly() -> println
+}

@@ -1,0 +1,90 @@
+import std.compress.brotli.command as commands
+import std.compress.brotli.command.error as command_errors
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.prefix_table as prefix
+
+kindCode kind: command_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    TruncatedInput { 1 }
+    InvalidBlockSwitch { 2 }
+    InvalidCommand { 3 }
+    CommandLimitExceeded { 4 }
+    OutputLimitExceeded { 5 }
+    InvalidLiteralTree { 6 }
+    InvalidDistanceTree { 7 }
+    InvalidDistance { 8 }
+    UnsupportedDictionary { 9 }
+}
+
+allByte values: [UInt8], expected: UInt8 -> Bool {
+    values -> len => length
+    0 => index!
+    index! < length -> while {
+        values[index!] == expected -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+headerParser: -> Result<headers.Parser, headers.Error> => headers.Limits {
+    maxBlockTypes: 256
+    maxBlockLength: 16_793_840
+    maxContextEntries: 16_384
+    maxTrees: 256
+    maxTableEntries: 1_080
+    maxTotalTableEntries: 276_480
+} -> parser
+
+main {
+    [UInt8(27), 99, 0, 248, 37, 194, 2, 177, 64, 160, 3] => input
+    headerParser() -> when {
+        Err(_) { "header=false" -> println }
+        Ok(parser) {
+            parser -> parse(input, prefix.Position { byteIndex: 3, bitIndex: 0 }) -> when {
+                Err(_) { "parse=false" -> println }
+                Ok(header) {
+                    commands.Limits {
+                        maxOutputBytes: 1_024
+                        maxCommands: 64
+                        maxWindowBytes: 4_194_288
+                    } -> executor(header, 100) -> when {
+                        Err(_) { "executor=false" -> println }
+                        Ok(executor) {
+                            executor -> decode(input) -> when {
+                                Err(error) { "decode-error=$(error.kind -> kindCode):$(error.offset)" -> println }
+                                Ok(decoded) {
+                                    "output=$((decoded.output -> len) == 100 and (decoded.output -> allByte(97)))" -> println
+                                    "position=$(decoded.position.byteIndex):$(decoded.position.bitIndex)" -> println
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    headerParser() -> when {
+        Err(_) { "truncated=false" -> println }
+        Ok(parser) {
+            parser -> parse(input, prefix.Position { byteIndex: 3, bitIndex: 0 }) -> when {
+                Err(_) { "truncated=false" -> println }
+                Ok(header) {
+                    commands.Limits {
+                        maxOutputBytes: 1_024
+                        maxCommands: 64
+                        maxWindowBytes: 4_194_288
+                    } -> executor(header, 100) -> when {
+                        Err(_) { "truncated=false" -> println }
+                        Ok(executor) {
+                            executor -> decode([27, 99, 0, 248, 37, 194, 2, 177, 64, 160]) -> when {
+                                Ok(_) { "truncated=false" -> println }
+                                Err(error) { "truncated=$((error.kind -> kindCode) == 1)" -> println }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

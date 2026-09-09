@@ -1,0 +1,26 @@
+import std.time as time
+
+# The managed runtime owns the current non-blocking Task/timer implementation.
+# The self-host backend must gain the same scheduler before this fixture enters
+# its Stage3 LLVM inventory; a blocking native sleep is not an acceptable shim.
+constructInAsync: -> async Int {
+    time.milliseconds(0) -> when {
+        Ok(duration) { Int(duration -> asMilliseconds) }
+        Err(error) { -1 }
+    }
+}
+
+main {
+    constructInAsync() => construction
+    construction -> await => constructedMillis
+    "async-constructor=$constructedMillis" -> println
+
+    time.milliseconds(0) -> when {
+        Ok(delay) {
+            delay -> sleep => timer
+            timer -> await
+            "sleep=true"
+        }
+        Err(error) { "sleep=false" }
+    } -> println
+}

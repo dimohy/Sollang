@@ -1,0 +1,64 @@
+public enum Phase {
+    Read
+    Write
+}
+
+public struct Payload {
+    public values: [Int; ~]
+}
+
+public struct Child {
+    public seed: Int
+}
+
+public struct Parent {
+    public child: Child
+    public retained: [Int; ~]
+    public phase: Phase
+    public resumePhase: Phase
+}
+
+impl Child {
+    public fresh: self -> Payload {
+        [Int; ~] => values!
+        values! -> push(self.seed)
+        Payload { values: values! }
+    }
+}
+
+impl Parent {
+    public fresh: self -> Payload {
+        self.phase -> when {
+            Read { self.child -> fresh }
+            Write { self.child -> fresh }
+        }
+    }
+
+    public advance: mut self -> Unit {
+        true -> if {
+            self.resumePhase => self.phase
+        }
+    }
+
+    public phaseCode: self -> Int {
+        self.phase -> when {
+            Read { 0 }
+            Write { 1 }
+        }
+    }
+}
+
+main {
+    Parent {
+        child: Child { seed: 7 }
+        retained: [9]
+        phase: Phase.Read
+        resumePhase: Phase.Write
+    } => parent!
+    parent! -> fresh => payload
+    parent! -> advance
+    payload.values[0] => first
+    parent! -> phaseCode => phaseCode
+    "$first" -> println
+    "$phaseCode" -> println
+}

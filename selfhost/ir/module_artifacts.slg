@@ -10,16 +10,16 @@ import sollang.compiler.semantic.type_ids as typeIds
 # ordinals. Schema 2 embeds a canonical structural type table and replaces each
 # session-local typeId with its stable structural hash.
 public struct ArtifactValidation {
-    status: Int
-    moduleCount: Int
-    nodeCount: Int
-    typeCount: Int
+    public status: Int
+    public moduleCount: Int
+    public nodeCount: Int
+    public typeCount: Int
 }
 
 public struct DecodedArtifact {
-    ir: [typed.TypedIrNode; ~]
-    typeTable: artifactTypes.DecodedTypeTable
-    status: Int
+    public ir: [typed.TypedIrNode; ~]
+    public typeTable: artifactTypes.DecodedTypeTable
+    public status: Int
 }
 
 struct ResolvedReference {
@@ -75,13 +75,13 @@ moduleHash identities: [modules.ModuleIdentity; ~], sourceModule: Int -> UInt64 
 moduleIndex identities: [modules.ModuleIdentity; ~], hash: UInt64 -> Int {
     -1 => result!
     0 => identityIndex!
-    (identityIndex! < (identities -> len) and result! < 0)
+    identityIndex! < (identities -> len) and result! < 0
         -> while {
-        identities[identityIndex!].pathHash == hash -> if {
-            identities[identityIndex!].sourceIndex => result!
+            identities[identityIndex!].pathHash == hash -> if {
+                identities[identityIndex!].sourceIndex => result!
+            }
+            identityIndex! + 1 => identityIndex!
         }
-        identityIndex! + 1 => identityIndex!
-    }
     result!
 }
 
@@ -95,15 +95,15 @@ resolveReference moduleHashes: [UInt64; ~], moduleStarts: [Int; ~], moduleCounts
     } else {
         -1 => selected!
         0 => moduleIndex!
-        (moduleIndex! < (moduleHashes -> len) and selected! < 0)
+        moduleIndex! < (moduleHashes -> len) and selected! < 0
             -> while {
-            moduleHashes[moduleIndex!] == hash -> if { moduleIndex! => selected! }
-            moduleIndex! + 1 => moduleIndex!
-        }
+                moduleHashes[moduleIndex!] == hash -> if { moduleIndex! => selected! }
+                moduleIndex! + 1 => moduleIndex!
+            }
         selected! < 0 -> if {
             ResolvedReference { index: -1, status: 2 }
         } else {
-            (ordinal > UInt64(moduleCounts[selected!])) -> if {
+            ordinal > UInt64(moduleCounts[selected!]) -> if {
                 ResolvedReference { index: -1, status: 3 }
             } else {
                 ResolvedReference { index: moduleStarts[selected!] + Int(ordinal) - 1, status: 0 }
@@ -125,13 +125,13 @@ public encode ir: [typed.TypedIrNode; ~], identities: [modules.ModuleIdentity; ~
     0 => serializableNodeCount!
     nodeIndex! < (ir -> len) -> while {
         ir[nodeIndex!].sourceModule => sourceModule
-        (sourceModule >= 0 and sourceModule < (moduleNodeCounts! -> len))
+        sourceModule >= 0 and sourceModule < (moduleNodeCounts! -> len)
             -> if {
-            moduleNodeCounts![sourceModule] => ordinal
-            ordinals! -> push(ordinal)
-            ordinal + 1 => moduleNodeCounts![sourceModule]
-            serializableNodeCount! + 1 => serializableNodeCount!
-        } else { ordinals! -> push(-1) }
+                moduleNodeCounts![sourceModule] => ordinal
+                ordinals! -> push(ordinal)
+                ordinal + 1 => moduleNodeCounts![sourceModule]
+                serializableNodeCount! + 1 => serializableNodeCount!
+            } else { ordinals! -> push(-1) }
         nodeIndex! + 1 => nodeIndex!
     }
 
@@ -160,11 +160,11 @@ public encode ir: [typed.TypedIrNode; ~], identities: [modules.ModuleIdentity; ~
         UInt64(18446744073709551615) => selectedHash!
         0 => candidateIndex!
         candidateIndex! < (identities -> len) -> while {
-            (not emitted![candidateIndex!] and (selected! < 0 or identities[candidateIndex!].pathHash < selectedHash!))
+            not emitted![candidateIndex!] and (selected! < 0 or identities[candidateIndex!].pathHash < selectedHash!)
                 -> if {
-                candidateIndex! => selected!
-                identities[candidateIndex!].pathHash => selectedHash!
-            }
+                    candidateIndex! => selected!
+                    identities[candidateIndex!].pathHash => selectedHash!
+                }
             candidateIndex! + 1 => candidateIndex!
         }
         true => emitted![selected!]
@@ -177,78 +177,78 @@ public encode ir: [typed.TypedIrNode; ~], identities: [modules.ModuleIdentity; ~
         selectedNodeIndex! < (ir -> len) -> while {
             ir[selectedNodeIndex!].sourceModule == selectedSource
                 -> if {
-                ir[selectedNodeIndex!] => node
-                words! -> push(node.kind -> signedWord)
-                (node.parent >= 0 and node.parent < (ir -> len))
-                    -> if {
-                    identities -> moduleHash(ir[node.parent].sourceModule) => parentModuleHash
-                    words! -> push(parentModuleHash)
-                    words! -> push(UInt64(ordinals![node.parent] + 1))
-                } else {
-                    words! -> push(0)
-                    words! -> push(0)
+                    ir[selectedNodeIndex!] => node
+                    words! -> push(node.kind -> signedWord)
+                    node.parent >= 0 and node.parent < (ir -> len)
+                        -> if {
+                            identities -> moduleHash(ir[node.parent].sourceModule) => parentModuleHash
+                            words! -> push(parentModuleHash)
+                            words! -> push(UInt64(ordinals![node.parent] + 1))
+                        } else {
+                            words! -> push(0)
+                            words! -> push(0)
+                        }
+                    identities -> moduleHash(node.sourceModule) => sourceModuleHash
+                    words! -> push(sourceModuleHash)
+                    words! -> push(node.astNode -> signedWord)
+                    words! -> push(node.symbol -> signedWord)
+                    node.targetModule >= 0 -> if {
+                        words! -> push(1)
+                        words! -> push(identities -> moduleHash(node.targetModule))
+                    } else {
+                        words! -> push(0)
+                        words! -> push(0)
+                    }
+                    words! -> push(node.typeOrigin -> signedWord)
+                    node.typeModule >= 0 -> if {
+                        words! -> push(1)
+                        words! -> push(identities -> moduleHash(node.typeModule))
+                    } else {
+                        words! -> push(0)
+                        words! -> push(0)
+                    }
+                    words! -> push(node.typeSymbol -> signedWord)
+                    node.typeId >= 0 and node.typeId < (encodedTypes.hashes -> len)
+                        -> if {
+                            words! -> push(1)
+                            words! -> push(encodedTypes.hashes[node.typeId])
+                        } else {
+                            words! -> push(0)
+                            words! -> push(0)
+                        }
+                    words! -> push(node.typeKind -> signedWord)
+                    words! -> push(node.typeFlags -> signedWord)
+                    words! -> push(node.payloadToken -> signedWord)
+                    words! -> push(node.opcode -> signedWord)
+                    node.operand0 >= 0 and node.operand0 < (ir -> len)
+                        -> if {
+                            identities -> moduleHash(ir[node.operand0].sourceModule) => operand0ModuleHash
+                            words! -> push(operand0ModuleHash)
+                            words! -> push(UInt64(ordinals![node.operand0] + 1))
+                        } else {
+                            words! -> push(0)
+                            words! -> push(0)
+                        }
+                    node.operand1 >= 0 and node.operand1 < (ir -> len)
+                        -> if {
+                            identities -> moduleHash(ir[node.operand1].sourceModule) => operand1ModuleHash
+                            words! -> push(operand1ModuleHash)
+                            words! -> push(UInt64(ordinals![node.operand1] + 1))
+                        } else {
+                            words! -> push(0)
+                            words! -> push(0)
+                        }
+                    node.nextOperand >= 0 and node.nextOperand < (ir -> len)
+                        -> if {
+                            identities -> moduleHash(ir[node.nextOperand].sourceModule) => nextModuleHash
+                            words! -> push(nextModuleHash)
+                            words! -> push(UInt64(ordinals![node.nextOperand] + 1))
+                        } else {
+                            words! -> push(0)
+                            words! -> push(0)
+                        }
+                    words! -> push(node.flags -> signedWord)
                 }
-                identities -> moduleHash(node.sourceModule) => sourceModuleHash
-                words! -> push(sourceModuleHash)
-                words! -> push(node.astNode -> signedWord)
-                words! -> push(node.symbol -> signedWord)
-                node.targetModule >= 0 -> if {
-                    words! -> push(1)
-                    words! -> push(identities -> moduleHash(node.targetModule))
-                } else {
-                    words! -> push(0)
-                    words! -> push(0)
-                }
-                words! -> push(node.typeOrigin -> signedWord)
-                node.typeModule >= 0 -> if {
-                    words! -> push(1)
-                    words! -> push(identities -> moduleHash(node.typeModule))
-                } else {
-                    words! -> push(0)
-                    words! -> push(0)
-                }
-                words! -> push(node.typeSymbol -> signedWord)
-                (node.typeId >= 0 and node.typeId < (encodedTypes.hashes -> len))
-                    -> if {
-                    words! -> push(1)
-                    words! -> push(encodedTypes.hashes[node.typeId])
-                } else {
-                    words! -> push(0)
-                    words! -> push(0)
-                }
-                words! -> push(node.typeKind -> signedWord)
-                words! -> push(node.typeFlags -> signedWord)
-                words! -> push(node.payloadToken -> signedWord)
-                words! -> push(node.opcode -> signedWord)
-                (node.operand0 >= 0 and node.operand0 < (ir -> len))
-                    -> if {
-                    identities -> moduleHash(ir[node.operand0].sourceModule) => operand0ModuleHash
-                    words! -> push(operand0ModuleHash)
-                    words! -> push(UInt64(ordinals![node.operand0] + 1))
-                } else {
-                    words! -> push(0)
-                    words! -> push(0)
-                }
-                (node.operand1 >= 0 and node.operand1 < (ir -> len))
-                    -> if {
-                    identities -> moduleHash(ir[node.operand1].sourceModule) => operand1ModuleHash
-                    words! -> push(operand1ModuleHash)
-                    words! -> push(UInt64(ordinals![node.operand1] + 1))
-                } else {
-                    words! -> push(0)
-                    words! -> push(0)
-                }
-                (node.nextOperand >= 0 and node.nextOperand < (ir -> len))
-                    -> if {
-                    identities -> moduleHash(ir[node.nextOperand].sourceModule) => nextModuleHash
-                    words! -> push(nextModuleHash)
-                    words! -> push(UInt64(ordinals![node.nextOperand] + 1))
-                } else {
-                    words! -> push(0)
-                    words! -> push(0)
-                }
-                words! -> push(node.flags -> signedWord)
-            }
             selectedNodeIndex! + 1 => selectedNodeIndex!
         }
         emittedCount! + 1 => emittedCount!
@@ -269,20 +269,20 @@ public validate words: [UInt64; ~] -> ArtifactValidation {
     Int(words -> len) => wordLength
     wordLength >= 9 -> if {
         words[0] == 6002245291164258113 -> unless { 2 => status! }
-        (status! == 0 and words[1] != 2) -> if { 3 => status! }
-        (status! == 0 and words[2] != 1397509978044337767)
+        status! == 0 and words[1] != 2 -> if { 3 => status! }
+        status! == 0 and words[2] != 1397509978044337767
             -> if { 4 => status! }
-        (status! == 0 and words[7] != UInt64(wordLength))
+        status! == 0 and words[7] != UInt64(wordLength)
             -> if { 5 => status! }
         words -> checksum(9) => actualChecksum
-        (status! == 0 and words[8] != actualChecksum)
+        status! == 0 and words[8] != actualChecksum
             -> if { 6 => status! }
         status! == 0 -> if {
             Int(words[3]) => moduleCount!
             Int(words[4]) => nodeCount!
             Int(words[5]) => typeCount!
             Int(words[6]) => typeWords
-            (typeCount! < 0 or typeWords != typeCount! * 14 or 9 + typeWords > wordLength)
+            typeCount! < 0 or typeWords != typeCount! * 14 or 9 + typeWords > wordLength
                 -> if { 11 => status! }
             status! == 0 -> if {
                 words -> artifactTypes.validate(9, typeCount!) => typeStatus
@@ -292,27 +292,27 @@ public validate words: [UInt64; ~] -> ArtifactValidation {
             0 => decodedModules!
             0 => decodedNodes!
             UInt64(0) => previousModuleHash!
-            (status! == 0 and decodedModules! < moduleCount!)
+            status! == 0 and decodedModules! < moduleCount!
                 -> while {
-                index! + 3 <= wordLength -> if {
-                    words[index!] => currentModuleHash
-                    Int(words[index! + 1]) => currentNodeCount
-                    Int(words[index! + 2]) => payloadWords
-                    (decodedModules! == 0 or currentModuleHash > previousModuleHash!)
-                        -> if {
-                    (currentNodeCount >= 0 and payloadWords == currentNodeCount * 25)
-                        -> if {
-                    index! + 3 + payloadWords <= wordLength -> if {
-                        currentModuleHash => previousModuleHash!
-                        decodedNodes! + currentNodeCount => decodedNodes!
-                        index! + 3 + payloadWords => index!
-                    } else { 9 => status! }
-                    } else { 8 => status! }
+                    index! + 3 <= wordLength -> if {
+                        words[index!] => currentModuleHash
+                        Int(words[index! + 1]) => currentNodeCount
+                        Int(words[index! + 2]) => payloadWords
+                        decodedModules! == 0 or currentModuleHash > previousModuleHash!
+                            -> if {
+                                currentNodeCount >= 0 and payloadWords == currentNodeCount * 25
+                                    -> if {
+                                        index! + 3 + payloadWords <= wordLength -> if {
+                                            currentModuleHash => previousModuleHash!
+                                            decodedNodes! + currentNodeCount => decodedNodes!
+                                            index! + 3 + payloadWords => index!
+                                        } else { 9 => status! }
+                                    } else { 8 => status! }
+                            } else { 7 => status! }
                     } else { 7 => status! }
-                } else { 7 => status! }
-                decodedModules! + 1 => decodedModules!
-            }
-            (status! == 0 and (index! != wordLength or decodedNodes! != nodeCount!))
+                    decodedModules! + 1 => decodedModules!
+                }
+            status! == 0 and (index! != wordLength or decodedNodes! != nodeCount!)
                 -> if { 10 => status! }
         }
     } else { 1 => status! }
@@ -325,7 +325,7 @@ public decode words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> Dec
     validation.typeCount => validatedTypeCount
     [typed.TypedIrNode; ~] => ir!
     words -> artifactTypes.decode(identities) => decodedTypes
-    (status! == 0 and decodedTypes.status != 0) -> if { 13 => status! }
+    status! == 0 and decodedTypes.status != 0 -> if { 13 => status! }
 
     [UInt64; ~] => moduleHashes!
     [Int; ~] => moduleStarts!
@@ -333,108 +333,108 @@ public decode words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> Dec
     9 + validatedTypeCount * 14 => index!
     0 => moduleOrdinal!
     0 => globalNodeStart!
-    (status! == 0 and moduleOrdinal! < validation.moduleCount)
+    status! == 0 and moduleOrdinal! < validation.moduleCount
         -> while {
-        words[index!] => currentHash
-        Int(words[index! + 1]) => currentCount
-        identities -> moduleIndex(currentHash) => currentModule
-        currentModule < 0 -> if { 14 => status! }
-        moduleHashes! -> push(currentHash)
-        moduleStarts! -> push(globalNodeStart!)
-        moduleCounts! -> push(currentCount)
-        globalNodeStart! + currentCount => globalNodeStart!
-        index! + 3 + currentCount * 25 => index!
-        moduleOrdinal! + 1 => moduleOrdinal!
-    }
+            words[index!] => currentHash
+            Int(words[index! + 1]) => currentCount
+            identities -> moduleIndex(currentHash) => currentModule
+            currentModule < 0 -> if { 14 => status! }
+            moduleHashes! -> push(currentHash)
+            moduleStarts! -> push(globalNodeStart!)
+            moduleCounts! -> push(currentCount)
+            globalNodeStart! + currentCount => globalNodeStart!
+            index! + 3 + currentCount * 25 => index!
+            moduleOrdinal! + 1 => moduleOrdinal!
+        }
 
     9 + validatedTypeCount * 14 => artifactIndex!
     0 => decodedModuleCount!
-    (status! == 0 and decodedModuleCount! < validation.moduleCount)
+    status! == 0 and decodedModuleCount! < validation.moduleCount
         -> while {
-        words[artifactIndex!] => containingModuleHash
-        Int(words[artifactIndex! + 1]) => currentNodeCount
-        artifactIndex! + 3 => nodeIndex!
-        0 => currentNode!
-        (status! == 0 and currentNode! < currentNodeCount)
-            -> while {
-            words[nodeIndex! + 3] => sourceModuleHash
-            identities -> moduleIndex(sourceModuleHash) => sourceModule
-            (sourceModule < 0 or sourceModuleHash != containingModuleHash)
-                -> if { 14 => status! }
+            words[artifactIndex!] => containingModuleHash
+            Int(words[artifactIndex! + 1]) => currentNodeCount
+            artifactIndex! + 3 => nodeIndex!
+            0 => currentNode!
+            status! == 0 and currentNode! < currentNodeCount
+                -> while {
+                    words[nodeIndex! + 3] => sourceModuleHash
+                    identities -> moduleIndex(sourceModuleHash) => sourceModule
+                    sourceModule < 0 or sourceModuleHash != containingModuleHash
+                        -> if { 14 => status! }
 
-            words[nodeIndex! + 1] => parentHash
-            words[nodeIndex! + 2] => parentOrdinal
-            words[nodeIndex! + 18] => operand0Hash
-            words[nodeIndex! + 19] => operand0Ordinal
-            words[nodeIndex! + 20] => operand1Hash
-            words[nodeIndex! + 21] => operand1Ordinal
-            words[nodeIndex! + 22] => nextOperandHash
-            words[nodeIndex! + 23] => nextOperandOrdinal
-            moduleHashes! -> resolveReference(moduleStarts!, moduleCounts!, parentHash, parentOrdinal) => parent
-            moduleHashes! -> resolveReference(moduleStarts!, moduleCounts!, operand0Hash, operand0Ordinal) => operand0
-            moduleHashes! -> resolveReference(moduleStarts!, moduleCounts!, operand1Hash, operand1Ordinal) => operand1
-            moduleHashes! -> resolveReference(moduleStarts!, moduleCounts!, nextOperandHash, nextOperandOrdinal) => nextOperand
-            (parent.status != 0 or operand0.status != 0 or operand1.status != 0 or nextOperand.status != 0)
-                -> if { 15 => status! }
+                    words[nodeIndex! + 1] => parentHash
+                    words[nodeIndex! + 2] => parentOrdinal
+                    words[nodeIndex! + 18] => operand0Hash
+                    words[nodeIndex! + 19] => operand0Ordinal
+                    words[nodeIndex! + 20] => operand1Hash
+                    words[nodeIndex! + 21] => operand1Ordinal
+                    words[nodeIndex! + 22] => nextOperandHash
+                    words[nodeIndex! + 23] => nextOperandOrdinal
+                    moduleHashes! -> resolveReference(moduleStarts!, moduleCounts!, parentHash, parentOrdinal) => parent
+                    moduleHashes! -> resolveReference(moduleStarts!, moduleCounts!, operand0Hash, operand0Ordinal) => operand0
+                    moduleHashes! -> resolveReference(moduleStarts!, moduleCounts!, operand1Hash, operand1Ordinal) => operand1
+                    moduleHashes! -> resolveReference(moduleStarts!, moduleCounts!, nextOperandHash, nextOperandOrdinal) => nextOperand
+                    parent.status != 0 or operand0.status != 0 or operand1.status != 0 or nextOperand.status != 0
+                        -> if { 15 => status! }
 
-            -1 => targetModule!
-            words[nodeIndex! + 6] == 1 -> if {
-                words[nodeIndex! + 7] => targetModuleHash
-                identities -> moduleIndex(targetModuleHash) => targetModule!
-                targetModule! < 0 -> if { 14 => status! }
-            }
-            -1 => typeModule!
-            words[nodeIndex! + 9] == 1 -> if {
-                words[nodeIndex! + 10] => typeModuleHash
-                identities -> moduleIndex(typeModuleHash) => typeModule!
-                typeModule! < 0 -> if { 14 => status! }
-            }
-            -1 => typeId!
-            words[nodeIndex! + 12] == 1 -> if {
-                words[nodeIndex! + 13] => typeHash
-                decodedTypes.hashes -> artifactTypes.indexOfHash(typeHash) => typeId!
-                typeId! < 0 -> if { 16 => status! }
-            }
+                    -1 => targetModule!
+                    words[nodeIndex! + 6] == 1 -> if {
+                        words[nodeIndex! + 7] => targetModuleHash
+                        identities -> moduleIndex(targetModuleHash) => targetModule!
+                        targetModule! < 0 -> if { 14 => status! }
+                    }
+                    -1 => typeModule!
+                    words[nodeIndex! + 9] == 1 -> if {
+                        words[nodeIndex! + 10] => typeModuleHash
+                        identities -> moduleIndex(typeModuleHash) => typeModule!
+                        typeModule! < 0 -> if { 14 => status! }
+                    }
+                    -1 => typeId!
+                    words[nodeIndex! + 12] == 1 -> if {
+                        words[nodeIndex! + 13] => typeHash
+                        decodedTypes.hashes -> artifactTypes.indexOfHash(typeHash) => typeId!
+                        typeId! < 0 -> if { 16 => status! }
+                    }
 
-            status! == 0 -> if {
-                words[nodeIndex!] -> signedValue => kind
-                words[nodeIndex! + 4] -> signedValue => astNode
-                words[nodeIndex! + 5] -> signedValue => symbol
-                words[nodeIndex! + 8] -> signedValue => typeOrigin
-                words[nodeIndex! + 11] -> signedValue => typeSymbol
-                words[nodeIndex! + 14] -> signedValue => typeKind
-                words[nodeIndex! + 15] -> signedValue => typeFlags
-                words[nodeIndex! + 16] -> signedValue => payloadToken
-                words[nodeIndex! + 17] -> signedValue => opcode
-                words[nodeIndex! + 24] -> signedValue => flags
-                ir! -> push(typed.TypedIrNode {
-                    kind: kind
-                    parent: parent.index
-                    sourceModule: sourceModule
-                    astNode: astNode
-                    symbol: symbol
-                    targetModule: targetModule!
-                    typeOrigin: typeOrigin
-                    typeModule: typeModule!
-                    typeSymbol: typeSymbol
-                    typeId: typeId!
-                    typeKind: typeKind
-                    typeFlags: typeFlags
-                    payloadToken: payloadToken
-                    opcode: opcode
-                    operand0: operand0.index
-                    operand1: operand1.index
-                    nextOperand: nextOperand.index
-                    flags: flags
-                })
-            }
-            nodeIndex! + 25 => nodeIndex!
-            currentNode! + 1 => currentNode!
+                    status! == 0 -> if {
+                        words[nodeIndex!] -> signedValue => kind
+                        words[nodeIndex! + 4] -> signedValue => astNode
+                        words[nodeIndex! + 5] -> signedValue => symbol
+                        words[nodeIndex! + 8] -> signedValue => typeOrigin
+                        words[nodeIndex! + 11] -> signedValue => typeSymbol
+                        words[nodeIndex! + 14] -> signedValue => typeKind
+                        words[nodeIndex! + 15] -> signedValue => typeFlags
+                        words[nodeIndex! + 16] -> signedValue => payloadToken
+                        words[nodeIndex! + 17] -> signedValue => opcode
+                        words[nodeIndex! + 24] -> signedValue => flags
+                        ir! -> push(typed.TypedIrNode {
+                            kind: kind
+                            parent: parent.index
+                            sourceModule: sourceModule
+                            astNode: astNode
+                            symbol: symbol
+                            targetModule: targetModule!
+                            typeOrigin: typeOrigin
+                            typeModule: typeModule!
+                            typeSymbol: typeSymbol
+                            typeId: typeId!
+                            typeKind: typeKind
+                            typeFlags: typeFlags
+                            payloadToken: payloadToken
+                            opcode: opcode
+                            operand0: operand0.index
+                            operand1: operand1.index
+                            nextOperand: nextOperand.index
+                            flags: flags
+                        })
+                    }
+                    nodeIndex! + 25 => nodeIndex!
+                    currentNode! + 1 => currentNode!
+                }
+            artifactIndex! + 3 + currentNodeCount * 25 => artifactIndex!
+            decodedModuleCount! + 1 => decodedModuleCount!
         }
-        artifactIndex! + 3 + currentNodeCount * 25 => artifactIndex!
-        decodedModuleCount! + 1 => decodedModuleCount!
-    }
-    (status! == 0 and (ir! -> len) != validation.nodeCount)
+    status! == 0 and (ir! -> len) != validation.nodeCount
         -> if { 17 => status! }
     DecodedArtifact { ir: ir!, typeTable: decodedTypes, status: status! } => result
     result

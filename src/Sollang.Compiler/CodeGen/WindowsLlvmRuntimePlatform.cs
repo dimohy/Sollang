@@ -20,7 +20,6 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine("@sollang_file_reader = internal global ptr null");
         globals.AppendLine("@sollang_argument_count_value = internal global i64 0");
         globals.AppendLine("@sollang_argument_records = internal global ptr null");
-        globals.AppendLine("@sollang_process_output_override = internal global ptr null");
         globals.AppendLine("@sollang_environment_allocations = internal global ptr null");
         globals.AppendLine("@sollang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1");
         globals.AppendLine("@sollang_stdout_buffer = internal global [1048576 x i8] zeroinitializer, align 16");
@@ -81,6 +80,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare dllimport ptr @HeapAlloc(ptr, i32, i64)");
         functions.AppendLine("declare dllimport i32 @HeapFree(ptr, i32, ptr)");
         functions.AppendLine("declare dllimport i64 @GetTickCount64()");
+        functions.AppendLine("declare dllimport void @GetSystemTimePreciseAsFileTime(ptr)");
         functions.AppendLine("declare dllimport void @Sleep(i32)");
         functions.AppendLine("declare dllimport ptr @GetCommandLineW()");
         functions.AppendLine("declare dllimport ptr @CommandLineToArgvW(ptr, ptr)");
@@ -90,7 +90,16 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         if (UsesProcessRuntime)
         {
             functions.AppendLine("declare dllimport i32 @CreateProcessW(ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr)");
+            functions.AppendLine("declare dllimport ptr @GetEnvironmentStringsW()");
+            functions.AppendLine("declare dllimport i32 @FreeEnvironmentStringsW(ptr)");
+            functions.AppendLine("declare dllimport i32 @CompareStringOrdinal(ptr, i32, ptr, i32, i32)");
+            functions.AppendLine("declare dllimport i32 @GetProcessId(ptr)");
             functions.AppendLine("declare dllimport i32 @GetExitCodeProcess(ptr, ptr)");
+            functions.AppendLine("declare dllimport i32 @TerminateProcess(ptr, i32)");
+        }
+        if (UsesProcessCapture)
+        {
+            functions.AppendLine("declare dllimport i32 @CreatePipe(ptr, ptr, ptr, i32)");
         }
         if (UsesProcessRuntime || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
@@ -110,9 +119,12 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)");
             functions.AppendLine("declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)");
         }
-        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
+        if (UsesProcessCapture || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
         {
             functions.AppendLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
+        }
+        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
+        {
             functions.AppendLine("declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)");
         }
         if (UsesAsyncFile || UsesComputePool || UsesMouseEvents)
@@ -205,6 +217,341 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             }
 
             """);
+    }
+
+    private void EmitProcessCapturePrimitives(StringBuilder functions)
+    {
+        if (UsesProcessCapture)
+        {
+            functions.AppendLine("""
+                %sollang.process_capture_stream.windows = type { ptr, ptr, i64, i64, i64, i1, i1 }
+
+                define internal void @sollang_windows_capture_append(ptr %context, ptr %chunk, i64 %chunk_length) #0 {
+                entry:
+                  %data_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %context, i32 0, i32 1
+                  %length_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %context, i32 0, i32 2
+                  %capacity_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %context, i32 0, i32 3
+                  %limit_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %context, i32 0, i32 4
+                  %truncated_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %context, i32 0, i32 5
+                  %error_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %context, i32 0, i32 6
+                  %has_error = load i1, ptr %error_slot, align 1
+                  br i1 %has_error, label %done, label %measure
+
+                measure:
+                  %length = load i64, ptr %length_slot, align 8
+                  %limit = load i64, ptr %limit_slot, align 8
+                  %remaining = sub i64 %limit, %length
+                  %fits = icmp ule i64 %chunk_length, %remaining
+                  %keep = select i1 %fits, i64 %chunk_length, i64 %remaining
+                  %overflowed = icmp ult i64 %keep, %chunk_length
+                  br i1 %overflowed, label %mark_truncated, label %select_storage
+
+                mark_truncated:
+                  store i1 true, ptr %truncated_slot, align 1
+                  br label %select_storage
+
+                select_storage:
+                  %has_bytes = icmp ugt i64 %keep, 0
+                  br i1 %has_bytes, label %ensure_capacity, label %done
+
+                ensure_capacity:
+                  %capacity = load i64, ptr %capacity_slot, align 8
+                  %required = add i64 %length, %keep
+                  %has_capacity = icmp uge i64 %capacity, %required
+                  br i1 %has_capacity, label %copy_chunk, label %grow
+
+                grow:
+                  %doubled = shl i64 %capacity, 1
+                  %doubling_overflow = icmp ult i64 %doubled, %capacity
+                  %safe_doubled = select i1 %doubling_overflow, i64 %limit, i64 %doubled
+                  %needs_required = icmp ult i64 %safe_doubled, %required
+                  %required_candidate = select i1 %needs_required, i64 %required, i64 %safe_doubled
+                  %needs_initial = icmp ult i64 %required_candidate, 4096
+                  %initial_candidate = select i1 %needs_initial, i64 4096, i64 %required_candidate
+                  %exceeds_limit = icmp ugt i64 %initial_candidate, %limit
+                  %new_capacity = select i1 %exceeds_limit, i64 %limit, i64 %initial_candidate
+                  %new_data = call ptr @sollang_alloc(i64 %new_capacity)
+                  %allocated = icmp ne ptr %new_data, null
+                  br i1 %allocated, label %copy_old_check, label %allocation_error
+
+                copy_old_check:
+                  %old_data = load ptr, ptr %data_slot, align 8
+                  %has_old = icmp ugt i64 %length, 0
+                  br i1 %has_old, label %copy_old, label %replace
+
+                copy_old:
+                  call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+                  br label %free_old
+
+                free_old:
+                  call void @sollang_free(ptr %old_data)
+                  br label %replace
+
+                replace:
+                  store ptr %new_data, ptr %data_slot, align 8
+                  store i64 %new_capacity, ptr %capacity_slot, align 8
+                  br label %copy_chunk
+
+                copy_chunk:
+                  %data = load ptr, ptr %data_slot, align 8
+                  %destination = getelementptr i8, ptr %data, i64 %length
+                  call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %chunk, i64 %keep, i1 false)
+                  store i64 %required, ptr %length_slot, align 8
+                  br label %done
+
+                allocation_error:
+                  store i1 true, ptr %error_slot, align 1
+                  br label %done
+
+                done:
+                  ret void
+                }
+
+                define internal ptr @sollang_windows_capture_worker(ptr %context) #0 {
+                entry:
+                  %handle_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %context, i32 0, i32 0
+                  %handle = load ptr, ptr %handle_slot, align 8
+                  %chunk = alloca [4096 x i8], align 16
+                  %chunk_pointer = getelementptr inbounds [4096 x i8], ptr %chunk, i64 0, i64 0
+                  %read_slot = alloca i32, align 4
+                  br label %read_loop
+
+                read_loop:
+                  store i32 0, ptr %read_slot, align 4
+                  %read_ok = call i32 @ReadFile(ptr %handle, ptr %chunk_pointer, i32 4096, ptr %read_slot, ptr null)
+                  %read_succeeded = icmp ne i32 %read_ok, 0
+                  br i1 %read_succeeded, label %read_count_block, label %read_failed
+
+                read_count_block:
+                  %read_count32 = load i32, ptr %read_slot, align 4
+                  %has_bytes = icmp ugt i32 %read_count32, 0
+                  br i1 %has_bytes, label %append, label %done
+
+                append:
+                  %read_count = zext i32 %read_count32 to i64
+                  call void @sollang_windows_capture_append(ptr %context, ptr %chunk_pointer, i64 %read_count)
+                  br label %read_loop
+
+                read_failed:
+                  %error = call i32 @GetLastError()
+                  %closed = icmp eq i32 %error, 109
+                  br i1 %closed, label %done, label %mark_error
+
+                mark_error:
+                  %error_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %context, i32 0, i32 6
+                  store i1 true, ptr %error_slot, align 1
+                  br label %done
+
+                done:
+                  ret ptr null
+                }
+
+                define internal %sollang.process_capture_result @sollang_windows_capture_failure(i32 %error, ptr %stdout_data, ptr %stderr_data) #0 {
+                entry:
+                  %has_stdout = icmp ne ptr %stdout_data, null
+                  br i1 %has_stdout, label %free_stdout, label %check_stderr
+                free_stdout:
+                  call void @sollang_free(ptr %stdout_data)
+                  br label %check_stderr
+                check_stderr:
+                  %has_stderr = icmp ne ptr %stderr_data, null
+                  br i1 %has_stderr, label %free_stderr, label %return
+                free_stderr:
+                  call void @sollang_free(ptr %stderr_data)
+                  br label %return
+                return:
+                  %result0 = insertvalue %sollang.process_capture_result poison, i32 0, 0
+                  %result1 = insertvalue %sollang.process_capture_result %result0, ptr null, 1
+                  %result2 = insertvalue %sollang.process_capture_result %result1, i64 0, 2
+                  %result3 = insertvalue %sollang.process_capture_result %result2, i64 0, 3
+                  %result4 = insertvalue %sollang.process_capture_result %result3, i1 false, 4
+                  %result5 = insertvalue %sollang.process_capture_result %result4, ptr null, 5
+                  %result6 = insertvalue %sollang.process_capture_result %result5, i64 0, 6
+                  %result7 = insertvalue %sollang.process_capture_result %result6, i64 0, 7
+                  %result8 = insertvalue %sollang.process_capture_result %result7, i1 false, 8
+                  %result9 = insertvalue %sollang.process_capture_result %result8, i32 %error, 9
+                  ret %sollang.process_capture_result %result9
+                }
+
+                define internal %sollang.process_capture_result @sollang_collect_process_configured(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, i32 %stdin_mode, ptr %stdin_path, i64 %stdin_path_length, i32 %stdout_mode, ptr %stdout_path, i64 %stdout_path_length, i32 %stderr_mode, ptr %stderr_path, i64 %stderr_path_length, i64 %stdout_limit, i64 %stderr_limit) #0 {
+                entry:
+                  %stdout_read_slot = alloca ptr, align 8
+                  %stdout_write_slot = alloca ptr, align 8
+                  %stderr_read_slot = alloca ptr, align 8
+                  %stderr_write_slot = alloca ptr, align 8
+                  %stdout_context = alloca %sollang.process_capture_stream.windows, align 8
+                  %stderr_context = alloca %sollang.process_capture_stream.windows, align 8
+                  %stdout_pipe = call i32 @CreatePipe(ptr %stdout_read_slot, ptr %stdout_write_slot, ptr null, i32 0)
+                  %stdout_pipe_ok = icmp ne i32 %stdout_pipe, 0
+                  br i1 %stdout_pipe_ok, label %create_stderr_pipe, label %pipe_error
+
+                create_stderr_pipe:
+                  %stderr_pipe = call i32 @CreatePipe(ptr %stderr_read_slot, ptr %stderr_write_slot, ptr null, i32 0)
+                  %stderr_pipe_ok = icmp ne i32 %stderr_pipe, 0
+                  br i1 %stderr_pipe_ok, label %initialize, label %close_stdout_pipe_error
+
+                initialize:
+                  %stdout_read = load ptr, ptr %stdout_read_slot, align 8
+                  %stdout_write = load ptr, ptr %stdout_write_slot, align 8
+                  %stderr_read = load ptr, ptr %stderr_read_slot, align 8
+                  %stderr_write = load ptr, ptr %stderr_write_slot, align 8
+                  %stdout_handle_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stdout_context, i32 0, i32 0
+                  store ptr %stdout_read, ptr %stdout_handle_slot, align 8
+                  %stdout_data_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stdout_context, i32 0, i32 1
+                  store ptr null, ptr %stdout_data_slot, align 8
+                  %stdout_length_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stdout_context, i32 0, i32 2
+                  store i64 0, ptr %stdout_length_slot, align 8
+                  %stdout_capacity_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stdout_context, i32 0, i32 3
+                  store i64 0, ptr %stdout_capacity_slot, align 8
+                  %stdout_limit_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stdout_context, i32 0, i32 4
+                  store i64 %stdout_limit, ptr %stdout_limit_slot, align 8
+                  %stdout_truncated_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stdout_context, i32 0, i32 5
+                  store i1 false, ptr %stdout_truncated_slot, align 1
+                  %stdout_error_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stdout_context, i32 0, i32 6
+                  store i1 false, ptr %stdout_error_slot, align 1
+                  %stderr_handle_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stderr_context, i32 0, i32 0
+                  store ptr %stderr_read, ptr %stderr_handle_slot, align 8
+                  %stderr_data_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stderr_context, i32 0, i32 1
+                  store ptr null, ptr %stderr_data_slot, align 8
+                  %stderr_length_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stderr_context, i32 0, i32 2
+                  store i64 0, ptr %stderr_length_slot, align 8
+                  %stderr_capacity_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stderr_context, i32 0, i32 3
+                  store i64 0, ptr %stderr_capacity_slot, align 8
+                  %stderr_limit_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stderr_context, i32 0, i32 4
+                  store i64 %stderr_limit, ptr %stderr_limit_slot, align 8
+                  %stderr_truncated_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stderr_context, i32 0, i32 5
+                  store i1 false, ptr %stderr_truncated_slot, align 1
+                  %stderr_error_slot = getelementptr inbounds %sollang.process_capture_stream.windows, ptr %stderr_context, i32 0, i32 6
+                  store i1 false, ptr %stderr_error_slot, align 1
+                  %stdout_thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_capture_worker, ptr %stdout_context, i32 0, ptr null)
+                  %stdout_thread_ok = icmp ne ptr %stdout_thread, null
+                  br i1 %stdout_thread_ok, label %create_stderr_thread, label %close_all_pipe_error
+
+                create_stderr_thread:
+                  %stderr_thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_capture_worker, ptr %stderr_context, i32 0, ptr null)
+                  %stderr_thread_ok = icmp ne ptr %stderr_thread, null
+                  br i1 %stderr_thread_ok, label %open_stdin, label %stderr_thread_error
+
+                open_stdin:
+                  %stdin_handle = call ptr @sollang_process_open_windows_stdio(i32 %stdin_mode, ptr %stdin_path, i64 %stdin_path_length, i1 true)
+                  %stdin_value = ptrtoint ptr %stdin_handle to i64
+                  %stdin_ok = icmp ne i64 %stdin_value, -1
+                  br i1 %stdin_ok, label %spawn, label %stdin_error
+
+                spawn:
+                  %spawned = call %sollang.process_spawn_result @sollang_spawn_process_with_stdio(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %stdin_handle, ptr %stdout_write, ptr %stderr_write)
+                  call void @sollang_process_close_windows_stdio(ptr %stdin_handle)
+                  %closed_stdout_write = call i32 @CloseHandle(ptr %stdout_write)
+                  %closed_stderr_write = call i32 @CloseHandle(ptr %stderr_write)
+                  %token = extractvalue %sollang.process_spawn_result %spawned, 0
+                  %spawn_error = extractvalue %sollang.process_spawn_result %spawned, 2
+                  %spawn_ok = icmp eq i32 %spawn_error, 0
+                  br i1 %spawn_ok, label %wait, label %join_spawn_error
+
+                wait:
+                  %waited = call %sollang.process_result @sollang_wait_process(i64 %token)
+                  %exit_code = extractvalue %sollang.process_result %waited, 0
+                  %wait_error = extractvalue %sollang.process_result %waited, 1
+                  br label %join
+
+                join_spawn_error:
+                  br label %join
+
+                join:
+                  %final_exit_code = phi i32 [ %exit_code, %wait ], [ 0, %join_spawn_error ]
+                  %process_error = phi i32 [ %wait_error, %wait ], [ 1, %join_spawn_error ]
+                  %stdout_join = call i32 @WaitForSingleObject(ptr %stdout_thread, i32 -1)
+                  %stderr_join = call i32 @WaitForSingleObject(ptr %stderr_thread, i32 -1)
+                  %closed_stdout_thread = call i32 @CloseHandle(ptr %stdout_thread)
+                  %closed_stderr_thread = call i32 @CloseHandle(ptr %stderr_thread)
+                  %closed_stdout_read = call i32 @CloseHandle(ptr %stdout_read)
+                  %closed_stderr_read = call i32 @CloseHandle(ptr %stderr_read)
+                  %stdout_data = load ptr, ptr %stdout_data_slot, align 8
+                  %stdout_length = load i64, ptr %stdout_length_slot, align 8
+                  %stdout_capacity = load i64, ptr %stdout_capacity_slot, align 8
+                  %stdout_truncated = load i1, ptr %stdout_truncated_slot, align 1
+                  %stdout_error = load i1, ptr %stdout_error_slot, align 1
+                  %stderr_data = load ptr, ptr %stderr_data_slot, align 8
+                  %stderr_length = load i64, ptr %stderr_length_slot, align 8
+                  %stderr_capacity = load i64, ptr %stderr_capacity_slot, align 8
+                  %stderr_truncated = load i1, ptr %stderr_truncated_slot, align 1
+                  %stderr_error = load i1, ptr %stderr_error_slot, align 1
+                  %stdout_join_ok = icmp eq i32 %stdout_join, 0
+                  %stderr_join_ok = icmp eq i32 %stderr_join, 0
+                  %join_ok = and i1 %stdout_join_ok, %stderr_join_ok
+                  %stream_error = or i1 %stdout_error, %stderr_error
+                  %streams_ok = xor i1 %stream_error, true
+                  %read_ok = and i1 %join_ok, %streams_ok
+                  %process_ok = icmp eq i32 %process_error, 0
+                  %all_ok = and i1 %process_ok, %read_ok
+                  br i1 %all_ok, label %success, label %runtime_error
+
+                success:
+                  %result0 = insertvalue %sollang.process_capture_result poison, i32 %final_exit_code, 0
+                  %result1 = insertvalue %sollang.process_capture_result %result0, ptr %stdout_data, 1
+                  %result2 = insertvalue %sollang.process_capture_result %result1, i64 %stdout_length, 2
+                  %result3 = insertvalue %sollang.process_capture_result %result2, i64 %stdout_capacity, 3
+                  %result4 = insertvalue %sollang.process_capture_result %result3, i1 %stdout_truncated, 4
+                  %result5 = insertvalue %sollang.process_capture_result %result4, ptr %stderr_data, 5
+                  %result6 = insertvalue %sollang.process_capture_result %result5, i64 %stderr_length, 6
+                  %result7 = insertvalue %sollang.process_capture_result %result6, i64 %stderr_capacity, 7
+                  %result8 = insertvalue %sollang.process_capture_result %result7, i1 %stderr_truncated, 8
+                  %result9 = insertvalue %sollang.process_capture_result %result8, i32 0, 9
+                  ret %sollang.process_capture_result %result9
+
+                runtime_error:
+                  %capture_error = select i1 %process_ok, i32 4, i32 %process_error
+                  %failure = call %sollang.process_capture_result @sollang_windows_capture_failure(i32 %capture_error, ptr %stdout_data, ptr %stderr_data)
+                  ret %sollang.process_capture_result %failure
+
+                stdin_error:
+                  %closed_stdout_write_stdin = call i32 @CloseHandle(ptr %stdout_write)
+                  %closed_stderr_write_stdin = call i32 @CloseHandle(ptr %stderr_write)
+                  br label %join_early_error
+
+                stderr_thread_error:
+                  %closed_stdout_write_thread = call i32 @CloseHandle(ptr %stdout_write)
+                  %closed_stderr_write_thread = call i32 @CloseHandle(ptr %stderr_write)
+                  %closed_stderr_read_thread = call i32 @CloseHandle(ptr %stderr_read)
+                  %joined_stdout_thread = call i32 @WaitForSingleObject(ptr %stdout_thread, i32 -1)
+                  %closed_stdout_thread_error = call i32 @CloseHandle(ptr %stdout_thread)
+                  %closed_stdout_read_thread = call i32 @CloseHandle(ptr %stdout_read)
+                  %stdout_data_thread_error = load ptr, ptr %stdout_data_slot, align 8
+                  %failure_thread = call %sollang.process_capture_result @sollang_windows_capture_failure(i32 4, ptr %stdout_data_thread_error, ptr null)
+                  ret %sollang.process_capture_result %failure_thread
+
+                join_early_error:
+                  %joined_stdout_early = call i32 @WaitForSingleObject(ptr %stdout_thread, i32 -1)
+                  %joined_stderr_early = call i32 @WaitForSingleObject(ptr %stderr_thread, i32 -1)
+                  %closed_stdout_thread_early = call i32 @CloseHandle(ptr %stdout_thread)
+                  %closed_stderr_thread_early = call i32 @CloseHandle(ptr %stderr_thread)
+                  %closed_stdout_read_early = call i32 @CloseHandle(ptr %stdout_read)
+                  %closed_stderr_read_early = call i32 @CloseHandle(ptr %stderr_read)
+                  %stdout_data_early = load ptr, ptr %stdout_data_slot, align 8
+                  %stderr_data_early = load ptr, ptr %stderr_data_slot, align 8
+                  %failure_early = call %sollang.process_capture_result @sollang_windows_capture_failure(i32 1, ptr %stdout_data_early, ptr %stderr_data_early)
+                  ret %sollang.process_capture_result %failure_early
+
+                close_all_pipe_error:
+                  %closed_stdout_read_all = call i32 @CloseHandle(ptr %stdout_read)
+                  %closed_stdout_write_all = call i32 @CloseHandle(ptr %stdout_write)
+                  %closed_stderr_read_all = call i32 @CloseHandle(ptr %stderr_read)
+                  %closed_stderr_write_all = call i32 @CloseHandle(ptr %stderr_write)
+                  br label %pipe_error
+
+                close_stdout_pipe_error:
+                  %stdout_read_partial = load ptr, ptr %stdout_read_slot, align 8
+                  %stdout_write_partial = load ptr, ptr %stdout_write_slot, align 8
+                  %closed_stdout_read_partial = call i32 @CloseHandle(ptr %stdout_read_partial)
+                  %closed_stdout_write_partial = call i32 @CloseHandle(ptr %stdout_write_partial)
+                  br label %pipe_error
+
+                pipe_error:
+                  %failure_pipe = call %sollang.process_capture_result @sollang_windows_capture_failure(i32 4, ptr null, ptr null)
+                  ret %sollang.process_capture_result %failure_pipe
+                }
+                """);
+        }
     }
 
     public override void EmitMemoryDeclarations(StringBuilder functions)
@@ -1028,6 +1375,23 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i64 %millis
             }
 
+            define internal i64 @sollang_utc_now_millis() #0 {
+            entry:
+              %filetime = alloca [2 x i32], align 4
+              call void @GetSystemTimePreciseAsFileTime(ptr %filetime)
+              %low_ptr = getelementptr inbounds [2 x i32], ptr %filetime, i64 0, i64 0
+              %high_ptr = getelementptr inbounds [2 x i32], ptr %filetime, i64 0, i64 1
+              %low32 = load i32, ptr %low_ptr, align 4
+              %high32 = load i32, ptr %high_ptr, align 4
+              %low = zext i32 %low32 to i64
+              %high = zext i32 %high32 to i64
+              %shifted = shl i64 %high, 32
+              %ticks = or i64 %shifted, %low
+              %unix_ticks = sub i64 %ticks, 116444736000000000
+              %millis = udiv i64 %unix_ticks, 10000
+              ret i64 %millis
+            }
+
             define internal void @sollang_wait_millis(i64 %requested) #0 {
             entry:
               %positive = icmp sgt i64 %requested, 0
@@ -1251,6 +1615,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitProcessPrimitives(StringBuilder functions)
     {
+        EmitProcessCapturePrimitives(functions);
         functions.AppendLine("""
             define internal i32 @sollang_init_arguments() #0 {
             entry:
@@ -1454,6 +1819,45 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret ptr null
             }
 
+            define internal ptr @sollang_process_windows_text(ptr %data, i64 %length64) #0 {
+            entry:
+              %length_fits = icmp ule i64 %length64, 2147483647
+              br i1 %length_fits, label %measure, label %fail
+
+            measure:
+              %length = trunc i64 %length64 to i32
+              %chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %length, ptr null, i32 0)
+              %chars_valid = icmp sgt i32 %chars, 0
+              %empty = icmp eq i32 %length, 0
+              %valid = or i1 %chars_valid, %empty
+              br i1 %valid, label %allocate, label %fail
+
+            allocate:
+              %with_null = add i32 %chars, 1
+              %with_null64 = zext i32 %with_null to i64
+              %bytes = mul i64 %with_null64, 2
+              %wide = call ptr @sollang_alloc(i64 %bytes)
+              %allocated = icmp ne ptr %wide, null
+              br i1 %allocated, label %convert, label %fail
+
+            convert:
+              %written = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %length, ptr %wide, i32 %chars)
+              %converted = icmp eq i32 %written, %chars
+              br i1 %converted, label %terminate, label %free_fail
+
+            terminate:
+              %end = getelementptr i16, ptr %wide, i32 %chars
+              store i16 0, ptr %end, align 2
+              ret ptr %wide
+
+            free_fail:
+              call void @sollang_free(ptr %wide)
+              br label %fail
+
+            fail:
+              ret ptr null
+            }
+
             define internal ptr @sollang_join_windows_args(ptr %argv, i64 %count) #0 {
             entry:
               %i_slot = alloca i64, align 8
@@ -1554,6 +1958,407 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret ptr null
             }
 
+            define internal i64 @sollang_windows_wide_length(ptr %text) #0 {
+            entry:
+              br label %loop
+            loop:
+              %index = phi i64 [ 0, %entry ], [ %next, %more ]
+              %at = getelementptr i16, ptr %text, i64 %index
+              %character = load i16, ptr %at, align 2
+              %done = icmp eq i16 %character, 0
+              br i1 %done, label %result, label %more
+            more:
+              %next = add i64 %index, 1
+              br label %loop
+            result:
+              ret i64 %index
+            }
+
+            define internal i64 @sollang_windows_environment_name_length(ptr %entry) #0 {
+            entry_block:
+              %first = load i16, ptr %entry, align 2
+              %hidden = icmp eq i16 %first, 61
+              %start = select i1 %hidden, i64 1, i64 0
+              br label %loop
+            loop:
+              %index = phi i64 [ %start, %entry_block ], [ %next, %more ]
+              %at = getelementptr i16, ptr %entry, i64 %index
+              %character = load i16, ptr %at, align 2
+              %separator = icmp eq i16 %character, 61
+              %end = icmp eq i16 %character, 0
+              %done = or i1 %separator, %end
+              br i1 %done, label %result, label %more
+            more:
+              %next = add i64 %index, 1
+              br label %loop
+            result:
+              ret i64 %index
+            }
+
+            define internal i1 @sollang_windows_environment_text_valid(ptr %data, i64 %length, i1 %name) #0 {
+            entry:
+              br label %loop
+            loop:
+              %index = phi i64 [ 0, %entry ], [ %next, %more ]
+              %done = icmp eq i64 %index, %length
+              br i1 %done, label %valid, label %inspect
+            inspect:
+              %at = getelementptr i8, ptr %data, i64 %index
+              %byte = load i8, ptr %at, align 1
+              %nul = icmp eq i8 %byte, 0
+              %equal = icmp eq i8 %byte, 61
+              %name_equal = and i1 %name, %equal
+              %invalid = or i1 %nul, %name_equal
+              br i1 %invalid, label %failure, label %more
+            more:
+              %next = add i64 %index, 1
+              br label %loop
+            valid:
+              ret i1 true
+            failure:
+              ret i1 false
+            }
+
+            define internal i64 @sollang_windows_latest_environment_change(ptr %entries, ptr %name_lengths, i64 %count, ptr %name, i64 %name_length) #0 {
+            entry:
+              %name_fits = icmp ule i64 %name_length, 2147483647
+              br i1 %name_fits, label %loop, label %missing
+            loop:
+              %remaining = phi i64 [ %count, %entry ], [ %index, %different ]
+              %done = icmp eq i64 %remaining, 0
+              br i1 %done, label %missing, label %inspect
+            inspect:
+              %index = sub i64 %remaining, 1
+              %entry_slot = getelementptr ptr, ptr %entries, i64 %index
+              %candidate = load ptr, ptr %entry_slot, align 8
+              %length_slot = getelementptr i64, ptr %name_lengths, i64 %index
+              %candidate_length64 = load i64, ptr %length_slot, align 8
+              %candidate_fits = icmp ule i64 %candidate_length64, 2147483647
+              br i1 %candidate_fits, label %compare, label %different
+            compare:
+              %candidate_length = trunc i64 %candidate_length64 to i32
+              %target_length = trunc i64 %name_length to i32
+              %order = call i32 @CompareStringOrdinal(ptr %candidate, i32 %candidate_length, ptr %name, i32 %target_length, i32 1)
+              %matches = icmp eq i32 %order, 2
+              br i1 %matches, label %found, label %different
+            different:
+              br label %loop
+            found:
+              ret i64 %index
+            missing:
+              ret i64 -1
+            }
+
+            define internal void @sollang_windows_dispose_environment_build(ptr %entries, ptr %name_lengths, ptr %list, i64 %count, ptr %parent) #0 {
+            entry:
+              %has_entries = icmp ne ptr %entries, null
+              br i1 %has_entries, label %entry_loop, label %free_arrays
+            entry_loop:
+              %index = phi i64 [ 0, %entry ], [ %next, %entry_more ]
+              %entries_done = icmp eq i64 %index, %count
+              br i1 %entries_done, label %free_arrays, label %entry_more
+            entry_more:
+              %slot = getelementptr ptr, ptr %entries, i64 %index
+              %value = load ptr, ptr %slot, align 8
+              call void @sollang_free(ptr %value)
+              %next = add i64 %index, 1
+              br label %entry_loop
+            free_arrays:
+              call void @sollang_free(ptr %entries)
+              call void @sollang_free(ptr %name_lengths)
+              call void @sollang_free(ptr %list)
+              %has_parent = icmp ne ptr %parent, null
+              br i1 %has_parent, label %free_parent, label %cleanup_done
+            free_parent:
+              %parent_freed = call i32 @FreeEnvironmentStringsW(ptr %parent)
+              br label %cleanup_done
+            cleanup_done:
+              ret void
+            }
+
+            define internal %sollang.process_environment_result @sollang_windows_build_environment(ptr %changes, i64 %change_count, i1 %inherits) #0 {
+            entry:
+              %has_changes = icmp ne i64 %change_count, 0
+              %cleared = xor i1 %inherits, true
+              %custom = or i1 %has_changes, %cleared
+              br i1 %custom, label %allocate_entries, label %fast
+            fast:
+              %fast0 = insertvalue %sollang.process_environment_result poison, ptr null, 0
+              %fast1 = insertvalue %sollang.process_environment_result %fast0, i64 0, 1
+              %fast2 = insertvalue %sollang.process_environment_result %fast1, i64 -1, 2
+              %fast3 = insertvalue %sollang.process_environment_result %fast2, i1 true, 3
+              ret %sollang.process_environment_result %fast3
+            allocate_entries:
+              %entry_slots0 = select i1 %has_changes, i64 %change_count, i64 1
+              %entry_bytes = mul i64 %entry_slots0, 8
+              %entries = call ptr @sollang_alloc(i64 %entry_bytes)
+              %entries_ok = icmp ne ptr %entries, null
+              br i1 %entries_ok, label %allocate_lengths, label %failure
+            allocate_lengths:
+              %name_lengths = call ptr @sollang_alloc(i64 %entry_bytes)
+              %lengths_ok = icmp ne ptr %name_lengths, null
+              br i1 %lengths_ok, label %initialize_entries, label %free_entries_failure
+            initialize_entries:
+              %init_index = phi i64 [ 0, %allocate_lengths ], [ %init_next, %init_more ]
+              %init_done = icmp eq i64 %init_index, %change_count
+              br i1 %init_done, label %convert_changes, label %init_more
+            init_more:
+              %init_slot = getelementptr ptr, ptr %entries, i64 %init_index
+              store ptr null, ptr %init_slot, align 8
+              %init_next = add i64 %init_index, 1
+              br label %initialize_entries
+            convert_changes:
+              %change_index = phi i64 [ 0, %initialize_entries ], [ %change_next_removed, %store_removed ], [ %change_next_set, %store_set ]
+              %changes_done = icmp eq i64 %change_index, %change_count
+              br i1 %changes_done, label %parent_select, label %load_change
+            load_change:
+              %change = getelementptr { %sollang.text, %sollang.text, i1 }, ptr %changes, i64 %change_index
+              %name_slot = getelementptr inbounds { %sollang.text, %sollang.text, i1 }, ptr %change, i32 0, i32 0
+              %name = load %sollang.text, ptr %name_slot, align 8
+              %name_data = extractvalue %sollang.text %name, 0
+              %name_length = extractvalue %sollang.text %name, 1
+              %name_nonempty = icmp ne i64 %name_length, 0
+              %name_valid0 = call i1 @sollang_windows_environment_text_valid(ptr %name_data, i64 %name_length, i1 true)
+              %name_valid = and i1 %name_nonempty, %name_valid0
+              %value_slot = getelementptr inbounds { %sollang.text, %sollang.text, i1 }, ptr %change, i32 0, i32 1
+              %value = load %sollang.text, ptr %value_slot, align 8
+              %value_data = extractvalue %sollang.text %value, 0
+              %value_length = extractvalue %sollang.text %value, 1
+              %value_valid = call i1 @sollang_windows_environment_text_valid(ptr %value_data, i64 %value_length, i1 false)
+              %text_valid = and i1 %name_valid, %value_valid
+              br i1 %text_valid, label %convert_name, label %build_failure
+            convert_name:
+              %wide_name = call ptr @sollang_process_windows_text(ptr %name_data, i64 %name_length)
+              %wide_name_ok = icmp ne ptr %wide_name, null
+              br i1 %wide_name_ok, label %measure_name, label %build_failure
+            measure_name:
+              %wide_name_length = call i64 @sollang_windows_wide_length(ptr %wide_name)
+              %name_length_store = getelementptr i64, ptr %name_lengths, i64 %change_index
+              store i64 %wide_name_length, ptr %name_length_store, align 8
+              %removed_slot = getelementptr inbounds { %sollang.text, %sollang.text, i1 }, ptr %change, i32 0, i32 2
+              %removed = load i1, ptr %removed_slot, align 1
+              br i1 %removed, label %store_removed, label %convert_value
+            store_removed:
+              %removed_entry_slot = getelementptr ptr, ptr %entries, i64 %change_index
+              store ptr %wide_name, ptr %removed_entry_slot, align 8
+              %change_next_removed = add i64 %change_index, 1
+              br label %convert_changes
+            convert_value:
+              %wide_value = call ptr @sollang_process_windows_text(ptr %value_data, i64 %value_length)
+              %wide_value_ok = icmp ne ptr %wide_value, null
+              br i1 %wide_value_ok, label %allocate_entry, label %free_name_failure
+            allocate_entry:
+              %wide_value_length = call i64 @sollang_windows_wide_length(ptr %wide_value)
+              %entry_without_end = add i64 %wide_name_length, %wide_value_length
+              %entry_chars = add i64 %entry_without_end, 2
+              %wide_entry_bytes = mul i64 %entry_chars, 2
+              %wide_entry = call ptr @sollang_alloc(i64 %wide_entry_bytes)
+              %wide_entry_ok = icmp ne ptr %wide_entry, null
+              br i1 %wide_entry_ok, label %copy_entry, label %free_name_value_failure
+            copy_entry:
+              %wide_name_bytes = mul i64 %wide_name_length, 2
+              call void @llvm.memcpy.p0.p0.i64(ptr %wide_entry, ptr %wide_name, i64 %wide_name_bytes, i1 false)
+              %separator = getelementptr i16, ptr %wide_entry, i64 %wide_name_length
+              store i16 61, ptr %separator, align 2
+              %value_offset = add i64 %wide_name_length, 1
+              %value_destination = getelementptr i16, ptr %wide_entry, i64 %value_offset
+              %wide_value_bytes = mul i64 %wide_value_length, 2
+              call void @llvm.memcpy.p0.p0.i64(ptr %value_destination, ptr %wide_value, i64 %wide_value_bytes, i1 false)
+              %entry_end_offset = add i64 %value_offset, %wide_value_length
+              %entry_end = getelementptr i16, ptr %wide_entry, i64 %entry_end_offset
+              store i16 0, ptr %entry_end, align 2
+              call void @sollang_free(ptr %wide_name)
+              call void @sollang_free(ptr %wide_value)
+              br label %store_set
+            store_set:
+              %set_entry_slot = getelementptr ptr, ptr %entries, i64 %change_index
+              store ptr %wide_entry, ptr %set_entry_slot, align 8
+              %change_next_set = add i64 %change_index, 1
+              br label %convert_changes
+            free_name_failure:
+              call void @sollang_free(ptr %wide_name)
+              br label %build_failure
+            free_name_value_failure:
+              call void @sollang_free(ptr %wide_name)
+              call void @sollang_free(ptr %wide_value)
+              br label %build_failure
+            parent_select:
+              br i1 %inherits, label %load_parent, label %allocate_list
+            load_parent:
+              %parent = call ptr @GetEnvironmentStringsW()
+              %parent_ok = icmp ne ptr %parent, null
+              br i1 %parent_ok, label %count_parent, label %build_failure
+            count_parent:
+              %parent_count = phi i64 [ 0, %load_parent ], [ %parent_count_next, %parent_more ]
+              %parent_cursor = phi ptr [ %parent, %load_parent ], [ %parent_next, %parent_more ]
+              %parent_first = load i16, ptr %parent_cursor, align 2
+              %parent_done = icmp eq i16 %parent_first, 0
+              br i1 %parent_done, label %allocate_list, label %parent_more
+            parent_more:
+              %parent_length = call i64 @sollang_windows_wide_length(ptr %parent_cursor)
+              %parent_stride = add i64 %parent_length, 1
+              %parent_next = getelementptr i16, ptr %parent_cursor, i64 %parent_stride
+              %parent_count_next = add i64 %parent_count, 1
+              br label %count_parent
+            allocate_list:
+              %selected_parent = phi ptr [ null, %parent_select ], [ %parent, %count_parent ]
+              %selected_parent_count = phi i64 [ 0, %parent_select ], [ %parent_count, %count_parent ]
+              %maximum_count = add i64 %selected_parent_count, %change_count
+              %list_slots = add i64 %maximum_count, 1
+              %list_bytes = mul i64 %list_slots, 8
+              %list = call ptr @sollang_alloc(i64 %list_bytes)
+              %list_ok = icmp ne ptr %list, null
+              br i1 %list_ok, label %copy_parent, label %build_failure_with_parent
+            copy_parent:
+              %copy_parent_index = phi i64 [ 0, %allocate_list ], [ %copy_parent_next, %copy_parent_continue ]
+              %copy_parent_cursor = phi ptr [ %selected_parent, %allocate_list ], [ %copy_parent_cursor_next, %copy_parent_continue ]
+              %kept_count = phi i64 [ 0, %allocate_list ], [ %kept_next, %copy_parent_continue ]
+              %copy_parent_done = icmp eq i64 %copy_parent_index, %selected_parent_count
+              br i1 %copy_parent_done, label %append_changes, label %copy_parent_inspect
+            copy_parent_inspect:
+              %parent_entry_length = call i64 @sollang_windows_wide_length(ptr %copy_parent_cursor)
+              %parent_name_length = call i64 @sollang_windows_environment_name_length(ptr %copy_parent_cursor)
+              %parent_change = call i64 @sollang_windows_latest_environment_change(ptr %entries, ptr %name_lengths, i64 %change_count, ptr %copy_parent_cursor, i64 %parent_name_length)
+              %parent_overridden = icmp sge i64 %parent_change, 0
+              br i1 %parent_overridden, label %copy_parent_skip, label %copy_parent_keep
+            copy_parent_keep:
+              %parent_destination = getelementptr ptr, ptr %list, i64 %kept_count
+              store ptr %copy_parent_cursor, ptr %parent_destination, align 8
+              %kept_after_copy = add i64 %kept_count, 1
+              br label %copy_parent_continue
+            copy_parent_skip:
+              br label %copy_parent_continue
+            copy_parent_continue:
+              %kept_next = phi i64 [ %kept_after_copy, %copy_parent_keep ], [ %kept_count, %copy_parent_skip ]
+              %copy_parent_stride = add i64 %parent_entry_length, 1
+              %copy_parent_cursor_next = getelementptr i16, ptr %copy_parent_cursor, i64 %copy_parent_stride
+              %copy_parent_next = add i64 %copy_parent_index, 1
+              br label %copy_parent
+            append_changes:
+              %append_index = phi i64 [ 0, %copy_parent ], [ %append_next, %append_continue ]
+              %output_count = phi i64 [ %kept_count, %copy_parent ], [ %output_next, %append_continue ]
+              %append_done = icmp eq i64 %append_index, %change_count
+              br i1 %append_done, label %sort_outer, label %append_inspect
+            append_inspect:
+              %append_entry_slot = getelementptr ptr, ptr %entries, i64 %append_index
+              %append_entry = load ptr, ptr %append_entry_slot, align 8
+              %append_name_length_slot = getelementptr i64, ptr %name_lengths, i64 %append_index
+              %append_name_length = load i64, ptr %append_name_length_slot, align 8
+              %latest = call i64 @sollang_windows_latest_environment_change(ptr %entries, ptr %name_lengths, i64 %change_count, ptr %append_entry, i64 %append_name_length)
+              %is_latest = icmp eq i64 %latest, %append_index
+              br i1 %is_latest, label %append_latest, label %append_skip
+            append_latest:
+              %append_change = getelementptr { %sollang.text, %sollang.text, i1 }, ptr %changes, i64 %append_index
+              %append_removed_slot = getelementptr inbounds { %sollang.text, %sollang.text, i1 }, ptr %append_change, i32 0, i32 2
+              %append_removed = load i1, ptr %append_removed_slot, align 1
+              br i1 %append_removed, label %append_skip, label %append_keep
+            append_keep:
+              %append_destination = getelementptr ptr, ptr %list, i64 %output_count
+              store ptr %append_entry, ptr %append_destination, align 8
+              %output_after_append = add i64 %output_count, 1
+              br label %append_continue
+            append_skip:
+              br label %append_continue
+            append_continue:
+              %output_next = phi i64 [ %output_after_append, %append_keep ], [ %output_count, %append_skip ]
+              %append_next = add i64 %append_index, 1
+              br label %append_changes
+            sort_outer:
+              %sort_index = phi i64 [ 1, %append_changes ], [ %sort_next, %sort_store ]
+              %sort_done = icmp uge i64 %sort_index, %output_count
+              br i1 %sort_done, label %measure_block, label %sort_load
+            sort_load:
+              %sort_key_slot = getelementptr ptr, ptr %list, i64 %sort_index
+              %sort_key = load ptr, ptr %sort_key_slot, align 8
+              br label %sort_inner
+            sort_inner:
+              %sort_position = phi i64 [ %sort_index, %sort_load ], [ %sort_previous, %sort_shift ]
+              %at_start = icmp eq i64 %sort_position, 0
+              br i1 %at_start, label %sort_store, label %sort_compare
+            sort_compare:
+              %sort_previous = sub i64 %sort_position, 1
+              %sort_previous_slot = getelementptr ptr, ptr %list, i64 %sort_previous
+              %sort_previous_value = load ptr, ptr %sort_previous_slot, align 8
+              %sort_order = call i32 @CompareStringOrdinal(ptr %sort_key, i32 -1, ptr %sort_previous_value, i32 -1, i32 1)
+              %sort_before = icmp eq i32 %sort_order, 1
+              br i1 %sort_before, label %sort_shift, label %sort_store
+            sort_shift:
+              %sort_shift_destination = getelementptr ptr, ptr %list, i64 %sort_position
+              store ptr %sort_previous_value, ptr %sort_shift_destination, align 8
+              br label %sort_inner
+            sort_store:
+              %sort_destination = getelementptr ptr, ptr %list, i64 %sort_position
+              store ptr %sort_key, ptr %sort_destination, align 8
+              %sort_next = add i64 %sort_index, 1
+              br label %sort_outer
+            measure_block:
+              %measure_index = phi i64 [ 0, %sort_outer ], [ %measure_next, %measure_more ]
+              %measure_chars = phi i64 [ 0, %sort_outer ], [ %measure_total, %measure_more ]
+              %measure_done = icmp eq i64 %measure_index, %output_count
+              br i1 %measure_done, label %allocate_block, label %measure_more
+            measure_more:
+              %measure_slot = getelementptr ptr, ptr %list, i64 %measure_index
+              %measure_entry = load ptr, ptr %measure_slot, align 8
+              %measure_length = call i64 @sollang_windows_wide_length(ptr %measure_entry)
+              %measure_with_null = add i64 %measure_length, 1
+              %measure_total = add i64 %measure_chars, %measure_with_null
+              %measure_next = add i64 %measure_index, 1
+              br label %measure_block
+            allocate_block:
+              %empty_block = icmp eq i64 %output_count, 0
+              %nonempty_chars = add i64 %measure_chars, 1
+              %block_chars = select i1 %empty_block, i64 2, i64 %nonempty_chars
+              %block_bytes = mul i64 %block_chars, 2
+              %block = call ptr @sollang_alloc(i64 %block_bytes)
+              %block_ok = icmp ne ptr %block, null
+              br i1 %block_ok, label %copy_block, label %build_failure_with_list
+            copy_block:
+              %block_index = phi i64 [ 0, %allocate_block ], [ %block_next, %block_more ]
+              %block_offset = phi i64 [ 0, %allocate_block ], [ %block_offset_next, %block_more ]
+              %block_done = icmp eq i64 %block_index, %output_count
+              br i1 %block_done, label %terminate_block, label %block_more
+            block_more:
+              %block_entry_slot = getelementptr ptr, ptr %list, i64 %block_index
+              %block_entry = load ptr, ptr %block_entry_slot, align 8
+              %block_entry_length = call i64 @sollang_windows_wide_length(ptr %block_entry)
+              %block_copy_chars = add i64 %block_entry_length, 1
+              %block_copy_bytes = mul i64 %block_copy_chars, 2
+              %block_destination = getelementptr i16, ptr %block, i64 %block_offset
+              call void @llvm.memcpy.p0.p0.i64(ptr %block_destination, ptr %block_entry, i64 %block_copy_bytes, i1 false)
+              %block_offset_next = add i64 %block_offset, %block_copy_chars
+              %block_next = add i64 %block_index, 1
+              br label %copy_block
+            terminate_block:
+              %final_null = getelementptr i16, ptr %block, i64 %block_offset
+              store i16 0, ptr %final_null, align 2
+              %empty_second = getelementptr i16, ptr %block, i64 1
+              br i1 %empty_block, label %terminate_empty, label %finish
+            terminate_empty:
+              store i16 0, ptr %empty_second, align 2
+              br label %finish
+            finish:
+              call void @sollang_windows_dispose_environment_build(ptr %entries, ptr %name_lengths, ptr %list, i64 %change_count, ptr %selected_parent)
+              %ok0 = insertvalue %sollang.process_environment_result poison, ptr %block, 0
+              %ok1 = insertvalue %sollang.process_environment_result %ok0, i64 0, 1
+              %ok2 = insertvalue %sollang.process_environment_result %ok1, i64 -1, 2
+              %ok3 = insertvalue %sollang.process_environment_result %ok2, i1 true, 3
+              ret %sollang.process_environment_result %ok3
+            build_failure_with_list:
+              call void @sollang_windows_dispose_environment_build(ptr %entries, ptr %name_lengths, ptr %list, i64 %change_count, ptr %selected_parent)
+              br label %failure
+            build_failure_with_parent:
+              call void @sollang_windows_dispose_environment_build(ptr %entries, ptr %name_lengths, ptr null, i64 %change_count, ptr %selected_parent)
+              br label %failure
+            build_failure:
+              call void @sollang_windows_dispose_environment_build(ptr %entries, ptr %name_lengths, ptr null, i64 %change_count, ptr null)
+              br label %failure
+            free_entries_failure:
+              call void @sollang_free(ptr %entries)
+              br label %failure
+            failure:
+              ret %sollang.process_environment_result zeroinitializer
+            }
+
             define internal ptr @sollang_inherit_windows_handle(ptr %source) #0 {
             entry:
               %process = call ptr @GetCurrentProcess()
@@ -1568,19 +2373,22 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret ptr null
             }
 
-            define internal i64 @sollang_spawn_windows(ptr %program, ptr %argv, i64 %count) #0 {
+            define internal i64 @sollang_spawn_windows(ptr %program, ptr %argv, i64 %count, ptr %working_directory, ptr %environment, ptr %stdin_override, ptr %stdout_override, ptr %stderr_override) #0 {
             entry:
               %command = call ptr @sollang_join_windows_args(ptr %argv, i64 %count)
               %command_ok = icmp ne ptr %command, null
               br i1 %command_ok, label %handles, label %fail
 
             handles:
-              %stdin_source = call ptr @GetStdHandle(i32 -10)
-              %stdout_override = load ptr, ptr @sollang_process_output_override, align 8
-              %has_override = icmp ne ptr %stdout_override, null
+              %has_stdin_override = icmp ne ptr %stdin_override, null
+              %stdin_default = call ptr @GetStdHandle(i32 -10)
+              %stdin_source = select i1 %has_stdin_override, ptr %stdin_override, ptr %stdin_default
+              %has_stdout_override = icmp ne ptr %stdout_override, null
               %stdout_default = call ptr @GetStdHandle(i32 -11)
-              %stdout_source = select i1 %has_override, ptr %stdout_override, ptr %stdout_default
-              %stderr_source = call ptr @GetStdHandle(i32 -12)
+              %stdout_source = select i1 %has_stdout_override, ptr %stdout_override, ptr %stdout_default
+              %has_stderr_override = icmp ne ptr %stderr_override, null
+              %stderr_default = call ptr @GetStdHandle(i32 -12)
+              %stderr_source = select i1 %has_stderr_override, ptr %stderr_override, ptr %stderr_default
               %stdin_handle = call ptr @sollang_inherit_windows_handle(ptr %stdin_source)
               %stdout_handle = call ptr @sollang_inherit_windows_handle(ptr %stdout_source)
               %stderr_handle = call ptr @sollang_inherit_windows_handle(ptr %stderr_source)
@@ -1605,30 +2413,23 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               store ptr %stdout_handle, ptr %stdout_ptr, align 8
               %stderr_ptr = getelementptr i8, ptr %startup, i64 96
               store ptr %stderr_handle, ptr %stderr_ptr, align 8
-              %created = call i32 @CreateProcessW(ptr %program, ptr %command, ptr null, ptr null, i32 1, i32 0, ptr null, ptr null, ptr %startup, ptr %process_info)
+              %has_environment = icmp ne ptr %environment, null
+              %creation_flags = select i1 %has_environment, i32 1024, i32 0
+              %created = call i32 @CreateProcessW(ptr %program, ptr %command, ptr null, ptr null, i32 1, i32 %creation_flags, ptr %environment, ptr %working_directory, ptr %startup, ptr %process_info)
               %created_ok = icmp ne i32 %created, 0
-              br i1 %created_ok, label %wait, label %close_handles_fail
+              br i1 %created_ok, label %spawned, label %close_handles_fail
 
-            wait:
+            spawned:
               %process_handle = load ptr, ptr %process_info, align 8
               %thread_ptr = getelementptr i8, ptr %process_info, i64 8
               %thread_handle = load ptr, ptr %thread_ptr, align 8
-              %waited = call i32 @WaitForSingleObject(ptr %process_handle, i32 -1)
-              %exit_slot = alloca i32, align 4
-              %exit_read = call i32 @GetExitCodeProcess(ptr %process_handle, ptr %exit_slot)
-              %exit_ok = icmp ne i32 %exit_read, 0
               %closed_thread = call i32 @CloseHandle(ptr %thread_handle)
-              %closed_process = call i32 @CloseHandle(ptr %process_handle)
               %closed_stdin = call i32 @CloseHandle(ptr %stdin_handle)
               %closed_stdout = call i32 @CloseHandle(ptr %stdout_handle)
               %closed_stderr = call i32 @CloseHandle(ptr %stderr_handle)
               call void @sollang_free(ptr %command)
-              br i1 %exit_ok, label %success, label %fail_return
-
-            success:
-              %exit_code = load i32, ptr %exit_slot, align 4
-              %exit_code64 = zext i32 %exit_code to i64
-              ret i64 %exit_code64
+              %process_token = ptrtoint ptr %process_handle to i64
+              ret i64 %process_token
 
             close_handles_fail:
               br i1 %stdin_ok, label %close_stdin_fail, label %close_stdout_fail
@@ -1655,7 +2456,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i64 -1
             }
 
-            define internal %sollang.process_result @sollang_run_process(ptr %records, i64 %count) #0 {
+            define internal %sollang.process_spawn_result @sollang_spawn_process_with_stdio(ptr %records, i64 %count, ptr %working_directory_data, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %stdin_override, ptr %stdout_override, ptr %stderr_override) #0 {
             entry:
               %has_program = icmp ugt i64 %count, 0
               br i1 %has_program, label %allocate, label %spawn_error
@@ -1737,7 +2538,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br label %cleanup_failure
 
             cleanup_failure:
-              %failure_j = phi i64 [ %i, %convert_fail ], [ %failure_prev, %cleanup_failure_item ]
+              %failure_j = phi i64 [ %i, %convert_fail ], [ %count, %working_directory_convert ], [ %failure_prev, %cleanup_failure_item ]
               %failure_done = icmp eq i64 %failure_j, 0
               br i1 %failure_done, label %free_argv_error, label %cleanup_failure_item
 
@@ -1758,11 +2559,37 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %null_slot = getelementptr ptr, ptr %wide_argv, i64 %count
               store ptr null, ptr %null_slot, align 8
               %program = load ptr, ptr %program_slot, align 8
-              %spawn_result = call i64 @sollang_spawn_windows(ptr %program, ptr %wide_argv, i64 %count)
+              br i1 %has_working_directory, label %working_directory_convert, label %spawn
+
+            working_directory_convert:
+              %working_directory_wide = call ptr @sollang_process_windows_text(ptr %working_directory_data, i64 %working_directory_length)
+              %working_directory_ok = icmp ne ptr %working_directory_wide, null
+              br i1 %working_directory_ok, label %working_directory_ready, label %cleanup_failure
+
+            working_directory_ready:
+              br label %spawn
+
+            spawn:
+              %working_directory = phi ptr [ null, %terminate ], [ %working_directory_wide, %working_directory_ready ]
+              %environment_result = call %sollang.process_environment_result @sollang_windows_build_environment(ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment)
+              %environment = extractvalue %sollang.process_environment_result %environment_result, 0
+              %environment_ok = extractvalue %sollang.process_environment_result %environment_result, 3
+              br i1 %environment_ok, label %environment_ready, label %environment_failure
+
+            environment_ready:
+              %spawned_result = call i64 @sollang_spawn_windows(ptr %program, ptr %wide_argv, i64 %count, ptr %working_directory, ptr %environment, ptr %stdin_override, ptr %stdout_override, ptr %stderr_override)
+              call void @sollang_free(ptr %environment)
+              br label %cleanup_begin
+
+            environment_failure:
+              br label %cleanup_begin
+
+            cleanup_begin:
+              %spawn_result = phi i64 [ %spawned_result, %environment_ready ], [ -1, %environment_failure ]
               br label %cleanup
 
             cleanup:
-              %j = phi i64 [ %count, %terminate ], [ %prev, %cleanup_item ]
+              %j = phi i64 [ %count, %cleanup_begin ], [ %prev, %cleanup_item ]
               %cleanup_done = icmp eq i64 %j, 0
               br i1 %cleanup_done, label %free_argv, label %cleanup_item
 
@@ -1777,14 +2604,225 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %saved_program = load ptr, ptr %program_slot, align 8
               call void @sollang_free(ptr %saved_program)
               call void @sollang_free(ptr %wide_argv)
+              call void @sollang_free(ptr %working_directory)
               %spawn_ok = icmp ne i64 %spawn_result, -1
-              br i1 %spawn_ok, label %success, label %spawn_error
+              br i1 %spawn_ok, label %read_process_id, label %spawn_error
+
+            read_process_id:
+              %spawn_handle = inttoptr i64 %spawn_result to ptr
+              %process_id32 = call i32 @GetProcessId(ptr %spawn_handle)
+              %process_id_ok = icmp ne i32 %process_id32, 0
+              br i1 %process_id_ok, label %success, label %process_id_error
+
+            process_id_error:
+              %terminated_id_error = call i32 @TerminateProcess(ptr %spawn_handle, i32 1)
+              %reaped_id_error = call i32 @WaitForSingleObject(ptr %spawn_handle, i32 -1)
+              %closed_id_error = call i32 @CloseHandle(ptr %spawn_handle)
+              br label %spawn_error
 
             success:
-              %exit_code = trunc i64 %spawn_result to i32
+              %process_id = zext i32 %process_id32 to i64
+              %ok0 = insertvalue %sollang.process_spawn_result poison, i64 %spawn_result, 0
+              %ok1 = insertvalue %sollang.process_spawn_result %ok0, i64 %process_id, 1
+              %ok2 = insertvalue %sollang.process_spawn_result %ok1, i32 0, 2
+              ret %sollang.process_spawn_result %ok2
+
+            spawn_error:
+              %error0 = insertvalue %sollang.process_spawn_result poison, i64 0, 0
+              %error1 = insertvalue %sollang.process_spawn_result %error0, i64 0, 1
+              %error2 = insertvalue %sollang.process_spawn_result %error1, i32 1, 2
+              ret %sollang.process_spawn_result %error2
+            }
+
+            define internal %sollang.process_spawn_result @sollang_spawn_process_with_stdout(ptr %records, i64 %count, ptr %working_directory_data, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %stdout_override) #0 {
+            entry:
+              %result = call %sollang.process_spawn_result @sollang_spawn_process_with_stdio(ptr %records, i64 %count, ptr %working_directory_data, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr null, ptr %stdout_override, ptr null)
+              ret %sollang.process_spawn_result %result
+            }
+
+            define internal ptr @sollang_process_copy_stdio_path(ptr %data, i64 %length) #0 {
+            entry:
+              %bytes = add i64 %length, 1
+              %copy = call ptr @sollang_alloc(i64 %bytes)
+              %allocated = icmp ne ptr %copy, null
+              br i1 %allocated, label %initialize, label %failure
+
+            initialize:
+              call void @llvm.memcpy.p0.p0.i64(ptr %copy, ptr %data, i64 %length, i1 false)
+              %end = getelementptr i8, ptr %copy, i64 %length
+              store i8 0, ptr %end, align 1
+              ret ptr %copy
+
+            failure:
+              ret ptr null
+            }
+
+            @sollang_process_null_windows = private unnamed_addr constant [4 x i8] c"NUL\00"
+
+            define internal ptr @sollang_process_open_windows_stdio(i32 %mode, ptr %path, i64 %path_length, i1 %input) #0 {
+            entry:
+              %inherits = icmp eq i32 %mode, 0
+              br i1 %inherits, label %inherit, label %select_file
+
+            select_file:
+              %is_file = icmp eq i32 %mode, 1
+              br i1 %is_file, label %copy_path, label %select_null
+
+            select_null:
+              %is_null = icmp eq i32 %mode, 2
+              br i1 %is_null, label %open_null, label %failure
+
+            copy_path:
+              %path_copy = call ptr @sollang_process_copy_stdio_path(ptr %path, i64 %path_length)
+              %path_ok = icmp ne ptr %path_copy, null
+              br i1 %path_ok, label %open, label %failure
+
+            open:
+              %access = select i1 %input, i32 -2147483648, i32 1073741824
+              %creation = select i1 %input, i32 3, i32 2
+              %handle = call ptr @CreateFileA(ptr %path_copy, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
+              call void @sollang_free(ptr %path_copy)
+              ret ptr %handle
+
+            open_null:
+              %null_access = select i1 %input, i32 -2147483648, i32 1073741824
+              %null_creation = select i1 %input, i32 3, i32 2
+              %null_handle = call ptr @CreateFileA(ptr @sollang_process_null_windows, i32 %null_access, i32 3, ptr null, i32 %null_creation, i32 128, ptr null)
+              ret ptr %null_handle
+
+            inherit:
+              ret ptr null
+
+            failure:
+              ret ptr inttoptr (i64 -1 to ptr)
+            }
+
+            define internal void @sollang_process_close_windows_stdio(ptr %handle) #0 {
+            entry:
+              %value = ptrtoint ptr %handle to i64
+              %present = icmp ne i64 %value, 0
+              %valid = icmp ne i64 %value, -1
+              %should_close = and i1 %present, %valid
+              br i1 %should_close, label %close, label %done
+
+            close:
+              %closed = call i32 @CloseHandle(ptr %handle)
+              br label %done
+
+            done:
+              ret void
+            }
+
+            define internal %sollang.process_spawn_result @sollang_spawn_process_configured(ptr %records, i64 %count, ptr %working_directory_data, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, i32 %stdin_mode, ptr %stdin_path, i64 %stdin_path_length, i32 %stdout_mode, ptr %stdout_path, i64 %stdout_path_length, i32 %stderr_mode, ptr %stderr_path, i64 %stderr_path_length) #0 {
+            entry:
+              %stdin_inherits = icmp eq i32 %stdin_mode, 0
+              %stdout_inherits = icmp eq i32 %stdout_mode, 0
+              %stderr_inherits = icmp eq i32 %stderr_mode, 0
+              %output_inherits = and i1 %stdout_inherits, %stderr_inherits
+              %all_inherit = and i1 %stdin_inherits, %output_inherits
+              br i1 %all_inherit, label %inherit, label %open
+
+            inherit:
+              %inherited = call %sollang.process_spawn_result @sollang_spawn_process(ptr %records, i64 %count, ptr %working_directory_data, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment)
+              ret %sollang.process_spawn_result %inherited
+
+            open:
+              %stdin_handle = call ptr @sollang_process_open_windows_stdio(i32 %stdin_mode, ptr %stdin_path, i64 %stdin_path_length, i1 true)
+              %stdout_handle = call ptr @sollang_process_open_windows_stdio(i32 %stdout_mode, ptr %stdout_path, i64 %stdout_path_length, i1 false)
+              %stderr_handle = call ptr @sollang_process_open_windows_stdio(i32 %stderr_mode, ptr %stderr_path, i64 %stderr_path_length, i1 false)
+              %stdin_value = ptrtoint ptr %stdin_handle to i64
+              %stdout_value = ptrtoint ptr %stdout_handle to i64
+              %stderr_value = ptrtoint ptr %stderr_handle to i64
+              %stdin_ok = icmp ne i64 %stdin_value, -1
+              %stdout_ok = icmp ne i64 %stdout_value, -1
+              %stderr_ok = icmp ne i64 %stderr_value, -1
+              %stdio_ok0 = and i1 %stdin_ok, %stdout_ok
+              %stdio_ok = and i1 %stdio_ok0, %stderr_ok
+              br i1 %stdio_ok, label %spawn, label %open_failure
+
+            spawn:
+              %spawned = call %sollang.process_spawn_result @sollang_spawn_process_with_stdio(ptr %records, i64 %count, ptr %working_directory_data, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %stdin_handle, ptr %stdout_handle, ptr %stderr_handle)
+              call void @sollang_process_close_windows_stdio(ptr %stdin_handle)
+              call void @sollang_process_close_windows_stdio(ptr %stdout_handle)
+              call void @sollang_process_close_windows_stdio(ptr %stderr_handle)
+              ret %sollang.process_spawn_result %spawned
+
+            open_failure:
+              call void @sollang_process_close_windows_stdio(ptr %stdin_handle)
+              call void @sollang_process_close_windows_stdio(ptr %stdout_handle)
+              call void @sollang_process_close_windows_stdio(ptr %stderr_handle)
+              ret %sollang.process_spawn_result { i64 0, i64 0, i32 1 }
+            }
+
+            define internal %sollang.process_spawn_result @sollang_spawn_process(ptr %records, i64 %count, ptr %working_directory_data, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment) #0 {
+            entry:
+              %result = call %sollang.process_spawn_result @sollang_spawn_process_with_stdio(ptr %records, i64 %count, ptr %working_directory_data, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr null, ptr null, ptr null)
+              ret %sollang.process_spawn_result %result
+            }
+
+            define internal %sollang.process_result @sollang_wait_process(i64 %token) #0 {
+            entry:
+              %valid = icmp ne i64 %token, 0
+              br i1 %valid, label %wait, label %wait_error
+
+            wait:
+              %process_handle = inttoptr i64 %token to ptr
+              %waited = call i32 @WaitForSingleObject(ptr %process_handle, i32 -1)
+              %wait_ok = icmp eq i32 %waited, 0
+              br i1 %wait_ok, label %read_exit, label %terminate_error
+
+            read_exit:
+              %exit_slot = alloca i32, align 4
+              %exit_read = call i32 @GetExitCodeProcess(ptr %process_handle, ptr %exit_slot)
+              %exit_ok = icmp ne i32 %exit_read, 0
+              br i1 %exit_ok, label %success, label %terminate_error
+
+            success:
+              %exit_code = load i32, ptr %exit_slot, align 4
+              %closed_success = call i32 @CloseHandle(ptr %process_handle)
               %ok0 = insertvalue %sollang.process_result poison, i32 %exit_code, 0
               %ok1 = insertvalue %sollang.process_result %ok0, i32 0, 1
               ret %sollang.process_result %ok1
+
+            terminate_error:
+              %terminated = call i32 @TerminateProcess(ptr %process_handle, i32 1)
+              %reaped = call i32 @WaitForSingleObject(ptr %process_handle, i32 -1)
+              %closed_error = call i32 @CloseHandle(ptr %process_handle)
+              br label %wait_error
+
+            wait_error:
+              %error0 = insertvalue %sollang.process_result poison, i32 0, 0
+              %error1 = insertvalue %sollang.process_result %error0, i32 2, 1
+              ret %sollang.process_result %error1
+            }
+
+            define internal void @sollang_drop_process_child(i64 %token) #0 {
+            entry:
+              %valid = icmp ne i64 %token, 0
+              br i1 %valid, label %dispose, label %done
+
+            dispose:
+              %process_handle = inttoptr i64 %token to ptr
+              %terminated = call i32 @TerminateProcess(ptr %process_handle, i32 1)
+              %reaped = call i32 @WaitForSingleObject(ptr %process_handle, i32 -1)
+              %closed = call i32 @CloseHandle(ptr %process_handle)
+              br label %done
+
+            done:
+              ret void
+            }
+
+            define internal %sollang.process_result @sollang_run_process(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment) #0 {
+            entry:
+              %spawned = call %sollang.process_spawn_result @sollang_spawn_process(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment)
+              %token = extractvalue %sollang.process_spawn_result %spawned, 0
+              %error = extractvalue %sollang.process_spawn_result %spawned, 2
+              %spawn_ok = icmp eq i32 %error, 0
+              br i1 %spawn_ok, label %wait, label %spawn_error
+
+            wait:
+              %result = call %sollang.process_result @sollang_wait_process(i64 %token)
+              ret %sollang.process_result %result
 
             spawn_error:
               %error0 = insertvalue %sollang.process_result poison, i32 0, 0
@@ -1792,7 +2830,23 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %sollang.process_result %error1
             }
 
-            define internal %sollang.process_result @sollang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_len) #0 {
+            define internal %sollang.process_result @sollang_run_process_configured(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, i32 %stdin_mode, ptr %stdin_path, i64 %stdin_path_length, i32 %stdout_mode, ptr %stdout_path, i64 %stdout_path_length, i32 %stderr_mode, ptr %stderr_path, i64 %stderr_path_length) #0 {
+            entry:
+              %spawned = call %sollang.process_spawn_result @sollang_spawn_process_configured(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, i32 %stdin_mode, ptr %stdin_path, i64 %stdin_path_length, i32 %stdout_mode, ptr %stdout_path, i64 %stdout_path_length, i32 %stderr_mode, ptr %stderr_path, i64 %stderr_path_length)
+              %token = extractvalue %sollang.process_spawn_result %spawned, 0
+              %error = extractvalue %sollang.process_spawn_result %spawned, 2
+              %ok = icmp eq i32 %error, 0
+              br i1 %ok, label %wait, label %spawn_error
+
+            wait:
+              %result = call %sollang.process_result @sollang_wait_process(i64 %token)
+              ret %sollang.process_result %result
+
+            spawn_error:
+              ret %sollang.process_result { i32 0, i32 1 }
+            }
+
+            define internal %sollang.process_result @sollang_run_process_to_file(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %path, i64 %path_len) #0 {
             entry:
               %path_buffer = alloca [260 x i8], align 1
               %path_buffer_ptr = getelementptr inbounds [260 x i8], ptr %path_buffer, i64 0, i64 0
@@ -1807,10 +2861,15 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br i1 %open_ok, label %run, label %error
 
             run:
-              store ptr %handle, ptr @sollang_process_output_override, align 8
-              %result = call %sollang.process_result @sollang_run_process(ptr %records, i64 %count)
-              store ptr null, ptr @sollang_process_output_override, align 8
+              %spawned = call %sollang.process_spawn_result @sollang_spawn_process_with_stdout(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %handle)
               %closed = call i32 @CloseHandle(ptr %handle)
+              %token = extractvalue %sollang.process_spawn_result %spawned, 0
+              %spawn_error = extractvalue %sollang.process_spawn_result %spawned, 2
+              %spawn_ok = icmp eq i32 %spawn_error, 0
+              br i1 %spawn_ok, label %wait, label %error
+
+            wait:
+              %result = call %sollang.process_result @sollang_wait_process(i64 %token)
               ret %sollang.process_result %result
 
             error:
@@ -1857,12 +2916,39 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %data, i32 %len, ptr %written) #0 {
             entry:
+              %empty = icmp eq i32 %len, 0
+              br i1 %empty, label %success_empty, label %classify
+
+            success_empty:
+              store i32 0, ptr %written, align 4
+              ret i32 1
+
+            classify:
               %is_console = load i1, ptr @sollang_stdout_line_buffered, align 1
               br i1 %is_console, label %console_prepare, label %redirected
 
             redirected:
-              %redirected_ok = call i32 @WriteFile(ptr %stdout, ptr %data, i32 %len, ptr %written, ptr null)
-              ret i32 %redirected_ok
+              br label %redirected_write
+
+            redirected_write:
+              %redirected_offset = phi i32 [ 0, %redirected ], [ %redirected_next, %redirected_advance ]
+              %redirected_remaining = sub i32 %len, %redirected_offset
+              %redirected_offset64 = zext i32 %redirected_offset to i64
+              %redirected_data = getelementptr i8, ptr %data, i64 %redirected_offset64
+              store i32 0, ptr %written, align 4
+              %redirected_ok = call i32 @WriteFile(ptr %stdout, ptr %redirected_data, i32 %redirected_remaining, ptr %written, ptr null)
+              %redirected_count = load i32, ptr %written, align 4
+              %redirected_succeeded = icmp ne i32 %redirected_ok, 0
+              %redirected_progress = icmp ugt i32 %redirected_count, 0
+              %redirected_bounded = icmp ule i32 %redirected_count, %redirected_remaining
+              %redirected_valid0 = and i1 %redirected_succeeded, %redirected_progress
+              %redirected_valid = and i1 %redirected_valid0, %redirected_bounded
+              br i1 %redirected_valid, label %redirected_advance, label %write_failed
+
+            redirected_advance:
+              %redirected_next = add i32 %redirected_offset, %redirected_count
+              %redirected_complete = icmp eq i32 %redirected_next, %len
+              br i1 %redirected_complete, label %write_succeeded, label %redirected_write
 
             console_prepare:
               %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
@@ -1874,6 +2960,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %wide_bytes = zext i32 %wide_bytes32 to i64
               %heap = call ptr @GetProcessHeap()
               %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+              %wide_written = alloca i32, align 4
               %allocated = icmp ne ptr %wide, null
               br i1 %allocated, label %convert, label %conversion_failed
 
@@ -1883,13 +2970,40 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br i1 %converted_all, label %console_write, label %conversion_free
 
             console_write:
-              %wide_written = alloca i32, align 4
-              %console_ok = call i32 @WriteConsoleW(ptr %stdout, ptr %wide, i32 %wide_chars, ptr %wide_written, ptr null)
-              %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+              %console_offset = phi i32 [ 0, %convert ], [ %console_next, %console_advance ]
+              %console_remaining = sub i32 %wide_chars, %console_offset
+              %console_offset64 = zext i32 %console_offset to i64
+              %console_data = getelementptr i16, ptr %wide, i64 %console_offset64
+              store i32 0, ptr %wide_written, align 4
+              %console_ok = call i32 @WriteConsoleW(ptr %stdout, ptr %console_data, i32 %console_remaining, ptr %wide_written, ptr null)
+              %console_count = load i32, ptr %wide_written, align 4
               %console_succeeded = icmp ne i32 %console_ok, 0
-              %reported_written = select i1 %console_succeeded, i32 %len, i32 0
-              store i32 %reported_written, ptr %written, align 4
-              ret i32 %console_ok
+              %console_progress = icmp ugt i32 %console_count, 0
+              %console_bounded = icmp ule i32 %console_count, %console_remaining
+              %console_valid0 = and i1 %console_succeeded, %console_progress
+              %console_valid = and i1 %console_valid0, %console_bounded
+              br i1 %console_valid, label %console_advance, label %console_write_failed
+
+            console_advance:
+              %console_next = add i32 %console_offset, %console_count
+              %console_complete = icmp eq i32 %console_next, %wide_chars
+              br i1 %console_complete, label %console_write_succeeded, label %console_write
+
+            console_write_succeeded:
+              %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+              br label %write_succeeded
+
+            console_write_failed:
+              %freed_after_write_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+              br label %write_failed
+
+            write_succeeded:
+              store i32 %len, ptr %written, align 4
+              ret i32 1
+
+            write_failed:
+              store i32 0, ptr %written, align 4
+              ret i32 0
 
             conversion_free:
               %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
@@ -1989,8 +3103,16 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %count = trunc i64 %count64 to i32
               %buffer = getelementptr inbounds [1048576 x i8], ptr @sollang_stdout_buffer, i64 0, i64 0
               %ok = call i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %buffer, i32 %count, ptr %written)
+              %succeeded = icmp ne i32 %ok, 0
+              br i1 %succeeded, label %clear, label %failure
+
+            clear:
               store i64 0, ptr @sollang_stdout_buffer_count, align 8
               ret i32 %ok
+
+            failure:
+              call void @llvm.trap()
+              unreachable
 
             empty:
               store i32 0, ptr %written, align 4
@@ -2039,7 +3161,15 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %flushed_direct = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
               %direct_len = trunc i64 %len64 to i32
               %direct_ok = call i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %data, i32 %direct_len, ptr %written)
-              ret i32 %direct_ok
+              %direct_succeeded = icmp ne i32 %direct_ok, 0
+              br i1 %direct_succeeded, label %write_direct_done, label %write_direct_failure
+
+            write_direct_done:
+              ret i32 1
+
+            write_direct_failure:
+              call void @llvm.trap()
+              unreachable
 
             buffer_prepare:
               %count = load i64, ptr @sollang_stdout_buffer_count, align 8

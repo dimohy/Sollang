@@ -1,0 +1,207 @@
+namespace std.compress.zstd.huffman
+
+import std.compress.zstd.huffman as model
+
+# RFC 8878 section 4.2 direct-weight Huffman tables and reverse bitstreams.
+# FSE-compressed weight descriptions intentionally share the later FSE engine.
+public enum Failure {
+    Invalid
+    UnsupportedFseWeights
+}
+
+public struct Table {
+    public symbolsByCode: [Int; ~]
+    public maxBits: Int
+}
+
+public struct Description {
+    public table: Table
+    public bytesRead: Int
+}
+
+errorDescription failure: Failure -> Result<Description, Failure> {
+    Result<Description, Failure>.Err(failure)
+}
+
+errorBytes failure: Failure -> Result<[UInt8; ~], Failure> {
+    Result<[UInt8; ~], Failure>.Err(failure)
+}
+
+powerOfTwo exponent: Int -> Int {
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+public empty: -> Table {
+    Table { symbolsByCode: [Int; ~], maxBits: 0 }
+}
+
+impl Table {
+    public reset: mut self -> Unit {
+        (self.symbolsByCode -> len) > 0 -> while {
+            self.symbolsByCode -> take((self.symbolsByCode -> len) - 1) => discarded
+        }
+        0 => self.maxBits
+    }
+
+    public replaceFrom: mut self, replacement: ref Table -> Unit {
+        self -> reset
+        0 => index!
+        index! < (replacement.symbolsByCode -> len) -> while {
+            self.symbolsByCode -> push(replacement.symbolsByCode[index!])
+            index! + 1 => index!
+        }
+        replacement.maxBits => self.maxBits
+    }
+}
+
+impl Description {
+    public intoTable: move self -> Table {
+        self.table => table
+        table
+    }
+}
+
+public parseDirectDescription input: [UInt8], offset: Int, available: Int -> Result<Description, Failure> {
+    available > 0 and offset >= 0 and offset < (input -> len)
+        -> unless { errorDescription(model.Failure.Invalid) -> return }
+    Int(input[offset]) => header
+    header >= 128
+        -> unless { errorDescription(model.Failure.UnsupportedFseWeights) -> return }
+    header - 127 => listedSymbols
+    (listedSymbols + 1) / 2 => weightBytes
+    1 + weightBytes <= available and offset + 1 + weightBytes <= (input -> len)
+        -> unless { errorDescription(model.Failure.Invalid) -> return }
+
+    [Int; ~] => weights!
+    weights! -> reserve(listedSymbols + 1)
+    0 => weightSum!
+    0 => symbol!
+    symbol! < listedSymbols -> while {
+        Int(input[offset + 1 + symbol! / 2]) => packed
+        symbol! % 2 == 0 -> if { packed / 16 } else { packed % 16 } => weight
+        weight <= 11 -> unless { errorDescription(model.Failure.Invalid) -> return }
+        weights! -> push(weight)
+        weight > 0 -> if { weightSum! + ((weight - 1) -> powerOfTwo) => weightSum! }
+        symbol! + 1 => symbol!
+    }
+    weightSum! > 0 -> unless { errorDescription(model.Failure.Invalid) -> return }
+
+    1 => total!
+    0 => maxBits!
+    total! <= weightSum! -> while {
+        total! * 2 => total!
+        maxBits! + 1 => maxBits!
+    }
+    maxBits! > 0 and maxBits! <= 11
+        -> unless { errorDescription(model.Failure.Invalid) -> return }
+    total! - weightSum! => lastContribution!
+    1 => lastWeight!
+    lastContribution! > 1 -> while {
+        lastContribution! % 2 == 0 -> unless { errorDescription(model.Failure.Invalid) -> return }
+        lastContribution! / 2 => lastContribution!
+        lastWeight! + 1 => lastWeight!
+    }
+    lastContribution! == 1 and lastWeight! <= maxBits!
+        -> unless { errorDescription(model.Failure.Invalid) -> return }
+    weights! -> push(lastWeight!)
+
+    (maxBits! + 1 -> powerOfTwo) - 2 => lookupSize
+    [Int; ~] => symbolsByCode!
+    symbolsByCode! -> reserve(lookupSize)
+    0 => index!
+    index! < lookupSize -> while {
+        symbolsByCode! -> push(-1)
+        index! + 1 => index!
+    }
+
+    0 => code!
+    1 => currentWeight!
+    currentWeight! <= maxBits! -> while {
+        0 => count!
+        0 => currentSymbol!
+        currentSymbol! < (weights! -> len) -> while {
+            weights![currentSymbol!] == currentWeight! -> if {
+                maxBits! + 1 - currentWeight! => bitLength
+                (bitLength -> powerOfTwo) - 2 + code! => lookup
+                lookup >= 0 and lookup < lookupSize and symbolsByCode![lookup] == -1
+                    -> unless { errorDescription(model.Failure.Invalid) -> return }
+                currentSymbol! => symbolsByCode![lookup]
+                code! + 1 => code!
+                count! + 1 => count!
+            }
+            currentSymbol! + 1 => currentSymbol!
+        }
+        (code! / 2) => code!
+        currentWeight! + 1 => currentWeight!
+    }
+
+    Result<Description, Failure>.Ok(Description {
+        table: Table { symbolsByCode: symbolsByCode!, maxBits: maxBits! }
+        bytesRead: 1 + weightBytes
+    })
+}
+
+highestSetBit value: Int -> Int {
+    value > 0 -> unless { -1 -> return }
+    value => remaining!
+    0 => bit!
+    remaining! > 1 -> while {
+        remaining! / 2 => remaining!
+        bit! + 1 => bit!
+    }
+    bit!
+}
+
+impl Table {
+    public decodeStream: self, input: [UInt8], offset: Int, size: Int, expectedBytes: Int -> Result<[UInt8; ~], Failure> {
+        size > 0 and expectedBytes >= 0 and self.maxBits > 0
+            and offset >= 0 and offset + size <= (input -> len)
+            -> unless { errorBytes(model.Failure.Invalid) -> return }
+        Int(input[offset + size - 1]) => lastByte
+        lastByte -> highestSetBit => endBit
+        endBit >= 0 -> unless { errorBytes(model.Failure.Invalid) -> return }
+
+        offset + size - 1 => byteIndex!
+        endBit - 1 => bitIndex!
+        [UInt8; ~] => output!
+        output! -> reserve(expectedBytes)
+        0 => produced!
+        produced! < expectedBytes -> while {
+            0 => code!
+            1 => bitLength!
+            false => found!
+            bitLength! <= self.maxBits -> while {
+                bitIndex! >= 0 -> unless { errorBytes(model.Failure.Invalid) -> return }
+                bitIndex! -> powerOfTwo => divisor
+                (Int(input[byteIndex!]) / divisor) % 2 => bit
+                code! * 2 + bit => code!
+                bitIndex! - 1 => bitIndex!
+                bitIndex! < 0 and byteIndex! > offset -> if {
+                    byteIndex! - 1 => byteIndex!
+                    7 => bitIndex!
+                }
+                (bitLength! -> powerOfTwo) - 2 + code! => lookup
+                lookup >= 0 and lookup < (self.symbolsByCode -> len)
+                    -> if {
+                        self.symbolsByCode[lookup] >= 0 -> if {
+                            output! -> push(UInt8(self.symbolsByCode[lookup]))
+                            true => found!
+                            self.maxBits + 1 => bitLength!
+                        }
+                    }
+                not found! -> if { bitLength! + 1 => bitLength! }
+            }
+            found! -> unless { errorBytes(model.Failure.Invalid) -> return }
+            produced! + 1 => produced!
+        }
+        byteIndex! == offset and bitIndex! == -1
+            -> unless { errorBytes(model.Failure.Invalid) -> return }
+        Result<[UInt8; ~], Failure>.Ok(output!)
+    }
+}

@@ -27,15 +27,13 @@ See [The Sollang Philosophy](docs/PHILOSOPHY.md).
 ## For AI Agents
 
 Do not infer Sollang syntax from this README, from another language, or from
-one isolated fixture. Read [llms.txt](llms.txt) and then this order:
+one isolated fixture. Read the single AI guide:
 
-1. [Philosophy](docs/PHILOSOPHY.md)
-2. [AI Agent coding guide](docs/AI_AGENT_GUIDE.md)
-3. [User examples](examples/user/README.md)
-4. [Specification](docs/SPEC.md)
-5. [Decision log](docs/DECISIONS.md)
-6. [Flow Junctions](docs/FLOW_JUNCTIONS.md) when branching or streams are involved
-7. [Lexer](syntax/sollang.lexer) and [grammar](syntax/sollang.grammar)
+[SLG best practices for AI Agents](docs/AI_SLG_BEST_PRACTICES.md) explains current
+syntax, beautiful code, ownership, effects, and verification. It links to the
+[specification](docs/SPEC.md), [user examples](examples/user/README.md), and
+[grammar](syntax/sollang.grammar) for focused detail. [llms.txt](llms.txt) is
+the machine-discovery entry point; the old AI Agent guide is only a redirect.
 
 [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), and
 [.github/copilot-instructions.md](.github/copilot-instructions.md) are short
@@ -118,9 +116,11 @@ line to each `readInt` call.
   `Result`, and `?` propagation
 - import discovery with the final path segment as the default alias, local
   packages, products, and explicit workspaces
-- a Sollang standard library under `stdlib/sys`
-- flat `Result`-based TCP, UDP, and QUIC networking under `sys.socket` and
-  `sys.quic`, with affine handles and an explicit `Network` capability
+- a Sollang standard library under `stdlib/std` with irreducible native
+  primitives isolated under `stdlib/sys`
+- flat `Result`-based TCP and UDP networking under `std.net.socket`, plus QUIC
+  currently under `std.net.quic` while its public protocol surface migrates to
+  `std.net.quic`, with affine handles and an explicit `Network` capability
 - one compact lexer/grammar source set consumed by the C# bootstrap and the
   Sollang lexer/parser/CST/AST pipeline
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
@@ -321,21 +321,105 @@ Fallible network steps stay flat inside a `Result`-returning function. Postfix
 `when`:
 
 ```sollang
-sendPing endpoint: socket.Endpoint -> Result<Bool, socket.SocketError> uses Network {
-    socket.connect(endpoint)? => connection
-    socket.sendText(connection, "ping")? => count
-    socket.shutdown(connection)?
+sendPing endpoint: net.Endpoint -> Result<Bool, socket.SocketError> uses Network {
+    endpoint -> connect? => connection
+    connection -> sendText("ping")? => count
+    connection -> shutdown(socket.ShutdownDirection.Both)?
+    connection -> close
     Result<Bool, socket.SocketError>.Ok(count == UIntSize(4))
 }
 ```
 
-`sys.socket` provides native TCP and UDP on Windows x64 and Linux x64.
-`sys.quic` provides certificate-pinned QUIC v1 and v2 streams and datagrams as
+`std.net.socket` provides native TCP and UDP on Windows x64 and Linux x64.
+`std.net.quic` provides certificate-pinned QUIC v1 and v2 streams and datagrams as
 reachable Sollang standard-library code. The compiler includes only the used
 protocol modules in the native executable; no Rust crate, QUIC DLL, shared
 object, or runtime adapter installation is required.
 
-`sys.quic.p2p` adds stable peer IDs, signed expiring endpoint records, mutual
+`std.compress.gzip` provides an instance-owned, bounded GZIP codec. `compress`
+produces deterministic RFC 1952 level-0 streams, while `compressFixed` uses a
+bounded fast-match table and fixed Huffman codes. The reader accepts
+stored, fixed-Huffman, and dynamic-Huffman RFC 1951 blocks, including LZ77
+back-references, with CRC32, size, output, and expansion-ratio validation.
+`codec -> encoder()` creates a reusable stored-block encoder; `write` emits
+each chunk immediately and `finish: move self` appends the final block and
+trailer without buffering the input. `codec -> decoder(DecoderLimits)` creates
+an affine transactional decoder with explicit compressed-input and member
+limits. Each `write` advances the member header, DEFLATE bit reservoir, active
+Huffman tables, 32 KiB history, CRC32, and ISIZE without retaining or reparsing
+the complete compressed input. Unverified member output stays private;
+consuming `finish` transfers the verified aggregate only after every member
+validates CRC32 and ISIZE. Dynamic-Huffman writers and ZIP remain later
+compatibility layers; malformed blocks fail explicitly.
+
+`std.compress.zstd` adds the first pure Sollang RFC 8878 layer with the same
+instance-owned shape. `Limits -> codec` fixes encoded, decoded, window, frame,
+and skippable-frame ceilings. The deterministic encoder writes single-segment
+raw blocks to caller-owned output, while the affine incremental decoder accepts
+raw/RLE blocks, skippable frames, concatenated frames, and one-byte input
+boundaries transactionally. Entropy-compressed blocks, dictionaries, and
+content checksums remain explicit unsupported capabilities until their own
+conformance gates pass; Brotli is the next modern-codec contract.
+
+Portable binary data uses explicit instances too. `std.encoding.binary.ByteOrder`
+creates a bounded reader or writer, and `std.hash.crc32.Polynomial` creates a
+reusable incremental hasher. Callers retain the input/output buffers, so these
+objects own only cursor, limit, and checksum state:
+
+```sollang
+binary.ByteOrder.Big -> writer(64)? => writer!
+[UInt8; ~] => output!
+writer! -> writeUInt32(2_305_843_009, output!)?
+
+crc32.Polynomial.Castagnoli -> hasher => hasher!
+hasher! -> write(output!)
+hasher! -> checksum => checksum
+```
+
+Fixed-width integers and canonical ten-byte unsigned varints report exact
+failure offsets without partially advancing state. Native O0 verification also
+rejects hidden allocation or copying in the fixed-input CRC instance path.
+
+QUIC addresses use named constructors instead of exposing dotted IPv4 as four
+fields at every call site:
+
+```sollang
+quic.loopback(44_434) => local
+quic.ipv4("192.0.2.42", 44_434)? => peer
+quic.generateIdentity()? => identity
+quic.bind(local)? => endpoint!
+endpoint! -> listen(identity)? => listener!
+```
+
+`ipv4` is a strict numeric parser returning `Result`; it never hides DNS or
+network access. `quic.anyAddress(port)` is the explicit wildcard bind address.
+`quic.bind(local)` creates the affine transport owner. The endpoint then
+consumes the generated server identity through `listen` and retains the UDP
+socket and connection-routing state.
+
+Use the short `listen`/`connect` forms for reviewed defaults. Services that need
+an explicit memory envelope pass one inline value before construction:
+
+```sollang
+quic.ConnectionOptions {
+    maxInboundBidirectionalStreams: 64
+    pendingInboundBidirectionalStreams: 64
+    pendingApplicationFrames: 256
+    pendingApplicationBytes: 4_194_304
+    receiveWindows: quic.ReceiveWindowSizes {
+        connection: 8_388_608
+        locallyInitiatedBidirectionalStream: 262_144
+        remotelyInitiatedBidirectionalStream: 262_144
+    }
+} => connectionOptions
+endpoint! -> listenWith(identity, connectionOptions)? => listener!
+```
+
+The options are validated before state change or network access and remain
+inline scalar data. Queue exhaustion is reported as `QueueLimitExceeded`; it is
+not disguised as a peer protocol failure.
+
+`std.net.quic.p2p` adds stable peer IDs, signed expiring endpoint records, mutual
 Ed25519 authentication, exact application-protocol negotiation, and framed
 messages over direct QUIC. The runnable chat pair is
 `examples/interop/quic-p2p-chat-server.slg` and

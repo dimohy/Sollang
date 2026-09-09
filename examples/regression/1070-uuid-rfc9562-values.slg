@@ -1,0 +1,38 @@
+import std.uuid
+
+# RFC 9562 values keep version/variant bits and format through caller-owned storage.
+main {
+    uuid.codec() => codec
+    codec -> parse("01890f4c-7c00-7cc3-98c8-4c0c9c5f7a21") -> when {
+        Ok(value) {
+            value -> variant -> when {
+                Rfc9562 { "rfc9562" }
+                Ncs { "ncs" }
+                Microsoft { "microsoft" }
+                Future { "future" }
+            } => variant
+            Arena(36) => textStorage!
+            value -> text(textStorage!) => valueText
+            "uuid=$valueText" -> println
+            "version=$(value -> version),variant=$variant" -> println
+            codec -> nil -> isNil -> if { "true" } else { "false" } => nilText
+            codec -> max -> isMax -> if { "true" } else { "false" } => maxText
+            "nil=$nilText,max=$maxText" -> println
+        }
+        Err(error) { "uuid=parse-error" -> println }
+    }
+    # Uppercase input normalizes to canonical lowercase text.
+    codec -> parse("01890F4C-7C00-7CC3-98C8-4C0C9C5F7A21") -> when {
+        Ok(upperValue) {
+            Arena(36) => upperStorage!
+            upperValue -> text(upperStorage!) => canonical
+            "uppercase=$canonical" -> println
+        }
+        Err(error) { "uppercase=parse-error" -> println }
+    }
+    # Strict core parsing rejects a non-hyphen separator at its exact offset.
+    codec -> parse("01890f4c_7c00-7cc3-98c8-4c0c9c5f7a21") -> when {
+        Ok(invalidValue) { "separator=accepted" -> println }
+        Err(error) { "separator=rejected@$(error -> errorOffset)" -> println }
+    }
+}

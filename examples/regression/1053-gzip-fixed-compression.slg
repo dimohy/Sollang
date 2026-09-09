@@ -1,0 +1,43 @@
+import std.compress.gzip as gzip
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+main {
+    gzip.Limits { maxOutputBytes: 2_000, maxExpansionRatio: 100 } -> codec() -> when {
+        Err(_) { "fixed-compress=false" -> println }
+        Ok(codec) {
+            [UInt8; ~] => source!
+            0 => index!
+            index! < 1_000 -> while {
+                source! -> push(65)
+                index! + 1 => index!
+            }
+            codec -> compress(source!) -> when {
+                Err(_) { "fixed-compress=false" -> println }
+                Ok(stored) => codec -> compressFixed(source!) -> when {
+                    Err(_) { "fixed-compress=false" -> println }
+                    Ok(compressed) => codec -> decompress(compressed) -> when {
+                        Err(_) { "fixed-compress=false" -> println }
+                        Ok(restored) {
+                            (compressed -> len) < (stored -> len)
+                                and (restored -> matches(source!)) => valid
+                            valid -> if {
+                                "fixed-compress=true,$(compressed -> len)" -> println
+                            } else {
+                                "fixed-compress=false" -> println
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

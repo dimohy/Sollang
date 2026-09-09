@@ -1,15 +1,15 @@
-import sys.quic.application_engine as application
-import sys.quic.error as errors
-import sys.quic.frame_types as frames
-import sys.quic.keys
+import std.net.quic.application_engine as application
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+import std.net.quic.keys
 
 secret: -> [UInt8; 32] => [68; 32]
 connectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
 payload: -> [UInt8; ~] => [112, 105, 110, 103; ~]
 
 run: -> Result<Bool, errors.Error> {
-    application.create(secret()) => sender
-    application.create(secret()) => receiver!
+    application.create(keys.version2(), secret()) => sender
+    application.create(keys.version2(), secret()) => receiver!
     [frames.Value; ~] => values!
     values! -> push(frames.Value.MaxData(8_192))
     values! -> push(frames.Value.Stream(frames.Stream {
@@ -18,8 +18,8 @@ run: -> Result<Bool, errors.Error> {
         fin: true
         data: payload()
     }))
-    application.encodeMany(keys.version2(), connectionId(), 7, values!, sender)? => datagram
-    application.openMany(keys.version2(), datagram, connectionId(), 7, receiver!)? => opened!
+    sender -> encodeMany(connectionId(), 7, values!)? => datagram
+    receiver! -> openMany(datagram, connectionId(), 7)? => opened!
     (opened!.frames -> len) == 2 -> unless {
         Result<Bool, errors.Error>.Ok(false) -> return
     }

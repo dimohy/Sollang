@@ -1,0 +1,51 @@
+# A nested Result match may borrow an owned field for a long call and then transfer it.
+struct Table {
+    values: [Int; ~]
+}
+
+struct Description {
+    table: Table
+    bytesRead: Int
+}
+
+struct Decoded {
+    output: [Int; ~]
+    table: Table
+}
+
+parse input: [Int] -> Result<Description, Int> {
+    Result<Description, Int>.Ok(Description {
+        table: Table { values: [input[0]; ~] }
+        bytesRead: 1
+    })
+}
+
+decodeMany table: ref Table, input: [Int], first: Int, second: Int, third: Int, fourth: Int, fifth: Int, sixth: Int -> Result<[Int; ~], Int> {
+    Result<[Int; ~], Int>.Ok([
+        table.values[0] + input[0] + first + second + third + fourth + fifth + sixth; ~
+    ])
+}
+
+decode input: [Int] -> Result<Decoded, Int> {
+    parse(input) -> when {
+        Err(error) { Result<Decoded, Int>.Err(error) -> return }
+        Ok(description) {
+            decodeMany(description.table, input, description.bytesRead, 2, 3, 4, 5, 6) -> when {
+                Err(error) { Result<Decoded, Int>.Err(error) -> return }
+                Ok(output) {
+                    Result<Decoded, Int>.Ok(Decoded {
+                        output: output
+                        table: description.table
+                    }) -> return
+                }
+            }
+        }
+    }
+}
+
+main {
+    decode([1]) -> when {
+        Err(error) { "nested-many-error=$error" -> println }
+        Ok(decoded) { "nested-many=$(decoded.output[0])" -> println }
+    }
+}

@@ -1,0 +1,92 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    """"
+        namespace sample.client
+
+        import sample.model as model
+        import sample.extension as extension
+
+        sendRange endpoint: model.Endpoint -> Result<UIntSize, model.Error> {
+            Result<UIntSize, model.Error>.Ok(UIntSize(endpoint.port))
+        }
+
+        run endpoint: model.Endpoint -> Result<UIntSize, model.Error> {
+            endpoint -> connect => connected
+            endpoint -> sendRange? => ranged
+            Result<UIntSize, model.Error>.Ok(connected + ranged)
+        }
+
+        main {
+            model.Endpoint { port: 7 } => endpoint
+            endpoint -> connect => connected
+            endpoint -> sendRange -> when {
+                Ok(ranged) { connected + ranged -> println }
+                Err(_) { "range-error" -> println }
+            }
+        }
+    """" => clientSource
+
+    """"
+        namespace sample.model
+
+        public struct Endpoint { public port: UInt16 }
+        public struct Stream { public token: UInt64 }
+        public enum Error { Failed }
+    """" => modelSource
+
+    """"
+        namespace sample.extension
+
+        import sample.model as model
+
+        impl model.Endpoint {
+            public connect: self -> UIntSize => UIntSize(self.port) + 1
+        }
+
+        impl model.Stream {
+            public sendRange: self -> Result<UIntSize, model.Error> {
+                Result<UIntSize, model.Error>.Ok(UIntSize(self.token))
+            }
+        }
+    """" => extensionSource
+
+    [clientSource, modelSource, extensionSource; ~] -> semanticContext.prepare => context
+    context -> expressionTypeIds.resolveContext => types
+    context -> typedIr.lowerResolvedContext(types) => ir
+
+    0 => endpointConnects!
+    0 => lexicalRanges!
+    0 => streamRangeMistakes!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        node.kind == 6
+            and node.targetModule >= 0
+            and node.symbol >= 0
+            -> if {
+            context.package.ranges[node.targetModule] => targetRange
+            context.package.symbols[targetRange.symbolStart + node.symbol] => target
+            target.nameToken >= 0 -> if {
+                context.package.tokens[targetRange.tokenStart + target.nameToken] => name
+                name.span.length == 7
+                    and (extensionSource -> byte(name.span.start)) == 99
+                    and node.targetModule == 2
+                    -> if { endpointConnects! + 1 => endpointConnects! }
+                name.span.length == 9
+                    -> if {
+                        node.targetModule == 0
+                            and (clientSource -> byte(name.span.start)) == 115
+                            -> if { lexicalRanges! + 1 => lexicalRanges! }
+                        node.targetModule == 2
+                            and (extensionSource -> byte(name.span.start)) == 115
+                            -> if { streamRangeMistakes! + 1 => streamRangeMistakes! }
+                    }
+            }
+        }
+        irIndex! + 1 => irIndex!
+    }
+    "endpoint-connect=$(endpointConnects!),lexical-range=$(lexicalRanges!),wrong-stream-range=$(streamRangeMistakes!)" -> println
+}

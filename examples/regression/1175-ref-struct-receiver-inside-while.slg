@@ -1,0 +1,33 @@
+struct Counter {
+    value: Int
+}
+
+impl Counter {
+    public read: self -> Int {
+        self.value
+    }
+}
+
+# A readonly struct reference used as a value receiver inside a loop is loaded
+# once from its pointer before the by-value instance call.
+readInsideLoop counter: ref Counter -> Int {
+    1 => remaining!
+    0 => value!
+    remaining! > 0 -> while {
+        counter -> read => value!
+        remaining! - 1 => remaining!
+    }
+    value!
+}
+
+# Forwarding the same reference keeps its pointer ABI; only its by-value method
+# receiver use inside readInsideLoop loads the Counter value.
+forwardReference counter: ref Counter -> Int {
+    counter -> readInsideLoop
+}
+
+main {
+    Counter { value: 42 } => counter
+    counter -> forwardReference => value
+    "ref-struct-loop=$value" -> println
+}

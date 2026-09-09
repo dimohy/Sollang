@@ -1,0 +1,59 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+sendPing endpoint: net.Endpoint -> Result<UIntSize, socket.SocketError> uses Network {
+    endpoint -> connect? => connection
+    connection -> sendText("ping")? => count
+    connection -> shutdown(socket.ShutdownDirection.Both)?
+    connection -> close
+    Result<UIntSize, socket.SocketError>.Ok(count)
+}
+
+struct Observation {
+    sent: UIntSize
+    first: UIntSize
+    second: UIntSize
+    received: UIntSize
+    lengthsMatch: Bool
+    bytesMatch: Bool
+}
+
+roundtrip local: net.Endpoint -> Result<Observation, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: local
+        backlog: 8
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localPort? => port
+    net.loopback(port) -> unified -> sendPing? => sent
+    listener -> accept? => connection
+    [UInt8; 16~] => first!
+    [UInt8; 16~] => second!
+    [UInt8; 16~] => received!
+    connection -> peekInto(first!)? => firstCount
+    connection -> peekInto(second!)? => secondCount
+    connection -> receiveInto(received!)? => receivedCount
+    first! -> len => firstLength
+    second! -> len => secondLength
+    received! -> len => receivedLength
+    connection -> close
+    listener -> close
+    Result<Observation, socket.SocketError>.Ok(Observation {
+        sent: sent
+        first: firstCount
+        second: secondCount
+        received: receivedCount
+        lengthsMatch: sent == firstCount and firstCount == secondCount and secondCount == receivedCount and Int(firstCount) == firstLength and firstLength == secondLength and secondLength == receivedLength
+        bytesMatch: first![0] == second![0] and second![0] == received![0] and first![3] == second![3] and second![3] == received![3]
+    })
+}
+
+main {
+    net.loopback(0) -> unified -> roundtrip -> when {
+        Ok(observation) {
+            "tcp-peek=$(observation.sent),$(observation.first),$(observation.second),$(observation.received),$(observation.lengthsMatch),$(observation.bytesMatch)" -> println
+        }
+        Err(error) { "socket-error=$(error.code)" -> println }
+    }
+}

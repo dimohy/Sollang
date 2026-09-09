@@ -1,0 +1,38 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.ir.typed as typedIr
+
+# Process intrinsic dispatch retains typed receiver precedence after open imports.
+main {
+    [
+    "examples/regression/fixtures/1169-process-run.slg",
+    "examples/regression/sample/qualified_method_tool.slg",
+    "stdlib/sys/process.slg",
+    "stdlib/sys/runtime/process.slg"; ~
+    ] => paths
+    paths -> semanticContext.prepareFiles => prepared
+
+    0 => sourceCallCount!
+    0 => failedCallCount!
+    0 => callIndex!
+    callIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[callIndex!] => call
+        call.sourceModule == 0 -> if {
+            sourceCallCount! + 1 => sourceCallCount!
+            call.status != 0 -> if { failedCallCount! + 1 => failedCallCount! }
+        }
+        callIndex! + 1 => callIndex!
+    }
+
+    prepared -> typedIr.lowerContext => ir
+    0 => runOpcodeCount!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        node.sourceModule == 0 and node.opcode == -210
+            -> if {
+                runOpcodeCount! + 1 => runOpcodeCount!
+            }
+        irIndex! + 1 => irIndex!
+    }
+    "process-instance=$(sourceCallCount!),$(failedCallCount!),$(runOpcodeCount!)" -> println
+}

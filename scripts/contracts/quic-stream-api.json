@@ -1,0 +1,595 @@
+{
+  "$schema": "quic-stream-api.schema.json",
+  "schemaVersion": 1,
+  "module": "std.net.quic",
+  "authorities": [
+    {
+      "name": "RFC 9000 QUIC Transport",
+      "url": "https://www.rfc-editor.org/rfc/rfc9000",
+      "appliesTo": ["stream identity", "stream limits", "implicit opening", "directional state", "flow control"]
+    },
+    {
+      "name": ".NET QuicConnection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.net.quic.quicconnection?view=net-10.0",
+      "appliesTo": ["connection owns stream creation and acceptance", "connection close", "endpoint observation"]
+    },
+    {
+      "name": ".NET QuicStream",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.net.quic.quicstream?view=net-10.0",
+      "appliesTo": ["stream byte I/O", "graceful write completion", "directional abort", "read and write completion"]
+    },
+    {
+      "name": ".NET QUIC overview",
+      "url": "https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/quic/quic-overview",
+      "appliesTo": ["outbound open reserves a stream without notifying the peer", "peer acceptance begins only after stream activity is observed"]
+    },
+    {
+      "name": ".NET QUIC connection options",
+      "url": "https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/quic/quic-options",
+      "appliesTo": ["pre-construction connection options", "role-specific bidirectional receive windows", "inbound stream limits"]
+    },
+    {
+      "name": "Rust NonZero value domain",
+      "url": "https://doc.rust-lang.org/core/num/struct.NonZero.html",
+      "appliesTo": ["validated scalar factory", "direct instance value access", "zero-cost nominal scalar layout"]
+    },
+    {
+      "name": "C# access modifiers",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/access-modifiers",
+      "appliesTo": ["public value type with non-public representation", "construction through an intentional public API"]
+    },
+    {
+      "name": "Rust visibility and privacy",
+      "url": "https://doc.rust-lang.org/nightly/reference/visibility-and-privacy.html",
+      "appliesTo": ["public struct with private fields", "module-scoped representation access"]
+    },
+    {
+      "name": "Quinn TransportConfig",
+      "url": "https://docs.rs/quinn/latest/quinn/struct.TransportConfig.html",
+      "appliesTo": ["connection and stream receive windows", "explicit memory tradeoffs", "bounded local receive resources"]
+    },
+    {
+      "name": "Quinn SendStream",
+      "url": "https://docs.rs/quinn/latest/quinn/struct.SendStream.html",
+      "appliesTo": ["graceful send finish", "RESET_STREAM send abort", "closed send-direction state"]
+    },
+    {
+      "name": "Quinn RecvStream",
+      "url": "https://docs.rs/quinn/latest/quinn/struct.RecvStream.html",
+      "appliesTo": ["STOP_SENDING receive cancellation", "discarding unread data", "peer reset observation"]
+    }
+  ],
+  "numericLimits": {
+    "maximumStreamCountInclusive": 1152921504606846976,
+    "maximumStreamIdInclusive": 4611686018427387903,
+    "maximumStreamOffsetInclusive": 4611686018427387903
+  },
+  "frameExhaustiveConsumerFixtures": [
+    "892-quic-frame-codec",
+    "941-quic-one-rtt-application-engine",
+    "942-owned-frame-result-field-match"
+  ],
+  "publicSurface": [
+    {
+      "owner": "StreamCount",
+      "member": "value",
+      "receiver": "self",
+      "result": "UInt64",
+      "semantics": "Return the validated cumulative QUIC stream allowance as one direct scalar load; construction remains the explicit streamCount factory boundary."
+    },
+    {
+      "owner": "Endpoint",
+      "member": "listenWith",
+      "receiver": "mut self",
+      "result": "Result<Listener, QuicError>",
+      "semantics": "Validate inline server connection limits before changing listener state, then retain the scalar options for each accepted connection."
+    },
+    {
+      "owner": "Endpoint",
+      "member": "connectWith",
+      "receiver": "mut self",
+      "result": "Result<Connection, QuicError>",
+      "semantics": "Validate inline client connection limits before random generation or network access and construct one affine connection without a wrapper."
+    },
+    {
+      "owner": "ConnectionOptions",
+      "member": "validate",
+      "receiver": "self",
+      "result": "Result<ConnectionOptions, QuicError>",
+      "semantics": "Check stream-count, pending-queue, and QUIC variable-length receive-window bounds as a pure value operation."
+    },
+    {
+      "owner": "Connection",
+      "member": "openBi",
+      "receiver": "mut self",
+      "result": "Result<BiStream, QuicError>",
+      "semantics": "Allocate the next local bidirectional identity after checking the peer-advertised stream count."
+    },
+    {
+      "owner": "Connection",
+      "member": "acceptBi",
+      "receiver": "mut self",
+      "result": "Result<BiStream, QuicError>",
+      "semantics": "Return the next newly peer-opened bidirectional stream in ascending sequence order."
+    },
+    {
+      "owner": "Connection",
+      "member": "openUni",
+      "receiver": "mut self",
+      "result": "Result<SendStream, QuicError>",
+      "semantics": "Allocate the next local unidirectional identity and return an inline send-only owner with peer-advertised unidirectional credit."
+    },
+    {
+      "owner": "Connection",
+      "member": "acceptUni",
+      "receiver": "mut self",
+      "result": "Result<ReceiveStream, QuicError>",
+      "semantics": "Return the next peer-opened unidirectional identity as an inline receive-only owner after stream activity is observed."
+    },
+    {
+      "owner": "Connection",
+      "member": "close",
+      "receiver": "move self",
+      "result": "Result<Unit, QuicError>",
+      "semantics": "Best-effort CONNECTION_CLOSE followed by exactly-once connection ownership release."
+    },
+    {
+      "owner": "BiStream",
+      "member": "send",
+      "receiver": "mut self",
+      "result": "Result<UIntSize, QuicError>",
+      "semantics": "Send bytes on this stream identity while mutating explicit connection and endpoint state."
+    },
+    {
+      "owner": "BiStream",
+      "member": "receive",
+      "receiver": "mut self",
+      "result": "Result<[UInt8; ~], QuicError>",
+      "semantics": "Receive only bytes buffered for this exact stream identity; empty success denotes observed EOF."
+    },
+    {
+      "owner": "BiStream",
+      "member": "finish",
+      "receiver": "mut self",
+      "result": "Result<Unit, QuicError>",
+      "semantics": "Gracefully send FIN at the current final offset without closing the read direction."
+    },
+    {
+      "owner": "BiStream",
+      "member": "abortSend",
+      "receiver": "mut self",
+      "result": "Result<Unit, QuicError>",
+      "semantics": "Send RESET_STREAM with an explicit application error; this is not graceful FIN."
+    },
+    {
+      "owner": "BiStream",
+      "member": "requestStop",
+      "receiver": "mut self",
+      "result": "Result<Unit, QuicError>",
+      "semantics": "Send STOP_SENDING with an explicit application error; this does not close the local send side."
+    },
+    {
+      "owner": "BiStream",
+      "member": "id",
+      "receiver": "self",
+      "result": "UInt64",
+      "semantics": "Expose immutable protocol identity through a direct field load."
+    },
+    {
+      "owner": "BiStream",
+      "member": "isWriteFinished",
+      "receiver": "self",
+      "result": "Bool",
+      "semantics": "Observe local graceful or abort completion independently from receive completion."
+    },
+    {
+      "owner": "BiStream",
+      "member": "isReadFinished",
+      "receiver": "self",
+      "result": "Bool",
+      "semantics": "Observe peer FIN or reset completion independently from send completion."
+    },
+    {
+      "owner": "SendStream",
+      "member": "send",
+      "receiver": "mut self",
+      "result": "Result<UIntSize, QuicError>",
+      "semantics": "Send bytes through the local direction without exposing receive operations or a runtime direction branch."
+    },
+    {
+      "owner": "SendStream",
+      "member": "finish",
+      "receiver": "mut self",
+      "result": "Result<Unit, QuicError>",
+      "semantics": "Gracefully finish the only available send direction."
+    },
+    {
+      "owner": "SendStream",
+      "member": "abortSend",
+      "receiver": "mut self",
+      "result": "Result<Unit, QuicError>",
+      "semantics": "Abort the only available send direction with RESET_STREAM."
+    },
+    {
+      "owner": "SendStream",
+      "member": "id",
+      "receiver": "self",
+      "result": "UInt64",
+      "semantics": "Expose the immutable unidirectional stream identity through a direct field load."
+    },
+    {
+      "owner": "SendStream",
+      "member": "isWriteFinished",
+      "receiver": "self",
+      "result": "Bool",
+      "semantics": "Observe completion of the only available send direction."
+    },
+    {
+      "owner": "ReceiveStream",
+      "member": "receive",
+      "receiver": "mut self",
+      "result": "Result<[UInt8; ~], QuicError>",
+      "semantics": "Receive bytes through the peer direction without exposing send operations or a runtime direction branch."
+    },
+    {
+      "owner": "ReceiveStream",
+      "member": "requestStop",
+      "receiver": "mut self",
+      "result": "Result<Unit, QuicError>",
+      "semantics": "Cancel the only available receive direction with STOP_SENDING."
+    },
+    {
+      "owner": "ReceiveStream",
+      "member": "id",
+      "receiver": "self",
+      "result": "UInt64",
+      "semantics": "Expose the immutable unidirectional stream identity through a direct field load."
+    },
+    {
+      "owner": "ReceiveStream",
+      "member": "isReadFinished",
+      "receiver": "self",
+      "result": "Bool",
+      "semantics": "Observe completion of the only available receive direction."
+    }
+  ],
+  "invariants": [
+    {
+      "id": "QUIC-STREAM-001",
+      "rule": "The low two stream-id bits encode initiator and direction; sequence is id divided by four.",
+      "proof": "Exact identity fixtures cover client/server and bidirectional/unidirectional IDs."
+    },
+    {
+      "id": "QUIC-STREAM-002",
+      "rule": "Each local stream family uses a monotonically increasing sequence and never returns an identity twice.",
+      "proof": "Opening multiple streams yields distinct ascending IDs and rejects the first ID beyond the advertised count."
+    },
+    {
+      "id": "QUIC-STREAM-003",
+      "rule": "A peer frame for sequence N implicitly opens every lower unopened stream in that family.",
+      "proof": "Out-of-order peer STREAM input enqueues all implied identities exactly once in ascending order."
+    },
+    {
+      "id": "QUIC-STREAM-004",
+      "rule": "Pending peer stream identities, application frames, and payload bytes are independently bounded; local exhaustion returns QueueLimitExceeded while wire violations retain protocol or transport errors.",
+      "proof": "Boundary fixtures fill each configured queue independently and reject one additional item before identity, flow, queue, or byte accounting mutation."
+    },
+    {
+      "id": "QUIC-STREAM-005",
+      "rule": "Bytes and FIN state are buffered and delivered only under their exact stream ID.",
+      "proof": "Interleaved traffic for two streams preserves bytes, order, and directional completion for both owners."
+    },
+    {
+      "id": "QUIC-STREAM-006",
+      "rule": "A locally initiated bidirectional stream sends under peer initial_max_stream_data_bidi_remote; a peer-initiated stream sends under peer initial_max_stream_data_bidi_local.",
+      "proof": "Asymmetric transport-parameter fixtures prove distinct initial credits for local and peer streams."
+    },
+    {
+      "id": "QUIC-STREAM-007",
+      "rule": "Absent initial_max_streams values mean zero permitted peer-initiated streams.",
+      "proof": "A handshake omitting the parameter rejects the first local open until MAX_STREAMS arrives."
+    },
+    {
+      "id": "QUIC-STREAM-008",
+      "rule": "FIN, RESET_STREAM, STOP_SENDING, and consuming connection close are four distinct transitions.",
+      "proof": "Directional state fixtures verify independent write/read completion and exact frame selection."
+    },
+    {
+      "id": "QUIC-STREAM-009",
+      "rule": "Unidirectional APIs expose distinct send-only and receive-only owners, so an operation in the absent direction is rejected by method resolution rather than a runtime capability branch.",
+      "proof": "The live owner fixture proves role-correct open, accept, send, receive, identity, and finish behavior; structural and negative gates reject opposite-direction methods and wrapper dispatch."
+    },
+    {
+      "id": "QUIC-STREAM-010",
+      "rule": "Stream instance calls remain statically resolved and add no parent pointer, heap wrapper, copy, or dynamic dispatch.",
+      "proof": "O0 LLVM checks direct method lowering and native Windows/Linux execution uses the same owner layout."
+    },
+    {
+      "id": "QUIC-STREAM-011",
+      "rule": "Stream count, stream ID, and stream offset arithmetic is bounded by QUIC varint limits before addition or multiplication.",
+      "proof": "Maximum-minus-one controls pass and maximum-plus-one cases return the exact transport error without UInt64 wraparound."
+    },
+    {
+      "id": "QUIC-STREAM-012",
+      "rule": "Opening an outbound stream reserves a unique local identity but does not fabricate a peer-visible stream; accept returns only after an inbound stream-related frame establishes peer activity.",
+      "proof": "A no-write local open leaves peer accept pending, while first STREAM activity discovers and returns the exact peer identity once."
+    },
+    {
+      "id": "QUIC-STREAM-013",
+      "rule": "Unidirectional stream-count, stream-data credit, identity allocation, implied peer discovery, and pending identity capacity are independent from their bidirectional counterparts.",
+      "proof": "Fixture 1291 exercises zero and increased local limits, both endpoint-role ID families, implied peer identities, and the dedicated bounded queue while structural gates retain transport parameter IDs 0x07 and 0x09."
+    },
+    {
+      "id": "QUIC-STREAM-014",
+      "rule": "Out-of-order, overlapping, and retransmitted STREAM data remains bounded by the connection frame and byte budgets, is accounted once by largest received offset, and is delivered as one ordered byte stream from the owner consumed cursor; FIN fixes a final size that cannot precede any previously received byte.",
+      "proof": "Fixture 1300 queues future data before the prefix, overlaps one byte, splits by maxBytes, preserves FIN/final size, reports six newly received bytes once, and drains the exact queue byte count to zero; fixture 1301 rejects a newly declared final size below the highest received offset."
+    },
+    {
+      "id": "QUIC-STREAM-015",
+      "rule": "Every stdlib transition from an untrusted UInt64 to a cumulative stream allowance passes through the one-word StreamCount factory; the retained value is read by a direct instance method and preserves transport-parameter versus frame error context.",
+      "proof": "Fixture 945 accepts 2^60 through streamCount.value, rejects one-past as TRANSPORT_PARAMETER_ERROR at the factory boundary, and maps the same invalid wire scalar to FRAME_ENCODING_ERROR in MAX_STREAMS and STREAMS_BLOCKED."
+    }
+  ],
+  "verificationMatrix": [
+    {
+      "id": "QSF001",
+      "kind": "positive",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3", "browser"],
+      "proves": ["QUIC-STREAM-001", "QUIC-STREAM-011"],
+      "scenario": "Decode every initiator/direction low-bit family and exercise the final valid sequence, stream ID, and offset.",
+      "expected": "Exact identities are returned and every one-past-maximum input fails before multiplication or addition."
+    },
+    {
+      "id": "QSF013",
+      "kind": "negative",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3", "browser"],
+      "proves": ["QUIC-STREAM-011"],
+      "scenario": "Fixture 945 encodes and decodes MAX_STREAMS/STREAMS_BLOCKED at exactly 2^60 and with a manually encoded 2^60 + 1 wire value, then validates the bidirectional transport-parameter count.",
+      "expected": "Exactly 2^60 succeeds; one-past returns FRAME_ENCODING_ERROR for both frame types and TRANSPORT_PARAMETER_ERROR for the transport parameter before any value is retained."
+    },
+    {
+      "id": "QSF002",
+      "kind": "integration",
+      "targets": ["windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-002"],
+      "scenario": "Fixture 1206 opens client stream IDs 0 and 4, sends stream 4 first, and accepts both peer owners once on the server.",
+      "expected": "The client reserves ascending non-reused IDs and the server receives matching peer owners 0 and 4 exactly once."
+    },
+    {
+      "id": "QSF003",
+      "kind": "negative",
+      "targets": ["managed", "windows-stage2", "linux-stage2"],
+      "proves": ["QUIC-STREAM-002", "QUIC-STREAM-007"],
+      "scenario": "Fixture 1205 opens at zero advertised streams and then reserves the exact permitted local identity count.",
+      "expected": "The first policy rejects every open; the second accepts one identity and rejects the next without advancing state."
+    },
+    {
+      "id": "QSF004",
+      "kind": "integration",
+      "targets": ["windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-003"],
+      "scenario": "Deliver the first peer STREAM frame on family sequence two before sequences zero and one are accepted.",
+      "expected": "acceptBi yields the three implied identities once in ascending order."
+    },
+    {
+      "id": "QSF005",
+      "kind": "integration",
+      "targets": ["windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-005"],
+      "scenario": "Fixture 1206 interleaves payload for two live bidirectional streams in the opposite order from owner reads and replies in the opposite wire order.",
+      "expected": "Each owner receives only its exact bytes; neither stream loses or consumes the other stream's frame."
+    },
+    {
+      "id": "QSF006",
+      "kind": "positive",
+      "targets": ["managed", "windows-stage2", "linux-stage2"],
+      "proves": ["QUIC-STREAM-006"],
+      "scenario": "Negotiate distinct bidi_local and bidi_remote credits, then create one locally and one peer-initiated stream.",
+      "expected": "Each SendFlow starts with the identity-role-specific peer credit and the receive allowances remain distinct."
+    },
+    {
+      "id": "QSF007",
+      "kind": "negative",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-004"],
+      "scenario": "Fixture 1209 configures pending identity, frame, and byte budgets independently, fills each budget, and delivers one additional peer STREAM frame.",
+      "expected": "The exact bounded resource error is returned without partial queue mutation or frame loss from existing streams."
+    },
+    {
+      "id": "QSF008",
+      "kind": "integration",
+      "targets": ["windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-008"],
+      "scenario": "Finish the local write side, receive a peer response and FIN, and observe both completion properties.",
+      "expected": "FIN closes only write first; receive remains usable until peer FIN and then returns immediate empty EOF."
+    },
+    {
+      "id": "QSF009",
+      "kind": "integration",
+      "targets": ["windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-008"],
+      "scenario": "Apply abortSend and requestStop with distinct application errors on separate streams.",
+      "expected": "RESET_STREAM and STOP_SENDING carry the exact IDs/errors and do not close the connection or the opposite direction."
+    },
+    {
+      "id": "QSF010",
+      "kind": "structural",
+      "targets": ["managed", "windows-stage2", "linux-stage2"],
+      "proves": ["QUIC-STREAM-010"],
+      "scenario": "Compile open, accept, send, receive, finish and close at O0.",
+      "expected": "LLVM contains direct static instance targets and no wrapper allocation, parent pointer, copy shim, or dynamic dispatch."
+    },
+    {
+      "id": "QSF011",
+      "kind": "structural",
+      "targets": ["managed", "windows-stage2", "linux-stage2", "browser"],
+      "proves": ["QUIC-STREAM-009"],
+      "scenario": "The quic-send-stream-receive-rejected and quic-receive-stream-send-rejected diagnostic fixtures compile the typed owner surface and attempt receive on SendStream and send on ReceiveStream.",
+      "expected": "openUni returns SendStream and acceptUni returns ReceiveStream; opposite-direction members are absent and rejected during method resolution as unknown value-flow targets."
+    },
+    {
+      "id": "QSF012",
+      "kind": "integration",
+      "targets": ["windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-012"],
+      "scenario": "Open a local bidirectional stream without writing, then send the first STREAM frame and observe peer acceptance.",
+      "expected": "The local identity is reserved immediately, peer accept remains pending before activity, and the first STREAM frame publishes that exact identity once."
+    },
+    {
+      "id": "QSF014",
+      "kind": "boundary",
+      "targets": ["managed", "windows-stage3", "linux-stage3"],
+      "proves": ["QUIC-STREAM-008", "QUIC-STREAM-011"],
+      "scenario": "Fixture 1210 roundtrips RESET_STREAM and STOP_SENDING with distinct IDs and final-valid application/final-size values, then rejects one-past and truncated encodings.",
+      "expected": "Frame kinds and every scalar remain exact through the wire codec; 2^62 is rejected before encoding and truncation reports the first missing byte."
+    },
+    {
+      "id": "QSF015",
+      "kind": "boundary",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3", "browser"],
+      "proves": ["QUIC-STREAM-002", "QUIC-STREAM-003", "QUIC-STREAM-007", "QUIC-STREAM-011", "QUIC-STREAM-013"],
+      "scenario": "Fixture 1291 starts with zero local unidirectional credit, applies MAX_STREAMS, allocates the client and server ID families, and discovers peer sequence two before accepting its predecessors.",
+      "expected": "The first open fails without mutation; client IDs are 2, 6 and server IDs are 3, 7; peer IDs 2, 6, 10 are queued once in order independently from bidirectional state."
+    },
+    {
+      "id": "QSF016",
+      "kind": "integration",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-002", "QUIC-STREAM-005", "QUIC-STREAM-009", "QUIC-STREAM-010", "QUIC-STREAM-012", "QUIC-STREAM-013"],
+      "scenario": "Fixture 1297 opens one client and one server unidirectional stream, transfers bytes in each permitted direction, and observes exact owner identities and completion state.",
+      "expected": "Client SendStream ID 2 pairs with server ReceiveStream ID 2; server SendStream ID 3 pairs with client ReceiveStream ID 3; both payloads and FIN states remain exact without wrappers."
+    },
+    {
+      "id": "QSF017",
+      "kind": "integration",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-004", "QUIC-STREAM-005", "QUIC-STREAM-011", "QUIC-STREAM-014"],
+      "scenario": "Fixture 1300 inserts offset 4 with FIN before offset 0, overlaps offset 4, and reads with a three-byte first limit followed by larger reads.",
+      "expected": "The owner receives bytes 1 through 6 once and in order, duplicate credit is zero, final size is six, and bounded queued bytes drain from seven to zero."
+    },
+    {
+      "id": "QSF018",
+      "kind": "negative",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-014"],
+      "scenario": "Fixture 1301 receives a byte ending at offset six and then receives FIN declaring final size five.",
+      "expected": "The receive flow returns FINAL_SIZE_ERROR before replacing the highest received offset or accepting the contradictory final size."
+    },
+    {
+      "id": "QSF019",
+      "kind": "positive",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3"],
+      "proves": ["QUIC-STREAM-011", "QUIC-STREAM-015"],
+      "scenario": "Fixture 945 constructs the inclusive 2^60 cumulative allowance through streamCount, reads it through StreamCount.value, and submits one-past values through both transport and frame boundaries.",
+      "expected": "The valid value round-trips as one UInt64, the factory returns TRANSPORT_PARAMETER_ERROR, and frame codecs return FRAME_ENCODING_ERROR without retaining an invalid count."
+    },
+    {
+      "id": "QSF020",
+      "kind": "negative",
+      "targets": ["managed", "windows-stage2", "windows-stage3", "linux-stage2", "linux-stage3", "browser"],
+      "proves": ["QUIC-STREAM-015"],
+      "scenario": "External code attempts to construct StreamCount from raw, read raw, and write raw while the declaring module constructs and projects it through public APIs.",
+      "expected": "All three external representation operations fail before LLVM; the same-module factory and direct value instance method remain valid and lower to one UInt64 aggregate with no heap wrapper."
+    }
+  ],
+  "implementationSlices": [
+    {
+      "id": "QS1",
+      "status": "implemented",
+      "dependsOn": [],
+      "files": [
+        "stdlib/std/net/quic/stream_state.slg",
+        "examples/regression/903-quic-stream-flow-control.slg"
+      ],
+      "scope": "Stream identity and flow-state value types",
+      "gate": "Fixture 903 passes exact Stage3 execution with zero diagnostics at the final valid count, ID, and offset and rejects each one-past boundary before arithmetic wraparound."
+    },
+    {
+      "id": "QS5",
+      "status": "implemented",
+      "dependsOn": ["QS1"],
+      "files": [
+        "stdlib/std/net/quic/transport_parameters.slg",
+        "stdlib/std/net/quic/frame.slg",
+        "stdlib/std/net/quic.slg",
+        "examples/regression/945-quic-flow-control-frames.slg"
+      ],
+      "scope": "One-word StreamCount domain construction plus wire validation for bidirectional and unidirectional initial_max_streams, MAX_STREAMS, and STREAMS_BLOCKED at the inclusive 2^60 cumulative-count boundary",
+      "gate": "Managed and repaired self-host fixture 945 construct exactly 2^60 through streamCount, read it through the direct value instance method, reject one-past before state retention with the RFC transport/frame error code, and pass Windows Stage2/Stage3 exact execution with zero diagnostics."
+    },
+    {
+      "id": "QS2",
+      "status": "implemented",
+      "dependsOn": ["QS1"],
+      "files": [
+        "stdlib/std/net/quic.slg",
+        "stdlib/std/net/quic/stream_state.slg",
+        "examples/regression/1205-quic-stream-registry.slg",
+        "examples/regression/1206-quic-bidirectional-multi-stream-routing.slg",
+        "examples/regression/1209-quic-connection-options-queue-limits.slg"
+      ],
+      "scope": "Bidirectional multi-stream allocation, peer discovery, prevalidated connection options, independently bounded exact-ID queues, and asymmetric credits",
+      "gate": "Fixtures 1206 and 1209 prove exact multi-stream routing plus fail-before-mutation identity, frame, and byte limits on Windows and Linux."
+    },
+    {
+      "id": "QS3",
+      "status": "implemented",
+      "dependsOn": ["QS2"],
+      "files": [
+        "stdlib/std/net/quic.slg",
+        "stdlib/std/net/quic/frame.slg",
+        "examples/regression/1210-quic-directional-control-frames.slg",
+        "examples/regression/1211-quic-directional-owner-transitions.slg"
+      ],
+      "scope": "Directional FIN, RESET_STREAM, and STOP_SENDING transitions",
+      "gate": "Frame, state, O0 direct-call, and native execution fixtures distinguish every transition."
+    },
+    {
+      "id": "QS6",
+      "status": "partial",
+      "dependsOn": ["QS1", "QS5", "QS2"],
+      "files": [
+        "stdlib/std/net/quic.slg",
+        "stdlib/std/net/quic/stream_state.slg",
+        "examples/regression/1291-quic-unidirectional-stream-registry.slg"
+      ],
+      "scope": "Unidirectional transport parameters, asymmetric flow credit, role-correct ID allocation, implied peer discovery, and an independently bounded pending-identity queue",
+      "gate": "Managed fixture 1291 and structural contract checks pass; promote only after focused self-host native execution and the Windows/Linux Stage2/Stage3 matrix pass."
+    },
+    {
+      "id": "QS4",
+      "status": "implemented",
+      "dependsOn": ["QS3", "QS6"],
+      "files": [
+        "stdlib/std/net/quic.slg",
+        "stdlib/std/net/quic/stream_state.slg",
+        "examples/regression/1297-quic-unidirectional-stream-owners.slg",
+        "examples/regression/diagnostics/quic-send-stream-receive-rejected.slg",
+        "examples/regression/diagnostics/quic-receive-stream-send-rejected.slg"
+      ],
+      "scope": "Distinct send-only and receive-only unidirectional stream owners",
+      "gate": "Fixture 1297 passes managed and self-host native exact execution; structural gates retain direct inline direction state and compile-time method separation in every promotion matrix."
+    },
+    {
+      "id": "QS7",
+      "status": "implemented",
+      "dependsOn": ["QS2", "QS3", "QS4"],
+      "files": [
+        "stdlib/std/net/quic.slg",
+        "stdlib/std/net/quic/reassembly.slg",
+        "examples/regression/1300-quic-bounded-stream-reassembly.slg",
+        "examples/regression/1301-quic-reassembly-final-size-rejected.slg"
+      ],
+      "scope": "Bounded exact-ID out-of-order, overlap, retransmission, partial-read, and FIN reassembly",
+      "gate": "Fixtures 1300 and 1301 pass managed and self-host native exact execution; fixtures 1211 and 1297 retain live bidirectional and typed-unidirectional Connection integration."
+    }
+  ],
+  "knownGaps": [
+    {
+      "id": "QG1",
+      "source": "Sollang private-by-default struct field visibility",
+      "current": "Managed and focused self-host execution now make fields private by default, expose only explicitly `public` fields, reject external private construction/read/write before LLVM, and retain the one-UInt64 direct instance layout; formal Stage2/Stage3 and target promotion remain outstanding.",
+      "required": "Pass the field-visibility fixtures through Windows/Linux Stage2 and Stage3 plus browser checked compilation, then remove this promotion gap."
+    }
+  ]
+}

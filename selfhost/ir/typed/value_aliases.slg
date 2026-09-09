@@ -1,0 +1,291 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.type_ids as typeIds
+
+hasCanonicalValueType node: ref TypedIrNode -> Bool {
+    node.typeId >= 0 and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+}
+
+# A later assignment can temporarily point a mutable binding at an unresolved
+# Result payload. Refreshing that edge must never erase an earlier canonical
+# owner type with unknown or provisional Unit metadata.
+mayRefreshValueAlias binding: ref TypedIrNode, value: ref TypedIrNode -> Bool {
+    (value -> hasCanonicalValueType) or not (binding -> hasCanonicalValueType)
+}
+
+# Resolve a declaration result from the canonical recursive type arena. This is
+# shared by initial lowering and late call-identity closure so a projected call
+# cannot acquire its target after the only return-type pass has already run.
+resolvedFunctionResultTypeId sourceIndex: Int, functionSymbol: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, types: ref [typeIds.SemanticType; ~] -> Int {
+    prepared.package.ranges[sourceIndex] => functionRange
+    prepared.package.symbols[functionRange.symbolStart + functionSymbol] => function
+    -1 => resultTypeId!
+    function.flags / 32 % 2 == 1 -> if {
+        0 => inferredResultSearch!
+        inferredResultSearch! < (recursiveTypes.expressions -> len)
+            -> while {
+                recursiveTypes.expressions[inferredResultSearch!] => inferredResult
+                inferredResult.sourceModule == sourceIndex
+                    and inferredResult.astNode == function.astNode
+                    and inferredResult.status == 0
+                    -> if { inferredResult.typeId -> return }
+                inferredResultSearch! + 1 => inferredResultSearch!
+            }
+        -1 -> return
+    }
+    function.kind == 36 -> if {
+        function.parent => comGeneratedInterfaceSymbol!
+        function.flags / 131072 % 2 == 1 -> if { function.secondaryTypeNode => comGeneratedInterfaceSymbol! }
+        types -> comGeneratedResultTypeId(sourceIndex, comGeneratedInterfaceSymbol!, function.flags) => resultTypeId!
+    } else {
+        function.typeNode => resultAst!
+        function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => resultAst! }
+        prepared -> declaredArrayShapeKind(sourceIndex, resultAst!) => resultShapeKind
+        0 => resultReferenceSearch!
+        resultReferenceSearch! < (recursiveTypes.references -> len)
+            -> while {
+                recursiveTypes.references[resultReferenceSearch!] => resultReference
+                resultReference.status == 0
+                    and resultReference.sourceModule == sourceIndex
+                    and resultReference.typeAst == resultAst!
+                    and (resultShapeKind < 0 or types[resultReference.typeId].kind == resultShapeKind)
+                    -> if { resultReference.typeId => resultTypeId! }
+                resultReferenceSearch! + 1 => resultReferenceSearch!
+            }
+        function.flags / 32768 % 2 == 1 and resultTypeId! >= 0
+            -> if {
+                resultTypeId! => nativeTrySuccessType
+                0 => nativeTryResultSearch!
+                nativeTryResultSearch! < (types -> len) -> while {
+                    types[nativeTryResultSearch!] => nativeTryResultCandidate
+                    nativeTryResultCandidate.kind == 7
+                        and nativeTryResultCandidate.origin == 4
+                        and nativeTryResultCandidate.symbol == 1
+                        and nativeTryResultCandidate.first == nativeTrySuccessType
+                        and nativeTryResultCandidate.second == 5
+                        -> if { nativeTryResultSearch! => resultTypeId! }
+                    nativeTryResultSearch! + 1 => nativeTryResultSearch!
+                }
+            }
+    }
+    resultTypeId!
+}
+
+sealLateResolvedCallResultTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
+    0 => callIndex!
+    callIndex! < (nodes -> len) -> while {
+        nodes[callIndex!] => call!
+        (call!.kind == 6 or call!.kind == 9)
+            and call!.typeId < 0
+            and call!.targetModule >= 0
+            and call!.targetModule < (prepared.package.ranges -> len)
+            and call!.symbol >= 0
+            and call!.symbol < prepared.package.ranges[call!.targetModule].symbolCount
+            -> if {
+                call!.targetModule -> resolvedFunctionResultTypeId(call!.symbol, prepared, recursiveTypes, types) => resultTypeId
+                resultTypeId >= 0 -> if {
+                    types[resultTypeId] => resultType
+                    resultTypeId => call!.typeId
+                    resultType.kind => call!.typeKind
+                    resultType.origin => call!.typeOrigin
+                    resultType.module => call!.typeModule
+                    resultType.symbol => call!.typeSymbol
+                    flags[resultTypeId] => call!.typeFlags
+                    call! => nodes[callIndex!]
+                }
+            }
+        callIndex! + 1 => callIndex!
+    }
+}
+
+# Index canonical Result values by their exact propagation parent once, then
+# materialize every postfix-`?` payload and receiving binding. Late instance
+# resolution can type a call, binding, and direct read only after the initial
+# propagation pass. Follow only the terminal edge of a transparent flow shell;
+# a Result constructed inside one match arm is not the match's merged value.
+sealLateResultPropagations nodes: mut [TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
+    [Int; ~] => resultValueByPropagation!
+    0 => resultPropagationSeed!
+    resultPropagationSeed! < (nodes -> len) -> while {
+        resultValueByPropagation! -> push(-1)
+        resultPropagationSeed! + 1 => resultPropagationSeed!
+    }
+    0 => resultValueIndex!
+    resultValueIndex! < (nodes -> len) -> while {
+        nodes[resultValueIndex!] => resultValue
+        resultValue.parent => propagationParent!
+        resultValueIndex! => producerChild!
+        propagationParent! >= 0
+            and propagationParent! < (nodes -> len)
+            and nodes[propagationParent!].kind == 9
+            and nodes[propagationParent!].opcode == -1
+            -> while {
+                nodes[propagationParent!] => wrapper
+                wrapper.operand1 == producerChild!
+                    or (wrapper.operand1 < 0 and wrapper.operand0 == producerChild!)
+                    -> if {
+                        propagationParent! => producerChild!
+                        wrapper.parent => propagationParent!
+                    } else { -1 => propagationParent! }
+            }
+        false => hasFollowingProducer!
+        resultValue.nextOperand >= 0
+            and resultValue.nextOperand < (nodes -> len)
+            -> if {
+                nodes[resultValue.nextOperand].parent == resultValue.parent
+                    -> if { true => hasFollowingProducer! }
+            }
+        propagationParent! >= 0
+            and propagationParent! < (nodes -> len)
+            and nodes[propagationParent!].kind == 30
+            and not hasFollowingProducer!
+            and (resultValue.typeId -> intrinsicResultTypeId(types)) >= 0
+            -> if {
+                resultValueIndex! => resultValueByPropagation![propagationParent!]
+            }
+        resultValueIndex! + 1 => resultValueIndex!
+    }
+    0 => resultPropagationIndex!
+    resultPropagationIndex! < (nodes -> len) -> while {
+        nodes[resultPropagationIndex!] => propagation!
+        propagation!.kind == 30
+            and resultValueByPropagation![resultPropagationIndex!] >= 0
+            -> if {
+                resultValueByPropagation![resultPropagationIndex!] => producerIndex
+                nodes[producerIndex] => producer
+                propagation! -> resultPropagationResultTypeId(producer, types)
+                    => propagationResultTypeId
+                propagationResultTypeId >= 0 -> if {
+                    types[propagationResultTypeId] => propagationResultType
+                    types[propagationResultType.first] => payloadType
+                    producerIndex => propagation!.operand0
+                    propagationResultType.first => propagation!.typeId
+                    payloadType.kind => propagation!.typeKind
+                    payloadType.origin => propagation!.typeOrigin
+                    payloadType.module => propagation!.typeModule
+                    payloadType.symbol => propagation!.typeSymbol
+                    flags[propagationResultType.first] => propagation!.typeFlags
+                    propagation! => nodes[resultPropagationIndex!]
+                    propagation!.parent >= 0
+                        and propagation!.parent < (nodes -> len)
+                        and nodes[propagation!.parent].kind == 17
+                        -> if {
+                            nodes[propagation!.parent] => propagationBinding!
+                            resultPropagationIndex! => propagationBinding!.operand0
+                            propagation!.typeId => propagationBinding!.typeId
+                            propagation!.typeKind => propagationBinding!.typeKind
+                            propagation!.typeOrigin => propagationBinding!.typeOrigin
+                            propagation!.typeModule => propagationBinding!.typeModule
+                            propagation!.typeSymbol => propagationBinding!.typeSymbol
+                            propagation!.typeFlags => propagationBinding!.typeFlags
+                            propagationBinding! => nodes[propagation!.parent]
+                        }
+                }
+            }
+        resultPropagationIndex! + 1 => resultPropagationIndex!
+    }
+}
+
+# An immutable `value => name` binding and an unknown mutable root initialized
+# from a non-Result value preserve the producer type. A late intrinsic or
+# projected call can acquire its canonical result only after the broad binding
+# refresh has run. Repair only an unknown or provisional Unit binding from a
+# concrete non-Unit producer; Result `?` bindings intentionally carry the
+# success payload rather than the Result and are never copied from the wrapper.
+# Mutable rebinds are distinct IR binding nodes with the same exact global
+# source symbol. Retain the last canonical binding per symbol in one linear
+# index. An unknown rebind inherits that type, as does the narrow cycle where
+# its Result propagation reads the same rebind as its own receiver. Ordinary
+# numeric widening and other non-cyclic rebind convergence remain untouched.
+sealLateValueAliasTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    [Int; ~] => canonicalMutableBindingBySymbol!
+    0 => canonicalMutableSymbolSeed!
+    canonicalMutableSymbolSeed! < (prepared.package.symbols -> len)
+        -> while {
+            canonicalMutableBindingBySymbol! -> push(-1)
+            canonicalMutableSymbolSeed! + 1 => canonicalMutableSymbolSeed!
+        }
+    0 => bindingIndex!
+    bindingIndex! < (nodes -> len) -> while {
+        nodes[bindingIndex!] => binding!
+        binding!.kind == 17
+            and binding!.operand0 >= 0
+            and binding!.operand0 < (nodes -> len)
+            and (nodes[binding!.operand0] -> hasCanonicalValueType)
+            and (binding!.flags != 1
+            or not (nodes[binding!.operand0].typeKind == 7
+            and nodes[binding!.operand0].typeOrigin == 4
+            and nodes[binding!.operand0].typeSymbol == 1))
+            and (binding!.typeId < 0
+            or (binding!.typeOrigin == 1 and binding!.typeSymbol == 0)
+            or (binding!.flags != 1
+            and nodes[binding!.operand0].kind == 15
+            and binding!.typeId != nodes[binding!.operand0].typeId))
+            -> if {
+                nodes[binding!.operand0] => value
+                value.typeId => binding!.typeId
+                value.typeKind => binding!.typeKind
+                value.typeOrigin => binding!.typeOrigin
+                value.typeModule => binding!.typeModule
+                value.typeSymbol => binding!.typeSymbol
+                value.typeFlags => binding!.typeFlags
+                binding! => nodes[bindingIndex!]
+            }
+        binding!.kind == 17
+            and binding!.flags == 1
+            and binding!.sourceModule >= 0
+            and binding!.sourceModule < (prepared.package.ranges -> len)
+            and binding!.symbol >= 0
+            and binding!.symbol < prepared.package.ranges[binding!.sourceModule].symbolCount
+            -> if {
+                prepared.package.ranges[binding!.sourceModule].symbolStart + binding!.symbol
+                    => canonicalMutableGlobalSymbol
+                canonicalMutableBindingBySymbol![canonicalMutableGlobalSymbol] >= 0
+                    and (not (binding! -> hasCanonicalValueType)
+                    or (binding!.operand0 >= 0
+                    and binding!.operand0 < (nodes -> len)
+                    and nodes[binding!.operand0].kind == 30
+                    and nodes[binding!.operand0].operand0 >= 0
+                    and nodes[binding!.operand0].operand0 < (nodes -> len)
+                    and nodes[nodes[binding!.operand0].operand0].kind == 5
+                    and nodes[nodes[binding!.operand0].operand0].operand0 == bindingIndex!))
+                    -> if {
+                        nodes[canonicalMutableBindingBySymbol![canonicalMutableGlobalSymbol]]
+                            => canonicalMutableBinding
+                        canonicalMutableBinding.typeId => binding!.typeId
+                        canonicalMutableBinding.typeKind => binding!.typeKind
+                        canonicalMutableBinding.typeOrigin => binding!.typeOrigin
+                        canonicalMutableBinding.typeModule => binding!.typeModule
+                        canonicalMutableBinding.typeSymbol => binding!.typeSymbol
+                        canonicalMutableBinding.typeFlags => binding!.typeFlags
+                        binding! => nodes[bindingIndex!]
+                    }
+                binding! -> hasCanonicalValueType -> if {
+                    bindingIndex! => canonicalMutableBindingBySymbol![canonicalMutableGlobalSymbol]
+                }
+            }
+        bindingIndex! + 1 => bindingIndex!
+    }
+    0 => readIndex!
+    readIndex! < (nodes -> len) -> while {
+        nodes[readIndex!] => read!
+        read!.kind == 5
+            and read!.operand0 >= 0
+            and read!.operand0 < (nodes -> len)
+            and nodes[read!.operand0].kind == 17
+            and nodes[read!.operand0].typeId >= 0
+            -> if {
+                nodes[read!.operand0] => binding
+                binding.typeId => read!.typeId
+                binding.typeKind => read!.typeKind
+                binding.typeOrigin => read!.typeOrigin
+                binding.typeModule => read!.typeModule
+                binding.typeSymbol => read!.typeSymbol
+                binding.typeFlags => read!.typeFlags
+                read! => nodes[readIndex!]
+            }
+        readIndex! + 1 => readIndex!
+    }
+}

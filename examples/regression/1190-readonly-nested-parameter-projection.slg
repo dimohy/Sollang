@@ -1,0 +1,28 @@
+struct Batch {
+    values: [Int; ~]
+}
+
+struct Envelope {
+    batch: Batch
+}
+
+struct Lookup {
+    bias: Int
+}
+
+readLength lookup: ref Lookup, values: ref [Int; ~] -> Int => (values -> len) + lookup.bias
+
+# The nested projection remains rooted in the by-value function parameter. It
+# is not a literal or temporary borrow and must reach the readonly call by the
+# parameter's exact stack address.
+inspect envelope: Envelope -> Int {
+    Lookup { bias: 0 } => lookup
+    lookup -> readLength(envelope.batch.values)
+}
+
+main {
+    Envelope {
+        batch: Batch { values: [3, 5; ~] }
+    } -> inspect => length
+    "nested-ref-length=$length" -> println
+}

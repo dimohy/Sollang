@@ -1,0 +1,68 @@
+{
+  "$schema": "zstd-foundation.schema.json",
+  "version": 5,
+  "module": "std.compress.zstd",
+  "hashModule": "std.hash.xxhash64",
+  "sources": [
+    "stdlib/std/compress/zstd.slg",
+    "stdlib/std/compress/zstd/error.slg",
+    "stdlib/std/compress/zstd/decoder_phase.slg",
+    "stdlib/std/compress/zstd/huffman.slg",
+    "stdlib/std/compress/zstd/fse.slg",
+    "stdlib/std/compress/zstd/sequence.slg",
+    "stdlib/std/hash/xxhash64.slg"
+  ],
+  "fixture": "1220-zstd-raw-rle-streaming",
+  "compressedLiteralFixture": "1304-zstd-literal-only-compressed-block",
+  "huffmanFixture": "1306-zstd-direct-huffman-literals",
+  "fseFixture": "1310-zstd-fse-foundation",
+  "sequenceFixture": "1312-zstd-sequence-frame",
+  "compressedFseFixture": "1313-zstd-compressed-fse-frame",
+  "hashFixture": "1228-xxhash64-streaming",
+  "officialReferences": [
+    "https://www.rfc-editor.org/rfc/rfc8878.html",
+    "https://github.com/facebook/zstd/blob/dev/doc/educational_decoder/zstd_decompress.c",
+    "https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md",
+    "https://docs.python.org/3/library/compression.zstd.html"
+  ],
+  "surfaces": [
+    "Limits.codec",
+    "FrameOptions.checksum",
+    "Codec.encoder",
+    "Codec.decoder",
+    "Codec.compress",
+    "Codec.decompress",
+    "Encoder.write",
+    "Encoder.finish",
+    "Decoder.write",
+    "Decoder.finish",
+    "xxhash64.Seed.hasher",
+    "xxhash64.Hasher.write",
+    "xxhash64.Hasher.checksum"
+  ],
+  "invariants": [
+    "all public stateful operations use inherent instance methods",
+    "encoding emits deterministic RFC 8878 single-segment raw-block frames",
+    "decoding accepts raw and RLE blocks incrementally without retaining encoded input",
+    "compressed blocks with raw or RLE literals and zero or nonzero sequences decode transactionally from one bounded block buffer",
+    "direct-weight Huffman literals decode one-stream and four-stream layouts with exact regenerated-size validation",
+    "treeless Huffman literals reuse only a table established earlier in the same frame",
+    "sequence tables support predefined RLE FSE-compressed and same-frame repeat modes",
+    "sequence decoding reads reverse-interleaved literal offset and match states and validates exact bitstream completion",
+    "repeat offsets are frame-local state initialized to 1 4 8 and updated only after a valid sequence block commits",
+    "encoded decoded window frame and skippable byte limits are independent domain fields",
+    "each data block is bounded by both the frame window and 128 KiB",
+    "skippable frame payload is bounded before it is consumed",
+    "caller output changes only after every complete data frame and optional content checksum validates",
+    "finish consumes affine encoder and decoder instances",
+    "content checksum is the low 32 bits of seed-zero XXH64 over decoded frame bytes in little-endian order",
+    "encoder checksum policy is an immutable FrameOptions domain value owned by Codec",
+    "XXH64 supports bounded 32-byte-stripe streaming without retaining complete input",
+    "checksum mismatch has an exact error and preserves caller output transactionality",
+    "FSE-compressed Huffman weights and dictionaries fail explicitly"
+  ],
+  "unsupported": [
+    "FSE-compressed Huffman weights",
+    "dictionaries"
+  ]
+}

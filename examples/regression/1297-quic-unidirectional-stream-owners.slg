@@ -1,0 +1,56 @@
+import std.net.quic as quic
+
+# Proves that each unidirectional stream has one statically available direction:
+# local opens return SendStream, while peer acceptance returns ReceiveStream.
+unidirectionalOwners: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificate
+
+    quic.bind(quic.loopback(0))? => clientEndpoint!
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    serverEndpoint! -> listen(identity)? => listener!
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+
+    clientEndpoint! -> connect(serverAddress, certificate)? => clientConnection!
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> openUni(clientEndpoint!)? => clientSend!
+    clientSend! -> send(clientConnection!, clientEndpoint!, [65, 66])? => clientSent
+    clientSend! -> finish(clientConnection!, clientEndpoint!)?
+    serverConnection! -> acceptUni(serverEndpoint!)? => serverReceive!
+    serverReceive! -> receive(serverConnection!, serverEndpoint!, 8)? => fromClient
+
+    serverConnection! -> openUni(serverEndpoint!)? => serverSend!
+    serverSend! -> send(serverConnection!, serverEndpoint!, [97, 98, 99])? => serverSent
+    serverSend! -> finish(serverConnection!, serverEndpoint!)?
+    clientConnection! -> acceptUni(clientEndpoint!)? => clientReceive!
+    clientReceive! -> receive(clientConnection!, clientEndpoint!, 8)? => fromServer
+
+    clientSent == 2
+        and serverSent == 3
+        and (clientSend! -> id) == 2
+        and (serverReceive! -> id) == 2
+        and (serverSend! -> id) == 3
+        and (clientReceive! -> id) == 3
+        and fromClient[0] == 65
+        and fromClient[1] == 66
+        and fromServer[0] == 97
+        and fromServer[1] == 98
+        and fromServer[2] == 99
+        and (clientSend! -> isWriteFinished)
+        and (serverSend! -> isWriteFinished) => correct
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    serverConnection! -> close(serverEndpoint!, 0)?
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(correct)
+}
+
+main {
+    unidirectionalOwners() -> when {
+        Ok(correct) { "quic-unidirectional-owners=$correct" -> println }
+        Err(error) { "quic-unidirectional-owner-error=$(error.code)" -> println }
+    }
+}

@@ -3,72 +3,142 @@ namespace sollang.compiler.llvm.text
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.emitter.context as emitterContext
 
+parallelCallbackOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    -1 => owner!
+    nodeIndex => callbackAncestor!
+    callbackAncestor! >= 0 and owner! < 0 -> while {
+        context.ir[callbackAncestor!].parent => callbackParent
+        callbackParent >= 0 -> if {
+            context.ir[callbackParent] => callbackParentNode
+            callbackParentNode.kind == 6
+                and (callbackParentNode.opcode == -207 or callbackParentNode.opcode == -209)
+                and callbackAncestor! != callbackParentNode.operand0
+                -> if { callbackParent => owner! } else { callbackParent => callbackAncestor! }
+        } else {
+            -1 => callbackAncestor!
+        }
+    }
+    owner!
+}
+
+# A role receiver always has the exact element type of its structured source.
+# Late call-plan repair can prepend that canonical receiver while an explicit
+# reference argument still carries the role symbol provisionally. The explicit
+# argument remains in the final call chain, so liveness cannot distinguish it;
+# exact source-element type identity can.
+parallelRoleMatchesSourceType nodeIndex: Int, parallelIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    false => matches!
+    context.ir[parallelIndex] => parallel
+    parallel.operand0 >= 0 and parallel.operand0 < (context.ir -> len)
+        -> if {
+            context.ir[parallel.operand0] => source
+            source.typeId >= 0 and source.typeId < (context.types -> len)
+                -> if {
+                    source.typeId => sourceTypeId!
+                    context.types[sourceTypeId!].kind == 8
+                        -> if { context.types[sourceTypeId!].first => sourceTypeId! }
+                    sourceTypeId! >= 0
+                        and sourceTypeId! < (context.types -> len)
+                        and (context.types[sourceTypeId!].kind == 3
+                        or context.types[sourceTypeId!].kind == 4
+                        or context.types[sourceTypeId!].kind == 12)
+                        -> if {
+                            context.ir[nodeIndex].typeId == context.types[sourceTypeId!].first
+                                => matches!
+                        }
+                }
+        }
+    matches!
+}
+
+structuredParallelRoleOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    -1 => owner!
+    context.ir[nodeIndex] => role
+    role.kind == 5
+        and role.symbol >= 0
+        and role.sourceModule >= 0
+        and role.sourceModule < (context.ranges -> len)
+        and role.symbol < context.ranges[role.sourceModule].symbolCount
+        -> if {
+            context.symbols[context.ranges[role.sourceModule].symbolStart + role.symbol] => roleSymbol
+            roleSymbol.kind == 35 -> if {
+                nodeIndex -> parallelCallbackOwner(context) => owner!
+                owner! >= 0 and not (nodeIndex -> parallelRoleMatchesSourceType(owner!, context))
+                    -> if { -1 => owner! }
+            }
+        }
+    owner!
+}
+
+emitStructuredParallelRoleValues parallelIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    0 => roleIndex!
+    roleIndex! < (context.ir -> len) -> while {
+        context.ir[roleIndex!] => role
+        (roleIndex! -> structuredParallelRoleOwner(context)) == parallelIndex
+            -> if {
+                "  %v$(roleIndex!) = freeze " -> print
+                role -> writeIrType(context, state)
+                " %v$(parallelIndex)_item" -> println
+            }
+        roleIndex! + 1 => roleIndex!
+    }
+}
+
 callHasDeclaredEffects node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => hasEffects!
-    (node.kind == 6 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len) and node.symbol >= 0)
+    node.kind == 6 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len) and node.symbol >= 0
         -> if {
-        context.ranges[node.targetModule] => targetRange
-        node.symbol < targetRange.symbolCount -> if {
-            context.symbols[targetRange.symbolStart + node.symbol] => targetSymbol
-            targetSymbol.astNode >= 0 -> if {
-                context.nodes[targetRange.astStart + targetSymbol.astNode] => targetDeclaration
-                targetDeclaration.firstToken => tokenIndex!
-                tokenIndex! < targetDeclaration.firstToken + targetDeclaration.tokenCount
-                    -> while {
-                    context.tokens[targetRange.tokenStart + tokenIndex!] => token
-                    (token.span.length == 4
-                        and (context.sources[node.targetModule] -> byte(token.span.start)) == 117
-                        and (context.sources[node.targetModule] -> byte(token.span.start + 1)) == 115
-                        and (context.sources[node.targetModule] -> byte(token.span.start + 2)) == 101
-                        and (context.sources[node.targetModule] -> byte(token.span.start + 3)) == 115)
-                            -> if {
-                        true => hasEffects!
-                    }
-                    tokenIndex! + 1 => tokenIndex!
-                }
-            }
+            context.ranges[node.targetModule].symbolStart + node.symbol => targetGlobalSymbol
+            targetGlobalSymbol >= 0 and targetGlobalSymbol < (state.frozenFunctionsHaveDeclaredEffectsBySymbol -> len)
+                -> if { state.frozenFunctionsHaveDeclaredEffectsBySymbol[targetGlobalSymbol] => hasEffects! }
         }
-    }
-    (node.kind == 6 and node.targetModule >= 0 and node.symbol >= 0 and not hasEffects!)
-        -> if {
-        0 => targetFunctionIndex!
-        targetFunctionIndex! < (context.ir -> len) -> while {
-            context.ir[targetFunctionIndex!] => targetFunction
-            (targetFunction.kind == 0
-                and targetFunction.sourceModule == node.targetModule
-                and targetFunction.symbol == node.symbol) -> if {
-                targetFunction.operand1 => targetParameterIndex!
-                0 => targetParameterOrdinal!
-                targetParameterIndex! >= 0 -> while {
-                    context.ir[targetParameterIndex!] => targetParameter
-                    targetParameter.flags / 2 % 2 == 1 -> if { true => hasEffects! }
-                    targetParameterOrdinal! == 0 -> if {
-                        targetFunction.nextOperand => targetParameterIndex!
-                    } else {
-                        targetParameter.nextOperand => targetParameterIndex!
-                    }
-                    targetParameterOrdinal! + 1 => targetParameterOrdinal!
-                }
-            }
-            targetFunctionIndex! + 1 => targetFunctionIndex!
-        }
-    }
     hasEffects!
 }
+# Mutation barriers share one catalog across sparse discovery, mutable reads,
+# effect roots and predecessor ordering. In particular, reserve may replace
+# the backing allocation even when the logical array length does not change.
+isSchedulingMutationIntrinsic node: typedIr.TypedIrNode -> Bool {
+    node.kind == 9 and (node.opcode == -204 or node.opcode == -213
+        or node.opcode == -223 or node.opcode == -303
+        or node.opcode == -229 or node.opcode == -241 or node.opcode == -242
+        or node.opcode == -246 or node.opcode == -247 or node.opcode == -250
+        or node.opcode == -251 or node.opcode == -252 or node.opcode == -254
+        or node.opcode == -255 or node.opcode == -257 or node.opcode == -271)
+}
+
+# Aggregate materialization captures inline values from backing storage.
+# Later mutation must not overtake that capture after its descriptor read.
+isSchedulingValueCapture node: typedIr.TypedIrNode -> Bool {
+    node.kind == 12 or node.kind == 14 or node.kind == 16 or node.kind == 35
+}
+
 prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionStart: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] uses Console {
+    # Mutable lexical roots require a function-local name and visibility scan.
+    # Cache every binding/read root once because readiness and effect ordering
+    # revisit the same nodes many times.
+    [Int; ~] => functionMutableRoots!
+    functionIndex + 1 => mutableRootCacheIndex!
+    mutableRootCacheIndex! < functionEnd -> while {
+        context.ir[mutableRootCacheIndex!] => mutableRootCacheNode
+        -1 => mutableRootCacheValue!
+        mutableRootCacheNode.kind == 5 or mutableRootCacheNode.kind == 10 or mutableRootCacheNode.kind == 17
+            -> if { mutableRootCacheIndex! -> mutableBindingRoot(context, state) => mutableRootCacheValue! }
+        functionMutableRoots! -> push(mutableRootCacheValue!)
+        mutableRootCacheIndex! + 1 => mutableRootCacheIndex!
+    }
     expressionStart => mutableSlotIndex!
     mutableSlotIndex! < functionEnd -> while {
         context.ir[mutableSlotIndex!] => mutableSlotCandidate
-        (mutableSlotCandidate.kind == 17 and mutableSlotCandidate.flags == 1)
+        mutableSlotCandidate.kind == 17 and mutableSlotCandidate.flags == 1
             -> if {
-            mutableSlotIndex! -> mutableBindingRoot(context, state) => mutableSlotRoot
-            mutableSlotRoot == mutableSlotIndex! -> if {
-                "  %slot$(mutableSlotRoot) = alloca " -> print
-                mutableSlotCandidate -> writeIrType(context, state)
-                ", align " -> print
-                mutableSlotCandidate -> storageAlign(context, state) -> writeDecimalLine
+                functionMutableRoots![mutableSlotIndex! - functionIndex - 1] => mutableSlotRoot
+                mutableSlotRoot == mutableSlotIndex! -> if {
+                    "  %slot$(mutableSlotRoot) = alloca " -> print
+                    mutableSlotCandidate -> writeIrType(context, state)
+                    ", align " -> print
+                    mutableSlotCandidate -> storageAlign(context, state) -> writeDecimalLine
+                }
             }
-        }
         mutableSlotIndex! + 1 => mutableSlotIndex!
     }
     [Bool; ~] => expressionScheduled!
@@ -77,488 +147,667 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
         expressionScheduled! -> push(false)
         scheduledInit! + 1 => scheduledInit!
     }
+    # Control and logical containment are structural properties of the frozen
+    # Typed IR. Compute them once; readiness revisits must not repeat the same
+    # ancestor and condition scans for every scheduling pass.
+    [Bool; ~] => ifConditionRoots!
+    expressionStart => ifConditionRootIndex!
+    ifConditionRootIndex! < functionEnd -> while {
+        ifConditionRoots! -> push(false)
+        ifConditionRootIndex! + 1 => ifConditionRootIndex!
+    }
+    expressionStart => ifConditionIndex!
+    ifConditionIndex! < functionEnd -> while {
+        context.ir[ifConditionIndex!] => ifConditionCandidate
+        ifConditionCandidate.kind == 18
+            and ifConditionCandidate.operand0 >= expressionStart
+            and ifConditionCandidate.operand0 < functionEnd
+            -> if {
+                context.ir[ifConditionCandidate.operand0] => ifConditionRoot
+                (ifConditionRoot.kind == 8 and (ifConditionRoot.opcode == -25 or ifConditionRoot.opcode == -24))
+                    or (ifConditionRoot.kind == 7 and ifConditionRoot.opcode == -26)
+                    -> if { true => ifConditionRoots![ifConditionCandidate.operand0 - expressionStart] }
+            }
+        ifConditionIndex! + 1 => ifConditionIndex!
+    }
+    [Bool; ~] => expressionInsideControlRegion!
+    [Bool; ~] => expressionInsideLogicalValue!
+    expressionStart => containmentIndex!
+    containmentIndex! < functionEnd -> while {
+        context.ir[containmentIndex!] => containmentNode
+        containmentNode.parent => containmentAncestor!
+        containmentNode.kind == 19 or ifConditionRoots![containmentIndex! - expressionStart] => containmentInsideControl!
+        containmentAncestor! >= expressionStart and not containmentInsideControl!
+            -> while {
+                context.ir[containmentAncestor!].kind == 19
+                    or context.ir[containmentAncestor!].kind == 20
+                    or ifConditionRoots![containmentAncestor! - expressionStart]
+                    -> if { true => containmentInsideControl! } else { context.ir[containmentAncestor!].parent => containmentAncestor! }
+            }
+        (containmentIndex! -> parallelCallbackOwner(context)) >= 0
+            -> if { true => containmentInsideControl! }
+        false => containmentInsideLogical!
+        containmentNode.parent => containmentLogicalAncestor!
+        containmentLogicalAncestor! >= expressionStart and not containmentInsideLogical!
+            -> while {
+                context.ir[containmentLogicalAncestor!] => containmentLogicalAncestorNode
+                containmentLogicalAncestorNode.kind == 8 and (containmentLogicalAncestorNode.opcode == -24 or containmentLogicalAncestorNode.opcode == -25)
+                    -> if { true => containmentInsideLogical! } else { containmentLogicalAncestorNode.parent => containmentLogicalAncestor! }
+            }
+        containmentNode.kind == 17 and containmentNode.operand0 >= expressionStart and containmentNode.operand0 < functionEnd and not containmentInsideControl!
+            -> if {
+                context.ir[containmentNode.operand0].parent => containmentBindingAncestor!
+                containmentBindingAncestor! >= expressionStart and not containmentInsideControl!
+                    -> while {
+                        context.ir[containmentBindingAncestor!].kind == 19
+                            -> if { true => containmentInsideControl! } else { context.ir[containmentBindingAncestor!].parent => containmentBindingAncestor! }
+                    }
+            }
+        expressionInsideControlRegion! -> push(containmentInsideControl!)
+        expressionInsideLogicalValue! -> push(containmentInsideLogical!)
+        containmentIndex! + 1 => containmentIndex!
+    }
+    # Read and effect ordering only inspect nodes that can become observable
+    # barriers. Freeze that sparse set once instead of rescanning every pure
+    # expression on each readiness revisit.
+    [Int; ~] => schedulingBarrierIndices!
+    expressionStart => schedulingBarrierIndex!
+    schedulingBarrierIndex! < functionEnd -> while {
+        context.ir[schedulingBarrierIndex!] => schedulingBarrier
+        (schedulingBarrier -> isSchedulingValueCapture)
+            or schedulingBarrier.kind == 6
+            or schedulingBarrier.kind == 18
+            or schedulingBarrier.kind == 20
+            or schedulingBarrier.kind == 27
+            or schedulingBarrier.kind == 34
+            or schedulingBarrier.kind == 24
+            or schedulingBarrier.kind == 25
+            or (schedulingBarrier.kind == 17 and schedulingBarrier.flags == 1)
+            or ((schedulingBarrier -> isSchedulingMutationIntrinsic) or (schedulingBarrier.kind == 9 and (schedulingBarrier.opcode == -205 or schedulingBarrier.opcode == -220 or schedulingBarrier.opcode == -221 or schedulingBarrier.opcode == -253 or schedulingBarrier.opcode == -256)))
+            -> if { schedulingBarrierIndices! -> push(schedulingBarrierIndex!) }
+        schedulingBarrierIndex! + 1 => schedulingBarrierIndex!
+    }
     [Int; ~] => expressionOrder!
     true => scheduleProgress!
     scheduleProgress! -> while {
         false => scheduleProgress!
         -1 => pendingEach!
         Int(expressionOrder! -> len) - 1 => pendingEachOrderIndex!
-        (pendingEachOrderIndex! >= 0 and pendingEach! < 0)
+        pendingEachOrderIndex! >= 0 and pendingEach! < 0
             -> while {
-            expressionOrder![pendingEachOrderIndex!] => orderedEachCandidate
-            context.ir[orderedEachCandidate] => orderedEachNode
-            (orderedEachNode.kind == 6 and orderedEachNode.opcode == -208)
-                -> if {
-                false => orderedEachHasPendingBody!
-                expressionStart => orderedEachBodySearch!
-                (orderedEachBodySearch! < functionEnd and not orderedEachHasPendingBody!)
-                    -> while {
-                    NodeAncestorRequest { nodeIndex: orderedEachBodySearch!, ownerIndex: orderedEachCandidate } => orderedEachAncestorRequest
-                    orderedEachAncestorRequest -> irDescendsFrom(context, state) => orderedEachInside
-                    (not expressionScheduled![orderedEachBodySearch! - expressionStart] and orderedEachInside)
-                        -> if { true => orderedEachHasPendingBody! }
-                    orderedEachBodySearch! + 1 => orderedEachBodySearch!
-                }
-                orderedEachHasPendingBody! -> if { orderedEachCandidate => pendingEach! }
+                expressionOrder![pendingEachOrderIndex!] => orderedEachCandidate
+                context.ir[orderedEachCandidate] => orderedEachNode
+                orderedEachNode.kind == 6 and orderedEachNode.opcode == -208
+                    -> if {
+                        false => orderedEachHasPendingBody!
+                        expressionStart => orderedEachBodySearch!
+                        orderedEachBodySearch! < functionEnd and not orderedEachHasPendingBody!
+                            -> while {
+                                NodeAncestorRequest { nodeIndex: orderedEachBodySearch!, ownerIndex: orderedEachCandidate } => orderedEachAncestorRequest
+                                orderedEachAncestorRequest -> irDescendsFrom(context, state) => orderedEachInside
+                                not expressionScheduled![orderedEachBodySearch! - expressionStart] and orderedEachInside
+                                    -> if { true => orderedEachHasPendingBody! }
+                                orderedEachBodySearch! + 1 => orderedEachBodySearch!
+                            }
+                        orderedEachHasPendingBody! -> if { orderedEachCandidate => pendingEach! }
+                    }
+                pendingEachOrderIndex! - 1 => pendingEachOrderIndex!
             }
-            pendingEachOrderIndex! - 1 => pendingEachOrderIndex!
-        }
         expressionStart => scheduleCandidate!
         scheduleCandidate! < functionEnd -> while {
             not expressionScheduled![scheduleCandidate! - expressionStart]
                 -> if {
-                context.ir[scheduleCandidate!] => scheduleNode
-                scheduleNode.parent => scheduleAncestor!
-                scheduleNode.kind == 19 => insideControlRegion!
-                (scheduleAncestor! >= expressionStart and not insideControlRegion!)
-                    -> while {
-                    (context.ir[scheduleAncestor!].kind == 19 or context.ir[scheduleAncestor!].kind == 20)
-                        -> if { true => insideControlRegion! } else { context.ir[scheduleAncestor!].parent => scheduleAncestor! }
-                }
-                false => insideIfCondition!
-                expressionStart => ifConditionSearch!
-                ifConditionSearch! < functionEnd -> while {
-                    context.ir[ifConditionSearch!] => ifConditionCandidate
-                    ifConditionCandidate.kind == 18 -> if {
-                        context.ir[ifConditionCandidate.operand0] => ifConditionRoot
-                        (ifConditionRoot.kind == 8 and (ifConditionRoot.opcode == -25 or ifConditionRoot.opcode == -24) or (ifConditionRoot.kind == 7 and ifConditionRoot.opcode == -26))
-                            -> if {
-                            NodeAncestorRequest { nodeIndex: scheduleCandidate!, ownerIndex: ifConditionCandidate.operand0 } => ifAncestorRequest
-                            ifAncestorRequest -> irDescendsFrom(context, state) => ifDescends
-                            (scheduleCandidate! == ifConditionCandidate.operand0 or ifDescends)
-                                -> if {
-                                true => insideIfCondition!
-                            }
-                        }
-                    }
-                    ifConditionSearch! + 1 => ifConditionSearch!
-                }
-                insideIfCondition! -> if { true => insideControlRegion! }
-                false => insideLogicalValue!
-                scheduleNode.parent => logicalValueAncestor!
-                (logicalValueAncestor! >= expressionStart and not insideLogicalValue!)
-                    -> while {
-                    context.ir[logicalValueAncestor!] => logicalValueAncestorNode
-                    (logicalValueAncestorNode.kind == 8 and (logicalValueAncestorNode.opcode == -24 or logicalValueAncestorNode.opcode == -25))
+                    context.ir[scheduleCandidate!] => scheduleNode
+                    expressionInsideControlRegion![scheduleCandidate! - expressionStart] => insideControlRegion
+                    expressionInsideLogicalValue![scheduleCandidate! - expressionStart] => insideLogicalValue
+                    insideControlRegion or scheduleNode.kind == 19
                         -> if {
-                        true => insideLogicalValue!
-                    } else {
-                        logicalValueAncestorNode.parent => logicalValueAncestor!
-                    }
-                }
-                (scheduleNode.kind == 17 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and not insideControlRegion!)
-                    -> if {
-                    context.ir[scheduleNode.operand0].parent => bindingScheduleAncestor!
-                    (bindingScheduleAncestor! >= expressionStart and not insideControlRegion!)
-                        -> while {
-                        context.ir[bindingScheduleAncestor!].kind == 19
-                            -> if { true => insideControlRegion! } else { context.ir[bindingScheduleAncestor!].parent => bindingScheduleAncestor! }
-                    }
-                }
-                (insideControlRegion! or scheduleNode.kind == 19)
-                    -> if {
-                    true => expressionScheduled![scheduleCandidate! - expressionStart]
-                    true => scheduleProgress!
-                }
-                true => scheduleReady!
-                (insideControlRegion! or scheduleNode.kind == 19)
-                    -> if { false => scheduleReady! }
-                false => scheduleInsidePendingEach!
-                pendingEach! >= 0 -> if {
-                    NodeAncestorRequest { nodeIndex: scheduleCandidate!, ownerIndex: pendingEach! } => pendingEachAncestorRequest
-                    pendingEachAncestorRequest -> irDescendsFrom(context, state) => scheduleInsidePendingEach!
-                }
-                (scheduleReady! and pendingEach! >= 0 and not scheduleInsidePendingEach!)
-                    -> if { false => scheduleReady! }
-                (scheduleReady! and scheduleNode.parent >= expressionStart)
-                    -> if {
-                    scheduleCandidate! => eachBranchChild!
-                    scheduleNode.parent => eachScheduleAncestor!
-                    (eachScheduleAncestor! >= expressionStart and scheduleReady!)
-                        -> while {
-                        context.ir[eachScheduleAncestor!] => eachScheduleOwner
-                        (eachScheduleOwner.kind == 6 and eachScheduleOwner.opcode == -208 and eachBranchChild! != eachScheduleOwner.operand0 and not expressionScheduled![eachScheduleAncestor! - expressionStart])
-                            -> if { false => scheduleReady! }
-                        eachScheduleAncestor! => eachBranchChild!
-                        context.ir[eachScheduleAncestor!].parent => eachScheduleAncestor!
-                    }
-                }
-                (scheduleReady! and scheduleNode.kind != 38 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0 - expressionStart])
-                    -> if { false => scheduleReady! }
-                (scheduleReady! and scheduleNode.kind == 5 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and context.ir[scheduleNode.operand0].kind == 17 and context.ir[scheduleNode.operand0].flags == 1)
-                    -> if {
-                    scheduleNode.operand0 -> mutableBindingRoot(context, state) => scheduleMutableReadRoot
-                    # A mutable rebind reads the slot value that existed
-                    # before its own store. Do not turn that read into a
-                    # dependency on the store currently being scheduled.
-                    (scheduleMutableReadRoot != scheduleNode.operand0 and scheduleMutableReadRoot >= expressionStart and scheduleMutableReadRoot < functionEnd and not expressionScheduled![scheduleMutableReadRoot - expressionStart])
+                            true => expressionScheduled![scheduleCandidate! - expressionStart]
+                            true => scheduleProgress!
+                        }
+                    true => scheduleReady!
+                    insideControlRegion or scheduleNode.kind == 19
                         -> if { false => scheduleReady! }
-                }
-                (scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.kind != 27 and scheduleNode.kind != 33 and scheduleNode.kind != 34 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd and not expressionScheduled![scheduleNode.operand1 - expressionStart])
-                    -> if { false => scheduleReady! }
-                (scheduleReady! and scheduleNode.kind == 6 and scheduleNode.opcode != -207 and scheduleNode.opcode != -208 and scheduleNode.opcode != -209 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd)
-                    -> if {
-                    scheduleNode.operand1 -> aggregateValueIndex(context, state) => scheduleAdditionalArgument
-                    (scheduleAdditionalArgument >= expressionStart and scheduleAdditionalArgument < functionEnd and not expressionScheduled![scheduleAdditionalArgument - expressionStart])
+                    false => scheduleInsidePendingEach!
+                    pendingEach! >= 0 -> if {
+                        NodeAncestorRequest { nodeIndex: scheduleCandidate!, ownerIndex: pendingEach! } => pendingEachAncestorRequest
+                        pendingEachAncestorRequest -> irDescendsFrom(context, state) => scheduleInsidePendingEach!
+                    }
+                    scheduleReady! and pendingEach! >= 0 and not scheduleInsidePendingEach!
                         -> if { false => scheduleReady! }
-                }
-                (scheduleReady! and scheduleNode.kind == 6 and scheduleNode.parent >= expressionStart and scheduleNode.parent < functionEnd and context.ir[scheduleNode.parent].kind == 39 and context.ir[scheduleNode.parent].parent >= expressionStart and context.ir[context.ir[scheduleNode.parent].parent].kind == 37)
-                    -> if {
-                    context.ir[context.ir[scheduleNode.parent].parent].operand0 => scheduleBranchArm!
-                    -1 => schedulePreviousBranchArm!
-                    (scheduleBranchArm! >= expressionStart and scheduleBranchArm! < functionEnd and scheduleBranchArm! != scheduleNode.parent)
-                        -> while {
-                        scheduleBranchArm! => schedulePreviousBranchArm!
-                        context.ir[scheduleBranchArm!].nextOperand => scheduleBranchArm!
-                    }
-                    (scheduleBranchArm! == scheduleNode.parent and schedulePreviousBranchArm! >= expressionStart and not expressionScheduled![schedulePreviousBranchArm! - expressionStart])
-                        -> if { false => scheduleReady! }
-                    scheduleCandidate! -> branchStageFlowIndex(context, state) => scheduleBranchStageFlow
-                    (scheduleBranchStageFlow >= expressionStart and scheduleBranchStageFlow < functionEnd and context.ir[scheduleBranchStageFlow].kind == 6 and not expressionScheduled![scheduleBranchStageFlow - expressionStart])
-                        -> if { false => scheduleReady! }
-                }
-                (scheduleNode.parent >= expressionStart and scheduleNode.parent < functionEnd and (context.ir[scheduleNode.parent].kind == 38 or (context.ir[scheduleNode.parent].kind == 39 and context.ir[scheduleNode.parent].parent >= expressionStart and context.ir[context.ir[scheduleNode.parent].parent].kind == 38)))
-                    -> if { false => scheduleReady! }
-                (scheduleReady! and (scheduleNode.kind == 9 or (scheduleNode.kind == 6 and scheduleNode.opcode == -1)) and scheduleNode.operand0 >= expressionStart)
-                    -> if {
-                    scheduleNode.operand0 => scheduleCallArgument!
-                    (scheduleCallArgument! >= expressionStart and scheduleCallArgument! < functionEnd and context.ir[scheduleCallArgument!].parent == scheduleCandidate!)
-                        -> while {
-                        not expressionScheduled![scheduleCallArgument! - expressionStart]
-                            -> if { false => scheduleReady! }
-                        scheduleCallArgument! -> aggregateValueIndex(context, state) => scheduleCallArgumentValue
-                        (scheduleCallArgumentValue >= expressionStart
-                            and scheduleCallArgumentValue < functionEnd
-                            and not expressionScheduled![scheduleCallArgumentValue - expressionStart])
-                                -> if { false => scheduleReady! }
-                        context.ir[scheduleCallArgument!].nextOperand => scheduleCallArgument!
-                    }
-                }
-                # A call with declared external effects may be bound and
-                # consumed only later. Keep it behind earlier source
-                # bindings so a ready read cannot leap over a still-
-                # computing publish/write binding. Console intrinsics keep
-                # the same source-order barrier.
-                scheduleNode -> callHasDeclaredEffects(context, state) => scheduleCallHasEffects
-                (scheduleReady! and scheduleNode.kind == 6 and (scheduleNode.symbol == -101 or scheduleNode.symbol == -102 or scheduleNode.symbol == -116 or scheduleCallHasEffects))
-                    -> if {
-                    expressionStart => scheduleCallBindingSearch!
-                    scheduleCallBindingSearch! < functionEnd -> while {
-                        context.ir[scheduleCallBindingSearch!] => scheduleCallBinding
-                        NodeAncestorRequest { nodeIndex: scheduleCandidate!, ownerIndex: scheduleCallBindingSearch! } => scheduleCallBindingOwnerRequest
-                        scheduleCallBindingOwnerRequest -> irDescendsFrom(context, state) => scheduleCallInsideBinding
-                        (scheduleCallBinding.kind == 17 and scheduleCallBinding.operand0 >= expressionStart and scheduleCallBinding.operand0 < functionEnd and not scheduleCallInsideBinding and (scheduleCallBinding -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state)) and not expressionScheduled![scheduleCallBindingSearch! - expressionStart])
-                            -> if { false => scheduleReady! }
-                        scheduleCallBindingSearch! + 1 => scheduleCallBindingSearch!
-                    }
-                }
-                (scheduleReady! and (scheduleNode.kind == 9 or scheduleNode.kind == 6) and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand - expressionStart])
-                    -> if { false => scheduleReady! }
-                (scheduleReady! and scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -213 or scheduleNode.opcode == -241 or scheduleNode.opcode == -242 or scheduleNode.opcode == -246 or scheduleNode.opcode == -247 or scheduleNode.opcode == -252 or scheduleNode.opcode == -255 or scheduleNode.opcode == -256 or scheduleNode.opcode == -257) and scheduleNode.operand1 >= 0)
-                    -> if {
-                    scheduleNode.operand1 -> aggregateValueIndex(context, state) => schedulePushValue
-                    (schedulePushValue >= expressionStart and schedulePushValue < functionEnd and not expressionScheduled![schedulePushValue - expressionStart])
-                        -> if { false => scheduleReady! }
-                }
-                (scheduleReady! and scheduleNode.kind == 26 and scheduleNode.operand0 >= 0)
-                    -> if {
-                    scheduleNode.operand0 -> aggregateValueIndex(context, state) => scheduleEnumPayloadValue
-                    (scheduleEnumPayloadValue >= expressionStart and scheduleEnumPayloadValue < functionEnd and not expressionScheduled![scheduleEnumPayloadValue - expressionStart])
-                        -> if { false => scheduleReady! }
-                }
-                (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16 or scheduleNode.kind == 35))
-                    -> if {
-                    scheduleNode.operand0 => scheduleSibling!
-                    scheduleSibling! >= 0 -> while {
-                        scheduleSibling! -> aggregateValueIndex(context, state) => scheduleAggregateValue
-                        not expressionScheduled![scheduleAggregateValue - expressionStart]
-                            -> if { false => scheduleReady! }
-                        context.ir[scheduleSibling!].nextOperand => scheduleSibling!
-                    }
-                }
-                (scheduleReady! and scheduleNode.kind == 37) -> if {
-                    scheduleNode.operand0 => scheduleBranchArmDependency!
-                    scheduleBranchArmDependency! >= 0 -> while {
-                        (scheduleBranchArmDependency! >= expressionStart and scheduleBranchArmDependency! < functionEnd and not expressionScheduled![scheduleBranchArmDependency! - expressionStart])
-                            -> if { false => scheduleReady! }
-                        context.ir[scheduleBranchArmDependency!].nextOperand => scheduleBranchArmDependency!
-                    }
-                }
-                (scheduleReady! and scheduleNode.kind == 39 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd and not expressionScheduled![scheduleNode.operand1 - expressionStart])
-                    -> if { false => scheduleReady! }
-                (scheduleReady! and scheduleNode.kind == 38) -> if {
-                    scheduleCandidate! -> parallelBranchArguments(context) => scheduleParallelBranchArguments
-                    0 => scheduleParallelBranchArgumentIndex!
-                    scheduleParallelBranchArgumentIndex! < (scheduleParallelBranchArguments -> len)
-                        -> while {
-                        scheduleParallelBranchArguments[scheduleParallelBranchArgumentIndex!] -> aggregateValueIndex(context, state) => scheduleParallelBranchArgumentValue
-                        (scheduleParallelBranchArgumentValue >= expressionStart and scheduleParallelBranchArgumentValue < functionEnd and not expressionScheduled![scheduleParallelBranchArgumentValue - expressionStart])
-                            -> if { false => scheduleReady! }
-                        scheduleParallelBranchArgumentIndex! + 1 => scheduleParallelBranchArgumentIndex!
-                    }
-                }
-                (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33 or scheduleNode.kind == 34))
-                    -> if {
-                    expressionStart => controlDependencySearch!
-                    controlDependencySearch! < functionEnd -> while {
-                        context.ir[controlDependencySearch!] => controlDependencyUse
-                        controlDependencyUse.parent => controlDependencyAncestor!
-                        false => controlDependencyInside!
-                        (controlDependencyAncestor! >= expressionStart and not controlDependencyInside!)
-                            -> while {
-                            (controlDependencyAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDependencyAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyAncestor! == scheduleNode.nextOperand))
-                                -> if { true => controlDependencyInside! } else { context.ir[controlDependencyAncestor!].parent => controlDependencyAncestor! }
-                        }
-                        (controlDependencyInside! and controlDependencyUse.kind == 5 and controlDependencyUse.operand0 >= expressionStart and controlDependencyUse.operand0 < functionEnd and context.ir[controlDependencyUse.operand0].kind == 17 and context.ir[controlDependencyUse.operand0].flags != 1)
-                            -> if {
-                            context.ir[controlDependencyUse.operand0].operand0 => controlDependencyValue
-                            (controlDependencyValue >= expressionStart and controlDependencyValue < functionEnd)
-                                -> if {
-                                context.ir[controlDependencyValue].parent => controlDependencyValueAncestor!
-                                false => controlDependencyValueInside!
-                                (controlDependencyValueAncestor! >= expressionStart and not controlDependencyValueInside!)
-                                    -> while {
-                                    (controlDependencyValueAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDependencyValueAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyValueAncestor! == scheduleNode.nextOperand))
-                                        -> if { true => controlDependencyValueInside! } else { context.ir[controlDependencyValueAncestor!].parent => controlDependencyValueAncestor! }
-                                }
-                                (not controlDependencyValueInside! and not expressionScheduled![controlDependencyValue - expressionStart])
-                                    -> if { false => scheduleReady! }
-                            }
-                        }
-                        controlDependencyInside! -> if {
-                            0 => controlDirectOperandIndex!
-                            controlDirectOperandIndex! < 2 -> while {
-                                controlDependencyUse.operand0 => controlDirectOperand!
-                                controlDirectOperandIndex! == 1 -> if { controlDependencyUse.operand1 => controlDirectOperand! }
-                                (controlDirectOperand! >= expressionStart
-                                    and controlDirectOperand! < functionEnd
-                                    and context.ir[controlDirectOperand!].kind == 17
-                                    and context.ir[controlDirectOperand!].flags == 1)
-                                        -> if {
-                                    -1 => controlDirectOperand!
-                                }
-                                (controlDirectOperand! >= expressionStart and controlDirectOperand! < functionEnd)
-                                    -> if {
-                                    context.ir[controlDirectOperand!].parent => controlDirectOperandAncestor!
-                                    false => controlDirectOperandInside!
-                                    controlDirectOperand! == scheduleNode.operand1
-                                        -> if { true => controlDirectOperandInside! }
-                                    (scheduleNode.kind == 20 and controlDirectOperand! == scheduleNode.operand0)
-                                        -> if { true => controlDirectOperandInside! }
-                                    (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDirectOperand! == scheduleNode.nextOperand)
-                                        -> if { true => controlDirectOperandInside! }
-                                    (controlDirectOperandAncestor! >= expressionStart and not controlDirectOperandInside!)
-                                        -> while {
-                                        (controlDirectOperandAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDirectOperandAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDirectOperandAncestor! == scheduleNode.nextOperand))
-                                            -> if { true => controlDirectOperandInside! } else { context.ir[controlDirectOperandAncestor!].parent => controlDirectOperandAncestor! }
-                                    }
-                                    (not controlDirectOperandInside! and not expressionScheduled![controlDirectOperand! - expressionStart])
-                                        -> if { false => scheduleReady! }
-                                }
-                                controlDirectOperandIndex! + 1 => controlDirectOperandIndex!
-                            }
-                        }
-                        controlDependencySearch! + 1 => controlDependencySearch!
-                    }
-                }
-                (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33 or scheduleNode.kind == 34))
-                    -> if {
-                    expressionStart => priorControlValueSearch!
-                    priorControlValueSearch! < functionEnd -> while {
-                        context.ir[priorControlValueSearch!] => priorControlValue
-                        priorControlValue.parent => priorControlValueAncestor!
-                        false => priorControlValueInsideRegion!
-                        (priorControlValueAncestor! >= expressionStart and not priorControlValueInsideRegion!)
-                            -> while {
-                            (context.ir[priorControlValueAncestor!].kind == 19 or context.ir[priorControlValueAncestor!].kind == 20)
-                                -> if {
-                                true => priorControlValueInsideRegion!
-                            } else {
-                                context.ir[priorControlValueAncestor!].parent => priorControlValueAncestor!
-                            }
-                        }
-                        NodeAncestorRequest { nodeIndex: scheduleCandidate!, ownerIndex: priorControlValueSearch! } => priorControlValueOwnerRequest
-                        priorControlValueOwnerRequest -> irDescendsFrom(context, state) => priorControlValueOwnsControl
-                        (not expressionScheduled![priorControlValueSearch! - expressionStart] and not priorControlValueInsideRegion! and not priorControlValueOwnsControl and not (priorControlValue.kind == 17 and priorControlValue.operand0 == scheduleCandidate!) and (priorControlValue -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state)))
-                            -> if {
-                            false => scheduleReady!
-                        }
-                        priorControlValueSearch! + 1 => priorControlValueSearch!
-                    }
-                }
-                (scheduleReady! and (scheduleNode.kind == 5 or scheduleNode.kind == 13 or scheduleNode.kind == 15 or (scheduleNode.kind == 9 and (scheduleNode.opcode == -201 or scheduleNode.opcode == -236 or (scheduleNode.opcode <= -248 and scheduleNode.opcode >= -251)) and scheduleNode.operand0 >= 0)))
-                    -> if {
-                    false => mutableRead!
-                    -1 => mutableReadRoot!
-                    scheduleCandidate! -> isMutablePlaceRead(expressionStart, functionEnd, context, state)
-                        -> if { true => mutableRead! }
-                    scheduleNode.kind == 5 -> if {
-                        false => exactReadBinding!
-                        (scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and context.ir[scheduleNode.operand0].kind == 17 and context.ir[scheduleNode.operand0].flags == 1)
-                            -> if {
-                            true => exactReadBinding!
-                            true => mutableRead!
-                            scheduleNode.operand0 => mutableReadRoot!
-                        }
-                        (scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and context.ir[scheduleNode.operand0].kind == 17)
-                            -> if {
-                            true => exactReadBinding!
-                        }
-                        not exactReadBinding! -> if {
-                            expressionStart => mutableReadBindingSearch!
-                            mutableReadBindingSearch! < functionEnd -> while {
-                                (context.ir[mutableReadBindingSearch!].kind == 17 and context.ir[mutableReadBindingSearch!].symbol == scheduleNode.symbol and context.ir[mutableReadBindingSearch!].flags == 1)
-                                    -> if {
-                                    true => mutableRead!
-                                    mutableReadBindingSearch! => mutableReadRoot!
-                                }
-                                mutableReadBindingSearch! + 1 => mutableReadBindingSearch!
-                            }
-                        }
-                        not exactReadBinding! -> if {
-                            scheduleCandidate! -> mutableBorrowParameterOrdinal(functionIndex, context, state) => mutableReadParameterOrdinal
-                            mutableReadParameterOrdinal >= 0 -> if { true => mutableRead! }
-                        }
-                    } else {
-                        scheduleNode.kind == 9 -> if {
-                            scheduleNode.operand0 -> mutableStorageRoot(context, state) => mutableReadRoot!
-                            mutableReadRoot! >= 0 -> if { true => mutableRead! }
-                            scheduleNode.operand0 -> mutableBorrowParameterOrdinal(functionIndex, context, state) => mutableReadParameterOrdinal
-                            mutableReadParameterOrdinal >= 0 -> if { true => mutableRead! }
-                        } else {
-                            scheduleCandidate! -> referencePlaceRootBinding(context, state) => mutableProjectionRoot
-                            (mutableProjectionRoot >= expressionStart and mutableProjectionRoot < functionEnd and context.ir[mutableProjectionRoot].flags == 1)
-                                -> if {
-                                true => mutableRead!
-                                mutableProjectionRoot => mutableReadRoot!
-                            }
-                            scheduleNode.kind == 15 -> if {
-                                scheduleNode.operand0 -> mutableBorrowParameterOrdinal(functionIndex, context, state) => mutableProjectionParameterOrdinal
-                                mutableProjectionParameterOrdinal >= 0 -> if { true => mutableRead! }
-                            }
-                        }
-                    }
-                    mutableRead! -> if {
-                        expressionStart => mutableReadBarrierSearch!
-                        mutableReadBarrierSearch! < functionEnd -> while {
-                            context.ir[mutableReadBarrierSearch!] => mutableReadBarrier
-                            false => mutableReadInsideBarrier!
-                            scheduleNode.parent => mutableReadBarrierAncestor!
-                            (mutableReadBarrierAncestor! >= expressionStart and not mutableReadInsideBarrier!)
+                    scheduleReady! and scheduleNode.parent >= expressionStart
+                        -> if {
+                            scheduleCandidate! => eachBranchChild!
+                            scheduleNode.parent => eachScheduleAncestor!
+                            eachScheduleAncestor! >= expressionStart and scheduleReady!
                                 -> while {
-                                mutableReadBarrierAncestor! == mutableReadBarrierSearch!
-                                    -> if { true => mutableReadInsideBarrier! } else {
-                                    context.ir[mutableReadBarrierAncestor!].parent => mutableReadBarrierAncestor!
+                                    context.ir[eachScheduleAncestor!] => eachScheduleOwner
+                                    eachScheduleOwner.kind == 6 and eachScheduleOwner.opcode == -208 and eachBranchChild! != eachScheduleOwner.operand0 and not expressionScheduled![eachScheduleAncestor! - expressionStart]
+                                        -> if { false => scheduleReady! }
+                                    eachScheduleAncestor! => eachBranchChild!
+                                    context.ir[eachScheduleAncestor!].parent => eachScheduleAncestor!
                                 }
-                            }
-                            false => readsCurrentRebindPreviousValue!
-                            mutableReadBarrier -> callHasDeclaredEffects(context, state) => mutableReadBarrierHasEffects
-                            false => mutableReadBarrierMutatesBinding!
-                            (mutableReadBarrier.kind == 6 and mutableReadRoot! >= 0)
-                                -> if {
-                                mutableReadBarrierSearch! -> callMutatesBinding(mutableReadRoot!, functionIndex, context, state) => mutableReadBarrierMutatesBinding!
-                            }
-                            (scheduleNode.kind == 5
-                                and scheduleNode.operand0 == mutableReadBarrierSearch!
-                                and mutableReadBarrier.kind == 17
-                                and mutableReadBarrier.flags == 1
-                                and mutableReadBarrier.operand0 >= expressionStart
-                                and mutableReadBarrier.operand0 < functionEnd)
-                                    -> if {
-                                NodeAncestorRequest {
-                                    nodeIndex: scheduleCandidate!
-                                    ownerIndex: mutableReadBarrier.operand0
-                                } => currentRebindInitializerRequest
-                                currentRebindInitializerRequest -> irDescendsFrom(context, state) => readsCurrentRebindPreviousValue!
-                            }
-                            (not mutableReadInsideBarrier!
-                                and not readsCurrentRebindPreviousValue!
-                                and not expressionScheduled![mutableReadBarrierSearch! - expressionStart]
-                                and (mutableReadBarrier.kind == 18
-                                    or mutableReadBarrier.kind == 20
-                                    or mutableReadBarrier.kind == 27
-                                    or mutableReadBarrier.kind == 34
-                                    or mutableReadBarrier.kind == 24
-                                    or mutableReadBarrier.kind == 25
-                                    or (mutableReadBarrier.kind == 6 and (mutableReadBarrierHasEffects or mutableReadBarrierMutatesBinding!))
-                                    or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)
-                                    or (mutableReadBarrier.kind == 9 and (mutableReadBarrier.opcode == -204 or mutableReadBarrier.opcode == -213 or mutableReadBarrier.opcode == -229 or mutableReadBarrier.opcode == -241 or mutableReadBarrier.opcode == -242 or mutableReadBarrier.opcode == -246 or mutableReadBarrier.opcode == -247 or mutableReadBarrier.opcode == -250 or mutableReadBarrier.opcode == -251 or (mutableReadBarrier.opcode <= -252 and mutableReadBarrier.opcode >= -257))))
-                                and (mutableReadBarrier -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state)))
-                                    -> if {
-                                false => scheduleReady!
-                            }
-                            mutableReadBarrierSearch! + 1 => mutableReadBarrierSearch!
                         }
-                    }
-                }
-                (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 27 or scheduleNode.kind == 33 or scheduleNode.kind == 34 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -27 or scheduleNode.opcode == -204 or scheduleNode.opcode == -205 or scheduleNode.opcode == -213 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221 or scheduleNode.opcode == -229 or scheduleNode.opcode == -241 or scheduleNode.opcode == -242 or scheduleNode.opcode == -246 or scheduleNode.opcode == -247 or scheduleNode.opcode == -250 or scheduleNode.opcode == -251 or scheduleNode.opcode == -252 or scheduleNode.opcode == -254 or scheduleNode.opcode == -255 or scheduleNode.opcode == -257))))
-                    -> if {
-                    true => rootEffect!
-                    scheduleNode.parent => effectAncestor!
-                    (effectAncestor! >= expressionStart and rootEffect!)
-                        -> while {
-                        ((context.ir[effectAncestor!].kind == 6 and context.ir[effectAncestor!].opcode != -208) or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 27 or context.ir[effectAncestor!].kind == 34 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -204 or context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -213 or context.ir[effectAncestor!].opcode == -220 or context.ir[effectAncestor!].opcode == -221 or context.ir[effectAncestor!].opcode == -229 or context.ir[effectAncestor!].opcode == -241 or context.ir[effectAncestor!].opcode == -242 or context.ir[effectAncestor!].opcode == -246 or context.ir[effectAncestor!].opcode == -247 or context.ir[effectAncestor!].opcode == -250 or context.ir[effectAncestor!].opcode == -251 or context.ir[effectAncestor!].opcode == -252 or context.ir[effectAncestor!].opcode == -254 or context.ir[effectAncestor!].opcode == -255 or context.ir[effectAncestor!].opcode == -257)))
-                            -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
-                    }
-                    false => mutableRebindEffect!
-                    (scheduleNode.kind == 17 and scheduleNode.flags == 1)
+                    scheduleReady! and scheduleNode.kind != 38 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0 - expressionStart]
+                        -> if { false => scheduleReady! }
+                    # Assignment operand0 may be a non-emitting value wrapper.
+                    # Wait for the canonical child that the emitter reads, so a
+                    # post-control assignment never references a later SSA value.
+                    scheduleReady! and (scheduleNode.kind == 24 or scheduleNode.kind == 25) and scheduleNode.operand0 >= expressionStart
                         -> if {
-                        scheduleCandidate! -> mutableBindingRoot(context, state) => scheduleEffectMutableRoot
-                        scheduleEffectMutableRoot != scheduleCandidate!
-                            -> if { true => mutableRebindEffect! }
-                    }
-                    (rootEffect! and (not (scheduleNode.kind == 17 and scheduleNode.flags == 1) or mutableRebindEffect!))
+                            scheduleNode.operand0 -> aggregateValueIndex(context, state) => scheduleAssignmentValue
+                            scheduleAssignmentValue >= expressionStart
+                                and scheduleAssignmentValue < functionEnd
+                                and not expressionScheduled![scheduleAssignmentValue - expressionStart]
+                                -> if { false => scheduleReady! }
+                            expressionStart => scheduleAssignmentChildSearch!
+                            scheduleAssignmentChildSearch! < functionEnd and scheduleReady!
+                                -> while {
+                                    context.ir[scheduleAssignmentChildSearch!].parent == scheduleNode.operand0
+                                        and not expressionScheduled![scheduleAssignmentChildSearch! - expressionStart]
+                                        -> if { false => scheduleReady! }
+                                    scheduleAssignmentChildSearch! + 1 => scheduleAssignmentChildSearch!
+                                }
+                        }
+                    scheduleReady! and scheduleNode.kind == 5 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and context.ir[scheduleNode.operand0].kind == 17 and context.ir[scheduleNode.operand0].flags == 1
                         -> if {
-                        expressionStart => earlierEffectSearch!
-                        earlierEffectSearch! < functionEnd -> while {
-                            context.ir[earlierEffectSearch!] => earlierEffect
-                        (not expressionScheduled![earlierEffectSearch! - expressionStart] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 27 or earlierEffect.kind == 34 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -213 or earlierEffect.opcode == -229 or earlierEffect.opcode == -241 or earlierEffect.opcode == -242 or earlierEffect.opcode == -246 or earlierEffect.opcode == -247 or earlierEffect.opcode == -250 or earlierEffect.opcode == -251 or earlierEffect.opcode == -252 or earlierEffect.opcode == -254 or earlierEffect.opcode == -255 or earlierEffect.opcode == -257))) and (earlierEffect -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state)))
-                            -> if {
-                                earlierEffect.parent => earlierEffectAncestor!
-                                true => earlierRootEffect!
-                                false => earlierInsideRegion!
-                                (earlierEffectAncestor! >= expressionStart and earlierRootEffect! and not earlierInsideRegion!)
-                                    -> while {
-                                    (context.ir[earlierEffectAncestor!].kind == 19 or context.ir[earlierEffectAncestor!].kind == 20)
-                                        -> if { true => earlierInsideRegion! } else {
-                                    ((context.ir[earlierEffectAncestor!].kind == 6 and context.ir[earlierEffectAncestor!].opcode != -208) or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 27 or context.ir[earlierEffectAncestor!].kind == 34 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -205 or context.ir[earlierEffectAncestor!].opcode == -213 or context.ir[earlierEffectAncestor!].opcode == -220 or context.ir[earlierEffectAncestor!].opcode == -221 or context.ir[earlierEffectAncestor!].opcode == -229 or context.ir[earlierEffectAncestor!].opcode == -241 or context.ir[earlierEffectAncestor!].opcode == -242 or context.ir[earlierEffectAncestor!].opcode == -246 or context.ir[earlierEffectAncestor!].opcode == -247 or context.ir[earlierEffectAncestor!].opcode == -250 or context.ir[earlierEffectAncestor!].opcode == -251 or context.ir[earlierEffectAncestor!].opcode == -252 or context.ir[earlierEffectAncestor!].opcode == -254 or context.ir[earlierEffectAncestor!].opcode == -255 or context.ir[earlierEffectAncestor!].opcode == -257)))
-                                        -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
+                            functionMutableRoots![scheduleNode.operand0 - functionIndex - 1] => scheduleMutableReadRoot
+                            # A mutable rebind reads the slot value that existed
+                            # before its own store. Do not turn that read into a
+                            # dependency on the store currently being scheduled.
+                            scheduleMutableReadRoot != scheduleNode.operand0 and scheduleMutableReadRoot >= expressionStart and scheduleMutableReadRoot < functionEnd and not expressionScheduled![scheduleMutableReadRoot - expressionStart]
+                                -> if { false => scheduleReady! }
+                        }
+                    scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.kind != 27 and scheduleNode.kind != 33 and scheduleNode.kind != 34 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd and not expressionScheduled![scheduleNode.operand1 - expressionStart]
+                        -> if { false => scheduleReady! }
+                    scheduleReady! and scheduleNode.kind == 6 and scheduleNode.opcode != -207 and scheduleNode.opcode != -208 and scheduleNode.opcode != -209 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd
+                        -> if {
+                            scheduleNode.operand1 -> aggregateValueIndex(context, state) => scheduleAdditionalArgument
+                            scheduleAdditionalArgument >= expressionStart and scheduleAdditionalArgument < functionEnd and not expressionScheduled![scheduleAdditionalArgument - expressionStart]
+                                -> if { false => scheduleReady! }
+                        }
+                    scheduleReady! and scheduleNode.kind == 6 and scheduleNode.parent >= expressionStart and scheduleNode.parent < functionEnd and context.ir[scheduleNode.parent].kind == 39 and context.ir[scheduleNode.parent].parent >= expressionStart and context.ir[context.ir[scheduleNode.parent].parent].kind == 37
+                        -> if {
+                            context.ir[context.ir[scheduleNode.parent].parent].operand0 => scheduleBranchArm!
+                            -1 => schedulePreviousBranchArm!
+                            scheduleBranchArm! >= expressionStart and scheduleBranchArm! < functionEnd and scheduleBranchArm! != scheduleNode.parent
+                                -> while {
+                                    scheduleBranchArm! => schedulePreviousBranchArm!
+                                    context.ir[scheduleBranchArm!].nextOperand => scheduleBranchArm!
+                                }
+                            scheduleBranchArm! == scheduleNode.parent and schedulePreviousBranchArm! >= expressionStart and not expressionScheduled![schedulePreviousBranchArm! - expressionStart]
+                                -> if { false => scheduleReady! }
+                            scheduleCandidate! -> branchStageFlowIndex(context, state) => scheduleBranchStageFlow
+                            scheduleBranchStageFlow >= expressionStart and scheduleBranchStageFlow < functionEnd and context.ir[scheduleBranchStageFlow].kind == 6 and not expressionScheduled![scheduleBranchStageFlow - expressionStart]
+                                -> if { false => scheduleReady! }
+                        }
+                    scheduleNode.parent >= expressionStart and scheduleNode.parent < functionEnd and (context.ir[scheduleNode.parent].kind == 38 or (context.ir[scheduleNode.parent].kind == 39 and context.ir[scheduleNode.parent].parent >= expressionStart and context.ir[context.ir[scheduleNode.parent].parent].kind == 38))
+                        -> if { false => scheduleReady! }
+                    # Every ordinary call consumes its linked argument chain,
+                    # including resolved runtime intrinsics. Waiting only for
+                    # opcode -1 calls can emit an intrinsic before a readonly
+                    # aggregate alias is defined, producing non-dominating SSA.
+                    # Block intrinsics own their operand1 callback region. Requiring
+                    # that linked body as an ordinary call argument creates a cycle:
+                    # the body waits for the block to open while the block waits for
+                    # the body to be scheduled.
+                    scheduleReady! and (scheduleNode.kind == 9 or scheduleNode.kind == 6)
+                        and scheduleNode.opcode != -207
+                        and scheduleNode.opcode != -208
+                        and scheduleNode.opcode != -209
+                        and scheduleNode.operand0 >= expressionStart
+                        -> if {
+                            scheduleNode.operand0 => scheduleCallArgument!
+                            0 => scheduleCallOrdinal!
+                            scheduleCallArgument! >= expressionStart
+                                and scheduleCallArgument! < functionEnd
+                                and scheduleReady!
+                                and ((scheduleCandidate! -> callTargetParameter(scheduleCallOrdinal!, context, state)) >= 0
+                                or context.ir[scheduleCallArgument!].parent == scheduleCandidate!)
+                                -> while {
+                                    not expressionScheduled![scheduleCallArgument! - expressionStart]
+                                        -> if { false => scheduleReady! }
+                                    scheduleCallArgument! -> aggregateValueIndex(context, state) => scheduleCallArgumentValue
+                                    scheduleCallArgumentValue >= expressionStart
+                                        and scheduleCallArgumentValue < functionEnd
+                                        and not expressionScheduled![scheduleCallArgumentValue - expressionStart]
+                                        -> if { false => scheduleReady! }
+                                    context.ir[scheduleCallArgument!].nextOperand => scheduleCallArgument!
+                                    scheduleCallOrdinal! + 1 => scheduleCallOrdinal!
+                                }
+                        }
+                    # A call with declared external effects may be bound and
+                    # consumed only later. Keep it behind earlier source
+                    # bindings so a ready read cannot leap over a still-
+                    # computing publish/write binding. Console intrinsics keep
+                    # the same source-order barrier.
+                    scheduleNode -> callHasDeclaredEffects(context, state) => scheduleCallHasEffects
+                    scheduleReady!
+                        and ((scheduleNode -> typedIr.isConsoleRuntimeCall)
+                        or (scheduleNode.kind == 6 and scheduleCallHasEffects))
+                        -> if {
+                            expressionStart => scheduleCallBindingSearch!
+                            scheduleCallBindingSearch! < functionEnd
+                                and scheduleReady!
+                                -> while {
+                                    context.ir[scheduleCallBindingSearch!] => scheduleCallBinding
+                                    scheduleCallBinding.kind == 17
+                                        and scheduleCallBinding.operand0 >= expressionStart
+                                        and scheduleCallBinding.operand0 < functionEnd
+                                        and not expressionScheduled![scheduleCallBindingSearch! - expressionStart]
+                                        -> if {
+                                            NodeAncestorRequest { nodeIndex: scheduleCandidate!, ownerIndex: scheduleCallBindingSearch! } => scheduleCallBindingOwnerRequest
+                                            scheduleCallBindingOwnerRequest -> irDescendsFrom(context, state) => scheduleCallInsideBinding
+                                            not scheduleCallInsideBinding
+                                                and (scheduleCallBinding -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))
+                                                -> if { false => scheduleReady! }
+                                        }
+                                    scheduleCallBindingSearch! + 1 => scheduleCallBindingSearch!
+                                }
+                        }
+                    scheduleReady! and (scheduleNode.kind == 9 or scheduleNode.kind == 6) and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand - expressionStart]
+                        -> if { false => scheduleReady! }
+                    scheduleReady! and ((scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -213 or scheduleNode.opcode == -241 or scheduleNode.opcode == -242 or scheduleNode.opcode == -246 or scheduleNode.opcode == -247 or scheduleNode.opcode == -252 or scheduleNode.opcode == -255 or scheduleNode.opcode == -256 or scheduleNode.opcode == -257 or scheduleNode.opcode == -271)) or (scheduleNode -> typedIr.isSetIntrinsicCall)) and scheduleNode.operand1 >= 0
+                        -> if {
+                            scheduleNode.operand1 -> aggregateValueIndex(context, state) => schedulePushValue
+                            schedulePushValue >= expressionStart and schedulePushValue < functionEnd and not expressionScheduled![schedulePushValue - expressionStart]
+                                -> if { false => scheduleReady! }
+                        }
+                    scheduleReady! and scheduleNode.kind == 26 and scheduleNode.operand0 >= 0
+                        -> if {
+                            scheduleNode.operand0 -> aggregateValueIndex(context, state) => scheduleEnumPayloadValue
+                            scheduleEnumPayloadValue >= expressionStart and scheduleEnumPayloadValue < functionEnd and not expressionScheduled![scheduleEnumPayloadValue - expressionStart]
+                                -> if { false => scheduleReady! }
+                        }
+                    scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16 or scheduleNode.kind == 35)
+                        -> if {
+                            scheduleNode.operand0 => scheduleSibling!
+                            scheduleSibling! >= 0 and scheduleReady! -> while {
+                                scheduleSibling! -> aggregateValueIndex(context, state) => scheduleAggregateValue
+                                not expressionScheduled![scheduleAggregateValue - expressionStart]
+                                    -> if { false => scheduleReady! }
+                                context.ir[scheduleSibling!].nextOperand => scheduleSibling!
+                            }
+                        }
+                    scheduleReady! and scheduleNode.kind == 37 -> if {
+                        scheduleNode.operand0 => scheduleBranchArmDependency!
+                        scheduleBranchArmDependency! >= 0 and scheduleReady!
+                            -> while {
+                                scheduleBranchArmDependency! >= expressionStart and scheduleBranchArmDependency! < functionEnd and not expressionScheduled![scheduleBranchArmDependency! - expressionStart]
+                                    -> if { false => scheduleReady! }
+                                context.ir[scheduleBranchArmDependency!].nextOperand => scheduleBranchArmDependency!
+                            }
+                    }
+                    scheduleReady! and scheduleNode.kind == 39 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd and not expressionScheduled![scheduleNode.operand1 - expressionStart]
+                        -> if { false => scheduleReady! }
+                    scheduleReady! and scheduleNode.kind == 38 -> if {
+                        scheduleCandidate! -> parallelBranchArguments(context) => scheduleParallelBranchArguments
+                        0 => scheduleParallelBranchArgumentIndex!
+                        scheduleParallelBranchArgumentIndex! < (scheduleParallelBranchArguments -> len)
+                            and scheduleReady!
+                            -> while {
+                                scheduleParallelBranchArguments[scheduleParallelBranchArgumentIndex!] -> aggregateValueIndex(context, state) => scheduleParallelBranchArgumentValue
+                                scheduleParallelBranchArgumentValue >= expressionStart and scheduleParallelBranchArgumentValue < functionEnd and not expressionScheduled![scheduleParallelBranchArgumentValue - expressionStart]
+                                    -> if { false => scheduleReady! }
+                                scheduleParallelBranchArgumentIndex! + 1 => scheduleParallelBranchArgumentIndex!
+                            }
+                    }
+                    # A subject-when may encode its final else value directly
+                    # instead of behind a kind-19 arm region. Text literals
+                    # are pure SSA aggregates, so schedule that direct value
+                    # before the branch. Otherwise emitSubjectWhen would store
+                    # %vN in the else block before the function-order pass
+                    # defines it after the merge, violating dominance.
+                    scheduleReady! and scheduleNode.kind == 34
+                        -> if {
+                            scheduleNode.operand1 => scheduleWhenArm!
+                            scheduleWhenArm! >= expressionStart and scheduleWhenArm! < functionEnd
+                                and scheduleReady!
+                                -> while {
+                                    context.ir[scheduleWhenArm!] => scheduleWhenArmNode
+                                    scheduleWhenArmNode.kind == 2
+                                        and not expressionScheduled![scheduleWhenArm! - expressionStart]
+                                        -> if { false => scheduleReady! }
+                                    scheduleWhenArmNode.nextOperand => scheduleWhenArm!
+                                }
+                        }
+                    scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 27 or scheduleNode.kind == 33 or scheduleNode.kind == 34)
+                        -> if {
+                            expressionStart => controlDependencySearch!
+                            controlDependencySearch! < functionEnd and scheduleReady!
+                                -> while {
+                                    context.ir[controlDependencySearch!] => controlDependencyUse
+                                    controlDependencyUse.parent => controlDependencyAncestor!
+                                    false => controlDependencyInside!
+                                    controlDependencyAncestor! >= expressionStart and not controlDependencyInside!
+                                        -> while {
+                                            controlDependencyAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDependencyAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyAncestor! == scheduleNode.nextOperand)
+                                                -> if { true => controlDependencyInside! } else { context.ir[controlDependencyAncestor!].parent => controlDependencyAncestor! }
+                                        }
+                                    controlDependencyInside! and controlDependencyUse.kind == 5 and controlDependencyUse.operand0 >= expressionStart and controlDependencyUse.operand0 < functionEnd and context.ir[controlDependencyUse.operand0].kind == 17 and context.ir[controlDependencyUse.operand0].flags != 1
+                                        -> if {
+                                            context.ir[controlDependencyUse.operand0].operand0 => controlDependencyValue
+                                            controlDependencyValue >= expressionStart and controlDependencyValue < functionEnd
+                                                -> if {
+                                                    context.ir[controlDependencyValue].parent => controlDependencyValueAncestor!
+                                                    false => controlDependencyValueInside!
+                                                    controlDependencyValueAncestor! >= expressionStart and not controlDependencyValueInside!
+                                                        -> while {
+                                                            controlDependencyValueAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDependencyValueAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyValueAncestor! == scheduleNode.nextOperand)
+                                                                -> if { true => controlDependencyValueInside! } else { context.ir[controlDependencyValueAncestor!].parent => controlDependencyValueAncestor! }
+                                                        }
+                                                    not controlDependencyValueInside! and not expressionScheduled![controlDependencyValue - expressionStart]
+                                                        -> if { false => scheduleReady! }
+                                                }
+                                        }
+                                    controlDependencyInside! -> if {
+                                        0 => controlDirectOperandIndex!
+                                        controlDirectOperandIndex! < 2 and scheduleReady!
+                                            -> while {
+                                                controlDependencyUse.operand0 => controlDirectOperand!
+                                                controlDirectOperandIndex! == 1 -> if { controlDependencyUse.operand1 => controlDirectOperand! }
+                                                controlDirectOperand! >= expressionStart
+                                                    and controlDirectOperand! < functionEnd
+                                                    and context.ir[controlDirectOperand!].kind == 17
+                                                    and context.ir[controlDirectOperand!].flags == 1
+                                                    -> if {
+                                                        -1 => controlDirectOperand!
+                                                    }
+                                                controlDirectOperand! >= expressionStart and controlDirectOperand! < functionEnd
+                                                    -> if {
+                                                        context.ir[controlDirectOperand!].parent => controlDirectOperandAncestor!
+                                                        false => controlDirectOperandInside!
+                                                        controlDirectOperand! == scheduleNode.operand1
+                                                            -> if { true => controlDirectOperandInside! }
+                                                        controlDirectOperand! == scheduleCandidate!
+                                                            -> if { true => controlDirectOperandInside! }
+                                                        scheduleNode.kind == 20 and controlDirectOperand! == scheduleNode.operand0
+                                                            -> if { true => controlDirectOperandInside! }
+                                                        scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDirectOperand! == scheduleNode.nextOperand
+                                                            -> if { true => controlDirectOperandInside! }
+                                                        controlDirectOperandAncestor! >= expressionStart and not controlDirectOperandInside!
+                                                            -> while {
+                                                                controlDirectOperandAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDirectOperandAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDirectOperandAncestor! == scheduleNode.nextOperand)
+                                                                    -> if { true => controlDirectOperandInside! } else { context.ir[controlDirectOperandAncestor!].parent => controlDirectOperandAncestor! }
+                                                            }
+                                                        not controlDirectOperandInside! and not expressionScheduled![controlDirectOperand! - expressionStart]
+                                                            -> if { false => scheduleReady! }
+                                                    }
+                                                controlDirectOperandIndex! + 1 => controlDirectOperandIndex!
+                                            }
+                                    }
+                                    controlDependencySearch! + 1 => controlDependencySearch!
+                                }
+                        }
+                    # Opening each pins scheduling to its body until completion.
+                    # Finish earlier external bindings first: an emitted initializer
+                    # alone does not make its binding available to a nested control.
+                    # Otherwise the body waits for the binding while pendingEach
+                    # prevents that binding from ever being scheduled.
+                    scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 27 or scheduleNode.kind == 33 or scheduleNode.kind == 34
+                        or (scheduleNode.kind == 6 and scheduleNode.opcode == -208))
+                        -> if {
+                            expressionStart => priorControlValueSearch!
+                            priorControlValueSearch! < functionEnd and scheduleReady!
+                                -> while {
+                                    context.ir[priorControlValueSearch!] => priorControlValue
+                                    priorControlValue.parent => priorControlValueAncestor!
+                                    false => priorControlValueInsideRegion!
+                                    priorControlValueAncestor! >= expressionStart and not priorControlValueInsideRegion!
+                                        -> while {
+                                            context.ir[priorControlValueAncestor!].kind == 19 or context.ir[priorControlValueAncestor!].kind == 20
+                                                -> if {
+                                                    true => priorControlValueInsideRegion!
+                                                } else {
+                                                    context.ir[priorControlValueAncestor!].parent => priorControlValueAncestor!
+                                                }
+                                        }
+                                    NodeAncestorRequest { nodeIndex: scheduleCandidate!, ownerIndex: priorControlValueSearch! } => priorControlValueOwnerRequest
+                                    priorControlValueOwnerRequest -> irDescendsFrom(context, state) => priorControlValueOwnsControl
+                                    not expressionScheduled![priorControlValueSearch! - expressionStart] and not priorControlValueInsideRegion! and not priorControlValueOwnsControl and not (priorControlValue.kind == 17 and priorControlValue.operand0 == scheduleCandidate!) and (priorControlValue -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))
+                                        -> if {
+                                            false => scheduleReady!
+                                        }
+                                    priorControlValueSearch! + 1 => priorControlValueSearch!
+                                }
+                        }
+                    scheduleReady! and (scheduleNode.kind == 5 or scheduleNode.kind == 13 or scheduleNode.kind == 15 or (scheduleNode.kind == 9 and (scheduleNode.opcode == -201 or scheduleNode.opcode == -236 or (scheduleNode.opcode <= -248 and scheduleNode.opcode >= -251)) and scheduleNode.operand0 >= 0))
+                        -> if {
+                            false => mutableRead!
+                            -1 => mutableReadRoot!
+                            scheduleCandidate! -> isMutablePlaceRead(expressionStart, functionEnd, context, state)
+                                -> if { true => mutableRead! }
+                            scheduleNode.kind == 5 -> if {
+                                false => exactReadBinding!
+                                scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and context.ir[scheduleNode.operand0].kind == 17 and context.ir[scheduleNode.operand0].flags == 1
+                                    -> if {
+                                        true => exactReadBinding!
+                                        true => mutableRead!
+                                        scheduleNode.operand0 => mutableReadRoot!
+                                    }
+                                scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd and context.ir[scheduleNode.operand0].kind == 17
+                                    -> if {
+                                        true => exactReadBinding!
+                                    }
+                                not exactReadBinding! -> if {
+                                    functionMutableRoots![scheduleCandidate! - functionIndex - 1] => cachedMutableReadRoot
+                                    cachedMutableReadRoot >= 0 and context.ir[cachedMutableReadRoot].kind == 17 and context.ir[cachedMutableReadRoot].flags == 1
+                                        -> if {
+                                            true => mutableRead!
+                                            cachedMutableReadRoot => mutableReadRoot!
+                                        }
+                                }
+                                not exactReadBinding! -> if {
+                                    scheduleCandidate! -> mutableBorrowParameterOrdinal(functionIndex, context, state) => mutableReadParameterOrdinal
+                                    mutableReadParameterOrdinal >= 0 -> if { true => mutableRead! }
+                                }
+                            } else {
+                                scheduleNode.kind == 9 -> if {
+                                    scheduleNode.operand0 > functionIndex and scheduleNode.operand0 < functionEnd
+                                        -> if {
+                                            functionMutableRoots![scheduleNode.operand0 - functionIndex - 1] => cachedMutableStorageRoot
+                                            cachedMutableStorageRoot >= 0 and context.ir[cachedMutableStorageRoot].kind == 17 and context.ir[cachedMutableStorageRoot].flags == 1
+                                                -> if { cachedMutableStorageRoot => mutableReadRoot! }
+                                        } else {
+                                            scheduleNode.operand0 -> mutableStorageRoot(context, state) => mutableReadRoot!
+                                        }
+                                    mutableReadRoot! >= 0 -> if { true => mutableRead! }
+                                    scheduleNode.operand0 -> mutableBorrowParameterOrdinal(functionIndex, context, state) => mutableReadParameterOrdinal
+                                    mutableReadParameterOrdinal >= 0 -> if { true => mutableRead! }
+                                } else {
+                                    scheduleCandidate! -> referencePlaceRootBinding(context) => mutableProjectionRoot
+                                    mutableProjectionRoot >= expressionStart and mutableProjectionRoot < functionEnd and context.ir[mutableProjectionRoot].flags == 1
+                                        -> if {
+                                            true => mutableRead!
+                                            mutableProjectionRoot => mutableReadRoot!
+                                        }
+                                    scheduleNode.kind == 15 -> if {
+                                        scheduleNode.operand0 -> mutableBorrowParameterOrdinal(functionIndex, context, state) => mutableProjectionParameterOrdinal
+                                        mutableProjectionParameterOrdinal >= 0 -> if { true => mutableRead! }
                                     }
                                 }
-                                (earlierRootEffect! and not earlierInsideRegion!)
-                                    -> if { false => scheduleReady! }
                             }
-                            earlierEffectSearch! + 1 => earlierEffectSearch!
+                            mutableRead! -> if {
+                                0 => mutableReadBarrierCursor!
+                                mutableReadBarrierCursor! < (schedulingBarrierIndices! -> len)
+                                    and scheduleReady!
+                                    -> while {
+                                        schedulingBarrierIndices![mutableReadBarrierCursor!] => mutableReadBarrierSearch
+                                        context.ir[mutableReadBarrierSearch] => mutableReadBarrier
+                                        false => mutableReadInsideBarrier!
+                                        scheduleNode.parent => mutableReadBarrierAncestor!
+                                        mutableReadBarrierAncestor! >= expressionStart and not mutableReadInsideBarrier!
+                                            -> while {
+                                                mutableReadBarrierAncestor! == mutableReadBarrierSearch
+                                                    -> if { true => mutableReadInsideBarrier! } else {
+                                                        context.ir[mutableReadBarrierAncestor!].parent => mutableReadBarrierAncestor!
+                                                    }
+                                            }
+                                        false => readsCurrentRebindPreviousValue!
+                                        mutableReadBarrier -> callHasDeclaredEffects(context, state) => mutableReadBarrierHasEffects
+                                        false => mutableReadBarrierMutatesBinding!
+                                        mutableReadBarrier.kind == 6 and mutableReadRoot! >= 0
+                                            -> if {
+                                                mutableReadBarrierSearch -> callMutatesBinding(mutableReadRoot!, functionIndex, context, state) => mutableReadBarrierMutatesBinding!
+                                            }
+                                        scheduleNode.kind == 5
+                                            and scheduleNode.operand0 == mutableReadBarrierSearch
+                                            and mutableReadBarrier.kind == 17
+                                            and mutableReadBarrier.flags == 1
+                                            and mutableReadBarrier.operand0 >= expressionStart
+                                            and mutableReadBarrier.operand0 < functionEnd
+                                            -> if {
+                                                NodeAncestorRequest {
+                                                    nodeIndex: scheduleCandidate!
+                                                    ownerIndex: mutableReadBarrier.operand0
+                                                } => currentRebindInitializerRequest
+                                                currentRebindInitializerRequest -> irDescendsFrom(context, state) => readsCurrentRebindPreviousValue!
+                                            }
+                                        not mutableReadInsideBarrier!
+                                            and not readsCurrentRebindPreviousValue!
+                                            and not expressionScheduled![mutableReadBarrierSearch - expressionStart]
+                                            and (mutableReadBarrier.kind == 18
+                                            or mutableReadBarrier.kind == 20
+                                            or mutableReadBarrier.kind == 27
+                                            or mutableReadBarrier.kind == 34
+                                            or mutableReadBarrier.kind == 24
+                                            or mutableReadBarrier.kind == 25
+                                            or (mutableReadBarrier.kind == 6 and (mutableReadBarrierHasEffects or mutableReadBarrierMutatesBinding!))
+                                            or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)
+                                            or ((mutableReadBarrier -> isSchedulingMutationIntrinsic) or (mutableReadBarrier.kind == 9 and (mutableReadBarrier.opcode == -253 or mutableReadBarrier.opcode == -256)))
+                                            or (mutableReadBarrier.kind == 6 and (mutableReadBarrier -> typedIr.isSetMutationCall)))
+                                            and (mutableReadBarrier -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state))
+                                            -> if {
+                                                false => scheduleReady!
+                                            }
+                                        mutableReadBarrierCursor! + 1 => mutableReadBarrierCursor!
+                                    }
+                            }
                         }
-                    }
-                }
-                (not insideControlRegion!
-                    and scheduleNode.kind == 5
-                    and scheduleNode.operand0 >= expressionStart
-                    and scheduleNode.operand0 < functionEnd
-                    and context.ir[scheduleNode.operand0].kind == 17
-                    and context.ir[scheduleNode.operand0].flags != 1
-                    and scheduleNode.parent >= expressionStart
-                    and scheduleNode.parent < functionEnd
-                    and (context.ir[scheduleNode.parent].kind == 12
+                    # Checked indexing is observably ordered: moving its trap
+                    # before an earlier control node can execute a source-level
+                    # fallback that is unreachable after an early return.
+                    scheduleReady! and ((scheduleNode -> isSchedulingValueCapture) or scheduleNode.kind == 6 or scheduleNode.kind == 15 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 27 or scheduleNode.kind == 33 or scheduleNode.kind == 34 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or ((scheduleNode -> isSchedulingMutationIntrinsic) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -27 or scheduleNode.opcode == -205 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221))))
+                        -> if {
+                            true => rootEffect!
+                            scheduleCandidate! => effectOrderingIndex!
+                            scheduleNode.parent => effectAncestor!
+                            effectAncestor! >= expressionStart and rootEffect!
+                                -> while {
+                                    # An outer call does not neutralize a nested call effect or the
+                                    # bounds trap of an indexed argument. Promote the
+                                    # ordering identity to that call before climbing so
+                                    # the call cannot become its own earlier-effect barrier.
+                                    (context.ir[effectAncestor!] -> isSchedulingValueCapture) or (((context.ir[effectAncestor!].kind == 6 and context.ir[effectAncestor!].opcode != -208) or (context.ir[effectAncestor!] -> typedIr.isConsoleRuntimeCall)) and (scheduleNode.kind == 15 or scheduleNode.kind == 6))
+                                        -> if {
+                                            effectAncestor! => effectOrderingIndex!
+                                            context.ir[effectAncestor!].parent => effectAncestor!
+                                        } else {
+                                            (context.ir[effectAncestor!].kind == 6 and context.ir[effectAncestor!].opcode != -208) or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 27 or context.ir[effectAncestor!].kind == 34 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or ((context.ir[effectAncestor!] -> isSchedulingMutationIntrinsic) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -220 or context.ir[effectAncestor!].opcode == -221)))
+                                                -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
+                                        }
+                                }
+                            false => mutableRebindEffect!
+                            scheduleNode.kind == 17 and scheduleNode.flags == 1
+                                -> if {
+                                    functionMutableRoots![scheduleCandidate! - functionIndex - 1] => scheduleEffectMutableRoot
+                                    scheduleEffectMutableRoot != scheduleCandidate!
+                                        -> if { true => mutableRebindEffect! }
+                                }
+                            rootEffect! and (not (scheduleNode.kind == 17 and scheduleNode.flags == 1) or mutableRebindEffect!)
+                                -> if {
+                                    0 => earlierEffectCursor!
+                                    earlierEffectCursor! < (schedulingBarrierIndices! -> len)
+                                        and scheduleReady!
+                                        -> while {
+                                            schedulingBarrierIndices![earlierEffectCursor!] => earlierEffectSearch
+                                            context.ir[earlierEffectSearch] => earlierEffect
+                                            # A checked index waits for earlier root controls through
+                                            # the current-node effect rule above. It must not itself
+                                            # become a generic barrier here: flattened nodes emitted
+                                            # inside an earlier control can otherwise block a later
+                                            # logical root forever even though that control already
+                                            # owns and emits the bounds check.
+                                            not expressionScheduled![earlierEffectSearch - expressionStart] and ((earlierEffect -> isSchedulingValueCapture) or earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 27 or earlierEffect.kind == 34 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect -> isSchedulingMutationIntrinsic)) and (earlierEffect -> sourceStart(context, state)) < (context.ir[effectOrderingIndex!] -> sourceStart(context, state))
+                                                -> if {
+                                                    earlierEffect.parent => earlierEffectAncestor!
+                                                    true => earlierRootEffect!
+                                                    false => earlierInsideRegion!
+                                                    earlierEffectAncestor! >= expressionStart and earlierRootEffect! and not earlierInsideRegion!
+                                                        -> while {
+                                                            context.ir[earlierEffectAncestor!].kind == 19 or context.ir[earlierEffectAncestor!].kind == 20
+                                                                -> if { true => earlierInsideRegion! } else {
+                                                                    ((earlierEffect -> isSchedulingValueCapture) and (context.ir[earlierEffectAncestor!] -> isSchedulingValueCapture)) or (context.ir[earlierEffectAncestor!].kind == 6 and context.ir[earlierEffectAncestor!].opcode != -208) or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 27 or context.ir[earlierEffectAncestor!].kind == 34 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -205 or context.ir[earlierEffectAncestor!].opcode == -213 or context.ir[earlierEffectAncestor!].opcode == -220 or context.ir[earlierEffectAncestor!].opcode == -221 or context.ir[earlierEffectAncestor!].opcode == -229 or context.ir[earlierEffectAncestor!].opcode == -241 or context.ir[earlierEffectAncestor!].opcode == -242 or context.ir[earlierEffectAncestor!].opcode == -246 or context.ir[earlierEffectAncestor!].opcode == -247 or context.ir[earlierEffectAncestor!].opcode == -250 or context.ir[earlierEffectAncestor!].opcode == -251 or context.ir[earlierEffectAncestor!].opcode == -252 or context.ir[earlierEffectAncestor!].opcode == -254 or context.ir[earlierEffectAncestor!].opcode == -255 or context.ir[earlierEffectAncestor!].opcode == -257))
+                                                                        -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
+                                                                }
+                                                        }
+                                                    earlierRootEffect! and not earlierInsideRegion!
+                                                        -> if { false => scheduleReady! }
+                                                }
+                                            earlierEffectCursor! + 1 => earlierEffectCursor!
+                                        }
+                                }
+                        }
+                    # An immutable alias can relax data dependencies, but must
+                    # not escape an active each before its remaining body work.
+                    not insideControlRegion
+                        and (pendingEach! < 0 or scheduleInsidePendingEach!)
+                        and scheduleNode.kind == 5
+                        and scheduleNode.operand0 >= expressionStart
+                        and scheduleNode.operand0 < functionEnd
+                        and context.ir[scheduleNode.operand0].kind == 17
+                        and context.ir[scheduleNode.operand0].flags != 1
+                        and scheduleNode.parent >= expressionStart
+                        and scheduleNode.parent < functionEnd
+                        and (context.ir[scheduleNode.parent].kind == 12
                         or context.ir[scheduleNode.parent].kind == 14
                         or context.ir[scheduleNode.parent].kind == 16
                         or context.ir[scheduleNode.parent].kind == 26
                         or context.ir[scheduleNode.parent].kind == 35)
-                    and expressionScheduled![scheduleNode.operand0 - expressionStart])
+                        and expressionScheduled![scheduleNode.operand0 - expressionStart]
                         -> if {
-                    true => scheduleReady!
+                            true => scheduleReady!
+                        }
+                    scheduleReady! -> if {
+                        not insideLogicalValue -> if { expressionOrder! -> push(scheduleCandidate!) }
+                        true => expressionScheduled![scheduleCandidate! - expressionStart]
+                        not insideLogicalValue
+                            and scheduleNode.parent >= expressionStart
+                            and scheduleNode.parent < functionEnd
+                            and not expressionScheduled![scheduleNode.parent - expressionStart]
+                            and context.ir[scheduleNode.parent].kind == 30
+                            and context.ir[scheduleNode.parent].operand0 == scheduleCandidate!
+                            and context.nodes[context.ranges[context.ir[scheduleNode.parent].sourceModule].astStart + context.ir[scheduleNode.parent].astNode].kind == 82
+                            -> if {
+                                expressionOrder! -> push(scheduleNode.parent)
+                                true => expressionScheduled![scheduleNode.parent - expressionStart]
+                            }
+                        scheduleNode.kind == 6 and scheduleNode.opcode == -208
+                            -> if { scheduleCandidate! => pendingEach! }
+                        true => scheduleProgress!
+                    }
                 }
-                scheduleReady! -> if {
-                    not insideLogicalValue! -> if { expressionOrder! -> push(scheduleCandidate!) }
-                    true => expressionScheduled![scheduleCandidate! - expressionStart]
-                    (scheduleNode.kind == 6 and scheduleNode.opcode == -208)
-                        -> if { scheduleCandidate! => pendingEach! }
-                    true => scheduleProgress!
-                }
-            }
             scheduleCandidate! + 1 => scheduleCandidate!
         }
     }
-    expressionOrder!
+    # Once a top-level control returns on every path and is the final child of
+    # its owning region, later scheduled expressions are unreachable. Use the
+    # same wrapper-aware, later-sibling-aware predicate as control emission and
+    # function return selection; a source fallback after the control requires
+    # the control merge to remain materialized even if every arm returns.
+    [Int; ~] => reachableExpressionOrder!
+    true => reachableExpressionOpen!
+    0 => reachableExpressionIndex!
+    reachableExpressionIndex! < (expressionOrder! -> len)
+        -> while {
+            expressionOrder![reachableExpressionIndex!] => reachableCandidate
+            reachableExpressionOpen! -> if {
+                reachableExpressionOrder! -> push(reachableCandidate)
+                context.ir[reachableCandidate].parent == context.ir[functionIndex].operand0
+                    and (reachableCandidate -> terminatingControlReturns(context, state))
+                    -> if { false => reachableExpressionOpen! }
+            }
+            reachableExpressionIndex! + 1 => reachableExpressionIndex!
+        }
+    reachableExpressionOrder!
 }

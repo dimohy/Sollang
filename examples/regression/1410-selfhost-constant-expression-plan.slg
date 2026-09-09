@@ -1,0 +1,50 @@
+# Compile the real AST once and reuse its checked evaluation slots for two items.
+import sollang.compiler.ast as ast
+import sollang.compiler.semantic.constant_expressions as expression
+
+show label: Text, result: Result<Long, expression.Error> -> Unit uses Console {
+    result -> when {
+        Ok(value) { "$label=$value" -> println }
+        Err(error) {
+            error.kind -> when {
+                NonConstant => "nonconstant"
+                Overflow => "overflow"
+                DivisionByZero => "division-by-zero"
+                InvalidAst => "invalid-ast"
+            } => kind
+            "$label=$kind@$(error.start):$(error.length)" -> println
+        }
+    }
+}
+
+evaluatePair label: Text, source: Text, itemName: Text, first: Long, second: Long -> Result<Unit, expression.Error> uses Console {
+    source -> ast.lowerExpression => nodes
+    source -> expression.compile(nodes, 0, itemName)? => evaluator!
+    evaluator! -> evaluate(first) => firstResult
+    "$label-first" -> show(firstResult)
+    evaluator! -> evaluate(second) => secondResult
+    "$label-second" -> show(secondResult)
+    Result<Unit, expression.Error>.Ok
+}
+
+check label: Text, source: Text, itemName: Text, first: Long, second: Long -> Unit uses Console {
+    label -> evaluatePair(source, itemName, first, second) -> when {
+        Ok(_) {}
+        Err(error) {
+            error -> Result<Long, expression.Error>.Err => result
+            label -> show(result)
+        }
+    }
+}
+
+main {
+    "precedence" -> check("1 + 2 * 3 - 4", "", 0, 0)
+    "grouping" -> check("(1 + 2) * 3", "", 0, 0)
+    "item" -> check("it * 10 - 2", "it", 3, 4)
+    "negate" -> check("-item * 2", "item", 3, -4)
+    "maximum" -> check("9_223_372_036_854_775_807", "", 0, 0)
+    "minimum" -> check("-9_223_372_036_854_775_807 - 1", "", 0, 0)
+    "missing" -> check("missing + 1", "it", 0, 0)
+    "overflow" -> check("9_223_372_036_854_775_807 + 1", "", 0, 0)
+    "division" -> check("4 / (2 - 2)", "", 0, 0)
+}

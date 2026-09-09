@@ -1,0 +1,57 @@
+import sollang.compiler.semantic.context as semanticContext
+
+# An inferred local nominal literal keeps its exact instance-method owner.
+main {
+    """
+    struct State {
+        values: [Int; ~]
+        enabled: Bool
+    }
+
+    impl State {
+        public clearScalar: mut self -> Unit {
+            false => self.enabled
+        }
+
+        public clearArray: mut self -> Unit {
+            [Int; ~] => self.values
+        }
+
+        public clearBoth: mut self -> Unit {
+            [Int; ~] => self.values
+            false => self.enabled
+        }
+    }
+
+    main {
+        State { values: [1; ~], enabled: true } => scalar!
+        scalar! -> clearScalar
+        State { values: [2; ~], enabled: true } => array!
+        array! -> clearArray
+        State { values: [3; ~], enabled: true } => both!
+        both! -> clearBoth
+    }
+    """ => source
+
+    [Text; ~] => sources!
+    sources! -> push(source)
+    sources! -> semanticContext.prepare => prepared
+    0 => resolvedCount!
+    0 => methodCount!
+    0 => failedCount!
+    0 => callIndex!
+    callIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[callIndex!] => call
+        call.status == 0 -> if {
+            resolvedCount! + 1 => resolvedCount!
+            prepared.package.ranges[call.targetSourceModule] => targetRange
+            prepared.package.symbols[targetRange.symbolStart + call.functionSymbol]
+                => target
+            target.kind == 31 -> if { methodCount! + 1 => methodCount! }
+        } else {
+            failedCount! + 1 => failedCount!
+        }
+        callIndex! + 1 => callIndex!
+    }
+    "calls=$(resolvedCount!),$(methodCount!),$(failedCount!)" -> println
+}

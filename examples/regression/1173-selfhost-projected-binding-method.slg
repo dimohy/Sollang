@@ -1,0 +1,30 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A local inferred from a nominal field projection retains that field's exact
+# instance-method owner through semantic resolution and Typed IR lowering.
+main {
+    [
+    "examples/regression/fixtures/1173-projected-binding-type.slg",
+    "examples/regression/fixtures/1173-projected-binding-runtime.slg"; ~
+    ] => paths
+    paths -> semanticContext.prepareFiles => prepared
+    prepared -> typedIr.lowerContext => ir
+
+    0 => resolvedClose!
+    0 => failedCalls!
+    prepared.calls -> each call {
+        call.sourceModule == 1 -> if {
+            call.status == 0 and call.targetSourceModule == 0
+                -> if { resolvedClose! + 1 => resolvedClose! }
+            call.status != 0 -> if { failedCalls! + 1 => failedCalls! }
+        }
+    }
+
+    0 => loweredClose!
+    ir -> each node {
+        (node.kind == 6 or node.kind == 9) and node.sourceModule == 1 and node.targetModule == 0
+            -> if { loweredClose! + 1 => loweredClose! }
+    }
+    "projected-binding=$(resolvedClose!),$(loweredClose!),$(failedCalls!)" -> println
+}

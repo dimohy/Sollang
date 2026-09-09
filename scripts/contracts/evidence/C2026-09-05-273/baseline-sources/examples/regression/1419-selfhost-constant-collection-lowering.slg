@@ -1,0 +1,50 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.semantic.constant_collection_lowering as lowering
+
+check label: Text, source: Text -> Unit uses Console {
+    source -> ast.lowerExpression -> lowering.lower(source) -> when {
+        Ok(result) {
+            "$label:" -> print
+            true => valid!
+            0 => index!
+            index! < (result.nodes -> len) -> while {
+                result.nodes[index!] => node
+                node.parent < -1 or node.parent >= (result.nodes -> len)
+                    or node.kind == 63 or node.kind == 83
+                    or node.start + node.length > (source -> len)
+                    -> if { false => valid! }
+                node.parent == 0 -> if {
+                    result.literals -> lowering.find(0, result.literals -> len, index!) -> when {
+                        Some(value) { "$value," -> print }
+                        None {
+                            source -> slice(node.start, node.length) -> print
+                            "," -> print
+                        }
+                    }
+                }
+                index! + 1 => index!
+            }
+            "constants=$(result.literals -> len),valid=$(valid!)" -> println
+        }
+        Err(error) {
+            error -> when {
+                InvalidAst(_) { "$label:invalid-ast" -> println }
+                InvalidRange(_) { "$label:descending" -> println }
+                ExpansionLimit(_) { "$label:limit" -> println }
+                InvalidSelector(_) { "$label:selector" -> println }
+                Expression(_) { "$label:constant-error" -> println }
+            }
+        }
+    }
+}
+
+main {
+    "mixed" -> check("[9, 1..3, 7, 4..<4, 2..3 -> each { it * -2 }]")
+    "dictionary" -> check("{9: 90, 1..2 -> each { it: it * 10 }, 7: 70}")
+    "empty" -> check("[4..<4 -> each { missing }]")
+    "plain" -> check("[9, 7]")
+    "descending" -> check("[9, 3..1, 7]")
+    "limit" -> check("[0..100000]")
+    "nonconstant" -> check("[1..2 -> each { missing }]")
+    "overflow" -> check("[1..2 -> each { 9223372036854775807 + it }]")
+}

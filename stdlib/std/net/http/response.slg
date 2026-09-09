@@ -1,0 +1,362 @@
+namespace std.net.http.response
+
+import std.net.http.error as errors
+import std.net.http as http
+import std.net.http.response as model
+
+# Pure bounded HTTP/1.x response-head writing. The writer owns only head bytes;
+# the application retains body storage so a transport can send it without an
+# extra aggregate copy. Content-Length and connection framing have one owner.
+public struct ResponseLimits {
+    public maxHeadBytes: Int
+    public maxFieldCount: Int
+    public maxFieldNameBytes: Int
+    public maxFieldValueBytes: Int
+}
+
+public struct ResponsePolicy {
+    public limits: ResponseLimits
+}
+
+public enum ConnectionMode {
+    Persistent
+    Close
+}
+
+public enum BodyDisposition {
+    Send
+    Suppress
+    Tunnel
+}
+
+public struct ResponseWriter {
+    public limits: ResponseLimits
+    public bytes: [UInt8; ~]
+    public fieldCount: Int
+    public automaticFieldCount: Int
+    public includeContentLength: Bool
+    public includeConnectionClose: Bool
+    public includeConnectionKeepAlive: Bool
+    public bodyLength: UIntSize
+    public bodyDisposition: BodyDisposition
+}
+
+public struct ResponseHead {
+    public bytes: [UInt8; ~]
+    public bodyLength: UIntSize
+    public bodyDisposition: BodyDisposition
+    public connection: ConnectionMode
+}
+
+responseError kind: errors.Kind, offset: UIntSize -> http.Error => http.Error {
+    kind: kind
+    offset: offset
+}
+
+policyError kind: errors.Kind -> Result<ResponsePolicy, http.Error> {
+    Result<ResponsePolicy, http.Error>.Err(responseError(kind, 0))
+}
+
+writerError kind: errors.Kind, offset: UIntSize -> Result<ResponseWriter, http.Error> {
+    Result<ResponseWriter, http.Error>.Err(responseError(kind, offset))
+}
+
+fieldError kind: errors.Kind, offset: UIntSize -> Result<Unit, http.Error> {
+    Result<Unit, http.Error>.Err(responseError(kind, offset))
+}
+
+headError kind: errors.Kind, offset: UIntSize -> Result<ResponseHead, http.Error> {
+    Result<ResponseHead, http.Error>.Err(responseError(kind, offset))
+}
+
+isTokenByte byte: UInt8 -> Bool {
+    (byte >= 48 and byte <= 57)
+        or (byte >= 65 and byte <= 90)
+        or (byte >= 97 and byte <= 122)
+        or byte == 33
+        or byte == 35
+        or byte == 36
+        or byte == 37
+        or byte == 38
+        or byte == 39
+        or byte == 42
+        or byte == 43
+        or byte == 45
+        or byte == 46
+        or byte == 94
+        or byte == 95
+        or byte == 96
+        or byte == 124
+        or byte == 126
+}
+
+isFieldValueByte byte: UInt8 -> Bool {
+    byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+}
+
+asciiEqualIgnoreCase value: Text, expected: Text -> Bool {
+    (value -> len) == (expected -> len) -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => left!
+        expected -> byte(index!) => right!
+        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
+        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! == right! -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+isReservedField name: Text -> Bool {
+    (name -> asciiEqualIgnoreCase("Content-Length"))
+        or (name -> asciiEqualIgnoreCase("Transfer-Encoding"))
+        or (name -> asciiEqualIgnoreCase("Connection"))
+        or (name -> asciiEqualIgnoreCase("Trailer"))
+}
+
+appendText output: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        output -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+}
+
+appendVersion output: mut [UInt8; ~], version: http.Version -> Unit {
+    version -> when {
+        Http10 { appendText(output, "HTTP/1.0") }
+        Http11 { appendText(output, "HTTP/1.1") }
+    }
+}
+
+appendStatus output: mut [UInt8; ~], status: Int -> Unit {
+    output -> push(UInt8(status / 100) + 48)
+    output -> push(UInt8((status / 10) % 10) + 48)
+    output -> push(UInt8(status % 10) + 48)
+}
+
+decimalLength value: UIntSize -> Int {
+    value == 0 -> if { 1 -> return }
+    value => remaining!
+    0 => length!
+    remaining! > 0 -> while {
+        remaining! / 10 => remaining!
+        length! + 1 => length!
+    }
+    length!
+}
+
+appendDecimal output: mut [UInt8; ~], value: UIntSize -> Unit {
+    [UInt8(0); 20] => digits!
+    value => remaining!
+    0 => count!
+    remaining! == 0 -> if {
+        output -> push(48)
+        return
+    }
+    remaining! > 0 -> while {
+        UInt8(remaining! % 10) + 48 => digits![count!]
+        remaining! / 10 => remaining!
+        count! + 1 => count!
+    }
+    count! > 0 -> while {
+        count! - 1 => count!
+        output -> push(digits![count!])
+    }
+}
+
+appendField output: mut [UInt8; ~], name: Text, value: Text -> Unit {
+    appendText(output, name)
+    appendText(output, ": ")
+    appendText(output, value)
+    appendText(output, "\r\n")
+}
+
+appendContentLength output: mut [UInt8; ~], length: UIntSize -> Unit {
+    appendText(output, "Content-Length: ")
+    appendDecimal(output, length)
+    appendText(output, "\r\n")
+}
+
+impl ResponseLimits {
+    public policy: self -> Result<ResponsePolicy, http.Error> {
+        self.maxHeadBytes >= 15
+            and self.maxFieldCount >= 0
+            and self.maxFieldNameBytes >= 0
+            and self.maxFieldValueBytes >= 0
+            -> unless { policyError(errors.Kind.InvalidResponseLimit) -> return }
+        Result<ResponsePolicy, http.Error>.Ok(ResponsePolicy { limits: self })
+    }
+}
+
+impl ResponsePolicy {
+    public response: self, method: Text, version: http.Version, status: Int, reason: Text, bodyLength: UIntSize, connection: ConnectionMode -> Result<ResponseWriter, http.Error> {
+        status >= 100 and status <= 599 -> unless {
+            writerError(errors.Kind.InvalidStatus, 0) -> return
+        }
+        UIntSize(0) => reasonIndex!
+        reasonIndex! < (reason -> len) -> while {
+            reason -> byte(reasonIndex!) -> isFieldValueByte
+                -> unless {
+                    writerError(errors.Kind.InvalidReason, reasonIndex!) -> return
+                }
+            reasonIndex! + 1 => reasonIndex!
+        }
+
+        status >= 100 and status < 200 -> if { true } else { false } => informational
+        status == 204 -> if { true } else { false } => noContent
+        status == 205 -> if { true } else { false } => resetContent
+        status == 304 -> if { true } else { false } => notModified
+        (method -> asciiEqualIgnoreCase("CONNECT")) and status >= 200 and status < 300
+            -> if { true } else { false } => tunnel
+        method -> asciiEqualIgnoreCase("HEAD") => headRequest
+        informational or noContent or resetContent or tunnel
+            -> if {
+                bodyLength == 0 -> unless {
+                    writerError(errors.Kind.ResponseBodyNotAllowed, bodyLength) -> return
+                }
+            }
+
+        informational or noContent or tunnel
+            -> if { false } else { true } => includeContentLength
+        informational or noContent or resetContent or notModified or headRequest
+            => suppressBody
+        tunnel -> if {
+            model.BodyDisposition.Tunnel
+        } else {
+            suppressBody -> if {
+                model.BodyDisposition.Suppress
+            } else {
+                model.BodyDisposition.Send
+            }
+        } => bodyDisposition
+
+        connection -> when {
+            Close { not informational }
+            Persistent { false }
+        } => includeConnectionClose
+        connection -> when {
+            Close { false }
+            Persistent => version -> when {
+                Http10 { true }
+                Http11 { false }
+            }
+        } => includeConnectionKeepAlive
+        0 => automaticFieldCount!
+        includeContentLength -> if { automaticFieldCount! + 1 => automaticFieldCount! }
+        includeConnectionClose or includeConnectionKeepAlive
+            -> if { automaticFieldCount! + 1 => automaticFieldCount! }
+        automaticFieldCount! <= self.limits.maxFieldCount
+            -> unless {
+                writerError(errors.Kind.FieldCountLimitExceeded, 0) -> return
+            }
+
+        15 + Int(reason -> len) => initialLength
+        initialLength <= self.limits.maxHeadBytes -> unless {
+            writerError(errors.Kind.ResponseHeadLimitExceeded, UIntSize(initialLength)) -> return
+        }
+        [UInt8; ~] => bytes!
+        appendVersion(bytes!, version)
+        bytes! -> push(32)
+        appendStatus(bytes!, status)
+        bytes! -> push(32)
+        appendText(bytes!, reason)
+        appendText(bytes!, "\r\n")
+        Result<ResponseWriter, http.Error>.Ok(ResponseWriter {
+            limits: self.limits
+            bytes: bytes!
+            fieldCount: 0
+            automaticFieldCount: automaticFieldCount!
+            includeContentLength: includeContentLength
+            includeConnectionClose: includeConnectionClose
+            includeConnectionKeepAlive: includeConnectionKeepAlive
+            bodyLength: bodyLength
+            bodyDisposition: bodyDisposition
+        })
+    }
+}
+
+impl ResponseWriter {
+    public field: mut self, name: Text, value: Text -> Result<Unit, http.Error> {
+        (name -> len) > 0 -> unless { fieldError(errors.Kind.InvalidFieldName, 0) -> return }
+        Int(name -> len) <= self.limits.maxFieldNameBytes
+            -> unless {
+                fieldError(errors.Kind.FieldNameLimitExceeded, name -> len) -> return
+            }
+        Int(value -> len) <= self.limits.maxFieldValueBytes
+            -> unless {
+                fieldError(errors.Kind.FieldValueLimitExceeded, value -> len) -> return
+            }
+        UIntSize(0) => nameIndex!
+        nameIndex! < (name -> len) -> while {
+            name -> byte(nameIndex!) -> isTokenByte -> unless {
+                fieldError(errors.Kind.InvalidFieldName, nameIndex!) -> return
+            }
+            nameIndex! + 1 => nameIndex!
+        }
+        name -> isReservedField -> if {
+            fieldError(errors.Kind.ReservedResponseField, 0) -> return
+        }
+        UIntSize(0) => valueIndex!
+        valueIndex! < (value -> len) -> while {
+            value -> byte(valueIndex!) -> isFieldValueByte
+                -> unless {
+                    fieldError(errors.Kind.InvalidFieldValue, valueIndex!) -> return
+                }
+            valueIndex! + 1 => valueIndex!
+        }
+        self.fieldCount + self.automaticFieldCount < self.limits.maxFieldCount
+            -> unless {
+                fieldError(errors.Kind.FieldCountLimitExceeded, UIntSize(self.fieldCount)) -> return
+            }
+        (self.bytes -> len) + Int(name -> len) + Int(value -> len) + 4 => requiredHeadBytes
+        requiredHeadBytes <= self.limits.maxHeadBytes
+            -> unless {
+                fieldError(errors.Kind.ResponseHeadLimitExceeded, UIntSize(self.bytes -> len)) -> return
+            }
+        appendField(self.bytes, name, value)
+        self.fieldCount + 1 => self.fieldCount
+        Result<Unit, http.Error>.Ok
+    }
+
+    public finish: move self -> Result<ResponseHead, http.Error> {
+        self.limits => limits
+        self.bodyLength => bodyLength
+        self.bodyDisposition => bodyDisposition
+        self.includeContentLength => includeContentLength
+        self.includeConnectionClose => includeConnectionClose
+        self.includeConnectionKeepAlive => includeConnectionKeepAlive
+        self.bytes => bytes!
+        2 => suffixLength!
+        includeContentLength -> if {
+            suffixLength! + 18 + decimalLength(bodyLength) => suffixLength!
+        }
+        includeConnectionClose -> if { suffixLength! + 19 => suffixLength! }
+        includeConnectionKeepAlive -> if { suffixLength! + 24 => suffixLength! }
+        (bytes! -> len) + suffixLength! <= limits.maxHeadBytes
+            -> unless {
+                headError(errors.Kind.ResponseHeadLimitExceeded, UIntSize(bytes! -> len)) -> return
+            }
+        includeContentLength -> if { appendContentLength(bytes!, bodyLength) }
+        includeConnectionClose -> if { appendField(bytes!, "Connection", "close") }
+        includeConnectionKeepAlive -> if { appendField(bytes!, "Connection", "keep-alive") }
+        appendText(bytes!, "\r\n")
+        includeConnectionClose
+            -> if { model.ConnectionMode.Close } else { model.ConnectionMode.Persistent }
+            => connection
+        Result<ResponseHead, http.Error>.Ok(ResponseHead {
+            bytes: bytes!
+            bodyLength: bodyLength
+            bodyDisposition: bodyDisposition
+            connection: connection
+        })
+    }
+}
+
+impl ResponseHead {
+    public intoBytes: move self -> [UInt8; ~] {
+        self.bytes => bytes
+        bytes
+    }
+}

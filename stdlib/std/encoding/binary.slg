@@ -1,0 +1,215 @@
+namespace std.encoding.binary
+
+import std.encoding.binary.error as errors
+
+public enum ByteOrder {
+    Big
+    Little
+}
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Reader {
+    public order: ByteOrder
+    public offset: UIntSize
+}
+
+public struct Writer {
+    public order: ByteOrder
+    public maxOutputBytes: Int
+    public produced: Int
+}
+
+error kind: errors.Kind, offset: UIntSize -> Error => Error {
+    kind: kind
+    offset: offset
+}
+
+power256 exponent: Int -> UInt64 {
+    UInt64(1) => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 256 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+readUnsigned reader: mut Reader, width: Int, input: [UInt8] -> Result<UInt64, Error> {
+    UIntSize(input -> len) => length
+    reader.offset > length or UIntSize(width) > length - reader.offset
+        -> if {
+            Result<UInt64, Error>.Err(error(errors.Kind.TruncatedInput, length)) -> return
+        }
+
+    UInt64(0) => value!
+    reader.order -> when {
+        Big {
+            0 => index!
+            index! < width -> while {
+                value! * 256 + UInt64(input[Int(reader.offset) + index!]) => value!
+                index! + 1 => index!
+            }
+        }
+        Little {
+            UInt64(1) => place!
+            0 => index!
+            index! < width -> while {
+                value! + UInt64(input[Int(reader.offset) + index!]) * place! => value!
+                index! + 1 => index!
+                index! < width -> if { place! * 256 => place! }
+            }
+        }
+    }
+    reader.offset + UIntSize(width) => reader.offset
+    Result<UInt64, Error>.Ok(value!)
+}
+
+writeUnsigned writer: mut Writer, value: UInt64, width: Int, output: mut [UInt8; ~] -> Result<Int, Error> {
+    width > writer.maxOutputBytes - writer.produced
+        -> if {
+            Result<Int, Error>.Err(error(errors.Kind.OutputLimitExceeded, UIntSize(writer.produced))) -> return
+        }
+    output -> reserve((output -> len) + width)
+    writer.order -> when {
+        Big {
+            width - 1 -> power256 => place!
+            0 => index!
+            index! < width -> while {
+                output -> push(UInt8(value / place! % 256))
+                index! + 1 => index!
+                index! < width -> if { place! / 256 => place! }
+            }
+        }
+        Little {
+            UInt64(1) => place!
+            0 => index!
+            index! < width -> while {
+                output -> push(UInt8(value / place! % 256))
+                index! + 1 => index!
+                index! < width -> if { place! * 256 => place! }
+            }
+        }
+    }
+    writer.produced + width => writer.produced
+    Result<Int, Error>.Ok(width)
+}
+
+varintLength value: UInt64 -> Int {
+    value => remaining!
+    1 => length!
+    remaining! >= 128 -> while {
+        remaining! / 128 => remaining!
+        length! + 1 => length!
+    }
+    length!
+}
+
+impl Error {
+    public errorKind: self -> errors.Kind => self.kind
+    public errorOffset: self -> UIntSize => self.offset
+}
+
+impl ByteOrder {
+    public reader: self -> Reader => Reader {
+        order: self
+        offset: 0
+    }
+
+    public writer: self, maxOutputBytes: Int -> Result<Writer, Error> {
+        maxOutputBytes >= 0 -> unless {
+            Result<Writer, Error>.Err(error(errors.Kind.InvalidLimit, 0)) -> return
+        }
+        Result<Writer, Error>.Ok(Writer {
+            order: self
+            maxOutputBytes: maxOutputBytes
+            produced: 0
+        })
+    }
+}
+
+impl Reader {
+    public byteOffset: self -> UIntSize => self.offset
+
+    public remaining: self, input: [UInt8] -> Int => (input -> len) - Int(self.offset)
+
+    public readUInt16: mut self, input: [UInt8] -> Result<UInt16, Error> {
+        self -> readUnsigned(2, input)? => value
+        Result<UInt16, Error>.Ok(UInt16(value))
+    }
+
+    public readUInt32: mut self, input: [UInt8] -> Result<UInt32, Error> {
+        self -> readUnsigned(4, input)? => value
+        Result<UInt32, Error>.Ok(UInt32(value))
+    }
+
+    public readUInt64: mut self, input: [UInt8] -> Result<UInt64, Error> => self -> readUnsigned(8, input)
+
+    public readVarint: mut self, input: [UInt8] -> Result<UInt64, Error> {
+        self.offset => cursor!
+        UInt64(0) => value!
+        UInt64(1) => place!
+        0 => index!
+        index! < 10 -> while {
+            cursor! < UIntSize(input -> len) -> unless {
+                Result<UInt64, Error>.Err(error(errors.Kind.TruncatedInput, cursor!)) -> return
+            }
+            input[Int(cursor!)] => byte
+            index! == 9 and byte > 1 -> if {
+                Result<UInt64, Error>.Err(error(errors.Kind.VarintOverflow, cursor!)) -> return
+            }
+            value! + UInt64(byte % 128) * place! => value!
+            cursor! + 1 => cursor!
+            byte < 128 -> if {
+                index! > 0 and byte == 0 -> if {
+                    Result<UInt64, Error>.Err(error(errors.Kind.NonCanonicalVarint, cursor! - 1)) -> return
+                }
+                cursor! => self.offset
+                Result<UInt64, Error>.Ok(value!) -> return
+            }
+            index! + 1 => index!
+            index! < 10 -> if { place! * 128 => place! }
+        }
+        Result<UInt64, Error>.Err(error(errors.Kind.VarintOverflow, cursor! - 1))
+    }
+
+}
+
+impl Writer {
+    public byteCount: self -> Int => self.produced
+
+    public writeUInt16: mut self, value: UInt16, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self -> writeUnsigned(UInt64(value), 2, output)
+    }
+
+    public writeUInt32: mut self, value: UInt32, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self -> writeUnsigned(UInt64(value), 4, output)
+    }
+
+    public writeUInt64: mut self, value: UInt64, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self -> writeUnsigned(value, 8, output)
+    }
+
+    public writeVarint: mut self, value: UInt64, output: mut [UInt8; ~] -> Result<Int, Error> {
+        value -> varintLength => length
+        length <= self.maxOutputBytes - self.produced
+            -> unless {
+                Result<Int, Error>.Err(error(errors.Kind.OutputLimitExceeded, UIntSize(self.produced))) -> return
+            }
+        output -> reserve((output -> len) + length)
+        value => remaining!
+        0 => index!
+        index! < length -> while {
+            UInt8(remaining! % 128) => byte!
+            remaining! / 128 => remaining!
+            index! + 1 < length -> if { byte! + 128 => byte! }
+            output -> push(byte!)
+            index! + 1 => index!
+        }
+        self.produced + length => self.produced
+        Result<Int, Error>.Ok(length)
+    }
+}

@@ -1,0 +1,25 @@
+import std.compress.brotli.literal_context as contexts
+import std.hash.crc32 as crc32
+
+main {
+    [UInt8; ~] => lut0!
+    [UInt8; ~] => lut1!
+    [UInt8; ~] => lut2!
+    0 => byte!
+    byte! < 256 -> while {
+        lut0! -> push(UInt8(contexts.Mode.Utf8 -> id(UInt8(byte!), 0)))
+        lut1! -> push(UInt8(contexts.Mode.Utf8 -> id(0, UInt8(byte!))))
+        lut2! -> push(UInt8(contexts.Mode.Signed -> id(0, UInt8(byte!))))
+        byte! + 1 => byte!
+    }
+    crc32.Polynomial.Ieee -> checksum(lut0!) => lut0Checksum
+    crc32.Polynomial.Ieee -> checksum(lut1!) => lut1Checksum
+    crc32.Polynomial.Ieee -> checksum(lut2!) => lut2Checksum
+    "lut0=$lut0Checksum" -> println
+    "lut1=$lut1Checksum" -> println
+    "lut2=$lut2Checksum" -> println
+    contexts.Mode.Lsb6 -> id(255, 0) => lsb
+    contexts.Mode.Msb6 -> id(255, 0) => msb
+    "lsb=$lsb" -> println
+    "msb=$msb" -> println
+}

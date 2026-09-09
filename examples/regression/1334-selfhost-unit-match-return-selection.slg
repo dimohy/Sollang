@@ -1,0 +1,56 @@
+enum Error {
+    Exhausted
+}
+
+struct Owner {
+    next: Int
+    limit: Int
+}
+
+impl Owner {
+    open: mut self -> Result<Int, Error> {
+        self.next < self.limit -> unless {
+            Result<Int, Error>.Err(Error.Exhausted) -> return
+        }
+        self.next => value
+        self.next + 1 => self.next
+        Result<Int, Error>.Ok(value)
+    }
+
+    extend: mut self, limit: Int -> Result<Unit, Error> {
+        limit => self.limit
+        Result<Unit, Error>.Ok
+    }
+}
+
+owner limit: Int -> Result<Owner, Error> => Result<Owner, Error>.Ok(Owner {
+    next: 0
+    limit: limit
+})
+
+# Unit-valued matches and Result<Unit, E> propagation cannot become the return
+# value when a later explicit Result<Int, E> expression ends the function.
+verify: -> Result<Int, Error> uses Console {
+    owner(0)? => first!
+    first! -> open -> when {
+        Ok(value) { "unexpected-zero" -> println }
+        Err(error) { "zero=exhausted" -> println }
+    }
+    first! -> extend(2)?
+    first! -> open? => firstValue
+    first! -> open? => secondValue
+    first! -> open -> when {
+        Ok(value) { "unexpected-limit" -> println }
+        Err(error) { "limit=$(firstValue),$(secondValue)" -> println }
+    }
+    owner(2)? => second!
+    second! -> open? => opened
+    Result<Int, Error>.Ok(opened)
+}
+
+main {
+    verify() -> when {
+        Ok(value) { "unit-match-return=$(value)" -> println }
+        Err(error) { "unexpected-error" -> println }
+    }
+}

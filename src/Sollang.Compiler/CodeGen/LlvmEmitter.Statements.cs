@@ -129,7 +129,7 @@ internal sealed partial class LlvmEmitter
                     && _locals.TryGetValue(binding.Name, out var reboundLocal)
                         ? EmitFunctionArgumentExpression(binding.Value, reboundLocal.Type)
                         : EmitExpression(binding.Value);
-                var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, value);
+                var movedOwnedField = GetMoveConsumingOwnedField(binding.Value, value);
                 if (binding.IsMutable
                     && _mutableScalarSlots.TryGetValue(binding.Name, out var reboundPointer))
                 {
@@ -159,11 +159,20 @@ internal sealed partial class LlvmEmitter
                 {
                     RemoveLocal(movedSourceName);
                 }
-                if (movedFieldOwnerName is not null)
+                if (movedOwnedField is not null)
                 {
-                    RemoveLocal(movedFieldOwnerName);
+                    MarkMovedOwnedStructField(
+                        movedOwnedField.Value.OwnerName,
+                        movedOwnedField.Value.FieldName);
                 }
-                RemoveOwnedLiteralSources(binding.Value, value.Type);
+                // A direct field extracted from `move self` leaves a partially
+                // live aggregate.  Its exact moved-field mask replaces the
+                // generic aggregate-literal transfer path, which consumes the
+                // complete projected owner.
+                if (movedOwnedField is null)
+                {
+                    RemoveOwnedLiteralSources(binding.Value, value.Type);
+                }
 
                 ClearShadowedLocalBinding(binding.Name);
                 _locals.Add(binding.Name, value);
@@ -225,6 +234,7 @@ internal sealed partial class LlvmEmitter
             throw new SollangException($"'{statement.Kind.ToString().ToLowerInvariant()}' is only valid inside a loop");
         }
 
+        MergeOwnedStructFieldMoves(loop.OuterScope, [(CaptureLocals(), _currentBlockLabel)]);
         DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null);
         var edges = statement.Kind == LoopControlKind.Break
             ? loop.BreakEdges
@@ -257,6 +267,7 @@ internal sealed partial class LlvmEmitter
         }
 
         var value = EmitFunctionArgumentExpression(statement.Value, function.ReturnType);
+        value = PrepareBorrowedFixedStorageReturn(statement.Value, value);
         EnsureRuntimeType(value, function.ReturnType, function.Name);
         var transferredOwnerName = IsOwnedContainerRuntimeValue(value)
             ? GetFunctionResultTransferredOwnerName(function, statement.Value)
@@ -281,6 +292,7 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(exitLabel);
         _currentBlockLabel = exitLabel;
+        MergeOwnedStructFieldMoves(loop.OuterScope, [(CaptureLocals(), _currentBlockLabel)]);
         DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null);
         var edges = statement.Kind == LoopControlKind.Break
             ? loop.BreakEdges
@@ -311,6 +323,7 @@ internal sealed partial class LlvmEmitter
             EmitStatements(statements);
             if (!_currentBlockTerminated)
             {
+                MergeOwnedStructFieldMoves(outerScope, [(CaptureLocals(), _currentBlockLabel)]);
                 DropOwnedLocalsCreatedSince(outerScope, transferredOwnerName: null);
             }
             if (!_currentBlockTerminated && _currentStreamCancellationSlot is { } cancellationSlot)
@@ -364,7 +377,7 @@ internal sealed partial class LlvmEmitter
             && sourceValue.Type == field.Type
                 ? sourceName.Name
                 : null;
-        var value = EmitExpression(assignment.Value);
+        var value = EmitFunctionArgumentExpression(assignment.Value, field.Type);
         EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
         var fieldAddress = NextTemp("field_addr");
         EmitAssign(
@@ -372,12 +385,16 @@ internal sealed partial class LlvmEmitter
             $"getelementptr inbounds {LlvmStructType(type)}, ptr {pointer}, i32 0, i32 {field.Index.ToString(CultureInfo.InvariantCulture)}");
         if (_program.Types.ContainsOwnedStorage(field.Type))
         {
-            var previous = NextTemp("field_previous");
-            EmitLoad(previous, LlvmType(field.Type), fieldAddress, RuntimeAlignment(field.Type));
-            DropOwnedRuntimeValue(DematerializeAggregateValue(field.Type, previous));
+            if (!IsMovedOwnedStructField(assignment.Name, field.Name))
+            {
+                var previous = NextTemp("field_previous");
+                EmitLoad(previous, LlvmType(field.Type), fieldAddress, RuntimeAlignment(field.Type));
+                DropOwnedRuntimeValue(DematerializeAggregateValue(field.Type, previous));
+            }
         }
         var materialized = MaterializeAggregateValue(value);
         EmitStore(materialized.TypeName, materialized.ValueName, fieldAddress, RuntimeAlignment(field.Type));
+        RepairMovedOwnedStructField(assignment.Name, field.Name);
         if (movedSourceName is not null)
         {
             RemoveLocal(movedSourceName);
@@ -509,18 +526,26 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private string? GetMoveConsumingOwnedFieldOwnerName(Expression expression, RuntimeValue value)
+    private (string OwnerName, string FieldName)? GetMoveConsumingOwnedField(
+        Expression expression,
+        RuntimeValue value)
     {
-        if (expression is not FieldAccessExpression { Source: NameExpression owner }
+        if (expression is not FieldAccessExpression
+            {
+                Source: NameExpression owner,
+                FieldName: var fieldName
+            }
             || _currentFunction is null
-            || _currentFunction.InputOwnership != BoundFunctionInputOwnership.Move
+            || _currentFunction.InputOwnership is not (
+                BoundFunctionInputOwnership.Move
+                or BoundFunctionInputOwnership.MutableBorrow)
             || !string.Equals(owner.Name, _currentFunction.InputName ?? "it", StringComparison.Ordinal)
             || !_program.Types.ContainsOwnedStorage(value.Type))
         {
             return null;
         }
 
-        return owner.Name;
+        return (owner.Name, fieldName);
     }
 
     private void EmitBlockFunctionCall(BlockFunctionCallStatement statement)
@@ -571,7 +596,7 @@ internal sealed partial class LlvmEmitter
     private void EmitBlockFunctionPipeline(BlockFunctionPipelineStatement pipeline)
     {
         var firstCall = pipeline.Calls[0];
-        if ((_program.ResolvedGenericCalls.TryGetValue(firstCall, out var firstFunction)
+        if ((_program.ResolvedGenericCalls.TryGetValue(firstCall.ResolutionSite, out var firstFunction)
                 || TryResolveFunction(firstCall.Target, out firstFunction))
             && firstFunction.StreamElementType is not null)
         {
@@ -612,7 +637,7 @@ internal sealed partial class LlvmEmitter
         }
         else
         {
-            if (!(_program.ResolvedGenericCalls.TryGetValue(lastCall, out var terminalFunction)
+            if (!(_program.ResolvedGenericCalls.TryGetValue(lastCall.ResolutionSite, out var terminalFunction)
                     || TryResolveFunction(lastCall.Target, out terminalFunction))
                 || terminalFunction.Kind != BoundFunctionKind.UserBlock
                 || terminalFunction.ReturnType != BoundType.Unit)
@@ -626,7 +651,7 @@ internal sealed partial class LlvmEmitter
         for (var index = pipeline.Calls.Count - 2; index >= 1; index--)
         {
             var call = pipeline.Calls[index];
-            if (!(_program.ResolvedGenericCalls.TryGetValue(call, out var function)
+            if (!(_program.ResolvedGenericCalls.TryGetValue(call.ResolutionSite, out var function)
                     || TryResolveFunction(call.Target, out function))
                 || function.StreamElementType is null)
             {
@@ -745,7 +770,7 @@ internal sealed partial class LlvmEmitter
         }
         else
         {
-            if (!(_program.ResolvedGenericCalls.TryGetValue(lastCall, out var terminalFunction)
+            if (!(_program.ResolvedGenericCalls.TryGetValue(lastCall.ResolutionSite, out var terminalFunction)
                     || TryResolveFunction(lastCall.Target, out terminalFunction))
                 || terminalFunction.Kind != BoundFunctionKind.UserBlock
                 || terminalFunction.ReturnType != BoundType.Unit)
@@ -759,7 +784,7 @@ internal sealed partial class LlvmEmitter
         for (var index = calls.Count - 2; index >= 0; index--)
         {
             var call = calls[index];
-            if (!(_program.ResolvedGenericCalls.TryGetValue(call, out var function)
+            if (!(_program.ResolvedGenericCalls.TryGetValue(call.ResolutionSite, out var function)
                     || TryResolveFunction(call.Target, out function))
                 || function.StreamElementType is null)
             {
@@ -1360,6 +1385,7 @@ internal sealed partial class LlvmEmitter
                 new HashSet<string>(StringComparer.Ordinal),
                 new HashSet<string>(StringComparer.Ordinal),
                 new HashSet<string>(StringComparer.Ordinal),
+                new Dictionary<string, HashSet<string>>(StringComparer.Ordinal),
                 new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
@@ -1585,6 +1611,7 @@ internal sealed partial class LlvmEmitter
             new HashSet<string>(StringComparer.Ordinal),
             new HashSet<string>(StringComparer.Ordinal),
             new HashSet<string>(StringComparer.Ordinal),
+            new Dictionary<string, HashSet<string>>(StringComparer.Ordinal),
             new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),

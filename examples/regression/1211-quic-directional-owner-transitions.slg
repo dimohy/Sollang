@@ -1,0 +1,87 @@
+import std.net.quic as quic
+import std.net.quic.error as errors
+
+# Pumps STOP_SENDING and RESET_STREAM through unrelated stream/datagram traffic,
+# then proves exact errors and that each opposite direction remains usable.
+directionalOwnerTransitions: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificate
+
+    quic.bind(quic.loopback(0))? => clientEndpoint!
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    serverEndpoint! -> listen(identity)? => listener!
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+
+    clientEndpoint! -> connect(serverAddress, certificate)? => clientConnection!
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> openBi(clientEndpoint!)? => clientFirst!
+    clientConnection! -> openBi(clientEndpoint!)? => clientSecond!
+    clientFirst! -> send(clientConnection!, clientEndpoint!, [65])? => firstSent
+    clientSecond! -> send(clientConnection!, clientEndpoint!, [66])? => secondSent
+
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverFirst!
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverSecond!
+    serverFirst! -> receive(serverConnection!, serverEndpoint!, 8)? => firstReceived
+    serverSecond! -> receive(serverConnection!, serverEndpoint!, 8)? => secondReceived
+
+    serverFirst! -> requestStop(serverConnection!, serverEndpoint!, 41)?
+    serverSecond! -> send(serverConnection!, serverEndpoint!, [98])? => pumpSent
+    clientSecond! -> receive(clientConnection!, clientEndpoint!, 8)? => pumpReceived
+    clientFirst! -> send(clientConnection!, clientEndpoint!, [67]) -> when {
+        Ok(sent) { false }
+        Err(error) => error.kind -> when {
+            StreamStopped { error.code == 41 }
+            else { false }
+        }
+    } => stopExact
+
+    serverFirst! -> send(serverConnection!, serverEndpoint!, [97])? => oppositeStopSent
+    clientFirst! -> receive(clientConnection!, clientEndpoint!, 8)? => oppositeAfterStop
+
+    clientSecond! -> abortSend(clientConnection!, clientEndpoint!, 52)?
+    clientConnection! -> sendDatagram(clientEndpoint!, [9])?
+    serverConnection! -> receiveDatagram(serverEndpoint!)? => pumpDatagram
+    serverSecond! -> receive(serverConnection!, serverEndpoint!, 8) -> when {
+        Ok(bytes) { false }
+        Err(error) => error.kind -> when {
+            StreamReset { error.code == 52 }
+            else { false }
+        }
+    } => resetExact
+
+    serverSecond! -> send(serverConnection!, serverEndpoint!, [99])? => oppositeResetSent
+    clientSecond! -> receive(clientConnection!, clientEndpoint!, 8)? => oppositeAfterReset
+
+    stopExact
+        and resetExact
+        and firstSent == 1
+        and secondSent == 1
+        and firstReceived[0] == 65
+        and secondReceived[0] == 66
+        and pumpSent == 1
+        and pumpReceived[0] == 98
+        and oppositeStopSent == 1
+        and pumpDatagram[0] == 9
+        and oppositeResetSent == 1
+        and oppositeAfterStop[0] == 97
+        and oppositeAfterReset[0] == 99
+        and (clientSecond! -> isWriteFinished)
+        and (serverSecond! -> isReadFinished)
+        and not (clientFirst! -> isReadFinished)
+        and not (serverSecond! -> isWriteFinished) => correct
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    serverConnection! -> close(serverEndpoint!, 0)?
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(correct)
+}
+
+main {
+    directionalOwnerTransitions() -> when {
+        Ok(correct) { "quic-directional-owners=$correct" -> println }
+        Err(error) { "quic-directional-owner-error=$(error.code)" -> println }
+    }
+}

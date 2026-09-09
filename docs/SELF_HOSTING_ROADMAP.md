@@ -184,7 +184,7 @@ numbering. Typed `Duration` and `sleep: Duration -> async Unit` now feed a
 deadline-ordered runtime timer queue. Sleeping Tasks leave the ready queue,
 due timers wake at FIFO tail, and cancellation unlinks timer waiters without a
 per-Task OS thread. Self-host module/call resolution recognizes the separate
-`sys.time` module and preserves the timer await suspension state. Generic
+`std.time` module and preserves the timer await suspension state. Generic
 `readAsync<T>` now sends scalar file reads to one shared native worker and
 returns completions through the same ready queue. Windows uses Events; Linux
 uses `pthread`, `eventfd`, and `poll`. Cancellation defers destruction only
@@ -1052,7 +1052,21 @@ verifier passes. Ordered parallel LLVM body emission remains useful, but it is
 now a secondary improvement after removing the accidental quadratic work.
 
 No-capture callbacks are no longer rejected as one broad class. Arrays whose
-input and result elements are self-contained numeric or `Bool` values use the
+elements are recursively worker-transferable nominal records use the same
+direct worker ABI as scalar and `SourceText` inputs; output records may contain
+owned transferable arrays. Example 1198 pins this general input/result rule,
+while example 1199 independently proves reachable local-function callback
+discovery. Capture-bearing callbacks reuse the semantic ownership gate: E18
+rejects mutable state and E19 rejects structurally non-shareable state, while
+the LLVM environment copies safe scalars and borrows safe owned/readonly
+captures through the structured join. Example 1200 combines this capture shape
+with nominal worker input and output and prevents a silent serial fallback.
+Generated compiler LLVM must contain at least four callbacks and at
+least one nominal input/result callback before C82 performance measurement or
+promotion, so the historical three-callback serial fallback fails fast.
+
+Arrays whose input and result elements are self-contained numeric or `Bool`
+values use the
 compute pool without a capture environment; a 100-generation execution test
 proves the null-environment ABI. Entry-body role bindings now receive the same
 explicit call-result edge repair as ordinary functions, and top-level entry
@@ -3520,3 +3534,46 @@ Sollang source and are compiled into a program only when imported. Examples
 875-968 retain the flat `?` API, nested self-host intrinsic lowering,
 Windows/Linux TCP and UDP, protocol vectors, and native QUIC execution as the
 verification set.
+
+### Self-host production-cache integration audit
+
+The managed reference compiler's ordinary `sollang build` path has the complete
+D207C cache chain: exact-source, semantic, codegen-unit, and final-product
+generations. That result must not be generalized to the native self-host CLI.
+The current self-host driver imports `module_cache.slg` and
+`module_cache_io.slg`, but consumes them only in its explicit
+`interface-cache` probe. Its normal Windows, Linux, browser, and root-emission
+commands still enter `prepareFiles` through the production LLVM roots without a
+previous-generation load or a next-generation publication boundary.
+`module_cache_files.slg` is also absent from the reusable compiler source
+manifest, so its file-owning adapter cannot currently participate in those
+commands.
+
+This explains the present performance shape without weakening verification:
+the outer incremental script can reuse an exact compiler LLVM artifact by a
+complete content fingerprint, but the first build after any compiler input
+change still performs the full self-host frontend and emitter work. Closing the
+gap requires a native self-host build contract, not another timestamp shortcut:
+
+1. add compiler schema, target, optimization, ordered roots, and exact source
+   identities to one bounded generation key;
+2. load and validate the previous generation before `prepareFiles`;
+3. initially permit only an exact-input LLVM/product hit, then add green-module
+   semantic and codegen-unit reuse with ordered dependency-interface hashes;
+4. publish the next generation atomically only after LLVM verification and a
+   successful native link; and
+5. require cold, exact-warm, body-only, public-interface, target-change,
+   corruption, clean-versus-cached LLVM, and runtime-output parity fixtures for
+   both Windows and Linux before enabling the path by default.
+
+Until that contract is implemented and measured, the existing self-host module
+cache remains a probe capability and the exact outer fingerprint remains the
+only production reuse claim.
+
+The outer fingerprint also requires an immutable seed identity. A seed path
+that is also the Stage1 output path is self-referential: the build key hashes
+the old executable and the successful link replaces that executable, forcing a
+different key on every subsequent fixture. The incremental verifier now rejects
+that configuration before compiler execution and directs callers to a separate
+receipt-bound stable seed. This fail-fast guard prevents an otherwise valid
+cache from degenerating into repeated compiler-sized cold builds.

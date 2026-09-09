@@ -1,0 +1,137 @@
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.prefix_table as prefix
+
+allZero values: [Int] -> Bool {
+    true => valid!
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] == 0 -> unless { false => valid! }
+        index! + 1 => index!
+    }
+    valid!
+}
+
+checkContext context: move headers.ContextReader, window: prefix.Window, input: [UInt8], position: prefix.Position -> Bool {
+    context => context!
+    window => window!
+    position => position!
+    0 => fedBits!
+    0 => attempts!
+    attempts! < 16 -> while {
+        context! -> read(window!) -> when {
+            Err(_) { false -> return }
+            Ok(progress) {
+                progress -> when {
+                    NeedMore(_) {
+                        (window! -> available) + 1 => required
+                        window! -> fill(input, position!, required) -> when {
+                            Err(_) { false -> return }
+                            Ok(next) { next => position! }
+                        }
+                        fedBits! + 1 => fedBits!
+                    }
+                    NeedPrefix(_) { false -> return }
+                    Ready {
+                        context! -> finish -> when {
+                            Err(_) { false -> return }
+                            Ok(result) {
+                                fedBits! == 2
+                                    and position!.byteIndex == 1
+                                    and position!.bitIndex == 5
+                                    and (window! -> available) == 0
+                                    and result.literalTreeCount == 1
+                                    and result.distanceTreeCount == 1
+                                    and (result.literalContextMap -> len) == 64
+                                    and (result.distanceContextMap -> len) == 4
+                                    and (result.literalContextMap -> allZero)
+                                    and (result.distanceContextMap -> allZero)
+                                    => valid
+                                valid -> return
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        attempts! + 1 => attempts!
+    }
+    false
+}
+
+# The independent header vector has single-tree literal and distance maps.
+# Feed one bit per caller step across the HeaderReader -> ContextReader typestate
+# boundary and retain no encoded caller array in either instance.
+check parser: headers.Parser -> Bool {
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+        Err(_) { false }
+        Ok(window) {
+            window => window!
+            parser -> headerReader => header!
+            prefix.Position { byteIndex: 0, bitIndex: 0 } => position!
+            [UInt8(248), 5] => input
+            0 => finishedBlocks!
+            0 => fedBits!
+            0 => attempts!
+            attempts! < 32 -> while {
+                header! -> read(window!) -> when {
+                    Err(_) { false -> return }
+                    Ok(progress) {
+                        progress -> when {
+                            NeedMore(_) {
+                                (window! -> available) + 1 => required
+                                window! -> fill(input, position!, required) -> when {
+                                    Err(_) { false -> return }
+                                    Ok(next) { next => position! }
+                                }
+                                fedBits! + 1 => fedBits!
+                            }
+                            NeedBlockPrefix(_) { false -> return }
+                            NeedBlockFinish(index) {
+                                index == finishedBlocks! -> unless { false -> return }
+                                header! -> finishBlock -> when {
+                                    Err(_) { false -> return }
+                                    Ok(_) { }
+                                }
+                                finishedBlocks! + 1 => finishedBlocks!
+                            }
+                            Ready {
+                                header! -> finishPrelude -> when {
+                                    Err(_) { false -> return }
+                                    Ok(prelude) {
+                                        prelude -> contextReader(parser) -> when {
+                                            Err(_) { false -> return }
+                                            Ok(context) {
+                                                context -> checkContext(window!, input, position!) => contextOk
+                                                finishedBlocks! == 3
+                                                    and fedBits! == 11
+                                                    and contextOk
+                                                    => valid
+                                                valid -> return
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                attempts! + 1 => attempts!
+            }
+            false
+        }
+    }
+}
+
+main {
+    headers.Limits {
+        maxBlockTypes: 256
+        maxBlockLength: 16_793_840
+        maxContextEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Err(_) { "context-reader=false" -> println }
+        Ok(parser) { "context-reader=$(parser -> check)" -> println }
+    }
+}

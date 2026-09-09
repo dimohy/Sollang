@@ -1,0 +1,27 @@
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+import std.net.quic.stream_state as streams
+
+advance flow: streams.ReceiveFlow -> Result<UInt64, errors.Error> {
+    flow => nextFlow!
+    nextFlow! -> onReceive(0, 2, true)? => nextFlow!
+    Result<frames.Stream, errors.Error>.Ok(frames.Stream {
+        id: 0
+        offset: 0
+        fin: true
+        data: [1, 2; ~]
+    }) -> when {
+        Ok(value) {
+            nextFlow! -> onConsumed(UInt64(value.data -> len))? => nextFlow!
+        }
+        Err(error) {}
+    }
+    Result<UInt64, errors.Error>.Ok(nextFlow!.highestReceived)
+}
+
+main {
+    streams.initialReceiveFlow(16) -> advance -> when {
+        Ok(highest) { "mutable-receiver=$highest" -> println }
+        Err(error) { "mutable-receiver-error=$(error.code)" -> println }
+    }
+}

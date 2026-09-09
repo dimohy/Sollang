@@ -1,0 +1,31 @@
+import std.compress.gzip as gzip
+import std.hash.crc32 as crc32
+
+run: -> Result<Unit, gzip.Error> uses Console {
+    [UInt8(49), 50, 51, 52, 53, 54, 55, 56, 57] => input
+    gzip.Limits {
+        maxOutputBytes: 1_024
+        maxExpansionRatio: 64
+    } -> codec()? => codec
+    codec -> compressFixed(input)? => compressed
+
+    (compressed -> len) - 8 => trailer
+    UInt32(compressed[trailer]) => trailer0
+    UInt32(compressed[trailer + 1]) => trailer1
+    UInt32(compressed[trailer + 2]) => trailer2
+    UInt32(compressed[trailer + 3]) => trailer3
+    trailer0 + trailer1 * 256 + trailer2 * 65_536 + trailer3 * 16_777_216 => gzipChecksum
+    crc32.Polynomial.Ieee -> hasher => hasher!
+    hasher! -> write(input)
+    hasher! -> checksum => publicChecksum
+    gzipChecksum == publicChecksum -> if { "true" } else { "false" } => same
+    "gzip-crc=$gzipChecksum,$publicChecksum,$same" -> println
+    Result<Unit, gzip.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected=$(error.offset)" -> println }
+    }
+}

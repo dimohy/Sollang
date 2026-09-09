@@ -1,0 +1,105 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.invariant_rules as invariantRules
+
+# Canonical aggregate producer selection shared by call, ownership, and
+# reference-slot emission. Kept separate as an independently analyzable and
+# compilable responsibility unit so code generation can run in parallel.
+aggregateValueIndex wrapperIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    wrapperIndex => resolved!
+    wrapperIndex >= 0
+        and wrapperIndex < (context.ir -> len)
+        and context.ir[wrapperIndex].kind == 9
+        and context.ir[wrapperIndex].opcode == -1
+        -> if {
+            context.ir[wrapperIndex] => aggregateWrapper
+            false => resolvedMatchesWrapperType!
+            false => aggregateWrapperIsReference!
+            aggregateWrapper -> effectiveTypeId(context, state) => aggregateWrapperTypeId
+            aggregateWrapperTypeId >= 0
+                and aggregateWrapperTypeId < (context.types -> len)
+                and context.types[aggregateWrapperTypeId].kind == 8
+                -> if { true => aggregateWrapperIsReference! }
+            aggregateWrapperTypeId => aggregateWrapperValueTypeId!
+            aggregateWrapperIsReference! -> if {
+                context.types[aggregateWrapperTypeId].first => aggregateWrapperValueTypeId!
+            }
+            state.frozenFirstIrChildByParent[wrapperIndex] => controlSearch!
+            controlSearch! >= 0 -> while {
+                context.ir[controlSearch!] => aggregateCandidate
+                aggregateCandidate -> effectiveTypeId(context, state) => aggregateCandidateTypeId
+                (((not aggregateWrapperIsReference!)
+                    and aggregateWrapper.typeId >= 0
+                    and aggregateCandidate.typeId == aggregateWrapper.typeId)
+                    or (aggregateWrapperIsReference!
+                    and aggregateCandidateTypeId >= 0
+                    and (aggregateCandidateTypeId == aggregateWrapperValueTypeId!
+                    or (aggregateCandidateTypeId -> sameNominalTypeIdentity(aggregateWrapperValueTypeId!, context))))
+                    or (aggregateWrapper.typeId < 0
+                    and aggregateCandidate.typeId < 0
+                    and aggregateCandidate.typeKind == aggregateWrapper.typeKind
+                    and aggregateCandidate.typeOrigin == aggregateWrapper.typeOrigin
+                    and aggregateCandidate.typeModule == aggregateWrapper.typeModule
+                    and aggregateCandidate.typeSymbol == aggregateWrapper.typeSymbol))
+                    => aggregateCandidateMatchesWrapperType
+                # Explicit conversions around aggregate fields are represented
+                # by a value wrapper whose direct result is a call node.
+                aggregateCandidate.parent == wrapperIndex
+                    and (not aggregateWrapperIsReference!
+                    or (aggregateCandidate.kind != 2
+                    and aggregateCandidate.kind != 3
+                    and aggregateCandidate.kind != 4))
+                    and (aggregateCandidate.kind == 2
+                    or aggregateCandidate.kind == 3
+                    or aggregateCandidate.kind == 4
+                    or aggregateCandidate.kind == 5
+                    or aggregateCandidate.kind == 6
+                    or aggregateCandidate.kind == 7
+                    or aggregateCandidate.kind == 8
+                    or (aggregateCandidate.kind == 9 and aggregateCandidate.opcode == -1)
+                    or aggregateCandidate.kind == 12
+                    or aggregateCandidate.kind == 13
+                    or aggregateCandidate.kind == 14
+                    or aggregateCandidate.kind == 15
+                    or aggregateCandidate.kind == 16
+                    or aggregateCandidate.kind == 18
+                    or aggregateCandidate.kind == 26
+                    or aggregateCandidate.kind == 27
+                    or aggregateCandidate.kind == 34)
+                    and invariantRules.aggregateChildReplacesSelection(
+                true,
+                aggregateCandidateMatchesWrapperType,
+                resolvedMatchesWrapperType!)
+                    -> if {
+                        controlSearch! => resolved!
+                        aggregateCandidateMatchesWrapperType => resolvedMatchesWrapperType!
+                    }
+                state.frozenNextIrSiblingByNode[controlSearch!] => controlSearch!
+            }
+            # An exact direct value edge is more authoritative than flattened
+            # child order. Late parent preservation can intentionally keep the
+            # producer outside this transparent wrapper's parent chain.
+            aggregateWrapper.operand0 >= 0
+                and aggregateWrapper.operand0 < (context.ir -> len)
+                and aggregateWrapper.operand0 != wrapperIndex
+                -> if {
+                    context.ir[aggregateWrapper.operand0] => directAggregateValue
+                    directAggregateValue -> effectiveTypeId(context, state) => directAggregateValueTypeId
+                    (aggregateWrapper -> sameCanonicalIrType(directAggregateValue))
+                        or (aggregateWrapperIsReference!
+                        and directAggregateValueTypeId >= 0
+                        and (directAggregateValueTypeId == aggregateWrapperValueTypeId!
+                        or (directAggregateValueTypeId -> sameNominalTypeIdentity(aggregateWrapperValueTypeId!, context))))
+                        -> if { aggregateWrapper.operand0 => resolved! }
+                }
+        }
+    resolved! >= 0
+        and resolved! < (context.ir -> len)
+        and resolved! != wrapperIndex
+        and context.ir[resolved!].kind == 9
+        and context.ir[resolved!].opcode == -1
+        -> if { resolved! -> aggregateValueIndex(context, state) => resolved! }
+    resolved! => result
+    result
+}

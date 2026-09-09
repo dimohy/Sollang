@@ -1,0 +1,51 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+sendPing endpoint: net.Endpoint -> Result<UIntSize, socket.SocketError> uses Network {
+    endpoint -> connect? => connection
+    connection -> sendText("ping")? => count
+    connection -> shutdown(socket.ShutdownDirection.Both)?
+    connection -> close
+    Result<UIntSize, socket.SocketError>.Ok(count)
+}
+
+struct Receipt {
+    sent: UIntSize
+    received: UIntSize
+    length: Int
+    first: UInt32
+    last: UInt32
+}
+
+receivePing local: net.Endpoint -> Result<Receipt, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: local
+        backlog: 8
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localPort? => port
+    net.loopback(port) -> unified => endpoint
+    endpoint -> sendPing? => sent
+    listener -> accept? => connection
+    [UInt8; 16~] => buffer!
+    connection -> receiveInto(buffer!)? => received
+    connection -> close
+    listener -> close
+    Result<Receipt, socket.SocketError>.Ok(Receipt {
+        sent: sent
+        received: received
+        length: buffer! -> len
+        first: UInt32(buffer![0])
+        last: UInt32(buffer![Int(received) - 1])
+    })
+}
+
+main {
+    net.loopback(0) -> unified -> receivePing -> when {
+        Ok(receipt) {
+            "into=$(receipt.sent),$(receipt.received),$(receipt.length),$(receipt.first),$(receipt.last)" -> println
+        }
+        Err(error) { "socket-error=$(error.code)" -> println }
+    }
+}

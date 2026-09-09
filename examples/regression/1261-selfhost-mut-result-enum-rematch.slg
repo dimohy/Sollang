@@ -1,0 +1,49 @@
+struct Probed {
+    symbol: Int
+    consumed: Int
+}
+
+enum Probe {
+    NeedMore(Int)
+    Ready(Probed)
+}
+
+struct Error {
+    code: Int
+}
+
+struct Window {
+    available: Int
+}
+
+probe ready: Bool -> Result<Probe, Error> {
+    ready -> if {
+        Result<Probe, Error>.Ok(Probe.Ready(Probed { symbol: 42, consumed: 3 }))
+    } else {
+        Result<Probe, Error>.Ok(Probe.NeedMore(1))
+    }
+}
+
+impl Window {
+    readSymbol: mut self, ready: Bool -> Result<Probe, Error> {
+        probe(ready)? => probed
+        probed -> when {
+            NeedMore(bits) { Result<Probe, Error>.Ok(Probe.NeedMore(bits)) }
+            Ready(decoded) {
+                self.available - decoded.consumed => self.available
+                Result<Probe, Error>.Ok(Probe.Ready(decoded))
+            }
+        }
+    }
+}
+
+main {
+    Window { available: 8 } => window!
+    window! -> readSymbol(true) -> when {
+        Err(error) { "error=$(error.code)" -> println }
+        Ok(probed) => probed -> when {
+            NeedMore(bits) { "need=$bits" -> println }
+            Ready(decoded) { "symbol=$(decoded.symbol),remaining=$(window!.available)" -> println }
+        }
+    }
+}

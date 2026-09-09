@@ -1,0 +1,91 @@
+import std.compress.brotli.prefix_table as prefix
+import std.compress.brotli.tree_group as groups
+import std.compress.brotli.tree_group.error as group_errors
+
+kindCode kind: group_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    TruncatedInput { 1 }
+    InvalidPrefixCode { 2 }
+    TreeLimitExceeded { 3 }
+    TotalTableLimitExceeded { 4 }
+}
+
+failsWith result: Result<groups.Parsed, groups.Error>, expectedKind: Int -> Bool {
+    result -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == expectedKind }
+    }
+}
+
+hasTwoFourEntryTrees parsed: ref groups.Parsed -> Bool {
+    (parsed.trees -> len) == 2
+        and (parsed.trees[0] -> entryCount) == 4
+        and (parsed.trees[1] -> entryCount) == 4
+}
+
+printCheck label: Text, value: Bool -> Unit uses Console {
+    "$(label)=$(value)" -> println
+}
+
+main {
+    groups.Limits {
+        maxTrees: 256
+        maxAlphabetSize: 704
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Err(_) { "parser=false" -> println }
+        Ok(parser) {
+            [UInt8(77), 174, 201, 1] => input
+            parser -> parse(
+            input,
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4,
+            2,
+            2) -> when {
+                Err(_) { printCheck("two-trees", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "two-trees",
+                    parsed.position.byteIndex == 3 and parsed.position.bitIndex == 2
+                        and (parsed -> hasTwoFourEntryTrees))
+                }
+            }
+            printCheck(
+            "tree-limit",
+            parser -> parse(
+            input,
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4,
+            257,
+            2) -> failsWith(3))
+            printCheck(
+            "truncated",
+            parser -> parse(
+            [77],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4,
+            2,
+            2) -> failsWith(1))
+        }
+    }
+
+    groups.Limits {
+        maxTrees: 2
+        maxAlphabetSize: 4
+        maxTableEntries: 4
+        maxTotalTableEntries: 7
+    } -> parser -> when {
+        Err(_) { printCheck("total-limit", false) }
+        Ok(parser) {
+            printCheck(
+            "total-limit",
+            parser -> parse(
+            [77, 174, 201, 1],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4,
+            2,
+            2) -> failsWith(4))
+        }
+    }
+}

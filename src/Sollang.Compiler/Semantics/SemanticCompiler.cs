@@ -140,10 +140,23 @@ internal sealed partial class SemanticCompiler
 
     public BoundProgram Compile(SemanticReusePlan? reusePlan = null)
     {
+        foreach (var note in _program.StyleNotes ?? [])
+        {
+            if (_warningLocations.Add((note.Code, note.ModuleName, note.Line, note.Column)))
+            {
+                _warnings.Add(new SemanticWarning(
+                    note.Code,
+                    note.ModuleName,
+                    note.Line,
+                    note.Column,
+                    note.Message));
+            }
+        }
         _program = InferPrivateFunctionSignatures(_program);
         var functions = DeclareFunctions();
         DiscoverBorrowedTextReturnOrigins(functions);
         DiscoverReadonlyReferenceReturnOrigins(functions);
+        ValidateReadonlySliceReturnEscapes(functions);
         var declarationFingerprint = SemanticStableIdentity.DeclarationFingerprint(
             _types,
             _traits.Values,
@@ -211,6 +224,11 @@ internal sealed partial class SemanticCompiler
             functions.Values,
             _resolvedGenericCalls.Values);
         var stableCallSiteIdentities = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        // Binding can create generic bodies with their own syntax identities.
+        // The declaration-only index above belongs to cache restoration; index
+        // the final function graph before exporting resolved call annotations.
+        syntaxCallSiteIdentities = SemanticStableIdentity.IndexSyntaxCallSites(
+            stableFunctionIdentities.Keys, _program.Statements, stableFunctionIdentities);
         foreach (var callSite in _resolvedGenericCalls.Keys)
         {
             if (!syntaxCallSiteIdentities.TryGetValue(callSite, out var identity))
@@ -310,8 +328,8 @@ internal sealed partial class SemanticCompiler
                         $"trait method '{declaration.Name}.{method.Name}' already exists");
                 }
 
-                var returnAssociatedType = declaration.AssociatedTypes
-                    .FirstOrDefault(type => type.Name == method.ReturnType);
+                var associatedNames = declaration.AssociatedTypes.Select(type => type.Name).ToArray();
+                var returnUsesAssociatedType = TypeSyntaxReferencesAnyParameter(method.ReturnType, associatedNames);
                 methods.Add(new BoundTraitMethod(
                     method.Name,
                     method.SelfOwnership switch
@@ -321,12 +339,26 @@ internal sealed partial class SemanticCompiler
                         FunctionInputOwnership.MutableBorrow => BoundFunctionInputOwnership.MutableBorrow,
                         _ => throw new InvalidOperationException("unsupported trait receiver ownership")
                     },
-                    returnAssociatedType is null
+                    !returnUsesAssociatedType
                         ? ParseType(method.ReturnType, method.Line, method.Column)
                         : null,
-                    returnAssociatedType?.Name,
+                    returnUsesAssociatedType ? method.ReturnType : null,
                     method.Line,
-                    method.Column));
+                    method.Column,
+                    method.AdditionalParameters.Select(parameter =>
+                    {
+                        var usesAssociatedType = TypeSyntaxReferencesAnyParameter(parameter.TypeName, associatedNames);
+                        return new BoundTraitParameter(
+                            parameter.Ownership switch
+                            {
+                                FunctionInputOwnership.Default => BoundFunctionInputOwnership.Default,
+                                FunctionInputOwnership.Move => BoundFunctionInputOwnership.Move,
+                                FunctionInputOwnership.MutableBorrow => BoundFunctionInputOwnership.MutableBorrow,
+                                _ => throw new InvalidOperationException("unsupported trait parameter ownership")
+                            },
+                            !usesAssociatedType ? ParseType(parameter.TypeName, parameter.Line, parameter.Column) : null,
+                            usesAssociatedType ? parameter.TypeName : null);
+                    }).ToArray()));
             }
 
             traits.Add(
@@ -394,9 +426,14 @@ internal sealed partial class SemanticCompiler
                     function.Column,
                     $"trait '{trait.Name}' has no method '{methodName}'");
             var requiredReturnType = requirement.ReturnType
-                ?? associatedBindings[requirement.ReturnAssociatedTypeName!];
+                ?? ParseAssociatedType(requirement.ReturnAssociatedTypeSyntax!, associatedBindings, requirement.Line, requirement.Column);
             if (function.InputOwnership != requirement.SelfOwnership
-                || function.ReturnType != requiredReturnType)
+                || function.ReturnType != requiredReturnType
+                || (function.AdditionalParameters?.Count ?? 0) != requirement.AdditionalParameters.Count
+                || requirement.AdditionalParameters.Where((parameter, index) =>
+                    function.AdditionalParameters![index].Ownership != parameter.Ownership
+                    || function.AdditionalParameters[index].Type != (parameter.Type
+                        ?? ParseAssociatedType(parameter.AssociatedTypeSyntax!, associatedBindings, requirement.Line, requirement.Column))).Any())
             {
                 throw Error(
                     function.Line,
@@ -1044,7 +1081,7 @@ internal sealed partial class SemanticCompiler
         var effects = BindFunctionEffects(function);
         var isAsyncRuntimeIntrinsic = function.IsStandardLibrary
             && function.IsIntrinsic
-            && function.Name is "sys.time.sleep"
+            && function.Name is "std.time.Duration.sleep"
                 or "sys.file.readAsync"
                 or "sys.file.openReadAsync"
                 or "sys.file.openWriteAsync";
@@ -1099,15 +1136,14 @@ internal sealed partial class SemanticCompiler
         }
         if (kind == BoundFunctionKind.RuntimeMouseEvents)
         {
-            if (additionalParameters.Length != 1
-                || !_types.TryResolve("sys.event.EventOverflowPolicy", out var overflowType)
-                || additionalParameters[0].Type != overflowType)
+            if (additionalParameters.Length != 0
+                || inputOwnership != BoundFunctionInputOwnership.Move)
             {
                 throw Error(
                     function.Line,
                     function.Column,
-                    "intrinsic sys.event.mouseEvents must be "
-                    + "Int, EventOverflowPolicy -> EventStream<MouseEvent>");
+                    "intrinsic sys.input.mouse.Source.events must be "
+                    + "move Source -> EventStream<Event>");
             }
         }
         var localFunctions = BindLocalFunctions(function);
@@ -1139,7 +1175,7 @@ internal sealed partial class SemanticCompiler
             IsValueGeneric: function.IsValueGeneric,
             HasValueGenericFixedArrayInput: function.HasValueGenericFixedArrayInput,
             ModuleName: function.ModuleName,
-            IsPublic: function.IsPublic || function.IsStandardLibrary,
+            IsPublic: function.IsPublic,
             IsAsync: function.IsAsync,
             BlockInputTypeTemplate: blockInputTypeTemplate,
             Effects: effects,
@@ -1220,6 +1256,12 @@ internal sealed partial class SemanticCompiler
 
         if (ownership == FunctionInputOwnership.MutableBorrow)
         {
+            // A template has no concrete storage yet. Validate its substituted
+            // type again before binding a specialization body.
+            if (inputType is BoundType.GenericParameter or BoundType.SecondaryGenericParameter or BoundType.TertiaryGenericParameter)
+            {
+                return BoundFunctionInputOwnership.MutableBorrow;
+            }
             if (inputType is null)
             {
                 throw Error(line, column, "mut input requires an input type");
@@ -1256,17 +1298,20 @@ internal sealed partial class SemanticCompiler
                 && !TypeSyntaxReferencesParameter(function.InputType, function.SecondaryGenericParameterName)
                 && !TypeSyntaxReferencesParameter(function.InputType, function.TertiaryGenericParameterName)
                 && (function.BlockResultType is null
-                    || !TypeSyntaxReferencesParameter(function.BlockResultType, function.GenericParameterName)))
+                    || !TypeSyntaxReferencesParameter(function.BlockResultType, function.GenericParameterName))
+                && !(function.AdditionalParameters ?? []).Any(input =>
+                    (function.GenericParameters ?? []).Any(parameter =>
+                        TypeSyntaxReferencesParameter(input.TypeName, parameter.Name))))
             {
                 throw Error(
                     function.Line,
                     function.Column,
                     $"generic function input must use its type parameter '{function.GenericParameterName}' in this slice");
             }
-            if (function.InputOwnership != FunctionInputOwnership.Default
+            if (function.InputOwnership == FunctionInputOwnership.Move
                 && !function.IsValueGeneric)
             {
-                throw Error(function.Line, function.Column, "generic function inputs are readonly in this slice");
+                throw Error(function.Line, function.Column, "generic move inputs are not implemented yet");
             }
         }
 
@@ -2435,7 +2480,10 @@ internal sealed partial class SemanticCompiler
         {
             MarkFixedLengthCandidateRequiresGrowable(function.Body, function.ReturnType, bodyType);
         }
-        if (!IsFunctionReturnCompatible(function.Body, bodyType, function.ReturnType, bodyBindings))
+        // Explicit returns have already checked their payload against the declared
+        // type. Only a reachable fallthrough contributes the final body value.
+        if (FunctionControlFlowFacts.MayReachContinuation(function)
+            && !IsFunctionReturnCompatible(function.Body, bodyType, function.ReturnType, bodyBindings))
         {
             throw Error(
                 function.Line,
@@ -2477,10 +2525,11 @@ internal sealed partial class SemanticCompiler
 
         if (function.Body is not null
             && !_types.IsReference(function.ReturnType)
-            && IsContainerType(bodyType))
+            && _types.ContainsOwnedStorage(bodyType))
         {
-            EnsureOwnedContainerCanLeaveBlock(
+            EnsureOwnedValueCanLeaveBlock(
                 function.Body,
+                bodyType,
                 returnOuterBindings,
                 bodyBindings,
                 returnedMoveInputName);
@@ -2510,6 +2559,17 @@ internal sealed partial class SemanticCompiler
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> parentFunctions)
     {
+        if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
+        {
+            BindFunctionInputOwnership(FunctionInputOwnership.MutableBorrow, function.InputType, function.Line, function.Column);
+        }
+        foreach (var parameter in function.AdditionalParameters ?? [])
+        {
+            if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
+            {
+                BindFunctionInputOwnership(FunctionInputOwnership.MutableBorrow, parameter.Type, parameter.Line, parameter.Column);
+            }
+        }
         var previousModuleName = _currentModuleName;
         var previousTypeScopeName = _currentTypeScopeName;
         var previousReturnType = _currentFunctionReturnType;
@@ -2650,10 +2710,11 @@ internal sealed partial class SemanticCompiler
 
         if (function.Body is not null
             && !_types.IsReference(function.ReturnType)
-            && IsContainerType(bodyType))
+            && _types.ContainsOwnedStorage(bodyType))
         {
-            EnsureOwnedContainerCanLeaveBlock(
+            EnsureOwnedValueCanLeaveBlock(
                 function.Body,
+                bodyType,
                 _currentFunctionOuterBindings,
                 bodyBindings,
                 null);
@@ -2820,6 +2881,13 @@ internal sealed partial class SemanticCompiler
                 expectedInputType: null,
                 BoundType.Int64,
                 BoundFunctionKind.RuntimeNowMillis),
+            "sys.runtime.utcNowMillis" => RequireIntrinsicSignature(
+                function,
+                inputType,
+                returnType,
+                expectedInputType: null,
+                BoundType.Int64,
+                BoundFunctionKind.RuntimeUtcNowMillis),
             "sys.runtime.parallel" => RequireParallelIntrinsicSignature(function),
             "sys.runtime.tryParallel" => RequireTryParallelIntrinsicSignature(function),
             "sys.runtime.limitParallelWorkers" => RequireIntrinsicSignature(
@@ -2850,17 +2918,19 @@ internal sealed partial class SemanticCompiler
                 BoundType.Range,
                 _types.GetOrAddStream(BoundType.Int),
                 BoundFunctionKind.RuntimeRangeStream),
-            "sys.event.mouseEvents" => RequireIntrinsicSignature(
+            "sys.input.mouse.Source.events" => RequireIntrinsicSignature(
                 function,
                 inputType,
                 returnType,
-                BoundType.Int,
+                _types.TryResolve("sys.input.mouse.Source", out var mouseSourceType)
+                    ? mouseSourceType
+                    : throw Error(function.Line, function.Column, "sys.input.mouse.Source type is missing"),
                 _types.GetOrAddEventStream(
-                    _types.TryResolve("sys.event.MouseEvent", out var mouseEventType)
+                    _types.TryResolve("sys.input.mouse.Event", out var mouseEventType)
                         ? mouseEventType
-                        : throw Error(function.Line, function.Column, "sys.event.MouseEvent type is missing")),
+                        : throw Error(function.Line, function.Column, "sys.input.mouse.Event type is missing")),
                 BoundFunctionKind.RuntimeMouseEvents),
-            "sys.time.sleep" => RequireSleepIntrinsicSignature(
+            "std.time.Duration.sleep" => RequireSleepIntrinsicSignature(
                 function,
                 inputType,
                 returnType),
@@ -2875,11 +2945,31 @@ internal sealed partial class SemanticCompiler
                 function,
                 inputType,
                 returnType),
-            "sys.process.run" => RequireProcessRunIntrinsicSignature(
+            "sys.process.Command.run" => RequireProcessRunIntrinsicSignature(
                 function,
                 inputType,
                 returnType),
-            "sys.process.runToFile" => RequireProcessRunToFileIntrinsicSignature(
+            "sys.process.Command.spawn" => RequireProcessSpawnIntrinsicSignature(
+                function,
+                inputType,
+                returnType),
+            "sys.process.Command.runToFile" => RequireProcessRunToFileIntrinsicSignature(
+                function,
+                inputType,
+                returnType),
+            "sys.process.Command.collect" => RequireProcessCollectIntrinsicSignature(
+                function,
+                inputType,
+                returnType),
+            "sys.process.Child.wait" => RequireProcessWaitIntrinsicSignature(
+                function,
+                inputType,
+                returnType),
+            "sys.process.Child.id" => RequireProcessChildIdIntrinsicSignature(
+                function,
+                inputType,
+                returnType),
+            "sys.process.ProcessId.asUInt64" => RequireProcessIdValueIntrinsicSignature(
                 function,
                 inputType,
                 returnType),
@@ -2912,13 +3002,13 @@ internal sealed partial class SemanticCompiler
             "sys.file.mapPath" => RequireIntrinsicSignature(
                 function, inputType, returnType, TypeId.Path, BoundType.SourceText,
                 BoundFunctionKind.RuntimeMapSourcePath),
-            "sys.path.pathText" => RequireIntrinsicSignature(
-                function, inputType, returnType, _types.GetOrAddReference(TypeId.Path), BoundType.Text,
+            "sys.path.Path.pathText" => RequireIntrinsicSignature(
+                function, inputType, returnType, TypeId.Path, BoundType.Text,
                 BoundFunctionKind.RuntimePathText),
             "sys.path.nativeStyle" => RequireIntrinsicSignature(
                 function, inputType, returnType, expectedInputType: null, TypeId.PathStyle,
                 BoundFunctionKind.RuntimePathStyle),
-            "sys.path.queryRaw" => RequirePathQuerySignature(
+            "sys.path.Path.queryRaw" => RequirePathQuerySignature(
                 function,
                 inputType,
                 returnType),
@@ -2974,19 +3064,96 @@ internal sealed partial class SemanticCompiler
                 isAsync: true),
             "sys.file.sync" => RequireOwnedFileSyncSignature(function, inputType, returnType),
             "sys.file.atomicReplace" => RequireAtomicReplaceSignature(function, inputType, returnType),
-            "sys.socket.listen" => RequireSocketListenSignature(function, inputType, returnType),
-            "sys.socket.accept" => RequireSocketOwnerResultSignature(
-                function, inputType, returnType, "sys.socket.TcpListener", "sys.socket.TcpStream",
+            "std.net.socket.Reactor.waitInto" => RequireSocketReactorWaitSignature(function, inputType, returnType),
+            "std.net.socket.ListenOptions.listen" => RequireSocketListenSignature(function, inputType, returnType),
+            "std.net.socket.TcpListener.accept" => RequireSocketOwnerResultSignature(
+                function, inputType, returnType, "std.net.socket.TcpListener", "std.net.socket.TcpStream",
                 BoundFunctionKind.RuntimeSocketAccept),
-            "sys.socket.connect" => RequireSocketConnectSignature(function, inputType, returnType),
-            "sys.socket.receive" => RequireSocketReceiveSignature(function, inputType, returnType),
-            "sys.socket.send" => RequireSocketSendSignature(function, inputType, returnType, text: false),
-            "sys.socket.sendText" => RequireSocketSendSignature(function, inputType, returnType, text: true),
-            "sys.socket.shutdown" => RequireSocketUnitResultSignature(function, inputType, returnType),
-            "sys.socket.bindDatagram" => RequireSocketBindDatagramSignature(function, inputType, returnType),
-            "sys.socket.localPort" => RequireSocketLocalPortSignature(function, inputType, returnType),
-            "sys.socket.sendTo" => RequireSocketSendToSignature(function, inputType, returnType),
-            "sys.socket.receiveFrom" => RequireSocketReceiveFromSignature(function, inputType, returnType),
+            "std.net.socket.TcpListener.tryClone" => RequireSocketTryCloneSignature(
+                function, inputType, returnType, "std.net.socket.TcpListener"),
+            "std.net.socket.TcpListener.setNonblocking" => RequireSocketBooleanMutationSignature(
+                function, inputType, returnType, "std.net.socket.TcpListener",
+                BoundFunctionKind.RuntimeSocketSetNonblocking),
+            "std.net.socket.TcpListener.poll" => RequireSocketPollSignature(
+                function, inputType, returnType, "std.net.socket.TcpListener"),
+            "std.net.socket.TcpListener.localPort" => RequireSocketLocalPortSignature(function, inputType, returnType),
+            "std.net.socket.TcpListener.localEndpoint" => RequireSocketEndpointObservationSignature(
+                function, inputType, returnType, remote: false),
+            "std.net.socket.TcpListener.close" => RequireSocketCloseSignature(
+                function, inputType, returnType, "std.net.socket.TcpListener"),
+            "std.net.Endpoint.connect" => RequireSocketConnectSignature(function, inputType, returnType),
+            "std.net.socket.TcpStream.receive" => RequireSocketReceiveSignature(function, inputType, returnType),
+            "std.net.socket.TcpStream.tryClone" => RequireSocketTryCloneSignature(
+                function, inputType, returnType, "std.net.socket.TcpStream"),
+            "std.net.socket.TcpStream.setNonblocking" => RequireSocketBooleanMutationSignature(
+                function, inputType, returnType, "std.net.socket.TcpStream",
+                BoundFunctionKind.RuntimeSocketSetNonblocking),
+            "std.net.socket.TcpStream.poll" => RequireSocketPollSignature(
+                function, inputType, returnType, "std.net.socket.TcpStream"),
+            "std.net.socket.TcpStream.receiveInto" => RequireSocketReceiveIntoSignature(
+                function, inputType, returnType, BoundFunctionKind.RuntimeSocketReceive),
+            "std.net.socket.TcpStream.receiveAppend" => RequireSocketReceiveIntoSignature(
+                function, inputType, returnType, BoundFunctionKind.RuntimeSocketReceiveAppend),
+            "std.net.socket.TcpStream.receiveVectored" => RequireSocketReceiveVectoredSignature(
+                function, inputType, returnType),
+            "std.net.socket.TcpStream.peekInto" => RequireSocketReceiveIntoSignature(
+                function, inputType, returnType, BoundFunctionKind.RuntimeSocketPeek),
+            "std.net.socket.TcpStream.send" => RequireSocketSendSignature(function, inputType, returnType, text: false),
+            "std.net.socket.TcpStream.sendRange" => RequireSocketSendRangeSignature(function, inputType, returnType),
+            "std.net.socket.TcpStream.sendVectored" => RequireSocketSendVectoredSignature(function, inputType, returnType),
+            "std.net.socket.TcpStream.sendText" => RequireSocketSendSignature(function, inputType, returnType, text: true),
+            "std.net.socket.TcpStream.localPort" => RequireSocketLocalPortSignature(function, inputType, returnType),
+            "std.net.socket.TcpStream.localEndpoint" => RequireSocketEndpointObservationSignature(
+                function, inputType, returnType, remote: false),
+            "std.net.socket.TcpStream.remoteEndpoint" => RequireSocketEndpointObservationSignature(
+                function, inputType, returnType, remote: true),
+            "std.net.socket.TcpStream.setNoDelay" => RequireSocketNoDelaySignature(
+                function, inputType, returnType, setter: true),
+            "std.net.socket.TcpStream.noDelay" => RequireSocketNoDelaySignature(
+                function, inputType, returnType, setter: false),
+            "std.net.socket.TcpStream.setKeepAlive" => RequireSocketBooleanOptionSignature(
+                function, inputType, returnType, setter: true,
+                BoundFunctionKind.RuntimeSocketSetKeepAlive,
+                BoundFunctionKind.RuntimeSocketKeepAlive),
+            "std.net.socket.TcpStream.keepAlive" => RequireSocketBooleanOptionSignature(
+                function, inputType, returnType, setter: false,
+                BoundFunctionKind.RuntimeSocketSetKeepAlive,
+                BoundFunctionKind.RuntimeSocketKeepAlive),
+            "std.net.socket.TcpStream.setLinger" => RequireSocketLingerSignature(
+                function, inputType, returnType, setter: true),
+            "std.net.socket.TcpStream.linger" => RequireSocketLingerSignature(
+                function, inputType, returnType, setter: false),
+            "std.net.socket.TcpStream.setReadTimeout" => RequireSocketTimeoutSignature(
+                function, inputType, returnType, setter: true, write: false),
+            "std.net.socket.TcpStream.readTimeout" => RequireSocketTimeoutSignature(
+                function, inputType, returnType, setter: false, write: false),
+            "std.net.socket.TcpStream.setWriteTimeout" => RequireSocketTimeoutSignature(
+                function, inputType, returnType, setter: true, write: true),
+            "std.net.socket.TcpStream.writeTimeout" => RequireSocketTimeoutSignature(
+                function, inputType, returnType, setter: false, write: true),
+            "std.net.socket.TcpStream.shutdown" => RequireSocketShutdownSignature(function, inputType, returnType),
+            "std.net.socket.TcpStream.close" => RequireSocketCloseSignature(
+                function, inputType, returnType, "std.net.socket.TcpStream"),
+            "std.net.socket.DatagramBindOptions.bind" => RequireSocketBindDatagramSignature(function, inputType, returnType),
+            "std.net.socket.UdpSocket.localPort" => RequireSocketLocalPortSignature(function, inputType, returnType),
+            "std.net.socket.UdpSocket.tryClone" => RequireSocketTryCloneSignature(
+                function, inputType, returnType, "std.net.socket.UdpSocket"),
+            "std.net.socket.UdpSocket.setNonblocking" => RequireSocketBooleanMutationSignature(
+                function, inputType, returnType, "std.net.socket.UdpSocket",
+                BoundFunctionKind.RuntimeSocketSetNonblocking),
+            "std.net.socket.UdpSocket.poll" => RequireSocketPollSignature(
+                function, inputType, returnType, "std.net.socket.UdpSocket"),
+            "std.net.socket.UdpSocket.localEndpoint" => RequireSocketEndpointObservationSignature(
+                function, inputType, returnType, remote: false),
+            "std.net.socket.UdpSocket.sendTo" => RequireSocketSendToSignature(function, inputType, returnType),
+            "std.net.socket.UdpSocket.receiveFrom" => RequireSocketReceiveFromSignature(function, inputType, returnType),
+            "std.net.socket.UdpSocket.receiveFromInto" => RequireSocketReceiveFromIntoSignature(
+                function, inputType, returnType, BoundFunctionKind.RuntimeSocketReceiveFrom),
+            "std.net.socket.UdpSocket.peekFromInto" => RequireSocketReceiveFromIntoSignature(
+                function, inputType, returnType, BoundFunctionKind.RuntimeSocketPeekFrom),
+            "std.net.socket.UdpSocket.close" => RequireSocketCloseSignature(
+                function, inputType, returnType, "std.net.socket.UdpSocket"),
+            "std.net.dns.Resolver.lookup" => RequireDnsLookupSignature(function, inputType, returnType),
             "sys.file.openWriter" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.Unit,
                 BoundFunctionKind.RuntimeOpenIntWriter),
@@ -3049,10 +3216,7 @@ internal sealed partial class SemanticCompiler
             || returnType != BoundType.Unit
             || inputType is not { } durationType
             || !_types.IsStruct(durationType)
-            || !string.Equals(
-                _types.GetStruct(durationType).Name,
-                "sys.time.Duration",
-                StringComparison.Ordinal))
+            || _types.GetStruct(durationType).Name != "std.time.Duration")
         {
             throw Error(
                 function.Line,
@@ -3087,13 +3251,13 @@ internal sealed partial class SemanticCompiler
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || resultTypes.Ok != TypeId.DynamicUInt8Array
             || !_types.IsEnum(resultTypes.Error)
-            || _types.GetEnum(resultTypes.Error).Name != "sys.crypto.random.Error")
+            || _types.GetEnum(resultTypes.Error).Name != "std.crypto.random.Error")
         {
             throw Error(
                 function.Line,
                 function.Column,
                 $"intrinsic '{function.Name}' must have signature "
-                + "UIntSize -> Result<[UInt8; ~], sys.crypto.random.Error>");
+                + "UIntSize -> Result<[UInt8; ~], std.crypto.random.Error>");
         }
 
         return BoundFunctionKind.RuntimeSecureRandomBytes;
@@ -3198,10 +3362,10 @@ internal sealed partial class SemanticCompiler
         BoundType returnType)
     {
         if (inputType is not { } optionsType
-            || !IsNamedStructType(optionsType, "sys.socket.ListenOptions")
+            || !IsNamedStructType(optionsType, "std.net.socket.ListenOptions")
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
-            || !IsNamedStructType(resultTypes.Ok, "sys.socket.TcpListener")
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.TcpListener")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
                 $"intrinsic '{function.Name}' must have signature ListenOptions -> Result<TcpListener, SocketError>");
@@ -3215,10 +3379,10 @@ internal sealed partial class SemanticCompiler
         BoundType returnType)
     {
         if (inputType is not { } endpointType
-            || !IsNamedStructType(endpointType, "sys.socket.Endpoint")
+            || !IsNamedEnumType(endpointType, "std.net.Endpoint")
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
-            || !IsNamedStructType(resultTypes.Ok, "sys.socket.TcpStream")
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.TcpStream")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
                 $"intrinsic '{function.Name}' must have signature Endpoint -> Result<TcpStream, SocketError>");
@@ -3238,12 +3402,51 @@ internal sealed partial class SemanticCompiler
             || !IsNamedStructType(ownerType, inputName)
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || !IsNamedStructType(resultTypes.Ok, resultName)
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
                 $"intrinsic '{function.Name}' must have signature {inputName.Split('.').Last()} -> Result<{resultName.Split('.').Last()}, SocketError>");
         }
         return kind;
+    }
+
+    private BoundFunctionKind RequireSocketCloseSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        string ownerName)
+    {
+        if (inputType is not { } ownerType
+            || !IsNamedStructType(ownerType, ownerName)
+            || returnType != BoundType.Unit
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || (function.AdditionalParameters?.Count ?? 0) != 0)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move {ownerName.Split('.').Last()} -> Unit");
+        }
+        return BoundFunctionKind.RuntimeSocketClose;
+    }
+
+    private BoundFunctionKind RequireSocketTryCloneSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        string ownerName)
+    {
+        if (inputType is not { } ownerType
+            || !IsNamedStructType(ownerType, ownerName)
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, ownerName)
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError")
+            || function.InputOwnership == FunctionInputOwnership.Move
+            || (function.AdditionalParameters?.Count ?? 0) != 0)
+        {
+            var shortName = ownerName.Split('.').Last();
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature {shortName} -> Result<{shortName}, SocketError> without consuming self");
+        }
+        return BoundFunctionKind.RuntimeSocketTryClone;
     }
 
     private BoundFunctionKind RequireSocketReceiveSignature(
@@ -3253,13 +3456,13 @@ internal sealed partial class SemanticCompiler
     {
         var parameters = function.AdditionalParameters ?? [];
         if (inputType is not { } streamType
-            || !IsNamedStructType(streamType, "sys.socket.TcpStream")
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
             || parameters.Count != 1
             || parameters[0].TypeName != "UIntSize"
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || !_types.IsDynamicArray(resultTypes.Ok)
             || _types.GetDynamicArray(resultTypes.Ok).ElementType != BoundType.UInt8
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
                 $"intrinsic '{function.Name}' must have signature TcpStream, UIntSize -> Result<[UInt8; ~], SocketError>");
@@ -3278,11 +3481,11 @@ internal sealed partial class SemanticCompiler
             ? parameters.Count == 1 && parameters[0].TypeName == "Text"
             : parameters.Count == 1 && parameters[0].TypeName == "ref [UInt8; ~]";
         if (inputType is not { } streamType
-            || !IsNamedStructType(streamType, "sys.socket.TcpStream")
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
             || !validAdditional
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || resultTypes.Ok != BoundType.UIntSize
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             var payload = text ? "Text" : "ref [UInt8; ~]";
             throw Error(function.Line, function.Column,
@@ -3291,21 +3494,336 @@ internal sealed partial class SemanticCompiler
         return text ? BoundFunctionKind.RuntimeSocketSendText : BoundFunctionKind.RuntimeSocketSend;
     }
 
-    private BoundFunctionKind RequireSocketUnitResultSignature(
+    private BoundFunctionKind RequireSocketReceiveIntoSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        BoundFunctionKind kind)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } streamType
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || parameters.Count != 1
+            || parameters[0].TypeName != "[UInt8; ~]"
+            || parameters[0].Ownership != FunctionInputOwnership.MutableBorrow
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.UIntSize
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature TcpStream, mut [UInt8; ~] -> Result<UIntSize, SocketError>");
+        }
+        return kind;
+    }
+
+    private BoundFunctionKind RequireSocketSendRangeSignature(
         FunctionDeclaration function,
         BoundType? inputType,
         BoundType returnType)
     {
+        var parameters = function.AdditionalParameters ?? [];
         if (inputType is not { } streamType
-            || !IsNamedStructType(streamType, "sys.socket.TcpStream")
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || parameters.Count != 3
+            || parameters[0].TypeName != "ref [UInt8; ~]"
+            || parameters[1].TypeName != "UIntSize"
+            || parameters[2].TypeName != "UIntSize"
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
-            || resultTypes.Ok != BoundType.Unit
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || resultTypes.Ok != BoundType.UIntSize
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
-                $"intrinsic '{function.Name}' must have signature TcpStream -> Result<Unit, SocketError>");
+                $"intrinsic '{function.Name}' must have signature TcpStream, ref [UInt8; ~], UIntSize, UIntSize -> Result<UIntSize, SocketError>");
+        }
+        return BoundFunctionKind.RuntimeSocketSendRange;
+    }
+
+    private BoundFunctionKind RequireSocketSendVectoredSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var buffersType = parameters.Count == 1
+            ? ParseType(parameters[0].TypeName, function.Line, function.Column)
+            : BoundType.Unit;
+        var actualBufferElement = _types.IsSlice(buffersType)
+            ? _types.GetSliceElement(buffersType)
+            : BoundType.Unit;
+        if (inputType is not { } streamType
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || parameters.Count != 1
+            || !_types.IsSlice(buffersType)
+            || !IsNamedStructType(
+                _types.GetSliceElement(buffersType),
+                "std.net.socket.SendBuffer")
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.UIntSize
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature TcpStream, [SendBuffer] -> Result<UIntSize, SocketError>; "
+                + $"received parameter '{(parameters.Count == 1 ? parameters[0].TypeName : "<missing>")}' "
+                + $"as {FormatType(buffersType)} with element {FormatType(actualBufferElement)}");
+        }
+        return BoundFunctionKind.RuntimeSocketSendVectored;
+    }
+
+    private BoundFunctionKind RequireSocketReceiveVectoredSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var buffersType = parameters.Count == 1
+            ? ParseType(parameters[0].TypeName, function.Line, function.Column)
+            : BoundType.Unit;
+        var bufferElement = _types.IsDynamicArray(buffersType)
+            ? _types.GetDynamicArray(buffersType).ElementType
+            : BoundType.Unit;
+        if (inputType is not { } streamType
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || parameters.Count != 1
+            || parameters[0].Ownership != FunctionInputOwnership.MutableBorrow
+            || !_types.IsDynamicArray(buffersType)
+            || !IsNamedStructType(bufferElement, "std.net.socket.ReceiveBuffer")
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.UIntSize
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature TcpStream, mut [ReceiveBuffer; ~] -> Result<UIntSize, SocketError>");
+        }
+        return BoundFunctionKind.RuntimeSocketReceiveVectored;
+    }
+
+    private BoundFunctionKind RequireSocketShutdownSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } streamType
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || parameters.Count != 1
+            || parameters[0].TypeName != "std.net.socket.ShutdownDirection"
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.Unit
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature TcpStream, ShutdownDirection -> Result<Unit, SocketError>");
         }
         return BoundFunctionKind.RuntimeSocketShutdown;
+    }
+
+    private BoundFunctionKind RequireSocketNoDelaySignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        bool setter)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var parametersValid = setter
+            ? parameters.Count == 1
+                && parameters[0].TypeName == "Bool"
+                && parameters[0].Ownership == FunctionInputOwnership.Default
+            : parameters.Count == 0;
+        if (inputType is not { } streamType
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || !parametersValid
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != (setter ? BoundType.Unit : BoundType.Bool)
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            var signature = setter
+                ? "TcpStream, Bool -> Result<Unit, SocketError>"
+                : "TcpStream -> Result<Bool, SocketError>";
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature {signature}");
+        }
+        return setter
+            ? BoundFunctionKind.RuntimeSocketSetNoDelay
+            : BoundFunctionKind.RuntimeSocketNoDelay;
+    }
+
+    private BoundFunctionKind RequireSocketBooleanOptionSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        bool setter,
+        BoundFunctionKind setterKind,
+        BoundFunctionKind getterKind)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var parametersValid = setter
+            ? parameters.Count == 1
+                && parameters[0].TypeName == "Bool"
+                && parameters[0].Ownership == FunctionInputOwnership.Default
+            : parameters.Count == 0;
+        if (inputType is not { } streamType
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || !parametersValid
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != (setter ? BoundType.Unit : BoundType.Bool)
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            var signature = setter
+                ? "TcpStream, Bool -> Result<Unit, SocketError>"
+                : "TcpStream -> Result<Bool, SocketError>";
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature {signature}");
+        }
+        return setter ? setterKind : getterKind;
+    }
+
+    private BoundFunctionKind RequireSocketBooleanMutationSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        string ownerTypeName,
+        BoundFunctionKind kind)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } ownerType
+            || !IsNamedStructType(ownerType, ownerTypeName)
+            || parameters.Count != 1
+            || parameters[0].TypeName != "Bool"
+            || parameters[0].Ownership != FunctionInputOwnership.Default
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.Unit
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature {ownerTypeName}, Bool -> Result<Unit, SocketError>");
+        }
+        return kind;
+    }
+
+    private BoundFunctionKind RequireSocketPollSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        string ownerTypeName)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } ownerType
+            || !IsNamedStructType(ownerType, ownerTypeName)
+            || parameters.Count != 2
+            || parameters[0].TypeName != "std.net.socket.PollMode"
+            || parameters[0].Ownership != FunctionInputOwnership.Default
+            || parameters[1].TypeName != "Option<std.time.Duration>"
+            || parameters[1].Ownership != FunctionInputOwnership.Default
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.Bool
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature {ownerTypeName}, PollMode, Option<Duration> -> Result<Bool, SocketError>");
+        }
+        return BoundFunctionKind.RuntimeSocketPoll;
+    }
+
+    private BoundFunctionKind RequireSocketReactorWaitSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var eventsType = parameters.Count == 2
+            ? ParseType(parameters[0].TypeName, function.Line, function.Column)
+            : BoundType.Unit;
+        var eventsValid = _types.IsDynamicArray(eventsType)
+            && IsNamedStructType(_types.GetDynamicArray(eventsType).ElementType, "std.net.socket.ReadyEvent");
+        if (inputType is not { } reactorType
+            || !IsNamedStructType(reactorType, "std.net.socket.Reactor")
+            || parameters.Count != 2
+            || !eventsValid
+            || parameters[0].Ownership != FunctionInputOwnership.MutableBorrow
+            || parameters[1].TypeName != "Option<std.time.Duration>"
+            || parameters[1].Ownership != FunctionInputOwnership.Default
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.UIntSize
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature Reactor, mut [ReadyEvent; ~], Option<Duration> -> Result<UIntSize, SocketError>");
+        }
+        return BoundFunctionKind.RuntimeSocketReactorWait;
+    }
+
+    private BoundFunctionKind RequireSocketLingerSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        bool setter)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var parametersValid = setter
+            ? parameters.Count == 1
+                && parameters[0].TypeName == "Option<std.time.Duration>"
+                && parameters[0].Ownership == FunctionInputOwnership.Default
+            : parameters.Count == 0;
+        var resultValid = _types.TryGetResultTypes(returnType, out var resultTypes)
+            && IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError")
+            && (setter
+                ? resultTypes.Ok == BoundType.Unit
+                : _types.TryGetOptionValue(resultTypes.Ok, out var durationType)
+                    && IsNamedStructType(durationType, "std.time.Duration"));
+        if (inputType is not { } streamType
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || !parametersValid
+            || !resultValid)
+        {
+            var signature = setter
+                ? "TcpStream, Option<Duration> -> Result<Unit, SocketError>"
+                : "TcpStream -> Result<Option<Duration>, SocketError>";
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature {signature}");
+        }
+        return setter
+            ? BoundFunctionKind.RuntimeSocketSetLinger
+            : BoundFunctionKind.RuntimeSocketLinger;
+    }
+
+    private BoundFunctionKind RequireSocketTimeoutSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        bool setter,
+        bool write)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var parametersValid = setter
+            ? parameters.Count == 1
+                && parameters[0].TypeName == "Option<std.time.Duration>"
+                && parameters[0].Ownership == FunctionInputOwnership.Default
+            : parameters.Count == 0;
+        var resultValid = _types.TryGetResultTypes(returnType, out var resultTypes)
+            && IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError")
+            && (setter
+                ? resultTypes.Ok == BoundType.Unit
+                : _types.TryGetOptionValue(resultTypes.Ok, out var durationType)
+                    && IsNamedStructType(durationType, "std.time.Duration"));
+        if (inputType is not { } streamType
+            || !IsNamedStructType(streamType, "std.net.socket.TcpStream")
+            || !parametersValid
+            || !resultValid)
+        {
+            var direction = write ? "Write" : "Read";
+            var signature = setter
+                ? $"TcpStream, Option<Duration> -> Result<Unit, SocketError> for set{direction}Timeout"
+                : $"TcpStream -> Result<Option<Duration>, SocketError> for {direction.ToLowerInvariant()}Timeout";
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature {signature}");
+        }
+        return (setter, write) switch
+        {
+            (true, false) => BoundFunctionKind.RuntimeSocketSetReadTimeout,
+            (false, false) => BoundFunctionKind.RuntimeSocketReadTimeout,
+            (true, true) => BoundFunctionKind.RuntimeSocketSetWriteTimeout,
+            _ => BoundFunctionKind.RuntimeSocketWriteTimeout
+        };
     }
 
     private BoundFunctionKind RequireSocketBindDatagramSignature(
@@ -3314,10 +3832,10 @@ internal sealed partial class SemanticCompiler
         BoundType returnType)
     {
         if (inputType is not { } optionsType
-            || !IsNamedStructType(optionsType, "sys.socket.DatagramBindOptions")
+            || !IsNamedStructType(optionsType, "std.net.socket.DatagramBindOptions")
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
-            || !IsNamedStructType(resultTypes.Ok, "sys.socket.UdpSocket")
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.UdpSocket")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
                 $"intrinsic '{function.Name}' must have signature DatagramBindOptions -> Result<UdpSocket, SocketError>");
@@ -3332,13 +3850,13 @@ internal sealed partial class SemanticCompiler
     {
         var parameters = function.AdditionalParameters ?? [];
         if (inputType is not { } socketType
-            || !IsNamedStructType(socketType, "sys.socket.UdpSocket")
+            || !IsNamedStructType(socketType, "std.net.socket.UdpSocket")
             || parameters.Count != 2
-            || parameters[0].TypeName is not ("Endpoint" or "sys.socket.Endpoint")
+            || parameters[0].TypeName is not ("Endpoint" or "net.Endpoint" or "std.net.Endpoint")
             || parameters[1].TypeName != "ref [UInt8; ~]"
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || resultTypes.Ok != BoundType.UIntSize
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
                 $"intrinsic '{function.Name}' must have signature UdpSocket, Endpoint, ref [UInt8; ~] -> Result<UIntSize, SocketError>");
@@ -3352,15 +3870,41 @@ internal sealed partial class SemanticCompiler
         BoundType returnType)
     {
         if (inputType is not { } socketType
-            || !IsNamedStructType(socketType, "sys.socket.UdpSocket")
+            || !(IsNamedStructType(socketType, "std.net.socket.TcpListener")
+                || IsNamedStructType(socketType, "std.net.socket.TcpStream")
+                || IsNamedStructType(socketType, "std.net.socket.UdpSocket"))
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || resultTypes.Ok != BoundType.UInt16
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
-                $"intrinsic '{function.Name}' must have signature UdpSocket -> Result<UInt16, SocketError>");
+                $"intrinsic '{function.Name}' must have signature TcpListener|TcpStream|UdpSocket -> Result<UInt16, SocketError>");
         }
         return BoundFunctionKind.RuntimeSocketLocalPort;
+    }
+
+    private BoundFunctionKind RequireSocketEndpointObservationSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        bool remote)
+    {
+        if (inputType is not { } socketType
+            || !(IsNamedStructType(socketType, "std.net.socket.TcpListener")
+                || IsNamedStructType(socketType, "std.net.socket.TcpStream")
+                || IsNamedStructType(socketType, "std.net.socket.UdpSocket"))
+            || (remote && !IsNamedStructType(socketType, "std.net.socket.TcpStream"))
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedEnumType(resultTypes.Ok, "std.net.Endpoint")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            var operation = remote ? "remoteEndpoint" : "localEndpoint";
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{operation}' must return Result<std.net.Endpoint, SocketError> from a supported socket owner");
+        }
+        return remote
+            ? BoundFunctionKind.RuntimeSocketRemoteEndpoint
+            : BoundFunctionKind.RuntimeSocketLocalEndpoint;
     }
 
     private BoundFunctionKind RequireSocketReceiveFromSignature(
@@ -3370,12 +3914,12 @@ internal sealed partial class SemanticCompiler
     {
         var parameters = function.AdditionalParameters ?? [];
         if (inputType is not { } socketType
-            || !IsNamedStructType(socketType, "sys.socket.UdpSocket")
+            || !IsNamedStructType(socketType, "std.net.socket.UdpSocket")
             || parameters.Count != 1
             || parameters[0].TypeName != "UIntSize"
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
-            || !IsNamedStructType(resultTypes.Ok, "sys.socket.Datagram")
-            || !IsNamedStructType(resultTypes.Error, "sys.socket.SocketError"))
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.Datagram")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
         {
             throw Error(function.Line, function.Column,
                 $"intrinsic '{function.Name}' must have signature UdpSocket, UIntSize -> Result<Datagram, SocketError>");
@@ -3383,20 +3927,65 @@ internal sealed partial class SemanticCompiler
         return BoundFunctionKind.RuntimeSocketReceiveFrom;
     }
 
+    private BoundFunctionKind RequireSocketReceiveFromIntoSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        BoundFunctionKind kind)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } socketType
+            || !IsNamedStructType(socketType, "std.net.socket.UdpSocket")
+            || parameters.Count != 1
+            || parameters[0].TypeName != "[UInt8; ~]"
+            || parameters[0].Ownership != FunctionInputOwnership.MutableBorrow
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.DatagramReceipt")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature UdpSocket, mut [UInt8; ~] -> Result<DatagramReceipt, SocketError>");
+        }
+        return kind;
+    }
+
+    private BoundFunctionKind RequireDnsLookupSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } resolverType
+            || !IsNamedStructType(resolverType, "std.net.dns.Resolver")
+            || parameters.Count != 2
+            || parameters[0].TypeName != "Text"
+            || parameters[1].TypeName != "UInt16"
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !_types.IsDynamicArray(resultTypes.Ok)
+            || !IsNamedEnumType(_types.GetDynamicArray(resultTypes.Ok).ElementType, "std.net.Endpoint")
+            || !IsNamedStructType(resultTypes.Error, "std.net.dns.Error"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature Resolver, Text, UInt16 -> Result<[Endpoint; ~], Error>");
+        }
+        return BoundFunctionKind.RuntimeDnsLookup;
+    }
+
     private BoundFunctionKind RequireProcessRunIntrinsicSignature(
         FunctionDeclaration function,
         BoundType? inputType,
         BoundType returnType)
     {
-        if (inputType is not { } argvType
-            || !_types.IsDynamicArray(argvType)
-            || _types.GetDynamicArray(argvType).ElementType != BoundType.Text
+        if (inputType is not { } commandType
+            || !IsNamedStructType(commandType, "sys.process.Command")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || (function.AdditionalParameters?.Count ?? 0) != 0
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || resultTypes.Ok != BoundType.Int
             || resultTypes.Error != BoundType.Text)
         {
             throw Error(function.Line, function.Column,
-                $"intrinsic '{function.Name}' must have signature [Text; ~] -> Result<Int, Text>");
+                $"intrinsic '{function.Name}' must have signature move Command -> Result<Int, Text>");
         }
         return BoundFunctionKind.RuntimeRunProcess;
     }
@@ -3406,30 +3995,118 @@ internal sealed partial class SemanticCompiler
         BoundType? inputType,
         BoundType returnType)
     {
-        if (inputType is not { } requestType
-            || !_types.IsStruct(requestType)
-            || _types.GetStruct(requestType) is not { Name: "sys.process.RunToFileRequest" } request)
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } commandType
+            || !IsNamedStructType(commandType, "sys.process.Command")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || parameters.Count != 1
+            || parameters[0].TypeName != "Text")
         {
             throw Error(function.Line, function.Column,
-                $"intrinsic '{function.Name}' must have signature RunToFileRequest -> Result<Int, Text>");
+                $"intrinsic '{function.Name}' must have signature move Command, Text -> Result<Int, Text>");
         }
-
-        var argvField = request.Fields.FirstOrDefault(static field => field.Name == "argv");
-        var outputField = request.Fields.FirstOrDefault(static field => field.Name == "output");
-        if (request.Fields.Count != 2
-            || argvField is null
-            || outputField is null
-            || !_types.IsDynamicArray(argvField.Type)
-            || _types.GetDynamicArray(argvField.Type).ElementType != BoundType.Text
-            || outputField.Type != BoundType.Text
-            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+        if (!_types.TryGetResultTypes(returnType, out var resultTypes)
             || resultTypes.Ok != BoundType.Int
             || resultTypes.Error != BoundType.Text)
         {
             throw Error(function.Line, function.Column,
-                $"intrinsic '{function.Name}' must have signature RunToFileRequest -> Result<Int, Text>");
+                $"intrinsic '{function.Name}' must have signature move Command, Text -> Result<Int, Text>");
         }
         return BoundFunctionKind.RuntimeRunProcessToFile;
+    }
+
+    private BoundFunctionKind RequireProcessCollectIntrinsicSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } commandType
+            || !IsNamedStructType(commandType, "sys.process.Command")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || parameters.Count != 1
+            || parameters[0].TypeName is not ("CaptureLimits" or "sys.process.CaptureLimits")
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "sys.process.CapturedOutput")
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature "
+                + "move Command, CaptureLimits -> Result<CapturedOutput, Text>");
+        }
+        return BoundFunctionKind.RuntimeCollectProcess;
+    }
+
+    private BoundFunctionKind RequireProcessSpawnIntrinsicSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } commandType
+            || !IsNamedStructType(commandType, "sys.process.Command")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "sys.process.Child")
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move Command -> Result<Child, Text>");
+        }
+        return BoundFunctionKind.RuntimeSpawnProcess;
+    }
+
+    private BoundFunctionKind RequireProcessWaitIntrinsicSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } childType
+            || !IsNamedStructType(childType, "sys.process.Child")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "sys.process.ExitStatus")
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move Child -> Result<ExitStatus, Text>");
+        }
+        return BoundFunctionKind.RuntimeWaitProcess;
+    }
+
+    private BoundFunctionKind RequireProcessChildIdIntrinsicSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } childType
+            || !IsNamedStructType(childType, "sys.process.Child")
+            || function.InputOwnership != FunctionInputOwnership.Default
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || !IsNamedStructType(returnType, "sys.process.ProcessId"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature Child -> ProcessId");
+        }
+        return BoundFunctionKind.RuntimeChildProcessId;
+    }
+
+    private BoundFunctionKind RequireProcessIdValueIntrinsicSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } processIdType
+            || !IsNamedStructType(processIdType, "sys.process.ProcessId")
+            || function.InputOwnership != FunctionInputOwnership.Default
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || returnType != BoundType.UInt64)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature ProcessId -> UInt64");
+        }
+        return BoundFunctionKind.RuntimeProcessIdValue;
     }
 
     private BoundFunctionKind RequireGenericScalarWriteSignature(
@@ -3531,10 +4208,6 @@ internal sealed partial class SemanticCompiler
         AddGlobalAlias(functions, "openIntReader", "sys.file.openIntReader");
         AddGlobalAlias(functions, "closestInt", "sys.file.closestInt");
         AddGlobalAlias(functions, "closeIntReader", "sys.file.closeIntReader");
-        AddGlobalAlias(functions, "nowMillis", "sys.time.nowMillis");
-        AddGlobalAlias(functions, "milliseconds", "sys.time.milliseconds");
-        AddGlobalAlias(functions, "seconds", "sys.time.seconds");
-        AddGlobalAlias(functions, "sleep", "sys.time.sleep");
         AddGlobalAlias(functions, "parallel", "sys.runtime.parallel");
         AddGlobalAlias(functions, "tryParallel", "sys.runtime.tryParallel");
         AddGlobalAlias(functions, "limitParallelWorkers", "sys.runtime.limitParallelWorkers");
@@ -3715,10 +4388,19 @@ internal sealed partial class SemanticCompiler
                     }
                     ValidateBindingName(binding.Name, binding.Line, binding.Column);
                     var reboundType = default(BoundType);
-                    var isMutableRebind = binding.IsMutable
+                    var rebindsExistingMutable = binding.IsMutable
                         && bindings.TryGetValue(binding.Name, out reboundType)
-                        && mutableBindings.Contains(binding.Name)
-                        && !IsContainerType(reboundType);
+                        && mutableBindings.Contains(binding.Name);
+                    var isMutableContainerRebind = rebindsExistingMutable
+                        && IsContainerType(reboundType);
+                    if (isMutableContainerRebind)
+                    {
+                        throw Error(
+                            binding.Line,
+                            binding.Column,
+                            $"owned container binding '{binding.Name}' cannot be rebound; bind the selected owner once with '=> name!' or mutate the existing owner through its instance methods");
+                    }
+                    var isMutableRebind = rebindsExistingMutable;
                     if (isMutableRebind)
                     {
                         MarkMutableBindingMutation(binding.Name);
@@ -3727,8 +4409,29 @@ internal sealed partial class SemanticCompiler
                         ?? (binding.Value is NameExpression
                             ? MoveInputNameForExpression(binding.Value)
                             : null);
-                    var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, bindings);
-                    var movedFieldOwnerPlace = GetMoveConsumingOwnedFieldPlace(binding.Value, bindings);
+                    var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(
+                        binding.Value,
+                        bindings,
+                        mutableBindings);
+                    var movedFieldOwnerPlace = GetMoveConsumingOwnedFieldPlace(
+                        binding.Value,
+                        bindings,
+                        mutableBindings);
+                    var mutablyBorrowedFieldMove = movedFieldOwnerName is not null
+                        && mutableBindings.Contains(movedFieldOwnerName);
+                    if (mutablyBorrowedFieldMove
+                        && (binding.Value is not FieldAccessExpression movedField
+                            || statementIndex + 1 >= statements.Count
+                            || statements[statementIndex + 1] is not FieldAssignmentStatement repair
+                            || !string.Equals(repair.Name, movedFieldOwnerName, StringComparison.Ordinal)
+                            || !string.Equals(repair.FieldName, movedField.FieldName, StringComparison.Ordinal)
+                            || FunctionControlFlowFacts.MayExitEarly(repair.Value)))
+                    {
+                        throw Error(
+                            binding.Line,
+                            binding.Column,
+                            $"owned field '{movedFieldOwnerPlace ?? movedFieldOwnerName}' moved from a mutable borrow must be reinitialized by the immediately following infallible statement; write 'replacement => {movedFieldOwnerPlace ?? movedFieldOwnerName}' without '?' before any use, control flow, or early return");
+                    }
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
                     var bindingMutationConsumedSourceNames = GetOwnedContainerMutationConsumedSourceNames(
                         binding.Value,
@@ -3826,7 +4529,7 @@ internal sealed partial class SemanticCompiler
                         bindings.Remove(movedSourceName);
                         mutableBindings.Remove(movedSourceName);
                     }
-                    if (movedFieldOwnerName is not null)
+                    if (movedFieldOwnerName is not null && !mutablyBorrowedFieldMove)
                     {
                         bindings.Remove(movedFieldOwnerName);
                         mutableBindings.Remove(movedFieldOwnerName);
@@ -4055,10 +4758,11 @@ internal sealed partial class SemanticCompiler
                     {
                         ValidateOwnedParameterConsumptionExpression(returnStatement.Value, functions, bindings);
                         if (!_types.IsReference(_currentFunctionReturnType.Value)
-                            && IsContainerType(returnType))
+                            && _types.ContainsOwnedStorage(returnType))
                         {
-                            EnsureOwnedContainerCanLeaveBlock(
+                            EnsureOwnedValueCanLeaveBlock(
                                 returnStatement.Value,
+                                returnType,
                                 _currentFunctionOuterBindings
                                     ?? throw new SollangException("missing function return ownership scope"),
                                 bindings,
@@ -4068,13 +4772,41 @@ internal sealed partial class SemanticCompiler
                     _borrowedTextContinuationNames = parentBorrowedTextContinuation;
                     return;
                 case ExpressionStatement expressionStatement:
+                    var effect = InferExpressionStatement(expressionStatement.Expression, functions, bindings, mutableBindings, yieldInputType);
+                    var flowAggregateSourceNames = expressionStatement.Expression is FlowExpression
+                        {
+                            Source: StructLiteralExpression flowAggregate
+                        }
+                        && _types.TryResolve(flowAggregate.TypeName, out var flowAggregateType)
+                            ? GetOwnedAggregateLiteralSourceNames(
+                                flowAggregate,
+                                bindings,
+                                flowAggregateType)
+                            : [];
+                    // Type the flow before classifying container transforms so
+                    // an inherent method such as `value -> append(...)` has an
+                    // authoritative resolved declaration and is not mistaken
+                    // for the built-in consuming array transform.
                     var movedExpressionSourceName = GetMoveConsumingContainerSourceName(
                         expressionStatement.Expression,
                         functions);
-                    var effect = InferExpressionStatement(expressionStatement.Expression, functions, bindings, mutableBindings, yieldInputType);
                     var mutatedContainerSourceNames = GetOwnedContainerMutationConsumedSourceNames(
                         expressionStatement.Expression,
                         bindings);
+                    var expressionTransferredSourceNames = mutatedContainerSourceNames
+                        .Concat(flowAggregateSourceNames)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
+                    RejectBorrowedOwnedStorageTransfers(
+                        mutatedContainerSourceNames,
+                        expressionStatement.Expression.Line,
+                        expressionStatement.Expression.Column,
+                        "owned container storage");
+                    RejectBorrowedOwnedStorageTransfers(
+                        flowAggregateSourceNames,
+                        expressionStatement.Expression.Line,
+                        expressionStatement.Expression.Column,
+                        "an owned temporary aggregate used as a flowed input; declare read-only request fields or helper parameters as 'ref T'");
                     var consumedExpressionSourceNames = GetOwnedParameterConsumedSourceNames(
                         expressionStatement.Expression,
                         functions,
@@ -4083,7 +4815,7 @@ internal sealed partial class SemanticCompiler
                         movedExpressionSourceName,
                         null,
                         consumedExpressionSourceNames,
-                        mutatedContainerSourceNames,
+                        expressionTransferredSourceNames,
                         null,
                         false,
                         expressionStatement.Expression.Line,
@@ -4138,6 +4870,11 @@ internal sealed partial class SemanticCompiler
                         bindings.Remove(transferredSourceName);
                         mutableBindings.Remove(transferredSourceName);
                     }
+                    foreach (var transferredSourceName in flowAggregateSourceNames)
+                    {
+                        bindings.Remove(transferredSourceName);
+                        mutableBindings.Remove(transferredSourceName);
+                    }
 
                     break;
                 default:
@@ -4164,7 +4901,7 @@ internal sealed partial class SemanticCompiler
     {
         if (!bindings.TryGetValue(assignment.Name, out var targetType))
         {
-            throw Error(assignment.Line, assignment.Column, $"unknown binding '{assignment.Name}'");
+            throw UnknownBindingError(assignment.Name, assignment.Line, assignment.Column);
         }
 
         if (!_types.IsStruct(targetType))
@@ -4193,15 +4930,21 @@ internal sealed partial class SemanticCompiler
                 assignment.Line,
                 assignment.Column,
                 $"struct '{definition.Name}' has no field '{assignment.FieldName}'");
-        var valueType = InferExpression(
+        EnsureStructFieldVisible(
+            definition,
+            field,
+            assignment.Line,
+            assignment.Column,
+            "write");
+        var valueType = InferContextualValue(
             assignment.Value,
+            field.Type,
             functions,
             bindings,
-            allowPrintCall: false,
             allowReadIntCall: true,
-            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings,
             yieldInputType: yieldInputType,
-            mutableBindings: mutableBindings);
+            allowedOwnedOuterResultName: MoveInputNameForExpression(assignment.Value));
         if (valueType != field.Type)
         {
             throw Error(
@@ -4250,6 +4993,12 @@ internal sealed partial class SemanticCompiler
                 $"owned field '{definition.Name}.{field.Name}' requires a fresh value or a named owner transfer");
         }
 
+        RejectBorrowedOwnedStorageTransfers(
+            transferred,
+            assignment.Value.Line,
+            assignment.Value.Column,
+            $"owned field '{definition.Name}.{field.Name}'");
+
         foreach (var transferredName in transferred)
         {
             bindings.Remove(transferredName);
@@ -4266,7 +5015,7 @@ internal sealed partial class SemanticCompiler
     {
         if (!bindings.TryGetValue(assignment.Name, out var targetType))
         {
-            throw Error(assignment.Line, assignment.Column, $"unknown binding '{assignment.Name}'");
+            throw UnknownBindingError(assignment.Name, assignment.Line, assignment.Column);
         }
 
         var isDynamicArray = _types.IsDynamicArray(targetType);
@@ -4355,6 +5104,12 @@ internal sealed partial class SemanticCompiler
                     "owned indexed replacement requires a fresh value or a named owner transfer");
             }
 
+            RejectBorrowedOwnedStorageTransfers(
+                transferred,
+                assignment.Value.Line,
+                assignment.Value.Column,
+                "owned indexed storage");
+
             foreach (var transferredName in transferred)
             {
                 bindings.Remove(transferredName);
@@ -4388,6 +5143,38 @@ internal sealed partial class SemanticCompiler
         }
     }
 
+    private BlockFunctionPipelineStatement ExpandStreamFlowSource(
+        BlockFunctionPipelineStatement pipeline,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        var first = pipeline.Calls[0];
+        if (first.Source is not FlowExpression flow
+            || flow.Targets.Count == 0
+            || flow.Targets.Any(target => target.TypeArgument is not null
+                || target.CompileTimeValueArgument is not null
+                || !TryGetFunction(string.Join('.', target.Path), functions, out var function)
+                || (function.StreamElementType is null && function.StreamElementTypeTemplate is null)))
+        {
+            return pipeline;
+        }
+
+        // Expression parsing may absorb blockless stream stages into the source
+        // of the terminal block. Bind them through the same consuming pipeline.
+        var calls = new List<BlockFunctionCallStatement>();
+        Expression source = flow.Source;
+        foreach (var target in flow.Targets)
+        {
+            var name = $"$stream_flow_{target.Line}_{target.Column}";
+            calls.Add(new BlockFunctionCallStatement(source, target.Path, "it", [], name,
+                false, target.Line, target.Column, true, ResultIsSynthetic: true,
+                Arguments: target.Arguments, SourceFlowTarget: target));
+            source = new NameExpression(name, target.Line, target.Column);
+        }
+        // The terminal is already parsed; retain its identity for generic/cache metadata.
+        calls.Add(first);
+        calls.AddRange(pipeline.Calls.Skip(1));
+        return pipeline with { Calls = calls };
+    }
     private void BindBlockFunctionCall(
         BlockFunctionCallStatement call,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -4395,7 +5182,7 @@ internal sealed partial class SemanticCompiler
         HashSet<string> mutableBindings,
         BoundType? yieldInputType)
     {
-        var partitionPipeline = new BlockFunctionPipelineStatement([call], call.Line, call.Column);
+        var partitionPipeline = ExpandStreamFlowSource(new BlockFunctionPipelineStatement([call], call.Line, call.Column), functions);
         if (TryBindStreamJoinPipeline(
                 partitionPipeline,
                 functions,
@@ -4415,13 +5202,13 @@ internal sealed partial class SemanticCompiler
             return;
         }
         var target = string.Join('.', call.Target);
-        if (call.Source is NameExpression eventSource
+        if (partitionPipeline.Calls[0].Source is NameExpression eventSource
             && ((_currentDeferredStreams.TryGetValue(eventSource.Name, out var eventPlan)
                     && eventPlan.EventSource is not null)
                 || (bindings.TryGetValue(eventSource.Name, out var eventSourceType)
                     && (_types.IsEventStream(eventSourceType) || _types.IsStream(eventSourceType)))))
         {
-            var pipeline = new BlockFunctionPipelineStatement([call], call.Line, call.Column);
+            var pipeline = partitionPipeline;
             if (TryBindEventStreamingPipeline(
                     pipeline,
                     functions,
@@ -4432,14 +5219,14 @@ internal sealed partial class SemanticCompiler
                 return;
             }
         }
-        if ((call.Source is NameExpression streamSource
+        if ((partitionPipeline.Calls[0].Source is NameExpression streamSource
                 && _currentDeferredStreams.TryGetValue(streamSource.Name, out var streamPlan)
                 && streamPlan.EventSource is null)
             || (TryGetFunction(target, functions, out var possibleStreamFunction)
                 && (possibleStreamFunction.StreamElementType is not null
                     || possibleStreamFunction.StreamElementTypeTemplate is not null)))
         {
-            var pipeline = new BlockFunctionPipelineStatement([call], call.Line, call.Column);
+            var pipeline = partitionPipeline;
             if (TryBindStreamingPipeline(
                     pipeline,
                     functions,
@@ -4494,12 +5281,14 @@ internal sealed partial class SemanticCompiler
         HashSet<string> mutableBindings,
         BoundType? yieldInputType)
     {
+        var originalPipeline = pipeline;
+        pipeline = ExpandStreamFlowSource(pipeline, functions);
         if (TryBindStreamJoinPipeline(
                 pipeline,
                 functions,
                 bindings,
                 mutableBindings,
-                pipeline))
+                originalPipeline))
         {
             return;
         }
@@ -4508,7 +5297,7 @@ internal sealed partial class SemanticCompiler
                 functions,
                 bindings,
                 mutableBindings,
-                pipeline))
+                originalPipeline))
         {
             return;
         }
@@ -4522,11 +5311,11 @@ internal sealed partial class SemanticCompiler
                 functions,
                 bindings,
                 mutableBindings,
-                pipeline))
+                originalPipeline))
         {
             return;
         }
-        if (TryBindStreamingPipeline(pipeline, functions, bindings, mutableBindings, pipeline))
+        if (TryBindStreamingPipeline(pipeline, functions, bindings, mutableBindings, originalPipeline))
         {
             return;
         }
@@ -4637,7 +5426,7 @@ internal sealed partial class SemanticCompiler
                     suppressResultBinding: true,
                     streamedInputType: currentElementType);
             }
-            streamFunction = _resolvedGenericCalls.TryGetValue(call, out var specialization)
+            streamFunction = _resolvedGenericCalls.TryGetValue(call.ResolutionSite, out var specialization)
                 ? specialization
                 : streamFunction;
             currentElementType = streamFunction.StreamElementType
@@ -4757,7 +5546,7 @@ internal sealed partial class SemanticCompiler
                     suppressResultBinding: true,
                     streamedInputType: currentElementType);
             }
-            streamFunction = _resolvedGenericCalls.TryGetValue(call, out var specialization)
+            streamFunction = _resolvedGenericCalls.TryGetValue(call.ResolutionSite, out var specialization)
                 ? specialization
                 : streamFunction;
             currentElementType = streamFunction.StreamElementType
@@ -4921,7 +5710,7 @@ internal sealed partial class SemanticCompiler
                     suppressResultBinding: true,
                     streamedInputType: streamedInputType);
             }
-            streamFunction = _resolvedGenericCalls.TryGetValue(call, out var specialization)
+            streamFunction = _resolvedGenericCalls.TryGetValue(call.ResolutionSite, out var specialization)
                 ? specialization
                 : streamFunction;
             streamedInputType = streamFunction.StreamElementType
@@ -5099,7 +5888,7 @@ internal sealed partial class SemanticCompiler
                     streamedInputType: currentElementType);
             }
 
-            streamFunction = _resolvedGenericCalls.TryGetValue(call, out var specialization)
+            streamFunction = _resolvedGenericCalls.TryGetValue(call.ResolutionSite, out var specialization)
                 ? specialization
                 : streamFunction;
             currentElementType = streamFunction.StreamElementType
@@ -5168,7 +5957,7 @@ internal sealed partial class SemanticCompiler
             && function.SpecializedType is null
             && function.SpecializedValue is null)
         {
-            function = ResolveGenericSpecialization(function, streamedInputType, functions, call);
+            function = ResolveGenericSpecialization(function, streamedInputType, functions, call.ResolutionSite);
         }
         if (function.InputType != streamedInputType)
         {
@@ -5209,7 +5998,6 @@ internal sealed partial class SemanticCompiler
             throw Error(call.Line, call.Column, "while does not bind an iteration item");
         }
 
-        NoteLongControlCondition(call.Source, call.Line, "while");
         var conditionType = InferExpression(call.Source, functions, bindings,
             allowPrintCall: false, allowReadIntCall: true, allowFlowBindingTarget: false,
             mutableBindings: mutableBindings);
@@ -6845,14 +7633,17 @@ internal sealed partial class SemanticCompiler
                         allowPrintCall: false,
                         allowReadIntCall,
                         allowFlowBindingTarget: false);
-            if (elementType == BoundType.Unit
-                || elementType is BoundType.IntSlice
+            var unsupportedElement = expression.IsDynamic
+                ? IsUnsupportedGrowableArrayElementType(elementType)
+                : elementType == BoundType.Unit
+                    || elementType is BoundType.IntSlice
                     or BoundType.StaticIntArray
                     or BoundType.StaticTextArray
                     or BoundType.DynamicIntArray
                     or BoundType.IntDictionaryView
                     or BoundType.IntDictionary
-                || _types.IsStaticArray(elementType))
+                    || _types.IsStaticArray(elementType);
+            if (unsupportedElement)
             {
                 throw Error(element.Line, element.Column, "fixed array elements must be inline scalar or user values");
             }
@@ -6864,6 +7655,14 @@ internal sealed partial class SemanticCompiler
                     $"array elements must have one type; expected {FormatType(inferredElementType.Value)}, got {FormatType(elementType)}");
             }
             inferredElementType = elementType;
+            if (_types.ContainsOwnedStorage(elementType)
+                && ReferencePlaceRoot(element) is { } ownerName
+                && bindings.TryGetValue(ownerName, out var ownerType)
+                && _types.IsReference(ownerType))
+            {
+                throw Error(element.Line, element.Column,
+                    $"borrowed owned value '{ownerName}' cannot be copied into array storage; transfer an owned value instead");
+            }
         }
 
         if (expression.BoundedCapacity is { } boundedCapacity)
@@ -6887,12 +7686,7 @@ internal sealed partial class SemanticCompiler
             };
         }
 
-        return inferredElementType switch
-        {
-            null or BoundType.Int => BoundType.StaticIntArray,
-            BoundType.Text => BoundType.StaticTextArray,
-            _ => _types.GetOrAddStaticArray(inferredElementType.Value)
-        };
+        return _types.GetOrAddFixedStaticArray(inferredElementType ?? BoundType.Int, expression.Elements.Count);
     }
 
     private BoundType InferArrayRepeatExpression(
@@ -6957,10 +7751,9 @@ internal sealed partial class SemanticCompiler
             return BoundType.DynamicIntArray;
         }
         var elementType = ParseType(expression.ElementType, expression.Line, expression.Column);
-        if (elementType == BoundType.Unit
-            || IsNestedContainerElementType(elementType))
+        if (IsUnsupportedGrowableArrayElementType(elementType))
         {
-            throw Error(expression.Line, expression.Column, "growable array elements must be inline scalar or user values");
+            throw Error(expression.Line, expression.Column, "growable array elements must have a supported inline value layout");
         }
         return _types.GetOrAddDynamicArray(elementType);
     }
@@ -7088,7 +7881,8 @@ internal sealed partial class SemanticCompiler
             allowPrintCall: false,
             allowReadIntCall,
             allowFlowBindingTarget: false,
-            allowOwnedElementBorrow: allowOwnedElementBorrow);
+            // The source remains a place; only the selected element can escape.
+            allowOwnedElementBorrow: true);
         if (_types.IsReference(sourceType))
         {
             sourceType = _types.GetReference(sourceType).ElementType;
@@ -7210,6 +8004,10 @@ internal sealed partial class SemanticCompiler
         bool allowReadIntCall)
     {
         var definition = _types.GetStruct(expectedType);
+        EnsureStructConstructionVisible(
+            definition,
+            expression.Line,
+            expression.Column);
         if (definition.ComInterface is not null || definition.NativeHandle is not null)
         {
             throw Error(
@@ -7273,6 +8071,10 @@ internal sealed partial class SemanticCompiler
         EnsureTypeVisible(type, expression.Line, expression.Column);
 
         var definition = _types.GetStruct(type);
+        EnsureStructConstructionVisible(
+            definition,
+            expression.Line,
+            expression.Column);
         if (definition.ComInterface is not null || definition.NativeHandle is not null)
         {
             throw Error(
@@ -7590,7 +8392,7 @@ internal sealed partial class SemanticCompiler
         }
         if (expression.Source is NameExpression typeName
             && !bindings.ContainsKey(typeName.Name)
-            && _types.TryResolve(typeName.Name, out var enumType)
+            && _types.TryResolveInModule(typeName.Name, _currentModuleName, out var enumType)
             && _types.IsEnum(enumType))
         {
             EnsureTypeVisible(enumType, expression.Line, expression.Column);
@@ -7667,6 +8469,12 @@ internal sealed partial class SemanticCompiler
         var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == expression.FieldName);
         if (field is not null)
         {
+            EnsureStructFieldVisible(
+                definition,
+                field,
+                expression.Line,
+                expression.Column,
+                "read");
             if (_types.ContainsOwnedStorage(field.Type)
                 && !allowOwnedElementBorrow
                 && IndexedProjectionRoot(expression.Source) is { } indexedRoot)
@@ -8017,6 +8825,25 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowReadIntCall);
 
+        if (left == BoundType.Text || right == BoundType.Text)
+        {
+            if (expression.Operator is not (ComparisonOperator.Equal or ComparisonOperator.NotEqual))
+            {
+                throw Error(
+                    expression.Left.Line,
+                    expression.Left.Column,
+                    "Text supports content equality with '==' and '!='; ordering requires an explicit text comparison API");
+            }
+            if (left != BoundType.Text || right != BoundType.Text)
+            {
+                throw Error(
+                    expression.Right.Line,
+                    expression.Right.Column,
+                    $"Text equality requires Text on both sides; left is {FormatType(left)}, right is {FormatType(right)}");
+            }
+            return BoundType.Bool;
+        }
+
         if (!IsNumericType(left))
         {
             throw Error(expression.Left.Line, expression.Left.Column, "left operand of comparison must be numeric");
@@ -8148,10 +8975,6 @@ internal sealed partial class SemanticCompiler
                 "the success branch is empty; replace 'condition -> if {} else { ... }' with 'condition -> unless { ... }'");
         }
 
-        NoteLongControlCondition(
-            UnwrapUnlessCondition(expression),
-            expression.Line,
-            IsUnlessCondition(expression) ? "unless" : "if");
 
         var condition = InferExpression(
             expression.Condition,
@@ -8412,13 +9235,16 @@ internal sealed partial class SemanticCompiler
         return condition is SubjectCompareExpression or SubjectRangeExpression;
     }
 
-    private static bool CanTransferOwnedEnumPayload(
+    private bool CanTransferOwnedEnumPayload(
         Expression subject,
         IReadOnlyDictionary<string, BoundType> bindings)
     {
         return subject switch
         {
-            NameExpression => true,
+            NameExpression name => _currentFunctionOuterBindings is null
+                || !_currentFunctionOuterBindings.TryGetValue(name.Name, out var parameterType)
+                || !_types.ContainsOwnedStorage(parameterType)
+                || _currentMoveInputNames.Contains(name.Name),
             FieldAccessExpression { Source: NameExpression owner } => !bindings.ContainsKey(owner.Name),
             FieldAccessExpression field => CanTransferOwnedEnumPayload(field.Source, bindings),
             _ => true
@@ -8433,6 +9259,11 @@ internal sealed partial class SemanticCompiler
     {
         foreach (var statement in body.Statements)
         {
+            if (statement is ReturnStatement { Value: NameExpression returnedName }
+                && string.Equals(returnedName.Name, name, StringComparison.Ordinal))
+            {
+                return true;
+            }
             var value = statement switch
             {
                 BindingStatement binding => binding.Value,
@@ -8450,9 +9281,11 @@ internal sealed partial class SemanticCompiler
             }
         }
 
-        return body.Value is not null
-            && GetOwnedParameterConsumedSourceNames(body.Value, functions, bindings)
-                .Contains(name, StringComparer.Ordinal);
+        return body.Value is NameExpression resultName
+                && string.Equals(resultName.Name, name, StringComparison.Ordinal)
+            || body.Value is not null
+                && GetOwnedParameterConsumedSourceNames(body.Value, functions, bindings)
+                    .Contains(name, StringComparer.Ordinal);
     }
 
     private BoundType InferEnumMatchExpression(
@@ -8489,7 +9322,7 @@ internal sealed partial class SemanticCompiler
             var pattern = (EnumPatternExpression)arm.Condition;
             var patternType = subjectType;
             if (pattern.TypeName.Length > 0
-                && !_types.TryResolve(pattern.TypeName, out patternType)
+                && !_types.TryResolveInModule(pattern.TypeName, _currentModuleName, out patternType)
                 && (pattern.TypeName.StartsWith("Option<", StringComparison.Ordinal)
                     || pattern.TypeName.StartsWith("Result<", StringComparison.Ordinal)))
             {
@@ -8500,14 +9333,17 @@ internal sealed partial class SemanticCompiler
                 throw Error(
                     pattern.Line,
                     pattern.Column,
-                    $"pattern type '{pattern.TypeName}' does not match enum '{definition.Name}'");
+                    $"pattern type '{pattern.TypeName}' does not match enum '{definition.Name}'; "
+                    + $"change the pattern type to '{definition.Name}', or match the value that produces '{pattern.TypeName}'");
             }
 
             var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == pattern.VariantName)
                 ?? throw Error(
                     pattern.Line,
                     pattern.Column,
-                    $"enum '{definition.Name}' has no variant '{pattern.VariantName}'");
+                    $"enum '{definition.Name}' has no variant '{pattern.VariantName}'; "
+                    + $"use one of [{string.Join(", ", definition.Variants.Select(static candidate => candidate.Name))}], "
+                    + $"or match a value whose enum declares '{pattern.VariantName}'");
             if (!covered.Add(variant.Name))
             {
                 throw Error(pattern.Line, pattern.Column, $"variant '{definition.Name}.{variant.Name}' is matched more than once");
@@ -8558,7 +9394,13 @@ internal sealed partial class SemanticCompiler
                     allowReadIntCall,
                     allowedOwnedOuterResultName,
                     mutableBindings,
-                    expectedResultType);
+                    expectedResultType,
+                    // The pattern is declared inside this arm. Its owned
+                    // payload may leave the arm only when the subject can
+                    // transfer it; a borrowed subject keeps the outer guard.
+                    ownedResultOuterBindings: CanTransferOwnedEnumPayload(expression.Subject, bindings)
+                        ? bindings
+                        : armBindings);
                 if (variant.PayloadType is { } ownedPayloadType
                     && _types.ContainsOwnedStorage(ownedPayloadType)
                     && pattern.BindingName is { } ownedPayloadName
@@ -8829,7 +9671,8 @@ internal sealed partial class SemanticCompiler
         bool allowReadIntCall,
         string? allowedOwnedOuterResultName = null,
         IReadOnlySet<string>? mutableBindings = null,
-        BoundType? expectedResultType = null)
+        BoundType? expectedResultType = null,
+        IReadOnlyDictionary<string, BoundType>? ownedResultOuterBindings = null)
     {
         var parentMutableDeclarationsByName = _currentMutableDeclarationsByName is null
             ? null
@@ -8890,11 +9733,12 @@ internal sealed partial class SemanticCompiler
                 "static array block results are not supported yet; use a growable array or keep the static array inside the block");
         }
 
-        if (IsContainerType(resultType))
+        if (_types.ContainsOwnedStorage(resultType))
         {
-            EnsureOwnedContainerCanLeaveBlock(
+            EnsureOwnedValueCanLeaveBlock(
                 body.Value,
-                bindings,
+                resultType,
+                ownedResultOuterBindings ?? bindings,
                 bodyBindings,
                 allowedOwnedOuterResultName);
         }
@@ -8916,23 +9760,56 @@ internal sealed partial class SemanticCompiler
         BoundType? yieldInputType = null,
         IReadOnlySet<string>? mutableBindings = null)
     {
-        var firstTargetReadonlyBorrows = expression.Targets.Count > 0
-            && ((expression.Targets[0].Path.Count == 1
-                    && expression.Targets[0].Path[0] is "len" or "byte" or "slice")
-                || (TryGetFunction(expression.Targets[0].Path, functions, out var firstFunction)
-                    && firstFunction.InputType is not null
-                    && firstFunction.InputOwnership == BoundFunctionInputOwnership.Default));
-        var firstTargetConsumesOwned = expression.Targets.Count > 0
-            && TryGetFunction(expression.Targets[0].Path, functions, out var consumingFunction)
-            && consumingFunction.InputType is not null
-            && consumingFunction.InputOwnership == BoundFunctionInputOwnership.Move;
-        var currentType = InferFlowSource(
+        // Resolve a direct collection target before inferring literal elements.
+        // Otherwise a wide integer can fail the default Int bounds before its
+        // declared parameter element type ever reaches contextual inference.
+        BoundType? initialCollectionContext = expression.Source is ArrayLiteralExpression or ArrayRepeatExpression
+            && expression.Targets.Count > 0
+            && TryGetFunction(string.Join('.', expression.Targets[0].Path), functions, out var contextualTarget)
+            && contextualTarget.InputType is { } contextualSourceType
+            && TryGetContextualArrayElementType(contextualSourceType, out _)
+                ? contextualSourceType
+                : null;
+        var currentType = initialCollectionContext is { } initialElementContext
+                ? InferContextualValue(
+                    expression.Source,
+                    initialElementContext,
+                    functions,
+                    bindings,
+                    allowReadIntCall,
+                    mutableBindings)
+                : InferFlowSource(
             expression.Source,
             functions,
             bindings,
             allowReadIntCall,
             mutableBindings,
-            firstTargetReadonlyBorrows);
+            allowOwnedElementBorrow: true);
+        var firstTargetReadonlyBorrows = expression.Targets.Count > 0
+            && expression.Targets[0].Path.Count == 1
+            && expression.Targets[0].Path[0] is "len" or "byte" or "slice";
+        var firstTargetConsumesOwned = false;
+        if (expression.Targets.Count > 0)
+        {
+            var firstTargetPath = string.Join('.', expression.Targets[0].Path);
+            if (TryResolveInstanceMethod(currentType, firstTargetPath, functions, out var firstFunction)
+                || TryGetFunction(firstTargetPath, functions, out firstFunction))
+            {
+                firstTargetReadonlyBorrows = firstFunction.InputType is not null
+                    && firstFunction.InputOwnership == BoundFunctionInputOwnership.Default;
+                firstTargetConsumesOwned = firstFunction.InputType is not null
+                    && firstFunction.InputOwnership == BoundFunctionInputOwnership.Move;
+            }
+        }
+        if (_types.ContainsOwnedStorage(currentType)
+            && IndexedProjectionRoot(expression.Source) is not null
+            && !firstTargetReadonlyBorrows)
+        {
+            throw Error(
+                expression.Source.Line,
+                expression.Source.Column,
+                $"indexing owned array element type {FormatType(currentType)} may only borrow it directly for a readonly call; use take to move it out");
+        }
         if (IsOwnedHeapType(currentType)
             && IsAnonymousOwnedHeapContainerExpression(expression.Source)
             && !firstTargetReadonlyBorrows
@@ -9067,27 +9944,47 @@ internal sealed partial class SemanticCompiler
                 return new FlowResult(BoundType.Unit, FlowEffect.None);
             }
 
-            if (TryGetFunction(path, functions, out var function)
-                || TryResolveInstanceMethod(currentType, path, functions, out function))
+            if (TryResolveInstanceMethod(currentType, path, functions, out var function)
+                || TryGetFunction(path, functions, out function))
             {
                 EnsureFunctionVisible(function, target.Line, target.Column);
                 EnsureAsyncRuntimeCallable(function, target.Line, target.Column, path);
+                if (string.Equals(function.Name, "sys.input.mouse.source", StringComparison.Ordinal))
+                {
+                    ValidateMouseEventCapacityLiteral(expression.Source);
+                }
                 if (function.Kind is not (
                         BoundFunctionKind.User
                         or BoundFunctionKind.Native
                         or BoundFunctionKind.RuntimeMouseEvents
                         or BoundFunctionKind.RuntimeSocketReceive
+                        or BoundFunctionKind.RuntimeSocketReceiveAppend
+                        or BoundFunctionKind.RuntimeSocketReceiveVectored
+                        or BoundFunctionKind.RuntimeSocketPeek
                         or BoundFunctionKind.RuntimeSocketSend
-                        or BoundFunctionKind.RuntimeSocketSendText)
-                    && target.Arguments.Count != 0)
+                        or BoundFunctionKind.RuntimeSocketSendRange
+                        or BoundFunctionKind.RuntimeSocketSendVectored
+                        or BoundFunctionKind.RuntimeSocketTryClone
+                        or BoundFunctionKind.RuntimeSocketSendText
+                        or BoundFunctionKind.RuntimeSocketSendTo
+                        or BoundFunctionKind.RuntimeSocketReceiveFrom
+                        or BoundFunctionKind.RuntimeSocketPeekFrom
+                        or BoundFunctionKind.RuntimeSocketClose
+                        or BoundFunctionKind.RuntimeSocketSetNonblocking
+                        or BoundFunctionKind.RuntimeSocketPoll
+                        or BoundFunctionKind.RuntimeSocketReactorWait
+                        or BoundFunctionKind.RuntimeDnsLookup)
+                    && target.Arguments.Count != 0
+                    && (function.AdditionalParameters?.Count ?? 0) == 0)
                 {
                     throw Error(
                         target.Line,
                         target.Column,
-                        $"function value-flow target '{path}' does not accept additional arguments in this slice");
+                        $"function value-flow target '{path}' ({function.Kind}) does not accept additional arguments in this slice");
                 }
                 if (i == 0
                     && function.InputType is { } contextualInput
+                    && initialCollectionContext != contextualInput
                     && expression.Source is (ArrayLiteralExpression
                         or ArrayRepeatExpression
                         or DictionaryLiteralExpression))
@@ -9230,6 +10127,11 @@ internal sealed partial class SemanticCompiler
                         continue;
                     case BoundFunctionKind.RuntimeRunProcess:
                     case BoundFunctionKind.RuntimeRunProcessToFile:
+                    case BoundFunctionKind.RuntimeCollectProcess:
+                    case BoundFunctionKind.RuntimeSpawnProcess:
+                    case BoundFunctionKind.RuntimeWaitProcess:
+                    case BoundFunctionKind.RuntimeChildProcessId:
+                    case BoundFunctionKind.RuntimeProcessIdValue:
                     case BoundFunctionKind.RuntimeReadDirectory:
                     case BoundFunctionKind.RuntimeCreateDirectory:
                     case BoundFunctionKind.RuntimePathQuery:
@@ -9241,6 +10143,7 @@ internal sealed partial class SemanticCompiler
                             function.InputType,
                             currentType);
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        _resolvedGenericCalls[target] = function;
                         currentType = function.ReturnType;
                         continue;
                     case BoundFunctionKind.RuntimeMouseEvents:
@@ -9251,7 +10154,6 @@ internal sealed partial class SemanticCompiler
                             expression.Column,
                             path);
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
-                        ValidateMouseEventCapacityLiteral(expression.Source);
                         ValidateAdditionalFunctionArguments(
                             function,
                             target.Arguments,
@@ -9260,19 +10162,44 @@ internal sealed partial class SemanticCompiler
                             allowReadIntCall,
                             mutableBindings,
                             path);
+                        _resolvedGenericCalls[target] = function;
                         currentType = function.ReturnType;
                         continue;
                     case BoundFunctionKind.RuntimeSocketListen:
                     case BoundFunctionKind.RuntimeSocketAccept:
                     case BoundFunctionKind.RuntimeSocketConnect:
                     case BoundFunctionKind.RuntimeSocketReceive:
+                    case BoundFunctionKind.RuntimeSocketReceiveAppend:
+                    case BoundFunctionKind.RuntimeSocketReceiveVectored:
+                    case BoundFunctionKind.RuntimeSocketPeek:
                     case BoundFunctionKind.RuntimeSocketSend:
+                    case BoundFunctionKind.RuntimeSocketSendRange:
+                    case BoundFunctionKind.RuntimeSocketSendVectored:
+                    case BoundFunctionKind.RuntimeSocketTryClone:
                     case BoundFunctionKind.RuntimeSocketSendText:
                     case BoundFunctionKind.RuntimeSocketShutdown:
                     case BoundFunctionKind.RuntimeSocketBindDatagram:
                     case BoundFunctionKind.RuntimeSocketLocalPort:
+                    case BoundFunctionKind.RuntimeSocketLocalEndpoint:
+                    case BoundFunctionKind.RuntimeSocketRemoteEndpoint:
+                    case BoundFunctionKind.RuntimeSocketSetNoDelay:
+                    case BoundFunctionKind.RuntimeSocketNoDelay:
+                    case BoundFunctionKind.RuntimeSocketSetKeepAlive:
+                    case BoundFunctionKind.RuntimeSocketKeepAlive:
+                    case BoundFunctionKind.RuntimeSocketSetLinger:
+                    case BoundFunctionKind.RuntimeSocketLinger:
+                    case BoundFunctionKind.RuntimeSocketSetReadTimeout:
+                    case BoundFunctionKind.RuntimeSocketReadTimeout:
+                    case BoundFunctionKind.RuntimeSocketSetWriteTimeout:
+                    case BoundFunctionKind.RuntimeSocketWriteTimeout:
                     case BoundFunctionKind.RuntimeSocketSendTo:
                     case BoundFunctionKind.RuntimeSocketReceiveFrom:
+                    case BoundFunctionKind.RuntimeSocketPeekFrom:
+                    case BoundFunctionKind.RuntimeSocketClose:
+                    case BoundFunctionKind.RuntimeSocketSetNonblocking:
+                    case BoundFunctionKind.RuntimeSocketPoll:
+                    case BoundFunctionKind.RuntimeSocketReactorWait:
+                    case BoundFunctionKind.RuntimeDnsLookup:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         ValidateAdditionalFunctionArguments(
                             function,
@@ -9304,7 +10231,7 @@ internal sealed partial class SemanticCompiler
                         {
                             function = function.IsValueGeneric
                                 ? ResolveValueGenericSpecialization(function, currentType, target.CompileTimeValueArgument, target)
-                                : ResolveGenericSpecialization(function, currentType, functions, target);
+                                : ResolveGenericFlowSpecialization(function, currentType, target, functions, bindings, allowReadIntCall);
                         }
                         else if (target.CompileTimeValueArgument is not null)
                         {
@@ -9377,6 +10304,10 @@ internal sealed partial class SemanticCompiler
                 }
             }
 
+            if (target.OpenImportCandidates is { Count: > 1 } candidates)
+            {
+                throw Error(target.Line, target.Column, ImportDiagnostics.AmbiguousSymbol(path, candidates));
+            }
             throw Error(target.Line, target.Column, $"unknown value-flow target '{path}'");
         }
 
@@ -9512,12 +10443,13 @@ internal sealed partial class SemanticCompiler
         }
         var incompatible = trait.Methods.FirstOrDefault(method =>
             method.SelfOwnership != BoundFunctionInputOwnership.Default
-            || method.ReturnType != BoundType.Int);
+            || method.ReturnType != BoundType.Int
+            || method.AdditionalParameters.Count != 0);
         if (incompatible is not null)
         {
             throw Error(line, column,
                 $"trait method '{CanonicalTraitName(trait)}.{incompatible.Name}' is not dyn-compatible; "
-                + "the current dyn slice requires readonly self and an Int return type");
+                + "the current dyn slice requires readonly self, no additional parameters, and an Int return type");
         }
     }
 
@@ -9723,6 +10655,15 @@ internal sealed partial class SemanticCompiler
                 isAsync ? _types.GetOrAddTask(returnType) : returnType,
                 FlowEffect.None);
             return true;
+        }
+
+        // Declared call targets take precedence over spelling-based container intrinsics.
+        if ((TryResolveInstanceMethod(currentType, path, functions, out var declaredFunction)
+                || TryGetFunction(path, functions, out declaredFunction))
+            && declaredFunction.IsVisibleFrom(_currentModuleName)
+            && declaredFunction.Kind is BoundFunctionKind.User or BoundFunctionKind.Native)
+        {
+            return false;
         }
 
         switch (path)
@@ -10103,7 +11044,11 @@ internal sealed partial class SemanticCompiler
                     throw Error(target.Line, target.Column, "push must be the final value-flow target");
                 }
 
-                EnsureMutableContainerSource(expression.Source, "push", mutableBindings);
+                EnsureMutableContainerSource(
+                    expression.Source,
+                    "push",
+                    mutableBindings,
+                    allowProjection: true);
 
                 if (target.Arguments.Count != 1)
                 {
@@ -10128,6 +11073,17 @@ internal sealed partial class SemanticCompiler
                         target.Arguments[0].Line,
                         target.Arguments[0].Column,
                         $"push expects {FormatType(expectedPushedType)}, got {FormatType(pushedType)}");
+                }
+                if (_types.ContainsOwnedStorage(expectedPushedType))
+                {
+                    RejectBorrowedOwnedStorageTransfers(
+                        GetOwnedAggregateLiteralSourceNames(
+                            pushedArgument,
+                            bindings,
+                            expectedPushedType),
+                        pushedArgument.Line,
+                        pushedArgument.Column,
+                        "owned container storage");
                 }
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
                 return true;
@@ -10518,6 +11474,11 @@ internal sealed partial class SemanticCompiler
 
         EnsureFunctionVisible(function, expression.Line, expression.Column);
         EnsureAsyncRuntimeCallable(function, expression.Line, expression.Column, path);
+        if (string.Equals(function.Name, "sys.input.mouse.source", StringComparison.Ordinal)
+            && expression.Arguments.Count > 0)
+        {
+            ValidateMouseEventCapacityLiteral(expression.Arguments[0]);
+        }
 
         if (expression.Arguments.Count == 0
             && (function.Kind == BoundFunctionKind.RuntimePrintLine
@@ -10664,6 +11625,11 @@ internal sealed partial class SemanticCompiler
                 return AsyncCallType(function);
             case BoundFunctionKind.RuntimeRunProcess:
             case BoundFunctionKind.RuntimeRunProcessToFile:
+            case BoundFunctionKind.RuntimeCollectProcess:
+            case BoundFunctionKind.RuntimeSpawnProcess:
+            case BoundFunctionKind.RuntimeWaitProcess:
+            case BoundFunctionKind.RuntimeChildProcessId:
+            case BoundFunctionKind.RuntimeProcessIdValue:
             case BoundFunctionKind.RuntimeSyncFile:
             case BoundFunctionKind.RuntimeAtomicReplaceFile:
                 if (expression.Arguments.Count != 1)
@@ -10674,6 +11640,7 @@ internal sealed partial class SemanticCompiler
                     expression.Arguments[0], functions, bindings,
                     allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
                 EnsureRuntimeInput(argvType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
+                _resolvedGenericCalls[expression] = function;
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeReadDirectory:
             case BoundFunctionKind.RuntimeCreateDirectory:
@@ -10732,6 +11699,7 @@ internal sealed partial class SemanticCompiler
 
                 return BoundType.Unit;
             case BoundFunctionKind.RuntimeNowMillis:
+            case BoundFunctionKind.RuntimeUtcNowMillis:
             case BoundFunctionKind.RuntimePathStyle:
             case BoundFunctionKind.RuntimeParallelWorkers:
             case BoundFunctionKind.RuntimeParallelPeakWorkers:
@@ -10759,14 +11727,14 @@ internal sealed partial class SemanticCompiler
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeMouseEvents:
                 EnsureRuntimeIntrinsicAllowed(function, allowReadIntCall, expression.Line, expression.Column, path);
-                if (expression.Arguments.Count != 2)
+                if (expression.Arguments.Count != 1)
                 {
                     throw Error(
                         expression.Line,
                         expression.Column,
-                        $"{path} expects capacity and overflow arguments");
+                        $"{path} expects exactly one Source argument");
                 }
-                var capacityType = InferExpression(
+                var mouseSourceType = InferExpression(
                     expression.Arguments[0],
                     functions,
                     bindings,
@@ -10775,20 +11743,12 @@ internal sealed partial class SemanticCompiler
                     allowFlowBindingTarget: false,
                     mutableBindings: mutableBindings);
                 EnsureRuntimeInput(
-                    capacityType,
+                    mouseSourceType,
                     function,
                     expression.Arguments[0].Line,
                     expression.Arguments[0].Column,
                     path);
-                ValidateMouseEventCapacityLiteral(expression.Arguments[0]);
-                ValidateAdditionalFunctionArguments(
-                    function,
-                    expression.Arguments.Skip(1).ToArray(),
-                    functions,
-                    bindings,
-                    allowReadIntCall,
-                    mutableBindings,
-                    path);
+                _resolvedGenericCalls[expression] = function;
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeSleep:
                 if (expression.Arguments.Count != 1)
@@ -10817,13 +11777,37 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeSocketAccept:
             case BoundFunctionKind.RuntimeSocketConnect:
             case BoundFunctionKind.RuntimeSocketReceive:
+            case BoundFunctionKind.RuntimeSocketReceiveAppend:
+            case BoundFunctionKind.RuntimeSocketReceiveVectored:
+            case BoundFunctionKind.RuntimeSocketPeek:
             case BoundFunctionKind.RuntimeSocketSend:
+            case BoundFunctionKind.RuntimeSocketSendRange:
+            case BoundFunctionKind.RuntimeSocketSendVectored:
+            case BoundFunctionKind.RuntimeSocketTryClone:
             case BoundFunctionKind.RuntimeSocketSendText:
             case BoundFunctionKind.RuntimeSocketShutdown:
             case BoundFunctionKind.RuntimeSocketBindDatagram:
             case BoundFunctionKind.RuntimeSocketLocalPort:
+            case BoundFunctionKind.RuntimeSocketLocalEndpoint:
+            case BoundFunctionKind.RuntimeSocketRemoteEndpoint:
+            case BoundFunctionKind.RuntimeSocketSetNoDelay:
+            case BoundFunctionKind.RuntimeSocketNoDelay:
+            case BoundFunctionKind.RuntimeSocketSetKeepAlive:
+            case BoundFunctionKind.RuntimeSocketKeepAlive:
+            case BoundFunctionKind.RuntimeSocketSetLinger:
+            case BoundFunctionKind.RuntimeSocketLinger:
+            case BoundFunctionKind.RuntimeSocketSetReadTimeout:
+            case BoundFunctionKind.RuntimeSocketReadTimeout:
+            case BoundFunctionKind.RuntimeSocketSetWriteTimeout:
+            case BoundFunctionKind.RuntimeSocketWriteTimeout:
             case BoundFunctionKind.RuntimeSocketSendTo:
             case BoundFunctionKind.RuntimeSocketReceiveFrom:
+            case BoundFunctionKind.RuntimeSocketPeekFrom:
+            case BoundFunctionKind.RuntimeSocketClose:
+            case BoundFunctionKind.RuntimeSocketSetNonblocking:
+            case BoundFunctionKind.RuntimeSocketPoll:
+            case BoundFunctionKind.RuntimeSocketReactorWait:
+            case BoundFunctionKind.RuntimeDnsLookup:
                 var socketArgumentCount = 1 + (function.AdditionalParameters?.Count ?? 0);
                 if (expression.Arguments.Count != socketArgumentCount)
                 {
@@ -10929,6 +11913,51 @@ internal sealed partial class SemanticCompiler
             default:
                 throw Error(expression.Line, expression.Column, $"unsupported function kind '{function.Kind}'");
         }
+    }
+
+    private BoundFunction ResolveGenericFlowSpecialization(
+        BoundFunction template, BoundType inputType, FlowTarget target,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings, bool allowReadIntCall)
+    {
+        if (target.Arguments.Count == 0 && target.TypeArgument is null)
+            return ResolveGenericSpecialization(template, inputType, functions, target);
+
+        var names = GenericParameterNames(template);
+        var inferred = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        if (target.TypeArgument is { } explicitType)
+            inferred[names[0]] = ParseType(explicitType, target.Line, target.Column);
+        InferGenericArgument(template.InputTypeTemplate, template.InputType, inputType,
+            template, inferred, target.Line, target.Column);
+        var parameters = template.AdditionalParameters ?? [];
+        if (target.Arguments.Count != parameters.Count)
+            throw Error(target.Line, target.Column,
+                $"generic function '{template.Name}' expects {parameters.Count} additional argument(s)");
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            var argument = target.Arguments[index];
+            var parameter = parameters[index];
+            var canContextualize = parameter.TypeTemplate is { } typeTemplate
+                ? names.Where(name => TypeSyntaxReferencesParameter(typeTemplate, name))
+                    .All(inferred.ContainsKey)
+                : names.All(inferred.ContainsKey);
+            var argumentType = canContextualize
+                ? InferContextualValue(argument,
+                    parameter.TypeTemplate is { } contextualTemplate
+                        ? ParseSpecializedFunctionType(contextualTemplate, inferred, argument.Line, argument.Column)
+                        : SubstituteGenericType(parameter.Type, template, inferred),
+                    functions, bindings, allowReadIntCall)
+                : InferExpression(argument, functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+            InferGenericArgument(parameters[index].TypeTemplate, parameters[index].Type,
+                argumentType, template, inferred, argument.Line, argument.Column);
+        }
+        var missing = names.FirstOrDefault(name => !inferred.ContainsKey(name));
+        if (missing is not null)
+            throw Error(target.Line, target.Column,
+                $"generic function '{template.Name}' cannot infer type parameter '{missing}'");
+        return ResolveGenericSpecialization(template, inferred[names[0]], functions,
+            target, specializedInputType: inputType, explicitGenericTypes: inferred);
     }
 
     private BoundType InferGenericCallExpression(
@@ -11222,7 +12251,7 @@ internal sealed partial class SemanticCompiler
 
         if (!_boundFunctions.TryGetValue(specializedName, out var specialization))
         {
-            specialization = template with
+            specialization = CloneGenericFunctionSyntax(template) with
             {
                 Name = specializedName,
                 Kind = template.Kind == BoundFunctionKind.User
@@ -11283,6 +12312,14 @@ internal sealed partial class SemanticCompiler
         _resolvedGenericCalls[callSite] = specialization;
         return specialization;
     }
+
+    private static BoundFunction CloneGenericFunctionSyntax(BoundFunction template) => template with
+    {
+        Body = SyntaxCloner.Clone(template.Body),
+        BlockBody = template.BlockBody.Select(statement => SyntaxCloner.Clone(statement)!).ToArray(),
+        LocalFunctions = template.LocalFunctions.ToDictionary(
+            pair => pair.Key, pair => CloneGenericFunctionSyntax(pair.Value), StringComparer.Ordinal)
+    };
 
     private BoundType SubstituteGenericType(
         BoundType type,
@@ -11599,7 +12636,7 @@ internal sealed partial class SemanticCompiler
                 && FixedArrayElementTypeSyntax(template.InputTypeTemplate!) == tertiaryName
                     ? fixedArrayElementType
                     : null;
-            specialization = template with
+            specialization = CloneGenericFunctionSyntax(template) with
             {
                 Name = specializedName,
                 InputType = template.HasValueGenericFixedArrayInput ? actualType : template.InputType,
@@ -11793,7 +12830,7 @@ internal sealed partial class SemanticCompiler
             return false;
         }
         var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
-        if (!_types.TryResolve(typeName, out type))
+        if (!_types.TryResolveInModule(typeName, _currentModuleName, out type))
         {
             if (!typeName.StartsWith("Option<", StringComparison.Ordinal)
                 && !typeName.StartsWith("Result<", StringComparison.Ordinal))
@@ -11921,19 +12958,31 @@ internal sealed partial class SemanticCompiler
         out BoundFunction function)
     {
         function = null!;
-        if (!_types.IsStruct(receiverType))
+        var typeName = _types.IsStruct(receiverType)
+            ? _types.GetStruct(receiverType).Name
+            : _types.IsEnum(receiverType)
+                ? _types.GetEnum(receiverType).Name
+                : null;
+        if (typeName is null)
         {
             return false;
         }
-
-        var typeName = _types.GetStruct(receiverType).Name;
         if (methodName.Contains('.', StringComparison.Ordinal))
         {
             var separator = methodName.LastIndexOf('.');
             var traitName = methodName[..separator];
             var memberName = methodName[(separator + 1)..];
-            return functions.TryGetValue(traitName + "." + typeName + "." + memberName, out function!)
-                && function.InputType == receiverType;
+            if (functions.TryGetValue(traitName + "." + typeName + "." + memberName, out function!)
+                && function.InputType == receiverType)
+            {
+                return true;
+            }
+
+            // Open-import resolution can canonicalize an unqualified flow
+            // target before receiver dispatch. If that canonical global is not
+            // a trait implementation for this receiver, its final segment is
+            // still the instance-method name and must retain receiver priority.
+            methodName = memberName;
         }
 
         var inherentName = typeName + "." + methodName;
@@ -12181,9 +13230,9 @@ internal sealed partial class SemanticCompiler
 
     private void EnsureDisplayable(BoundType type, int line, int column, string path)
     {
-        if (type != BoundType.Text && !IsIntegerType(type))
+        if (type != BoundType.Text && type != BoundType.Bool && !IsIntegerType(type))
         {
-            throw Error(line, column, $"{path} expects Text or Int but received {FormatType(type)}");
+            throw Error(line, column, $"{path} expects Text, Int, or Bool but received {FormatType(type)}");
         }
     }
 
@@ -12223,8 +13272,7 @@ internal sealed partial class SemanticCompiler
             or "sys.file.closeIntWriter"
             or "sys.file.openIntReader"
             or "sys.file.closestInt"
-            or "sys.file.closeIntReader"
-            or "sys.time.nowMillis";
+            or "sys.file.closeIntReader";
     }
 
     private void EnsureRuntimeIntrinsicAllowed(
@@ -12269,7 +13317,7 @@ internal sealed partial class SemanticCompiler
     {
         return bindings.TryGetValue(name, out var type)
             ? type
-            : throw Error(line, column, $"unknown binding '{name}'");
+            : throw UnknownBindingError(name, line, column);
     }
 
     private BoundType InferNameExpression(
@@ -12302,7 +13350,17 @@ internal sealed partial class SemanticCompiler
                 $"zero-input function '{expression.Name}' must be called with parentheses: '{expression.Name}()'");
         }
 
-        throw Error(expression.Line, expression.Column, $"unknown binding '{expression.Name}'");
+        throw UnknownBindingError(expression.Name, expression.Line, expression.Column);
+    }
+
+    private SollangException UnknownBindingError(string name, int line, int column)
+    {
+        return Error(
+            line,
+            column,
+            $"unknown binding '{name}'; check its spelling and lexical scope. "
+            + "If the value was consumed by a move input, use the owner returned by that call, "
+            + "borrow it before the move, or create a new owner before reuse");
     }
 
     private void ValidateBindingName(string name, int line, int column)
@@ -12321,9 +13379,7 @@ internal sealed partial class SemanticCompiler
             return;
         }
 
-        if ((function.Kind == BoundFunctionKind.User
-                && (!function.IsStandardLibrary
-                    || function.Name is "sys.time.milliseconds" or "sys.time.seconds"))
+        if (function.Kind == BoundFunctionKind.User
             || function.Kind is BoundFunctionKind.RuntimeSleep
                 or BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeOpenFile
@@ -12379,9 +13435,13 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeRandomBelow
                 or BoundFunctionKind.RuntimeSecureRandomBytes => ["Random"],
             BoundFunctionKind.RuntimeNowMillis
+                or BoundFunctionKind.RuntimeUtcNowMillis
                 or BoundFunctionKind.RuntimeSleep => ["Clock"],
             BoundFunctionKind.RuntimeArguments
-                or BoundFunctionKind.RuntimeRunProcess => ["Process"],
+                or BoundFunctionKind.RuntimeRunProcess
+                or BoundFunctionKind.RuntimeCollectProcess
+                or BoundFunctionKind.RuntimeSpawnProcess
+                or BoundFunctionKind.RuntimeWaitProcess => ["Process"],
             BoundFunctionKind.RuntimeRunProcessToFile => ["Process", "File"],
             BoundFunctionKind.RuntimeEnvironment => ["Environment"],
             BoundFunctionKind.RuntimeOpenIntWriter
@@ -12410,13 +13470,37 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeSocketAccept
                 or BoundFunctionKind.RuntimeSocketConnect
                 or BoundFunctionKind.RuntimeSocketReceive
+                or BoundFunctionKind.RuntimeSocketReceiveAppend
+                or BoundFunctionKind.RuntimeSocketReceiveVectored
+                or BoundFunctionKind.RuntimeSocketPeek
                 or BoundFunctionKind.RuntimeSocketSend
+                or BoundFunctionKind.RuntimeSocketSendRange
+                or BoundFunctionKind.RuntimeSocketSendVectored
+                or BoundFunctionKind.RuntimeSocketTryClone
                 or BoundFunctionKind.RuntimeSocketSendText
                 or BoundFunctionKind.RuntimeSocketShutdown
                 or BoundFunctionKind.RuntimeSocketBindDatagram
                 or BoundFunctionKind.RuntimeSocketLocalPort
+                or BoundFunctionKind.RuntimeSocketLocalEndpoint
+                or BoundFunctionKind.RuntimeSocketRemoteEndpoint
+                or BoundFunctionKind.RuntimeSocketSetNoDelay
+                or BoundFunctionKind.RuntimeSocketNoDelay
+                or BoundFunctionKind.RuntimeSocketSetKeepAlive
+                or BoundFunctionKind.RuntimeSocketKeepAlive
+                or BoundFunctionKind.RuntimeSocketSetLinger
+                or BoundFunctionKind.RuntimeSocketLinger
+                or BoundFunctionKind.RuntimeSocketSetReadTimeout
+                or BoundFunctionKind.RuntimeSocketReadTimeout
+                or BoundFunctionKind.RuntimeSocketSetWriteTimeout
+                or BoundFunctionKind.RuntimeSocketWriteTimeout
                 or BoundFunctionKind.RuntimeSocketSendTo
-                or BoundFunctionKind.RuntimeSocketReceiveFrom => ["Network"],
+                or BoundFunctionKind.RuntimeSocketReceiveFrom
+                or BoundFunctionKind.RuntimeSocketPeekFrom
+                or BoundFunctionKind.RuntimeSocketClose
+                or BoundFunctionKind.RuntimeSocketSetNonblocking
+                or BoundFunctionKind.RuntimeSocketPoll
+                or BoundFunctionKind.RuntimeSocketReactorWait
+                or BoundFunctionKind.RuntimeDnsLookup => ["Network"],
             _ => []
         };
     }
@@ -12456,6 +13540,7 @@ internal sealed partial class SemanticCompiler
             or "namespace"
             or "import"
             or "public"
+            or "opaque"
             or "struct"
             or "enum"
             or "trait"
@@ -12524,7 +13609,7 @@ internal sealed partial class SemanticCompiler
 
             var id = string.Equals(
                 declaration.Name,
-                "sys.time.Duration",
+                "std.time.Duration",
                 StringComparison.Ordinal)
                 ? TypeId.Duration
                 : string.Equals(declaration.Name, "sys.file.File", StringComparison.Ordinal)
@@ -12533,8 +13618,8 @@ internal sealed partial class SemanticCompiler
                         ? TypeId.FileWriter
                         : string.Equals(declaration.Name, "sys.file.SourceText", StringComparison.Ordinal)
                             ? TypeId.SourceText
-                            : string.Equals(declaration.Name, "sys.process.RunToFileRequest", StringComparison.Ordinal)
-                                ? TypeId.RunToFileRequest
+            : string.Equals(declaration.Name, "sys.process.Command", StringComparison.Ordinal)
+                                ? TypeId.ProcessCommand
                             : string.Equals(declaration.Name, "sys.file.AtomicReplaceRequest", StringComparison.Ordinal)
                                 ? TypeId.AtomicReplaceRequest
                                 : string.Equals(declaration.Name, "sys.path.Path", StringComparison.Ordinal)
@@ -12543,7 +13628,7 @@ internal sealed partial class SemanticCompiler
                                         ? TypeId.DirectoryRaw
                                         : string.Equals(declaration.Name, "sys.directory.Entry", StringComparison.Ordinal)
                                             ? TypeId.DirectoryEntry
-                                            : string.Equals(declaration.Name, "sys.event.MouseEvent", StringComparison.Ordinal)
+                                            : string.Equals(declaration.Name, "sys.input.mouse.Event", StringComparison.Ordinal)
                                                 ? TypeId.MouseEvent
                                             : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
@@ -12570,9 +13655,9 @@ internal sealed partial class SemanticCompiler
                         ? TypeId.DirectoryRawResult
                         : string.Equals(declaration.Name, "sys.directory.ReadResult", StringComparison.Ordinal)
                             ? TypeId.DirectoryReadResult
-                        : string.Equals(declaration.Name, "sys.event.MouseEventKind", StringComparison.Ordinal)
+                        : string.Equals(declaration.Name, "sys.input.mouse.Kind", StringComparison.Ordinal)
                             ? TypeId.MouseEventKind
-                        : string.Equals(declaration.Name, "sys.event.EventOverflowPolicy", StringComparison.Ordinal)
+                        : string.Equals(declaration.Name, "sys.input.mouse.OverflowPolicy", StringComparison.Ordinal)
                             ? TypeId.EventOverflowPolicy
                     : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
@@ -12614,7 +13699,7 @@ internal sealed partial class SemanticCompiler
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
                 || (structTypes.Values.Contains(item.Value)
                     && item.Value is not (TypeId.File or TypeId.FileWriter or TypeId.SourceText))
-                    && item.Value is not (TypeId.RunToFileRequest or TypeId.AtomicReplaceRequest)
+                && item.Value is not (TypeId.ProcessCommand or TypeId.AtomicReplaceRequest)
                 || enumTypes.Values.Contains(item.Value))
             .Where(item => item.Value is not (TypeId.Path or TypeId.PathStyle
                 or TypeId.DirectoryRaw or TypeId.DirectoryEntryKind or TypeId.DirectoryEntry
@@ -12633,6 +13718,11 @@ internal sealed partial class SemanticCompiler
 
         var references = new Dictionary<TypeId, BoundReferenceDefinition>();
         var referencesByElement = new Dictionary<TypeId, TypeId>();
+        var enums = new Dictionary<TypeId, BoundEnumDefinition>();
+        var declaredOptions = new Dictionary<TypeId, TypeId>();
+        var optionsByValue = new Dictionary<TypeId, TypeId>();
+        var declaredResults = new Dictionary<TypeId, (TypeId Ok, TypeId Error)>();
+        var resultsByShape = new Dictionary<(TypeId Ok, TypeId Error), TypeId>();
 
         TypeId ResolveDefinitionType(string typeName, int line, int column)
         {
@@ -12640,7 +13730,42 @@ internal sealed partial class SemanticCompiler
             {
                 return known;
             }
-            if (TryResolveDefinitionDynamicArray(typeName, out var dynamicArray))
+            if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+            {
+                var valueType = ResolveDefinitionType(typeName[7..^1].Trim(), line, column);
+                if (!optionsByValue.TryGetValue(valueType, out var option))
+                {
+                    option = (TypeId)nextTypeId++;
+                    optionsByValue.Add(valueType, option);
+                    declaredOptions.Add(option, valueType);
+                    enums.Add(option, TypeDefinitionTable.CreateOptionDefinition(option, valueType, typeName, 0)
+                        with { Line = line, Column = column });
+                }
+                names.TryAdd(typeName, option);
+                return option;
+            }
+            if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+            {
+                var arguments = typeName[7..^1];
+                var separator = FindTopLevelTypeComma(arguments);
+                if (separator < 0)
+                {
+                    throw Error(line, column, "Result requires success and error types");
+                }
+                var ok = ResolveDefinitionType(arguments[..separator].Trim(), line, column);
+                var error = ResolveDefinitionType(arguments[(separator + 1)..].Trim(), line, column);
+                if (!resultsByShape.TryGetValue((ok, error), out var resultType))
+                {
+                    resultType = (TypeId)nextTypeId++;
+                    resultsByShape.Add((ok, error), resultType);
+                    declaredResults.Add(resultType, (ok, error));
+                    enums.Add(resultType, TypeDefinitionTable.CreateResultDefinition(resultType, ok, error, typeName, 0)
+                        with { Line = line, Column = column });
+                }
+                names.TryAdd(typeName, resultType);
+                return resultType;
+            }
+            if (TryResolveDefinitionDynamicArray(typeName, line, column, out var dynamicArray))
             {
                 return dynamicArray;
             }
@@ -12679,6 +13804,18 @@ internal sealed partial class SemanticCompiler
             }
 
             throw Error(line, column, $"unknown type '{typeName}'");
+        }
+
+        // Runtime aliases and source-level Result annotations share one shape.
+        // Reserve those identities before resolving any user field annotation.
+        foreach (var declaration in enumDeclarations.Where(static declaration =>
+                     TypeDefinitionTable.IsRuntimeResultAlias(declaration.Name)))
+        {
+            var ok = declaration.Variants.First(static variant => variant.Name == "Ok");
+            var error = declaration.Variants.First(static variant => variant.Name == "Err");
+            resultsByShape.TryAdd((
+                ResolveDefinitionType(ok.PayloadType!, ok.Line, ok.Column),
+                ResolveDefinitionType(error.PayloadType!, error.Line, error.Column)), enumTypes[declaration]);
         }
 
         var structs = new Dictionary<TypeId, BoundStructDefinition>
@@ -12724,7 +13861,13 @@ internal sealed partial class SemanticCompiler
                         $"struct field '{field.Name}' must be an inline value type");
                 }
 
-                fields.Add(new BoundStructField(field.Name, fieldType, index, field.Line, field.Column));
+                fields.Add(new BoundStructField(
+                    field.Name,
+                    fieldType,
+                    index,
+                    field.Line,
+                    field.Column,
+                    field.IsPublic));
             }
 
             var id = structTypes[declaration];
@@ -12742,7 +13885,6 @@ internal sealed partial class SemanticCompiler
                 declaration.NativeHandle));
         }
 
-        var enums = new Dictionary<TypeId, BoundEnumDefinition>();
         foreach (var declaration in enumDeclarations)
         {
             _currentModuleName = declaration.ModuleName;
@@ -12808,7 +13950,8 @@ internal sealed partial class SemanticCompiler
                 declaration.IsPublic));
         }
 
-        ValidateAcyclicValueTypes(structs, enums);
+        ValidateAcyclicValueTypes(structs, enums, predeclaredFixedStaticArrays,
+            predeclaredBoundedArrays, predeclaredBoundedDictionaries);
         foreach (var (id, definition) in enums.ToArray())
         {
             var payloadBytes = definition.Variants
@@ -12837,7 +13980,9 @@ internal sealed partial class SemanticCompiler
             enums,
             boxes,
             references,
-            _pointerBitWidth / 8);
+            _pointerBitWidth / 8,
+            declaredOptions,
+            declaredResults);
         result.RegisterFixedStaticArrays(predeclaredFixedStaticArrays);
         result.RegisterDynamicArrays(predeclaredDynamicArrays);
         result.RegisterBoundedArrays(predeclaredBoundedArrays);
@@ -12867,7 +14012,8 @@ internal sealed partial class SemanticCompiler
             {
                 throw Error(line, column, "fixed array length must be a nonnegative integer literal");
             }
-            if (!names.TryGetValue(elementName, out var elementType) || elementType == BoundType.Unit)
+            var elementType = ResolveDefinitionType(elementName, line, column);
+            if (elementType == BoundType.Unit)
             {
                 return false;
             }
@@ -12885,7 +14031,7 @@ internal sealed partial class SemanticCompiler
             return true;
         }
 
-        bool TryResolveDefinitionDynamicArray(string typeName, out TypeId type)
+        bool TryResolveDefinitionDynamicArray(string typeName, int line, int column, out TypeId type)
         {
             type = default;
             if (!typeName.StartsWith('[', StringComparison.Ordinal)
@@ -12895,8 +14041,8 @@ internal sealed partial class SemanticCompiler
             }
 
             var elementName = typeName[1..^4].Trim();
-            if (!names.TryGetValue(elementName, out var elementType)
-                || elementType == BoundType.Unit)
+            var elementType = ResolveDefinitionType(elementName, line, column);
+            if (elementType == BoundType.Unit)
             {
                 return false;
             }
@@ -12933,7 +14079,8 @@ internal sealed partial class SemanticCompiler
             {
                 throw Error(line, column, "bounded array capacity must be a positive integer literal");
             }
-            if (!names.TryGetValue(elementName, out var elementType) || elementType == BoundType.Unit)
+            var elementType = ResolveDefinitionType(elementName, line, column);
+            if (elementType == BoundType.Unit)
             {
                 return false;
             }
@@ -12969,11 +14116,8 @@ internal sealed partial class SemanticCompiler
             {
                 throw Error(line, column, "bounded dictionary capacity must be a positive integer literal");
             }
-            if (!names.TryGetValue(keyName, out var keyType)
-                || !names.TryGetValue(valueName, out var valueType))
-            {
-                return false;
-            }
+            var keyType = ResolveDefinitionType(keyName, line, column);
+            var valueType = ResolveDefinitionType(valueName, line, column);
             var shape = (keyType, valueType, capacity);
             if (predeclaredBoundedDictionariesByShape.TryGetValue(shape, out type))
             {
@@ -12989,7 +14133,10 @@ internal sealed partial class SemanticCompiler
 
     private void ValidateAcyclicValueTypes(
         IReadOnlyDictionary<TypeId, BoundStructDefinition> structs,
-        IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums)
+        IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
+        IReadOnlyDictionary<TypeId, (TypeId ElementType, int Length)> fixedArrays,
+        IReadOnlyDictionary<TypeId, (TypeId ElementType, int Capacity)> boundedArrays,
+        IReadOnlyDictionary<TypeId, (TypeId KeyType, TypeId ValueType, int MaxEntries)> boundedDictionaries)
     {
         var states = new Dictionary<TypeId, int>();
         foreach (var definition in structs.Values)
@@ -13046,6 +14193,19 @@ internal sealed partial class SemanticCompiler
                 else if (enums.TryGetValue(dependency, out var nestedEnum))
                 {
                     Visit(nestedEnum.Id, nestedEnum.Name, nestedEnum.Line, nestedEnum.Column);
+                }
+                else if (fixedArrays.TryGetValue(dependency, out var fixedArray) && fixedArray.Length > 0)
+                {
+                    VisitDependency(fixedArray.ElementType);
+                }
+                else if (boundedArrays.TryGetValue(dependency, out var boundedArray) && boundedArray.Capacity > 0)
+                {
+                    VisitDependency(boundedArray.ElementType);
+                }
+                else if (boundedDictionaries.TryGetValue(dependency, out var boundedDictionary) && boundedDictionary.MaxEntries > 0)
+                {
+                    VisitDependency(boundedDictionary.KeyType);
+                    VisitDependency(boundedDictionary.ValueType);
                 }
             }
         }
@@ -13163,6 +14323,20 @@ internal sealed partial class SemanticCompiler
     private int AlignUp(int value, int alignment)
     {
         return checked((value + alignment - 1) / alignment * alignment);
+    }
+
+    private BoundType ParseAssociatedType(string syntax, IReadOnlyDictionary<string, BoundType> bindings, int line, int column)
+    {
+        var previous = _activeGenericTypeArguments;
+        try
+        {
+            _activeGenericTypeArguments = bindings;
+            return ParseType(syntax, line, column);
+        }
+        finally
+        {
+            _activeGenericTypeArguments = previous;
+        }
     }
 
     private BoundType ParseType(string typeName, int line, int column)
@@ -13297,9 +14471,9 @@ internal sealed partial class SemanticCompiler
         {
             var elementName = typeName[1..^4].Trim();
             var elementType = ParseType(elementName, line, column);
-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            if (IsUnsupportedGrowableArrayElementType(elementType))
             {
-                throw Error(line, column, "growable array elements must be inline scalar or user values");
+                throw Error(line, column, "growable array elements must have a supported inline value layout");
             }
             return elementType == BoundType.Int
                 ? BoundType.DynamicIntArray
@@ -13505,8 +14679,8 @@ internal sealed partial class SemanticCompiler
             && typeName.EndsWith("; ~]", StringComparison.Ordinal))
         {
             var element = ParseSpecializedFunctionType(typeName[1..^4], specializedTypes, line, column);
-            if (element == BoundType.Unit || IsNestedContainerElementType(element))
-                throw Error(line, column, "growable array elements must be inline scalar or user values");
+            if (IsUnsupportedGrowableArrayElementType(element))
+                throw Error(line, column, "growable array elements must have a supported inline value layout");
             return element == BoundType.Int
                 ? BoundType.DynamicIntArray
                 : _types.GetOrAddDynamicArray(element);
@@ -13604,9 +14778,9 @@ internal sealed partial class SemanticCompiler
                 typeName[1..^4], genericParameterName, primaryType,
                 secondaryGenericParameterName, secondaryType,
                 tertiaryGenericParameterName, tertiaryType, line, column);
-            if (element == BoundType.Unit || IsNestedContainerElementType(element))
+            if (IsUnsupportedGrowableArrayElementType(element))
             {
-                throw Error(line, column, "growable array elements must be inline scalar or user values");
+                throw Error(line, column, "growable array elements must have a supported inline value layout");
             }
             return element == BoundType.Int
                 ? BoundType.DynamicIntArray
@@ -13919,6 +15093,14 @@ internal sealed partial class SemanticCompiler
             || _types.ContainsOwnedStorage(type);
     }
 
+    private bool IsUnsupportedGrowableArrayElementType(BoundType type)
+    {
+        // Growable owners have an inline pointer/length/capacity descriptor and recursive drop glue.
+        return type == BoundType.Unit
+            || (IsNestedContainerElementType(type)
+                && type != BoundType.DynamicIntArray
+                && !_types.IsDynamicArray(type));
+    }
     private bool IsNestedContainerElementType(BoundType type)
     {
         return type is BoundType.IntSlice
@@ -13968,7 +15150,8 @@ internal sealed partial class SemanticCompiler
 
     private bool IsReadonlyIntViewCompatible(BoundType type)
     {
-        return type is BoundType.IntSlice or BoundType.StaticIntArray or BoundType.DynamicIntArray;
+        return type is BoundType.IntSlice or BoundType.StaticIntArray or BoundType.DynamicIntArray
+            || (_types.IsStaticArray(type) && _types.GetStaticArray(type).ElementType == BoundType.Int);
     }
 
     private bool CanPassFunctionArgument(BoundType actualType, BoundType expectedType)
@@ -14122,20 +15305,6 @@ internal sealed partial class SemanticCompiler
     }
 
     private const int ControlConditionInlineLimit = 45;
-
-    private static bool IsUnlessCondition(IfExpression expression)
-    {
-        return expression.Condition is NotExpression notExpression
-            && notExpression.Line == expression.Line
-            && notExpression.Column == expression.Column;
-    }
-
-    private static Expression UnwrapUnlessCondition(IfExpression expression)
-    {
-        return IsUnlessCondition(expression)
-            ? ((NotExpression)expression.Condition).Value
-            : expression.Condition;
-    }
 
     private void NoteLongControlCondition(Expression condition, int controlLine, string role)
     {
@@ -14588,6 +15757,10 @@ internal sealed partial class SemanticCompiler
         _types.IsStruct(type)
         && string.Equals(_types.GetStruct(type).Name, name, StringComparison.Ordinal);
 
+    private bool IsNamedEnumType(BoundType type, string name) =>
+        _types.IsEnum(type)
+        && string.Equals(_types.GetEnum(type).Name, name, StringComparison.Ordinal);
+
     private bool IsAsyncResultTypeSupported(BoundType type)
     {
         return type == BoundType.Unit || IsAsyncValueTypeSupported(type);
@@ -14712,6 +15885,7 @@ internal sealed partial class SemanticCompiler
             or FlowExpression
             or IfExpression
             or WhenExpression
+            or EnumMatchExpression
             || IsPayloadlessEnumVariantCreationExpression(expression)
             || IsZeroArgumentFunctionCreationExpression(expression)
             || IsAssociatedOwnedCreationExpression(expression)
@@ -14725,7 +15899,7 @@ internal sealed partial class SemanticCompiler
                 Source: NameExpression typeName,
                 FieldName: var variantName
             }
-            || !_types.TryResolve(typeName.Name, out var enumType)
+            || !_types.TryResolveInModule(typeName.Name, _currentModuleName, out var enumType)
             || !_types.IsEnum(enumType))
         {
             return false;
@@ -14798,7 +15972,8 @@ internal sealed partial class SemanticCompiler
             return false;
         }
 
-        if (functions is not null && TryGetFunction(lastTarget.Path, functions, out _))
+        if (_resolvedGenericCalls.ContainsKey(lastTarget)
+            || (functions is not null && TryGetFunction(lastTarget.Path, functions, out _)))
         {
             return false;
         }
@@ -14830,7 +16005,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         BoundType? inferredAggregateType = null)
     {
-        var transferred = new List<string>();
+        var transferred = new List<OwnedLiteralTransfer>();
         switch (expression)
         {
             case StructLiteralExpression structure
@@ -14865,25 +16040,25 @@ internal sealed partial class SemanticCompiler
                 break;
         }
 
-        var duplicate = transferred
-            .GroupBy(static name => name, StringComparer.Ordinal)
-            .FirstOrDefault(static group => group.Count() > 1);
+        var duplicate = FindOverlappingOwnedLiteralTransfer(transferred);
         if (duplicate is not null)
         {
             throw Error(
                 expression.Line,
                 expression.Column,
-                $"owned binding '{duplicate.Key}' cannot initialize more than one aggregate position");
+                $"owned binding '{duplicate}' cannot initialize more than one aggregate position");
         }
-        return transferred;
+        return transferred.Select(static transfer => transfer.OwnerName).Distinct(StringComparer.Ordinal).ToArray();
     }
 
     private string? GetMoveConsumingOwnedFieldOwnerName(
         Expression expression,
-        IReadOnlyDictionary<string, BoundType> bindings)
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         if (expression is not FieldAccessExpression { Source: NameExpression owner } field
-            || !_currentMoveInputNames.Contains(owner.Name)
+            || (!_currentMoveInputNames.Contains(owner.Name)
+                && !(mutableBindings?.Contains(owner.Name) ?? false))
             || !bindings.TryGetValue(owner.Name, out var ownerType)
             || !_types.IsStruct(ownerType))
         {
@@ -14899,9 +16074,13 @@ internal sealed partial class SemanticCompiler
 
     private string? GetMoveConsumingOwnedFieldPlace(
         Expression expression,
-        IReadOnlyDictionary<string, BoundType> bindings)
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string>? mutableBindings = null)
     {
-        var ownerName = GetMoveConsumingOwnedFieldOwnerName(expression, bindings);
+        var ownerName = GetMoveConsumingOwnedFieldOwnerName(
+            expression,
+            bindings,
+            mutableBindings);
         return ownerName is not null && expression is FieldAccessExpression field
             ? $"{CanonicalBorrowOriginName(ownerName)}.{field.FieldName}"
             : null;
@@ -14951,7 +16130,8 @@ internal sealed partial class SemanticCompiler
             or StreamJoinExpression
             or IfExpression
             or WhenExpression
-            or EnumMatchExpression)
+            or EnumMatchExpression
+            || IsPayloadlessEnumVariantCreationExpression(expression))
         {
             return;
         }
@@ -14960,6 +16140,75 @@ internal sealed partial class SemanticCompiler
             expression.Line,
             expression.Column,
             "owned container block results must be created in that block or moved from a block-local owner");
+    }
+
+    private void EnsureOwnedValueCanLeaveBlock(
+        Expression expression,
+        BoundType resultType,
+        IReadOnlyDictionary<string, BoundType> outerBindings,
+        IReadOnlyDictionary<string, BoundType> bodyBindings,
+        string? allowedOwnedOuterResultName)
+    {
+        // Fixed inline values can be copied without transferring their source.
+        // The runtime descriptor can still require independently owned backing.
+        if (_types.RequiresFixedStorageCopy(resultType)) return;
+
+        if (IsContainerType(resultType))
+        {
+            EnsureOwnedContainerCanLeaveBlock(
+                expression,
+                outerBindings,
+                bodyBindings,
+                allowedOwnedOuterResultName);
+        }
+
+        var transferred = new List<OwnedLiteralTransfer>();
+        CollectOwnedLiteralSourceNames(expression, resultType, bodyBindings, transferred);
+        foreach (var sourceName in transferred.Select(static transfer => transfer.OwnerName).Distinct(StringComparer.Ordinal))
+        {
+            if (!outerBindings.ContainsKey(sourceName)
+                || _currentMoveInputNames.Contains(sourceName)
+                || string.Equals(sourceName, allowedOwnedOuterResultName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"owned value '{sourceName}' is borrowed and cannot escape in an owned result; "
+                + $"declare the parameter as '{sourceName}: move ...' to transfer ownership, "
+                + "or keep the result borrowed/copy the value explicitly");
+        }
+    }
+
+    private void RejectBorrowedOwnedStorageTransfers(
+        IEnumerable<string> transferredNames,
+        int line,
+        int column,
+        string destination)
+    {
+        if (_currentFunctionOuterBindings is null)
+        {
+            return;
+        }
+
+        foreach (var sourceName in transferredNames.Distinct(StringComparer.Ordinal))
+        {
+            if (!_currentFunctionOuterBindings.TryGetValue(sourceName, out var sourceType)
+                || !_types.ContainsOwnedStorage(sourceType)
+                || _currentMoveInputNames.Contains(sourceName))
+            {
+                continue;
+            }
+
+            throw Error(
+                line,
+                column,
+                $"owned value '{sourceName}' is borrowed and cannot be stored in {destination}; "
+                + $"transfer ownership with a move input such as '{sourceName}: move ...', "
+                + "or store a borrowed view/copy the value explicitly");
+        }
     }
 
     private void EnsureBlockLocalOwner(
@@ -14992,15 +16241,18 @@ internal sealed partial class SemanticCompiler
         bool allowProjection = false)
     {
         if (allowProjection
-            && source is FieldAccessExpression { Source: NameExpression owner })
+            && source is FieldAccessExpression { Source: NameExpression owner } field)
         {
             MarkMutableBindingMutation(owner.Name);
             if (mutableBindings is null || !mutableBindings.Contains(owner.Name))
             {
+                var guidance = string.Equals(owner.Name.TrimEnd('!'), "self", StringComparison.Ordinal)
+                    ? $"{operation} mutates field '{field.FieldName}'; declare the method receiver as 'mut self'"
+                    : $"{operation} requires writable owner storage; change a readonly parameter from '{owner.Name.TrimEnd('!')}: Type' to '{owner.Name.TrimEnd('!')}: mut Type', or bind local owned storage with '=> {owner.Name.TrimEnd('!')}!'";
                 throw Error(
                     source.Line,
                     source.Column,
-                    $"{operation} requires a mutable owner binding; use '=> {owner.Name.TrimEnd('!')}!'");
+                    guidance);
             }
             RecordContainerOperation(owner.Name, operation);
             return;
@@ -15020,7 +16272,7 @@ internal sealed partial class SemanticCompiler
             throw Error(
                 source.Line,
                 source.Column,
-                $"{operation} requires a mutable owner binding; use '=> {name.Name.TrimEnd('!')}!'");
+                $"{operation} requires writable owner storage; change a readonly parameter from '{name.Name.TrimEnd('!')}: Type' to '{name.Name.TrimEnd('!')}: mut Type', declare an instance receiver as 'mut self', or bind local owned storage with '=> {name.Name.TrimEnd('!')}!'");
         }
         RecordContainerOperation(name.Name, operation);
     }
@@ -15036,9 +16288,14 @@ internal sealed partial class SemanticCompiler
         }
     }
 
+    private bool IsOwnedParameterSource(Expression source) =>
+        source is NameExpression
+        || source is FieldAccessExpression { Source: NameExpression owner } && _currentMoveInputNames.Contains(owner.Name)
+        || IsContainerCreationExpression(source);
+
     private void EnsureOwnedParameterFlowSource(Expression source, string functionName)
     {
-        if (source is not NameExpression && !IsContainerCreationExpression(source))
+        if (!IsOwnedParameterSource(source))
         {
             throw Error(
                 source.Line,
@@ -15049,7 +16306,7 @@ internal sealed partial class SemanticCompiler
 
     private void EnsureOwnedParameterCallArgument(Expression argument, string functionName)
     {
-        if (argument is not NameExpression && !IsContainerCreationExpression(argument))
+        if (!IsOwnedParameterSource(argument))
         {
             throw Error(
                 argument.Line,
@@ -15136,7 +16393,7 @@ internal sealed partial class SemanticCompiler
             return [];
         }
 
-        var consumed = new List<string>();
+        var consumed = new List<OwnedLiteralTransfer>();
         if (_types.IsDynamicArray(containerType) || _types.IsBoundedArray(containerType))
         {
             var elementType = _types.IsBoundedArray(containerType)
@@ -15166,24 +16423,51 @@ internal sealed partial class SemanticCompiler
                 }
             }
         }
-        var duplicatedOwner = consumed
-            .GroupBy(static name => name, StringComparer.Ordinal)
-            .FirstOrDefault(static group => group.Count() > 1);
+        var duplicatedOwner = FindOverlappingOwnedLiteralTransfer(consumed);
         if (duplicatedOwner is not null)
         {
             throw Error(
                 expression.Line,
                 expression.Column,
-                $"owned value '{duplicatedOwner.Key}' cannot be transferred into a container more than once");
+                $"owned value '{duplicatedOwner}' cannot be transferred into a container more than once");
         }
-        return consumed;
+        // Projected transfers retain the owner binding for live sibling fields.
+        // Code generation tracks and rejects reuse of the exact moved paths.
+        return consumed.Where(static transfer => transfer.FieldPath.Count == 0)
+            .Select(static transfer => transfer.OwnerName).Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    private sealed record OwnedLiteralTransfer(string OwnerName, IReadOnlyList<string> FieldPath);
+
+    private static string? FindOverlappingOwnedLiteralTransfer(IReadOnlyList<OwnedLiteralTransfer> transfers)
+    {
+        for (var index = 0; index < transfers.Count; index++)
+        {
+            var current = transfers[index];
+            for (var previousIndex = 0; previousIndex < index; previousIndex++)
+            {
+                var previous = transfers[previousIndex];
+                if (!string.Equals(current.OwnerName, previous.OwnerName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var commonLength = Math.Min(current.FieldPath.Count, previous.FieldPath.Count);
+                if (current.FieldPath.Take(commonLength).SequenceEqual(previous.FieldPath.Take(commonLength), StringComparer.Ordinal))
+                {
+                    // Equal paths and parent/child paths alias; disjoint siblings do not.
+                    return current.OwnerName;
+                }
+            }
+        }
+        return null;
     }
 
     private void CollectOwnedLiteralSourceNames(
         Expression expression,
         BoundType expectedType,
         IReadOnlyDictionary<string, BoundType> bindings,
-        List<string> consumed)
+        List<OwnedLiteralTransfer> consumed)
     {
         if (!_types.ContainsOwnedStorage(expectedType))
         {
@@ -15193,7 +16477,7 @@ internal sealed partial class SemanticCompiler
         {
             if (bindings.TryGetValue(name.Name, out var sourceType) && sourceType == expectedType)
             {
-                consumed.Add(name.Name);
+                consumed.Add(new OwnedLiteralTransfer(name.Name, []));
             }
             return;
         }
@@ -15209,7 +16493,7 @@ internal sealed partial class SemanticCompiler
             && sourceField.Type == expectedType
             && _types.ContainsOwnedStorage(sourceField.Type))
         {
-            consumed.Add(owner.Name);
+            consumed.Add(new OwnedLiteralTransfer(owner.Name, [fieldName]));
             return;
         }
         if ((_types.IsDynamicArray(expectedType) || _types.IsBoundedArray(expectedType))
@@ -15266,7 +16550,9 @@ internal sealed partial class SemanticCompiler
         }
         foreach (var field in _types.GetStruct(expectedType).Fields)
         {
-            if (initializers.TryGetValue(field.Name, out var initializer))
+            if (initializers.TryGetValue(field.Name, out var initializer)
+                && !(_types.RequiresFixedStorageCopy(field.Type)
+                    && initializer is NameExpression or FieldAccessExpression))
             {
                 CollectOwnedLiteralSourceNames(initializer, field.Type, bindings, consumed);
             }
@@ -15278,6 +16564,33 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings)
     {
+        if (expression is EnumMatchExpression { Subject: NameExpression subjectName } match
+            && bindings.TryGetValue(subjectName.Name, out var subjectType)
+            && _types.IsEnum(subjectType))
+        {
+            var definition = _types.GetEnum(subjectType);
+            foreach (var arm in match.Arms)
+            {
+                if (arm.Condition is not EnumPatternExpression { BindingName: { } payloadName } pattern
+                    || definition.Variants.FirstOrDefault(variant => variant.Name == pattern.VariantName)?.PayloadType
+                        is not { } payloadType
+                    || !_types.ContainsOwnedStorage(payloadType))
+                {
+                    continue;
+                }
+                var armBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
+                {
+                    [payloadName] = payloadType
+                };
+                if (BlockConsumesOwnedBinding(arm.Body, payloadName, functions, armBindings))
+                {
+                    // Match emission removes a named subject when an arm
+                    // transfers its payload; preserve that identity here too.
+                    return [subjectName.Name];
+                }
+            }
+        }
+
         if (expression is TryExpression { Value: NameExpression attemptedName }
             && _currentMoveInputNames.Contains(attemptedName.Name))
         {
@@ -15311,16 +16624,22 @@ internal sealed partial class SemanticCompiler
                 && bindings.TryGetValue(typedSource.Name, out var resolvedSourceType)
                     ? resolvedSourceType
                     : (BoundType?)null;
-            foreach (var target in flow.Targets)
+            // Only the first edge receives flow.Source. Later move parameters
+            // consume the preceding call's result, not the original binding.
+            foreach (var target in flow.Targets.Take(1))
             {
                 if (_resolvedContainerFlowTargets.Contains(target))
                 {
                     continue;
                 }
                 var path = string.Join('.', target.Path);
-                if ((TryGetFunction(target.Path, functions, out var targetFunction)
+                // Reuse the declaration selected by value-flow typing. Textual
+                // re-resolution can otherwise pick an unrelated same-name
+                // global and incorrectly consume an instance receiver.
+                if ((_resolvedGenericCalls.TryGetValue(target, out var targetFunction)
                         || (sourceType is { } receiverType
-                            && TryResolveInstanceMethod(receiverType, path, functions, out targetFunction)))
+                            && TryResolveInstanceMethod(receiverType, path, functions, out targetFunction))
+                        || TryGetFunction(target.Path, functions, out targetFunction))
                     && FunctionMovesOwnedHeapInput(targetFunction)
                     && flow.Source is NameExpression sourceName)
                 {
@@ -15386,7 +16705,8 @@ internal sealed partial class SemanticCompiler
             foreach (var pair in bindings)
             {
                 if (_types.ContainsOwnedStorage(pair.Value)
-                    && GetMoveInputDisposition(expression, pair.Key, functions, isResult: false)
+                    && GetMoveInputDisposition(expression, pair.Key, functions, isResult: false,
+                        copyResult: _types.RequiresFixedStorageCopy(pair.Value), continuingPathsOnly: true)
                     == MoveInputDisposition.Transferred)
                 {
                     consumed.Add(pair.Key);
@@ -15408,7 +16728,7 @@ internal sealed partial class SemanticCompiler
             return false;
         }
         var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
-        if (!_types.TryResolve(typeName, out var type) || !_types.IsEnum(type))
+        if (!_types.TryResolveInModule(typeName, _currentModuleName, out var type) || !_types.IsEnum(type))
         {
             return false;
         }
@@ -15441,14 +16761,15 @@ internal sealed partial class SemanticCompiler
         Expression expression,
         string inputName,
         IReadOnlyDictionary<string, BoundFunction> functions,
-        bool isResult)
+        bool isResult,
+        bool copyResult = false, bool continuingPathsOnly = false)
     {
         if (expression is TryExpression attempt)
         {
-            return GetMoveInputDisposition(attempt.Value, inputName, functions, isResult);
+            return GetMoveInputDisposition(attempt.Value, inputName, functions, isResult, copyResult, continuingPathsOnly);
         }
 
-        if (isResult && expression is NameExpression name && name.Name == inputName)
+        if (isResult && !copyResult && expression is NameExpression name && name.Name == inputName)
         {
             return MoveInputDisposition.Transferred;
         }
@@ -15474,7 +16795,7 @@ internal sealed partial class SemanticCompiler
         if (expression is FlowExpression flow
             && flow.Source is NameExpression sourceName
             && sourceName.Name == inputName
-            && flow.Targets.Any(target => IsOwnedParameterFlowTarget(target, functions)))
+            && flow.Targets.Take(1).Any(target => IsOwnedParameterFlowTarget(target, functions)))
         {
             return MoveInputDisposition.Transferred;
         }
@@ -15492,10 +16813,10 @@ internal sealed partial class SemanticCompiler
         if (expression is IfExpression conditional)
         {
             return CombineAlternativeMoveInputDispositions(
-                GetMoveInputDisposition(conditional.Then, inputName, functions),
+                GetMoveInputDisposition(conditional.Then, inputName, functions, copyResult, continuingPathsOnly),
                 conditional.Else is null
                     ? MoveInputDisposition.Retained
-                    : GetMoveInputDisposition(conditional.Else, inputName, functions));
+                    : GetMoveInputDisposition(conditional.Else, inputName, functions, copyResult, continuingPathsOnly));
         }
 
         if (expression is WhenExpression whenExpression)
@@ -15503,12 +16824,12 @@ internal sealed partial class SemanticCompiler
             var disposition = GetMoveInputDisposition(
                 whenExpression.Else,
                 inputName,
-                functions);
+                functions, copyResult, continuingPathsOnly);
             foreach (var arm in whenExpression.Arms)
             {
                 disposition = CombineAlternativeMoveInputDispositions(
                     disposition,
-                    GetMoveInputDisposition(arm.Body, inputName, functions));
+                    GetMoveInputDisposition(arm.Body, inputName, functions, copyResult, continuingPathsOnly));
             }
 
             return disposition;
@@ -15520,8 +16841,15 @@ internal sealed partial class SemanticCompiler
     private MoveInputDisposition GetMoveInputDisposition(
         BlockBody body,
         string inputName,
-        IReadOnlyDictionary<string, BoundFunction> functions)
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        bool copyResult = false, bool continuingPathsOnly = false)
     {
+        // Returning arms do not contribute an ownership state to the continuation.
+        if (continuingPathsOnly && !FunctionControlFlowFacts.MayReachContinuation(body))
+        {
+            return MoveInputDisposition.NoContinuation;
+        }
+
         var disposition = MoveInputDisposition.Retained;
         foreach (var statement in body.Statements)
         {
@@ -15542,7 +16870,7 @@ internal sealed partial class SemanticCompiler
                 expression,
                 inputName,
                 functions,
-                isResult: false);
+                isResult: false, copyResult: copyResult, continuingPathsOnly: continuingPathsOnly);
             if (statementDisposition != MoveInputDisposition.Retained)
             {
                 disposition = statementDisposition;
@@ -15555,13 +16883,15 @@ internal sealed partial class SemanticCompiler
             return disposition;
         }
 
-        return GetMoveInputDisposition(body.Value, inputName, functions, isResult: true);
+        return GetMoveInputDisposition(body.Value, inputName, functions, isResult: true, copyResult: copyResult, continuingPathsOnly: continuingPathsOnly);
     }
 
     private MoveInputDisposition CombineAlternativeMoveInputDispositions(
         MoveInputDisposition left,
         MoveInputDisposition right)
     {
+        if (left == MoveInputDisposition.NoContinuation) return right;
+        if (right == MoveInputDisposition.NoContinuation) return left;
         return left == right ? left : MoveInputDisposition.Mixed;
     }
 
@@ -15649,7 +16979,8 @@ internal sealed partial class SemanticCompiler
         foreach (var pair in bindings)
         {
             if (_types.ContainsOwnedStorage(pair.Value)
-                && GetMoveInputDisposition(expression, pair.Key, functions, isResult: false)
+                && GetMoveInputDisposition(expression, pair.Key, functions, isResult: false,
+                    copyResult: _types.RequiresFixedStorageCopy(pair.Value), continuingPathsOnly: true)
                 == MoveInputDisposition.Mixed)
             {
                 throw Error(
@@ -16080,10 +17411,7 @@ internal sealed partial class SemanticCompiler
 
     private void EnsureFunctionVisible(BoundFunction function, int line, int column)
     {
-        if (function.IsStandardLibrary
-            || function.IsLocal
-            || function.IsPublic
-            || function.ModuleName == _currentModuleName)
+        if (function.IsVisibleFrom(_currentModuleName))
         {
             return;
         }
@@ -16154,6 +17482,51 @@ internal sealed partial class SemanticCompiler
         throw Error(line, column, $"type '{name}' is internal to module '{moduleName}'");
     }
 
+    private void EnsureStructConstructionVisible(
+        BoundStructDefinition definition,
+        int line,
+        int column)
+    {
+        if (definition.ModuleName.Length == 0
+            || definition.ModuleName == _currentModuleName
+            || definition.IsProduct)
+        {
+            return;
+        }
+
+        var privateField = definition.Fields.FirstOrDefault(field => !field.IsPublic);
+        if (privateField is null)
+        {
+            return;
+        }
+
+        throw Error(
+            line,
+            column,
+            $"cannot construct struct '{definition.Name}' outside module '{definition.ModuleName}' because field '{privateField.Name}' is private; use its public factory or public instance methods");
+    }
+
+    private void EnsureStructFieldVisible(
+        BoundStructDefinition definition,
+        BoundStructField field,
+        int line,
+        int column,
+        string operation)
+    {
+        if (definition.ModuleName.Length == 0
+            || definition.ModuleName == _currentModuleName
+            || definition.IsProduct
+            || field.IsPublic)
+        {
+            return;
+        }
+
+        throw Error(
+            line,
+            column,
+            $"cannot {operation} private field '{field.Name}' of struct '{definition.Name}' outside module '{definition.ModuleName}'; use its public factory or public instance methods");
+    }
+
     private string? ResolveFunctionTypeScope(string functionName)
     {
         return _types.Structs
@@ -16200,6 +17573,7 @@ internal sealed partial class SemanticCompiler
     {
         Retained,
         Transferred,
+        NoContinuation,
         Mixed
     }
 }

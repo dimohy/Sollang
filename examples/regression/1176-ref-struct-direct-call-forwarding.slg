@@ -1,0 +1,28 @@
+struct Point {
+    x: [UInt64; 16]
+    y: [UInt64; 16]
+    z: [UInt64; 16]
+    t: [UInt64; 16]
+}
+
+encodePoint point: ref Point -> [UInt8; 32] {
+    [UInt8(point.x[0]); 32]
+}
+
+# A direct call that forwards a readonly struct reference keeps the original
+# pointer producer instead of inventing an undefined aggregate SSA value.
+forwardPoint point: ref Point -> UInt8 {
+    encodePoint(point) => encoded
+    encoded[0]
+}
+
+main {
+    Point {
+        x: [42; 16]
+        y: [0; 16]
+        z: [0; 16]
+        t: [0; 16]
+    } => point
+    forwardPoint(point) => value
+    "ref-struct-direct=$value" -> println
+}

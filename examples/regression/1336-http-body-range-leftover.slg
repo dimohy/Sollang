@@ -1,0 +1,66 @@
+import std.net.http as http
+import std.net.http.body as body
+
+bytesEqual left: ref [UInt8; ~], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+rangeWorks policy: body.BodyPolicy, head: ref http.RequestHead -> Result<Bool, http.Error> {
+    policy -> request(head)? => plan
+    plan -> decoder? => decoder!
+    [UInt8; ~] => output!
+    [UInt8(88), 89, 97, 98, 99, 71, 69, 84] => buffer
+    decoder! -> writeRange(buffer, 9, 1, output!) -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidBodyRange { true }
+            else { false }
+        }
+    } => rejectedWithoutMutation
+    decoder! -> writeRange(buffer, 2, 6, output!)? => progress
+    decoder! -> finish?
+    rejectedWithoutMutation
+        and (output! -> len) == 3
+        and progress.consumed == 3
+        and progress.produced == 3
+        and progress.complete
+        and 6 - progress.consumed == 3
+        and (output! -> bytesEqual([97, 98, 99]))
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+main {
+    body.BodyLimits {
+        maxEncodedBytes: 64
+        maxDecodedBytes: 64
+        maxChunkLineBytes: 16
+        maxTrailerBytes: 16
+        maxTrailerFields: 2
+    } -> policy -> when {
+        Err(_) { "http-body-range-leftover=setup-failed" -> println }
+        Ok(policy) => http.limits(1_024, 512, 16, 64, 512) -> when {
+            Err(_) { "http-body-range-leftover=setup-failed" -> println }
+            Ok(headLimits) => http.parser(headLimits) -> when {
+                Err(_) { "http-body-range-leftover=setup-failed" -> println }
+                Ok(parser) => parser -> parseRequest("POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\n") -> when {
+                    Err(_) { "http-body-range-leftover=parse-failed" -> println }
+                    Ok(head) => policy -> rangeWorks(head) -> when {
+                        Err(_) { "http-body-range-leftover=decode-failed" -> println }
+                        Ok(valid) => valid -> if {
+                            "http-body-range-leftover=ok"
+                        } else {
+                            "http-body-range-leftover=failed"
+                        } -> println
+                    }
+                }
+            }
+        }
+    }
+}

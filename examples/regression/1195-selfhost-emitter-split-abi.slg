@@ -1,0 +1,31 @@
+# Keep checked diagnostics and successful LLVM emission reachable on every
+# target so the split-ABI verifier can inspect readonly context helpers.
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        main {
+            0
+        }
+        """; ~
+    ] => nativeSources
+    nativeSources -> llvm.emitChecked => nativeDiagnosticCount
+    [
+        """
+        main {
+            0
+        }
+        """; ~
+    ] => linuxSources
+    linuxSources -> llvm.emitLinuxChecked => linuxDiagnosticCount
+    [
+        """
+        main {
+            0
+        }
+        """; ~
+    ] => wasmSources
+    wasmSources -> llvm.emitWasmChecked => wasmDiagnosticCount
+    nativeDiagnosticCount + linuxDiagnosticCount + wasmDiagnosticCount -> println
+}

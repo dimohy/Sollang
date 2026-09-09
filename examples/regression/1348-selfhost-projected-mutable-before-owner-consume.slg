@@ -1,0 +1,51 @@
+enum Mode {
+    Buffered
+    Fresh
+}
+
+struct Transport {
+    bytes: [UInt8; ~]
+}
+
+impl Transport {
+    touch: mut self -> Unit {
+        self.bytes -> push(9)
+    }
+}
+
+struct Owner {
+    transport: Transport
+    buffered: [UInt8; ~]
+}
+
+consume owner: move Owner -> Int {
+    (owner.transport.bytes -> len) + (owner.buffered -> len)
+}
+
+impl Owner {
+    forward: move self, mode: Mode -> Result<Int, Int> {
+        self => current!
+        current!.transport -> touch
+        mode -> when {
+            Buffered {
+                current! -> consume => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+            Fresh {
+                current! -> consume => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+        }
+        Result<Int, Int>.Err(1)
+    }
+}
+
+main {
+    Owner {
+        transport: Transport { bytes: [1, 2; ~] }
+        buffered: [3; ~]
+    } -> forward(Mode.Buffered) -> when {
+        Err(_) { "projected-mutable-owner-consume=false" -> println }
+        Ok(count) { "projected-mutable-owner-consume=$(count == 4)" -> println }
+    }
+}

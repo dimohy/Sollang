@@ -1,0 +1,260 @@
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.prefix_table as prefix
+
+# Freeze the caller-owned bit window and explicit prefix-table handoff used by
+# the future complete compressed-header Reader.
+zeros count: Int -> [Int; ~] {
+    [Int; ~] => values!
+    0 => index!
+    index! < count -> while {
+        values! -> push(0)
+        index! + 1 => index!
+    }
+    values!
+}
+
+singleTable symbol: Int, symbolCount: Int -> Result<prefix.Table, prefix.Error> {
+    symbolCount -> zeros => lengths!
+    1 => lengths![symbol]
+    prefix.Limits { maxSymbols: 704, maxTableEntries: 1_080 } -> builder? => builder
+    builder -> table(lengths!, 1)
+}
+
+singleType parser: headers.Parser -> Bool {
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+        Err(_) { }
+        Ok(window) {
+            window => window!
+            parser -> blockStreamReader => reader!
+            reader! -> read(window!) -> when {
+                Err(_) { }
+                Ok(progress) {
+                    progress -> when {
+                        NeedMore(bits) {
+                            bits == 1 -> if {
+                                window! -> fill([0], prefix.Position { byteIndex: 0, bitIndex: 0 }, 1) -> when {
+                                    Err(_) { }
+                                    Ok(_) {
+                                        reader! -> read(window!) -> when {
+                                            Err(_) { }
+                                            Ok(next) {
+                                                next -> when {
+                                                    Ready {
+                                                        reader! -> finish -> when {
+                                                            Err(_) { false -> return }
+                                                            Ok(blockStream) {
+                                                                blockStream.typeCount == 1
+                                                                    and blockStream.initialLength == 268_435_456 => result
+                                                                result -> return
+                                                            }
+                                                        }
+                                                    }
+                                                    else { }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        else { }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+multipleTypes parser: headers.Parser -> Bool {
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+        Err(_) { }
+        Ok(window) {
+            window => window!
+            parser -> blockStreamReader => reader!
+            prefix.Position { byteIndex: 0, bitIndex: 0 } => position!
+            reader! -> read(window!) -> when {
+                Err(_) { }
+                Ok(first) {
+                    first -> when {
+                        NeedMore(bits) {
+                            bits == 1 -> if {
+                                window! -> fill([17], position!, 1) -> when {
+                                    Err(_) { }
+                                    Ok(next) { next => position! }
+                                }
+                            }
+                        }
+                        else { }
+                    }
+                }
+            }
+            reader! -> read(window!) -> when {
+                Err(_) { }
+                Ok(width) {
+                    width -> when {
+                        NeedMore(bits) {
+                            bits == 3 -> if {
+                                window! -> fill([17], position!, 3) -> when {
+                                    Err(_) { }
+                                    Ok(next) { next => position! }
+                                }
+                            }
+                        }
+                        else { }
+                    }
+                }
+            }
+            false => typeBoundary!
+            reader! -> read(window!) -> when {
+                Err(_) { }
+                Ok(boundary) {
+                    boundary -> when {
+                        NeedPrefix(alphabetSize) {
+                            alphabetSize == 4 -> if {
+                                reader! -> prefixDescription -> when {
+                                    Err(_) { }
+                                    Ok(_) { true => typeBoundary! }
+                                }
+                            }
+                        }
+                        else { }
+                    }
+                }
+            }
+            false => lengthBoundary!
+            0 -> singleTable(4) -> when {
+                Err(_) { }
+                Ok(table) {
+                    reader! -> installPrefix(table) -> when {
+                        Err(_) { }
+                        Ok(_) {
+                            reader! -> read(window!) -> when {
+                                Err(_) { }
+                                Ok(boundary) {
+                                    boundary -> when {
+                                        NeedPrefix(alphabetSize) {
+                                            alphabetSize == 26 -> if { true => lengthBoundary! }
+                                        }
+                                        else { }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            0 -> singleTable(26) -> when {
+                Err(_) { }
+                Ok(table) {
+                    reader! -> installPrefix(table) -> when {
+                        Err(_) { }
+                        Ok(_) {
+                            reader! -> read(window!) -> when {
+                                Err(_) { }
+                                Ok(extra) {
+                                    extra -> when {
+                                        NeedMore(bits) {
+                                            bits == 2 -> if {
+                                                window! -> fill([17], position!, 1) -> when {
+                                                    Err(_) { }
+                                                    Ok(next) { next => position! }
+                                                }
+                                            }
+                                        }
+                                        else { }
+                                    }
+                                }
+                            }
+                            reader! -> read(window!) -> when {
+                                Err(_) { }
+                                Ok(extra) {
+                                    extra -> when {
+                                        NeedMore(bits) {
+                                            bits == 1 -> if {
+                                                window! -> fill([17], position!, 2) -> when {
+                                                    Err(_) { }
+                                                    Ok(next) { next => position! }
+                                                }
+                                            }
+                                        }
+                                        else { }
+                                    }
+                                }
+                            }
+                            reader! -> read(window!) -> when {
+                                Err(_) { }
+                                Ok(done) {
+                                    done -> when {
+                                        Ready {
+                                            reader! -> finish -> when {
+                                                Err(_) { false -> return }
+                                                Ok(blockStream) {
+                                                    typeBoundary! and lengthBoundary!
+                                                        and blockStream.typeCount == 2
+                                                        and blockStream.initialLength == 2
+                                                        and position!.byteIndex == 0
+                                                        and position!.bitIndex == 6 => result
+                                                    result -> return
+                                                }
+                                            }
+                                        }
+                                        else { }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+rejectSecondType parser: headers.Parser -> Bool {
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+        Err(_) { false }
+        Ok(window) {
+            window => window!
+            parser -> blockStreamReader => reader!
+            window! -> fill([1], prefix.Position { byteIndex: 0, bitIndex: 0 }, 4) -> when {
+                Err(_) { false }
+                Ok(_) {
+                    reader! -> read(window!) -> when {
+                        Err(_) { true }
+                        Ok(_) { false }
+                    }
+                }
+            }
+        }
+    }
+}
+
+main {
+    headers.Limits {
+        maxBlockTypes: 256
+        maxBlockLength: 16_793_840
+        maxContextEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Err(_) { "block-stream-reader=false:false" -> println }
+        Ok(parser) {
+            headers.Limits {
+                maxBlockTypes: 1
+                maxBlockLength: 16_793_840
+                maxContextEntries: 16_384
+                maxTrees: 256
+                maxTableEntries: 1_080
+                maxTotalTableEntries: 276_480
+            } -> parser -> when {
+                Err(_) { "block-stream-reader=false:false:false" -> println }
+                Ok(limited) {
+                    "block-stream-reader=$(parser -> singleType):$(parser -> multipleTypes):$(limited -> rejectSecondType)" -> println
+                }
+            }
+        }
+    }
+}

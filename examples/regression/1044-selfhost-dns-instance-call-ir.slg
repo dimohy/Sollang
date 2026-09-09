@@ -1,0 +1,32 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    [
+        "examples/regression/1042-dns-system-resolver.slg",
+        "stdlib/std/net.slg",
+        "stdlib/std/net/dns.slg"; ~
+    ] => sourcePaths
+    sourcePaths -> semanticContext.prepareFiles => context
+    context -> typedIr.lowerContext => ir
+
+    0 => projectedCalls!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.sourceModule == 0
+            and node.kind == 6
+            and node.targetModule == 1
+            and node.operand0 >= 0
+            and ir[node.operand0].kind == 13
+            and node.parent >= 0
+            and ir[node.parent].kind == 8
+            and node.typeOrigin == 1
+            and node.typeSymbol == 23)
+            -> if {
+            projectedCalls! + 1 => projectedCalls!
+        }
+        index! + 1 => index!
+    }
+    "dns projected instance calls=$(projectedCalls!)" -> println
+}

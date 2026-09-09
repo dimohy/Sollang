@@ -1,0 +1,66 @@
+import std.compress.gzip as gzip
+
+truncatedDynamicBytes: -> [UInt8] => [31, 139, 8, 0, 0, 0, 0, 0, 0, 255, 5, 0, 0, 0, 0, 0, 0, 0, 0]
+reservedBlockBytes: -> [UInt8] => [31, 139, 8, 0, 0, 0, 0, 0, 0, 255, 7, 0, 0, 0, 0, 0, 0, 0, 0]
+invalidDistanceBytes: -> [UInt8] => [31, 139, 8, 0, 0, 0, 0, 0, 0, 255, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+bombBytes: -> [UInt8] => [
+    31, 139, 8, 0, 0, 0, 0, 0, 2, 10, 115, 116, 28, 5, 163,
+    96, 20, 12, 119, 0, 0, 1, 46, 160, 81, 232, 3, 0, 0]
+
+rejectsTruncatedDynamic codec: gzip.Codec -> Bool {
+    codec -> decompress(truncatedDynamicBytes()) -> when {
+        Err(error) => error.kind -> when {
+            TruncatedInput { true }
+            else { false }
+        }
+        Ok(_) { false }
+    }
+}
+
+rejectsReservedBlock codec: gzip.Codec -> Bool {
+    codec -> decompress(reservedBlockBytes()) -> when {
+        Err(error) => error.kind -> when {
+            UnsupportedDeflateBlock { true }
+            else { false }
+        }
+        Ok(_) { false }
+    }
+}
+
+rejectsInvalidDistance codec: gzip.Codec -> Bool {
+    codec -> decompress(invalidDistanceBytes()) -> when {
+        Err(error) => error.kind -> when {
+            InvalidDistance { true }
+            else { false }
+        }
+        Ok(_) { false }
+    }
+}
+
+rejectsExpansionBomb: -> Bool {
+    gzip.Limits { maxOutputBytes: 2_000, maxExpansionRatio: 10 } -> codec() -> when {
+        Err(_) { false }
+        Ok(codec) {
+            codec -> decompress(bombBytes()) -> when {
+                Err(error) => error.kind -> when {
+                    ExpansionRatioExceeded { true }
+                    else { false }
+                }
+                Ok(_) { false }
+            }
+        }
+    }
+}
+
+main {
+    gzip.Limits { maxOutputBytes: 2_000, maxExpansionRatio: 100 } -> codec() -> when {
+        Err(_) { "security=false" -> println }
+        Ok(codec) {
+            (codec -> rejectsTruncatedDynamic)
+                and (codec -> rejectsReservedBlock)
+                and (codec -> rejectsInvalidDistance)
+                and rejectsExpansionBomb() => secure
+            secure -> if { "security=true" -> println } else { "security=false" -> println }
+        }
+    }
+}

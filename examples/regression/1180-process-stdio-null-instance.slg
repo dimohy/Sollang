@@ -1,0 +1,28 @@
+import sys.file as file
+import sys.process as process
+import sys.runtime as runtime
+
+# Null stdio belongs to one Command and never suppresses the parent's output.
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 1 -> if {
+        file.readStandardInput() => input
+        (input -> len) == 0 -> unless { 7 -> process.exit }
+        "discarded stdout" -> println
+        "discarded stderr" -> runtime.eprintln
+    } else {
+        process.command(arguments[0]) => command!
+        command! -> arg("--child")
+        command! -> stdin(process.Input.Null)
+        command! -> stdout(process.Output.Null)
+        command! -> stderr(process.Output.Null)
+        command! -> status -> when {
+            Result<process.ExitStatus, Text>.Ok(status) {
+                "status=$(status -> exitCode) parent=visible" -> println
+            }
+            Result<process.ExitStatus, Text>.Err(error) {
+                "error=$error" -> println
+            }
+        }
+    }
+}

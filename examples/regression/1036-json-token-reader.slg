@@ -1,0 +1,81 @@
+import std.text.json as json
+import sys.file as file
+
+run: -> Result<Unit, json.Error> uses Console {
+    json.limits(256, 8, 32, 32)? => limits
+    """"
+    {"name":"Sol\uB791","values":[null,false,true,-12.5e+2]}
+    """" => document
+    json.reader(document, limits)? => reader!
+    0 => names!
+    0 => strings!
+    0 => literals!
+    0 => containers!
+    true => reading!
+    reading! -> while {
+        reader! -> next? => token
+        token.kind -> when {
+            DocumentEnd { false => reading! }
+            Name {
+                names! + 1 => names!
+                reader! -> decodeString(token, 32)? => decoded
+                decoded -> file.borrowBytes => source
+                source -> slice(0, source -> len) => text
+                "name=$text" -> println
+            }
+            String {
+                strings! + 1 => strings!
+                reader! -> decodeString(token, 32)? => decoded
+                "string=$(decoded -> len),$(decoded[3])" -> println
+            }
+            Number {
+                reader! -> rawText(token) => raw
+                "number=$raw" -> println
+            }
+            Null { literals! + 1 => literals! }
+            False { literals! + 1 => literals! }
+            True { literals! + 1 => literals! }
+            BeginArray { containers! + 1 => containers! }
+            EndArray { containers! + 1 => containers! }
+            BeginObject {
+                containers! + 1 => containers!
+                "begin-object" -> println
+            }
+            EndObject { containers! + 1 => containers! }
+        }
+    }
+    "counts=$(names!),$(strings!),$(literals!),$(containers!),$(reader! -> tokenCount)" -> println
+
+    json.reader("[1,]", limits)? => trailing!
+    trailing! -> finish -> when {
+        Ok(done) { "unexpected" -> println }
+        Err(error) { "trailing=$(error.offset)" -> println }
+    }
+    json.reader("01", limits)? => leadingZero!
+    leadingZero! -> finish -> when {
+        Ok(done) { "unexpected" -> println }
+        Err(error) { "number-error=$(error.offset)" -> println }
+    }
+    """"
+    "\uD800"
+    """" => surrogateText
+    json.reader(surrogateText, limits)? => surrogate!
+    surrogate! -> finish -> when {
+        Ok(done) { "unexpected" -> println }
+        Err(error) { "unicode-error=$(error.offset)" -> println }
+    }
+    json.limits(32, 1, 8, 8)? => shallow
+    json.reader("[[0]]", shallow)? => nested!
+    nested! -> finish -> when {
+        Ok(done) { "unexpected" -> println }
+        Err(error) { "depth-error=$(error.offset)" -> println }
+    }
+    Result<Unit, json.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected-error=$(error.offset)" -> println }
+    }
+}

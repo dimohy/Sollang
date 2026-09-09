@@ -337,6 +337,78 @@ function Invoke-RawSession {
     }
 }
 
+function Assert-NativeFullSessionPrefixes {
+    param(
+        [string]$Uri,
+        [string]$CaseName
+    )
+
+    $initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+    $didOpen = @{
+        jsonrpc = "2.0"
+        method = "textDocument/didOpen"
+        params = @{ textDocument = @{ uri = $Uri; languageId = "sollang"; version = 1; text = 'main { "ok" -> println }' } }
+    } | ConvertTo-Json -Compress -Depth 8
+    $operations = @(
+        $didOpen,
+        (@{
+            jsonrpc = "2.0"
+            method = "textDocument/didChange"
+            params = @{ textDocument = @{ uri = $Uri; version = 2 }; contentChanges = @(@{ text = 'main { "😀" @ }' }) }
+        } | ConvertTo-Json -Compress -Depth 8),
+        (@{
+            jsonrpc = "2.0"
+            method = "textDocument/didChange"
+            params = @{ textDocument = @{ uri = $Uri; version = 3 }; contentChanges = @(@{ text = 'main{"ok"->println}' }) }
+        } | ConvertTo-Json -Compress -Depth 8),
+        (@{
+            jsonrpc = "2.0"
+            id = "fmt"
+            method = "textDocument/formatting"
+            params = @{ textDocument = @{ uri = $Uri }; options = @{ tabSize = 4; insertSpaces = $true } }
+        } | ConvertTo-Json -Compress -Depth 8),
+        '{"jsonrpc":"2.0","id":7,"method":"sollang/unknown","params":{}}',
+        (@{
+            jsonrpc = "2.0"
+            method = "textDocument/didClose"
+            params = @{ textDocument = @{ uri = $Uri } }
+        } | ConvertTo-Json -Compress -Depth 8)
+    )
+    $shutdown = '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
+    $exit = '{"jsonrpc":"2.0","method":"exit"}'
+
+    for ($prefixCount = 1; $prefixCount -le $operations.Count; $prefixCount++) {
+        $messages = [Collections.Generic.List[string]]::new()
+        $messages.Add($initialize)
+        for ($index = 0; $index -lt $prefixCount; $index++) {
+            $messages.Add($operations[$index])
+        }
+        $messages.Add($shutdown)
+        $messages.Add($exit)
+
+        $process = Start-LanguageServer $true
+        try {
+            foreach ($message in $messages) {
+                Write-Fragmented $process.StandardInput.BaseStream (ConvertTo-LspFrame $message)
+            }
+            $process.StandardInput.Close()
+            $stdout = [IO.MemoryStream]::new()
+            $process.StandardOutput.BaseStream.CopyTo($stdout)
+            $stderr = $process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) {
+                throw "native language server $CaseName prefix $prefixCount/$($operations.Count) exited with $($process.ExitCode); last operation contains '$($operations[$prefixCount - 1])'; stdout bytes $($stdout.Length); stderr: $stderr"
+            }
+        }
+        finally {
+            if (-not $process.HasExited) {
+                $process.Kill($true)
+            }
+            $process.Dispose()
+        }
+    }
+}
+
 function Assert-EquivalentFrames {
     param(
         [string[]]$Managed,
@@ -373,6 +445,9 @@ Assert-StreamingInitialize $false
 Write-Output "[1/4] PASS managed streaming initialize"
 Assert-StreamingInitialize $true
 Write-Output "[2/4] PASS native streaming initialize"
+Assert-NativeFullSessionPrefixes "file:///ascii.slg" "ASCII URI"
+Assert-NativeFullSessionPrefixes "file:///한글-😀.slg" "Unicode URI"
+Write-Output "[native LSP prefixes] PASS ASCII and Unicode incremental full-session operation prefixes"
 $managedFrames = Invoke-FullSession $false
 $nativeFrames = Invoke-FullSession $true
 Assert-EquivalentFrames $managedFrames $nativeFrames

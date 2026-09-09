@@ -1,0 +1,65 @@
+import std.compress.brotli as brotli
+
+allByte values: [UInt8], expected: UInt8 -> Bool {
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] == expected -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+decode codec: brotli.Codec, input: [UInt8] -> Result<Bool, brotli.Error> {
+    codec -> decoder? => decoder!
+    0 => index!
+    index! < (input -> len) -> while {
+        decoder! -> write([input[index!]])? => accepted
+        accepted == 1 -> unless { Result<Bool, brotli.Error>.Ok(false) -> return }
+        index! + 1 => index!
+    }
+    [UInt8; ~] => output!
+    decoder! -> finish(output!)? => written
+    Result<Bool, brotli.Error>.Ok(
+    written == 100 and (output! -> len) == 100 and (output! -> allByte(97)))
+}
+
+truncated codec: brotli.Codec -> Result<Bool, brotli.Error> {
+    codec -> decoder? => decoder!
+    decoder! -> write([27, 99, 0, 248, 37])? => accepted
+    [UInt8; ~] => output!
+    output! -> push(7)
+    decoder! -> finish(output!) -> when {
+        Ok(_) { Result<Bool, brotli.Error>.Ok(false) }
+        Err(error) {
+            error.kind -> when {
+                TruncatedInput {
+                    Result<Bool, brotli.Error>.Ok(
+                    accepted == 5 and (output! -> len) == 1 and output![0] == 7)
+                }
+                else { Result<Bool, brotli.Error>.Ok(false) }
+            }
+        }
+    }
+}
+
+main {
+    brotli.Limits {
+        maxEncodedBytes: 1_024
+        maxDecodedBytes: 1_024
+        maxWindowBytes: 4_194_288
+        maxMetaBlocks: 16
+        maxMetadataBytes: 128
+    } -> codec -> when {
+        Err(_) { "decoder-compressed-stream=false" -> println }
+        Ok(codec) {
+            codec -> truncated -> when {
+                Err(_) { false }
+                Ok(valid) { valid }
+            } => truncationOk
+            codec -> decode([27, 99, 0, 248, 37, 194, 2, 177, 64, 160, 3]) -> when {
+                Err(_) { "decoder-compressed-stream=false" -> println }
+                Ok(valid) { "decoder-compressed-stream=$(valid and truncationOk)" -> println }
+            }
+        }
+    }
+}

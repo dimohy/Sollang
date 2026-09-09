@@ -1,0 +1,460 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+# Responsibility fragment extracted from emitCore. State is passed by readonly
+# reference, preserving the original direct-call and allocation behavior.
+emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [Int; ~], regionOrder: ref [Int; ~], ifActive: mut [Bool; ~], ifThenReachesMerge: mut [Bool; ~], loopActive: mut [Bool; ~], initialRegionTerminated: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.pointerBitWidth / 8 => regionPointerAlignment
+    context.ir[regionIndex] => region
+    region.parent => ownerIndex!
+    ownerIndex! >= 0 and context.ir[ownerIndex!].kind != 0 and context.ir[ownerIndex!].kind != 11
+        -> while { context.ir[ownerIndex!].parent => ownerIndex! }
+    ownerIndex! + 1 => regionLocalStart
+    ownerIndex! -> functionEnd(context, state) => regionLocalEnd
+    initialRegionTerminated => regionTerminated!
+    [Int; ~] => activeEach!
+    0 => activeEachSize!
+    0 => regionOrderIndex!
+    regionOrderIndex! < (regionOrder -> len) -> while {
+        regionOrder[regionOrderIndex!] => regionNodeIndex
+        context.ir[regionNodeIndex] => regionNode
+        regionEventKinds[regionOrderIndex!] => regionEventKind
+        regionEventKind == 1 -> if {
+            not regionTerminated! -> if {
+                regionNode.kind == 23 -> if {
+                    false => promotedFixedReturn!
+                    -1 => returnedSymbol!
+                    -1 => returnedValueIndex!
+                    regionNode.operand0 >= 0 -> if {
+                        regionNode.operand0 => returnedValueIndex!
+                        returnedValueIndex! -> returnedOwnedBindingIndex(context, state) => returnedBindingIndex
+                        returnedBindingIndex >= 0 -> if { context.ir[returnedBindingIndex].symbol => returnedSymbol! }
+                        returnedBindingIndex < 0 and ownerIndex! >= 0
+                            -> if {
+                                returnedValueIndex! -> ownedValueSourceIndex(context, state) => returnedSourceIndex
+                                context.ir[returnedSourceIndex] => returnedSource
+                                returnedSource.kind == 5 -> if {
+                                    context -> parameterIndexForFunction(ownerIndex!, returnedSource.symbol) => returnedParameterIndex
+                                    returnedParameterIndex >= 0
+                                        and context.ir[returnedParameterIndex].sourceModule == returnedSource.sourceModule
+                                        and context.ir[returnedParameterIndex].flags % 2 == 1
+                                        -> if { returnedSource.symbol => returnedSymbol! }
+                                }
+                            }
+                    }
+                    ownerIndex! >= 0 and returnedValueIndex! >= 0
+                        -> if {
+                            context.ir[ownerIndex!].typeId => returnTypeId
+                            returnTypeId >= 0 and context.types[returnTypeId].kind == 4
+                                -> if {
+                                    returnedValueIndex! -> emitFixedArrayReturnPromotion(ownerIndex!, returnTypeId, regionNodeIndex, context, state)
+                                        => promotedFixedReturn!
+                                }
+                        }
+                    regionNode.parent => returnCleanupAncestor!
+                    returnCleanupAncestor! >= 0 and returnCleanupAncestor! != ownerIndex!
+                        -> while {
+                            context.ir[returnCleanupAncestor!].kind == 19 or context.ir[returnCleanupAncestor!].kind == 1
+                                -> if {
+                                    OwnedDropRequest { regionIndex: returnCleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 7, transferredSymbol: returnedSymbol! } -> emitOwnedDrops([Int; ~], context, state)
+                                }
+                            context.ir[returnCleanupAncestor!].parent => returnCleanupAncestor!
+                        }
+                    ownerIndex! >= 0 -> if {
+                        context.ir[ownerIndex!] => returnOwner
+                        0 => returnParameterOrdinal!
+                        context -> parameterIndexAtOrdinal(ownerIndex!, returnParameterOrdinal!) => returnParameterIndex!
+                        returnParameterIndex! >= 0 -> while {
+                            context.ir[returnParameterIndex!] => returnParameter
+                            returnParameter.symbol != returnedSymbol! -> if {
+                                returnedValueIndex! -> returnedValueConsumesMoveParameter(
+                                returnParameterIndex!,
+                                context,
+                                state
+                                ) => returnParameterTransferred!
+                                ownerIndex! + 1 => returnBindingTransferIndex!
+                                returnBindingTransferIndex! < regionNodeIndex and not returnParameterTransferred!
+                                    -> while {
+                                        returnBindingTransferIndex! -> owningBindingTransfersParameterBeforeEdge(
+                                        ownerIndex!,
+                                        returnParameter.symbol,
+                                        regionNodeIndex,
+                                        context,
+                                        state
+                                        ) -> if { true => returnParameterTransferred! }
+                                        not returnParameterTransferred! -> if {
+                                            returnBindingTransferIndex! -> resolvedCallTransfersParameterBeforeEdge(
+                                            returnParameterIndex!, regionNodeIndex, context, state
+                                            ) => returnParameterTransferred!
+                                        }
+                                        returnBindingTransferIndex! + 1 => returnBindingTransferIndex!
+                                    }
+                                false => returnParameterHasPartialMoves!
+                                0 => returnParameterMoveIndex!
+                                returnParameterMoveIndex! < (context.moves -> len)
+                                    -> while {
+                                        context.moves[returnParameterMoveIndex!] => returnParameterMove
+                                        returnParameterMove.memberIr >= 0
+                                            and returnParameterMove.sourceModule == returnParameter.sourceModule
+                                            and returnParameterMove.symbol == returnParameter.symbol
+                                            and (returnParameterMove.regionIr -> ownershipRegionContainsEdge(regionNodeIndex, context, state))
+                                            -> if { true => returnParameterHasPartialMoves! }
+                                        returnParameterMoveIndex! + 1 => returnParameterMoveIndex!
+                                    }
+                                returnParameter.typeId >= 0
+                                    and (returnParameter.typeId -> semanticTypeOwns(context, state))
+                                    and returnParameter.flags % 2 == 1
+                                    and not returnParameterTransferred!
+                                    and not returnParameterHasPartialMoves!
+                                    -> if {
+                                        returnParameterIndex! -> moveParameterNeedsPathOwnershipFlag(ownerIndex!, context, state)
+                                            => returnParameterHasPathOwnershipFlag
+                                        returnParameterHasPathOwnershipFlag -> if {
+                                            "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_whole_arg_owned = load i1, ptr %arg$(returnParameterIndex!)_owned, align 1" -> println
+                                            "  br i1 %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_whole_arg_owned, label %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_whole_arg_path, label %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_whole_arg_done" -> println
+                                            "return$(regionNodeIndex)_parameter$(returnParameterIndex!)_whole_arg_path:" -> println
+                                        }
+                                        returnParameterIndex! -> emitWholeParameterDrop(ownerIndex!, regionNodeIndex, context, state)
+                                        returnParameterHasPathOwnershipFlag -> if {
+                                            "  br label %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_whole_arg_done" -> println
+                                            "return$(regionNodeIndex)_parameter$(returnParameterIndex!)_whole_arg_done:" -> println
+                                        }
+                                    }
+                                returnParameter.flags % 2 == 1
+                                    and returnParameterHasPartialMoves! and not returnParameterTransferred!
+                                    and (returnParameter -> isNominalStructType)
+                                    -> if {
+                                        returnParameterIndex! -> moveParameterNeedsPathOwnershipFlag(ownerIndex!, context, state)
+                                            => returnParameterHasPathOwnershipFlag
+                                        returnParameterHasPathOwnershipFlag -> if {
+                                            "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_partial_arg_owned = load i1, ptr %arg$(returnParameterIndex!)_owned, align 1" -> println
+                                            "  br i1 %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_partial_arg_owned, label %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_partial_arg_path, label %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_partial_arg_done" -> println
+                                            "return$(regionNodeIndex)_parameter$(returnParameterIndex!)_partial_arg_path:" -> println
+                                        }
+                                        DropGlueRequest {
+                                            typeId: returnParameter.typeId
+                                            typeOrigin: returnParameter.typeOrigin
+                                            typeModule: returnParameter.typeModule
+                                            typeSymbol: returnParameter.typeSymbol
+                                            valueKind: 1
+                                            valueIndex: -1
+                                            nameRoot: regionNodeIndex * 1000 + returnParameterIndex!
+                                            pathCode: 0
+                                            bindingIndex: returnParameterIndex!
+                                            regionIndex: returnOwner.operand0
+                                            beforeAst: regionNode.astNode
+                                            parentTask: -1
+                                            fieldOrdinal: -1
+                                            hasPartialMoves: true
+                                        } -> emitDropGlue(regionNodeIndex, context, state)
+                                        returnParameterHasPathOwnershipFlag -> if {
+                                            "  br label %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_partial_arg_done" -> println
+                                            "return$(regionNodeIndex)_parameter$(returnParameterIndex!)_partial_arg_done:" -> println
+                                        }
+                                    }
+                                returnParameter.typeId < 0 and (returnParameter.typeOrigin == 13 or returnParameter.typeOrigin == 14) and returnParameter.flags % 2 == 1 and not returnParameterTransferred!
+                                    -> if {
+                                        "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg = extractvalue %sollang.array.i32 " -> print
+                                        context -> writeParameterReference(ownerIndex!, returnParameter.symbol) => returnArrayParameterWritten
+                                        ", 0" -> println
+                                        "  call void @free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg)" -> println
+                                    }
+                                returnParameter.typeId < 0 and returnParameter.typeOrigin == 15 and returnParameter.flags % 2 == 1 and not returnParameterTransferred!
+                                    -> if {
+                                        "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_keys = extractvalue %sollang.dict " -> print
+                                        context -> writeParameterReference(ownerIndex!, returnParameter.symbol) => returnDictionaryParameterWritten
+                                        ", 0" -> println
+                                        "  call void @free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_keys)" -> println
+                                        "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_values = extractvalue %sollang.dict " -> print
+                                        context -> writeParameterReference(ownerIndex!, returnParameter.symbol) => returnDictionaryValuesWritten
+                                        ", 1" -> println
+                                        "  call void @free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_values)" -> println
+                                    }
+                            }
+                            returnParameterOrdinal! + 1 => returnParameterOrdinal!
+                            context -> parameterIndexAtOrdinal(ownerIndex!, returnParameterOrdinal!) => returnParameterIndex!
+                        }
+                        returnOwner.typeOrigin == 1 and returnOwner.typeSymbol == 0
+                            -> if {
+                                "  ret void" -> println
+                            } else {
+                                "  ret " -> print
+                                returnOwner -> writeIrType(context, state)
+                                " " -> print
+                                context.ir[returnedValueIndex!] => returnedValue
+                                promotedFixedReturn! -> if { "%return_fixed$(regionNodeIndex)" -> print } else {
+                                    returnOwner.typeId >= 0 and context.types[returnOwner.typeId].kind == 8
+                                        -> if {
+                                            ownerIndex! -> writeReferencePlaceValue(returnedValueIndex!, context, state)
+                                        } else {
+                                            returnedValue.kind == 3 or returnedValue.kind == 4
+                                                -> if {
+                                                    returnedValue -> sourceToken(context, state) => returnValueToken
+                                                    returnedValue.kind == 3 -> if { returnedValue -> writeIntegerLiteral(context, state) } else {
+                                                        (context.sources[returnedValue.sourceModule] -> byte(returnValueToken.span.start)) == 116
+                                                            -> if { "1" -> print } else { "0" -> print }
+                                                    }
+                                                } else {
+                                                    returnOwner.operand1 >= 0 and returnedValue.kind == 5 and returnedValue.symbol == context.ir[returnOwner.operand1].symbol
+                                                        -> if { "%arg" -> print } else { "%v$(returnedValueIndex!)" -> print }
+                                                }
+                                        }
+                                }
+                                "" -> println
+                            }
+                    }
+                    true => regionTerminated!
+                }
+                regionNode.kind == 22 -> if {
+                    context.ir[regionNode.operand1] => guardCondition
+                    "  br i1 " -> print
+                    guardCondition.kind == 4 -> if {
+                        guardCondition -> sourceToken(context, state) => guardConditionToken
+                        (context.sources[guardCondition.sourceModule] -> byte(guardConditionToken.span.start)) == 116
+                            -> if { "1" -> print } else { "0" -> print }
+                    } else {
+                        ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and guardCondition.kind == 5 and guardCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol
+                            -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
+                    }
+                    ", label %guard$(regionNodeIndex)_exit, label %guard$(regionNodeIndex)_next" -> println
+                    "guard$(regionNodeIndex)_exit:" -> println
+                    regionNode.parent => guardCleanupAncestor!
+                    guardCleanupAncestor! >= 0 and guardCleanupAncestor! != regionNode.operand0
+                        -> while {
+                            context.ir[guardCleanupAncestor!].kind == 19
+                                -> if {
+                                    OwnedDropRequest { regionIndex: guardCleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 8, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                                }
+                            context.ir[guardCleanupAncestor!].parent => guardCleanupAncestor!
+                        }
+                    regionNode.opcode == 1 -> if {
+                        "  br label %while$(regionNode.operand0)_header" -> println
+                    } else {
+                        "  br label %while$(regionNode.operand0)_exit" -> println
+                    }
+                    "guard$(regionNodeIndex)_next:" -> println
+                    false => regionTerminated!
+                }
+                regionNode.kind == 21 -> if {
+                    "  br label %cleanup$(regionNodeIndex)" -> println
+                    "cleanup$(regionNodeIndex):" -> println
+                    regionNode.parent => cleanupAncestor!
+                    cleanupAncestor! >= 0 and cleanupAncestor! != regionNode.operand0
+                        -> while {
+                            context.ir[cleanupAncestor!].kind == 19 -> if {
+                                OwnedDropRequest { regionIndex: cleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex * 10 + 9, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                            }
+                            context.ir[cleanupAncestor!].parent => cleanupAncestor!
+                        }
+                    regionNode.opcode == 1 -> if {
+                        "  br label %while$(regionNode.operand0)_header" -> println
+                    } else {
+                        "  br label %while$(regionNode.operand0)_exit" -> println
+                    }
+                    true => regionTerminated!
+                }
+                regionNode.kind != 21 and regionNode.kind != 22 and regionNode.kind != 23
+                    -> if {
+                        regionNode.kind == 6 and regionNode.opcode == -208
+                            and regionNode.operand0 >= 0 and regionNode.operand1 >= 0
+                            and (regionNodeIndex -> plannedStreamPipeline(context, state)) < 0
+                            -> if {
+                                regionNodeIndex -> emitDirectEachStart(ownerIndex!, regionLocalStart, regionLocalEnd, context, state)
+                                activeEachSize! == (activeEach! -> len)
+                                    -> if { activeEach! -> push(regionNodeIndex) } else {
+                                        regionNodeIndex => activeEach![activeEachSize!]
+                                    }
+                                activeEachSize! + 1 => activeEachSize!
+                            }
+                        regionNodeIndex -> emitRegionBindingExpressions(ownerIndex!, emissionOrder, context, state)
+                        regionNodeIndex -> emitRegionControlExpressions(ownerIndex!, context, state)
+                        regionNodeIndex -> emitRegionIntrinsicExpressions(ownerIndex!, regionPointerAlignment, context, state)
+                        regionNodeIndex -> emitRegionArrayExpressions(ownerIndex!, context, state)
+                        regionNodeIndex -> emitRegionMemberExpressions(ownerIndex!, context, state)
+                        regionNodeIndex -> emitRegionOperatorExpressions(ownerIndex!, emissionOrder, context, state)
+                        regionNodeIndex -> emitRegionCallExpressions(ownerIndex!, emissionOrder, context, state)
+                    }
+            }
+        }
+        regionEventKind == 2 -> if {
+            not regionTerminated! -> if {
+                true => ifActive[regionNodeIndex - regionLocalStart]
+                false => nestedIfValueUsed!
+                regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedIfValueUsed!
+                regionNode.operand0 => nestedConditionIndex!
+                true => nestedConditionUnwrap!
+                nestedConditionIndex! >= 0 and nestedConditionUnwrap! and context.ir[nestedConditionIndex!].kind == 9
+                    -> while {
+                        -1 => nestedConditionChild!
+                        UIntSize(0) => nestedConditionChildStart!
+                        regionLocalStart => nestedConditionChildSearch!
+                        nestedConditionChildSearch! < regionLocalEnd
+                            -> while {
+                                context.ir[nestedConditionChildSearch!].parent == nestedConditionIndex!
+                                    -> if {
+                                        context.ir[nestedConditionChildSearch!] -> sourceNode(context, state) => nestedConditionChildAst
+                                        nestedConditionChild! < 0 or nestedConditionChildAst.start > nestedConditionChildStart!
+                                            -> if {
+                                                nestedConditionChildSearch! => nestedConditionChild!
+                                                nestedConditionChildAst.start => nestedConditionChildStart!
+                                            }
+                                    }
+                                nestedConditionChildSearch! + 1 => nestedConditionChildSearch!
+                            }
+                        nestedConditionChild! >= 0 -> if { nestedConditionChild! => nestedConditionIndex! } else { false => nestedConditionUnwrap! }
+                    }
+                context.ir[nestedConditionIndex!] => nestedCondition
+                (nestedCondition.kind == 8 and (nestedCondition.opcode == -25 or nestedCondition.opcode == -24) or (nestedCondition.kind == 7 and nestedCondition.opcode == -26)) => nestedShortCircuit
+                nestedShortCircuit -> if {
+                    WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex! } -> emitWhileBranch(emissionOrder, context, state)
+                    "while$(regionNodeIndex)_body:" -> println
+                    regionNode -> writeIfShortCircuitBodyTarget(regionNodeIndex)
+                    "while$(regionNodeIndex)_exit:" -> println
+                    regionNode -> writeIfShortCircuitExitTarget(regionNodeIndex)
+                } else {
+                    "  br i1 " -> print
+                    nestedCondition.kind == 4 -> if {
+                        nestedCondition -> sourceToken(context, state) => nestedConditionToken
+                        (context.sources[nestedCondition.sourceModule] -> byte(nestedConditionToken.span.start)) == 116
+                            -> if { "1" -> print } else { "0" -> print }
+                    } else {
+                        ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol
+                            -> if { "%arg" -> print } else { "%v$(nestedConditionIndex!)" -> print }
+                    }
+                    regionNode -> writeIfDirectBranchTargets(regionNodeIndex)
+                }
+                "if$(regionNodeIndex)_then:" -> println
+                false => regionTerminated!
+            }
+        }
+        regionEventKind == 3 -> if {
+            ifActive[regionNodeIndex - regionLocalStart]
+                -> if {
+                    not regionTerminated! -> if {
+                        false => nestedThenValueUsed!
+                        regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedThenValueUsed!
+                        nestedThenValueUsed! and not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) and regionNode.nextOperand >= 0
+                            -> if {
+                                regionNode.operand1 -> regionResultValueIndex(context, state) => nestedThenStoreIndex
+                                regionNode -> emitIfResultStore(nestedThenStoreIndex, ownerIndex!, regionNodeIndex, 0, context, state)
+                            }
+                        OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                        "  br label %if$(regionNodeIndex)_merge" -> println
+                        true => ifThenReachesMerge[regionNodeIndex - regionLocalStart]
+                    }
+                    "if$(regionNodeIndex)_else:" -> println
+                    false => regionTerminated!
+                }
+        }
+        regionEventKind == 4 -> if {
+            ifActive[regionNodeIndex - regionLocalStart]
+                -> if {
+                    regionNode.nextOperand < 0 -> if { true => ifThenReachesMerge[regionNodeIndex - regionLocalStart] }
+                    not regionTerminated! -> if {
+                        regionNode.nextOperand >= 0 -> if {
+                            false => nestedElseValueUsed!
+                            regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedElseValueUsed!
+                            nestedElseValueUsed! and not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0)
+                                -> if {
+                                    regionNode.nextOperand -> regionResultValueIndex(context, state) => nestedElseStoreIndex
+                                    regionNode -> emitIfResultStore(nestedElseStoreIndex, ownerIndex!, regionNodeIndex, 1, context, state)
+                                }
+                            OwnedDropRequest { regionIndex: regionNode.nextOperand, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                        } else {
+                            OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                        }
+                        "  br label %if$(regionNodeIndex)_merge" -> println
+                        true => ifThenReachesMerge[regionNodeIndex - regionLocalStart]
+                    }
+                    ifThenReachesMerge[regionNodeIndex - regionLocalStart]
+                        -> if {
+                            "if$(regionNodeIndex)_merge:" -> println
+                            false => regionTerminated!
+                            false => nestedMergeValueUsed!
+                            regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedMergeValueUsed!
+                            nestedMergeValueUsed! and not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) and regionNode.nextOperand >= 0
+                                -> if {
+                                    "  %v$(regionNodeIndex) = load " -> print
+                                    regionNode -> writeIrType(context, state)
+                                    ", ptr %if$(regionNodeIndex)_result, align " -> print
+                                    regionNode -> storageAlign(context, state) -> writeDecimalLine
+                                }
+                        }
+                }
+        }
+        regionEventKind == 6 -> if {
+            not regionTerminated! -> if {
+                true => loopActive[regionNodeIndex - regionLocalStart]
+                "  br label %while$(regionNodeIndex)_header" -> println
+                "while$(regionNodeIndex)_header:" -> println
+                false => regionTerminated!
+            }
+        }
+        regionEventKind == 7 -> if {
+            loopActive[regionNodeIndex - regionLocalStart]
+                -> if {
+                    WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: regionNode.operand0 } -> emitWhileBranch(emissionOrder, context, state)
+                    "while$(regionNodeIndex)_body:" -> println
+                    false => regionTerminated!
+                }
+        }
+        regionEventKind == 8 -> if {
+            loopActive[regionNodeIndex - regionLocalStart]
+                -> if {
+                    not regionTerminated! -> if {
+                        OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                        "  br label %while$(regionNodeIndex)_header" -> println
+                    }
+                    "while$(regionNodeIndex)_exit:" -> println
+                    false => regionTerminated!
+                }
+        }
+        -1 => nextRegionNode!
+        regionOrderIndex! + 1 < (regionOrder -> len)
+            -> if { regionOrder[regionOrderIndex! + 1] => nextRegionNode! }
+        true => closeEach!
+        activeEachSize! > 0 and closeEach! -> while {
+            activeEach![activeEachSize! - 1] => eachIndex
+            false => nextInside!
+            nextRegionNode! >= 0 -> if {
+                NodeAncestorRequest { nodeIndex: nextRegionNode!, ownerIndex: eachIndex }
+                    -> nodeDescendsFrom(context, state) => nextInside!
+            }
+            nextInside! -> if { false => closeEach! } else {
+                eachIndex -> emitDirectEachEnd(regionTerminated!, context)
+                false => regionTerminated!
+                activeEachSize! - 1 => activeEachSize!
+            }
+        }
+        regionOrderIndex! + 1 => regionOrderIndex!
+    }
+}

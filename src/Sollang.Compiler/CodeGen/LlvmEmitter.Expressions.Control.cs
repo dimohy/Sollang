@@ -208,6 +208,21 @@ internal sealed partial class LlvmEmitter
         {
             return EmitIntegerComparison(leftInt, expression.Operator, rightInt);
         }
+        if (left is RuntimeText leftText && right is RuntimeText rightText)
+        {
+            if (expression.Operator is not (ComparisonOperator.Equal or ComparisonOperator.NotEqual))
+            {
+                throw new SollangException("Text supports only '==' and '!=' comparisons");
+            }
+            var equal = EmitValuesEqual(leftText, rightText);
+            if (expression.Operator == ComparisonOperator.Equal)
+            {
+                return new RuntimeBool(equal);
+            }
+            var different = NextTemp("text_ne");
+            EmitBinary(different, "xor", "i1", equal, "true");
+            return new RuntimeBool(different);
+        }
         if (left is RuntimeFloat leftFloat && right is RuntimeFloat rightFloat)
         {
             var result = NextTemp("fcmp");
@@ -665,6 +680,23 @@ internal sealed partial class LlvmEmitter
             {
                 return new BlockResult(null, _currentBlockLabel, CaptureLocals());
             }
+            if (value is RuntimeStaticIntArray or RuntimeStaticTextArray or RuntimeStaticInlineArray)
+            {
+                var copyExistingValue = _program.Types.IsCopyableFixedArray(value.Type)
+                    && (body.Value is NameExpression resultName && outerLocals.Locals.ContainsKey(resultName.Name)
+                        || body.Value is FieldAccessExpression
+                            && RegisterOwnedFieldProjectionTransfer(body.Value, value.Type,
+                                new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal)));
+                value = PrepareStaticArrayBlockResult(value, copyExistingValue);
+            }
+            if (value is RuntimeStruct && _program.Types.RequiresFixedStorageCopy(value.Type)
+                && (body.Value is NameExpression structName && outerLocals.Locals.ContainsKey(structName.Name)
+                    || body.Value is FieldAccessExpression
+                        && RegisterOwnedFieldProjectionTransfer(body.Value, value.Type,
+                            new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal))))
+            {
+                value = CopyFixedStorageValue(value);
+            }
             DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName, body.Value);
             return new BlockResult(value, _currentBlockLabel, CaptureLocals());
         }
@@ -716,6 +748,8 @@ internal sealed partial class LlvmEmitter
                 .ToArray();
             _locals[name] = EmitAsyncScopePhi($"async_{name}", entryValue.Type, values);
         }
+
+        MergeOwnedStructFieldMoves(entryScope, incoming);
     }
 
     private void MergeSynchronousOuterScope(
@@ -754,7 +788,47 @@ internal sealed partial class LlvmEmitter
                     + $"(present: {presentLabels}; moved: {missingLabels})");
             }
         }
+
+        MergeOwnedStructFieldMoves(entryScope, incoming);
     }
+
+    private void MergeOwnedStructFieldMoves(
+        LocalScope entryScope,
+        IReadOnlyList<(LocalScope Scope, string Label)> incoming)
+    {
+        foreach (var name in entryScope.Locals.Keys)
+        {
+            if (incoming.Any(item => !item.Scope.Locals.ContainsKey(name)))
+            {
+                continue;
+            }
+            var masks = incoming.Select(item =>
+                item.Scope.MovedOwnedStructFields.TryGetValue(name, out var fields)
+                    ? fields
+                    : EmptyMovedFieldMask).ToArray();
+            if (masks.Length == 0)
+            {
+                continue;
+            }
+
+            var entryMask = entryScope.MovedOwnedStructFields.TryGetValue(name, out var entryFields)
+                ? entryFields
+                : EmptyMovedFieldMask;
+            if (masks.Any(mask => !entryMask.SetEquals(mask)))
+            {
+                var changedFields = masks
+                    .SelectMany(static mask => mask)
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal);
+                throw new SollangException(
+                    $"sollang error[E20]: partial move of owned field(s) "
+                    + $"'{string.Join(", ", changedFields)}' from binding '{name}' exits a branch; "
+                    + "reinitialize each moved field before the branch exits or return from the moving branch");
+            }
+        }
+    }
+
+    private static readonly HashSet<string> EmptyMovedFieldMask = new(StringComparer.Ordinal);
 
     private void MergeAsyncMutableSlot(
         string name,
@@ -847,12 +921,16 @@ internal sealed partial class LlvmEmitter
     {
         return incoming[0].Value switch
         {
+            RuntimeArguments => new RuntimeArguments(EmitScalarPhi(prefix, "i64", incoming)),
             RuntimeInt integer => new RuntimeInt(integer.Type, EmitScalarPhi(prefix, LlvmType(integer.Type), incoming)),
             RuntimeFloat floating => new RuntimeFloat(floating.Type, EmitScalarPhi(prefix, LlvmType(floating.Type), incoming)),
             RuntimeBool => new RuntimeBool(EmitScalarPhi(prefix, "i1", incoming)),
             RuntimeText => EmitTextPhi(prefix, incoming),
             RuntimeInlineSlice slice => EmitInlineSlicePhi(prefix, slice, incoming),
+            RuntimeStaticIntArray or RuntimeStaticTextArray or RuntimeStaticInlineArray =>
+                EmitStaticArrayPhi(prefix, incoming),
             RuntimeDynamicIntArray => EmitDynamicArrayPhi(prefix, incoming),
+            RuntimeDynamicInlineArray array => EmitDynamicInlineArrayPhi(prefix, array, incoming),
             RuntimeIntDictionary => EmitIntDictionaryPhi(prefix, incoming),
             RuntimeStruct structure => EmitStructPhi(prefix, structure.Type, incoming),
             RuntimeEnum enumeration => EmitEnumPhi(prefix, enumeration.Type, incoming),
@@ -861,11 +939,65 @@ internal sealed partial class LlvmEmitter
         };
     }
 
+    private static (string Pointer, string Length, BoundType ElementType, RuntimeContainerStorage Storage)
+        StaticArrayPhiStorage(RuntimeValue value) => value switch
+        {
+            RuntimeStaticIntArray array => (array.PointerName, array.LengthName, BoundType.Int, array.Storage),
+            RuntimeStaticTextArray array => (array.PointerName, array.LengthName, BoundType.Text, array.Storage),
+            RuntimeStaticInlineArray array => (array.PointerName, array.LengthName, array.ElementType, array.Storage),
+            _ => throw new SollangException("static array phi received a non-array value")
+        };
+
+    private static RuntimeValue WithStaticArrayPhiStorage(
+        RuntimeValue value, string pointer, string length, RuntimeContainerStorage storage) => value switch
+        {
+            RuntimeStaticIntArray array => array with { PointerName = pointer, LengthName = length, Storage = storage },
+            RuntimeStaticTextArray array => array with { PointerName = pointer, LengthName = length, Storage = storage },
+            RuntimeStaticInlineArray array => array with { PointerName = pointer, LengthName = length, Storage = storage },
+            _ => throw new SollangException("static array phi received a non-array value")
+        };
+
+    private RuntimeValue PrepareStaticArrayBlockResult(RuntimeValue value, bool copyExistingValue = false)
+    {
+        var storage = StaticArrayPhiStorage(value);
+        if (storage.Storage == RuntimeContainerStorage.Heap && !copyExistingValue) return value;
+
+        // Normalize each predecessor before its terminator, so the join has a
+        // single cleanup contract even when a literal and a call return meet.
+        var elementSize = _program.Types.GetStaticArray(
+            _program.Types.GetOrAddStaticArray(storage.ElementType)).ElementSize;
+        var bytes = NextTemp("block_fixed_bytes");
+        EmitBinary(bytes, "mul", "i64", storage.Length, elementSize.ToString(CultureInfo.InvariantCulture));
+        var pointer = EmitHeapAllocate(bytes);
+        EmitCall(target: null, "void", "llvm.memcpy.p0.p0.i64",
+            $"ptr {pointer}, ptr {storage.Pointer}, i64 {bytes}, i1 false");
+        return WithStaticArrayPhiStorage(value, pointer, storage.Length, RuntimeContainerStorage.Heap);
+    }
+
+    private RuntimeValue EmitStaticArrayPhi(
+        string prefix, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        var first = incoming[0].Value;
+        var storage = StaticArrayPhiStorage(first);
+        if (incoming.Any(item => item.Value.Type != first.Type
+            || StaticArrayPhiStorage(item.Value).ElementType != storage.ElementType
+            || StaticArrayPhiStorage(item.Value).Storage != storage.Storage))
+        {
+            throw new SollangException("static array phi inputs disagree on type or storage");
+        }
+        var pointer = NextTemp(prefix + "_ptr");
+        EmitPhi(pointer, "ptr", FormatPhiIncoming(incoming, static value => StaticArrayPhiStorage(value).Pointer));
+        var length = NextTemp(prefix + "_len");
+        EmitPhi(length, "i64", FormatPhiIncoming(incoming, static value => StaticArrayPhiStorage(value).Length));
+        return WithStaticArrayPhiStorage(first, pointer, length, storage.Storage);
+    }
+
     private string EmitScalarPhi(string prefix, string typeName, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
     {
         var result = NextTemp(prefix);
         var incomingList = FormatPhiIncoming(incoming, static value => value switch
         {
+            RuntimeArguments arguments => arguments.LengthName,
             RuntimeInt integer => integer.ValueName,
             RuntimeFloat floating => floating.ValueName,
             RuntimeBool boolean => boolean.ValueName,
@@ -916,6 +1048,37 @@ internal sealed partial class LlvmEmitter
         EmitPhi(capacity, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeDynamicIntArray)value).CapacityName));
 
         return new RuntimeDynamicIntArray(pointer, length, capacity);
+    }
+
+    private RuntimeDynamicInlineArray EmitDynamicInlineArrayPhi(
+        string prefix,
+        RuntimeDynamicInlineArray first,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (incoming.Any(item => item.Value is not RuntimeDynamicInlineArray array
+            || array.ArrayType != first.ArrayType
+            || array.ElementType != first.ElementType
+            || array.Storage != first.Storage))
+        {
+            throw new SollangException("dynamic inline array phi inputs disagree on type or storage");
+        }
+
+        var pointer = NextTemp(prefix + "_ptr");
+        EmitPhi(
+            pointer,
+            "ptr",
+            FormatPhiIncoming(incoming, static value => ((RuntimeDynamicInlineArray)value).PointerName));
+        var length = NextTemp(prefix + "_len");
+        EmitPhi(
+            length,
+            "i64",
+            FormatPhiIncoming(incoming, static value => ((RuntimeDynamicInlineArray)value).LengthName));
+        var capacity = NextTemp(prefix + "_capacity");
+        EmitPhi(
+            capacity,
+            "i64",
+            FormatPhiIncoming(incoming, static value => ((RuntimeDynamicInlineArray)value).CapacityName));
+        return first with { PointerName = pointer, LengthName = length, CapacityName = capacity };
     }
 
     private RuntimeIntDictionary EmitIntDictionaryPhi(string prefix, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)

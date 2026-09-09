@@ -1,0 +1,84 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    """"
+    identity<T> value: T -> T => value
+    struct Algorithms { }
+    impl Algorithms {
+        identity<T>: self, value: T -> T => value
+        second<T, U>: self, first: T, second: U -> U => second
+        same<T>: self, left: T, right: T -> T => left
+    }
+    main {
+        Algorithms { } -> identity(300) => number
+        Algorithms { } -> identity("text") => text
+        Algorithms { } -> second(1, "other") => other
+        identity(700) => directNumber
+        identity("direct") => directText
+        Algorithms { } -> same(1, "mismatch") => invalid
+    }
+    """" => source
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved
+    prepared -> typedIr.lowerResolvedContext(resolved) => nodes!
+    [typeIds.SemanticType; ~] => types!
+    resolved.types -> each type { types! -> push(type) }
+    nodes! -> typedIr.planGenericCalls(prepared, types!) => plans
+    0 => integers!
+    0 => texts!
+    0 => unresolved!
+    0 => rejected!
+    plans -> each plan {
+        plan.status == 0 and plan.resultType >= 0 -> if {
+            types![plan.resultType] => type
+            type.kind == 1 and type.origin == 1 -> if {
+                type.symbol == 2 -> if { integers! + 1 => integers! }
+                type.symbol == 1 -> if { texts! + 1 => texts! }
+            } else { unresolved! + 1 => unresolved! }
+        } else {
+            plan.status == 2 and plan.resultType == -1
+                -> if { rejected! + 1 => rejected! } else {
+                    unresolved! + 1 => unresolved!
+                }
+        }
+    }
+    0 => genericDeclarations!
+    resolved.references -> each reference {
+        resolved.types[reference.typeId] => type
+        type.kind == 1 and type.origin == 3
+            -> if { genericDeclarations! + 1 => genericDeclarations! }
+    }
+    genericDeclarations! == 10 => preserved
+    "int=$(integers!),text=$(texts!),unresolved=$(unresolved!),rejected=$(rejected!),templates=$preserved" -> println
+    nodes! -> typedIr.materializeGenericBodies(types!, resolved.fields, plans) => instances
+    0 => bodies!
+    0 => rejectedBodies!
+    0 => remaining!
+    true => relocated!
+    instances -> each instance {
+        instance.status == 0 -> if {
+            bodies! + 1 => bodies!
+            nodes![instance.functionNode] => header
+            header.operand0 <= instance.functionNode
+                or header.operand0 >= instance.functionNode + instance.nodeCount
+                or header.operand1 <= instance.functionNode
+                or header.operand1 >= instance.functionNode + instance.nodeCount
+                -> if { false => relocated! }
+            instance.functionNode => index!
+            index! < instance.functionNode + instance.nodeCount
+                -> while {
+                    nodes![index!] => node
+                    node.typeId >= 0 and types![node.typeId].containsParameter
+                        -> if { remaining! + 1 => remaining! }
+                    index! + 1 => index!
+                }
+        } else {
+            instance.functionNode == -1 and instance.nodeCount == 0
+                -> if { rejectedBodies! + 1 => rejectedBodies! }
+        }
+    }
+    "bodies=$(bodies!),rejected=$(rejectedBodies!),remaining=$(remaining!),relocated=$(relocated!)" -> println
+}

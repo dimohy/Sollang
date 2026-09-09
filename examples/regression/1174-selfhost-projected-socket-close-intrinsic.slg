@@ -1,0 +1,71 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A consuming socket intrinsic reached through a projected owned field keeps
+# its canonical runtime opcode instead of becoming an undefined direct call.
+main {
+    """
+    namespace std.net.socket
+
+    public struct TcpListener {
+        public token: UInt64
+    }
+
+    public struct TcpStream {
+        public token: UInt64
+    }
+
+    public struct UdpSocket {
+        public token: UInt64
+    }
+    """ => socketTypes
+
+    """
+    namespace std.net.socket
+
+    impl TcpListener {
+        public close: move self -> Unit uses Network = intrinsic
+    }
+
+    impl TcpStream {
+        public close: move self -> Unit uses Network = intrinsic
+    }
+
+    impl UdpSocket {
+        public close: move self -> Unit uses Network = intrinsic
+    }
+    """ => socketRuntime
+
+    """
+    namespace sample
+
+    import std.net.socket as socket
+
+    struct Owner {
+        resource: socket.UdpSocket
+        remaining: [Int; ~]
+    }
+
+    impl Owner {
+        public close: move self -> Unit uses Network {
+            self.resource -> close
+        }
+    }
+    """ => consumer
+
+    [socketTypes, socketRuntime, consumer; ~]
+        -> semanticContext.prepare => prepared
+    prepared -> typedIr.lowerContext => ir
+    0 => closeCalls!
+    -1 => closeOpcode!
+    ir -> each node {
+        (node.kind == 6 or node.kind == 9)
+            and node.sourceModule == 2
+            and node.targetModule == 1
+            -> if {
+                closeCalls! + 1 => closeCalls!
+                node.opcode => closeOpcode!
+            }
+    }
+    "projected-socket-close=$(closeOpcode!),$(closeCalls!)" -> println
+}

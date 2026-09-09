@@ -1,0 +1,32 @@
+struct Payload {
+    bytes: [UInt8; ~]
+}
+
+struct Envelope {
+    payload: Payload
+    cleanup: [UInt8; ~]
+}
+
+enum Stored {
+    Value(Payload)
+    Empty
+}
+
+impl Envelope {
+    touch: mut self -> Unit {
+        self.cleanup -> push(9)
+    }
+}
+
+main {
+    Envelope {
+        payload: Payload { bytes: [1, 2, 3; ~] }
+        cleanup: [UInt8; ~]
+    } => envelope!
+    envelope! -> touch
+    Stored.Value(envelope!.payload) => stored
+    stored -> when {
+        Value(payload) { "mutable-projection=$((payload.bytes -> len) == 3)" -> println }
+        Empty { "mutable-projection=false" -> println }
+    }
+}

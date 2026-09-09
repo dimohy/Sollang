@@ -1,38 +1,52 @@
+import std.time as time
+
 delayed value: Int -> async Int uses Clock {
-    25 -> milliseconds -> sleep -> await
+    time.Duration { millis: 25 } => duration
+    duration -> sleep -> await
     value
 }
 
 quick value: Int -> async Int uses Clock {
-    1 -> milliseconds -> sleep -> await
+    time.Duration { millis: 1 } => duration
+    duration -> sleep -> await
     value
 }
 
 veryDelayed value: Int -> async Int uses Clock {
-    1000 -> milliseconds -> sleep -> await
+    time.Duration { millis: 1000 } => duration
+    duration -> sleep -> await
     value
 }
 
 main {
-    nowMillis() => started
+    time.monotonicClock() => clock
+    clock -> now => started
     1 -> delayed => slow
     2 -> quick => fast
 
-    1000 -> milliseconds -> sleep => cancelled
+    time.Duration { millis: 1000 } => cancelDuration
+    cancelDuration -> sleep => cancelled
     3 -> veryDelayed => cancelledParent
-    0 -> milliseconds -> sleep -> await
+    time.Duration { millis: 0 } => zeroDuration
+    zeroDuration -> sleep -> await
     cancelled -> cancel
     cancelledParent -> cancel
 
     fast -> await => fastValue
     slow -> await => slowValue
-    -1 -> seconds -> sleep -> await
-    milliseconds(0) -> sleep -> await
-    nowMillis() - started => elapsed
-
-    elapsed >= 20 -> if {
-        "fast=$fastValue,slow=$slowValue,cancelled=true,parent=true,elapsed=true" -> println
-    } else {
-        "fast=$fastValue,slow=$slowValue,cancelled=true,parent=true,elapsed=false" -> println
+    time.Duration { millis: 0 } => finalZeroDuration
+    finalZeroDuration -> sleep -> await
+    clock -> now => finished
+    finished -> durationSince(started) -> when {
+        Ok(elapsed) {
+            elapsed.millis >= 20 -> if {
+                "fast=$fastValue,slow=$slowValue,cancelled=true,parent=true,elapsed=true" -> println
+            } else {
+                "fast=$fastValue,slow=$slowValue,cancelled=true,parent=true,elapsed=false" -> println
+            }
+        }
+        Err(error) {
+            "fast=$fastValue,slow=$slowValue,cancelled=true,parent=true,elapsed=false" -> println
+        }
     }
 }

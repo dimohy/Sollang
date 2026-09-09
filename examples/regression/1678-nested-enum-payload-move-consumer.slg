@@ -1,0 +1,25 @@
+# The inner match transfers its payload; the outer enum must not drop it again.
+struct Table {
+    data: [Int; ~]
+}
+
+enum Slot {
+    Empty
+    Built(Table)
+}
+
+make: -> Result<Slot, Int> {
+    Slot.Built(Table { data: [42] }) -> Result<Slot, Int>.Ok
+}
+
+consume table: move Table -> Int => table.data[0]
+
+main {
+    make() -> when {
+        Err(error) { error -> println }
+        Ok(slot) => slot -> when {
+            Empty { 0 -> println }
+            Built(table) { table -> consume -> println }
+        }
+    }
+}

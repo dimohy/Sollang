@@ -1,0 +1,160 @@
+import std.net as net
+import std.net.http as http
+import std.net.http.response as response
+import std.net.http.server as server
+import std.net.socket as socket
+
+readResponse connection: move socket.TcpStream -> Result<[UInt8; ~], socket.SocketError> uses Network {
+    [UInt8; ~] => bytes!
+    bytes! -> reserve(256)
+    false => complete!
+    not complete! -> while {
+        connection -> receiveAppend(bytes!)? => received
+        received == 0 -> if { true => complete! }
+    }
+    connection -> close
+    Result<[UInt8; ~], socket.SocketError>.Ok(bytes!)
+}
+
+main {
+    net.loopback(43181) -> unified => endpoint
+    http.limits(1_024, 256, 16, 64, 512) -> when {
+        Err(error) { "limits-error=$(error.offset)" -> println }
+        Ok(requestLimits) {
+            server.ServerOptions {
+                listener: socket.ListenOptions {
+                    endpoint: endpoint
+                    backlog: 8
+                    reuseAddress: true
+                }
+                requestLimits: requestLimits
+            } -> listen -> when {
+                Err(_) { "server-listen-error" -> println }
+                Ok(service) {
+                    endpoint -> connect -> when {
+                        Err(error) { "client-error=$(error.code)" -> println }
+                        Ok(client) {
+                            client -> sendText("GET /ready HTTP/1.1\r\nHost: loopback\r\n\r\n") -> when {
+                                Err(error) { "client-send-error=$(error.code)" -> println }
+                                Ok(_) {
+                                    service -> accept -> when {
+                                        Err(_) { "server-accept-error" -> println }
+                                        Ok(connection) {
+                                            connection -> readRequest -> when {
+                                                Err(error) => error -> when {
+                                                    Http(parserError) { "server-read-http-error=$(parserError.offset)" -> println }
+                                                    Socket(socketError) => socketError.kind -> when {
+                                                        InvalidAddress { "server-read-socket-invalid-address=$(socketError.code)" -> println }
+                                                        InvalidArgument { "server-read-socket-invalid-argument=$(socketError.code)" -> println }
+                                                        AddressInUse { "server-read-socket-address-in-use=$(socketError.code)" -> println }
+                                                        ConnectionRefused { "server-read-socket-connection-refused=$(socketError.code)" -> println }
+                                                        ConnectionReset { "server-read-socket-connection-reset=$(socketError.code)" -> println }
+                                                        TimedOut { "server-read-socket-timed-out=$(socketError.code)" -> println }
+                                                        Interrupted { "server-read-socket-interrupted=$(socketError.code)" -> println }
+                                                        Unsupported { "server-read-socket-unsupported=$(socketError.code)" -> println }
+                                                        Other { "server-read-socket-other=$(socketError.code)" -> println }
+                                                        WriteZero { "server-read-socket-write-zero=$(socketError.code)" -> println }
+                                                        WouldBlock { "server-read-socket-would-block=$(socketError.code)" -> println }
+                                                    }
+                                                    PeerClosed { "server-read-peer-closed" -> println }
+                                                    InvalidBodyBufferSize { "server-read-invalid-body-buffer" -> println }
+                                                    BodyAlreadyRead { "server-read-body-already-read" -> println }
+                                                    BodyNotComplete { "server-read-body-not-complete" -> println }
+                                                    BodyLengthMismatch { "server-read-body-length-mismatch" -> println }
+                                                    DiscontiguousLeftover { "server-read-discontiguous-leftover" -> println }
+                                                    TunnelUnavailable { "server-read-tunnel-unavailable" -> println }
+                                                }
+                                                Ok(request) {
+                                                    false => endpointsMatch!
+                                                    request -> localEndpoint -> when {
+                                                        Err(_) { }
+                                                        Ok(local) {
+                                                            request -> remoteEndpoint -> when {
+                                                                Err(_) { }
+                                                                Ok(remote) {
+                                                                    local -> port == 43181
+                                                                        and remote -> port != 0
+                                                                        => endpointsMatch!
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    request.head -> methodText => method
+                                                    request.head -> targetText => target
+                                                    (method -> len) == 3
+                                                        and (method -> byte(0)) == 71
+                                                        and (target -> len) == 6
+                                                        and (target -> byte(0)) == 47
+                                                        and (target -> byte(5)) == 121
+                                                        => requestMatches
+                                                    response.ResponseLimits {
+                                                        maxHeadBytes: 512
+                                                        maxFieldCount: 8
+                                                        maxFieldNameBytes: 64
+                                                        maxFieldValueBytes: 256
+                                                    } -> policy -> when {
+                                                        Err(_) { "response-policy-error" -> println }
+                                                        Ok(policy) => policy -> response(method, request.head.version, 200, "OK", 4, response.ConnectionMode.Close) -> when {
+                                                            Err(_) { "response-start-error" -> println }
+                                                            Ok(writer) => writer -> finish -> when {
+                                                                Err(_) { "response-finish-error" -> println }
+                                                                Ok(head) {
+                                                                    [UInt8; ~] => body!
+                                                                    body! -> push(112)
+                                                                    body! -> push(111)
+                                                                    body! -> push(110)
+                                                                    body! -> push(103)
+                                                                    request -> respond(head, body!) -> when {
+                                                                        Err(error) => error -> when {
+                                                                            Http(parserError) { "server-response-http-error=$(parserError.offset)" -> println }
+                                                                            Socket(socketError) { "server-response-socket-error=$(socketError.code)" -> println }
+                                                                            PeerClosed { "server-response-peer-closed" -> println }
+                                                                            InvalidBodyBufferSize { "server-response-invalid-body-buffer" -> println }
+                                                                            BodyAlreadyRead { "server-response-body-already-read" -> println }
+                                                                            BodyNotComplete { "server-response-body-not-complete" -> println }
+                                                                            BodyLengthMismatch { "server-response-body-length-mismatch" -> println }
+                                                                            DiscontiguousLeftover { "server-response-discontiguous-leftover" -> println }
+                                                                            TunnelUnavailable { "server-response-tunnel-unavailable" -> println }
+                                                                        }
+                                                                        Ok(_) {
+                                                                            client -> readResponse -> when {
+                                                                                Err(error) { "client-read-error=$(error.code)" -> println }
+                                                                                Ok(received) {
+                                                                                    http.parser(requestLimits) -> when {
+                                                                                        Err(error) { "parser-error=$(error.offset)" -> println }
+                                                                                        Ok(parser) => parser -> parseResponseBytes(received) -> when {
+                                                                                            Err(error) { "parse-error=$(error.offset)" -> println }
+                                                                                            Ok(reply) {
+                                                                                                service -> close
+                                                                                                requestMatches
+                                                                                                    and endpointsMatch!
+                                                                                                    and reply.status == 200
+                                                                                                    and (received -> len) == Int(reply.bodyStart) + 4
+                                                                                                    and received[Int(reply.bodyStart)] == 112
+                                                                                                    and received[(received -> len) - 1] == 103
+                                                                                                    -> if { "http-one-request-server=ok" } else { "http-one-request-server=failed" }
+                                                                                                    -> println
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

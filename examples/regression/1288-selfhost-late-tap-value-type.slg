@@ -1,0 +1,51 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A late-resolved indexed Path.pathText producer, its immutable binding, and
+# the binding's direct read are one SSA value. Both aliases must inherit Text
+# before LLVM emission instead of generating `freeze void %value`.
+main {
+    [
+    """
+    namespace sys.path
+
+    public struct Path {
+        public bytes: [UInt8; ~]
+        public style: Int
+    }
+
+    impl Path {
+        public pathText: self -> Text = intrinsic
+    }
+    """,
+    """
+    import sys.path as path
+
+    inspect paths: [path.Path; ~], index: Int -> Text {
+        paths[index] -> pathText => currentText
+        currentText
+    }
+
+    main { }
+    """; ~
+    ] => sources
+    sources -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    false => aliasTyped!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.kind == 5 and node.operand0 >= 0 and ir[node.operand0].kind == 17
+            -> if {
+            ir[node.operand0] => binding
+            binding.operand0 >= 0 and ir[binding.operand0].opcode == -230
+                -> if {
+                ir[binding.operand0] => producer
+                node.typeId >= 0 and node.typeId == binding.typeId and binding.typeId == producer.typeId
+                    -> if { true => aliasTyped! }
+            }
+        }
+        index! + 1 => index!
+    }
+    "alias-text=$(aliasTyped!)" -> println
+}

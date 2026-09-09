@@ -1,0 +1,30 @@
+produce outerOk: Bool, innerOk: Bool -> Result<Result<Int, Int>, Int> {
+    outerOk -> if {
+        innerOk -> if {
+            Result<Result<Int, Int>, Int>.Ok(Result<Int, Int>.Ok(7))
+        } else {
+            Result<Result<Int, Int>, Int>.Ok(Result<Int, Int>.Err(8))
+        }
+    } else {
+        Result<Result<Int, Int>, Int>.Err(9)
+    }
+}
+
+finish outerOk: Bool, innerOk: Bool -> Result<Int, Int> {
+    produce(outerOk, innerOk) -> when {
+        Ok(inner) {
+            inner -> when {
+                Ok(value) { Result<Int, Int>.Ok(value) -> return }
+                Err(error) { Result<Int, Int>.Err(error) -> return }
+            }
+        }
+        Err(error) { Result<Int, Int>.Err(error) -> return }
+    }
+}
+
+main {
+    finish(false, true) -> when {
+        Ok(value) { "unexpected=$value" -> println }
+        Err(error) { "nested-all-return=$error" -> println }
+    }
+}

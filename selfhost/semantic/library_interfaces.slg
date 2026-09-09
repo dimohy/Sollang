@@ -6,33 +6,33 @@ import sys.file as file
 # from its mapped bytes. Text fields remain offsets into the SourceText owner;
 # no generated Sollang source and no copied strings are created.
 public struct MetadataSpan {
-    start: UIntSize
-    length: UIntSize
+    public start: UIntSize
+    public length: UIntSize
 }
 
 public struct LibraryParameter {
-    name: MetadataSpan
-    typeName: MetadataSpan
+    public name: MetadataSpan
+    public typeName: MetadataSpan
 }
 
 public struct LibraryExport {
-    name: MetadataSpan
-    qualifiedName: MetadataSpan
-    symbol: MetadataSpan
-    parameterStart: Int
-    parameterCount: Int
-    resultType: MetadataSpan
-    signatureHash: MetadataSpan
+    public name: MetadataSpan
+    public qualifiedName: MetadataSpan
+    public symbol: MetadataSpan
+    public parameterStart: Int
+    public parameterCount: Int
+    public resultType: MetadataSpan
+    public signatureHash: MetadataSpan
 }
 
 public struct LibraryInterface {
-    status: Int
-    errorOffset: UIntSize
-    target: MetadataSpan
-    libraryFile: MetadataSpan
-    abiHash: MetadataSpan
-    exports: [LibraryExport; ~]
-    parameters: [LibraryParameter; ~]
+    public status: Int
+    public errorOffset: UIntSize
+    public target: MetadataSpan
+    public libraryFile: MetadataSpan
+    public abiHash: MetadataSpan
+    public exports: [LibraryExport; ~]
+    public parameters: [LibraryParameter; ~]
 }
 
 struct Cursor {
@@ -58,12 +58,12 @@ isHex value: UInt8 -> Bool {
 skipWhitespace source: Text, cursor: Cursor -> Cursor {
     cursor => result!
     source -> len => sourceLength
-    (result!.status == 0
+    result!.status == 0
         and result!.index < sourceLength
-        and ((source -> byte(result!.index)) -> isWhitespace))
-            -> while {
-        result!.index + 1 => result!.index
-    }
+        and ((source -> byte(result!.index)) -> isWhitespace)
+        -> while {
+            result!.index + 1 => result!.index
+        }
     result!
 }
 
@@ -71,12 +71,12 @@ expectByte source: Text, cursor: Cursor, expected: UInt8, code: Int -> Cursor {
     source -> skipWhitespace(cursor) => result!
     source -> len => sourceLength
     result!.status == 0 -> if {
-        (result!.index < sourceLength and (source -> byte(result!.index)) == expected)
+        result!.index < sourceLength and (source -> byte(result!.index)) == expected
             -> if {
-            result!.index + 1 => result!.index
-        } else {
-            code => result!.status
-        }
+                result!.index + 1 => result!.index
+            } else {
+                code => result!.status
+            }
     }
     result!
 }
@@ -86,64 +86,64 @@ readString source: Text, cursor: Cursor, code: Int -> StringRead {
     MetadataSpan { start: next!.index, length: 0 } => value!
     source -> len => sourceLength
     next!.status == 0 -> if {
-        (next!.index < sourceLength and (source -> byte(next!.index)) == 34)
+        next!.index < sourceLength and (source -> byte(next!.index)) == 34
             -> if {
-            next!.index + 1 => next!.index
-            next!.index => value!.start
-            false => closed!
-            (next!.status == 0 and next!.index < sourceLength and not closed!)
-                -> while {
-                source -> byte(next!.index) => current
-                current == 34 -> if {
-                    next!.index - value!.start => value!.length
-                    next!.index + 1 => next!.index
-                    true => closed!
-                } else {
-                    current < 32 -> if {
-                        code => next!.status
-                    } else {
-                        current == 92 -> if {
+                next!.index + 1 => next!.index
+                next!.index => value!.start
+                false => closed!
+                next!.status == 0 and next!.index < sourceLength and not closed!
+                    -> while {
+                        source -> byte(next!.index) => current
+                        current == 34 -> if {
+                            next!.index - value!.start => value!.length
                             next!.index + 1 => next!.index
-                            next!.index < sourceLength -> if {
-                                source -> byte(next!.index) => escaped
-                                escaped == 117 -> if {
-                                    UIntSize(0) => hexIndex!
-                                    (next!.status == 0 and hexIndex! < 4) -> while {
-                                        next!.index + 1 => next!.index
-                                        (next!.index < sourceLength
-                                            and ((source -> byte(next!.index)) -> isHex))
-                                                -> if {
-                                            hexIndex! + 1 => hexIndex!
+                            true => closed!
+                        } else {
+                            current < 32 -> if {
+                                code => next!.status
+                            } else {
+                                current == 92 -> if {
+                                    next!.index + 1 => next!.index
+                                    next!.index < sourceLength -> if {
+                                        source -> byte(next!.index) => escaped
+                                        escaped == 117 -> if {
+                                            UIntSize(0) => hexIndex!
+                                            next!.status == 0 and hexIndex! < 4 -> while {
+                                                next!.index + 1 => next!.index
+                                                next!.index < sourceLength
+                                                    and ((source -> byte(next!.index)) -> isHex)
+                                                    -> if {
+                                                        hexIndex! + 1 => hexIndex!
+                                                    } else {
+                                                        code => next!.status
+                                                    }
+                                            }
                                         } else {
-                                            code => next!.status
+                                            escaped == 34
+                                                or escaped == 92
+                                                or escaped == 47
+                                                or escaped == 98
+                                                or escaped == 102
+                                                or escaped == 110
+                                                or escaped == 114
+                                                or escaped == 116 -> unless {
+                                                    code => next!.status
+                                                }
                                         }
-                                    }
-                                } else {
-                                    (escaped == 34
-                                        or escaped == 92
-                                        or escaped == 47
-                                        or escaped == 98
-                                        or escaped == 102
-                                        or escaped == 110
-                                        or escaped == 114
-                                        or escaped == 116) -> unless {
+                                    } else {
                                         code => next!.status
                                     }
                                 }
-                            } else {
-                                code => next!.status
+                                next!.status == 0 -> if {
+                                    next!.index + 1 => next!.index
+                                }
                             }
                         }
-                        next!.status == 0 -> if {
-                            next!.index + 1 => next!.index
-                        }
                     }
-                }
+                next!.status == 0 and not closed! -> if { code => next!.status }
+            } else {
+                code => next!.status
             }
-            (next!.status == 0 and not closed!) -> if { code => next!.status }
-        } else {
-            code => next!.status
-        }
     }
     StringRead { cursor: next!, value: value! }
 }
@@ -151,11 +151,11 @@ readString source: Text, cursor: Cursor, code: Int -> StringRead {
 spanIs source: Text, span: MetadataSpan, expected: Text -> Bool {
     span.length == (expected -> len) => matches!
     UIntSize(0) => index!
-    (matches! and index! < span.length) -> while {
+    matches! and index! < span.length -> while {
         (source -> byte(span.start + index!)) != (expected -> byte(index!))
             -> if {
-            false => matches!
-        }
+                false => matches!
+            }
         index! + 1 => index!
     }
     matches!
@@ -189,11 +189,11 @@ public exportParameterType document: ref LibraryInterface, exportIndex: Int, par
 sameSpan source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
     left.length == right.length => matches!
     UIntSize(0) => index!
-    (matches! and index! < left.length) -> while {
+    matches! and index! < left.length -> while {
         (source -> byte(left.start + index!)) != (source -> byte(right.start + index!))
             -> if {
-            false => matches!
-        }
+                false => matches!
+            }
         index! + 1 => index!
     }
     matches!
@@ -202,11 +202,11 @@ sameSpan source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
 spanIsHex source: Text, span: MetadataSpan, length: UIntSize -> Bool {
     span.length == length => valid!
     UIntSize(0) => index!
-    (valid! and index! < span.length) -> while {
+    valid! and index! < span.length -> while {
         (source -> byte(span.start + index!)) -> isHex
             -> unless {
-            false => valid!
-        }
+                false => valid!
+            }
         index! + 1 => index!
     }
     valid!
@@ -248,17 +248,17 @@ readParameters source: Text, cursor: Cursor, parameters: mut [LibraryParameter; 
     source -> expectByte(cursor, 91, 38) => next!
     source -> skipWhitespace(next!) => next!
     source -> len => sourceLength
-    (next!.status == 0
+    next!.status == 0
         and next!.index < sourceLength
-        and (source -> byte(next!.index)) != 93) -> while {
-        source -> readParameter(next!, parameters) => next!
-        source -> skipWhitespace(next!) => next!
-        (next!.status == 0
-            and next!.index < sourceLength
-            and (source -> byte(next!.index)) != 93) -> if {
-            source -> expectByte(next!, 44, 39) => next!
+        and (source -> byte(next!.index)) != 93 -> while {
+            source -> readParameter(next!, parameters) => next!
+            source -> skipWhitespace(next!) => next!
+            next!.status == 0
+                and next!.index < sourceLength
+                and (source -> byte(next!.index)) != 93 -> if {
+                    source -> expectByte(next!, 44, 39) => next!
+                }
         }
-    }
     source -> expectByte(next!, 93, 40)
 }
 
@@ -287,14 +287,14 @@ readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parame
             parameters[leftParameter!].typeName.length == 0
                 -> if { 63 => next!.status }
             leftParameter! + 1 => rightParameter!
-            (next!.status == 0 and rightParameter! < Int(parameters -> len))
+            next!.status == 0 and rightParameter! < Int(parameters -> len)
                 -> while {
-                source -> sameSpan(parameters[leftParameter!].name, parameters[rightParameter!].name)
-                    -> if {
-                    63 => next!.status
+                    source -> sameSpan(parameters[leftParameter!].name, parameters[rightParameter!].name)
+                        -> if {
+                            63 => next!.status
+                        }
+                    rightParameter! + 1 => rightParameter!
                 }
-                rightParameter! + 1 => rightParameter!
-            }
             leftParameter! + 1 => leftParameter!
         }
     }
@@ -309,29 +309,29 @@ readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parame
     source -> expectByte(next!, 125, 58) => next!
 
     next!.status == 0 -> if {
-        (nameRead.value.length == 0
+        nameRead.value.length == 0
             or qualifiedRead.value.length == 0
             or symbolRead.value.length == 0
-            or resultRead.value.length == 0) -> if {
-            64 => next!.status
-        }
-        (next!.status == 0
-            and not (source -> spanIsHex(signatureRead.value, 64)))
-                -> if {
-            65 => next!.status
-        }
+            or resultRead.value.length == 0 -> if {
+                64 => next!.status
+            }
+        next!.status == 0
+            and not (source -> spanIsHex(signatureRead.value, 64))
+            -> if {
+                65 => next!.status
+            }
     }
     next!.status == 0 -> if {
         false => duplicate!
         0 => exportIndex!
-        (not duplicate! and exportIndex! < (exports -> len))
+        not duplicate! and exportIndex! < (exports -> len)
             -> while {
-            source -> sameSpan(exports[exportIndex!].name, nameRead.value)
-                -> if {
-                true => duplicate!
+                source -> sameSpan(exports[exportIndex!].name, nameRead.value)
+                    -> if {
+                        true => duplicate!
+                    }
+                exportIndex! + 1 => exportIndex!
             }
-            exportIndex! + 1 => exportIndex!
-        }
         duplicate! -> if {
             59 => next!.status
         } else {
@@ -353,17 +353,17 @@ readExports source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], param
     source -> expectByte(cursor, 91, 60) => next!
     source -> skipWhitespace(next!) => next!
     source -> len => sourceLength
-    (next!.status == 0
+    next!.status == 0
         and next!.index < sourceLength
-        and (source -> byte(next!.index)) != 93) -> while {
-        source -> readExport(next!, exports, parameters) => next!
-        source -> skipWhitespace(next!) => next!
-        (next!.status == 0
-            and next!.index < sourceLength
-            and (source -> byte(next!.index)) != 93) -> if {
-            source -> expectByte(next!, 44, 61) => next!
+        and (source -> byte(next!.index)) != 93 -> while {
+            source -> readExport(next!, exports, parameters) => next!
+            source -> skipWhitespace(next!) => next!
+            next!.status == 0
+                and next!.index < sourceLength
+                and (source -> byte(next!.index)) != 93 -> if {
+                    source -> expectByte(next!, 44, 61) => next!
+                }
         }
-    }
     source -> expectByte(next!, 93, 62)
 }
 
@@ -383,32 +383,32 @@ public parse source: Text -> LibraryInterface {
     source -> skipWhitespace(cursor!) => cursor!
     source -> len => sourceLength
     cursor!.status == 0 -> if {
-        (cursor!.index < sourceLength and (source -> byte(cursor!.index)) == 49)
+        cursor!.index < sourceLength and (source -> byte(cursor!.index)) == 49
             -> if {
-            cursor!.index + 1 => cursor!.index
-        } else {
-            21 => cursor!.status
-        }
+                cursor!.index + 1 => cursor!.index
+            } else {
+                21 => cursor!.status
+            }
     }
     source -> expectByte(cursor!, 44, 13) => cursor!
     source -> expectKey(cursor!, "abi", 14) => cursor!
     source -> readString(cursor!, 15) => abiRead
     abiRead.cursor => cursor!
-    (cursor!.status == 0 and not (source -> spanIs(abiRead.value, "sollang-c-v1")))
+    cursor!.status == 0 and not (source -> spanIs(abiRead.value, "sollang-c-v1"))
         -> if {
-        22 => cursor!.status
-    }
+            22 => cursor!.status
+        }
     source -> expectByte(cursor!, 44, 16) => cursor!
     source -> expectKey(cursor!, "target", 17) => cursor!
     source -> readString(cursor!, 18) => targetRead
     targetRead.cursor => cursor!
     targetRead.value => target!
-    (cursor!.status == 0
+    cursor!.status == 0
         and not (source -> spanIs(target!, "windows-x64"))
-        and not (source -> spanIs(target!, "linux-x64")))
-            -> if {
-        23 => cursor!.status
-    }
+        and not (source -> spanIs(target!, "linux-x64"))
+        -> if {
+            23 => cursor!.status
+        }
     source -> expectByte(cursor!, 44, 19) => cursor!
     source -> expectKey(cursor!, "libraryFile", 20) => cursor!
     source -> readString(cursor!, 24) => libraryRead
@@ -419,16 +419,17 @@ public parse source: Text -> LibraryInterface {
     source -> readString(cursor!, 27) => hashRead
     hashRead.cursor => cursor!
     hashRead.value => abiHash!
-    (cursor!.status == 0
-        and not (source -> spanIsHex(abiHash!, 64))) -> if {
-        24 => cursor!.status
-    }
+    cursor!.status == 0
+        and not (source -> spanIsHex(abiHash!, 64))
+        -> if {
+            24 => cursor!.status
+        }
     source -> expectByte(cursor!, 44, 28) => cursor!
     source -> expectKey(cursor!, "exports", 29) => cursor!
     source -> readExports(cursor!, exports!, parameters!) => cursor!
     source -> expectByte(cursor!, 125, 30) => cursor!
     source -> skipWhitespace(cursor!) => cursor!
-    (cursor!.status == 0 and cursor!.index != sourceLength)
+    cursor!.status == 0 and cursor!.index != sourceLength
         -> if { 70 => cursor!.status }
 
     LibraryInterface {

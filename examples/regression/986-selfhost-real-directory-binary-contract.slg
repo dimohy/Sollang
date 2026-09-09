@@ -11,15 +11,19 @@ main {
         ir[index!] => node
         context.package.ranges[node.sourceModule] => range
         context.package.nodes[range.astStart + node.astNode] => sourceNode
-        (node.sourceModule == 0 and node.kind == 8 and (sourceNode.start == 3339 or sourceNode.start == 3422))
+        context.package.sources[node.sourceModule] -> slice(sourceNode.start, sourceNode.length) => expressionSource
+        node.sourceModule == 0
+            and node.kind == 8
+            and (expressionSource == "nameIndex! + 1" or expressionSource == "cursor! + nameLength")
             -> if {
             ir[node.operand0] => left
             ir[node.operand1] => right
             ir[left.operand0] => leftBinding
-            (node.typeSymbol == 13
+            node.typeSymbol == 13
                 and left.typeId == node.typeId
                 and right.typeId == node.typeId
-                and leftBinding.typeId == node.typeId) -> if { contracts! + 1 => contracts! }
+                and leftBinding.typeId == node.typeId
+                -> if { contracts! + 1 => contracts! }
         }
         index! + 1 => index!
     }

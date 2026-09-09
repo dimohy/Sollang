@@ -1,0 +1,31 @@
+import std.time as time
+
+# Wall and manual UTC clocks share the instance-shaped `now` vocabulary while
+# only the system clock carries the ambient Clock effect.
+verify: -> Unit uses Console, Clock {
+    time.manualWallClock(1_700_000_000_123) => manual!
+    manual! -> now => fixed
+    "manual=$(fixed -> asUnixMilliseconds)" -> println
+
+    time.wallClock() => system
+    system -> now => current
+    (current -> asUnixMilliseconds) > 1_577_836_800_000
+        -> if {
+        "wall=true" -> println
+    } else {
+        "wall=false" -> println
+    }
+
+    manual! -> set(current)
+    manual! -> now => copied
+    (copied -> asUnixMilliseconds) == (current -> asUnixMilliseconds)
+        -> if {
+        "copy=true" -> println
+    } else {
+        "copy=false" -> println
+    }
+}
+
+main {
+    verify()
+}

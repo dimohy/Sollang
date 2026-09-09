@@ -6,19 +6,19 @@ import sollang.compiler.semantic.analysis as analysis
 import syntax.generated.slg as grammar
 
 public struct ModuleIdentity {
-    sourceIndex: Int
-    pathHash: UInt64
-    pathStart: UIntSize
-    pathLength: UIntSize
-    importCount: Int
+    public sourceIndex: Int
+    public pathHash: UInt64
+    public pathStart: UIntSize
+    public pathLength: UIntSize
+    public importCount: Int
 }
 
 public struct ImportEdge {
-    sourceModule: Int
-    targetHash: UInt64
-    pathStart: UIntSize
-    pathLength: UIntSize
-    aliasToken: Int
+    public sourceModule: Int
+    public targetHash: UInt64
+    public pathStart: UIntSize
+    public pathLength: UIntSize
+    public aliasToken: Int
 }
 
 public identities sources: [Text; ~] -> [ModuleIdentity; ~] {
@@ -50,30 +50,30 @@ public identitiesAnalyzed package: analysis.PackageAnalysis -> [ModuleIdentity; 
                 0 => pathIndex!
                 pathIndex! < nodeCount -> while {
                     package.nodes[sourceRange.astStart + pathIndex!] => pathNode
-                    (pathNode.parent == nodeIndex! and pathNode.kind == 16)
+                    pathNode.parent == nodeIndex! and pathNode.kind == 16
                         -> if {
-                        pathNode.start => pathStart!
-                        pathNode.length => pathLength!
-                        1469598103934665603 => pathHash!
-                        pathNode.firstToken => pathToken!
-                        pathNode.firstToken + pathNode.tokenCount => pathTokenEnd
-                        pathToken! < pathTokenEnd -> while {
-                            package.tokens[sourceRange.tokenStart + pathToken!] => token
-                            (token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment())
-                                -> if {
-                                UIntSize(0) => pathByte!
-                                pathByte! < token.span.length -> while {
-                                    source -> byte(token.span.start + pathByte!) => value
-                                    pathHash! * 1099511628211 + UInt64(value) => pathHash!
-                                    pathByte! + 1 => pathByte!
-                                }
+                            pathNode.start => pathStart!
+                            pathNode.length => pathLength!
+                            1469598103934665603 => pathHash!
+                            pathNode.firstToken => pathToken!
+                            pathNode.firstToken + pathNode.tokenCount => pathTokenEnd
+                            pathToken! < pathTokenEnd -> while {
+                                package.tokens[sourceRange.tokenStart + pathToken!] => token
+                                token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                                    -> if {
+                                        UIntSize(0) => pathByte!
+                                        pathByte! < token.span.length -> while {
+                                            source -> byte(token.span.start + pathByte!) => value
+                                            pathHash! * 1099511628211 + UInt64(value) => pathHash!
+                                            pathByte! + 1 => pathByte!
+                                        }
+                                    }
+                                pathToken! + 1 => pathToken!
                             }
-                            pathToken! + 1 => pathToken!
+                            nodeCount => pathIndex!
+                        } else {
+                            pathIndex! + 1 => pathIndex!
                         }
-                        nodeCount => pathIndex!
-                    } else {
-                        pathIndex! + 1 => pathIndex!
-                    }
                 }
             }
             nodeIndex! + 1 => nodeIndex!
@@ -113,33 +113,34 @@ public importsAnalyzed package: analysis.PackageAnalysis -> [ImportEdge; ~] {
                 0 => pathIndex!
                 pathIndex! < nodeCount -> while {
                     package.nodes[sourceRange.astStart + pathIndex!] => pathNode
-                    (pathNode.parent == nodeIndex! and pathNode.kind == 16)
+                    pathNode.parent == nodeIndex! and pathNode.kind == 16
                         -> if {
-                        pathNode.start => importStart!
-                        pathNode.length => importLength!
-                        1469598103934665603 => targetHash!
-                        pathNode.firstToken => importPathToken!
-                        pathNode.firstToken + pathNode.tokenCount => importPathEnd
-                        importPathToken! < importPathEnd -> while {
-                            package.tokens[sourceRange.tokenStart + importPathToken!] => token
-                            token.kind == grammar.tokenIdIdentifier() -> if {
-                                importPathToken! => defaultAliasToken!
+                            pathNode.start => importStart!
+                            pathNode.length => importLength!
+                            1469598103934665603 => targetHash!
+                            pathNode.firstToken => importPathToken!
+                            pathNode.firstToken + pathNode.tokenCount => importPathEnd
+                            importPathToken! < importPathEnd -> while {
+                                package.tokens[sourceRange.tokenStart + importPathToken!] => token
+                                token.kind == grammar.tokenIdIdentifier()
+                                    -> if {
+                                        importPathToken! => defaultAliasToken!
+                                    }
+                                token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                                    -> if {
+                                        UIntSize(0) => importByte!
+                                        importByte! < token.span.length -> while {
+                                            source -> byte(token.span.start + importByte!) => value
+                                            targetHash! * 1099511628211 + UInt64(value) => targetHash!
+                                            importByte! + 1 => importByte!
+                                        }
+                                    }
+                                importPathToken! + 1 => importPathToken!
                             }
-                            (token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment())
-                                -> if {
-                                UIntSize(0) => importByte!
-                                importByte! < token.span.length -> while {
-                                    source -> byte(token.span.start + importByte!) => value
-                                    targetHash! * 1099511628211 + UInt64(value) => targetHash!
-                                    importByte! + 1 => importByte!
-                                }
-                            }
-                            importPathToken! + 1 => importPathToken!
+                            nodeCount => pathIndex!
+                        } else {
+                            pathIndex! + 1 => pathIndex!
                         }
-                        nodeCount => pathIndex!
-                    } else {
-                        pathIndex! + 1 => pathIndex!
-                    }
                 }
                 false => afterAs!
                 node.firstToken => importToken!
@@ -147,20 +148,22 @@ public importsAnalyzed package: analysis.PackageAnalysis -> [ImportEdge; ~] {
                 importToken! < importTokenEnd -> while {
                     package.tokens[sourceRange.tokenStart + importToken!] => token
                     afterAs! -> if {
-                        token.kind == grammar.tokenIdIdentifier() -> if {
-                            importToken! => aliasToken!
-                            importTokenEnd => importToken!
-                        } else {
-                            importToken! + 1 => importToken!
-                        }
-                    } else {
-                        token.kind == grammar.tokenIdIdentifier() -> if {
-                            token.span.length == 2 -> if {
-                                source -> byte(token.span.start) => asByte0
-                                source -> byte(token.span.start + 1) => asByte1
-                                (asByte0 == 97 and asByte1 == 115) -> if { true => afterAs! }
+                        token.kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                importToken! => aliasToken!
+                                importTokenEnd => importToken!
+                            } else {
+                                importToken! + 1 => importToken!
                             }
-                        }
+                    } else {
+                        token.kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                token.span.length == 2 -> if {
+                                    source -> byte(token.span.start) => asByte0
+                                    source -> byte(token.span.start + 1) => asByte1
+                                    asByte0 == 97 and asByte1 == 115 -> if { true => afterAs! }
+                                }
+                            }
                         importToken! + 1 => importToken!
                     }
                 }

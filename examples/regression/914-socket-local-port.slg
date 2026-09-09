@@ -1,13 +1,14 @@
 import sys.io
-import sys.socket as socket
+import std.net.socket as socket
+import std.net as net
 
-boundPort endpoint: socket.Endpoint -> Result<UInt16, socket.SocketError> uses Network {
-    socket.bindDatagram({ endpoint: endpoint, reuseAddress: true })? => datagram
-    socket.localPort(datagram)
+boundPort endpoint: net.Endpoint -> Result<UInt16, socket.SocketError> uses Network {
+    socket.DatagramBindOptions { endpoint: endpoint, reuseAddress: true } -> bind? => datagram
+    datagram -> localPort
 }
 
 main {
-    socket.Endpoint { address: "127.0.0.1", port: 0 } -> boundPort -> when {
+    net.loopback(0) -> unified -> boundPort -> when {
         Ok(port) {
             port > 0 -> if { "true" } else { "false" } => assigned
             "ephemeral=$assigned" -> println

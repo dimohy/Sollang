@@ -1,14 +1,14 @@
-import sys.quic.application_engine as application
-import sys.quic.error as errors
-import sys.quic.frame_types as frames
-import sys.quic.keys
+import std.net.quic.application_engine as application
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+import std.net.quic.keys
 
 secret: -> [UInt8; 32] => [68; 32]
 connectionId: -> [UInt8] => [1, 2, 3, 4, 5, 6, 7, 8]
 
 run: -> Result<Bool, errors.Error> {
-    application.create(secret()) => sender
-    application.create(secret()) => receiver!
+    application.create(keys.version1(), secret()) => sender
+    application.create(keys.version1(), secret()) => receiver!
     [frames.Value; ~] => values!
     values! -> push(frames.Value.NewConnectionId(frames.NewConnectionId {
         sequence: 1
@@ -16,8 +16,8 @@ run: -> Result<Bool, errors.Error> {
         connectionId: [9, 8, 7, 6, 5, 4, 3, 2; ~]
         statelessResetToken: [17; 16]
     }))
-    application.encodeMany(keys.version1(), connectionId(), 3, values!, sender)? => datagram
-    application.openMany(keys.version1(), datagram, connectionId(), 0, receiver!)? => opened!
+    sender -> encodeMany(connectionId(), 3, values!)? => datagram
+    receiver! -> openMany(datagram, connectionId(), 0)? => opened!
     false => valid!
     opened!.frames -> take(0) -> when {
         NewConnectionId(value) {

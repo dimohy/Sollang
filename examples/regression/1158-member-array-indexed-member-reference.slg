@@ -1,0 +1,28 @@
+# A readonly call borrow through `struct.member[index].member` must preserve
+# every projected place. The array header lives in `Container.items`, not at
+# the root `Container` address.
+struct Item {
+    value: Int
+    other: Int
+}
+
+struct Container {
+    items: [Item; ~]
+    marker: Int
+}
+
+read value: ref Int -> Int => value
+
+firstValue container: ref Container -> Int {
+    0 => index
+    container.items[index].value -> read
+}
+
+main {
+    Container {
+        items: [Item { value: 7, other: 70 }; ~]
+        marker: 99
+    } => container
+    container -> firstValue => actual
+    "value=$actual" -> println
+}

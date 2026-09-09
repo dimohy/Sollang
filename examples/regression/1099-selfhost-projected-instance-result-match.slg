@@ -1,0 +1,77 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A projected inherent receiver owns the following Result match. A nested enum
+# constructor argument must never replace the resolved method call as subject.
+main {
+    """"
+        namespace sample
+
+        enum Payload {
+            Data([UInt8; ~])
+        }
+
+        struct Policy {
+            marker: UInt8
+        }
+
+        struct Owner {
+            policy: Policy
+        }
+
+        impl Policy {
+            encode: self, payload: move Payload -> Result<[UInt8; ~], Int> {
+                payload -> when {
+                    Data(bytes) { Result<[UInt8; ~], Int>.Ok(bytes) }
+                }
+            }
+        }
+
+        impl Owner {
+            close: move self -> Result<Int, Int> {
+                self.policy -> encode(Payload.Data([1, 2, 3; ~])) -> when {
+                    Ok(bytes) { Result<Int, Int>.Ok(bytes -> len) }
+                    Err(error) { Result<Int, Int>.Err(error) }
+                }
+            }
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    false => subjectValid!
+    false => payloadValid!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.kind == 27
+            and node.operand0 >= 0
+            and ir[node.operand0].kind == 6
+            and ir[node.operand0].typeOrigin == 4
+            and ir[node.operand0].typeSymbol == 1)
+            -> if { true => subjectValid! }
+        (node.kind == 29
+            and node.parent >= 0
+            and ir[node.parent].kind == 19
+            and ir[node.parent].opcode == 0
+            and ir[node.parent].parent >= 0
+            and ir[ir[node.parent].parent].kind == 27
+            and ir[ir[node.parent].parent].operand0 >= 0)
+            -> if {
+                ir[ir[node.parent].parent].operand0 => payloadSubjectIndex
+                ir[payloadSubjectIndex].typeId => payloadSubjectTypeId
+                (payloadSubjectTypeId >= 0
+                    and context.semantic.types[payloadSubjectTypeId].kind == 7
+                    and context.semantic.types[payloadSubjectTypeId].origin == 4
+                    and context.semantic.types[payloadSubjectTypeId].symbol == 1
+                    and node.typeId == context.semantic.types[payloadSubjectTypeId].first)
+                    -> if { true => payloadValid! }
+            }
+        index! + 1 => index!
+    }
+    subjectValid! and payloadValid! -> if {
+        "projected instance Result match = valid" -> println
+    } else {
+        "projected instance Result match = invalid" -> println
+    }
+}

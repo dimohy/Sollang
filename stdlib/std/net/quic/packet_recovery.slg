@@ -1,0 +1,152 @@
+namespace std.net.quic.packet_recovery
+
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+import std.net.quic.loss_recovery as recovery
+
+public struct SentPacket {
+    public number: UInt64
+    public sentTime: UInt64
+    public size: UInt64
+    public ackEliciting: Bool
+    public inFlight: Bool
+}
+
+public struct Update {
+    public rtt: recovery.RttState
+    public congestion: recovery.CongestionState
+    public acknowledgedBytes: UInt64
+    public lostBytes: UInt64
+    public acknowledgedPackets: UInt64
+    public lostPackets: UInt64
+}
+
+public struct Journal {
+    public packets: [SentPacket; ~]
+}
+
+public create: -> Journal => Journal { packets: [SentPacket; ~] }
+
+impl Journal {
+    public recordSent: mut self, number: UInt64, sentTime: UInt64, size: UInt64, ackEliciting: Bool, inFlight: Bool -> Unit {
+        self.packets -> push(SentPacket {
+            number: number
+            sentTime: sentTime
+            size: size
+            ackEliciting: ackEliciting
+            inFlight: inFlight
+        })
+    }
+}
+
+scaleAckDelay value: UInt64, exponent: UInt8 -> Result<UInt64, errors.Error> {
+    value => scaled!
+    UInt8(0) => shift!
+    shift! < exponent -> while {
+        scaled! <= 9_223_372_036_854_775_807 -> unless {
+            Result<UInt64, errors.Error>.Err(errors.Error {
+                kind: errors.Kind.ProtocolViolation
+                code: value
+            }) -> return
+        }
+        scaled! * 2 => scaled!
+        shift! + 1 => shift!
+    }
+    Result<UInt64, errors.Error>.Ok(scaled!)
+}
+
+impl Journal {
+    public processAckScaled: mut self, ack: ref frames.Ack, rtt: recovery.RttState, congestion: recovery.CongestionState, now: UInt64, ackDelayExponent: UInt8, maxAckDelay: UInt64, applicationData: Bool, maxDatagramSize: UInt64, congestionLimited: Bool -> Result<Update, errors.Error> {
+        scaleAckDelay(ack.ackDelay, ackDelayExponent)? => ackDelay
+        now - now => acknowledgedBytes!
+        now - now => lostBytes!
+        now - now => acknowledgedPackets!
+        now - now => lostPackets!
+        now - now => largestAcknowledgedSentTime!
+        now - now => largestLostSentTime!
+        now - now => latestRtt!
+        false => hasAcknowledgedSentTime!
+        false => hasLostSentTime!
+        false => hasRttSample!
+        self.packets -> len => remaining!
+        remaining! > 0 -> while {
+            self.packets -> take(0) => packet
+            ack -> acknowledges(packet.number)? => acknowledged
+            acknowledged -> if {
+                acknowledgedPackets! + 1 => acknowledgedPackets!
+                packet.inFlight -> if { acknowledgedBytes! + packet.size => acknowledgedBytes! }
+                not hasAcknowledgedSentTime! or packet.sentTime > largestAcknowledgedSentTime!
+                    -> if {
+                        packet.sentTime => largestAcknowledgedSentTime!
+                        true => hasAcknowledgedSentTime!
+                    }
+                packet.number == ack.largestAcknowledged and packet.ackEliciting and now >= packet.sentTime
+                    -> if {
+                        now - packet.sentTime => latestRtt!
+                        true => hasRttSample!
+                    }
+            } else {
+                rtt -> lostByTimeThreshold(now, packet.sentTime) => lostByTime
+                recovery.lostByPacketThreshold(ack.largestAcknowledged, packet.number)
+                    or lostByTime
+                    -> if {
+                        lostPackets! + 1 => lostPackets!
+                        packet.inFlight -> if { lostBytes! + packet.size => lostBytes! }
+                        not hasLostSentTime! or packet.sentTime > largestLostSentTime!
+                            -> if {
+                                packet.sentTime => largestLostSentTime!
+                                true => hasLostSentTime!
+                            }
+                    } else {
+                        self.packets -> push(packet)
+                    }
+            }
+            remaining! - 1 => remaining!
+        }
+
+        hasRttSample! -> if {
+            rtt -> update(latestRtt!, ackDelay, maxAckDelay, applicationData)
+        } else {
+            rtt
+        } => nextRtt
+        hasAcknowledgedSentTime! -> if {
+            congestion -> onPacketsAcknowledged(
+            acknowledgedBytes!,
+            largestAcknowledgedSentTime!,
+            maxDatagramSize,
+            congestionLimited)
+        } else {
+            congestion
+        } => acknowledgedCongestion
+        hasLostSentTime! -> if {
+            acknowledgedCongestion -> onPacketsLost(
+            lostBytes!,
+            largestLostSentTime!,
+            now,
+            maxDatagramSize)
+        } else {
+            acknowledgedCongestion
+        } => nextCongestion
+        Update {
+            rtt: nextRtt
+            congestion: nextCongestion
+            acknowledgedBytes: acknowledgedBytes!
+            lostBytes: lostBytes!
+            acknowledgedPackets: acknowledgedPackets!
+            lostPackets: lostPackets!
+        } -> Result<Update, errors.Error>.Ok
+    }
+
+    public processAck: mut self, ack: ref frames.Ack, rtt: recovery.RttState, congestion: recovery.CongestionState, now: UInt64, maxAckDelay: UInt64, applicationData: Bool, maxDatagramSize: UInt64, congestionLimited: Bool -> Result<Update, errors.Error> {
+        self -> processAckScaled(
+        ack,
+        rtt,
+        congestion,
+        now,
+        0,
+        maxAckDelay,
+        applicationData,
+        maxDatagramSize,
+        congestionLimited)
+    }
+}

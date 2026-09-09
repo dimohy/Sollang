@@ -1,0 +1,563 @@
+namespace std.encoding.base64
+
+import std.encoding.base64.error as errors
+import std.encoding.base64.types as types
+
+# Strict RFC 4648 Base64. Basic and URL-safe alphabets reject every byte not
+# in their selected alphabet; CR/LF tolerance belongs to a future explicit
+# MIME codec. Streaming state preserves offsets across chunk boundaries.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct EncodePlan {
+    public inputLength: Int
+    public outputLength: Int
+}
+
+public struct DecodePlan {
+    public inputLength: Int
+    public outputLength: Int
+}
+
+public struct Codec {
+    public alphabet: types.Alphabet
+    public padding: types.Padding
+}
+
+public struct Encoder {
+    public codec: Codec
+    public maxOutputBytes: Int
+    public produced: Int
+    public inputOffset: UIntSize
+    public pending0: UInt8
+    public pending1: UInt8
+    public pendingLength: Int
+}
+
+public struct Decoder {
+    public codec: Codec
+    public maxOutputBytes: Int
+    public produced: Int
+    public inputOffset: UIntSize
+    public value0: Int
+    public value1: Int
+    public value2: Int
+    public value3: Int
+    public offset0: UIntSize
+    public offset1: UIntSize
+    public offset2: UIntSize
+    public offset3: UIntSize
+    public valueLength: Int
+    public finished: Bool
+}
+
+struct DecodeWritePlan {
+    added: Int
+    produced: Int
+    inputOffset: UIntSize
+    value0: Int
+    value1: Int
+    value2: Int
+    value3: Int
+    offset0: UIntSize
+    offset1: UIntSize
+    offset2: UIntSize
+    offset3: UIntSize
+    valueLength: Int
+    finished: Bool
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorEncodePlan kind: errors.Kind, offset: UIntSize -> Result<EncodePlan, Error> {
+    Result<EncodePlan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecodePlan kind: errors.Kind, offset: UIntSize -> Result<DecodePlan, Error> {
+    Result<DecodePlan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorEncoder kind: errors.Kind, offset: UIntSize -> Result<Encoder, Error> {
+    Result<Encoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecoder kind: errors.Kind, offset: UIntSize -> Result<Decoder, Error> {
+    Result<Decoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecodeWritePlan kind: errors.Kind, offset: UIntSize -> Result<DecodeWritePlan, Error> {
+    Result<DecodeWritePlan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+usesPadding codec: Codec -> Bool {
+    codec.padding -> when {
+        Required { true }
+        Omitted { false }
+    }
+}
+
+alphabetValue codec: Codec, byte: UInt8 -> Int {
+    byte >= 65 and byte <= 90 -> if { Int(byte - 65) -> return }
+    byte >= 97 and byte <= 122 -> if { Int(byte - 97) + 26 -> return }
+    byte >= 48 and byte <= 57 -> if { Int(byte - 48) + 52 -> return }
+    codec.alphabet -> when {
+        Standard {
+            byte == 43 -> if { 62 -> return }
+            byte == 47 -> if { 63 -> return }
+        }
+        UrlSafe {
+            byte == 45 -> if { 62 -> return }
+            byte == 95 -> if { 63 -> return }
+        }
+    }
+    -1
+}
+
+alphabetDigit codec: Codec, value: Int -> UInt8 {
+    value < 26 -> if { UInt8(value + 65) -> return }
+    value < 52 -> if { UInt8(value - 26 + 97) -> return }
+    value < 62 -> if { UInt8(value - 52 + 48) -> return }
+    value == 62 -> if {
+        codec.alphabet -> when {
+            Standard { 43 -> return }
+            UrlSafe { 45 -> return }
+        }
+    }
+    codec.alphabet -> when {
+        Standard { UInt8(47) }
+        UrlSafe { UInt8(95) }
+    }
+}
+
+appendTriple codec: Codec, first: UInt8, second: UInt8, third: UInt8, output: mut [UInt8; ~] -> Unit {
+    Int(first) * 65_536 + Int(second) * 256 + Int(third) => bits
+    output -> push(codec -> alphabetDigit(bits / 262_144 % 64))
+    output -> push(codec -> alphabetDigit(bits / 4_096 % 64))
+    output -> push(codec -> alphabetDigit(bits / 64 % 64))
+    output -> push(codec -> alphabetDigit(bits % 64))
+}
+
+appendDecoded value0: Int, value1: Int, value2: Int, value3: Int, output: mut [UInt8; ~] -> Unit {
+    output -> push(UInt8(value0 * 4 + value1 / 16))
+    value2 >= 0 -> if {
+        output -> push(UInt8((value1 % 16) * 16 + value2 / 4))
+        value3 >= 0 -> if {
+            output -> push(UInt8((value2 % 4) * 64 + value3))
+        }
+    }
+}
+
+setPlanValue plan: mut DecodeWritePlan, index: Int, value: Int, offset: UIntSize -> Unit {
+    index -> when {
+        == 0 {
+            value => plan.value0
+            offset => plan.offset0
+        }
+        == 1 {
+            value => plan.value1
+            offset => plan.offset1
+        }
+        == 2 {
+            value => plan.value2
+            offset => plan.offset2
+        }
+        else {
+            value => plan.value3
+            offset => plan.offset3
+        }
+    }
+}
+
+validateQuantum plan: mut DecodeWritePlan, currentOffset: UIntSize -> Result<Int, Error> {
+    plan.value0 >= 0 and plan.value1 >= 0 -> unless {
+        errorInt(errors.Kind.InvalidPadding, currentOffset) -> return
+    }
+    plan.value2 == -2 -> if {
+        plan.value3 == -2 -> unless {
+            errorInt(errors.Kind.InvalidPadding, plan.offset3) -> return
+        }
+        plan.value1 % 16 == 0 -> unless {
+            errorInt(errors.Kind.NonZeroPaddingBits, plan.offset1) -> return
+        }
+        true => plan.finished
+        Result<Int, Error>.Ok(1) -> return
+    }
+    plan.value2 >= 0 -> unless {
+        errorInt(errors.Kind.InvalidPadding, plan.offset2) -> return
+    }
+    plan.value3 == -2 -> if {
+        plan.value2 % 4 == 0 -> unless {
+            errorInt(errors.Kind.NonZeroPaddingBits, plan.offset2) -> return
+        }
+        true => plan.finished
+        Result<Int, Error>.Ok(2) -> return
+    }
+    plan.value3 >= 0 -> unless {
+        errorInt(errors.Kind.InvalidPadding, plan.offset3) -> return
+    }
+    Result<Int, Error>.Ok(3)
+}
+
+validateWrite decoder: ref Decoder, input: [UInt8] -> Result<DecodeWritePlan, Error> {
+    DecodeWritePlan {
+        added: 0
+        produced: decoder.produced
+        inputOffset: decoder.inputOffset
+        value0: decoder.value0
+        value1: decoder.value1
+        value2: decoder.value2
+        value3: decoder.value3
+        offset0: decoder.offset0
+        offset1: decoder.offset1
+        offset2: decoder.offset2
+        offset3: decoder.offset3
+        valueLength: decoder.valueLength
+        finished: decoder.finished
+    } => plan!
+    0 => index!
+    index! < (input -> len) -> while {
+        input[index!] => byte
+        decoder.inputOffset + UIntSize(index!) => offset
+        plan!.finished -> if {
+            errorDecodeWritePlan(errors.Kind.TrailingData, offset) -> return
+        }
+        decoder.codec -> alphabetValue(byte) => decodedValue
+        -1 => value!
+        byte == 61 -> if {
+            decoder.codec -> usesPadding -> unless {
+                errorDecodeWritePlan(errors.Kind.InvalidPadding, offset) -> return
+            }
+            plan!.valueLength >= 2 -> unless {
+                errorDecodeWritePlan(errors.Kind.InvalidPadding, offset) -> return
+            }
+            -2 => value!
+        } else {
+            decodedValue => value!
+            value! >= 0 -> unless {
+                errorDecodeWritePlan(errors.Kind.InvalidByte, offset) -> return
+            }
+            plan!.valueLength > 0 -> if {
+                plan!.value2 == -2 or plan!.value3 == -2 -> if {
+                    errorDecodeWritePlan(errors.Kind.InvalidPadding, offset) -> return
+                }
+            }
+        }
+        plan! -> setPlanValue(plan!.valueLength, value!, offset)
+        plan!.valueLength + 1 => plan!.valueLength
+        plan!.valueLength == 4 -> if {
+            plan! -> validateQuantum(offset)? => quantumBytes
+            plan!.added + quantumBytes => plan!.added
+            0 => plan!.valueLength
+            -1 => plan!.value0
+            -1 => plan!.value1
+            -1 => plan!.value2
+            -1 => plan!.value3
+        }
+        index! + 1 => index!
+    }
+    plan!.added <= decoder.maxOutputBytes - decoder.produced
+        -> unless {
+            errorDecodeWritePlan(
+            errors.Kind.OutputLimitExceeded,
+            decoder.inputOffset + UIntSize(input -> len)) -> return
+        }
+    decoder.produced + plan!.added => produced
+    decoder.inputOffset + UIntSize(input -> len) => inputOffset
+    produced => plan!.produced
+    inputOffset => plan!.inputOffset
+    Result<DecodeWritePlan, Error>.Ok(plan!)
+}
+
+public standard: -> Codec => Codec {
+    alphabet: types.Alphabet.Standard
+    padding: types.Padding.Required
+}
+
+public rawStandard: -> Codec => Codec {
+    alphabet: types.Alphabet.Standard
+    padding: types.Padding.Omitted
+}
+
+public urlSafe: -> Codec => Codec {
+    alphabet: types.Alphabet.UrlSafe
+    padding: types.Padding.Required
+}
+
+public rawUrlSafe: -> Codec => Codec {
+    alphabet: types.Alphabet.UrlSafe
+    padding: types.Padding.Omitted
+}
+
+impl Codec {
+    public planEncode: self, inputLength: Int, maxOutputBytes: Int -> Result<EncodePlan, Error> {
+        maxOutputBytes >= 0 and inputLength >= 0 -> unless {
+            errorEncodePlan(errors.Kind.InvalidLimit, 0) -> return
+        }
+        inputLength / 3 => groups
+        inputLength % 3 => remainder
+        groups <= maxOutputBytes / 4 -> unless {
+            errorEncodePlan(errors.Kind.OutputLimitExceeded, UIntSize(inputLength)) -> return
+        }
+        groups * 4 => outputLength!
+        remainder > 0 -> if {
+            self -> usesPadding -> if { 4 } else { remainder + 1 } => tail
+            tail <= maxOutputBytes - outputLength! -> unless {
+                errorEncodePlan(errors.Kind.OutputLimitExceeded, UIntSize(inputLength)) -> return
+            }
+            outputLength! + tail => outputLength!
+        }
+        Result<EncodePlan, Error>.Ok(EncodePlan {
+            inputLength: inputLength
+            outputLength: outputLength!
+        })
+    }
+
+    public planDecode: self, input: [UInt8], maxOutputBytes: Int -> Result<DecodePlan, Error> {
+        self -> decoder(maxOutputBytes)? => decoder
+        decoder -> validateWrite(input)? => plan
+        plan.added => outputLength!
+        plan.valueLength > 0 -> if {
+            self -> usesPadding -> if {
+                errorDecodePlan(errors.Kind.MissingPadding, UIntSize(input -> len)) -> return
+            }
+            plan.valueLength == 1 -> if {
+                errorDecodePlan(errors.Kind.InvalidLength, UIntSize(input -> len)) -> return
+            }
+            plan.valueLength == 2 -> if {
+                plan.value1 % 16 == 0 -> unless {
+                    errorDecodePlan(errors.Kind.NonZeroPaddingBits, plan.offset1) -> return
+                }
+                outputLength! + 1 => outputLength!
+            }
+            plan.valueLength == 3 -> if {
+                plan.value2 % 4 == 0 -> unless {
+                    errorDecodePlan(errors.Kind.NonZeroPaddingBits, plan.offset2) -> return
+                }
+                outputLength! + 2 => outputLength!
+            }
+        }
+        outputLength! <= maxOutputBytes -> unless {
+            errorDecodePlan(errors.Kind.OutputLimitExceeded, UIntSize(input -> len)) -> return
+        }
+        Result<DecodePlan, Error>.Ok(DecodePlan {
+            inputLength: input -> len
+            outputLength: outputLength!
+        })
+    }
+
+    public encoder: self, maxOutputBytes: Int -> Result<Encoder, Error> {
+        maxOutputBytes >= 0 -> unless {
+            errorEncoder(errors.Kind.InvalidLimit, 0) -> return
+        }
+        Result<Encoder, Error>.Ok(Encoder {
+            codec: self
+            maxOutputBytes: maxOutputBytes
+            produced: 0
+            inputOffset: 0
+            pending0: 0
+            pending1: 0
+            pendingLength: 0
+        })
+    }
+
+    public decoder: self, maxOutputBytes: Int -> Result<Decoder, Error> {
+        maxOutputBytes >= 0 -> unless {
+            errorDecoder(errors.Kind.InvalidLimit, 0) -> return
+        }
+        Result<Decoder, Error>.Ok(Decoder {
+            codec: self
+            maxOutputBytes: maxOutputBytes
+            produced: 0
+            inputOffset: 0
+            value0: -1
+            value1: -1
+            value2: -1
+            value3: -1
+            offset0: 0
+            offset1: 0
+            offset2: 0
+            offset3: 0
+            valueLength: 0
+            finished: false
+        })
+    }
+
+    public encode: self, input: [UInt8], maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        self -> encoder(maxOutputBytes)? => encoder!
+        [UInt8; ~] => output!
+        encoder! -> write(input, output!)? => written
+        encoder! -> finish(output!)? => finished
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public decode: self, input: [UInt8], maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        self -> decoder(maxOutputBytes)? => decoder!
+        [UInt8; ~] => output!
+        decoder! -> write(input, output!)? => written
+        decoder! -> finish(output!)? => finished
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+}
+
+impl Encoder {
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        (self.pendingLength + (input -> len)) / 3 => groups
+        groups <= (self.maxOutputBytes - self.produced) / 4
+            -> unless {
+                errorInt(
+                errors.Kind.OutputLimitExceeded,
+                self.inputOffset + UIntSize(input -> len)) -> return
+            }
+        groups * 4 => added
+        output -> reserve((output -> len) + added)
+        0 => index!
+        index! < (input -> len) -> while {
+            input[index!] => byte
+            self.pendingLength == 0 -> if {
+                byte => self.pending0
+                1 => self.pendingLength
+            } else {
+                self.pendingLength == 1 -> if {
+                    byte => self.pending1
+                    2 => self.pendingLength
+                } else {
+                    appendTriple(self.codec, self.pending0, self.pending1, byte, output)
+                    0 => self.pendingLength
+                }
+            }
+            index! + 1 => index!
+        }
+        self.produced + added => produced
+        self.inputOffset + UIntSize(input -> len) => inputOffset
+        produced => self.produced
+        inputOffset => self.inputOffset
+        Result<Int, Error>.Ok(added)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        0 => added!
+        self.pendingLength > 0 -> if {
+            self.codec -> usesPadding -> if { 4 } else { self.pendingLength + 1 } => added!
+        }
+        added! <= self.maxOutputBytes - self.produced
+            -> unless {
+                errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return
+            }
+        output -> reserve((output -> len) + added!)
+        self.pendingLength == 1 -> if {
+            Int(self.pending0) => bits
+            output -> push(self.codec -> alphabetDigit(bits / 4))
+            output -> push(self.codec -> alphabetDigit((bits % 4) * 16))
+            self.codec -> usesPadding -> if {
+                output -> push(61)
+                output -> push(61)
+            }
+        }
+        self.pendingLength == 2 -> if {
+            Int(self.pending0) * 256 + Int(self.pending1) => bits
+            output -> push(self.codec -> alphabetDigit(bits / 1_024 % 64))
+            output -> push(self.codec -> alphabetDigit(bits / 16 % 64))
+            output -> push(self.codec -> alphabetDigit((bits % 16) * 4))
+            self.codec -> usesPadding -> if { output -> push(61) }
+        }
+        Result<Int, Error>.Ok(added!)
+    }
+}
+
+impl Decoder {
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        self -> validateWrite(input)? => plan
+        output -> reserve((output -> len) + plan.added)
+
+        self.value0 => value0!
+        self.value1 => value1!
+        self.value2 => value2!
+        self.value3 => value3!
+        self.valueLength => valueLength!
+        0 => index!
+        index! < (input -> len) -> while {
+            input[index!] => byte
+            byte == 61 -> if { -2 } else { self.codec -> alphabetValue(byte) } => value
+            valueLength! -> when {
+                == 0 { value => value0! }
+                == 1 { value => value1! }
+                == 2 { value => value2! }
+                else { value => value3! }
+            }
+            valueLength! + 1 => valueLength!
+            valueLength! == 4 -> if {
+                appendDecoded(value0!, value1!, value2!, value3!, output)
+                0 => valueLength!
+                -1 => value0!
+                -1 => value1!
+                -1 => value2!
+                -1 => value3!
+            }
+            index! + 1 => index!
+        }
+
+        plan.produced => produced
+        plan.inputOffset => inputOffset
+        plan.value0 => committedValue0
+        plan.value1 => committedValue1
+        plan.value2 => committedValue2
+        plan.value3 => committedValue3
+        plan.offset0 => committedOffset0
+        plan.offset1 => committedOffset1
+        plan.offset2 => committedOffset2
+        plan.offset3 => committedOffset3
+        plan.valueLength => committedValueLength
+        plan.finished => finished
+        produced => self.produced
+        inputOffset => self.inputOffset
+        committedValue0 => self.value0
+        committedValue1 => self.value1
+        committedValue2 => self.value2
+        committedValue3 => self.value3
+        committedOffset0 => self.offset0
+        committedOffset1 => self.offset1
+        committedOffset2 => self.offset2
+        committedOffset3 => self.offset3
+        committedValueLength => self.valueLength
+        finished => self.finished
+        Result<Int, Error>.Ok(plan.added)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.valueLength == 0 -> if { Result<Int, Error>.Ok(0) -> return }
+        self.codec -> usesPadding -> if {
+            errorInt(errors.Kind.MissingPadding, self.inputOffset) -> return
+        }
+        self.valueLength == 1 -> if {
+            errorInt(errors.Kind.InvalidLength, self.inputOffset) -> return
+        }
+        self.valueLength == 2 -> if {
+            self.value1 % 16 == 0 -> unless {
+                errorInt(errors.Kind.NonZeroPaddingBits, self.offset1) -> return
+            }
+            1 => added
+            added <= self.maxOutputBytes - self.produced
+                -> unless {
+                    errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return
+                }
+            output -> reserve((output -> len) + added)
+            appendDecoded(self.value0, self.value1, -1, -1, output)
+            Result<Int, Error>.Ok(added) -> return
+        }
+        self.value2 % 4 == 0 -> unless {
+            errorInt(errors.Kind.NonZeroPaddingBits, self.offset2) -> return
+        }
+        2 => added
+        added <= self.maxOutputBytes - self.produced
+            -> unless {
+                errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return
+            }
+        output -> reserve((output -> len) + added)
+        appendDecoded(self.value0, self.value1, self.value2, -1, output)
+        Result<Int, Error>.Ok(added)
+    }
+}

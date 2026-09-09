@@ -1,0 +1,30 @@
+import sollang.compiler.diagnostics as diagnostics
+import sys.file as file
+
+struct Document {
+    uri: [UInt8; ~]
+    text: [UInt8; ~]
+}
+
+upsert documents: mut [Document; ~], uri: move [UInt8; ~], text: move [UInt8; ~] -> Int {
+    documents -> len => index
+    documents -> push(Document { uri: uri, text: text })
+    index
+}
+
+main {
+    [Document; ~] => documents!
+    [UInt8(102), 105, 108, 101; ~] => uri
+    """main { "ok" -> println }""" => sourceText
+    [UInt8; ~] => text!
+    UIntSize(0) => sourceIndex!
+    sourceIndex! < (sourceText -> len) -> while {
+        text! -> push(sourceText -> byte(sourceIndex!))
+        sourceIndex! + 1 => sourceIndex!
+    }
+    documents! -> upsert(uri, text!) => documentIndex
+    documents![documentIndex].text -> file.borrowBytes => source
+    source -> slice(UIntSize(0), source -> len) => view
+    view -> diagnostics.analyze => found
+    "$(found -> len)" -> println
+}

@@ -1,0 +1,57 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A canonical sys.directory.readRaw declaration must lower at the call site to
+# the directory runtime opcode. Leaving it as an ordinary call produces a valid
+# declaration but no definition and therefore fails only at the native linker.
+main {
+    [
+    """
+    namespace sys.path
+
+    public struct Path {
+        public bytes: [UInt8; ~]
+        public style: Int
+    }
+    """,
+    """
+    namespace sys.directory
+
+    import sys.path as path
+
+    public struct Raw {
+        public bytes: [UInt8; ~]
+        public count: UIntSize
+    }
+
+    public enum RawResult {
+        Ok(Raw)
+        Err(Text)
+    }
+
+    public readRaw directory: path.Path -> RawResult uses File = intrinsic
+
+    public snapshot directory: path.Path -> RawResult {
+        readRaw(directory)
+    }
+    """; ~
+    ] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> typedIr.lowerContext => ir
+    prepared.package.ranges[1] => directoryRange
+    prepared.package.symbols[directoryRange.symbolStart + 6] => readRawSymbol
+    0 => lowered!
+    0 => ordinary!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.kind == 6 and node.targetModule == 1
+            -> if {
+                node.opcode == -215 -> if { lowered! + 1 => lowered! }
+                node.opcode == -1 -> if { ordinary! + 1 => ordinary! }
+            }
+        index! + 1 => index!
+    }
+    readRawSymbol.flags / 128 % 2 == 1 => declarationIntrinsic
+    "directory-runtime=$(lowered!),ordinary=$(ordinary!),intrinsic=$(declarationIntrinsic)" -> println
+}

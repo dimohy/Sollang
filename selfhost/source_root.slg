@@ -12,13 +12,13 @@ sourceError message: Text -> Result<[path.Path; ~], Text> {
 # breadth-first order. Symlinks and non-source files are never traversed.
 public discover root: ref path.Path -> Result<[path.Path; ~], Text> uses File {
     [path.Path; ~] => directories!
-    path.pathText(root) => rootText
+    root -> pathText => rootText
     directories! -> push(path.fromText(rootText, root.style))
     [path.Path; ~] => sources!
     UIntSize(directories! -> len) > 0 -> while {
         directories! -> take(0) => current
         directory.readRawSnapshot(current) => raw
-        (raw.count == 0 and (raw.bytes -> len) == 1) -> if {
+        raw.count == 0 and (raw.bytes -> len) == 1 -> if {
             "source root could not be read" -> sourceError => failure
             failure -> return
         }
@@ -42,12 +42,12 @@ public discover root: ref path.Path -> Result<[path.Path; ~], Text> uses File {
             cursor! + nameLength => cursor!
             path.Path { bytes: nameBytes!, style: current.style } => name
             kind == 0 -> if {
-                name -> path.endsWithText(".slg") -> if {
-                    sources! -> push(current -> path.joinDiscovered(name))
+                name -> endsWithText(".slg") -> if {
+                    sources! -> push(current -> joinDiscovered(name))
                 }
             } else {
                 kind == 1 -> if {
-                    directories! -> push(current -> path.joinDiscovered(name))
+                    directories! -> push(current -> joinDiscovered(name))
                 }
             }
             entryIndex! + 1 => entryIndex!
@@ -65,15 +65,15 @@ public discover root: ref path.Path -> Result<[path.Path; ~], Text> uses File {
 # mapped source has acquired its own lifetime.
 public discoverDirect root: ref path.Path -> [path.Path; ~] uses File {
     [path.Path; ~] => directories!
-    path.pathText(root) => rootText
+    root -> pathText => rootText
     directories! -> push(path.fromText(rootText, root.style))
     [path.Path; ~] => sources!
     0 => directoryIndex!
     directoryIndex! < (directories! -> len) -> while {
-        path.pathText(directories![directoryIndex!]) => currentText
+        directories![directoryIndex!] -> pathText => currentText
         currentText -> path.fromText(root.style) => current
         directory.readRawSnapshot(current) => raw
-        (raw.count == 0 and (raw.bytes -> len) == 1) -> if {
+        raw.count == 0 and (raw.bytes -> len) == 1 -> if {
             [path.Path; ~] => empty
             empty -> return
         }
@@ -97,12 +97,12 @@ public discoverDirect root: ref path.Path -> [path.Path; ~] uses File {
             cursor! + nameLength => cursor!
             path.Path { bytes: nameBytes!, style: current.style } => name
             kind == 0 -> if {
-                name -> path.endsWithText(".slg") -> if {
-                    sources! -> push(current -> path.joinDiscovered(name))
+                name -> endsWithText(".slg") -> if {
+                    sources! -> push(current -> joinDiscovered(name))
                 }
             } else {
                 kind == 1 -> if {
-                    directories! -> push(current -> path.joinDiscovered(name))
+                    directories! -> push(current -> joinDiscovered(name))
                 }
             }
             entryIndex! + 1 => entryIndex!

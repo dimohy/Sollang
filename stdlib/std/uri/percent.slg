@@ -1,0 +1,178 @@
+namespace std.uri.percent
+
+import std.uri.percent.error as errors
+import std.uri.percent.types as types
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Plan {
+    public inputLength: Int
+    public outputLength: Int
+}
+
+public struct Codec {
+    public escapeSet: types.EscapeSet
+}
+
+errorPlan kind: errors.Kind, offset: UIntSize -> Result<Plan, Error> {
+    Result<Plan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBytes kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
+    Result<[UInt8; ~], Error>.Err(Error { kind: kind, offset: offset })
+}
+
+isAlphaNumeric byte: UInt8 -> Bool {
+    (byte >= 65 and byte <= 90)
+        or (byte >= 97 and byte <= 122)
+        or (byte >= 48 and byte <= 57)
+}
+
+isUnreserved byte: UInt8 -> Bool {
+    ((byte -> isAlphaNumeric)
+        or byte == 45
+        or byte == 46
+        or byte == 95
+        or byte == 126)
+}
+
+isSubDelimiter byte: UInt8 -> Bool {
+    byte == 33
+        or byte == 36
+        or byte == 38
+        or byte == 39
+        or byte == 40
+        or byte == 41
+        or byte == 42
+        or byte == 43
+        or byte == 44
+        or byte == 59
+        or byte == 61
+}
+
+isAllowed codec: Codec, byte: UInt8 -> Bool {
+    byte -> isUnreserved -> if { true -> return }
+    codec.escapeSet -> when {
+        Unreserved { false }
+        UserInfo { (byte -> isSubDelimiter) or byte == 58 }
+        RegisteredName { byte -> isSubDelimiter }
+        PathSegment { (byte -> isSubDelimiter) or byte == 58 or byte == 64 }
+        Path { (byte -> isSubDelimiter) or byte == 58 or byte == 64 or byte == 47 }
+        Query { (byte -> isSubDelimiter) or byte == 58 or byte == 64 or byte == 47 or byte == 63 }
+        Fragment { (byte -> isSubDelimiter) or byte == 58 or byte == 64 or byte == 47 or byte == 63 }
+    }
+}
+
+hexValue byte: UInt8 -> Int {
+    byte >= 48 and byte <= 57 -> if { Int(byte - 48) -> return }
+    byte >= 65 and byte <= 70 -> if { Int(byte - 65) + 10 -> return }
+    byte >= 97 and byte <= 102 -> if { Int(byte - 97) + 10 -> return }
+    -1
+}
+
+hexDigit value: Int -> UInt8 {
+    value < 10 -> if { UInt8(value + 48) -> return }
+    UInt8(value - 10 + 65)
+}
+
+public unreserved: -> Codec => Codec { escapeSet: types.EscapeSet.Unreserved }
+public userInfo: -> Codec => Codec { escapeSet: types.EscapeSet.UserInfo }
+public registeredName: -> Codec => Codec { escapeSet: types.EscapeSet.RegisteredName }
+public pathSegment: -> Codec => Codec { escapeSet: types.EscapeSet.PathSegment }
+public path: -> Codec => Codec { escapeSet: types.EscapeSet.Path }
+public query: -> Codec => Codec { escapeSet: types.EscapeSet.Query }
+public fragment: -> Codec => Codec { escapeSet: types.EscapeSet.Fragment }
+
+impl Codec {
+    public planEncode: self, input: [UInt8], maxOutputBytes: Int -> Result<Plan, Error> {
+        maxOutputBytes >= 0 -> unless {
+            errorPlan(errors.Kind.InvalidLimit, 0) -> return
+        }
+        0 => outputLength!
+        0 => index!
+        index! < (input -> len) -> while {
+            self -> isAllowed(input[index!]) -> if { 1 } else { 3 } => added
+            added <= maxOutputBytes - outputLength! -> unless {
+                errorPlan(errors.Kind.OutputLimitExceeded, UIntSize(index!)) -> return
+            }
+            outputLength! + added => outputLength!
+            index! + 1 => index!
+        }
+        Result<Plan, Error>.Ok(Plan {
+            inputLength: input -> len
+            outputLength: outputLength!
+        })
+    }
+
+    public encode: self, input: [UInt8], maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        self -> planEncode(input, maxOutputBytes)? => plan
+        [UInt8; ~] => output!
+        output! -> reserve(plan.outputLength)
+        0 => index!
+        index! < (input -> len) -> while {
+            input[index!] => byte
+            self -> isAllowed(byte) -> if {
+                output! -> push(byte)
+            } else {
+                output! -> push(37)
+                output! -> push(Int(byte) / 16 -> hexDigit)
+                output! -> push(Int(byte) % 16 -> hexDigit)
+            }
+            index! + 1 => index!
+        }
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public planDecode: self, input: [UInt8], maxOutputBytes: Int -> Result<Plan, Error> {
+        maxOutputBytes >= 0 -> unless {
+            errorPlan(errors.Kind.InvalidLimit, 0) -> return
+        }
+        0 => outputLength!
+        0 => index!
+        index! < (input -> len) -> while {
+            input[index!] == 37 -> if {
+                index! + 2 < (input -> len) -> unless {
+                    errorPlan(errors.Kind.InvalidEscape, UIntSize(index!)) -> return
+                }
+                input[index! + 1] -> hexValue => high
+                input[index! + 2] -> hexValue => low
+                high >= 0 and low >= 0 -> unless {
+                    errorPlan(errors.Kind.InvalidEscape, UIntSize(index!)) -> return
+                }
+                index! + 2 => index!
+            }
+            outputLength! < maxOutputBytes -> unless {
+                errorPlan(errors.Kind.OutputLimitExceeded, UIntSize(index!)) -> return
+            }
+            outputLength! + 1 => outputLength!
+            index! + 1 => index!
+        }
+        Result<Plan, Error>.Ok(Plan {
+            inputLength: input -> len
+            outputLength: outputLength!
+        })
+    }
+
+    public decode: self, input: [UInt8], maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        self -> planDecode(input, maxOutputBytes)? => plan
+        [UInt8; ~] => output!
+        output! -> reserve(plan.outputLength)
+        0 => index!
+        index! < (input -> len) -> while {
+            input[index!] => byte
+            byte == 37 -> if {
+                input[index! + 1] -> hexValue => high
+                input[index! + 2] -> hexValue => low
+                output! -> push(UInt8(high * 16 + low))
+                index! + 2 => index!
+            } else {
+                output! -> push(byte)
+            }
+            index! + 1 => index!
+        }
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+}

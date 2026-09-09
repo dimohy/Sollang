@@ -1,0 +1,29 @@
+import std.time as time
+
+verify: -> Result<Unit, time.Error> uses Clock, Console {
+    time.monotonicClock() => monotonic
+    monotonic -> now => before
+    monotonic -> now => after
+    after -> durationSince(before)? => elapsed
+
+    time.wallClock() => wall
+    wall -> now => current
+    current -> asUnixMilliseconds => unixMillis
+    elapsed -> asMilliseconds => elapsedMillis
+
+    unixMillis > 1_577_836_800_000 and elapsedMillis >= 0
+        -> if {
+        "browser-time-domains=ok" -> println
+    } else {
+        "browser-time-domains=invalid" -> println
+    }
+
+    Result<Unit, time.Error>.Ok
+}
+
+main {
+    verify() -> when {
+        Ok(_) { }
+        Err(_) { "browser-time-domains=error" -> println }
+    }
+}

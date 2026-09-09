@@ -10,15 +10,18 @@ internal sealed partial class LlvmEmitter
 {
     private readonly BoundProgram _program;
     private readonly LlvmRuntimePlatform _platform;
+    private readonly TargetContract _targetContract;
     private readonly bool _sharedLibrary;
     private readonly bool _usesProcessArguments;
     private readonly bool _usesProcessEnvironment;
     private readonly bool _usesChildProcesses;
+    private readonly bool _usesProcessCapture;
     private readonly bool _usesProcessExit;
     private readonly bool _usesAsync;
     private readonly bool _usesAsyncFile;
     private bool _usesDirectoryTraversal;
     private readonly bool _usesNetwork;
+    private readonly bool _usesDns;
     private readonly bool _usesSecureRandom;
     private readonly bool _usesParallel;
     private readonly bool _usesMouseEvents;
@@ -64,6 +67,9 @@ internal sealed partial class LlvmEmitter
     private readonly HashSet<string> _mutableLocals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _borrowedMutableLocals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _borrowedOwnedLocals = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, HashSet<string>> _movedOwnedStructFields =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _borrowedOwnedTransferFlags = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MutableContainerSlot> _mutableContainerSlots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _mutableStructSlots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _mutableScalarSlots = new(StringComparer.Ordinal);
@@ -75,6 +81,8 @@ internal sealed partial class LlvmEmitter
     private readonly HashSet<BoundFunction> _standaloneStandardLibraryFunctions =
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _reachableFunctions =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundDynTraitConversion> _reachableDynTraitConversions =
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _usedNativeFunctions =
         new(ReferenceEqualityComparer.Instance);
@@ -101,10 +109,12 @@ internal sealed partial class LlvmEmitter
     public LlvmEmitter(
         BoundProgram program,
         LlvmRuntimePlatform platform,
+        TargetContract targetContract,
         bool sharedLibrary = false)
     {
         _program = program;
         _platform = platform;
+        _targetContract = targetContract;
         _sharedLibrary = sharedLibrary;
         _currentFunctions = program.Functions;
         RecordFunctionScopes(program.Functions.Values, program.Functions);
@@ -120,9 +130,19 @@ internal sealed partial class LlvmEmitter
                 (function.Body is not null && UsesProcessEnvironment(function.Body))
                 || function.BlockBody.Any(UsesProcessEnvironment));
         _usesChildProcesses = program.MainStatements.Any(UsesChildProcess)
+            || program.Types.Structs.Any(definition =>
+                string.Equals(definition.Name, "sys.process.Child", StringComparison.Ordinal)
+                && IsDropTypeReachable(definition.Id))
             || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesChildProcess(function.Body))
-                || function.BlockBody.Any(UsesChildProcess));
+                || function.BlockBody.Any(UsesChildProcess)
+                || function.Kind is BoundFunctionKind.RuntimeRunProcess
+                    or BoundFunctionKind.RuntimeRunProcessToFile
+                    or BoundFunctionKind.RuntimeCollectProcess
+                    or BoundFunctionKind.RuntimeSpawnProcess
+                    or BoundFunctionKind.RuntimeWaitProcess);
+        _usesProcessCapture = _reachableFunctions.Any(static function =>
+                function.Kind == BoundFunctionKind.RuntimeCollectProcess);
         _usesProcessExit = program.MainStatements.Any(UsesProcessExit)
             || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesProcessExit(function.Body))
@@ -141,7 +161,9 @@ internal sealed partial class LlvmEmitter
                     or BoundFunctionKind.RuntimeLimitParallelWorkers));
         _usesMouseEvents = program.EventStreamConsumers.Values.Any(static pipeline => pipeline.IsEvent)
             || program.PartitionConsumers.Values.Any(static pipeline => pipeline.IsEvent)
-            || program.StreamJoins.Values.Any(join => join.Inputs.Any(static input => input.IsEvent));
+            || program.StreamJoins.Values.Any(join => join.Inputs.Any(static input => input.IsEvent))
+            || program.ResolvedGenericCalls.Values.Any(static function =>
+                function.Kind == BoundFunctionKind.RuntimeMouseEvents);
         _usesConcurrentStreamJoins = program.StreamJoins.Values.Any(join =>
             join.Policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Latest
             && join.Inputs.Any(static input => input.IsEvent));
@@ -151,18 +173,44 @@ internal sealed partial class LlvmEmitter
                 || function.BlockBody.Any(UsesRangeStream));
         _usesStandardError = _reachableFunctions.Any(
             static function => function.Kind == BoundFunctionKind.RuntimePrintErrorLine);
+        _usesDns = _reachableFunctions.Any(static function =>
+            function.Kind == BoundFunctionKind.RuntimeDnsLookup);
         _usesNetwork = _reachableFunctions.Any(static function =>
             function.Kind is BoundFunctionKind.RuntimeSocketListen
                 or BoundFunctionKind.RuntimeSocketAccept
                 or BoundFunctionKind.RuntimeSocketConnect
                 or BoundFunctionKind.RuntimeSocketReceive
+                or BoundFunctionKind.RuntimeSocketReceiveAppend
+                or BoundFunctionKind.RuntimeSocketReceiveVectored
+                or BoundFunctionKind.RuntimeSocketPeek
                 or BoundFunctionKind.RuntimeSocketSend
+                or BoundFunctionKind.RuntimeSocketSendRange
+                or BoundFunctionKind.RuntimeSocketSendVectored
+                or BoundFunctionKind.RuntimeSocketTryClone
                 or BoundFunctionKind.RuntimeSocketSendText
                 or BoundFunctionKind.RuntimeSocketShutdown
                 or BoundFunctionKind.RuntimeSocketBindDatagram
                 or BoundFunctionKind.RuntimeSocketLocalPort
+                or BoundFunctionKind.RuntimeSocketLocalEndpoint
+                or BoundFunctionKind.RuntimeSocketRemoteEndpoint
+                or BoundFunctionKind.RuntimeSocketSetNoDelay
+                or BoundFunctionKind.RuntimeSocketNoDelay
+                or BoundFunctionKind.RuntimeSocketSetKeepAlive
+                or BoundFunctionKind.RuntimeSocketKeepAlive
+                or BoundFunctionKind.RuntimeSocketSetLinger
+                or BoundFunctionKind.RuntimeSocketLinger
+                or BoundFunctionKind.RuntimeSocketSetReadTimeout
+                or BoundFunctionKind.RuntimeSocketReadTimeout
+                or BoundFunctionKind.RuntimeSocketSetWriteTimeout
+                or BoundFunctionKind.RuntimeSocketWriteTimeout
                 or BoundFunctionKind.RuntimeSocketSendTo
-                or BoundFunctionKind.RuntimeSocketReceiveFrom);
+                or BoundFunctionKind.RuntimeSocketReceiveFrom
+                or BoundFunctionKind.RuntimeSocketPeekFrom
+                or BoundFunctionKind.RuntimeSocketClose
+                or BoundFunctionKind.RuntimeSocketSetNonblocking
+                or BoundFunctionKind.RuntimeSocketPoll
+                or BoundFunctionKind.RuntimeSocketReactorWait
+                or BoundFunctionKind.RuntimeDnsLookup);
         _usesSecureRandom = _reachableFunctions.Any(static function =>
             function.Kind == BoundFunctionKind.RuntimeSecureRandomBytes);
         _usesAsync = _reachableFunctions.Any(function => function.IsAsync)
@@ -173,6 +221,7 @@ internal sealed partial class LlvmEmitter
                 || function.BlockBody.Any(UsesRuntimeSleep));
         _platform.UsesAsyncFile = _usesAsyncFile;
         _platform.UsesProcessRuntime = UsesProcessRuntime;
+        _platform.UsesProcessCapture = _usesProcessCapture;
         _platform.UsesProcessExit = _usesProcessExit;
         _platform.UsesComputePool = _usesParallel;
         _platform.UsesDirectoryTraversal = _usesDirectoryTraversal;
@@ -211,9 +260,10 @@ internal sealed partial class LlvmEmitter
     private bool UsesChildProcess(Expression expression)
     {
         if (expression is CallExpression call
-            && string.Join('.', call.Path) is "sys.process.run" or "sys.process.runToFile") return true;
+                && string.Join('.', call.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait") return true;
         if (expression is FlowExpression flow
-            && flow.Targets.Any(target => string.Join('.', target.Path) is "sys.process.run" or "sys.process.runToFile")) return true;
+                && flow.Targets.Any(target =>
+                    string.Join('.', target.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait")) return true;
         return expression switch
         {
             StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesChildProcess(x.Expression)),
@@ -351,9 +401,9 @@ internal sealed partial class LlvmEmitter
     private bool UsesRuntimeSleep(Expression expression)
     {
         if (expression is CallExpression call
-            && string.Join('.', call.Path) is "sleep" or "sys.time.sleep") return true;
+            && string.Join('.', call.Path) is "sleep" or "std.time.Duration.sleep") return true;
         if (expression is FlowExpression flow
-            && flow.Targets.Any(target => string.Join('.', target.Path) is "sleep" or "sys.time.sleep")) return true;
+            && flow.Targets.Any(target => string.Join('.', target.Path) is "sleep" or "std.time.Duration.sleep")) return true;
         return expression switch
         {
             StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesRuntimeSleep(x.Expression)),
@@ -660,8 +710,9 @@ internal sealed partial class LlvmEmitter
         }
         if (_usesNetwork && !_platform.SupportsNetwork)
         {
-            throw new SollangException(
-                "network sockets are unavailable on wasm32-browser; use a host-provided networking adapter");
+            throw new SollangException(_usesDns
+                ? "system name resolution is unavailable on wasm32-browser; use an explicit host-provided resolver"
+                : "network sockets are unavailable on wasm32-browser; use a host-provided networking adapter");
         }
         if (_usesSecureRandom && !_platform.SupportsSecureRandom)
         {
@@ -684,6 +735,9 @@ internal sealed partial class LlvmEmitter
             .OrderBy(static group => LlvmCodegenUnit.StableIdentity(group.Key))
             .Select(static group => new ModuleFunctionGroup(group.Key, group.ToArray()))
             .ToArray();
+        _usesAes128CpuSpecialization = moduleGroups
+            .SelectMany(static group => group.Functions)
+            .Any(IsAes128CpuSpecialization);
         for (var index = 1; index < moduleGroups.Length; index++)
         {
             if (LlvmCodegenUnit.StableIdentity(moduleGroups[index - 1].Identity)
@@ -699,6 +753,7 @@ internal sealed partial class LlvmEmitter
             return fullyReused;
         }
         var header = $$"""
+            ; sollang cpu contract {{_targetContract.CacheKey}}
             target triple = "{{_platform.TargetTriple}}"
 
             %sollang.text = type { ptr, i64 }
@@ -715,6 +770,9 @@ internal sealed partial class LlvmEmitter
             %sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
             %sollang.environment_result = type { ptr, i64, i1, i1 }
             %sollang.process_result = type { i32, i32 }
+            %sollang.process_spawn_result = type { i64, i64, i32 }
+            %sollang.process_capture_result = type { i32, ptr, i64, i64, i1, ptr, i64, i64, i1, i32 }
+            %sollang.process_environment_result = type { ptr, i64, i64, i1 }
             %sollang.task = type { ptr, ptr }
             %sollang.stream = type { ptr, ptr, ptr }
             %sollang.event_stream = type { ptr, ptr, ptr }
@@ -865,6 +923,10 @@ internal sealed partial class LlvmEmitter
             EmitMain();
         }
         EmitFunctionLine("attributes #0 = { nounwind }");
+        if (_usesAes128CpuSpecialization)
+        {
+            EmitFunctionLine("attributes #1 = { nounwind \"target-features\"=\"+aes,+sse2\" }");
+        }
         var suffixKey = reuse?.SuffixKey ?? default;
         units.Add(reuse is not null
                   && reuse.TryGet(LlvmCodegenUnitKind.SharedSuffix, "", suffixKey, out var reusedSuffix)

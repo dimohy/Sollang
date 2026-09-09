@@ -1,0 +1,432 @@
+namespace std.compress.brotli.prefix_table
+
+import std.compress.brotli.prefix_table as model
+import std.compress.brotli.prefix_table.error as errors
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxSymbols: Int
+    public maxTableEntries: Int
+}
+
+public struct Builder {
+    public maxSymbols: Int
+    public maxTableEntries: Int
+}
+
+public struct Table {
+    public entries: [Int; ~]
+    public rootBits: Int
+}
+
+public struct Position {
+    public byteIndex: Int
+    public bitIndex: Int
+}
+
+public struct Decoded {
+    public symbol: Int
+    public position: Position
+}
+
+# Probe is the resumable, input-storage-independent lookup result. NeedMore
+# reports the exact additional bit count required before the same Table can be
+# probed again; Ready reports the symbol and the number of buffered bits to
+# consume. Neither variant borrows or retains encoded input.
+public struct Probed {
+    public symbol: Int
+    public consumedBits: Int
+}
+
+public enum Probe {
+    NeedMore(Int)
+    Ready(Probed)
+}
+
+# Window retains only a bounded scalar suffix of caller input. It is the shared
+# cursor state for resumable fixed-width and prefix-symbol reads; no encoded
+# array or slice is retained between calls.
+public struct WindowLimits {
+    public maxBufferedBits: Int
+}
+
+public struct Window {
+    public bufferedBits: UInt64
+    public availableBits: Int
+    public maxBufferedBits: Int
+}
+
+public enum BitRead {
+    Incomplete(Int)
+    Complete(UInt64)
+}
+
+struct Peeked {
+    value: Int
+    available: Int
+}
+
+errorBuilder kind: errors.Kind, offset: UIntSize -> Result<Builder, Error> {
+    Result<Builder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorTable kind: errors.Kind, offset: UIntSize -> Result<Table, Error> {
+    Result<Table, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecoded kind: errors.Kind, offset: UIntSize -> Result<Decoded, Error> {
+    Result<Decoded, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorProbe kind: errors.Kind, offset: UIntSize -> Result<Probe, Error> {
+    Result<Probe, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorWindow kind: errors.Kind, offset: UIntSize -> Result<Window, Error> {
+    Result<Window, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorPosition kind: errors.Kind, offset: UIntSize -> Result<Position, Error> {
+    Result<Position, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBitRead kind: errors.Kind, offset: UIntSize -> Result<BitRead, Error> {
+    Result<BitRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+powerOfTwo exponent: Int -> Int {
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+appendZeros values: mut [Int; ~], count: Int -> Unit {
+    0 => index!
+    index! < count -> while {
+        values -> push(0)
+        index! + 1 => index!
+    }
+}
+
+nextKey key: Int, length: Int -> Int {
+    (length - 1) -> powerOfTwo => step!
+    step! > 0 and (key / step!) % 2 != 0 -> while { step! / 2 => step! }
+    step! == 0 -> if { key -> return }
+    key % step! + step!
+}
+
+replicateValue entries: mut [Int; ~], offset: Int, step: Int, end: Int, item: Int -> Unit {
+    end => current!
+    current! > 0 -> while {
+        current! - step => current!
+        item => entries[offset + current!]
+    }
+}
+
+nextTableBitSize counts: [Int], length: Int, rootBits: Int -> Int {
+    length => current!
+    (current! - rootBits) -> powerOfTwo => left!
+    current! < 15 -> while {
+        left! - counts[current!] => left!
+        left! <= 0 -> if { break }
+        current! + 1 => current!
+        left! * 2 => left!
+    }
+    current! - rootBits
+}
+
+peekBits input: [UInt8], position: Position, width: Int -> Peeked {
+    position.byteIndex => byteIndex!
+    position.bitIndex => bitIndex!
+    0 => value!
+    1 => place!
+    0 => available!
+    available! < width and byteIndex! < (input -> len)
+        -> while {
+            (Int(input[byteIndex!]) / (bitIndex! -> powerOfTwo)) % 2 => bit
+            bit == 1 -> if { value! + place! => value! }
+            place! * 2 => place!
+            available! + 1 => available!
+            bitIndex! + 1 => bitIndex!
+            bitIndex! == 8 -> if {
+                0 => bitIndex!
+                byteIndex! + 1 => byteIndex!
+            }
+        }
+    Peeked { value: value!, available: available! }
+}
+
+advance position: Position, width: Int -> Position {
+    position.bitIndex + width => totalBits
+    Position {
+        byteIndex: position.byteIndex + totalBits / 8
+        bitIndex: totalBits % 8
+    }
+}
+
+impl Limits {
+    public builder: self -> Result<Builder, Error> {
+        self.maxSymbols > 0 and self.maxSymbols <= 704 and self.maxTableEntries > 0
+            -> unless { errorBuilder(errors.Kind.InvalidLimit, 0) -> return }
+        Result<Builder, Error>.Ok(Builder {
+            maxSymbols: self.maxSymbols
+            maxTableEntries: self.maxTableEntries
+        })
+    }
+}
+
+impl WindowLimits {
+    public window: self -> Result<Window, Error> {
+        self.maxBufferedBits > 0 and self.maxBufferedBits <= 56
+            -> unless { errorWindow(errors.Kind.InvalidLimit, UIntSize(self.maxBufferedBits)) -> return }
+        Result<Window, Error>.Ok(Window {
+            bufferedBits: 0
+            availableBits: 0
+            maxBufferedBits: self.maxBufferedBits
+        })
+    }
+}
+
+impl Builder {
+    public table: self, codeLengths: [Int], rootBits: Int -> Result<Table, Error> {
+        (codeLengths -> len) > 0 and (codeLengths -> len) <= self.maxSymbols
+            and rootBits > 0 and rootBits <= 15
+            -> unless { errorTable(errors.Kind.InvalidLimit, 0) -> return }
+        [Int; ~] => counts!
+        counts! -> appendZeros(16)
+        0 => nonZero!
+        0 => symbol!
+        symbol! < (codeLengths -> len) -> while {
+            codeLengths[symbol!] >= 0 and codeLengths[symbol!] <= 15
+                -> unless { errorTable(errors.Kind.InvalidCodeLength, UIntSize(symbol!)) -> return }
+            counts![codeLengths[symbol!]] + 1 => counts![codeLengths[symbol!]]
+            codeLengths[symbol!] > 0 -> if { nonZero! + 1 => nonZero! }
+            symbol! + 1 => symbol!
+        }
+        nonZero! > 0 -> unless { errorTable(errors.Kind.InvalidCodeSpace, 0) -> return }
+        32_768 => space!
+        1 => length!
+        length! <= 15 -> while {
+            space! - counts![length!] * ((15 - length!) -> powerOfTwo) => space!
+            space! >= 0 -> unless { errorTable(errors.Kind.InvalidCodeSpace, UIntSize(length!)) -> return }
+            length! + 1 => length!
+        }
+        nonZero! == 1 or space! == 0
+            -> unless { errorTable(errors.Kind.InvalidCodeSpace, UIntSize(nonZero!)) -> return }
+
+        [Int; ~] => offsets!
+        offsets! -> appendZeros(16)
+        0 => offsets![1]
+        1 => length!
+        length! < 15 -> while {
+            offsets![length!] + counts![length!] => offsets![length! + 1]
+            length! + 1 => length!
+        }
+        [Int; ~] => sorted!
+        sorted! -> appendZeros(nonZero!)
+        0 => symbol!
+        symbol! < (codeLengths -> len) -> while {
+            codeLengths[symbol!] => symbolLength
+            symbolLength > 0 -> if {
+                symbol! => sorted![offsets![symbolLength]]
+                offsets![symbolLength] + 1 => offsets![symbolLength]
+            }
+            symbol! + 1 => symbol!
+        }
+
+        rootBits -> powerOfTwo => rootSize
+        rootSize <= self.maxTableEntries
+            -> unless { errorTable(errors.Kind.TableLimitExceeded, UIntSize(rootSize)) -> return }
+        [Int; ~] => entries!
+        entries! -> appendZeros(rootSize)
+        nonZero! == 1 -> if {
+            0 => index!
+            index! < rootSize -> while {
+                sorted![0] => entries![index!]
+                index! + 1 => index!
+            }
+            Result<Table, Error>.Ok(Table { entries: entries!, rootBits: rootBits }) -> return
+        }
+
+        0 => key!
+        0 => sortedIndex!
+        1 => length!
+        2 => step!
+        length! <= rootBits -> while {
+            counts![length!] > 0 -> while {
+                length! * 65_536 + sorted![sortedIndex!] => item
+                entries! -> replicateValue(key!, step!, rootSize, item)
+                key! -> nextKey(length!) => key!
+                sortedIndex! + 1 => sortedIndex!
+                counts![length!] - 1 => counts![length!]
+            }
+            length! + 1 => length!
+            step! * 2 => step!
+        }
+
+        rootSize - 1 => rootMask
+        -1 => low!
+        0 => currentOffset!
+        rootSize => tableSize!
+        rootBits + 1 => length!
+        2 => step!
+        length! <= 15 -> while {
+            counts![length!] > 0 -> while {
+                key! % (rootMask + 1) != low! -> if {
+                    currentOffset! + tableSize! => currentOffset!
+                    counts! -> nextTableBitSize(length!, rootBits) => tableBits
+                    tableBits -> powerOfTwo => tableSize!
+                    (entries! -> len) + tableSize! <= self.maxTableEntries
+                        -> unless {
+                            errorTable(errors.Kind.TableLimitExceeded, UIntSize((entries! -> len) + tableSize!)) -> return
+                        }
+                    entries! -> appendZeros(tableSize!)
+                    key! % (rootMask + 1) => low!
+                    (tableBits + rootBits) * 65_536 + (currentOffset! - low!) => entries![low!]
+                }
+                (length! - rootBits) * 65_536 + sorted![sortedIndex!] => item
+                entries! -> replicateValue(
+                currentOffset! + key! / (rootBits -> powerOfTwo),
+                step!,
+                tableSize!,
+                item)
+                key! -> nextKey(length!) => key!
+                sortedIndex! + 1 => sortedIndex!
+                counts![length!] - 1 => counts![length!]
+            }
+            length! + 1 => length!
+            step! * 2 => step!
+        }
+        Result<Table, Error>.Ok(Table { entries: entries!, rootBits: rootBits })
+    }
+}
+
+impl Table {
+    public entryCount: self -> Int => self.entries -> len
+
+    public probe: self, bufferedBits: Int, availableBits: Int -> Result<Probe, Error> {
+        availableBits >= 0 and availableBits <= 15 and bufferedBits >= 0
+            -> unless { errorProbe(errors.Kind.InvalidLimit, UIntSize(availableBits)) -> return }
+        bufferedBits < (availableBits -> powerOfTwo)
+            -> unless { errorProbe(errors.Kind.InvalidLimit, UIntSize(bufferedBits)) -> return }
+
+        self.entries[0] => firstEntry
+        firstEntry / 65_536 == 0 -> if {
+            Result<Probe, Error>.Ok(model.Probe.Ready(Probed {
+                symbol: firstEntry % 65_536
+                consumedBits: 0
+            })) -> return
+        }
+        # Missing high lookup bits are zero-padded only to select the root
+        # entry. A canonical short code occupies every extension of its prefix,
+        # so it is decodable as soon as that entry's own consumed width is
+        # available; requiring the complete root width falsely truncates valid
+        # end-of-stream symbols.
+        bufferedBits % (self.rootBits -> powerOfTwo) => rootIndex
+        self.entries[rootIndex] => rootEntry
+        rootEntry / 65_536 => bits
+        rootEntry % 65_536 => symbol
+        bits <= self.rootBits -> if {
+            availableBits < bits -> if {
+                Result<Probe, Error>.Ok(model.Probe.NeedMore(bits - availableBits)) -> return
+            }
+            Result<Probe, Error>.Ok(model.Probe.Ready(Probed {
+                symbol: symbol
+                consumedBits: bits
+            })) -> return
+        }
+        availableBits < bits -> if {
+            Result<Probe, Error>.Ok(model.Probe.NeedMore(bits - availableBits)) -> return
+        }
+
+        bits - self.rootBits => subtableBits
+        bufferedBits / (self.rootBits -> powerOfTwo) % (subtableBits -> powerOfTwo) => subtableIndex
+        rootIndex + symbol + subtableIndex => entryIndex
+        entryIndex < (self.entries -> len)
+            -> unless { errorProbe(errors.Kind.InvalidCodeSpace, UIntSize(entryIndex)) -> return }
+        self.entries[entryIndex] => entry
+        entry / 65_536 + self.rootBits => consumed
+        Result<Probe, Error>.Ok(model.Probe.Ready(Probed {
+            symbol: entry % 65_536
+            consumedBits: consumed
+        }))
+    }
+
+    public read: self, input: [UInt8], position: Position -> Result<Decoded, Error> {
+        input -> peekBits(position, 15) => bits
+        self -> probe(bits.value, bits.available)? => probe
+        probe -> when {
+            NeedMore(_) { errorDecoded(errors.Kind.TruncatedInput, UIntSize(position.byteIndex)) }
+            Ready(decoded) {
+                Result<Decoded, Error>.Ok(Decoded {
+                    symbol: decoded.symbol
+                    position: position -> advance(decoded.consumedBits)
+                })
+            }
+        }
+    }
+}
+
+impl Window {
+    public available: self -> Int => self.availableBits
+
+    public fill: mut self, input: [UInt8], position: Position, requiredBits: Int -> Result<Position, Error> {
+        requiredBits >= 0 and requiredBits <= self.maxBufferedBits
+            -> unless { errorPosition(errors.Kind.InvalidLimit, UIntSize(requiredBits)) -> return }
+        position.byteIndex >= 0 and position.byteIndex <= (input -> len)
+            and position.bitIndex >= 0 and position.bitIndex < 8
+            -> unless { errorPosition(errors.Kind.InvalidLimit, UIntSize(position.byteIndex)) -> return }
+
+        position.byteIndex => byteIndex!
+        position.bitIndex => bitIndex!
+        self.availableBits < requiredBits and byteIndex! < (input -> len)
+            -> while {
+                (Int(input[byteIndex!]) / (bitIndex! -> powerOfTwo)) % 2 => bit
+                bit == 1 -> if {
+                    self.bufferedBits + UInt64(self.availableBits -> powerOfTwo) => self.bufferedBits
+                }
+                self.availableBits + 1 => self.availableBits
+                bitIndex! + 1 => bitIndex!
+                bitIndex! == 8 -> if {
+                    0 => bitIndex!
+                    byteIndex! + 1 => byteIndex!
+                }
+            }
+        Result<Position, Error>.Ok(Position { byteIndex: byteIndex!, bitIndex: bitIndex! })
+    }
+
+    public read: mut self, width: Int -> Result<BitRead, Error> {
+        width >= 0 and width <= self.maxBufferedBits
+            -> unless { errorBitRead(errors.Kind.InvalidLimit, UIntSize(width)) -> return }
+        self.availableBits < width -> if {
+            Result<BitRead, Error>.Ok(model.BitRead.Incomplete(width - self.availableBits)) -> return
+        }
+        width -> powerOfTwo => divisor
+        self.bufferedBits % UInt64(divisor) => value
+        self.bufferedBits / UInt64(divisor) => self.bufferedBits
+        self.availableBits - width => self.availableBits
+        Result<BitRead, Error>.Ok(model.BitRead.Complete(value))
+    }
+
+    public symbol: mut self, table: ref Table -> Result<Probe, Error> {
+        self.availableBits < 15 -> if { self.availableBits } else { 15 } => available
+        table -> probe(Int(self.bufferedBits % 32_768), available)? => probed
+        probed -> when {
+            NeedMore(bits) { Result<Probe, Error>.Ok(model.Probe.NeedMore(bits)) }
+            Ready(decoded) {
+                decoded.consumedBits -> powerOfTwo => divisor
+                self.bufferedBits / UInt64(divisor) => self.bufferedBits
+                self.availableBits - decoded.consumedBits => self.availableBits
+                Result<Probe, Error>.Ok(model.Probe.Ready(decoded))
+            }
+        }
+    }
+}

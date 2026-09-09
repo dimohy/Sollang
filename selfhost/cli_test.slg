@@ -4,11 +4,11 @@ import sollang.compiler.semantic.context as semanticContext
 import sys.file as file
 
 public struct TestPlan {
-    status: Int
-    count: Int
-    sourceIndices: [Int; ~]
-    symbolIndices: [Int; ~]
-    harness: [UInt8; ~]
+    public status: Int
+    public count: Int
+    public sourceIndices: [Int; ~]
+    public symbolIndices: [Int; ~]
+    public harness: [UInt8; ~]
 }
 
 appendText bytes: mut [UInt8; ~], value: Text -> Unit {
@@ -57,7 +57,7 @@ appendQuote bytes: mut [UInt8; ~] -> Unit {
 matchesText source: file.SourceText, start: UIntSize, length: UIntSize, expected: Text -> Bool {
     length == (expected -> len) => matches!
     UIntSize(0) => index!
-    (matches! and index! < length) -> while {
+    matches! and index! < length -> while {
         (source -> byte(start + index!)) != (expected -> byte(index!))
             -> if { false => matches! }
         index! + 1 => index!
@@ -69,18 +69,18 @@ containsText source: file.SourceText, start: UIntSize, length: UIntSize, filter:
     (filter -> len) == 0 -> if { true -> return }
     false => found!
     UIntSize(0) => offset!
-    (not found! and offset! + (filter -> len) <= length)
+    not found! and offset! + (filter -> len) <= length
         -> while {
-        true => equal!
-        UIntSize(0) => index!
-        (equal! and index! < (filter -> len)) -> while {
-            (source -> byte(start + offset! + index!)) != (filter -> byte(index!))
-                -> if { false => equal! }
-            index! + 1 => index!
+            true => equal!
+            UIntSize(0) => index!
+            equal! and index! < (filter -> len) -> while {
+                (source -> byte(start + offset! + index!)) != (filter -> byte(index!))
+                    -> if { false => equal! }
+                index! + 1 => index!
+            }
+            equal! -> if { true => found! }
+            offset! + 1 => offset!
         }
-        equal! -> if { true => found! }
-        offset! + 1 => offset!
-    }
     found!
 }
 
@@ -212,54 +212,54 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         0 => symbolIndex!
         symbolIndex! < range.symbolCount -> while {
             prepared.package.symbols[range.symbolStart + symbolIndex!] => function
-            (function.kind == 7 and function.parent < 0 and function.nameToken >= 0)
+            function.kind == 7 and function.parent < 0 and function.nameToken >= 0
                 -> if {
-                availableSourceIndices! -> push(sourceIndex!)
-                availableSymbolIndices! -> push(symbolIndex!)
-                availableModuleIndices! -> push(moduleIndex!)
-                availableNameTokenIndices! -> push(function.nameToken)
-                prepared.package.tokens[range.tokenStart + function.nameToken] => nameToken
-                prepared.package.sources[sourceIndex!] -> isTestName(nameToken.span.start, nameToken.span.length)
-                    -> if {
-                    false => generic!
-                    false => parameter!
-                    0 => childIndex!
-                    childIndex! < range.symbolCount -> while {
-                        prepared.package.symbols[range.symbolStart + childIndex!] => child
-                        (child.parent == symbolIndex! and child.kind == 32)
-                            -> if { true => generic! }
-                        (child.parent == symbolIndex! and child.kind == 35)
-                            -> if { true => parameter! }
-                        childIndex! + 1 => childIndex!
-                    }
-                    function.typeNode => resultNode!
-                    function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => resultNode! }
-                    prepared.package.nodes[range.astStart + resultNode!] => resultType
-                    prepared.package.sources[sourceIndex!] -> matchesText(resultType.start, resultType.length, "Bool") => returnsBool
-                    (generic! or parameter! or function.secondaryTypeNode >= 0 or function.blockNameToken >= 0 or not returnsBool or (function.flags / 128 % 2) == 1)
+                    availableSourceIndices! -> push(sourceIndex!)
+                    availableSymbolIndices! -> push(symbolIndex!)
+                    availableModuleIndices! -> push(moduleIndex!)
+                    availableNameTokenIndices! -> push(function.nameToken)
+                    prepared.package.tokens[range.tokenStart + function.nameToken] => nameToken
+                    prepared.package.sources[sourceIndex!] -> isTestName(nameToken.span.start, nameToken.span.length)
                         -> if {
-                        "sollang: test function '" -> print
-                        prepared.modules[moduleIndex!] => moduleIdentity
-                        moduleIdentity.pathLength > 0 -> if {
-                            prepared.package.sources[sourceIndex!] -> slice(moduleIdentity.pathStart, moduleIdentity.pathLength) -> print
-                            "." -> print
+                            false => generic!
+                            false => parameter!
+                            0 => childIndex!
+                            childIndex! < range.symbolCount -> while {
+                                prepared.package.symbols[range.symbolStart + childIndex!] => child
+                                child.parent == symbolIndex! and child.kind == 32
+                                    -> if { true => generic! }
+                                child.parent == symbolIndex! and child.kind == 35
+                                    -> if { true => parameter! }
+                                childIndex! + 1 => childIndex!
+                            }
+                            function.typeNode => resultNode!
+                            function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => resultNode! }
+                            prepared.package.nodes[range.astStart + resultNode!] => resultType
+                            prepared.package.sources[sourceIndex!] -> matchesText(resultType.start, resultType.length, "Bool") => returnsBool
+                            generic! or parameter! or function.secondaryTypeNode >= 0 or function.blockNameToken >= 0 or not returnsBool or (function.flags / 128 % 2) == 1
+                                -> if {
+                                    "sollang: test function '" -> print
+                                    prepared.modules[moduleIndex!] => moduleIdentity
+                                    moduleIdentity.pathLength > 0 -> if {
+                                        prepared.package.sources[sourceIndex!] -> slice(moduleIdentity.pathStart, moduleIdentity.pathLength) -> print
+                                        "." -> print
+                                    }
+                                    prepared.package.sources[sourceIndex!] -> slice(nameToken.span.start, nameToken.span.length) -> print
+                                    "' must be a non-generic, zero-input, non-intrinsic function returning Bool" -> println
+                                    1 => status!
+                                } else {
+                                    prepared.modules[moduleIndex!] => moduleIdentity
+                                    prepared.package.sources[sourceIndex!] -> qualifiedContains(moduleIdentity.pathStart, moduleIdentity.pathLength, nameToken.span.start, nameToken.span.length, filter) => selected!
+                                    (filter -> len) == 0 -> if { true => selected! }
+                                    selected! -> if {
+                                        sourceIndices! -> push(sourceIndex!)
+                                        symbolIndices! -> push(symbolIndex!)
+                                        moduleIndices! -> push(moduleIndex!)
+                                        nameTokenIndices! -> push(function.nameToken)
+                                    }
+                                }
                         }
-                        prepared.package.sources[sourceIndex!] -> slice(nameToken.span.start, nameToken.span.length) -> print
-                        "' must be a non-generic, zero-input, non-intrinsic function returning Bool" -> println
-                        1 => status!
-                    } else {
-                        prepared.modules[moduleIndex!] => moduleIdentity
-                        prepared.package.sources[sourceIndex!] -> qualifiedContains(moduleIdentity.pathStart, moduleIdentity.pathLength, nameToken.span.start, nameToken.span.length, filter) => selected!
-                        (filter -> len) == 0 -> if { true => selected! }
-                        selected! -> if {
-                            sourceIndices! -> push(sourceIndex!)
-                            symbolIndices! -> push(symbolIndex!)
-                            moduleIndices! -> push(moduleIndex!)
-                            nameTokenIndices! -> push(function.nameToken)
-                        }
-                    }
                 }
-            }
             symbolIndex! + 1 => symbolIndex!
         }
         sourceIndex! + 1 => sourceIndex!
@@ -267,39 +267,39 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
 
     prepared -> sortQualified(availableSourceIndices!, availableSymbolIndices!, availableModuleIndices!, availableNameTokenIndices!)
     prepared -> sortQualified(sourceIndices!, symbolIndices!, moduleIndices!, nameTokenIndices!)
-    (status! == 0 and (sourceIndices! -> len) > 1)
+    status! == 0 and (sourceIndices! -> len) > 1
         -> if {
-        1 => selectedIndex!
-        selectedIndex! < (sourceIndices! -> len) -> while {
-            prepared -> compareQualified(moduleIndices![selectedIndex! - 1], nameTokenIndices![selectedIndex! - 1], moduleIndices![selectedIndex!], nameTokenIndices![selectedIndex!]) => ordering
-            ordering == 0 -> if {
-                "sollang: test names must be unique after module qualification" -> println
-                1 => status!
-            }
-            selectedIndex! + 1 => selectedIndex!
-        }
-    }
-
-    (status! == 0 and (sourceIndices! -> len) == 0)
-        -> if {
-        (filter -> len) > 0 -> if {
-            "sollang: no tests matched filter '$filter'" -> println
-        } else {
-            "sollang: no tests found; declare a zero-input Bool function whose name starts with 'test_'" -> print
-            (availableModuleIndices! -> len) > 0 -> if {
-                "; available functions: " -> print
-                0 => availableIndex!
-                availableIndex! < (availableModuleIndices! -> len)
-                    -> while {
-                    availableIndex! > 0 -> if { ", " -> print }
-                    prepared -> printQualified(availableModuleIndices![availableIndex!], availableNameTokenIndices![availableIndex!])
-                    availableIndex! + 1 => availableIndex!
+            1 => selectedIndex!
+            selectedIndex! < (sourceIndices! -> len) -> while {
+                prepared -> compareQualified(moduleIndices![selectedIndex! - 1], nameTokenIndices![selectedIndex! - 1], moduleIndices![selectedIndex!], nameTokenIndices![selectedIndex!]) => ordering
+                ordering == 0 -> if {
+                    "sollang: test names must be unique after module qualification" -> println
+                    1 => status!
                 }
+                selectedIndex! + 1 => selectedIndex!
             }
-            "" -> println
         }
-        1 => status!
-    }
+
+    status! == 0 and (sourceIndices! -> len) == 0
+        -> if {
+            (filter -> len) > 0 -> if {
+                "sollang: no tests matched filter '$filter'" -> println
+            } else {
+                "sollang: no tests found; declare a zero-input Bool function whose name starts with 'test_'" -> print
+                (availableModuleIndices! -> len) > 0 -> if {
+                    "; available functions: " -> print
+                    0 => availableIndex!
+                    availableIndex! < (availableModuleIndices! -> len)
+                        -> while {
+                            availableIndex! > 0 -> if { ", " -> print }
+                            prepared -> printQualified(availableModuleIndices![availableIndex!], availableNameTokenIndices![availableIndex!])
+                            availableIndex! + 1 => availableIndex!
+                        }
+                }
+                "" -> println
+            }
+            1 => status!
+        }
 
     [UInt8; ~] => harness!
     status! == 0 -> if {
@@ -311,22 +311,23 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
             -1 => aliasIndex!
             moduleIdentity.pathLength > 0 -> if {
                 0 => uniqueIndex!
-                uniqueIndex! < (uniqueModuleIndices! -> len) -> while {
-                    prepared.modules[uniqueModuleIndices![uniqueIndex!]] => uniqueModule
-                    moduleIdentity.pathLength == uniqueModule.pathLength => sameModule!
-                    UIntSize(0) => moduleByte!
-                    (sameModule! and moduleByte! < moduleIdentity.pathLength)
-                        -> while {
-                        prepared.package.sources[moduleIdentity.sourceIndex] -> byte(moduleIdentity.pathStart + moduleByte!) => modulePathByte
-                        prepared.package.sources[uniqueModule.sourceIndex] -> byte(uniqueModule.pathStart + moduleByte!) => uniqueModulePathByte
-                        modulePathByte != uniqueModulePathByte -> if {
-                            false => sameModule!
-                        }
-                        moduleByte! + 1 => moduleByte!
+                uniqueIndex! < (uniqueModuleIndices! -> len)
+                    -> while {
+                        prepared.modules[uniqueModuleIndices![uniqueIndex!]] => uniqueModule
+                        moduleIdentity.pathLength == uniqueModule.pathLength => sameModule!
+                        UIntSize(0) => moduleByte!
+                        sameModule! and moduleByte! < moduleIdentity.pathLength
+                            -> while {
+                                prepared.package.sources[moduleIdentity.sourceIndex] -> byte(moduleIdentity.pathStart + moduleByte!) => modulePathByte
+                                prepared.package.sources[uniqueModule.sourceIndex] -> byte(uniqueModule.pathStart + moduleByte!) => uniqueModulePathByte
+                                modulePathByte != uniqueModulePathByte -> if {
+                                    false => sameModule!
+                                }
+                                moduleByte! + 1 => moduleByte!
+                            }
+                        sameModule! -> if { uniqueIndex! => aliasIndex! }
+                        uniqueIndex! + 1 => uniqueIndex!
                     }
-                    sameModule! -> if { uniqueIndex! => aliasIndex! }
-                    uniqueIndex! + 1 => uniqueIndex!
-                }
                 aliasIndex! < 0 -> if {
                     uniqueModuleIndices! -> len => aliasIndex!
                     uniqueModuleIndices! -> push(moduleIndices![aliasTestIndex!])
@@ -339,15 +340,16 @@ public build paths: [Text; ~], candidateSourceCount: Int, filter: Text -> TestPl
         harness! -> appendText("import sys.process as process")
         harness! -> appendNewline
         0 => importIndex!
-        importIndex! < (uniqueModuleIndices! -> len) -> while {
-            prepared.modules[uniqueModuleIndices![importIndex!]] => moduleIdentity
-            harness! -> appendText("import ")
-            prepared.package.sources[moduleIdentity.sourceIndex] -> appendSourceTo(harness!, moduleIdentity.pathStart, moduleIdentity.pathLength)
-            harness! -> appendText(" as test_module_")
-            harness! -> appendInt(importIndex!)
-            harness! -> appendNewline
-            importIndex! + 1 => importIndex!
-        }
+        importIndex! < (uniqueModuleIndices! -> len)
+            -> while {
+                prepared.modules[uniqueModuleIndices![importIndex!]] => moduleIdentity
+                harness! -> appendText("import ")
+                prepared.package.sources[moduleIdentity.sourceIndex] -> appendSourceTo(harness!, moduleIdentity.pathStart, moduleIdentity.pathLength)
+                harness! -> appendText(" as test_module_")
+                harness! -> appendInt(importIndex!)
+                harness! -> appendNewline
+                importIndex! + 1 => importIndex!
+            }
         harness! -> appendNewline
         harness! -> appendText("main {")
         harness! -> appendNewline

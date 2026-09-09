@@ -1,0 +1,36 @@
+enum Mode {
+    Buffered
+    Fresh
+}
+
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+consume owner: move Owner -> Int {
+    owner.bytes -> len
+}
+
+impl Owner {
+    forward: move self, mode: Mode -> Result<Int, Int> {
+        self => current
+        mode -> when {
+            Buffered {
+                current -> consume => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+            Fresh {
+                current -> consume => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+        }
+        Result<Int, Int>.Err(1)
+    }
+}
+
+main {
+    Owner { bytes: [1, 2, 3; ~] } -> forward(Mode.Buffered) -> when {
+        Err(_) { "move-self-early-return=false" -> println }
+        Ok(count) { "move-self-early-return=$(count == 3)" -> println }
+    }
+}

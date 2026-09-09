@@ -1,0 +1,61 @@
+namespace sys.input.mouse
+
+import sys.input.mouse as mouse
+
+public struct Event {
+    public x: Int
+    public y: Int
+    public delta: Int
+    public button: Int
+    public kind: Kind
+}
+
+# Mouse event kinds are stable across platform adapters.
+public enum Kind {
+    Move
+    ButtonDown
+    ButtonUp
+    Wheel
+}
+
+# Defines what a hot producer does when its fixed-capacity queue is full.
+public enum OverflowPolicy {
+    DropNewest
+    DropOldest
+    CoalesceMotion
+}
+
+public enum ErrorKind {
+    InvalidCapacity
+}
+
+public struct Error {
+    public kind: ErrorKind
+    public capacity: Int
+}
+
+# Source is a validated, allocation-free subscription plan. Starting it moves
+# the plan into one affine EventStream; dropping that stream cancels input and
+# restores the platform console/input mode.
+public struct Source {
+    public capacity: Int
+    public overflow: OverflowPolicy
+}
+
+public source capacity: Int, overflow: OverflowPolicy -> Result<Source, Error> {
+    capacity >= 2 and capacity <= 65_536 -> unless {
+        Result<Source, Error>.Err(Error {
+            kind: mouse.ErrorKind.InvalidCapacity
+            capacity: capacity
+        }) -> return
+    }
+    Result<Source, Error>.Ok(Source {
+        capacity: capacity
+        overflow: overflow
+    })
+}
+
+impl Error {
+    public errorKind: self -> ErrorKind => self.kind
+    public invalidCapacity: self -> Int => self.capacity
+}

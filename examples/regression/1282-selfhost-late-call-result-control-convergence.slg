@@ -1,0 +1,47 @@
+public enum State {
+    Running
+}
+
+public enum Advance {
+    Continue
+    Ready(Int)
+}
+
+public struct Machine {
+    public state: State
+    public visits: Int
+}
+
+advance owner: mut Machine -> Result<Advance, Text> {
+    owner.visits + 1 => owner.visits
+    owner.visits == 1 -> if {
+        Result<Advance, Text>.Ok(Advance.Continue)
+    } else {
+        Result<Advance, Text>.Ok(Advance.Ready(42))
+    }
+}
+
+impl Machine {
+    public read: mut self -> Result<Int, Text> {
+        true -> while {
+            self -> advance -> when {
+                Err(error) { Result<Int, Text>.Err(error) -> return }
+                Ok(progress) {
+                    progress -> when {
+                        Continue { }
+                        Ready(value) { Result<Int, Text>.Ok(value) -> return }
+                    }
+                }
+            }
+        }
+        Result<Int, Text>.Err("unreachable")
+    }
+}
+
+main {
+    Machine { state: State.Running, visits: 0 } => machine!
+    machine! -> read -> when {
+        Err(error) { error -> println }
+        Ok(value) { "$value" -> println }
+    }
+}

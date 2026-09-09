@@ -19,8 +19,8 @@ main {
     sequenceOwner -> slice(UIntSize(0), sequenceLength) => sequence
     [program, sequence; ~] => sources
     [
-        "examples/regression/576-linq-multiplication-table.slg",
-        "stdlib/std/sequence.slg"; ~
+    "examples/regression/576-linq-multiplication-table.slg",
+    "stdlib/std/sequence.slg"; ~
     ] => paths
     sources -> semanticContext.prepare => prepared
     prepared.package -> libraryImports.load(paths, "windows-x64", path.nativeStyle()) => libraries
@@ -51,22 +51,34 @@ main {
     sensorOwner -> slice(UIntSize(0), sensorLength) => sensor
     [sensor, sequence; ~] => sensorSources
     [
-        "examples/regression/582-billion-sensor-alerts.slg",
-        "stdlib/std/sequence.slg"; ~
+    "examples/regression/582-billion-sensor-alerts.slg",
+    "stdlib/std/sequence.slg"; ~
     ] => sensorPaths
     sensorSources -> semanticContext.prepare => sensorPrepared
     sensorPrepared.package -> libraryImports.load(sensorPaths, "windows-x64", path.nativeStyle()) => sensorLibraries
     sensorPrepared.package -> libraryImports.resolveQualified(sensorLibraries) => sensorLibraryCalls
     sensorPrepared -> typedIr.lowerContext => sensorIr!
     sensorIr! -> typedLibraryImports.projectLibraries(sensorPrepared, sensorLibraries, sensorLibraryCalls) => sensorLibraryDiagnostics
+    0 => compilerSlices!
+    0 => unresolvedCalls!
+    sensorIr! -> each sensorNode {
+        sensorNode.kind == 6 and (sensorNode.opcode == -275 or sensorNode.opcode == -276)
+            -> if { compilerSlices! + 1 => compilerSlices! }
+        sensorNode.kind == 6
+            and sensorNode.symbol == -1
+            and sensorNode.targetModule == -1
+            and sensorNode.opcode == -1
+            -> if { unresolvedCalls! + 1 => unresolvedCalls! }
+    }
+    "sensor compiler slices=$(compilerSlices!),unresolved calls=$(unresolvedCalls!)" -> println
     sensorPrepared -> expressionTypeIds.resolveContext => sensorResolved
     sensorPrepared -> streamIr.build(sensorIr!, sensorResolved) => sensorPlan
-    ((sensorPlan.pipelines -> len) == 1 and (sensorPlan.stages -> len) == 4)
+    (sensorPlan.pipelines -> len) == 1 and (sensorPlan.stages -> len) == 4
         -> if {
-        "sensor-plan=one-pipeline-four-stages" -> println
-    } else {
-        "sensor-plan=unexpected" -> println
-    }
+            "sensor-plan=one-pipeline-four-stages" -> println
+        } else {
+            "sensor-plan=unexpected" -> println
+        }
     (sensorLibraryDiagnostics -> len) == 0 -> if {
         "sensor-library-diagnostics=zero" -> println
     } else {

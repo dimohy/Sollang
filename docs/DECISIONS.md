@@ -553,7 +553,8 @@ This required two syntax additions for the current implementation slice:
 - namespace declarations and import aliases, such as `namespace sys.io` and
   `import sys.runtime as rt`
 
-The compiler loads `stdlib/sys/runtime.slg` and `stdlib/sys/io.slg` before user
+The initial implementation loaded the then-monolithic runtime source and
+`stdlib/sys/io.slg` before user
 source, then adds only alias entries for `print`, `println`, and `readInt`.
 The semantic model resolves `sys.io` through the same function table as user
 functions. The Windows LLVM backend inlines standard library wrappers and lowers
@@ -3787,10 +3788,11 @@ References: [Swift Task.yield](https://developer.apple.com/documentation/swift/t
 Status: reference compiler, native runtime, and self-host planning implemented
 Date: 2026-07-14
 
-Sollang represents elapsed time with the public `sys.time.Duration` value type.
-`milliseconds` and `seconds` are ordinary pure constructors, and
-`sleep: Duration -> async Unit` returns an affine Task. The intended surface is
-therefore `250 -> milliseconds -> sleep -> await`: the unit is visible,
+Sollang represents elapsed time with the public `std.time.Duration` value type.
+`milliseconds` and `seconds` are validated pure constructors, and the inherent
+`Duration.sleep: move self -> async Unit` returns an affine Task. The intended
+surface is therefore `time.milliseconds(250)` followed by
+`duration -> sleep -> await`: the unit is visible,
 the suspension is explicit, and cancellation uses the same Task ownership rule
 as user async functions.
 
@@ -3817,8 +3819,8 @@ The Sollang timer node lives in the existing affine Task control, so cancellatio
 an ordinary ownership operation rather than a separate timer handle protocol.
 
 Example 259 covers ordered 1ms/25ms timers, a canceled 1-second waiter,
-zero/negative immediate completion, and elapsed-time behavior. Example 260
-proves self-host multi-file module/call resolution for `sys.time` and preserves
+zero-duration immediate completion, and elapsed-time behavior. Example 260
+proves self-host multi-file module/call resolution for `std.time` and preserves
 the await suspension state.
 
 References: [Swift Task.sleep](https://developer.apple.com/documentation/swift/task/sleep%28for%3Atolerance%3Aclock%3A%29),
@@ -10596,11 +10598,16 @@ boundaries and exact output. Example 589 proves the self-host runtime pull
 loop.
 
 `EventStream<T>` deliberately shares the same affine ABI and adds a hot-source
-lifetime contract. `sys.event.mouseEvents` owns a fixed-capacity ring, an
-explicit `DropNewest`, `DropOldest`, or `CoalesceMotion` policy, and a producer
-worker. Drop requests cancellation, interrupts or wakes blocked I/O, joins the
-worker, restores the console/terminal state, and releases the ring. No queue
-growth occurs after creation.
+lifetime contract. The former global `sys.event.mouseEvents` entry point was
+replaced by the responsibility-specific `sys.input.mouse` module. Its pure
+`source(capacity, overflow)` factory validates an allocation-free `Source`
+plan; consuming `source -> events` starts one producer. The intrinsic method is
+declared physically in `stdlib/sys/runtime/mouse_event.slg`, so the instance API
+adds no wrapper, allocation, copy, or dispatch. The stream owns a fixed-capacity
+ring, an explicit `DropNewest`, `DropOldest`, or `CoalesceMotion` policy, and a
+producer worker. Drop requests cancellation, interrupts or wakes blocked I/O,
+joins the worker, restores the console/terminal state, and releases the ring.
+No queue growth occurs after creation.
 
 The Windows adapter consumes actual `MOUSE_EVENT_RECORD` values through
 `ReadConsoleInputW`. The Linux adapter enables SGR 1003/1006 reporting and
@@ -11636,7 +11643,7 @@ Status: superseded by D307
 Date: 2026-08-14
 
 The web-server foundation uses two explicit layers. `sys.socket` owns portable
-TCP and UDP intrinsics in the Windows and Linux runtimes. `sys.quic` owns the
+TCP and UDP intrinsics in the Windows and Linux runtimes. `std.net.quic` owns the
 stable Sollang API for QUIC while a locked Rust `cdylib` delegates protocol,
 TLS 1.3, congestion control, streams, and datagrams to Quinn. QUIC peers trust
 only the certificate supplied at bind time; there is no insecure verifier or
@@ -11667,7 +11674,7 @@ excludes bootstrap/runtime `.dll` files; `sollang_quic.dll` is the explicit
 protocol adapter exception, paired with `libsollang_quic.so` on Linux.
 
 Native-library binding follows the reachable call graph. Merely discovering
-`sys.quic` in the standard-library source set does not load its adapter, emit a
+`std.net.quic` in the standard-library source set does not load its adapter, emit a
 browser capability failure, or create a deployment dependency for TCP/UDP-only
 programs. Once a reachable wrapper calls a native declaration, its library,
 symbols, and affine handle-drop functions are emitted as one binding unit.
@@ -11696,13 +11703,13 @@ semantic identity. Initializing that field from a compatible growable owner
 emits an exact length check before ownership moves into its fixed contract, and
 a mismatched literal is rejected during semantic analysis.
 
-`sys.crypto.sha256` consequently stores the 64 round constants as one
+`std.crypto.sha256` consequently stores the 64 round constants as one
 `[UInt64]` static literal, uses an eight-element fixed `UInt64` hash state, and
 uses `[UInt64(0); 64]` for the mutable message schedule. Focused SHA-256,
 HMAC/HKDF, and RFC 9369 QUIC v2 initial-key fixtures pass, the SHA build emits
 zero S001-S003 warnings, and dedicated fixtures assert S001 and S003 compiler
 output.
-`sys.quic.keys.InitialKeys` therefore declares 32-byte secrets, 16-byte AES-128
+`std.net.quic.keys.InitialKeys` therefore declares 32-byte secrets, 16-byte AES-128
 keys and header-protection keys, and 12-byte IVs directly in its field types.
 Fixed arrays also support `mut [T; N]` payload borrows. The ABI passes the
 fixed pointer and length rather than a resizable container triple, so an
@@ -11875,8 +11882,8 @@ and interoperability gates pass.
 ## D308 — Cryptographic entropy is a reachable OS intrinsic, not a PRNG fallback
 
 Pure Sollang X25519 now obtains private-key material through
-`sys.crypto.random.bytes`. The public operation returns an owned dynamic byte
-array or `sys.crypto.random.Error.Unavailable`; it never substitutes the
+`std.crypto.random.bytes`. The public operation returns an owned dynamic byte
+array or `std.crypto.random.Error.Unavailable`; it never substitutes the
 deterministic `seedRandom`/`randomBelow` generator. Windows lowers the reachable
 intrinsic to `BCryptGenRandom` with the system-preferred generator, while Linux
 loops over `getrandom` until the requested buffer is full. The helper and the
@@ -11996,7 +12003,7 @@ RFC 9002, QUIC v2 (RFC 9369), compatible version negotiation (RFC 9368), and
 DATAGRAM (RFC 9221). Multipath remains an Internet-Draft as of the standards
 review and is not represented as a completed protocol feature.
 
-`sys.quic.version_negotiation` encodes and strictly decodes RFC 9368 Version
+`std.net.quic.version_negotiation` encodes and strictly decodes RFC 9368 Version
 Information, rejects zero versions and malformed four-byte lists, validates
 that a client includes its chosen version, skips reserved `0x?a?a?a?a`
 versions, and selects the first mutually supported local preference. The
@@ -12037,7 +12044,7 @@ general contextual path also preserves dynamic and bounded array ownership and
 capacity rather than returning the temporary fixed literal type. Fixture 918
 covers fixed-repeat inference and aggregate return on Windows and Linux.
 
-`sys.quic.traffic_keys` derives QUIC v1 and v2 packet keys, IVs, and header-
+`std.net.quic.traffic_keys` derives QUIC v1 and v2 packet keys, IVs, and header-
 protection keys from TLS 1.3 traffic secrets and exposes RFC 9846 traffic-secret
 updates. Fixture 917 checks that derivation agrees with the independently
 covered Initial-key schedule for both versions and verifies key update on both
@@ -12046,7 +12053,7 @@ live key-phase transition remains a connection-state-machine gate.
 
 ## D316 — TLS server-flight ordering is an explicit state machine
 
-`sys.quic.tls_server_state` is the server-side counterpart to the client
+`std.net.quic.tls_server_state` is the server-side counterpart to the client
 handshake state. It accepts exactly one complete ClientHello, records the
 ordered ServerHello, EncryptedExtensions, Certificate, CertificateVerify, and
 server Finished flight, then accepts exactly one complete client Finished.
@@ -12085,9 +12092,9 @@ while preserving value-generic lengths and all asserted operations.
 
 ## D318 — SHA-512 remains pure Sollang and numeric context reaches codegen
 
-Ed25519 authentication requires SHA-512, so `sys.crypto.sha512` implements the
+Ed25519 authentication requires SHA-512, so `std.crypto.sha512` implements the
 FIPS 180-4 digest in Sollang using fixed UInt64 state and schedule arrays. The
-shared `sys.crypto.bits` module now supplies auditable UInt64 rotate, shift,
+shared `std.crypto.bits` module now supplies auditable UInt64 rotate, shift,
 xor, and operations in addition to its UInt32 surface. Fixture 920 verifies the
 empty, `abc`, and 112-byte two-block standard vectors on Windows and Linux.
 
@@ -12102,9 +12109,9 @@ source therefore keeps the inferred literal and does not add a redundant
 
 ## D319 — Ed25519 is pure Sollang and inline names have lexical storage
 
-`sys.crypto.ed25519` implements RFC 8032 signing, public-key derivation, and
-verification in Sollang over the shared `sys.crypto.field25519` arithmetic and
-pure `sys.crypto.sha512`. Fixed-size keys, scalars, points, and signatures stay
+`std.crypto.ed25519` implements RFC 8032 signing, public-key derivation, and
+verification in Sollang over the shared `std.crypto.field25519` arithmetic and
+pure `std.crypto.sha512`. Fixed-size keys, scalars, points, and signatures stay
 fixed arrays; no Rust or native cryptographic adapter is introduced. Fixture
 921 checks RFC 8032 test vectors 1 and 2, including the nonempty-message case,
 while fixture 920 also checks SHA-512 over the first vector's 32-byte seed. Both
@@ -12181,7 +12188,7 @@ constant-time audit.
 ## D322 — Exact certificate pinning binds Certificate to CertificateVerify
 
 The client no longer accepts a public key supplied separately from the TLS
-Certificate message. `sys.quic.x509_ed25519` compares the complete pinned DER
+Certificate message. `std.net.quic.x509_ed25519` compares the complete pinned DER
 value, parses definite-length DER with minimal length encodings and strict
 bounds, walks the RFC 5280 Certificate/TBSCertificate structure, and extracts
 only an RFC 8410 Ed25519 SubjectPublicKeyInfo. The algorithm identifier must
@@ -12212,7 +12219,7 @@ multi-block certificate payload.
 
 ## D323 — Initial packet integration consumes projected owners exactly once
 
-`sys.quic.initial_engine` is the first integrated pure-Sollang wire engine. It
+`std.net.quic.initial_engine` is the first integrated pure-Sollang wire engine. It
 encodes a TLS ClientHello in an offset-zero CRYPTO frame, pads the client
 Initial datagram to at least 1200 bytes, derives client/server Initial keys from
 the original destination connection ID, and validates the inverse server
@@ -12257,8 +12264,8 @@ whose shape did not express the operation's actual contract.
 
 ## D325 — Handshake and 1-RTT packet protection remain pure Sollang
 
-`sys.quic.handshake_engine` now seals and opens v1/v2 Handshake packets from
-TLS handshake traffic secrets. `sys.quic.application_engine` seals and opens
+`std.net.quic.handshake_engine` now seals and opens v1/v2 Handshake packets from
+TLS handshake traffic secrets. `std.net.quic.application_engine` seals and opens
 1-RTT short-header packets, validates the destination connection ID and
 reserved bits, carries STREAM and DATAGRAM frames, and accepts a peer key-phase
 transition only after the packet authenticates with the next TLS `traffic upd`
@@ -12363,7 +12370,7 @@ rule, including inline and async function lowering.
 
 The defect was isolated from the pure Sollang QUIC server: `receivePacket` put
 `received.bytes` into `Result.Ok`, then function cleanup dropped the entire UDP
-datagram. `sys.quic.receive` later dropped the returned byte owner again.
+datagram. `std.net.quic.receive` later dropped the returned byte owner again.
 Fixture 970 is the minimal two-field regression. Fixtures 927, 932, 963, 967,
 and 970 execute on Windows and Linux, and the real aioquic 1.3.0 roundtrip now
 completes for QUIC v1 and v2 on both targets without a native QUIC adapter.
@@ -12612,7 +12619,10 @@ A value-producing enum match has one canonical result slot type from its
 declared function or enclosing value context. S022 rejects an arm whose final
 result type differs from that slot. In particular, a flow such as
 `packet -> Result<T, E>.Ok` contributes the Result constructor, not the initial
-`packet` payload, as the arm result.
+`packet` payload, as the arm result. A bare integer literal arm in a numeric
+return context is assigned that slot's canonical integer type in Typed IR. The
+literal itself is reused, so contextual typing adds neither a conversion node
+nor runtime work; S022 remains an exact postcondition for every arm.
 
 A value-producing enum match arm cannot end at a transparent parser wrapper:
 that wrapper has no LLVM SSA definition even when contextual typing looks
@@ -12885,7 +12895,15 @@ condition twice.
 User programs may leave N001 as a note. Example tests fail only on
 unexpected `warning Snnn`. Repository `.slg` files, the runtime library, and
 samples wrap long conditions so in-tree sources stay note-clean. Fixture
-1004 retains the note; fixture 1005 retains the wrapped form.
+1004 retains the note; fixture 1005 retains the canonical multiline form.
+
+N002 reports an outer parenthesis pair that encloses an entire single- or multi-line
+`if`, `unless`, or `while` condition. It does not report a pair that groups
+only part of a larger expression. The managed and self-host formatters remove
+the reported pair, and repository `.slg` sources remain N002-clean. Fixture
+1022 preserves the single-line diagnostic contract; fixture 1154 preserves the
+multiline diagnostic and formatter contract, while 1155 rejects a partial-
+expression false positive.
 
 ## D340 — Qualified flow targets are not bounded by source-call parentheses
 
@@ -13045,7 +13063,7 @@ real protocol consequence.
 Status: implemented and live-process verified
 Date: 2026-08-20
 
-`sys.quic.p2p` separates stable peer identity from transport identity and from
+`std.net.quic.p2p` separates stable peer identity from transport identity and from
 peer discovery. A peer ID is SHA-256 over an Ed25519 public key. A signed,
 expiring `PeerRecord` binds that ID and key to an IPv4 endpoint and the exact
 certificate that the QUIC dialer pins. The rendezvous or out-of-band carrier
@@ -13166,3 +13184,8486 @@ that same region. Windows and Linux Stage 2 both compile example 670 with Stage
 and require exact output `6,3,inclusive`. This cold native differential is the
 machine-enforced boundary; managed catalog success and warm artifacts are not
 accepted as substitutes.
+
+## D353 — QUIC addresses use semantic constructors over storage literals
+
+Status: implemented
+Date: 2026-08-21
+
+The original QUIC examples required callers to spell loopback as
+`Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: ... }`. That representation is
+compact and owns its address without a borrowed `Text`, but it leaks storage
+layout into ordinary application code and duplicates the parsing work already
+expected at a networking boundary.
+
+`std.net.quic` now exposes `loopback(port)` and `anyAddress(port)` for the two
+semantic bind constants, plus `ipv4(address, port)` for arbitrary numeric IPv4
+text. The parser is pure Sollang, strict dotted decimal, returns `Result`, and
+performs no DNS or Network effect. The compact `Ipv4Endpoint` remains the
+connection and signed-peer-record representation, so this change adds no
+borrowed address lifetime or hidden allocation to a live connection.
+
+Regression 1017 retains valid parsing, invalid empty-octet and overflow
+rejection, loopback, wildcard, and numeric-separator ports. Interop, P2P, and
+foundation examples use the semantic constructors; direct octet literals are
+no longer the preferred public vocabulary.
+
+## D354 — A ready postfix propagation follows its operand immediately
+
+Status: implemented
+Date: 2026-08-21
+
+The function scheduler previously visited the typed propagation node before
+its higher-index operand. It deferred that node, scheduled later `when` and
+early-return regions during the same pass, and only emitted the earlier `?`
+after those regions. Cleanup on their return edges then referenced the success
+payload before its defining load, so LLVM rejected the function for broken
+dominance.
+
+When an expression is scheduled, the scheduler now immediately appends its
+unscheduled direct parent when that parent is the canonical postfix-`?` node
+and the expression is its operand. This records the real data/control
+dependency as `operand -> propagation` without turning all kind-30 nodes into
+global effects or introducing a cycle with the propagation's own operand.
+
+Regression 1017 is compiled, assembled, and executed by the Windows and Linux
+Stage 2 and Stage 3 gates. It retains the natural
+`quic.ipv4(...)? => parsed` source followed by `when` branches with early
+returns, which previously generated the invalid cleanup edges. The browser
+Stage 2 WebAssembly gate keeps the same scheduling shape in a self-contained
+fixture, so it tests the compiler invariant without depending on QUIC's native
+target surface or a large transitive module graph.
+
+## D355 — Output runtime needs follow intrinsic identity across control regions
+
+Status: implemented
+Date: 2026-08-21
+
+The formatter-runtime capability scan previously recognized built-in output
+only when its Typed IR node was an ordinary call (kind 6). The control emitter
+can carry the same `print` or `println` intrinsic symbol on a `when` arm region,
+so it emitted `@sollang_runtime_print_i32` while the earlier scan omitted that
+function's definition. LLVM then rejected the otherwise valid browser module.
+
+Built-in output is now classified by its stable intrinsic symbol, independently
+of the enclosing Typed IR node kind. Interpolation binding recovery uses one
+shared classification for parameters, ordinary bindings, and enum payload
+bindings; the last form covers `Ok(valid)` and `Err(error)` values introduced by
+`when` arms. This preserves the exact Int and Bool formatter selection instead
+of enabling every formatter unconditionally.
+
+The browser Result-propagation fixture retains Int and Bool interpolation in
+control arms. Its generated LLVM must assemble and execute, and the browser
+verifier independently rejects formatter calls without matching runtime
+definitions.
+
+## D356 — Standard-library state operations are zero-cost instance methods
+
+Status: in progress
+Date: 2026-08-21
+
+Sollang's public library surface is instance-first. An operation with a natural
+resource, state, or domain-value receiver is an inherent method and is normally
+called with `owner -> method(arguments)`. Module functions remain only where no
+receiver exists yet, such as construction and parsing, or for a genuinely
+process-global boundary. A struct that owns state while all of its operations
+remain `module.operation(owner, ...)` does not satisfy this contract.
+
+This is also a performance invariant. Socket inherent methods bind directly to
+the existing intrinsic `BoundFunctionKind`; they do not call a hidden Sollang
+wrapper. O0 LLVM therefore contains the same direct
+`sollang_platform_socket_*` calls and no additional method frame, allocation,
+copy, or branch. Ordinary QUIC and P2P method façades must be eliminated by the
+same existing inlining path and are checked in O0 as well as O2. Flow semantic
+resolution prefers an inherent receiver method over a same-named free function,
+matching code generation and preventing `options -> bind` from resolving to an
+unrelated module function.
+
+Affine socket `close: move self` consumes the named owner and immediately uses
+the existing exactly-once drop path. QUIC `Connection.close(code)` sends a
+best-effort CONNECTION_CLOSE and consumes the connection, so its UDP owner is
+dropped on both success and error. Use after either close is a compile-time
+ownership error.
+
+## D357 — QUIC binding consumes its identity through an instance method
+
+Status: implemented
+Date: 2026-08-21
+
+Creating a QUIC endpoint is stateful and transfers the generated identity into
+the endpoint. The public operation is therefore
+`identity -> bind(local, peerCertificate)`, not the former
+`quic.bind(local, identity, peerCertificate)` module function. The underlying
+pure Sollang implementation remains private, so the method adds no runtime
+representation, allocation, or protocol work.
+
+## D358 — `public` is authoritative inside the standard library
+
+Status: implemented
+Date: 2026-08-21
+
+Standard-library source previously promoted every function to public and added
+every direct function to open-import candidates, even when its declaration did
+not contain `public`. Internal QUIC and P2P implementation functions therefore
+collided with instance method vocabulary in importing programs.
+
+Binding and open-import discovery now preserve the declaration's `public`
+flag. Private helpers remain callable only inside their defining module, while
+public inherent methods and explicitly public constructors form the library
+surface. A diagnostic fixture rejects qualified access to a private `std.net`
+helper, and the full fast suite checks all existing cross-module dependencies.
+
+## D359 — Self-host verification reuses content-identical Stage2 artifacts
+
+Status: implemented foundation
+Date: 2026-08-21
+
+A cold Windows Stage2 rebuild currently analyzes 91 sources and about 89,000
+lines before emitting roughly 29 MB of LLVM. In the measured QUIC fixed-point
+run the global analysis phase alone took about 261-271 seconds. Repeating that
+work when no compiler input changed provides no additional evidence.
+
+The Stage2 verifier now fingerprints the Stage1 compiler binary, both ordered
+source manifests, every compiler source, and every compiler-runtime source.
+The existing Stage2 executable and LLVM are reused only for an exact SHA-256
+match. A one-time timestamp check migrates artifacts created before this
+fingerprint existed; timestamps are never cache authority afterward. Explicit
+`-Rebuild` still forces a cold bootstrap, and an actual content change always
+invalidates reuse.
+
+The same run also fixed the public-stdlib verification link to include
+`ws2_32`, because the complete public source root now emits reachable socket
+and QUIC functions even when the smoke entry does not call them. With a current
+Stage2 artifact, the complete seven-phase Windows differential gate passed in
+78,185 ms instead of repeating the multi-minute compiler regeneration.
+
+This is the safe short-term speed foundation, not the final incremental
+self-host architecture. The next structural step is to persist canonical
+module interfaces and semantic snapshots, invalidate changed modules plus
+reverse dependencies, and reuse unaffected LLVM codegen units in the native
+self-host compiler.
+
+## D360 — Numeric IP values use one explicit IPv4/IPv6 family enum
+
+Status: implemented foundation
+Date: 2026-08-21
+
+`std.net` owns the pure numeric address vocabulary. `Ipv6Address` stores eight
+16-bit groups, `Ipv6Endpoint` keeps `port`, `flowInfo`, and `scopeId`, and
+`Endpoint` distinguishes `V4` and `V6` without a borrowed text lifetime or heap
+allocation. Parsing accepts one `::` compression and returns exact offsets; it
+never performs DNS or ambient interface lookup. URI brackets remain a future
+authority-layer rule and a link-local zone is explicit endpoint scope metadata.
+
+The current socket and QUIC intrinsic ABIs still use their IPv4 forms. The
+common enum is therefore a value-model foundation, not a claim of end-to-end
+IPv6 transport. Integration must preserve direct intrinsic lowering and may not
+introduce a wrapper allocation or hidden name resolution.
+
+## D361 — Focused self-host feedback uses an unoptimized cached compiler
+
+Status: implemented
+Date: 2026-08-21
+
+The optimized Stage2/Stage3 compiler remains the release authority, but an O1
+native rebuild is unnecessary for each focused source edit. The incremental
+verification script now fingerprints its Stage1 optimization profile, defaults
+the feedback compiler to O0, and resolves the root fixture's transitive module
+imports automatically. Its bootstrap identity includes the managed compiler,
+source generator, lexer, and grammar inputs as well as self-host sources, so a
+managed compiler edit cannot reuse a stale Stage1 binary. O1 remains selectable
+for optimization-sensitive probes.
+
+On the 24-logical-core Windows development machine, rebuilding the changed
+Stage1 feedback compiler and executing the IPv6 fixture fell from 21.8 seconds
+at O1 to 13.5 seconds at O0, while an exact warm verification completed in
+157 milliseconds. The shortcut does not weaken the final gate: Stage2 parity
+is compared only against a content-current optimized compiler, and compiler
+changes still require the complete Stage2/Stage3 fixed point before release.
+
+The same fixture exposed a self-dependency in named-function control scheduling:
+a control-region node may directly reference its owning control token. That
+operand is internal to the region and must not make the control wait for itself.
+The scheduler now recognizes that relationship, preventing omitted loops and
+undefined tail-return SSA values.
+
+## D362 — Verification defaults use bounded 16-way fixture concurrency
+
+Status: implemented
+Date: 2026-08-21
+
+The example runner already isolates fixture artifacts and executes cases in
+parallel, but its automatic limit stopped at eight workers. On the 24-logical-
+core Windows development machine, a 60-second fast-suite sample completed 181
+cases with 16 workers versus 157 cases with the previous eight-worker default,
+about 15 percent more completed evidence in the same wall time. The default is
+therefore capped at 16 rather than eight; `--jobs N` remains the explicit
+machine-specific override.
+
+`--affected` now builds the standard-library namespace/import graph before
+selecting cases. A changed stdlib source selects fixtures whose source imports
+that module directly or transitively, including every split source that shares
+the imported namespace. Compiler, generator, lexer, grammar, and test-runner
+changes conservatively select the complete requested suite. In the first
+`std/net.slg` proof this reduced the fast catalog from 1,033 cases to the six
+actual IPv4/IPv6 and QUIC consumers, all of which passed in 5.1 seconds; the old
+selector incorrectly returned no cases for the same change.
+
+This only accelerates independent fixture verification. It does not solve the
+native CLI's repeated whole-stdlib analysis: two content-identical warm
+`sollang build` runs still measured about 29 seconds because each invocation
+starts `windows-stdlib` and analyzes the complete public source root. That path
+requires persistent pre-analysis module/interface snapshots and reusable LLVM
+codegen units keyed by compiler, target, configuration, source, and dependency
+interface fingerprints. Skipping the analysis based only on timestamps or
+relabeling a focused pass as a full gate is not acceptable.
+
+## D363 — Socket endpoints use one zero-allocation dual-stack ABI
+
+Status: implemented for outbound, bind, receive, and core QUIC operations
+Date: 2026-08-22
+
+`sys.socket` no longer owns a text-address endpoint. Listen options, datagram
+bind options, TCP connect, and UDP `sendTo` consume `std.net.Endpoint`, whose
+`V4` and `V6` payloads preserve the numeric address, port, IPv6 flow info, and
+scope id. Managed and self-host emitters lower that enum directly to the same
+32-byte stack descriptor. Windows and Linux runtimes pack the descriptor into
+`sockaddr_in` or `sockaddr_in6`; this boundary performs no DNS lookup, text
+materialization, heap allocation, wrapper dispatch, or additional method call.
+
+Fixture 1024 executes an IPv6 UDP roundtrip on the managed Windows and Linux
+paths. The focused self-host path verifies both target LLVM modules and executes
+the Windows result. Its warm cached pass completed in 224 ms. The incremental
+linker now supplies `ws2_32`, `shell32`, and `bcrypt` for Windows fixtures and
+`pthread`/`dl` for Linux fixtures, instead of failing after successful LLVM
+verification. Imported enum payload discovery also falls back to typed enum
+constructors, while the endpoint emitter resolves the two public payload types
+by their nominal declarations rather than assuming that only-used variants are
+the complete enum.
+
+`Datagram` now stores `source: std.net.Endpoint` beside its owned payload. The
+native receive ABI writes the same 32-byte descriptor on the caller's stack;
+managed and self-host emitters construct the V4/V6 enum directly, eliminating
+the former 46-byte address-text allocation, `inet_ntop`, and QUIC text parser.
+Core QUIC bind/connect, connection peer state, receive, and reply paths retain
+that common endpoint. The higher-level signed P2P record remains IPv4-specific
+until its authenticated wire encoding has an explicit versioned IPv6 form.
+
+The existing self-host call resolver also cannot
+disambiguate the three imported zero-argument `close: move self` methods after
+a propagated binding; affine scope exit remains correct, but explicit close in
+that self-host regression stays a separate compiler defect and must not be
+hidden by choosing an arbitrary overload.
+
+## D364 — Encoding codecs are strict, bounded, and instance-owned
+
+Status: implemented foundation
+Date: 2026-08-22
+
+`std.encoding.hex` and `std.encoding.base64` provide pure Sollang codecs over
+byte slices. Immutable `Codec` values own one-shot planning, encode, and decode
+methods. Stateful `Encoder` and `Decoder` values retain chunk state, mutate only
+through `write`, and are consumed by `finish`. Every construction or one-shot
+operation carries an explicit maximum-output contract. Validation completes
+before output reservation and state commit, so invalid input and size failures
+are transactional rather than partially observable.
+
+Base64 exposes RFC 4648 Basic and URL-safe alphabets as padded and raw codec
+values. The decoder is deliberately strict: whitespace, mixed alphabets,
+misplaced or missing padding, non-zero padding bits, and trailing data are
+typed errors with exact stream offsets. MIME folding remains a future explicit
+codec rather than an ambient relaxation. Hex similarly retains a pending
+nibble across writes and reports invalid bytes or odd final length exactly.
+
+The Base64 self-host gate exposed a common LLVM representative defect. A flow
+call argument can be a value wrapper whose direct runtime child is a readonly
+binding use. The scheduler emitted that child but the call writer named the
+wrapper, producing an undefined SSA value. `aggregateValueIndex` now recognizes
+only binding children that have an actual binding operand, preserving literal
+and aggregate wrappers while selecting the emitted value. Regression 1030
+retains an early-control plus flow-call binding argument independently of the
+encoding implementation.
+
+Examples 1026 and 1027 pass exact managed Windows execution, focused self-host
+LLVM verification and native Windows execution, and self-host Linux LLVM
+verification. Examples 1028, 1029, and 1030 retain the related propagated and
+imported receiver/call-value contracts. Warm focused self-host checks complete
+in hundreds of milliseconds; the optimized Stage2/Stage3 fixed point remains
+the release authority.
+
+## D365 — URI parsing is raw, bounded, pure, and ABI-safe
+
+Status: implemented foundation
+Date: 2026-08-22
+
+`std.uri` parses RFC 3986 URI references into one retained source plus spans for
+scheme, path, query, and fragment. Authority values distinguish registered
+names, numeric IPv4, and bracketed IPv6, while ports are typed `UInt16` values.
+Parsing is bounded before component work, preserves percent-encoded spelling,
+reports exact offsets, rejects numeric-looking invalid IPv4 and ports above
+65535, and performs no DNS, IDNA conversion, file access, or network activity.
+`std.uri.percent` supplies component-specific immutable codecs with bounded
+planning and strict percent-triplet decoding. Normalization, reference
+resolution, form encoding, IDNA, DNS, and scheme policy remain separate work.
+
+The URI execution fixture exposed a self-host ABI defect rather than a parser
+defect. `Result<Reference, Error>` contained a nested nominal authority enum and
+a `SourceText`; imported semantic duplicates retained smaller bootstrap layout
+sizes. Enum payload sizing now recursively follows emitted nominal layouts and
+treats `SourceText` as its actual 32-byte x64 LLVM value. Regression 1034 keeps
+a trailing scalar after `SourceText` inside `Result` so truncation is observable.
+Regression 1035 independently keeps imported instance calls inside string
+interpolation as direct compile-time-resolved calls, with no runtime lookup or
+wrapper allocation.
+
+Fixtures 1031 through 1035 pass managed Windows and Linux execution. Focused
+self-host Windows LLVM verification and execution pass in roughly 188–330 ms
+on warm cache; Linux-target self-host LLVM verification passes in 89–1551 ms,
+while Linux execution is independently covered by the managed compiler runner.
+Cold compiler-source changes still require rebuilding the reusable Stage1 host
+and are not represented by those warm figures.
+
+## D366 — JSON is a strict bounded token stream with an instance-owned writer
+
+Status: implemented foundation
+Date: 2026-08-22
+
+`std.text.json` implements the RFC 8259 interchange grammar without a reflection or
+object-mapping dependency. `Reader` owns a retained source view and yields
+ordered tokens with raw string and number spans. Decoding strings is an explicit
+bounded instance operation; number conversion remains a separate future numeric
+policy. Input bytes, depth, token count, and decoded string bytes have distinct
+limits. Comments, trailing commas, malformed UTF-8, invalid escapes and
+surrogates, `NaN`, and infinity are rejected. Duplicate object names remain
+observable in source order instead of being silently overwritten in a map.
+
+`Writer` owns both its structural stack and growable output. Its instance
+methods emit arrays, objects, names, nulls, booleans, exact validated number
+lexemes, and escaped UTF-8 strings. Every operation plans and validates the
+complete mutation before committing it, including output and depth limits, so
+failure leaves the writer reusable. `intoBytes: move self` rejects an incomplete
+document and transfers the existing growable buffer without a copy, wrapper
+allocation, global sink, or runtime dispatch.
+
+Fixtures 1036 and 1041 cover the strict reader and writer, including malformed
+number/string/structure paths, limits, duplicate names, transactional recovery,
+and the consuming buffer transfer. Managed Windows execution and focused
+self-host LLVM verification/native execution pass. The writer's warm focused
+self-host gate completes in roughly 337 ms; the first run after a compiler
+source change rebuilt the reusable Stage1 host and completed in 17.2 seconds.
+Those focused timings do not replace the optimized Stage2/Stage3 release gate.
+
+## D367 — DNS is an explicit bounded resolver instance
+
+Status: managed and self-host native foundation implemented
+Date: 2026-08-22
+
+`std.net.dns.Resolver` is a small policy value carrying address family,
+maximum result count, and maximum host bytes. `resolver -> lookup(host, port)`
+is the only system name-resolution operation and lowers directly to one native
+intrinsic, so the instance-first surface adds no wrapper call or owner
+allocation. Numeric `std.net` parsers, socket connect, URI parsing, and QUIC do
+not perform hidden DNS.
+
+The Windows boundary uses `GetAddrInfoW`; Linux uses `getaddrinfo`. Both convert
+native socket addresses into the existing fixed 32-byte endpoint descriptor,
+preserve resolver order, deduplicate exact results in place, attach the numeric
+port, and return a single exactly-sized owned endpoint array. Limits are
+validated before lookup, overflow is an error rather than truncation, and
+native EAI codes are retained beside typed error kinds. The current contract is
+ASCII-only, rejects numeric literals, and is explicitly blocking; IDNA,
+cancellation, timeouts, retry, service names, and connection racing are not
+hidden policy.
+
+Fixture 1042 executes on managed Windows and managed-produced Linux binaries.
+The Linux run caught and fixed the POSIX `addrinfo.ai_addr` offset difference
+from Windows. A dedicated wasm32 diagnostic rejects ambient system resolution.
+Self-host opcode `-269`, LLVM lowering, and Windows/POSIX resolver runtime
+emission now use the same endpoint and error contract. The focused Windows
+self-host binary resolves the system host, passes `llvm-as`, and executes with
+`dns-system=true`; an exact warm gate completes in about 272 ms while retaining
+LLVM verification and native execution.
+
+The self-host integration exposed two compiler-wide invariants. A call whose
+receiver is an enum payload projection can acquire its nominal type only after
+the enclosing pattern has settled, so unresolved flow-call syntax must survive
+until a final receiver-owner/method identity repair. Fixtures 1043 and 1044 keep
+that rule independent of DNS. Separately, intrinsic identity must never be
+established by comparing unresolved module and symbol sentinels. Without an
+explicit non-negative guard, DNS-absent stream calls with `-1/-1` were assigned
+opcode `-269` and entered the socket emitter. Existing executable stream
+fixtures 582 and 583 now guard that negative case.
+
+The final optimized Stage2/Stage3 fixed point, global-install synchronization,
+and complete target regression remain required before this item is complete.
+
+## D368 — Public sockets move to std without adding a close wrapper
+
+Status: managed and self-host Windows foundation implemented
+Date: 2026-08-22
+
+The portable public TCP/UDP module is `std.net.socket`; `sys` is reserved for
+irreducible OS and target primitives. The dependency direction is `std -> sys`,
+never `sys -> std`. Public QUIC and its pure protocol algorithms migrate
+incrementally toward `std.net.quic` as each replacement path is verified; new
+portable APIs must not accumulate under `sys`, and a compatibility duplicate is
+not retained after migration.
+
+Socket state remains affine and instance-first. `close: move self` is a socket
+intrinsic that lowers directly to `sollang_platform_close_socket`, so moving the
+namespace did not add an O0 wrapper frame, allocation, branch, or copy. The
+managed compiler uses `RuntimeSocketClose`; the self-host compiler uses opcode
+`-270`. Fixture 876 passes managed and self-host LLVM verification, native
+linking, and actual Windows loopback execution after the migration.
+
+## D369 — GZIP begins with a bounded interoperable level-0 codec
+
+Status: pure Sollang stored-block foundation implemented
+Date: 2026-08-22
+
+`std.compress.gzip.Limits` constructs an immutable `Codec`, and compression,
+decompression, and their planning operations are instance methods. The first
+implementation writes deterministic RFC 1952 streams with mtime zero and RFC
+1951 stored blocks. It reads stored blocks, including optional GZIP header
+fields, and verifies LEN/NLEN, optional header CRC, CRC32, ISIZE, exact stream
+termination, maximum output bytes, and maximum expansion ratio before returning
+owned output.
+
+The module deliberately rejects fixed and dynamic Huffman blocks as
+`UnsupportedDeflateBlock`; it is not described as complete DEFLATE. Fixture
+1049 covers roundtrip output, an independent level-0 stream, checksum failure,
+output limiting, and unsupported block rejection. Managed and self-host Windows
+LLVM/native execution pass. Reusable streaming state, complete DEFLATE, ZIP,
+and Zstandard remain separate follow-up gates.
+
+## D370 — GZIP decoding accepts complete RFC 1951 block families
+
+Status: pure Sollang stored/fixed/dynamic decoder implemented
+Date: 2026-08-22
+
+`std.compress.gzip.Codec.decompress` accepts RFC 1951 stored, fixed-Huffman,
+and dynamic-Huffman blocks. A bounded bit cursor, canonical Huffman builder,
+dynamic code-length expansion, and LZ77 length/distance decoder remain pure
+Sollang. Back-reference copies read from the growing output on every byte, so
+overlapping matches and history across block boundaries follow RFC 1951.
+
+The decoder validates tree oversubscription, reserved and invalid symbols,
+distance history, LEN/NLEN, exact payload termination, maximum output, and
+maximum expansion ratio before returning owned bytes. Fixtures 1050 and 1051
+retain independent fixed/dynamic streams generated by zlib and negative cases
+for a truncated dynamic header, reserved block type, impossible distance, and
+an expansion bomb.
+
+`decompress` validates the header once and performs one bounded emitting
+inflate. It no longer calls the counting `planDecompress` path and then repeats
+the complete DEFLATE traversal; output ratio, CRC32, and ISIZE are checked from
+that single result. `planDecompress` remains available when a caller explicitly
+needs a non-emitting size plan.
+
+`codec -> compressFixed` is the first compressed writer. It uses a 4,096-slot
+latest-match hash table, a 32 KiB distance bound, greedy matches up to 258
+bytes, and fixed Huffman codes. `planCompressFixed` proves the literal-only
+worst case before allocation, while fixture 1053 requires repetitive input to
+be smaller than the stored writer and round-trip through the shared decoder.
+Reusable streaming state and dynamic-Huffman writing remain follow-up gates.
+
+## D371 — Self-host projected intrinsics and collection mutation share canonical values
+
+Status: focused Windows self-host regression implemented
+Date: 2026-08-22
+
+The self-host LLVM emitter must not special-case interpolation `len` by accepting
+only a direct lexical binding. A projected collection such as `buffers.left`
+is already an emitted aggregate value, and the canonical interpolation
+intrinsic emitter reads its runtime length from that value. The entrypoint
+emitter now uses the same intrinsic path as function, control, container, and
+transient-text emitters instead of maintaining a direct-binding-only duplicate.
+Slices use their two-field ABI, dynamic and bounded-inline arrays use the common
+three-field array ABI, and fixed arrays emit their type-level constant length.
+Structural fields identified by `labelToken` participate in type lookup exactly
+like symbol-backed nominal fields. Fixture 1054 requires both projected array
+lengths to assemble, link, and execute as `sizes=2,3`.
+
+Collection mutation has the matching value-identity rule. `push` must recognize
+any ordinary scalar function parameter and select `%argN`, not only the first
+parameter `%arg`; mutable-borrow parameters retain their storage-specific path.
+Fixture 1052 keeps a conditionally pushed additional parameter executable. These
+instance/value paths add no wrapper allocation or runtime dispatch.
+
+## D372 — GZIP streaming starts with a transactional stored-block Encoder
+
+Status: managed Windows/Linux implementation and regression complete
+Date: 2026-08-22
+
+`codec -> encoder()` constructs a small value-state `std.compress.gzip.Encoder`.
+`encoder -> write(chunk, output)` writes RFC 1951 non-final stored blocks
+directly into the caller-owned growable output and retains only an unfinalized
+CRC32, modulo ISIZE, produced-byte count, and started flag. It never accumulates
+the input stream, allocates a wrapper object, or introduces runtime dispatch.
+`finish: move self` emits a final empty stored block and the RFC 1952 trailer.
+
+Every write proves space for its header/blocks and the still-required 13-byte
+final block/trailer before changing either output or encoder state. Fixture 1055
+covers multi-chunk and empty streams plus a rejected oversized chunk followed
+by successful reuse of the same encoder. Its exact 44-byte multi-block vector
+was independently decompressed by Python's standard `gzip` implementation and
+is retained in the fixture. Fixtures 1049, 1050, 1051, 1053, and 1055 execute
+on both managed-produced Windows and Linux x64 binaries. The streaming Decoder
+and compressed dynamic-Huffman writer remain later contracts.
+
+## D373 — Compiler development is SLG-first and C#-second
+
+Status: canonical workflow adopted
+Date: 2026-08-22
+
+Compiler behavior is implemented first in the `.slg` self-host compiler and
+compiled by the newest compatible verified SLG executable. Fixed-point Stage 3
+is preferred; a receipt-bound Stage 2 may bridge one source generation when the
+older Stage 3 cannot represent current source. A focused Typed IR, LLVM
+assembly, native execution, and expected-output proof must pass before the same
+contract is implemented in C#. The C# compiler remains necessary as an
+independent differential oracle, cold trust bootstrap, and recovery path, but it
+is not the normal design authority or first implementation.
+
+A C#-first bridge is allowed only when the verified Stage 3 cannot parse or
+represent the new `.slg` compiler source. The bridge is explicit, minimal, and
+is followed immediately by the canonical SLG implementation and fixed-point
+proof. The default incremental command binds its candidate cache to the verified
+SLG seed and current source fingerprints; managed inputs have a separate
+post-SLG differential role.
+
+The missing self-host `reserve` contract demonstrates why this order is needed.
+The managed compiler recognized `reserve`, while self-host Typed IR omitted its
+opcode from the canonical operand-linking set. GZIP's natural streaming encoder
+then exposed a call with both operands unset. Fixture 1057 retains the structural
+invariant that both reserve calls have canonical receiver and capacity operands;
+the correction belongs in the original operand-plan construction rather than a
+late name-based repair pass.
+
+Fixture 1058 protects the corresponding codegen boundary: a direct call result
+passed to dynamic-array `push` is emitted as that call's `%vN`, even when one of
+the call's source arguments is a function parameter with a different nominal
+type. Parameter-direct emission is valid only for a canonical name node; source
+token matching must not reinterpret a call result as `%argN`.
+
+## D374 — Empty array ABI failure is a compiler error, not an LLVM fallback
+
+Status: focused implementation verified
+Date: 2026-08-22
+
+D285 remains authoritative: `[value,; ~]` is a one-element growable value
+array, while `[Type; ~]` is typed-empty syntax independently of capitalization
+or symbol lookup. New self-host regressions accidentally used `[value; ~]`.
+The C# parser treated the lowercase identifier as a value, while the generated
+self-host parser correctly chose typed-empty syntax but later let the unresolved
+type fall through as an empty array. A following `len` then referenced an LLVM
+SSA name that had never been materialized.
+
+The regressions now use the canonical comma form. The C# oracle no longer uses
+capitalization to reinterpret missing-comma syntax and reports the unresolved
+type. At the Stage3 LLVM boundary, S048 rejects every empty array IR node whose
+canonical slice, fixed, growable, or bounded type is still missing. Fixture
+1068 preserves the valid `[value,; ~]`/`[Text; ~]` distinction, fixture 1069
+preserves the invalid IR shape that must fail fast, and the diagnostic fixture
+retains the C# error instead of permitting the old divergent parse.
+
+## D375 — Compiler cache fingerprints and executable receipts are distinct contracts
+
+Status: implemented and focused verification complete
+Date: 2026-08-22
+
+An incremental O0/O1 host compiler has two independent identities. Its
+`.inputs.sha256` file hashes the verified seed, compiler sources, target, and
+optimization profile and is used only to decide whether relinking can be
+skipped. Its same-basename `.sha256` file hashes the resulting executable and
+is the only receipt accepted when that executable becomes a seed for a full
+Stage2/Stage3 gate.
+
+The earlier incremental script wrote the input cache key into the receipt
+pathname. Focused cache reuse appeared correct, but the full self-host gate
+properly rejected the executable because its actual SHA-256 differed. The two
+paths are now separate. A pre-existing mismatched receipt forces relinking, and
+the executable receipt is published only after LLVM verification plus native
+expected-output execution succeeds. Missing or mismatched seed receipts remain
+fail-fast errors; the full verifier does not synthesize or trust them.
+
+## D376 — UUID values are pure instances with explicit formatting ownership
+
+Status: managed and Windows Stage3 fixed-point value foundation verified
+Date: 2026-08-22
+
+`std.uuid.Uuid` stores the RFC 9562 network-order sixteen-octet value. An
+immutable `Codec` instance owns strict 8-4-4-4-12 parsing and nil, max, and
+fixed-byte construction. A `Uuid` instance owns indexed byte inspection,
+version, variant, nil/max predicates, and canonical lowercase formatting.
+Formatting receives a mutable caller-owned `Arena`; it neither returns a
+deferred interpolation nor hides a heap owner.
+
+The pure parser accepts uppercase and lowercase hexadecimal input but rejects
+wrong lengths, separators, and digits at exact offsets. Braced and
+`urn:uuid:` forms are intentionally not accepted by the core codec. Random v4
+and time-ordered v7 construction remain separate work and must receive explicit
+entropy and wall-clock instances rather than introduce ambient global calls.
+Fixture 1070 retains version 7, RFC variant, nil/max, uppercase normalization,
+and invalid-separator behavior. Its managed fast gate is warning-free, and its
+focused Windows self-host O0 LLVM/native gate passes. The complete Windows
+Stage3 fixed point also compiles and executes the public stdlib source root.
+Cross-target gates remain required before the foundation is called complete.
+
+## D377 — Fixed arrays keep one canonical shape across construction and interpolation
+
+Status: focused Windows self-host O0/O1 and Stage3 fixed point verified
+Date: 2026-08-23
+
+A fixed array stored in a struct is an inline LLVM `[N x T]` field. The public
+fixed-array expression ABI remains the zero-allocation `{ ptr, i64 }` carrier.
+Constructing an entry-body struct therefore materializes the carrier into its
+exact inline field before `insertvalue`; it must not insert the carrier itself.
+For `[value; N]`, canonical type length `N` controls storage and the single
+lowered seed operand is reused for each slot. Operand count is never the fixed
+array storage length. Fixtures 1071 and 1072 retain those entry-body contracts.
+
+Interpolation must also preserve the language conversion topology. The syntax
+tree keeps both wrapper kind 10 and concrete call-shell kind 11. Lowering an
+expression such as `Int(packet.bytes[2]) / 2` retains the conversion as IR kind
+9 between the binary operation and fixed-array index. The LLVM emitter then
+reads the actual indexed element width and signedness, emits exactly one
+`zext` for `UInt8` or `sext` for `Int8`, and performs the wider operation. A
+constant index into an inline fixed-array field uses `extractvalue` directly;
+it introduces no wrapper allocation, scratch copy, or dynamic dispatch.
+
+Fixtures 1073 through 1076 separate the function path, syntax fragment shape,
+IR conversion chain, and signed extension. Managed execution is warning-free.
+Focused Windows self-host O0 LLVM verification and native execution pass for
+the UUID consumer plus fixtures 1071, 1072, 1073, and 1076. The signed-width
+fixture also passes through the O1 compiler profile. The complete Windows
+Stage2/Stage3 gate reaches normalized SHA-256
+`B809CDA274F556FB2870566301D444154CAD9A1BF5CD654D3E74B0770C2E10C4`,
+including native public-stdlib execution. Cross-target verification remains a
+completion gate.
+
+## D378 — Stage2 verification and the managed oracle have distinct artifacts
+
+Status: verifier repaired and Windows Stage3 fixed point verified
+Date: 2026-08-23
+
+The Stage2 input receipt binds the verified SLG seed executable, ordered source
+manifests, and compiler/runtime sources. The final managed differential runner
+historically publishes its reusable native oracle to the same
+`selfhost-sollangc-driver.exe` path. It therefore replaced the verified seed
+after Stage2 7/7 had passed, making the receipt fail its own current-input check
+when the Stage3 wrapper resumed.
+
+The runner continues to own `selfhost-sollangc-driver.exe`, while the full
+Stage2/Stage3 gate owns `selfhost-stage1-verification.exe`. An SLG seed is copied
+only to the verification path. Explicit managed recovery first builds the
+managed oracle and then copies that completed artifact to the verification
+path. The differential runner can no longer overwrite, preserve, restore, or
+otherwise mutate the Stage2 provenance input. This also prevents ordinary
+fixture runs from accidentally reusing a restored SLG seed under a managed
+oracle cache key.
+
+The earlier preserve-and-restore repair proved the diagnosis and allowed the
+Windows fixed point to complete, but it was transitional. Distinct ownership is
+the permanent contract; the next full Stage2 rebuild records the new Stage1
+path in its content fingerprint.
+
+## D379 — Wall time, secure entropy, and UUID generation are explicit instances
+
+Status: Windows Stage3 fixed point and focused deterministic Codec fixture verified
+Date: 2026-08-23
+
+Elapsed time and civil wall time are different semantic domains. The existing
+`MonotonicClock` continues to read process/boot-relative milliseconds, while
+`WallClock -> now` returns a distinct `UtcInstant` in Unix epoch milliseconds.
+Windows lowers that call directly to precise FILETIME conversion, Linux uses
+`CLOCK_REALTIME`, and the browser uses its existing epoch-millisecond host
+import. `ManualWallClock` provides deterministic injection without an ambient
+effect. Marker clock values introduce no heap allocation or dynamic dispatch,
+and optimized builds may erase their unused byte of marker storage.
+
+Cryptographic entropy is reached through `random.secure() -> bytes(count)`.
+The public global `random.bytes` path is removed. `std.uuid.Generator` stores a
+`WallClock` and `SecureRandom` instance, then exposes `generator -> v4` and
+`generator -> v7`. V4 sets the RFC version and variant bits over sixteen OS
+random octets. V7 validates the RFC 9562 48-bit Unix-millisecond range, embeds
+it in network order, and fills the remaining bits from OS entropy. Random
+unavailability, pre-epoch time, and timestamp overflow remain typed errors;
+they are not silently clamped or replaced with weaker randomness.
+
+Fixtures 1077 and 1078 execute the wall-clock intrinsic and both UUID generator
+paths on Windows native code. The complete Stage2/Stage3 fixed point is
+`A4A3CB3C7D22C826D9B6988573677C899132A5FFEA05D06D78D52340AFE20227`.
+`Codec.v4(entropy)` and `Codec.v7(instant, entropy)` provide the pure,
+deterministic counterpart without routing the effectful Generator through an
+extra wrapper call; fixture 1080 validates their exact entropy lengths,
+version/variant bits, and v7 timestamp recovery under both compilers. The
+post-formatter/Codec fixed point and cross-target gates remain pending.
+
+## D380 — N001 measures lexical source length and shares the formatter boundary
+
+Status: native note path implemented; final fixed point and repository gates pending
+Date: 2026-08-23
+
+N001 is a source-style note. Its length must therefore be determined from the
+tokens the user wrote, before import aliases and member targets acquire
+canonical semantic names. Reconstructing an expression from semantic paths
+made short readable pipelines appear longer than 45 characters and produced
+notes that `sollang format` could not reproduce from source text.
+
+Inline `if`, `unless`, and `while` detection now lives with the token-based
+source-style analyzer beside N002. It finds the lexical expression boundary on
+the same line, measures the first through last condition token, and uses the
+same 45-character contract as the formatter. Semantic-only handling remains
+for standalone `when`, `partition`, and guarded loop-control forms until their
+token contracts join the same analyzer. Fixture 1004 retains a real long-note
+case, 1005 retains the canonical multiline form, 1022 retains N002, and 1079 rejects a
+short-qualified-path N001 false positive. A formatting probe converts 1004 to
+the canonical two-line control form and is idempotent under `--check`.
+Fixtures 1081 and 1082 pin the exact boundary: a 44-character condition stays
+inline without N001, while 45 characters produces N001 and wraps. The formatter
+measures through the final condition character rather than counting whitespace
+before `->`; the managed analyzer and formatter share one constant.
+The managed formatter also had an older continuation-block exception that
+aligned a nested `-> println` with its value instead of one pipeline level
+deeper; the self-host formatter already used the intended nesting rule. That
+exception is removed, and the language-tools fixture now combines multiline
+control indentation with automatic long-condition wrapping so CLI write,
+`--check`, idempotence, and LSP formatting share one exact output.
+`scripts/format-authoritative-slg.ps1` makes the current 181 compiler/runtime/generated
+sources a deterministic formatting set without rewriting intentionally invalid
+diagnostic fixtures.
+
+Verified seed `9DAEF105DE7E81F620957C578655A1FC597F3132BFEA403FD0B3894618DBE27D`
+compiled fixture 1004 with empty stderr, proving the previous N001/N002 path was
+managed-only rather than Stage3-authoritative. `selfhost/source_style.slg` now
+derives structured N001/N002 notes from Stage3 lexer tokens, and Windows, Linux,
+and Wasm checked emitters relay the same nonblocking messages to stderr. Fixture
+1083 verifies module-name extraction and exact structured note positions before
+the full fixed-point gate. The analyzer builds line starts once and resolves
+note locations by binary search; it must not rescan from byte zero for every
+control expression and regress large-source validation toward quadratic time.
+The first full candidate exposed that fixture import expansion had hidden a
+missing `source_style.slg` entry from the explicit self-host manifests. All
+authoritative and expected source lists now include it, browser compilation
+also includes its direct `sys.runtime` dependency, and
+`scripts/verify-source-manifest-closure.ps1` rejects any unresolved direct
+import before the expensive compiler emission begins. Fixture 1083 also
+rejects a `namespaceFake` prefix as a namespace keyword boundary.
+
+The repository formatter also exposed a separate raw-string defect: it moved a
+nested opening delimiter without moving the body and closing delimiter, while
+pre-validation prevented repair. For delimiter-only multiline openings,
+managed and self-host formatters now shift the whole raw block by one
+indentation delta, preserve normalized content, and validate the final result.
+Inline-content raw strings keep their body whitespace unchanged. The native
+formatter fixture and pure-Sollang fixture 1084 cover both forms. The Stage3
+verifier runs fixtures 1081 through 1084 as a managed fail-fast gate before the
+expensive self-host rebuild, while still requiring native fixed-point proof.
+Its native source-style gate compares complete normalized stderr, so missing,
+duplicate, reordered, or otherwise unexpected notes cannot pass through a
+substring match.
+The fail-fast set also compiles fixture 1000's full self-host module closure.
+This caught a mutable role-name binding that the isolated analyzer fixture did
+not exercise; the message now derives one immutable `when` result before
+interpolation.
+The authoritative 181-source write/check gate passes.
+
+## D381 — Public stdlib global exceptions are a checked contract
+
+Status: policy gate implemented and passing
+Date: 2026-08-23
+
+Instance-first is a library invariant, not a review-time preference. A public
+operation with a natural state, owner, or domain-value receiver belongs in an
+`impl` block and is called through the pipeline. Top-level public functions in
+`stdlib/std` are limited to constructors/factories, parsers that have no value
+receiver yet, and generic flow adapters.
+
+`scripts/contracts/stdlib-global-api.json` records those exceptions with an
+explicit category. `scripts/verify-stdlib-instance-policy.ps1` derives the
+actual top-level public functions from every reachable `stdlib/std` source and
+fails on an unclassified addition, a stale entry after migration, duplicates,
+or an unsupported category. It currently verifies 72 reviewed exceptions: 2
+constants, 57 factories, 3 parsers, and 10 flow adapters. A second exact
+contract freezes
+`sys.path` at two reviewed raw boundaries, one factory, and ten explicitly
+named migration-debt globals. New debt is rejected and each completed instance
+migration must shrink that list. The policy derives its current totals from the
+JSON contract and requires the same summary in `STDLIB_EVOLUTION.md`, so API
+migration and the public backlog cannot drift silently.
+
+## D382 — Portable paths converge on a pure `std.path.Path` value
+
+Status: migration contract fixed; implementation pending
+Date: 2026-08-23
+
+The existing `sys.path.Path` module combines a portable owned value, lexical
+operations, target-style selection, and effectful filesystem queries. That
+mixing makes the `std -> sys` boundary unclear and leaves natural domain-value
+operations as global functions. Current language libraries consistently
+separate pure path manipulation from filesystem traversal, and the same split
+fits Sollang's visible effect model.
+
+Migration proceeds in two verified phases. First, natural operations such as
+text conversion, length, comparison, joining, absoluteness, and confined
+normalization become inherent methods on the existing value with no wrapper,
+allocation, branch, or copy. Second, the nominal portable vocabulary moves to
+`std.path.Path`; effectful metadata/canonicalization calls use irreducible raw
+`sys` primitives without making `sys` import `std`. The old public namespace is
+removed only after consumers and target gates use the replacement. Lexical
+`normalizeConfined` continues to reject root escape for package/module paths;
+it is not renamed or documented as symlink-aware canonical resolution.
+
+The first phase includes compiler identity work, not a facade: managed and
+self-host intrinsic selection must recognize the canonical `Path` impl member
+symbol and preserve direct opcode lowering. A same-spelled user method remains
+an ordinary call. O0 LLVM must prove that moving `pathText` into `impl Path`
+adds no wrapper or copy before its obsolete global declaration is removed.
+
+## D383 — Compiler phase profiles are fingerprinted structured evidence
+
+Status: structured record, prepare-only boundary, and fresh fixture 1043 profile verified
+Date: 2026-08-23
+
+Compiler-speed work must not start from the total wall-clock duration or from
+an old console transcript. `scripts/verify-selfhost-incremental.ps1` accepts
+`-ProfileOutput` only together with an explicit profiling mode and writes a
+schema-versioned JSON record containing the compiler and fixture fingerprints,
+seed mode, expanded source count, target/optimization, execution environment,
+explicit per-process wall/CPU/peak-working-set sample semantics, semantic
+preparation, expression-type-ID, Typed IR, and optional artifact totals and deltas.
+`-ProfileArtifacts` requires `-ProfilePhases`; invalid combinations fail before
+bootstrap or compilation.
+
+`scripts/contracts/selfhost-profile.schema.json` is the machine-readable
+contract. One sample can identify a candidate phase, but a claimed improvement
+requires repeated samples on the same environment.
+The current writer uses schema v3. Historical schema-v2 evidence remains
+validatable against `selfhost-profile-v2.schema.json`; its absent CPU and peak
+working-set fields are unknown, not zero and not values to reconstruct later.
+
+The next optimization is selected only after a fresh fixture 1043 record is
+captured with the current verified SLG seed. A faster result must retain the
+same fixture/compiler identity and semantic output; progress-output buffering
+or observed idle workers alone is not evidence that LLVM text emission owns
+the bottleneck.
+The baseline invokes the dedicated `prepare` driver command, which calls
+`prepareFiles` and reports only prepared package cardinalities. It does not run
+`fingerprintAnalyzed`; the separate `fingerprint` command remains available for
+interface-cache contracts. Schema version 3 requires the machine-readable
+`semanticBaseline: prepare-only` discriminator plus nonzero observed peak
+working sets for every executed phase. The introducing Stage2 verifies
+the command and summary shape; Stage2 and Stage3 then compare the same focused
+summary. Requiring the previous Stage1 to understand a newly introduced command
+would make the bootstrap transition impossible. Capture the authoritative 1043
+record only after that generational gate passes.
+
+After the D398 fixed point, the current verified SLG seed produced schema-v2
+profile `artifacts/profiles/1043-expression-types.json` on the 24-logical-core
+Windows x64 host. The 31-source fixture expansion took 12,917ms for semantic
+prepare and 37,532ms through expression type IDs, so the isolated expression
+type-ID delta is 24,615ms. The record fixes compiler fingerprint
+`30075894F06023C31256332C9E6EE1E752F63D31CC9FF70DD4FE06C36DEC746C`
+and fixture fingerprint
+`9CA9F1C4F5CC3A6479801A231A657CA19222FCB4FBEAB4A3B8BC95A831AB7427`;
+the schema positive and fingerprint negative controls pass.
+
+The surrounding cold-cache run spent 543,832ms rebuilding the O0 feedback
+compiler before those phase measurements. That is a separate orchestration
+bottleneck and is more than an order of magnitude larger than the focused
+semantic work. The first safe optimization candidate is to publish the
+verified Stage3 source fingerprint with its feedback seed and let profile-only
+or focused validation reuse that exact compiler when both source and artifact
+receipts match. A source edit, seed mismatch, target/optimization-sensitive
+probe, or missing receipt must still rebuild. Module-level compiler caching is
+the longer-term cold-build optimization; neither candidate changes the
+Stage2/Stage3 release fixed-point gate.
+
+## D384 — Binary and CRC codecs are bounded instance-owned values
+
+Status: pure Sollang implementation and managed vectors passing; native O0/O2 gate implemented, fixed-point execution pending
+Date: 2026-08-23
+
+Portable binary data must never depend on the host's native byte order. A pure
+`std.encoding.binary.ByteOrder` value represents big or little endian and
+creates bounded `Reader` and `Writer` instances. Readers own their cursor;
+successful fixed-width UInt16/UInt32/UInt64 and unsigned-varint reads advance
+it, while failure leaves it unchanged and reports the exact byte offset.
+Writers own byte order, output limit, and produced-count state while writing
+directly into an explicit caller-owned growable buffer; a write either fits
+completely or changes neither buffer nor writer state. This avoids an extra
+take/copy path and matches the existing streaming-codec boundary. Unsigned
+varints use the portable ten-byte base-128 contract, reject overflow in the
+tenth byte, and reject non-canonical longer spellings. QUIC's two-bit-length
+integer remains a protocol-specific codec and is not silently replaced by this
+format.
+
+The first binary fixtures pin `0x1234` as `12 34` in big endian and `34 12` in
+little endian, plus unsigned-varint boundaries 0, 127, 128, and UInt64 maximum.
+A truncated read reports the first unavailable offset, tenth-byte overflow
+reports that tenth byte, and a longer-than-minimal spelling reports its terminal
+byte. These offsets are part of the public error contract rather than prose-only
+diagnostics.
+
+`std.hash.crc32.Polynomial` is an immutable reflected-polynomial value with named
+IEEE and Castagnoli constructors. It creates a mutable scalar `Hasher` whose
+`write`, `checksum`, and `reset` operations are inherent methods; there is no
+ambient global checksum state and no per-write allocation. GZIP may remove its
+private IEEE implementation only after shared-code vectors, incremental/chunk
+parity, O0 call shape, and compression throughput show no semantic or material
+performance regression. The first implementation remains pure Sollang and
+adds table acceleration only from measured evidence, not by introducing a
+native runtime boundary.
+CRC fixtures use the independent check string `123456789`: IEEE is
+`CBF43926`, Castagnoli is `E3069283`, and arbitrary chunk partitions must equal
+the one-shot result. Empty input and reset are separate boundaries.
+Fixtures 1085 and 1086 now execute the fixed-width endian, canonical varint,
+transactional failure, IEEE, Castagnoli, chunk, empty, and reset contracts. The
+public modules add no global functions: callers start from `ByteOrder.Big` or
+`ByteOrder.Little`, and `Polynomial.Ieee` or `Polynomial.Castagnoli`, then use
+their instances' inherent methods. Fixture 1087 uses fixed input and repeats `write` after
+`reset`; its managed O0 program body contains no allocation, free, or memcpy.
+The native gate requires the same shape plus exact O0/O2 execution before the
+contract is promoted as fixed-point verified.
+The managed compiler and instance-policy gate pass; Stage3 and cross-target
+native execution remain required before completion.
+
+## D385 — Oversized LLVM emitter modules must split by semantic responsibility
+
+Status: complete size inventory captured; structural extraction pending after current fixed point
+Date: 2026-08-23
+
+`scripts/verify-llvm-emitter-modules.ps1` must report every size violation in
+one run rather than stopping at the first file. The current inventory is a
+5,449-line orchestration facade plus five over-limit fragments: entrypoints
+3,110, core calls 4,119, containers 4,210, control 3,779, and functions 3,861.
+Raising the 4,500/3,000 limits would hide accumulated responsibility and is not
+an acceptable repair.
+
+The verifier now reports the three largest top-level declaration spans for
+every oversized file in the same failing run. This turns the size inventory
+into a reproducible extraction input instead of requiring another manual scan.
+The first extraction boundaries are whole-function moves within the existing
+logical namespace: move entrypoint IR invariant analysis away from source/file
+entrypoints, split core call environment/value selection from argument and ABI
+emission, and split collection operations from loop/cleanup emission. The
+3,187-line `emitRegion`, 3,851-line `emitFunction`, and 5,288-line `emitCore`
+bodies require explicit request/state contracts before extraction; do not cut
+them by line range or create hidden mutable globals. Every split retains source
+manifest closure, Stage2/Stage3 fixed-point hashes, exact LLVM fixtures, and
+readonly `EmitContext`/`CoreEmitterState` boundaries.
+
+## D386 — Interrupted self-host rebuilds cannot authenticate partial artifacts
+
+Status: atomic Stage2 rebuild and Stage3 fixed point verified
+Date: 2026-08-23
+
+The Stage2 verifier previously redirected a rebuilding compiler straight into
+`selfhost-stage2.ll` and wrote its input fingerprint independently of the
+published artifact contents. Canceling that process truncated the canonical
+LLVM while leaving the prior executable and a potentially current-looking
+input receipt. Rebuilds now leave canonical artifacts and receipts untouched,
+emit LLVM/bitcode/executable candidates with separate candidate receipts, and
+run all seven Stage2 gates against those candidates. Only a complete pass
+promotes the candidates. It then publishes a canonical output receipt
+containing the SHA-256 of all three artifacts and atomically publishes the input
+fingerprint last. Reuse and Stage3 both require the input receipt and exact
+output hashes; timestamp migration is not trusted. Stage3 also emits and tests
+LLVM/bitcode/executable candidates and promotes them only after its fixed-point
+and native gates pass. A failed or canceled generation therefore cannot be
+mistaken for a verified compiler generation on the next run.
+`verify-stage2-artifact-receipt.ps1` fixes the reusable behavior contract with
+positive, content-mutation, missing/empty-artifact, and receipt-tampering
+controls. Candidate names preserve their executable suffix
+(`compiler.candidate.exe`, not `compiler.exe.candidate`) so Windows direct and
+`Start-Process` execution exercise the candidate rather than failing on file
+association. Stage3 also copies and hashes the next feedback seed under
+candidate names before replacing the seed and its receipt, so interruption
+cannot leave a partially copied executable authenticated by the prior receipt.
+Stage2 writes separate candidate input/output receipts after assembly and link.
+`-ResumeCandidate` accepts only an exact match for all three candidate hashes
+and the current input fingerprint, reruns the complete gate ladder, and still
+publishes canonical receipts only after 7/7. This preserves late-failure
+diagnostics without paying the nine-minute emission cost again.
+Stage3 applies the same rule with a candidate input fingerprint derived from
+the exact Stage2 executable hash and complete compiler-source fingerprint; its
+resume path still rechecks the fixed point and every native/public-stdlib gate.
+
+## D387 — Passing warning gates remove stale failure evidence
+
+Status: implemented and focused regression verified
+Date: 2026-08-23
+
+The example harness previously retained `<fixture>.unexpected-warnings.log`
+after the source was corrected and the same fixture passed without warnings.
+That made filesystem evidence disagree with the current gate. Native and WASM
+fixture runs now remove their exact prior warning log before compiling and
+recreate it only when the current compiler emits an unexpected Snnn warning.
+A focused 1087 control planted stale evidence, reran the warning-free fixture,
+and required that evidence to be absent afterward.
+
+## D388 — Current-generation stdlib parity starts at Stage2
+
+Status: implemented; Stage2 and Stage3 public-stdlib parity verified
+Date: 2026-08-23
+
+The verified Stage1 seed predates the generalized S022 contextual integer-arm
+repair, so it cannot compile a newly added CRC32 stdlib match that the new
+Stage2 accepts. Requiring Stage1/Stage2 public-stdlib LLVM equality therefore
+confused the bootstrap seed's prior-generation capability with the new compiler
+generation. Stage2 now requires warning-free public source-root emission,
+assembly, link, and execution. Stage3 emits the same current stdlib with Stage2
+and Stage3 and requires normalized LLVM equality. Compiler-source Stage1/
+Stage2 parity and complete compiler Stage2/Stage3 fixed point remain unchanged.
+The retired Stage1 public-stdlib output and error files are removed so the old
+S022 bootstrap diagnostic cannot survive as current failure evidence.
+
+## D389 — Source-style notes run before semantic preparation
+
+Status: implemented; Stage2 and Stage3 native note gates verified
+Date: 2026-08-23
+
+The pure `sourceStyle.analyze` implementation returned the exact two N001
+records for regression 1004 under both managed and Stage2-compiled fixture
+1088, but the full Stage2/Stage3 compiler emitted no stderr notes. The first
+hypothesis about post-prepare `context.sources` was rejected when a managed-
+built full driver still failed after moving the text-array call earlier. Source
+tracing then showed that normal `windows <files...>` dispatches to
+`emitCheckedFiles`, whose Windows/Linux and test-harness variants never called
+the analyzer at all; WASM delegates to the text-array checked path. Every
+checked entrypoint now borrows and analyzes its original source array before
+semantic prepare. Fixture 1088 pins note code, location, condition length, and
+role; the Stage2 gate now runs the native N001/N002 integration suite so this
+omission is rejected one generation earlier than Stage3.
+
+## D390 — A receipt-bound Stage2 may bridge one failed Stage3 behavior gate
+
+Status: bridge-seeded repaired Stage2 and final Stage3 fixed point verified
+Date: 2026-08-23
+
+The prior Stage2 completed 7/7 with matching LLVM, bitcode, executable, and
+input receipts, and its first Stage3 was compiler-byte-identical, but the late
+native source-style gate exposed a source-level diagnostic placement defect.
+`Stage2Bridge` is an explicit SLG-only seed mode for this boundary. It accepts
+only the complete prior Stage2 receipt bundle, copies that executable to the
+Stage1 verification slot, and requires the normal new Stage2 7/7 plus immediate
+Stage3 fixed point. It does not invoke or elevate the C# bootstrap and cannot be
+used with missing, empty, or hash-mismatched Stage2 artifacts.
+
+## D391 — Inline control wrapping must register continuation depth
+
+Status: managed, Stage2-native, rebuilt Stage2, and final Stage3 fixed point verified
+Date: 2026-08-23
+
+The first source-style repair reached a byte-identical Stage2/Stage3 compiler,
+public-stdlib parity, and native N001/N002 checks, then the late native formatter
+gate exposed a different state error. The C# formatter rewrites a long inline
+condition into two logical lines before calculating indentation. The self-host
+formatter emitted the same two lines only while appending output, so its scan
+saw the opening brace but never registered the generated `-> if {` line as a
+continuation block. A nested body was consequently four spaces too shallow.
+
+The self-host state machine now treats a detected inline control arrow like an
+explicit continuation when that line opens a block. Fixture 1084 includes the
+nested long-condition boundary and a redundant-parentheses case whose
+normalized condition is exactly 44 characters; parentheses are removed before
+the effective wrap threshold is applied. Both pass through the pure Sollang formatter.
+The existing 11-case native CLI formatter gate remains the integration proof;
+its failure is not repaired by weakening the canonical expected output. That
+gate now runs in Stage2 5/7 as well as Stage3, moving the same class of failure
+one expensive compiler generation earlier.
+The receipt-bound prior Stage2 also emits the focused formatter fixture with
+the explicit self-host runtime manifest; `llvm-as`, clang `-Werror`, and exact
+native output pass before the complete compiler rebuild finishes.
+
+## D392 — Interpolation shares the resolved-call ABI and canonical integer width
+
+Status: managed, native O0/O2, rebuilt Stage2, and final Stage3 fixed point verified
+Date: 2026-08-23
+
+The native binary/CRC integration gate exposed three self-host emitter defects
+before another full Stage3 run. A call nested in interpolation passed a
+growable-array aggregate where the resolved callee required a readonly slice;
+a `Result<UInt16>` match payload was sent directly to an `i32` printer; and a
+`UInt32` value above `Int32.max` used signed 32-bit formatting. These were
+compiler ABI defects, not stdlib workarounds.
+
+Interpolation call emission now applies the ordinary resolved-call slice
+projection. Entry and control roots use the source-position-aware
+`interpolationBindingIndex` and prefer the binding's canonical semantic type;
+duplicate last-name-wins scans no longer decide width. Narrow values extend
+with canonical signedness, while unsigned 32-bit roots zero-extend to `i64` and
+use unsigned formatting. Fixed-array literal payloads now use stack storage in
+entry, function, and control emitters through the shared function-entry hoist,
+preserving the instance API's direct static calls without a receiver wrapper,
+loop-local stack growth, or heap owner.
+
+Fixtures 1085 through 1087 pass managed comparison and native `llvm-as`, clang
+`-Werror`, exact O0/O2 output, and the fixed-input O0 no-heap/no-indirect-dispatch
+gate across the complete statically reachable direct-call graph. Fixture 1087
+constructs that fixed input inside a loop, and the gate also requires its
+payload alloca to precede the loop header.
+Fixture 1089 separately pins `UInt32` values above `Int32.max` in entry,
+named-function, and nested-control interpolation paths.
+`verify-native-binary-codecs.ps1` now runs in Stage2 5/7 as well as
+Stage3, so the same ABI or performance regression is rejected one generation
+before fixed-point verification.
+
+## D393 — LLVM integer literals have one separator-free writer
+
+Status: native assembly/execution, rebuilt Stage2, and final Stage3 fixed point verified
+Date: 2026-08-23
+
+Fixture 1089 initially passed managed execution and normalized compiler-output
+comparison but failed independent `llvm-as`: the entry numeric-constructor path
+copied `2_305_843_009` directly from Sollang source into LLVM. LLVM integer
+tokens do not accept Sollang's digit separators. This violated the existing
+guide contract that every kind-3 literal uses `writeIntegerLiteral`.
+
+The repair did not special-case the constructor. An audit replaced every
+remaining entry-emitter numeric source-token slice in struct fields, ranges,
+arrays, dictionaries, indexes, arithmetic, worker limits, interpolation, and
+numeric conversion with the canonical separator-free writer. Boolean hash and
+unary paths now emit `1` or `0` instead of source spelling. The remaining
+source-token slices under the LLVM text modules are names or diagnostics, not
+numeric operands. Fixture 1089 now passes self-host `llvm-as`, clang `-Werror`,
+and exact O0/O2 execution, and joins the Stage2/Stage3 native binary gate.
+Fixture 410 now spells its 64-bit constructor with multiple separators while
+retaining the same normalized LLVM constant.
+
+## D394 — General algorithms must not regress to public global functions
+
+Status: API research and executable parser probe complete; compiler support and stdlib implementation pending
+Date: 2026-08-23
+
+Rust slices, Go `slices`, and Java arrays converge on in-place sorting plus
+binary search over an already sorted collection. Go's result shape is the most
+useful portable contract for Sollang: return the earliest matching position or
+the insertion position together with whether a match existed. Sorting must be
+allocation-free for the unstable variant, preserve the caller-visible buffer,
+and document stability independently of the implementation algorithm.
+
+Sollang's public surface must remain instance-first. A direct compiler probe of
+`algorithms -> evaluate<T>(...)` reached the deliberate parser rejection for
+generic impl members, while the self-host grammar currently omits
+`GenericParameterClause` and `GenericWhereClause` from `MethodDeclaration`.
+Adding top-level `sort(values)` and `binarySearch(values, key)` as a shortcut
+would make temporary compiler incompleteness permanent library vocabulary.
+The prerequisite is therefore generic inherent methods with the same
+specialization, trait-constraint, ownership, block-callback, and O0 ABI rules
+as top-level generics. Only after managed and Stage2/Stage3 parser, semantic,
+typed-IR, and native fixtures pass may the pure Sollang algorithm instances be
+published.
+
+## D395 — Self-affecting emitter repairs require one explicit generational advance
+
+Status: classified generational advance and final Stage2/Stage3 fixed point verified
+Date: 2026-08-23
+
+The bridge-seeded Stage2 compiled the repaired emitter source with the prior
+generation's code generator. Its first Stage3 therefore applied the new
+fixed-array and unsigned-interpolation lowering to the compiler itself and was
+not expected to be byte-identical yet. Treating every such first-generation
+difference as either a new defect or an acceptable fixed point would both be
+wrong.
+
+The complete normalized delta was classified before advancing the seed: 17
+hunks contain only ten fixed-array payloads changing from `malloc` to
+function-entry `alloca`, plus one `UInt32` diagnostic changing from signed i32
+printing to zero-extension and unsigned i64 printing. There are no other added
+or removed LLVM instructions. The receipt-bound Stage2 is now advanced once
+more; only the next Stage2/Stage3 byte identity plus the full native gates may
+close the fixed point.
+
+## D396 — GZIP CRC consolidation starts with an independent public-Hasher oracle
+
+Status: managed plus Stage2/Stage3 native O0/O2 semantic parity verified; throughput consolidation pending
+Date: 2026-08-23
+
+The GZIP codec predates `std.hash.crc32` and still carries private IEEE range,
+incremental, and one-shot loops. Deleting them merely because the source looks
+similar would not prove the public instance path preserves the RFC 1952 result
+or throughput. Fixture 1090 compresses `123456789` with the fixed-Huffman path,
+reads the little-endian CRC32 trailer, and compares it with an incrementally
+written public `Polynomial.Ieee` Hasher. Both managed and current Stage2-native
+O0 execution produce `3421780262` on both paths.
+
+The fixture is the fifth case in `verify-native-binary-codecs.ps1`, which emits
+once and runs exact output at O0 and O2 from Stage2 and Stage3. This closes
+semantic parity only. The private GZIP implementation remains until a repeated,
+same-input native throughput comparison shows that the cross-module instance
+path adds no material regression; no optimizer-only or single-sample claim may
+authorize the deletion.
+
+## D397 — UUID wrapper presentations are explicit Codec methods
+
+Status: managed, Stage2-native llvm-as/O0, and Stage3 public-stdlib parity verified
+Date: 2026-08-23
+
+The strict `Codec.parse` contract remains exactly 36-byte 8-4-4-4-12 text.
+Accepting braces or a URN by silently inspecting punctuation would weaken its
+failure contract and make offsets presentation-dependent without naming that
+policy. `Codec.parseBraced` and `Codec.parseUrn` are therefore separate inherent
+methods. They borrow the canonical 36-byte interior without allocating, reuse
+the strict parser, and shift nested separator/hex offsets back to the complete
+caller input.
+
+The URN method accepts ASCII case variants of `urn:uuid:` because URI scheme
+and UUID namespace identifiers are case-insensitive, rejects any other prefix
+with typed `InvalidPrefix`, and performs no URI normalization or allocation.
+Fixture 1091 covers uppercase URN prefix, braces, invalid prefix offset zero,
+and a wrapped invalid hex digit at complete-input offset 36.
+
+## D398 — Interpolation call chains are rebuilt by increasing source span
+
+Status: managed, rebuilt Stage2, native O0/O2, and final Stage3 fixed point verified
+Date: 2026-08-23
+
+Fixture 1092 exposed a self-host-only ABI defect in the natural expression
+`error -> errorKind -> kindText` inside interpolation. The managed compiler
+executed it correctly, but the native self-host emitter passed the original
+`Failure` receiver to `kindText`, whose parameter is the enum returned by
+`errorKind`. Independent lowering inspection showed the cause before changing
+the emitter: repeated call suffixes were flat children of the outer call. The
+outer node retained the original receiver and the inner call as a second
+operand, and a call chain with explicit arguments could also lose a later
+argument after the three-operand wiring limit.
+
+The canonical repair is in interpolation IR construction. Same-start call
+shells are ordered by increasing source-span length. The shortest shell owns
+the base plus arguments within that span; every later shell owns the previous
+call result plus only newly introduced arguments. A nested call used as an
+ordinary argument starts at a different offset and is deliberately excluded
+from postfix folding. Fixture 1093 now produces inner
+`errorKind(error)` followed by outer `kindText(inner-result)`, including the
+corresponding argument partition for `first(1) -> second(2)`. Fixture 1092 is
+also a permanent managed and native O0/O2 gate; completion still requires the
+usual verified-Stage3 to new-Stage2 to new-Stage3 fixed point.
+
+The ordinary non-chain path inspects only the call node's three existing
+operands and allocates no reconstruction arrays. Child shells and values are
+collected once only after a same-start shorter call is present, so the repair
+does not turn every interpolation call into a full-table allocation or scan.
+
+The rebuilt Stage2 and Stage3 now emit the same complete 29,701,347-byte LLVM
+module with normalized hash
+`4578E53267414F64A6BD903EDFC50F9056C9690EFB414F8080C45FBB5BBA2F85`.
+The 14-case managed preflight, 11-case native formatter gate, and six-case O0/O2
+binary gate all pass; the published verified feedback seed is
+`078C230D2EA40C2CF1F97058492BFA718C200B6E328A30F34E91A19E09A95316`.
+
+## D399 — Child processes are an owned lifecycle, not a synchronous global call
+
+Status: spawn/wait and attached-child drop implemented; bounded I/O lifecycle pending
+Date: 2026-08-23
+
+The current `sys.process` surface exposes process arguments, environment lookup,
+blocking `run`, stdout-to-file, and exit. It cannot represent a running child,
+pipe ownership, separate stdout/stderr capture, polling, timeout, termination,
+or the requirement to reap an exited child. Adding more unrelated global
+intrinsics would repeat the instance-shape debt already found in process and
+other resource APIs.
+
+Rust's `Command`, `Child`, `Stdio`, `ExitStatus`, and `Output` split
+configuration from the running resource and explicitly warn about pipe
+deadlock and zombies. Go makes a command single-use, waits for I/O copying,
+supports cancellation, and bounds children or inherited pipes that do not
+close. Python's `communicate` drains both outputs and requires kill followed by
+another communication/wait after timeout, while warning that captured output
+is buffered in memory. .NET separately configures stream redirection and
+asynchronous wait. These are lifecycle lessons rather than APIs to copy.
+
+Sollang's canonical public surface is `sys.process.Command`, created by the
+narrow `command(program)` factory and configured by receiver methods with
+literal argument entries, explicit environment and working directory, and a
+typed `Stdio` policy. `spawn(move self)` returns an affine `Child`; `wait` and
+bounded `collect` consume and reap it, `tryWait` records a reaped status in the
+instance, and forced termination is never complete until reap succeeds. Scope
+exit kills and reaps an attached child so a zombie cannot be silently
+abandoned. A deliberately detached process, if later supported, must be chosen
+at spawn and use a platform contract that does not leave the caller responsible
+for reaping it.
+
+Output collection drains stdout and stderr concurrently, closes piped stdin at
+the documented boundary, and requires per-stream plus total byte limits.
+Timeout, truncation, spawn failure, I/O failure, normal exit code, and signal or
+forced termination are distinct typed results. Direct execution never invokes
+a shell or expands variables, redirections, or glob patterns. Process launch,
+environment access, current-process termination, and the public lifecycle
+remain in `sys.process`; its instance methods bind directly to the platform
+operations and must retain O0/O2 no-wrapper evidence.
+
+`collect` must start both drains before waiting and close an attached piped
+stdin before the blocking boundary; a sequential read-then-wait path can
+deadlock when either pipe fills. Cancellation also has a separate bounded drain
+grace after termination so inherited writers cannot hold the parent forever.
+A process-tree kill result may not claim that every descendant exited merely
+because the direct child was reaped: platforms such as .NET explicitly expose
+that distinction. Unsupported or only partially observed descendant cleanup is
+a typed outcome, not implicit success.
+
+## D400 — Standard-library paths follow domain ownership; runtime ABI is fragmented
+
+Status: QUIC, HTTP, JSON, and runtime physical moves implemented; focused gates verified
+Date: 2026-08-23
+
+Adding each new facility directly under `std` made related network protocols
+hard to discover and left public contracts mixed with `= intrinsic`
+declarations. A second partial repair moved a few bindings into
+`sys/runtime/**` while retaining the original `sys/runtime.slg` monolith. That
+was two competing layouts rather than one architecture.
+
+The canonical network family is now `std.net`: endpoint values, DNS, socket,
+QUIC, and HTTP live at `std.net`, `std.net.dns`, `std.net.socket`,
+`std.net.quic`, and `std.net.http`. JSON is a text representation and lives at
+`std.text.json`. Byte codecs remain `std.encoding`; compression, hashing,
+time, URI, and UUID remain shallow independent facilities because they are
+cross-domain rather than children of networking or JSON. Old public paths are
+removed instead of kept as compatibility facades.
+
+All runtime ABI declarations now live in responsibility files under
+`stdlib/sys/runtime/`. The former `stdlib/sys/runtime.slg` is removed.
+`clock.slg`, `console.slg`, `integer_file.slg`, `parallel.slg`, and
+`random.slg` intentionally form one logical `sys.runtime` namespace; socket,
+DNS, time, process, and sequence fragments retain the logical namespace of
+their public contracts. The loader permits these physical fragments only in
+the runtime directory, merges their symbols, and requires a companion public
+contract except for the internal `sys.runtime` namespace itself.
+
+This separation never authorizes a wrapper function. Managed and self-host
+compilers continue mapping the public method identity directly to the existing
+platform lowering. `verify-runtime-intrinsic-layout.ps1` rejects intrinsic
+declarations in `stdlib/std/**`, rejects return of the monolith, requires the
+known domain fragments, and validates public companion sources. Focused QUIC
+(38), HTTP/JSON (5), and split-runtime/process/parallel/random (65) regression
+sets pass with zero managed build warnings.
+
+## D401 — System I/O effects and portable memory I/O have separate homes
+
+Status: public split, bounded caller-buffer memory implementation, and managed Windows/Linux fixtures verified
+Date: 2026-08-23
+
+`sys.io` owns console and standard-stream effects because those operations cross
+the process/platform boundary. `std.io` owns portable Reader/Writer values whose
+entire state is ordinary memory. Runtime intrinsics, when required, live only in
+responsibility fragments under `stdlib/sys/runtime/**`; a public portable value
+does not move to `sys` merely because it is called a reader or writer.
+
+`std.io.MemoryReader` and `MemoryWriter` are instance values with explicit
+position, bounded partial transfer, exact/all transfer, seek, flush, and
+ownership-returning `intoBytes` operations. Factories are the narrow creation
+boundary; ongoing stateful operations are receiver methods. Reads and writes
+are bounded by configured limits, report typed errors, and do not introduce a
+wrapper allocation or payload copy merely to preserve the instance form.
+Fixture 1094 executes partial read, exact read, end, short-read, and output-limit
+paths on Windows with exact stdout.
+
+The caller-supplied mutable-buffer path is now the portable read primitive.
+Current [Rust `Read`](https://doc.rust-lang.org/std/io/trait.Read.html),
+[.NET `Stream.Read`](https://learn.microsoft.com/en-us/dotnet/api/system.io.stream.read?view=net-10.0),
+[Go `io.Reader` helpers](https://pkg.go.dev/io), and
+[Java `InputStream`](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/io/InputStream.html)
+all make partial reads into caller storage the primitive and layer exact/full
+operations above it. Sollang should follow that ownership shape with instance
+methods that mutate the reader cursor and an explicitly bounded caller buffer,
+return the transferred count, and allocate no payload on success. The exact
+variant must validate destination range and source availability before changing
+either cursor or destination. Existing allocating `read`/`readExact` remain
+conveniences, while unbounded `readAll` or `copy` is not accepted; any aggregate
+helper requires an explicit byte limit and preserves partial-progress semantics.
+`MemoryReader.readInto` returns the transferred count directly and allocates no
+payload. `readExactInto` validates both the configured limit and complete source
+range before writing the first destination byte or advancing the cursor.
+Fixture 1188 covers partial transfer, over-limit rejection, transactional
+short-read failure, and the zero-count end convention while proving the
+destination remains unchanged on every no-transfer path.
+Managed Windows and Linux execution pass without warnings; self-host and formal
+fixed-point evidence remain the completion gate.
+
+## D402 — Statically knowable owner corruption is an actionable compile error
+
+Status: managed and self-host negative/positive fixtures verified
+Date: 2026-08-23
+
+An early `MemoryReader` factory accepted a growable byte array as a default
+borrow and stored the same backing pointer in an owned returned struct. The
+caller cleanup and returned-value cleanup then both freed that pointer; the
+native process ended with Windows heap-corruption status `0xC0000374`. Fixing
+only that signature to `bytes: move [UInt8; ~]` would leave the compiler able to
+accept the same invalid ownership topology elsewhere.
+
+The language rule is therefore structural. A borrowed parameter or outer value
+that transitively owns storage cannot escape inside an owned result. The
+managed semantic compiler rejects the source and names the required
+`parameter: move ...` repair plus borrow/copy alternatives. The self-host
+ownership checker independently emits blocking E25 before LLVM output, using
+typed-IR owner traits and ownership-preserving aggregate ancestry. Scalar
+observations such as `bytes -> len` remain legal borrows and are not classified
+as ownership transfer. Fixture 1095 proves both the rejected borrowed form and
+the accepted moved form; the managed diagnostic fixture retains the same text.
+
+## D403 — Cryptographic algorithms are portable std values; entropy is runtime
+
+Status: physical move and focused 20-case managed/native regression verified
+Date: 2026-08-23
+
+AES-128, GCM, SHA-2, HMAC, HKDF, X25519, Ed25519, and TLS 1.3 key derivation
+are deterministic byte algorithms and therefore live under `std.crypto/**`, not
+`sys`. The public secure-random capability is `std.crypto.random.SecureRandom`;
+only its reachable operating-system entropy ABI remains
+`sys.runtime.secureRandomBytes`. The runtime returns the public typed
+`std.crypto.random.Error` and never falls back to the deterministic generator.
+
+The old `sys.crypto/**` directory and active namespace are removed rather than
+kept as compatibility aliases. The module-layout contract lists every moved
+crypto module and forbids `sys.crypto`. Twenty focused SHA/AES/HKDF/X25519/
+Ed25519/TLS/secure-random/UUID fixtures pass after rebuilding the Release
+compiler; the first stale-Release run was rejected uniformly by its old ABI
+type-name check and was not treated as a source or runtime fallback.
+
+## D404 — Network resource instances expose numeric endpoint observations
+
+Status: managed Windows runtime and QUIC value path verified; self-host parity in progress
+Date: 2026-08-24
+
+Current .NET, Rust, and Go network APIs consistently expose local and peer
+socket addresses on the resource instance. .NET `QuicConnection` likewise
+exposes `LocalEndPoint` and `RemoteEndPoint`, while QUIC application bytes flow
+through streams rather than the connection itself. Sources reviewed:
+
+- https://learn.microsoft.com/en-us/dotnet/api/system.net.quic.quicconnection?view=net-10.0
+- https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/quic/quic-overview
+- https://learn.microsoft.com/en-us/dotnet/api/system.net.quic.quicconnectionoptions?view=net-10.0
+- https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.socket.localendpoint?view=net-10.0
+- https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.socket.remoteendpoint?view=net-10.0
+- https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.tcplistener.localendpoint?view=net-10.0
+- https://doc.rust-lang.org/std/net/struct.TcpStream.html
+- https://doc.rust-lang.org/std/net/struct.TcpListener.html
+- https://pkg.go.dev/net
+
+Sollang exposes the shared numeric `std.net.Endpoint` directly from socket and
+QUIC instances. Socket observation is one direct `getsockname` or `getpeername`
+runtime primitive writing the existing fixed descriptor; it performs no DNS,
+text conversion, wrapper allocation, or managed dispatch. QUIC retains the
+already-known local and peer values in connection state, so its observations
+are direct field loads with no OS query. `Endpoint.withPort` preserves address,
+IPv6 flow information, and scope while changing only the transport port.
+
+Only connected `TcpStream` has `remoteEndpoint`; listener and unconnected UDP
+peer observation is absent rather than returning a guessed value. The smaller
+`localPort` fast path remains. Certificate derivation belongs to
+`Identity.certificate`; the duplicate stateful `quic.certificate(identity)`
+global path is removed after all active callers move.
+
+## D405 — Native source analysis is parallel and intrinsic opcode families are explicit sets
+
+Status: managed and focused native verification passed; Stage2/Stage3 fixed point in progress
+Date: 2026-08-24
+
+The first complete Stage2 rebuild spent 1,885 seconds in semantic analysis with
+eight worker threads waiting, then used all workers during LLVM emission. Source
+analysis had been made serial in D272 so the browser compiler could run without
+a compute pool, unintentionally removing the D174 native optimization as well.
+Native entrypoints now call `prepareParallel`, which transfers one owned
+`SourceAnalysis` per mapped source and assembles results deterministically in
+source order. Browser and general semantic tooling keep the serial preparation
+path, so unsupported browser parallel execution is not hidden behind fallback.
+
+The same rebuild exposed an independent socket classification defect. Collection
+`reserve` is opcode `-271`, between socket close `-270` and socket receive-into
+`-272`; mechanically widening the socket interval through endpoint observation
+opcodes `-273` and `-274` emitted socket Result lowering for an ordinary `i64`
+reserve value. Typed IR now owns the two exact predicates
+`isSocketRuntimeOpcode` and `isSocketResultOpcode`. Every self-host emitter and
+runtime diagnostic calls those predicates instead of duplicating a numeric
+range. The mouse Source public-stdlib probe again assembles with `llvm-as`, and
+fixture 377 preserves the worker-transfer ABI. Authoritative formatting and the
+focused source-style, socket endpoint, and QUIC identity fixtures pass without
+warnings; full fixed-point promotion remains required.
+
+`verify-selfhost-compiler-contracts.ps1` makes both repairs fail-fast before an
+expensive generation: native/browser preparation call counts are fixed, the
+parallel worker boundary and ordered assembly are required, and no LLVM
+consumer may recreate the contiguous `-258..-274` range.
+
+The stdlib global-API audit also identified 205 previously unclassified crypto
+and low-level QUIC functions. They are recorded as explicit `migration-debt`,
+not accepted as instance-first design. This makes Stage3 reject any new
+unreviewed global while preserving an honest decreasing backlog; each entry is
+removed only after its receiver-oriented replacement and callers are verified.
+
+## D406 — Duration and instant arithmetic is checked instance behavior
+
+Status: managed Windows behavior and policy gate verified; self-host fixed point in progress
+Date: 2026-08-24
+
+Current Rust, .NET, and Java time values all place arithmetic on the value
+instance. Rust additionally provides non-negative `Duration`, checked
+addition/subtraction and absolute difference; its integer scaling vocabulary
+uses an unsigned factor. .NET `TimeSpan` and Java `Duration` confirm the
+discoverable instance-shaped add/subtract/multiply/divide surface, but their
+exception and signed-duration policies are not copied into Sollang. Sources
+reviewed:
+
+- https://doc.rust-lang.org/std/time/struct.Duration.html
+- https://doc.rust-lang.org/stable/std/time/struct.Instant.html
+- https://learn.microsoft.com/en-us/dotnet/api/system.timespan.add?view=net-10.0
+- https://learn.microsoft.com/en-us/dotnet/api/system.timespan.subtract?view=net-10.0
+- https://learn.microsoft.com/en-us/dotnet/api/system.timespan.multiply?view=net-10.0
+- https://learn.microsoft.com/en-us/dotnet/api/system.timespan.divide?view=net-10.0
+- https://docs.oracle.com/en/java/javase/26/docs/api/java.base/java/time/Duration.html
+
+Sollang retains its non-negative millisecond `Duration` invariant and exposes
+`minutes`/`hours` only as fallible factory boundaries. Ongoing behavior is
+receiver-owned: whole-unit observations, checked add/subtract/multiply/divide,
+and absolute difference are instance methods. Negative subtraction, a zero
+divisor, and overflow are explicit `ErrorKind` values rather than exceptions,
+traps, wrapping, or saturation. `MonotonicInstant` and `UtcInstant` gain the
+same checked duration addition/subtraction vocabulary; elapsed measurement
+remains `later -> durationSince(earlier)` so monotonic and epoch domains cannot
+mix.
+
+Fixture 1119 executes the successful hour/minute arithmetic, monotonic and UTC
+instant paths plus negative-result, zero-divisor, and scaling-overflow errors.
+It and all 14 affected time/UUID/async/diagnostic fixtures pass on the managed
+Windows compiler without warnings. The stdlib global API gate classifies only
+the two new constructors as factories and keeps all stateful arithmetic on the
+instances. Self-host Windows/Linux and browser capability verification remain
+part of the active Stage2/Stage3 gate before this decision becomes complete.
+
+## D407 — Contextual width reaches through a negated integer literal
+
+Status: focused managed self-host LLVM regression verified; Stage2/Stage3 fixed point in progress
+Date: 2026-08-24
+
+The first self-host execution of D406 passed Duration and monotonic arithmetic
+but returned `time=error` before the UTC assertion. Its LLVM made the cause
+concrete: `-9_223_372_036_854_775_807 - Long(1)` emitted the inner negation as
+`sub i32 0, 9223372036854775807`, then widened only the outer subtraction to
+i64. Managed execution happened to type the same source correctly, so a
+managed-only stdlib test could not prove compiler parity.
+
+Typed IR already contextualized a direct integer literal from its independently
+typed binary peer, but a negative literal is represented by a unary node around
+that literal. The same pass now assigns the peer's canonical integer type to
+both the unary node and its literal child, symmetrically on either side of
+arithmetic, equality, and ordering operators. Comparison results remain Bool;
+only their numeric operands adopt the peer width. This is compile-time metadata
+propagation only; it adds no
+conversion, allocation, or runtime dispatch.
+
+Fixture 1120 snapshots corrected arithmetic `sub i64` plus all six equality and
+ordering comparisons at `i64`, and assembles the generated LLVM.
+Fixture 1119 remains the behavioral proof that reaches the negative Unix epoch
+checked-subtraction boundary. Both are fixed-point inventory entries; the
+interrupted pre-fix Stage2 candidate was intentionally not promoted because its
+source fingerprint could no longer prove the corrected compiler.
+
+The two 2026-08-24 defects are now structured in
+`scripts/contracts/compiler-defects.json` rather than described only in status
+prose. Both remain `candidate-fixed`, which counts as open. The ledger verifier
+checks classification, root-cause owner, focused fixture, closure gate, and
+required evidence policy; release packaging fails unless every recorded defect
+is closed with evidence. Discovery alone therefore cannot be reported as
+hardening or converted into a release success.
+
+An attempted combined incremental run exposed a verifier contract error:
+`-Fixture` is a source set for one executable, while exact stdout is selected
+from its first root. The verifier now rejects multiple column-zero `main` roots
+before source closure or compiler generation, so independent fixtures cannot
+produce a false proof or waste a cold self-host build. Isolating fixture 1119
+then exposed a separate latent compiler defect: all three statement-valued
+`when -> println` consumers were absent from native LLVM. Fixture 1121 proves
+Typed IR retains three controls and three linked console calls; fixture 1122 is
+the minimal managed/native runtime differential. These are recorded separately
+as verifier defect C2026-08-24-04 and compiler defect C2026-08-24-03.
+
+## D408 — Materialized control consumers remain ordered runtime effects
+
+Status: managed and fresh SLG focused contracts verified; Stage2 and fixed-point proof in progress
+Date: 2026-08-24
+
+Fixture 1119's isolated native execution preserved Duration and UTC arithmetic
+but printed five lines instead of the managed compiler's exact eight. Generated
+LLVM contained all three match CFGs and their Text constants, yet no trailing
+console calls. The defect was therefore not in `std.time`, enum construction,
+or match arm selection.
+
+Fixture 1121 fixes the Typed IR boundary: three consecutive statement-valued
+matches produce three kind-27 controls and three linked console consumers. The
+consumers are materialized kind-9 expressions with opcode -1 and console symbol
+-101, parented by the entry point. The emitter had treated only kind-6 calls as
+console effects, so it scheduled and emitted the control values while silently
+discarding their consumers.
+
+`typed.isConsoleRuntimeCall` now classifies both ordinary kind-6 and materialized
+kind-9 console forms. Entry scheduling, function scheduling, ordered-effect
+barriers, ancestor classification, print dependency checks, and the entry,
+function, and control-region general call-emission paths share that single
+predicate. This changes compile-time
+classification only and adds no runtime dispatch or allocation. Fixture 1122 is
+the entry-point exact-output proof: three consecutive `when -> println`
+statements must print three ordered lines, and its self-host LLVM contract
+requires a runtime-print call. Fixture 1124 repeats the contract inside a named
+function because function bodies have a distinct scheduling/emission path.
+Fixture 1125 nests the same shape inside an `if` because control regions have a
+third emission path. Fixture 1123 executes that nested SLG emitter case under
+the managed host and snapshots the runtime-print call. The compiler contract
+verifier checks every shared-predicate consumer before a cold self-host build.
+
+The same verifier audit found an independent false positive in the focused DNS
+LLVM contract. Its unanchored regex matched `call @sollang_platform_dns_lookup`
+inside the self-host emitter's LLVM string constants. Both the call and
+40-byte-stride patterns are now anchored to line-start SSA instructions, so a
+compiler-of-compiler fixture is a negative control while actual emitted DNS LLVM
+still has to prove the endpoint stride. This verifier defect is recorded and
+closed separately as C2026-08-24-05.
+
+The first regenerated SLG compiler passed entry-point fixture 1122 but still
+failed fixture 1119 because the named-function scheduler and emitter retained
+their separate kind-6-only checks. That negative control prevented premature
+closure and led to fixture 1124. A static audit then found the same stale check
+in the nested control-region emitter before another cold build, leading to
+fixture 1125. The defect remains `candidate-fixed` until a newly generated SLG
+compiler passes fixtures 1122 through 1126 exact LLVM/execution, fixture 1119's
+eight-line behavior, Windows Stage2 differential verification, and Stage3 fixed
+point. The incremental workflow now runs the emitter source-contract audit before
+starting a cold build. V003 stops LLVM emission when a builtin console symbol no
+longer has a supported ordinary/materialized Typed IR form and directs compiler
+maintainers to extend the canonical predicate and all three consumers rather
+than asking users to rewrite valid source.
+
+The regenerated SLG Stage1 with receipt hash
+`E7BF8C325353269D2B85F38BA6308D69D97373262D955DABE001278654607FB2`
+passes fixtures 1122, 1124, 1125, and 1119 with V004, LLVM assembly, native exact
+execution, and managed differential checks. Fixture 1126 also passes after a
+full 809,751 ms self-host emitter run, proving invariant code 49 without an
+undefined callback target. C2026-08-24-03 remains candidate-fixed until the
+active Windows Stage2 and subsequent Stage3 fixed point finish.
+
+## D409 — Parallel callbacks share executable function reachability
+
+Status: managed and fresh SLG focused proof complete; Stage2 and fixed-point proof required
+Date: 2026-08-24
+
+While proving fixture 1126, the regenerated SLG compiler emitted calls to
+`@sollang_m20_s0` from parallel callbacks without emitting or declaring that
+target. This was not a fixture source error. The managed emitter collects
+callbacks only from main and emittable user functions, but the self-host emitter
+scanned every Typed IR node. An unreachable imported compiler function could
+therefore create a callback while normal function reachability correctly omitted
+its target definition.
+
+The self-host parallel and parallel-branch callback loops now require
+`irNodeReachable` before emission, sharing the frozen executable call-graph
+closure already used by user-function emission. This is compile-time filtering
+only; it removes dead callback LLVM and adds no runtime branch or allocation.
+Fixture 1127 is the minimal negative control: an unused function contains a
+parallel call, while the entry point prints one reachable line. Its managed and
+self-host LLVM negative contracts reject any `sollang_parallel_callback_`
+definition. The source contract rejects either callback family if its
+reachability predicate is lost.
+The failed 1126 LLVM contained two such calls, `sollang_m20_s0` and
+`sollang_m28_s35`. `verify-llvm-direct-call-closure.ps1` now detects this class
+as compiler verification failure V004 after text emission but before `llvm-as`; its negative
+control names both symbols and a known-good focused LLVM passes. Incremental
+checks both its host compiler and focused artifact; Stage2 and Stage3 invoke the
+same gate, so a recurrence is reported as an
+actionable compiler error instead of an LLVM parser surprise.
+Browser Stage2 and Linux Stage2/Stage3 now use V004 at their compiler and focused
+program assembler boundaries as well; source-contract wiring checks prevent a
+target-specific gate from silently disappearing.
+The ordinary regression runner also exposed that fixture 1126 initially lacked
+its self-host compiler `.sources.txt` closure. The closure now mirrors the
+canonical LLVM-text compiler source set, and the pre-build contract generically
+rejects any Stage2 exact fixture importing `sollang.compiler.*` without a
+root-first source closure.
+The generic closure audit also found that legacy exact fixtures 365, 366, and
+377 were each missing the newly required `semantic/ownership_check.slg`
+dependency. All three manifests now match the authoritative LLVM-text support
+closure and pass with the runtime support manifest; no legacy allowlist was
+introduced. The complete closure then exposed fixture 377's previously hidden
+owned-result error, which is recorded in D410 rather than suppressing the
+ownership checker.
+Closure requires fixtures 1126 and 1127 under a newly regenerated SLG Stage1,
+then Windows Stage2 and Stage3 fixed point with warning zero.
+
+The new SLG Stage1 passes fixture 1127 with no parallel callback in focused LLVM,
+native exact output, and managed differential execution. Its host compiler LLVM
+and the focused artifact both pass V004. Fixture 1126 then passes V004 and
+`llvm-as` under the same receipt-bound Stage1, demonstrating that the two prior
+undefined callback targets are gone. C2026-08-24-06 remains candidate-fixed
+until Windows Stage2 and Stage3 close the fixed-point gate.
+
+## D410 — Complete fixture closures must expose, not hide, ownership errors
+
+Status: complete; focused differential, fresh Stage2, and Stage3 fixed point pass
+Date: 2026-08-24
+
+Restoring `semantic/ownership_check.slg` to fixture 377's source manifest made
+the C# reference compiler correctly reject `scanAll`: its trailing `parallel`
+block produced an owned `[Scan; ~]` without binding the result. The prior
+incomplete closure had hidden this semantic check. Removing the checker or
+weakening the diagnostic would preserve an invalid fixture and recreate the
+late-failure path.
+
+The fixture now uses `} => scans` and returns `scans`, making the ownership
+transfer explicit without adding a runtime copy or allocation. The regression
+runner refreshed the exact LLVM snapshot only after `llvm-as` accepted the new
+output, then the ordinary managed and native self-host differential run passed.
+The direct diagnostic fixture `parallel-owned-result-must-bind` also locks the
+original invalid form and the actionable `=> name` repair before LLVM emission.
+Future source-closure repairs therefore treat the first complete compile as a
+semantic audit and repair invalid Sollang naturally; a stale snapshot is not a
+reason to omit a compiler phase.
+
+The direct negative fixture then revealed a second defect: the managed compiler
+rejected the source, but the SLG Stage1 accepted `collect`, `parallel`, and
+`tryParallel` without result bindings and could emit an invalid target such as
+`@sollang_m-1_s-1`. The self-host ownership pass now adds E27 for any owned
+block-call result whose AST has no explicit `secondaryToken` binding. The
+regenerated Stage2 and Stage3 compilers now reject all three negative fixtures
+exactly once with E27 before LLVM, the repaired fixture 377 remains exact, and
+the full Stage3 fixed-point gate passes without compiler warnings.
+
+## D411 — Candidate promotion requires a stable input snapshot
+
+Status: complete; contract, fresh Stage2, and Stage3 promotion proof pass
+Date: 2026-08-24
+
+The Stage2 verifier previously computed a candidate input fingerprint when the
+candidate was built, but after all gates it recomputed and published the current
+fingerprint without proving the inputs were unchanged. A source edit during the
+run could therefore authenticate an old executable as if it came from the new
+tree. Stage3 had the same promotion window.
+
+Both verifiers now compare the candidate-bound fingerprint with a fresh full
+input fingerprint immediately before promotion. A mismatch stops promotion and
+requires a rebuild from a stable snapshot. The published Stage2 fingerprint is
+copied from the verified candidate value rather than recomputed after the fact.
+`verify-input-fingerprint-stability-contract.ps1` preserves an unchanged
+positive control and a changed-input negative control, while the compiler source
+contract requires both promotion paths to keep the gate.
+
+The fresh Stage3 run verified the candidate-bound fingerprint again immediately
+before promotion, reached the exact Stage2/Stage3 fixed point, and published the
+verified feedback seed. This closes the promotion race for both stages under
+the executable contract.
+
+## D412 — Executable reachability does not root every instance method
+
+Status: candidate implemented; browser and fixed-point proof required
+Date: 2026-08-24
+
+The browser Stage2 compiler exposed an invalid `extractvalue` from the opaque
+`%sollang.process_result` type. Its input uses `process.arguments`, which is
+available in the browser host, but never calls child-process methods. The
+self-host reachability closure nevertheless treated every AST kind 31 instance
+method as an executable root, so `Command.run` and `Command.runToFile` bodies
+were emitted while the browser target correctly omitted the child-process
+runtime.
+
+Executable self-host emission now starts only from the entry IR node and follows
+resolved ordinary and materialized calls (Typed IR kinds 6 and 9), matching the
+managed executable emitter. Binary-codec fixture 1085 then exposed imported
+instance calls inside interpolation: those calls remain interpolation kind 10
+until the emitter resolves the receiver. Reachability now shares the emitter's
+call-name matcher and closes matching name-and-arity candidates, while V004 is
+also wired directly before that gate's `llvm-as`. Instance-first APIs therefore
+keep every called method without paying for all unused methods, and native-only methods cannot
+leak into another target merely because they are members. The compiler source
+contract rejects both an unconditional kind 31 root and loss of either call
+edge; browser assembly and execution plus regenerated native fixed points are
+the closure evidence.
+
+## D413 — LLVM function declarations have one target-runtime owner
+
+Status: candidate implemented; Linux and fixed-point proof required
+Date: 2026-08-24
+
+The Linux QUIC result-propagation control reached both socket and process
+runtimes. Socket emitted `declare i32 @close(i32)`, while process suppressed its
+own declaration only for the compute runtime and emitted the same declaration
+again. LLVM assembly therefore failed after the expensive Stage2 generation.
+
+The process emitter now receives whether any preceding Linux runtime already
+owns `close`, including compute, socket, and emitted mouse-event runtimes. More
+generally, the pre-assembly closure verifier reports V005 for every repeated
+function declaration or definition and names the symbol. Its negative contract
+includes duplicate `close` declarations and a string-literal control, so the
+failure is early and deterministic rather than delegated to `llvm-as`.
+
+## D414 — Browser compiler diagnostics use a separate stderr capability
+
+Status: candidate implemented; browser and fixed-point proof required
+Date: 2026-08-24
+
+The regenerated browser compiler contained reachable diagnostic paths that call
+`sollang_runtime_eprint`, but the WASM text runtime defined only stdout helpers.
+This survived the original V004 scope because that verifier inspected only
+module-symbol calls and failed later in `llvm-as`.
+
+The WASM context now computes `usesStandardError`, emits `eprint`, `eprintln`,
+and the required integer or boolean formatting helpers only when reachable, and
+uses a distinct `sollang_browser_eprint` host import. Browser hosts keep those
+diagnostics separate from the stdout LLVM stream so an error cannot corrupt a
+compiler artifact. V004 now includes unresolved `sollang_runtime_*` calls, with
+a negative control naming the missing helper before assembly. The managed WASM
+runtime platform implements the same host boundary rather than leaving the two
+compiler paths semantically different.
+
+## D415 — Unresolved call sentinels never become LLVM symbols
+
+Status: candidate implemented; browser and fixed-point proof required
+Date: 2026-08-24
+
+Browser fixture 854 exposed `Set.insert` calls emitted as
+`@sollang_m-1_s-1`. The first intrinsic-classification pass saw a provisional
+receiver type, retained the internal unresolved identity, and no later pass
+reclassified the call after binding and reference types became authoritative.
+The direct-call verifier also accepted only nonnegative symbol spellings, so the
+failure reached `llvm-as`.
+
+Typed IR now performs a receiver-aware Set intrinsic repair immediately after
+final binding/reference recovery and turns `insert`, `contains`, and `remove`
+into their canonical opcodes. The repair accepts authoritative flat receiver
+metadata, a reference-unwrapped canonical `typeId`, the receiver node's exact
+semantic AST type, or the earliest typed direct child of the exact call AST.
+The AST sources preserve nominal truth when an
+effect-bearing named function leaves the materialized receiver read without
+either IR annotation; it does not guess Set from the shared dictionary ABI.
+V006 rejects any remaining ordinary `-1/-1` call and any materialized kind-9
+sentinel whose receiver is canonically Set or whose linked-argument shape is
+call-emittable before LLVM emission and explains that the compiler's call or
+intrinsic resolution must be repaired rather than asking the user to rewrite valid code.
+V004 also recognizes negative sentinel spellings and its executable contract
+pins `sollang_m-1_s-1` as a rejected input.
+
+Typed IR kind 9 is a general materialized value form, not a call identity by
+itself. Valid `if` and other control materializations can retain negative target
+placeholders without ever becoming LLVM calls, so V006 combines kind 9 with
+canonical Set receiver identity or an actual linked-argument call shape rather than
+widening to every materialization.
+Fixture 1126 keeps both the generic negative control and materialized Set
+positive rejection. Compiler-of-compiler fixture 1128 mirrors the full
+effect-bearing 854 Set-operation mix and independently requires 16 canonical `insert`,
+two `contains`, and two `remove` opcodes, split into 16 ordinary and four
+materialized Set calls, with zero Set receivers left at `-1/-1`.
+`verify-native-set-intrinsics.ps1` additionally runs fixture
+854 through the actual Stage2 or Stage3 candidate, rejects the exact emitted
+symbol, runs V004 and `llvm-as`, links, executes, and compares stdout before
+promotion. This candidate gate exists because a managed preflight and the first
+simplified 1128 version both passed while the real self-host candidate still
+emitted the sentinel.
+
+## D416 — Backend call invariants follow actual call-emission classification
+
+Status: candidate implemented; focused self-host and fixed-point proof required
+Date: 2026-08-24
+
+The first native self-host run of compiler-of-compiler fixture 1128 did not
+reach its Set assertions. V006 instead reported hundreds of targetless builtin
+integer conversions such as `UIntSize(0)` and `Int(character - 48)`. Many were
+inside the reachable `typed.lowerContext` function, so function reachability
+alone could not distinguish them. Their internal `-1/-1` identity is consumed
+by direct LLVM conversion lowering and can never become a module call symbol.
+
+`typed.isBuiltinIntegerConversionCall`, `typed.isArenaConstructorCall`, and
+their combined targetless predicate now own this classification for entry,
+function, control-region, and V006 consumers. An attempted function-reachability
+filter was rejected after fixture 854 proved that it let an actually emitted
+`makeSet` body bypass V006. V006 therefore remains a whole-IR compiler invariant:
+dead general unresolved calls are invalid too, and backend reachability cannot
+be used to excuse them. This is compile-time classification only and adds no
+generated branch, allocation, wrapper, or dispatch. Fixture 1126 now proves
+ordinary unresolved rejection plus numeric, Arena, and materialized non-call
+controls plus materialized Set rejection. Fixture 1128 uses flat and canonical
+receiver checks and requires all 20 exact 854-shaped Set operations to carry
+canonical opcodes, while fixture 854 plus V004 prove that a reachable negative
+sentinel cannot reach LLVM.
+
+## D417 — Set intrinsic identity is opcode-based across call shapes
+
+Status: candidate implemented; focused self-host and fixed-point proof required
+Date: 2026-08-24
+
+The strengthened 1128 fixture proved that late Typed IR classification was no
+longer the remaining 854 failure: all 20 Set operations had canonical opcodes.
+Sixteen `insert` operations inside the effect-bearing named function were
+ordinary kind-6 calls, while the entry/control consumers were four materialized
+kind-9 calls. All 16 ordinary receivers retain both canonical `typeId` and flat
+Set metadata required by zero-dispatch lowering. The LLVM entry, function, and
+control emitters accepted only kind
+9 for Set opcodes, so kind-6 inserts ignored their correct opcode and fell
+through to `@sollang_m-1_s-1`.
+
+`typed.isSetIntrinsicCall` now defines the valid ordinary-or-materialized Set
+shape once, and `typed.isSetMutationCall` identifies `insert`/`remove` barriers.
+Entry, named-function, and control-region emission, both dependency schedulers,
+and mutable-read barriers consume those predicates. Ownership transfer remains
+separate. Function reachability now adds the implicit `Hash.hash` and `Eq.eq`
+edges required by reachable nominal-key Set lowering through the same canonical
+trait-method resolver used by emission. This keeps unrelated instance methods
+dead without removing helper definitions still called by generated Set CFG. All
+three generic-call fallbacks explicitly exclude the Set predicate, preventing a
+kind-6 node from emitting both intrinsic CFG and a stale direct-call target.
+The schedulers preserve the prior kind-9 Set barrier ordering byte-for-byte and
+use `isSetMutationCall` only to add the missing ordinary kind-6 insert/remove
+barrier; this avoids unrelated LLVM reorderings in existing owned/Text Set code.
+This is compile-time dispatch only: it introduces no wrapper, virtual call, allocation,
+or runtime branch. Fixture 1128 pins the exact ordinary/materialized split, and
+the native 854 gate still assembles, links, executes, and compares output before
+any Stage2 or Stage3 candidate can be promoted.
+
+## D418 — A control producer wrapper is not a trailing call
+
+Status: candidate implemented; Windows Stage2 and Stage3 proof required
+Date: 2026-08-25
+
+The public standard-library Stage2 gate exposed three S047 diagnostics in valid
+QUIC loops shaped as `frames -> take(0) -> when`. Final Typed IR represents the
+whole flow with a targetless kind-9 materialize wrapper whose `operand0` is the
+concrete `take` result and whose `operand1` is the following control. The
+control correctly names that same concrete result as its subject. This is the
+producer direction; the wrapper is neither a trailing runtime call with a
+duplicate peer argument nor an unresolved module call.
+
+`typed.isTransparentControlProducerWrapper` now owns the exact identity:
+kind 9, symbol and target `-1/-1`, opcode `-1`, and both edges present. S047 and
+V006 consume that predicate before applying call-only invariants. Concrete
+console and module calls remain outside the predicate even though their builtin
+symbols are also negative, so the existing fail-fast behavior is not weakened.
+Fixture 1129 preserves the positive `take -> when` topology, and fixture 1126
+adds a paired synthetic control: the transparent producer returns invariant 0
+while a concrete materialized trailing console call with the same duplicate
+edges returns S047 code 44. This is a Typed IR classification change only and
+adds no generated wrapper, runtime dispatch, allocation, or branch.
+
+A later full QUIC closure exposed the producer-side prerequisite that D418 had
+not made structural. The AST can contain a full `FlowExpression` or
+`ControlFlowExpression`, a synthesized same-start prefix, and the exact
+`ValueFlowExpression`. Scanning
+each complete span by spelling copied opcode -213 onto all three nodes and
+late linking formed reciprocal mutation-owner edges, which S051 correctly
+rejected. The semantic snapshot now indexes only the outer node that has both
+a shorter prefix and a direct control child. `flowIntrinsicOpcode` refuses
+`ControlFlowExpression`; the exact value-flow node remains the single take
+producer, the outer node is the transparent wrapper, and the synthetic prefix
+is omitted. Entry and function lowering share the same immutable index, so the
+repair adds no per-function all-call scan or generated runtime work.
+
+## D419 — Compiler stream slices have an explicit Typed IR identity
+
+Status: candidate implemented; Windows Stage2 and Stage3 proof required
+Date: 2026-08-25
+
+The Stage2 sensor-stream parity gate reached V006 after table and deferred-text
+streams had passed. Grammar expansion represents `take` and `skip` inside a
+stream pipeline without a module function target because the stream planner
+consumes those stages directly. They nevertheless retained the same
+`symbol -1`, `target -1`, `opcode -1` identity reserved for an unresolved
+ordinary call, so the strengthened invariant could not distinguish valid
+compiler structure from a missing function resolution.
+
+Function and entry Typed IR now assign compiler-only opcodes `-275` and `-276`
+to those two slices before stream planning. The planner recognizes the explicit
+identity and retains its existing lexical stage flags for declared stream
+functions; V006 remains strict for the real `-1/-1/-1` sentinel. This is a
+compile-time classification and adds no runtime branch, allocation, wrapper, or
+dispatch. Fixture 844 lowers the real billion-sensor source and requires one
+compiler slice with zero unresolved calls, while fixture 1126 pairs invariant
+code 0 for a compiler slice with code 50 for an ordinary unresolved call. The
+Stage2 sensor parity path remains the candidate promotion gate because it is the
+first real pipeline that combines declared stages, a grammar-provided slice,
+and terminal `each`.
+
+## D420 — Emitter preparation shares one recursive expression-type result
+
+Status: implemented; focused and Windows fixed-point verified
+Date: 2026-08-25
+
+`context_prepare.slg` previously called `typedIr.lowerContext`, which resolved
+the complete recursive expression-type arena internally, and then immediately
+called `expressionTypeIds.resolveContext` again for stream planning. The two
+passes had identical immutable input and the second result was already the
+exact data Typed IR needed, so every native compiler emission paid the full
+analysis cost twice.
+
+Typed IR now exposes `lowerResolvedContext` over a borrowed
+`ExpressionTypeIdSet`; the existing `lowerContext` remains a compatibility
+wrapper for independent consumers. Production emitter preparation resolves the
+set once, lowers Typed IR from that value, and passes the same value to
+`streamIr.build`. The boundary adds no runtime wrapper, allocation, copy,
+branch, or dispatch to generated programs. Example 293 compares the explicit
+resolved path with prepared, source-only, and compatible context lowering, and
+the compiler contract requires exactly one production resolution in the
+resolve-to-lower-to-stream order before a cold self-host build starts.
+
+The receipt-bound Stage2 and Stage3 compilers emitted byte-identical
+30,254,681-byte LLVM with normalized SHA-256
+`0AE031283780346672A20EDEA55D5BA624313F19F04B5B53A7B6B5785F93647D`.
+On the same source snapshot, Stage2 generation by the previous compiler took
+639 seconds and Stage3 generation by the new compiler took 599 seconds. The
+observed 40-second reduction is useful evidence, but remains one sequential
+measurement rather than a general performance guarantee.
+
+## D421 — Entry bindings use the same operand selection as functions
+
+Status: implemented; focused and Windows fixed-point verified
+Date: 2026-08-25
+
+The resolved-context performance regression added a fourth array-length
+comparison to example 293. Managed execution passed, but the generated
+self-host compiler emitted the mutable Boolean binding as an `i64` slot, stored
+an undefined inner wrapper value, and later branched on it as `i1`. A minimal
+five-array reproduction showed that the entry Typed IR bound the logical
+expression to its widest AST child, a transparent `len` wrapper, while the
+actual Boolean binary node followed it.
+
+Function lowering had already narrowed the old widest-child heuristic to the
+one case that requires it: compiler-known collection constructors with a wider
+same-start outer value. Entry lowering now uses that identical predicate.
+Ordinary bindings therefore keep their first direct value child, while nested
+collection construction retains its existing outer-value recovery. Fixture
+1130 requires the four-term logical result to survive mutable storage and
+assemble as Boolean LLVM; fixture 1131 records the binding-to-final-binary IR
+topology so a later heuristic cannot reintroduce the divergence.
+
+Fixtures 1130 and 1131 pass the managed oracle, receipt-bound SLG-first LLVM
+emission, `llvm-as`, link, execution, and the formal managed-versus-Stage2
+differential gate. The regenerated Stage2 and Stage3 compilers are the exact
+fixed point recorded above, with zero .NET build warnings and errors.
+
+## D422 — A child process is one affine native token from spawn through reap
+
+Status: candidate implemented; regenerated Stage2 and Stage3 proof required
+Date: 2026-08-25
+
+The synchronous process runtimes combined argv construction, launch, wait, and
+handle cleanup in one operation. That shape could not expose a running child.
+It also hid lifecycle defects: Windows did not require
+`WaitForSingleObject == WAIT_OBJECT_0` before reading and closing the process
+handle, while the self-host Linux `fork`/`execvp` path reported exec failure as
+ordinary exit 127 and neither Linux implementation guaranteed reap after an
+unrecoverable wait failure.
+
+The canonical primitive path is now
+`Command.spawn(move) -> Result<Child, Text>` followed by
+`Child.wait(move) -> Result<ExitStatus, Text>`. `Child` is an affine nominal
+owner of one Windows process handle or POSIX PID. A normal wait consumes and
+reaps it. Drop of an attached child terminates, waits, and releases the native
+token. Linux uses `posix_spawnp`, retries `waitpid` on `EINTR`, and performs a
+kill/reap cleanup before returning a wait error. Windows checks both wait and
+exit-code retrieval and performs terminate/wait/close on failure. Legacy
+`run` and `runToFile` call the same spawn and wait primitives rather than owning
+a second lifecycle.
+
+Managed lowering uses `%sollang.process_spawn_result { i64, i32 }`, dedicated
+runtime kinds, and the same owned-storage traversal used by enum payloads and
+containers. The self-host Typed IR reserves opcodes `-277` and `-278` for spawn
+and wait, resolves them by canonical `sys.process` module and symbol identity,
+and emits the matching ABI in entry, function, and control regions. Runtime-use
+selection is based on resolved intrinsic kinds and reachable owned `Child`
+types, not only surface call spelling; this prevents instance-flow syntax from
+silently producing empty drop glue.
+
+Owner-transfer discovery also follows `when`/enum-match subjects and resolves
+instance flow targets before deciding final cleanup. Without that rule, a
+successful `child -> wait` arm consumed the native token but function cleanup
+could still call the outer `Result<Child, Text>` drop glue, creating a second
+release opportunity if the operating system reused the handle or PID. The
+LLVM verifier now traces the generated drop-glue call graph from
+`sollang_drop_process_child` to its outer owned root. It rejects any external
+call to a nested `Child` drop after consuming wait and rejects more than one
+external cleanup of the outer root.
+
+Self-host move extraction applies the same rule to resolved kind-6 and
+value-producing kind-9 process intrinsics. A `spawn` or `wait` that does not
+resolve through the ordinary declared-function scan still has a move receiver.
+Recording that receiver once in the canonical move table suppresses enum-arm
+cleanup of the consumed `Command` or `Child`.
+
+Fixtures 1132 and 1133 respectively prove explicit wait and lexical scope-drop
+cleanup, including the concrete `sollang_drop_process_child` call. The
+`process-child-use-after-wait` diagnostic rejects reuse after consuming wait
+and retains the compiler's move-repair guidance. Fixture 87 remains the
+synchronous argv and missing-executable compatibility proof. Windows and Linux
+managed execution pass; regenerated self-host and fixed-point evidence remain
+the promotion gate.
+
+## D423 — Deferred interpolation result types retain scalar formatters
+
+Status: candidate implemented; regenerated Stage2 and Stage3 proof required
+Date: 2026-08-25
+
+Self-host interpolation lowers syntax before receiver and source-call result
+types are always concrete. Emission can later resolve a member, index, or
+source-call root to an integer or Boolean and select its scalar print helper.
+Runtime capability selection must therefore retain both scalar formatter
+families for interpolation kinds 5, 7, 8, and 10; testing only member kind 5
+lets emission create an undefined `sollang_runtime_print_i32` call.
+
+Fixture 1132 exposes the source-call form through
+`status -> exitCode` inside interpolation. The native process lifecycle gates
+compile it with the actual Stage2/Stage3 candidate, run the direct-call closure
+verifier before independent LLVM assembly, execute it, and also enforce the
+affine Child single-drop invariant. Managed fixture output alone is not proof
+of this self-host runtime-capability path.
+
+## D424 — Formal self-host subprocess waits are bounded
+
+Status: implemented; contract verified
+Date: 2026-08-25
+
+Stage2 and Stage3 already emitted periodic progress while compiling the full
+self-host compiler, but progress reporting did not impose a completion bound.
+Several differential and diagnostic subprocesses also called parameterless
+`WaitForExit()`, while later Stage3 checks used `Start-Process -Wait`. A stalled
+compiler or fixture could therefore hold the self-host verification lock
+indefinitely without producing a diagnostic.
+
+The formal Windows, Linux, and browser Stage2/Stage3 scripts now route their long
+compiler and fixture processes through a shared wait function with a 30-minute
+per-process ceiling. The shared path reports the named step, elapsed time,
+host-visible process-tree CPU, aggregate working set, and observed process count
+at one-minute intervals. `host-visible` is deliberate: a Windows `wsl.exe`
+launcher does not expose complete guest-process resource accounting and its
+near-zero host sample must not be presented as evidence that Linux compilation
+is idle. Timeout terminates the complete process
+tree where the host runtime supports it and reports the exact verification step.
+Full compiler generation distinguishes analysis from LLVM emission and reports
+the prior generation's verified LLVM length as the emission denominator.
+Full-compiler heartbeats remain useful progress evidence but no longer
+substitute for a hard limit. The shared function has a completed-process
+positive control, a live parent/child telemetry control, and a timed-out
+parent/child process-tree negative control.
+The self-host compiler contract rejects parameterless `WaitForExit()` in all
+four native scripts and `Start-Process -Wait` in the browser compiler build,
+and requires that shared path, preventing an unbounded wait from silently
+returning during later gate additions.
+
+The same contract covers the nested Set, binary codec, source-style, formatter,
+and owned-block diagnostic verifiers plus the Stage3 Result propagation build.
+Using a direct PowerShell invocation or `Start-Process -Wait` for a compiler is
+not a bounded substitute merely because the fixture is normally small.
+Produced fixture executables use the same bounded capture helper, which retains
+exit code, stdout, and stderr before deleting its private temporary directory.
+The browser gate applies that checked helper to `llvm-as`, `clang`, `wasm-ld`,
+compiler-side Node execution, and produced-WASM Node execution as well as the
+full compiler emission. The helper's behavioral control verifies all three
+channels with a nonzero exit, and the compiler contract rejects reintroduced
+direct browser toolchain or Node calls.
+
+## D425 — Formal Linux self-host verification is SLG-first
+
+Status: implemented; contract and current Linux fixed point verified
+Date: 2026-08-25
+
+The Windows Stage2/Stage3 flow had moved to a verified SLG seed with the managed
+compiler retained as an explicit recovery oracle, but the formal Linux Stage2
+script still ran the managed fixture builder and used its C#-compiled driver as
+Stage1. A Linux pass could therefore prove managed-to-SLG parity while being
+reported beside the stricter SLG-to-SLG Windows fixed point.
+
+Linux Stage2 now requires the `selfhost-slg-seed.exe` published only after a
+complete Windows Stage3 fixed point and verifies its SHA-256 receipt before any
+Linux emission. A missing or mismatched seed fails before compilation. Linux
+Stage2 emission, assembly, and linking now target candidate artifacts. All
+native and differential gates run against that candidate, the source snapshot
+is re-fingerprinted, and only then are LLVM, bitcode, object, executable, output
+hash receipt, and finally the input receipt promoted. A cancellation cannot
+authenticate partial output, and reuse no longer trusts timestamps. The
+self-host compiler contract requires the seed, candidate, fingerprint, and
+receipt paths and forbids `dotnet run` in the formal Linux Stage2 script. The
+managed compiler remains an oracle and explicit Windows recovery bridge; it is
+no longer an implicit Linux bootstrap path.
+
+Linux Stage3 now rejects Stage2 unless its content fingerprint and LLVM,
+bitcode, and executable receipt all match. It generates the next compiler only
+under candidate names, binds that candidate to the Stage2 executable hash and
+ordered compiler-source fingerprint, runs the fixed-point and native gates,
+then promotes output and input receipts last. Thus both Linux generations have
+the same cancellation and stale-input guarantees as the Windows flow. The
+current 30,297,787-byte Linux Stage2/Stage3 fixed point passed with normalized
+SHA-256 `DAD5300890F22B96A05EADA3FA84CF03CE6606679E7BFA79B89804558096F4CE`.
+
+## D426 — Published Stage3 artifacts retain completion receipts
+
+Status: implemented; contract and regenerated Windows/Linux fixed points verified
+Date: 2026-08-25
+
+Windows Stage3 already bound candidate LLVM, bitcode, and executable to input
+and output receipts while running its gates, but discarded both candidate
+receipts after promotion. Only the copied incremental seed retained a hash.
+The published `selfhost-stage3.*` compiler therefore lacked an independently
+checkable completion record even though the feedback seed remained protected.
+
+Windows and Linux Stage3 now publish a content input fingerprint and an output
+receipt covering LLVM, bitcode, and executable after candidate promotion; the
+Linux receipt also covers the promoted native object. The input fingerprint is
+moved last. Candidate receipts still cannot substitute
+for published receipts. The compiler contract requires these public receipt
+paths so later tooling can distinguish a complete fixed point from stale,
+partial, or externally modified Stage3 artifacts.
+
+The shared receipt contract accepts explicitly named additional artifacts in
+ordinal name order. Its behavioral verifier checks that order, mutates a
+synthetic native object, and
+requires receipt rejection, while the compiler contract requires every Linux
+Stage2 and Stage3 receipt call to include its object path. Publishing an object
+without authenticating it is therefore a contract failure rather than a
+documentation-only convention.
+
+## D427 — Release packaging consumes Stage3 provenance, not only its executable
+
+Status: implemented; current Windows/Linux provenance gates verified
+Date: 2026-08-25
+
+The native release path checked that a Stage3 executable existed, copied it,
+compared the copied hash, and required a full CLI parity proof keyed by that
+hash. It did not consume the new published Stage3 input and output receipts.
+The parity proof could establish behavior of one binary while leaving the
+fixed-point LLVM, bitcode, Linux object, or current ordered-source provenance
+unauthenticated at packaging time.
+
+`verify-selfhost-stage3-artifacts.ps1` now verifies the complete Stage2 and
+Stage3 output receipts, including both Linux objects, requires normalized
+Stage2 and Stage3 LLVM equality, then recomputes the Stage3 input fingerprint
+from the sibling Stage2 executable hash and the ordered compiler/runtime manifests.
+Windows and Linux Stage3 invoke it immediately after publishing their receipts,
+and `publish-release.ps1` invokes it before copying either native compiler. The
+compiler contract pins all three consumers, the fixed point, and the
+input/output checks. A stale
+or independently modified Stage3 set therefore fails before package staging;
+the existing native CLI parity proof remains an additional behavior gate.
+
+## D428 — Release cleanup is confined to declared output children
+
+Status: implemented; behavioral contract verified
+Date: 2026-08-25
+
+`publish-release.ps1` previously removed the complete user-supplied
+`OutputRoot` recursively before staging a release. A broad or mistaken value
+could therefore erase unrelated data even though the release owns only its
+staging directory, two smoke directories, two archives, and checksum file.
+
+The release now rejects volume and repository roots, creates the output root
+without replacing it, and deletes only the six explicit owned children through
+`Remove-OwnedReleasePath`. That helper resolves absolute paths and rejects the
+output root itself, rooted relatives, parent traversal, and siblings before any
+recursive deletion. Its behavioral contract removes a synthetic owned child,
+preserves a sibling sentinel, and exercises output-root, sibling, volume-root,
+and repository-root negative controls. The compiler contract also forbids the
+old broad `Remove-Item $OutputRoot -Recurse` form.
+
+## D429 — Browser stdlib loading preserves every logical-module fragment
+
+Status: implemented; fresh and authenticated-reuse browser suites verified
+Date: 2026-08-25
+
+The browser verification host recursively discovered every public `.slg` file
+but indexed them as `namespace -> one source`. Because Sollang intentionally
+splits one logical module across public and `sys/runtime` fragments, the later
+sorted file replaced the earlier file. `std.sequence` therefore retained only
+its runtime fragment and silently lost `beforeEach` and `flatMap`; V006 caught
+the unresolved targets only when browser fixture 576 reached LLVM emission.
+
+The host now indexes `namespace -> ordered source fragments`, adds every
+fragment for an imported namespace, and follows imports from each fragment.
+The compiler contract rejects the former last-fragment-wins map and requires
+the multi-fragment expansion. Fixture 576 is the focused positive control, and
+the complete browser Stage2 suite remains the promotion gate.
+
+## D430 — Browser verification realloc preserves existing program state
+
+Status: implemented; fresh and authenticated-reuse browser suites verified
+Date: 2026-08-25
+
+The produced-program browser host implemented `sollang_browser_realloc` as a
+fresh allocation without copying the old block. Growable containers therefore
+lost prior elements whenever their backing storage moved, but fixtures that
+never crossed a relevant mutation pattern could still pass.
+
+The host now records allocation sizes, reuses a sufficiently large old block,
+and copies `min(oldLength, newLength)` bytes when growth moves the block.
+Fixture 1134 stores six 32-byte structs with UInt64 identity fields, crosses the
+initial four-slot capacity, and requires both the first and last hashes plus the
+complete iteration to survive. The compiler contract also rejects the former
+discarding implementation. This verifier contract is distinct from the
+compiler's own browser-host allocator, which already preserved copied bytes.
+
+## D431 — Interpolation uses emitted storage width
+
+Status: implemented; fresh and authenticated-reuse browser suites verified
+Date: 2026-08-25
+
+`UIntSize` is pointer-sized semantically, but the current dynamic-array and
+slice container ABI materializes length as i64 on every LLVM target. The
+self-host emitter previously selected wasm32's i32 semantic width while naming
+the already emitted i64 length value, producing invalid LLVM.
+
+The shared interpolation width query now gives the length node's canonical
+emitted storage width final authority. Fixture 1135 compiles, assembles, links,
+and executes a dynamic-array length interpolation on the browser target.
+
+## D432 — Entry control scheduling excludes non-dependencies
+
+Status: implemented; fresh and authenticated-reuse browser suites verified
+Date: 2026-08-25
+
+The entry-point scheduler treated every earlier unscheduled Typed IR node as a
+dependency of a value-producing control expression. Nodes inside a separately
+emitted control region and nodes owning the control are not dependencies; after
+an `each` loop they could block a trailing value `if` and its console consumer
+forever while still producing syntactically valid LLVM.
+
+Entry scheduling now applies the same region and ownership exclusions as the
+named-function scheduler. Fixture 1136 requires the trailing `if -> println`
+effect after `each` to remain present and execute exactly.
+
+## D433 — Browser compiler reuse is receipt-authenticated
+
+Status: implemented; fresh build and authenticated reuse verified
+Date: 2026-08-25
+
+`build-stage2-browser.ps1 -ReuseCompilerArtifact` previously checked only that
+the WASM file existed. This allowed current source-contract changes and fixture
+loader changes to be exercised against a compiler that did not contain those
+sources, producing misleading failures such as the old single-fragment call
+resolver after the loader itself had already been repaired.
+
+A browser compiler build now binds the Stage2 compiler, ordered source manifest
+and sources, build recipe, and LLVM toolchain into an input fingerprint. It
+publishes hashes for LLVM, bitcode, object, and WASM before publishing that
+fingerprint last, only after the complete browser suite passes and the inputs
+remain stable. Reuse authenticates both receipts and fails before fixtures on
+any missing, stale, or mutated input or output.
+
+## D434 — Browser effect structure is checked at the runtime abstraction
+
+Status: implemented; fresh and authenticated-reuse browser suites verified
+Date: 2026-08-25
+
+Fixture 1136's first structural verifier required a direct low-level
+`sollang_write` call. Correct browser LLVM emits Text output through
+`sollang_runtime_print`, which then owns the host-write detail. The verifier
+therefore rejected a correct value-if merge and console effect.
+
+The gate now checks the stable runtime-print call plus the generated if branch,
+then relies on linked exact execution for behavior. It does not couple semantic
+effect preservation to a replaceable lower-level write implementation.
+
+## D435 — SourceText keeps its aligned ABI width on wasm32
+
+Status: implemented; native fixed point plus fresh and authenticated-reuse browser suites verified
+Date: 2026-08-25
+
+D344 correctly required collection storage to follow the runtime-projected
+`SourceText` ABI, but its shared storage query still calculated that ABI as
+four pointer-width fields. The actual LLVM value is `{ ptr, i64, ptr, i64 }`.
+Its i64 members retain eight-byte alignment on wasm32, so the structure remains
+32 bytes rather than shrinking to 16.
+
+`storageSize(SourceText)` and its legacy alignment now return 32 and 8 on every
+target. Fixture 1137 supplies three compiler sources and resolves a public
+function from the second open-import fragment, exposing the third value that a
+64-byte initial allocation previously corrupted. Browser fixture 797 retains
+the same proof against the real multi-fragment `std.sequence` module. A fresh
+browser compiler and authenticated reuse are required before closing the
+candidate.
+
+## D436 — Browser generation requires a current native fixed point
+
+Status: implemented; current native fixed point plus fresh and authenticated-reuse browser suites verified
+Date: 2026-08-25
+
+Hashing the selected Stage2 executable into the browser input fingerprint says
+which compiler was used, but not whether that compiler belongs to the current
+self-host source generation. An older receipt-valid Stage2 compiled the updated
+emitter sources into a browser compiler while still laying out that compiler's
+own `SourceText` array with the previous 16-byte wasm32 rule. The structural
+gate caught the mismatch only after the long emission completed.
+
+Browser build preflight now invokes the published Windows Stage2/Stage3 artifact
+verifier for the selected Stage2's sibling Stage3. It requires current ordered
+source contents, authenticated artifacts, and an exact normalized LLVM fixed
+point before browser reuse or generation can start.
+
+## D437 — Browser verifier optional inputs are named
+
+Status: implemented; fresh build and authenticated reuse verified
+Date: 2026-08-25
+
+Fixture 1137 was the first browser compiler case to supply an additional source
+manifest without also expecting a diagnostic. The initial runner represented
+the absent diagnostic as an empty positional string. PowerShell rejected that
+element while binding the mandatory argument array, so ten executable cases
+passed before the verifier itself stopped and the focused multi-source proof
+never ran.
+
+The browser verifier now parses explicit `--source-manifest` and expected-
+diagnostic value pairs, rejects missing values and unknown options, and no
+longer depends on an empty process-argument placeholder. The build contract
+pins both named call sites. Publication still requires the complete fresh
+executable and diagnostic suite followed by authenticated reuse.
+
+## D438 — Browser checked diagnostics use the combined compiler stream
+
+Status: implemented; fresh build and authenticated reuse verified
+Date: 2026-08-25
+
+The browser host exposes separate ordinary-output and diagnostic imports, but
+the self-host compiler's checked syntax and semantic reporting uses its normal
+console path. The expected-diagnostic verifier searched only the diagnostic
+import, so it rejected the exact return-outside-function error that appeared in
+ordinary output.
+
+Expected-diagnostic cases now inspect the combined compiler message stream and
+still reject any output containing the wasm target triple. This accepts a
+checked failure regardless of host channel without allowing successful LLVM
+emission to masquerade as a diagnostic pass.
+
+## D439 — Browser diagnostic argv is UTF-8 Base64 across Start-Process
+
+Status: implemented; fresh build and authenticated reuse verified
+Date: 2026-08-25
+
+The first named diagnostic option still sent its human-readable text directly
+through PowerShell `Start-Process`. On Windows that array is flattened into a
+command line; spaces divided the expected message into multiple Node arguments,
+and the verifier rejected the second word as an unknown option.
+
+The build now UTF-8 encodes and Base64 wraps expected diagnostics before process
+launch. The Node verifier decodes the explicit
+`--expect-diagnostic-base64` value. This keeps spaces, quotes, and non-ASCII
+text exact without a shell-specific manual quoting layer.
+
+## D440 — Path behavior is instance-owned and runtime intrinsics are private fragments
+
+Status: implemented; focused managed and self-host fixtures verified
+Date: 2026-08-25
+
+`sys.path.Path` behavior belongs to a concrete path value. `query`,
+`byteCount`, text comparisons, absolute checks, joins, confinement
+normalization, and the raw `pathText` projection are therefore inherent
+methods. Only the `fromText` factory and target-dependent `nativeStyle`
+boundary remain module functions. The public vocabulary lives in
+`sys/path.slg`; `queryRaw`, `pathText`, and `nativeStyle` intrinsic declarations
+live in `sys/runtime/path.slg`.
+
+The instance-policy contract reports zero remaining `sys.path` migration debt,
+the runtime-layout gate owns the path fragment, and all compiler manifests
+include it. Fixtures 424, 565, 677, and 1139 pin owned behavior, canonical
+runtime lowering, and the same-name negative control.
+
+## D441 — Indexed owners borrow only after exact instance-method resolution
+
+Status: implemented; positive and negative ownership fixtures verified
+Date: 2026-08-25
+
+Whether `owners[index] -> method` is a readonly borrow or a move cannot be
+decided before resolving `method` against the receiver type. Managed flow
+inference now infers the indexed source once, resolves the first target as an
+inherent or global function, and retains the provisional borrow only for a
+default-input target. A `move` target still requires `take` and receives the
+existing repair guidance.
+
+Fixture 1138 proves a readonly inherent call performs no copy or move. The
+existing `array-owned-element-index` diagnostic remains the consuming negative
+control.
+
+## D442 — Intrinsic methods are not foreign C ABI functions
+
+Status: implemented; self-host LLVM and negative-control fixtures verified
+Date: 2026-08-25
+
+The self-host AST now preserves only the exact `= intrinsic` token pair on
+global functions and inherent methods; a declaration merely named `intrinsic`
+remains ordinary. That bit means the declaration has no Sollang body, but it
+does not by itself make the declaration a dynamically loaded foreign C ABI
+function. Foreign ABI validation, symbol globals, and loader initialization
+additionally require the exact `NativeFunctionDeclaration` grammar node from a
+native library. Runtime intrinsics are instead lowered by canonical module,
+exact symbol, and declaration identity.
+
+This separation prevents invalid body emission and foreign-ABI diagnostics for
+runtime methods. Fixtures 565 and 677 prove canonical path intrinsic lowering;
+fixture 1139 proves a same-named method without `= intrinsic` remains an
+ordinary call.
+
+## D443 — Instance-policy debt excludes mechanically provable boundaries
+
+Status: implemented; stdlib instance-policy contract verified
+Date: 2026-08-25
+
+The first global API inventory classified most newly discovered QUIC and crypto
+functions as migration debt, including parameterless protocol identifiers,
+entropy-backed constructors, and strict byte decoders. Those functions have no
+natural receiver, so counting them as instance work obscured the operations
+that still need a zero-cost owner type.
+
+The contract now distinguishes constants, factories, parsers, flow adapters,
+and genuine migration candidates. Constants must remain parameterless pure
+expression declarations, and parser exceptions must retain an explicit
+`parse*` or `decode*` boundary name. The gate reports 277 reviewed globals:
+162 justified boundaries and 115 instance-migration candidates. Reclassifying
+an operation cannot silently hide it behind an unchecked label.
+
+## D444 — Runtime intrinsic identity is finalized after call targets
+
+Status: implemented; Stage2 7/7 and Stage3 fixed point verified
+Date: 2026-08-25
+
+The directory runtime pass assigned `readRaw` and `create` opcodes before every
+call target was final. The Path instance migration changed the construction
+order inside `readRawSnapshot`; its `readRaw` call appeared after that pass and
+remained an ordinary call to a bodyless declaration. `llvm-as` accepted the
+external-looking declaration, but native linking failed on
+`sollang_m101_s12`.
+
+The exact `= intrinsic` marker now survives on both global and inherent
+declarations, while foreign ABI identity requires the native-function CST rule
+rather than the shared bodyless bit. A final canonical `sys.directory` module,
+symbol, and declaration pass assigns opcodes to late calls. Fixture 1140 pins
+the declaration bit, opcode `-215`, and zero ordinary calls. The direct-call
+closure verifier now distinguishes LLVM `define` from `declare`: an internal
+`sollang_m*_s*` call requires a definition, while target-runtime and ordinary
+external symbols retain their explicit declaration contracts. The failed
+candidate is now rejected as V004 on `sollang_m101_s12` before `llvm-as` or
+linking. Stage2 completed all seven phases and Stage3 published authenticated
+fixed point `0B991E5C725170A0B9FA93F630D4C2384FFA3B9CA11F777589A20F40CFEFC452`,
+closing C48 and this decision; verifier defect C49 remains closed by its
+negative contract.
+
+## D445 — Manifest-backed runtime probes share the target link contract
+
+Status: implemented; Windows executable probes and static contract verified
+Date: 2026-08-25
+
+After the monolithic runtime moved to `sys/runtime/**`, a focused probe that
+includes the complete runtime manifest also inherits that target's native link
+dependencies. Windows Stage2 probes therefore use one ordered library contract
+for `shell32`, `bcrypt`, and `ws2_32` instead of maintaining partial lists per
+probe. The compiler contract pins the shared declaration across seven runtime,
+compiler, and public-stdlib links. Early probes execute before expensive Stage2
+generation, while candidate and public-stdlib links retain the same target
+closure through final verification.
+
+## D446 — Foreign ABI identity is identical at definition and call sites
+
+Status: implemented; Stage2 7/7 and Stage3 fixed point verified
+Date: 2026-08-25
+
+Narrowing only native-function definition emission was insufficient: ordinary
+call lowering still treated every global `= intrinsic` declaration as a foreign
+symbol. The compiler then emitted an indirect load from an undefined
+`sollang_native_function_m94_s4` for `sys.runtime.flushStandardOutput`, despite
+also emitting its concrete runtime wrapper.
+
+One exact symbol predicate now requires the `NativeFunctionDeclaration` CST
+rule and is shared by native definitions, ordinary call targets, and fallible
+native calls. A Stage2-owned focused probe requires the runtime intrinsic to
+lower directly to `sollang_runtime_flush_stdout` with no native-function state
+global. The emitted-LLVM closure gate V007 additionally rejects native function
+or library state-global uses without definitions before `llvm-as`. C51 and this
+decision are closed by Stage2 7/7 plus authenticated Stage3 fixed point
+`0B991E5C725170A0B9FA93F630D4C2384FFA3B9CA11F777589A20F40CFEFC452`.
+
+## D447 — Repository compiler builds are warning-and-note zero
+
+Status: implemented; authoritative formatter and static gates verified
+Date: 2026-08-25
+
+N001/N002 remain nonblocking guidance for external user programs, but they are
+defects in authoritative repository sources. The reusable native compiler
+bootstrap previously relayed notes and still published its fingerprint, while
+ordinary examples rejected only `warning Snnn`. Both paths now reject any
+unexpected `warning Snnn` or `note Nnnn`; diagnostic fixtures remain allowed
+only through their explicit expected-stderr contract.
+
+The current formatter was mechanically applied to the affected AST, Typed IR,
+and core-call sources, and the authoritative check covers all 194 sources under
+`selfhost`, `stdlib`, and `syntax/generated`. This closes C53 and prevents the
+next long Stage2 run from accepting newly introduced repository notes.
+
+## D448 — Resolve the measured compiler-generation parallelism gap next
+
+Status: first retained-index candidate measured and rejected; O0 direct-index candidate under verification
+Date: 2026-08-25
+
+ManagedRecovery Stage1 spent about 300 seconds generating the current
+103-source, 95,755-line Stage2 before LLVM output, with CPU time tracking wall
+time. Its representative codegen minute then used about 8.6 cores. In contrast,
+the resulting SLG Stage2 used 436 CPU seconds in the first 60 wall seconds while
+analyzing the same compiler to produce Stage3. The worker pool and frontend
+parallel boundary therefore work in the SLG generation; the measured defect is
+a Stage1-to-Stage2 generation-parity gap, not proof that semantic/package merge
+is inherently serial.
+
+The next verified-SLG-seed Stage2 run resolved the apparent contradiction. It
+used 472 CPU seconds in the first 60 wall seconds, but the eight compute workers
+had each stopped at 69.1-76.8 CPU seconds while one thread continued running.
+Total CPU then advanced nearly one-for-one with wall time until LLVM output
+began at 449 seconds with 1,019 CPU seconds. The parallel source-local burst is
+healthy; an uninstrumented post-burst portion of `prepareAnalyzed`, recursive
+expression-type resolution, Typed IR lowering, or context construction owns
+the long serial tail.
+
+The next optimization must first explain and remove that generation disparity,
+add those exact per-phase measurements, preserve canonical ordered products, and prove
+wall-time improvement with byte-identical LLVM.
+Until then, authenticated candidate receipts are the safe verification-speed
+path: the two post-generation gate repairs in this run resumed the same Stage2
+candidate instead of repeating its nine-minute generation.
+
+A current static inventory narrows one measured candidate without yet claiming
+a speedup. `expression_type_ids.resolveContext` already allocates and fills one
+global-AST-indexed `referenceIndexByTypeAst` array, uses it during recursive
+resolution, and then discards it at the `ExpressionTypeIdSet` boundary. Typed IR
+subsequently performs seven complete `recursiveTypes.references` searches and
+two searches over the distinct `prepared.semantic.references` table;
+standalone type checking contains three more recursive-reference searches. The
+same Typed IR path also has
+eleven nominal-table and four composite-table full searches. The first bounded
+experiment is therefore to transfer the already-built reference index into the
+result and borrow it for exact source-module/type-AST lookups, without allocating
+a second index or adding a runtime wrapper. Capture a fresh schema-v3 fixture
+1043 profile before the change, compare repeated same-fingerprint samples and
+byte-identical LLVM afterward, and measure peak memory as well as wall time
+because retaining the existing array for longer can trade scans for live memory.
+Schema v3 launches each phase as a separately measured compiler process and
+records total wall time, CPU time, and peak working set. This makes the memory
+tradeoff and the serial-versus-parallel nature of the measured tail explicit
+instead of inferring either from wall time alone.
+
+Repeated comparisons are now deterministic rather than a manual reading of
+JSON files. `scripts/compare-selfhost-profiles.ps1` requires at least three
+schema-v3 samples per side, rejects mixed fingerprints or environments within
+either group, and compares median phase-local wall, CPU, and peak working set.
+The caller must supply wall-improvement, CPU-regression, and memory-regression
+thresholds before execution. A structured report is written before a failed
+threshold throws, so unfavorable measurements are preserved. The schema
+contract pins passing medians, a threshold failure with retained report, and a
+mixed-fingerprint negative control.
+
+The first current-fingerprint baseline measured semantic preparation at
+18,592ms and semantic plus expression types at 51,725ms, but correctly failed
+schema validation because post-exit `Process.PeakWorkingSet64` returned zero.
+That value was a measurement defect, not a zero-memory run. The isolated phase
+runner now uses exact `ProcessStartInfo.ArgumentList`, starts asynchronous
+stdout/stderr drains, and samples live CPU plus peak working set every 25ms
+inside the existing bounded timeout. A phase with no observed positive peak
+fails before profile publication. The current Stage1 cache is retained, so the
+corrected baseline reruns only the measured phases rather than rebuilding the
+compiler.
+
+The corrected three-sample fixture-1043 baseline is now frozen at compiler
+fingerprint
+`6439AA5AB41C939FF2905E296C1A6B7AF3983468D5EBA5C21609467190EBCEED` and
+fixture fingerprint
+`8F7C76008F4D3F458E4072FEA1F24F253E6A54E74BAB61E67E12CD37E386BE6B`.
+Its median expression-type delta is 33,327ms wall, 32,828ms CPU, and
+167,657,472 bytes peak working set. Its median post-expression Typed IR delta
+is 136,007ms wall, 134,078ms CPU, and 167,673,856 bytes peak working set.
+
+Before observing candidate measurements, the acceptance thresholds are fixed
+as follows. The targeted Typed IR phase must improve median wall time by at
+least 1%, may not regress median CPU time, and may increase peak working set by
+at most 2%. The expression-type phase is a non-target control: its median wall
+and CPU time may each vary by at most 2%, and its peak working set may increase
+by at most 2%. A candidate also requires exact focused execution, compiler
+source contracts, and normalized managed/new-Stage2/new-Stage3 LLVM parity;
+passing performance numbers cannot compensate for different generated code.
+The candidate retains the resolver's one existing global-AST reference index,
+transfers its ownership into `ExpressionTypeIdSet`, and uses it for seven
+original Typed IR exact lookups, one new declared-field stabilization lookup,
+and three type-check exact lookups over that same successful recursive-reference
+table. Two function-result searches retain their complete traversal because
+they also filter a contextual array shape; a single index keyed only by global
+AST cannot represent that second query dimension. Parent, ancestor, and
+owned-copy traversals likewise remain explicit scans.
+
+The first fixed three-sample candidate was not accepted. The expression-type
+control regressed from 33,327ms to 34,265ms median wall time (2.815%) and from
+32,828ms to 34,218ms CPU (4.234%); peak working set increased 0.066%. The
+targeted post-expression Typed IR median improved from 136,007ms to 134,622ms
+(1.018%), but CPU increased from 134,078ms to 134,203ms (0.093%) and therefore
+failed the predeclared zero-CPU-regression gate; peak increased 0.032%. Both
+failed structured reports remain under `artifacts/profiles` and the thresholds
+are not relaxed after observing them.
+
+That candidate was measured at `O0`. The eleven retained-index consumers used
+a top-level lookup helper, so each formerly linear search became a real
+function call plus repeated range checks rather than an inlined flat-array
+load. The next bounded candidate removes the unused helper and performs eight
+Typed IR plus three type-check lookups directly after proving the local
+source/type-AST range. It retains the same single index array, adds no wrapper
+or allocation, and the compiler contract rejects a return to helper calls.
+Managed fixture 1043 must compile and execute before another long SLG build;
+the same frozen schema-v3 thresholds remain authoritative for the new
+candidate rather than treating the failed first comparison as a reason to tune
+the gate.
+
+The replacement candidate's live feedback generation confirms that this local
+optimization is not the whole compiler-speed answer. Its first two minutes
+accumulated about 2,491 process-tree CPU seconds, but minutes three through
+seven advanced by only about 60 CPU seconds per wall minute while memory grew
+from roughly 106MiB to 642MiB. The source-local parallel burst is followed by a
+long effectively single-core emission tail. After the retained-index gate is
+resolved, the next profile must therefore time the frozen-state preparation,
+runtime/type preamble, function emission, and final module assembly separately;
+the 1% Typed IR experiment is not presented as a 32-minute generation fix.
+
+Adding the retained index field also exposed a pre-existing order-sensitive
+self-host defect before candidate execution: the old Stage3 assigned
+`[SourceText; ~]` to three explicitly declared `[Text; ~]` bindings used as
+`PackageAnalysis.sources`, and S028 correctly stopped the mismatched field ABI.
+The canonical field pass previously propagated an expected collection type only
+to a direct literal. It now crosses a plain name only when that name resolves to
+a binding whose explicit declared type exactly equals the field type and whose
+initializer is a collection literal; name, binding, and initializer are then
+updated together. The successful-reference index also excludes failed or
+untyped references while it is built, matching the former status-checked scans.
+This is a ManagedRecovery bridge case because the verified old Stage3 cannot
+compile the valid order-perturbed source while the managed oracle can; the new
+SLG compiler must immediately compile itself and reach Stage2/Stage3 parity.
+The bridge also exposed a stale-receipt cache defect: a rebuilt Stage1 could
+retain the previous executable hash when a profile-only run exited before
+verification receipt publication. Stage1 cache misses now invalidate that
+receipt before replacement, so the new binary is either independently verified
+later or deliberately remains unauthenticated while still being reusable for
+the remaining profile samples.
+
+## D449 — QUIC wire values and P2P records own their behavior
+
+Status: implemented; managed and current-generation Stage3 comparison passed
+Date: 2026-08-25
+
+Version-negotiation `Information.encode/validateClient`, version-negotiation
+`Packet.encode/validateOriginal`, and P2P `PeerRecord.validate` have natural
+domain receivers. They are inherent methods and use pipeline calls; the old
+module-level operations were removed rather than retained as compatibility
+wrappers. The methods borrow their existing value, preserve the same bodies
+and error types, and add no allocation, copy, or dynamic dispatch. Global
+`decode` functions remain explicit parser boundaries because no validated
+domain value exists before decoding succeeds. The checked global API inventory
+therefore decreases from 277 globals with 115 migration candidates to 272
+globals with 110 candidates while keeping 162 reviewed exceptions.
+
+## D450 — QUIC frame queries are receiver-owned and frame types are canonicalized
+
+Status: implemented; managed and current-generation Stage3 comparison passed
+Date: 2026-08-25
+
+`Ack.acknowledges(packetNumber)` is a read-only inherent domain query in the
+canonical frame module; no compatibility wrapper, allocation, copy, or dynamic
+dispatch was added. The separate `frame_types` namespace was removed and its
+declarations now live with their behavior in `std.net.quic.frame`.
+
+The attempted `Value.encode: move self` migration exposed a compiler gap: an
+owned enum receiver taken from the mutable frame collection did not resolve to
+its inherent method and instead fell through to an unrelated open-import
+function with the same member name. The explicit public `frame.encodeValue`
+function was therefore restored as explicit migration debt instead of shipping a broken
+stdlib or hiding the prerequisite behind a wrapper. `encodeAll` remains
+separate migration debt until its mutable collection has a natural receiver or
+a checked codec instance. The global inventory decreases from 272 globals and
+110 migration candidates to 271 and 109 while reviewed exceptions remain 162.
+
+## D451 — TCP no-delay is a live zero-cost stream policy
+
+Status: implemented; Windows/Linux Stage2/Stage3 fixed points and global install verified
+Date: 2026-08-25
+
+Rust `TcpStream`, Go `TCPConn`, and .NET `TcpClient`/`Socket` all place Nagle
+policy on the connected socket instance. Sollang follows that abstraction with
+`TcpStream.setNoDelay(enabled)` and `TcpStream.noDelay`, both fallible,
+non-consuming instance operations. The names expose portable intent while the
+runtime owns the Windows/Linux `TCP_NODELAY` constants and error mapping.
+
+The affine `TcpStream` representation remains one native handle. Managed and
+self-host lowering extract that handle and call `setsockopt` or `getsockopt`
+directly; there is no option object, compatibility global, cached shadow state,
+allocation, copy, or dynamic dispatch. Fixture 1141 toggles true and false and
+observes the live kernel state. Its LLVM contracts require the direct platform
+primitives on Windows and Linux. The implementation also closes the previously
+unlisted `getsockopt` symbol in the compiler-owned Windows import library.
+
+Sources:
+
+- https://doc.rust-lang.org/std/net/struct/TcpStream.html
+- https://pkg.go.dev/net
+- https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.tcpclient.nodelay?view=net-10.0
+- https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.socket.setsocketoption?view=net-10.0
+
+The canonical Windows compiler completed Stage2 7/7 and the Stage2/Stage3
+30,318,335-byte normalized LLVM fixed point
+`E46E5C75F457F738B09EEF86DF8380124BD0F953BEC19684F129F02561DC98FC`.
+The published Stage3 executable and verified feedback seed have SHA-256
+`C9ED64FB9E1F33FB3F078D50DD1B6D2E20975FC0C79C3082F75159B9494A0585`.
+That exact executable plus all 95 stdlib files are installed at
+`P:\Utils\sollang`; the environment-resolved LLVM path built and ran fixture
+1141 from the installed tree. The previous compiler and stdlib remain in the
+timestamped `20260825-120034` backups.
+
+The current Linux compiler completed its 30,297,787-byte Stage2/Stage3 fixed
+point with normalized LLVM SHA-256
+`DAD5300890F22B96A05EADA3FA84CF03CE6606679E7BFA79B89804558096F4CE`;
+the published Stage3 executable has SHA-256
+`AD21BC826C944A270716AA57A12E137E7AEDAAB56579FED2771554D8BDB62CE1`.
+Both published Linux generations independently built and ran fixture 1141, and
+their retained LLVM passed the Linux declarations, direct-call closure, and
+exact two-set/two-get call-count contracts. The formal Linux Stage3 verifier
+now retains that two-generation fixture gate for subsequent promotions.
+
+## D452 — Synchronous socket timeouts are typed relative stream policy
+
+Status: Windows/Linux Stage2/Stage3 fixed points and warning-zero build verified
+Date: 2026-08-25
+
+Rust exposes read and write timeouts as `Option<Duration>` on `TcpStream`, .NET
+scopes `ReceiveTimeout`/`SendTimeout` to synchronous socket operations, and Go
+separately exposes absolute deadlines that also govern pending I/O. Sollang
+uses `TcpStream.setReadTimeout`, `readTimeout`, `setWriteTimeout`, and
+`writeTimeout` for the portable synchronous subset. Setters accept
+`Option<std.time.Duration>` so `None` explicitly restores blocking behavior;
+absolute monotonic deadlines remain a future reactor contract rather than a
+misleading alias for `SO_RCVTIMEO` or `SO_SNDTIMEO`.
+
+Fresh self-host execution exposed a pre-existing, non-socket lowering defect:
+an expression-bodied enum arm such as `None => -1` emitted the unary subtraction
+but stored its positive literal child. The first correction exposed a second
+layer: a direct negated literal could retain default `Int` inside a `Long` match.
+Typed IR now contextualizes both the unary and literal from the canonical match
+result, and `matchRegionResultValueIndex` walks same-typed direct dependencies
+outward to that expression root. Fixture 1143 isolates both compiler invariants,
+while fixture 1142 keeps the user-visible socket set/query/clear behavior as the
+integration proof.
+
+A compiler rebuilt from the repaired self-host sources emits, assembles, links,
+and executes both fixtures on Windows and Linux with exact managed-oracle stdout.
+The reusable Windows timeout verifier additionally checks the retained LLVM
+contract, direct-call closure, `llvm-as`, live kernel set/query/clear behavior,
+and zero-duration rejection. A Windows-native compiler cannot itself perform a
+Linux cross-target link, so the focused Linux proof emits Linux LLVM and links
+and executes it inside WSL; the formal Linux fixed-point gate instead uses the
+native Linux Stage2 and Stage3 compilers.
+
+The affine stream remains one native handle. Managed and self-host lowering
+read the `Option` tag and `Duration` millisecond field directly, then call the
+Windows or Linux socket-option primitive without a public wrapper, allocation,
+copy, dynamic dispatch, or cached state. `Some(0ms)` returns
+`InvalidArgument`, avoiding the native zero-means-disabled ambiguity. Windows
+stores a `DWORD` millisecond value; Linux stores `timeval` seconds and
+microseconds. Getters return the live kernel option as `Option<Duration>` and
+round a sub-millisecond Linux remainder upward. Fixture 1142 sets, queries, and
+clears both directions and accepts the bounded upward kernel tick rounding
+observed on Linux.
+
+The regenerated Windows compiler reached the 30,406,426-byte Stage2/Stage3
+fixed point `915143A25D9D12865A199802DB3804DB8F5BCED02ED0A279F063B86773858DBB`;
+its Stage3 executable SHA-256 is
+`FCD46F3377A5CA5A2B72441930B6B1E5BF4A3A13B76943F45EA995675E723C95`.
+The regenerated Linux compiler reached the 30,385,878-byte fixed point
+`73F8F4A42D5CADDD698EBBDE9C4D079D3594D5940043375934F4C6CC5F5D93FC`;
+its Stage3 executable SHA-256 is
+`742AB27B8AA5DFEF7095C7CF285F1DA2121B33F8D0E8EB91C4A3F2900A032069`.
+Both generations independently passed the retained socket timeout LLVM,
+assembly, direct-call closure, zero rejection, and live set/query/clear gate.
+The Release solution build completed with zero warnings and zero errors, and
+compiler defect C2026-08-25-54 is closed by these fixed points.
+
+Sources:
+
+- https://doc.rust-lang.org/std/net/struct.TcpStream.html
+- https://pkg.go.dev/net
+- https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.socket.receivetimeout?view=net-10.0
+- https://learn.microsoft.com/en-us/windows/win32/winsock/sol-socket-socket-options
+
+## D453 — Mutable-parameter indexing observes current storage before every read
+
+Status: closed; Windows/Linux fixed points, browser, LSP parity, and warning-zero gates verified
+Date: 2026-08-25
+
+A growable `mut [T; ~]` parameter is a live reference to the owner's pointer,
+length, and capacity slots. A nested call can reallocate or change its length,
+so the immutable aggregate reconstructed at function entry is not valid after
+that call. Indexed value reads and indexed readonly-reference arguments reload
+the current pointer and length, branch on the current length, and form the
+element GEP only in the in-bounds block.
+
+Native LSP `didOpen` exposed the defect because it inserted the first
+`Document` through `upsertDocument` and immediately passed
+`documents[index]` by readonly reference. The selfhost emitter used the current
+data pointer but extracted the entry length of zero for the reference bounds
+check; it also emitted an eager unchecked element load before that check.
+Windows exited with illegal instruction, and Linux `gdb` identified the sole
+`dispatchMessage` bounds `ud2` as the fault site.
+
+Fixtures 1147 through 1150 isolate the first mutable parameter, a second mutable
+parameter, an indexed read inside an `if` control region, and an indexed read in
+a `while` condition. Each requires current storage loads for both the value and
+reference paths, a bounds branch before the first GEP/load, no reference-length
+extraction from the entry aggregate, and managed/selfhost stdout `2,1`.
+Fixtures 1144 through 1146 retain the negative isolation evidence that ordinary
+owned upsert, borrowed syntax diagnostics, and diagnostics over an owned
+document are independently sound.
+
+## D454 — Pure stdlib development does not rebuild the compiler per edit
+
+Status: accepted
+Date: 2026-08-25
+
+Compiler fixed-point proof and ordinary standard-library development are
+different verification layers. After known compiler defects are closed, a pure
+Sollang stdlib change advances with the current verified Stage3 compiler,
+dependency-aware `--affected` selection, exact fixtures, and the applicable
+managed/native behavior gates. It does not regenerate or reinstall Stage2 and
+Stage3 after every library edit.
+
+Regenerate the Windows/Linux Stage2/Stage3 fixed point when parser, semantics,
+Typed IR, code generation, the compiler-consumed runtime ABI, or another
+self-host input changes, and at an explicit release checkpoint. A stdlib or
+runtime fragment imported into the compiler source closure is such an input;
+ordinary library-only modules are not. This keeps the final provenance proof
+without turning it into the inner development loop.
+
+The distinction is also a performance contract. Focused or affected checks do
+not replace a required feature-completion gate, but a release fixed point does
+not replace the faster evidence appropriate to each intermediate stdlib edit.
+
+## D455 — Checked indexing preserves source order across early return
+
+Status: closed; Windows/Linux fixed points, full CLI parity, browser, and warning-zero gates verified
+Date: 2026-08-25
+
+An expression whose successful result is pure can still have observable
+failure semantics. Growable and fixed container indexing performs a checked
+bounds branch and may trap when the index is data-dependent. The self-host
+function scheduler must therefore order checked indexing with control and
+effects; it may not emit a later fallback index before an earlier `if`, `when`,
+loop, or effect.
+
+Native `sollang test --project` exposed the defect in `testOutputRoot`. The
+project directory was valid and non-empty, but the self-host LLVM placed
+`explicitSources[0]` and its `llvm.trap` before the project-directory length
+test and early return. Windows reported `0xC000001D`; Linux `gdb` identified
+the `ud2` in `testOutputRoot`, with the incoming project-directory length still
+equal to 63. Fixture 1152 locks the minimal valid program: a non-empty preferred
+value returns without touching an empty fallback array.
+
+## D456 — Control-owned checked indexes are not global barriers
+
+Status: closed; Windows/Linux Stage2/Stage3 fixed points verified
+Date: 2026-08-25
+
+D455 makes a checked index wait for an earlier source-level control because its
+bounds trap is observable. That does not make every flattened index node a
+global barrier for all later roots. An index in a control condition or body is
+owned and emitted by that control even when its flattened IR parent chain does
+not retain direct control ancestry.
+
+Treating such a child as an earlier generic effect caused the scheduler to stop
+with a later nested-index logical result unscheduled. The emitter then returned
+an undefined SSA value and the old Stage3 verifier reported only a fixed-point
+hash mismatch because assembly occurred after the comparison. Fixture 1153
+reproduces the exact shape. Checked indexing remains ordered as the current
+candidate, control-owned checked-index children are excluded from the generic
+earlier-effect barrier set, and Stage3 candidates are structurally assembled
+before semantic fixed-point comparison.
+
+## D457 — N002 spans a whole multiline control condition
+
+Status: closed; Windows/Linux fixed points and authoritative/native formatter gates verified
+Date: 2026-08-25
+
+Redundant whole-condition parentheses are a source-style defect regardless of
+whether their tokens share a physical line. The original N002 analyzer and the
+self-host formatter used line-local predecessor scans, so `(condition) -> if`
+was reported while the same condition wrapped over multiple lines silently
+passed. This allowed a newly added compiler regression fixture to enter an
+expensive Stage2 run with noncanonical control syntax.
+
+The managed analyzer and formatter now match the whole lexical condition across
+newlines. The self-host analyzer skips newline and trivia only while locating
+the token immediately before the control arrow, while retaining newline as a
+valid expression boundary. Its formatter removes the same two token offsets
+before applying indentation. Fixture 1154 pins the exact N002 location and the
+13-case native formatter gate pins removal plus idempotence. Fixture 1155
+preserves parentheses that group only a partial expression. The formatter input
+also places UTF-8 text before the pair so byte-offset removal cannot regress to
+character-count indexing.
+
+## D458 — Interpolation calls use the ordinary readonly-reference storage contract
+
+Status: closed; Windows/Linux fixed points and exact native ABI gates verified
+Date: 2026-08-25
+
+An interpolation expression has its own compact call tree, but a resolved call
+must still obey the same ABI as an ordinary Typed-IR call. The self-host emitter
+previously printed a readonly-reference parameter as `ptr` and then printed the
+aggregate SSA argument directly. LLVM consequently received `ptr %aggregate`
+instead of an address and rejected fixture 1153 after its interpolation output
+was made type-correct.
+
+Reference-slot discovery now scans interpolated call trees while the enclosing
+function entry allocas are emitted. The call site stores the aggregate into that
+hoisted slot immediately before use and passes only the slot address. It does
+not allocate inside a loop or control block. Fixture 1156 pins one entry alloca,
+one initialization store, the pointer call, and rejection of the old aggregate-
+as-pointer spelling; fixture 1153 keeps the independent checked-index scheduling
+contract.
+
+## D459 — Pure calls do not absorb checked-index trap ordering
+
+Status: closed; Windows/Linux fixed points, full CLI parity, browser, and warning-zero gates verified
+Date: 2026-08-25
+
+D455 correctly made a directly scheduled checked index wait for an earlier
+source-level control, but root-effect discovery stopped as soon as it reached
+an enclosing source call. A call such as
+`explicitSources[0] -> executableDirectory` consequently emitted its argument
+bounds trap before the preceding project-directory early return. The direct
+fallback fixture 1152 passed while the real `sollang test --project` path still
+terminated with SIGILL or `0xC000001D`.
+
+A pure source call does not own the observable bounds failure of its argument.
+For a checked-index node, effect ancestry now climbs through pure calls and
+stops only at a real control or effect region. While climbing, the scheduler
+promotes the ordering identity to the pure call itself; otherwise the
+unscheduled call sorts before its own indexed argument and creates a false
+self-dependency that can leave the call result undefined in LLVM. Fixture 1157 wraps an empty
+fallback index in a pure identity call and pins branch/return before the single
+bounds check. The native project discovery test remains the full-path closure
+gate on Windows and Linux.
+
+## D460 — Reference place projection preserves member collections before indexing
+
+Status: closed; Windows/Linux fixed points, bind-cpp/full CLI parity, browser, and warning-zero gates verified
+Date: 2026-08-26
+
+The canonical readonly-reference place for `root.member[index].field` is one
+ordered address chain. The self-host emitter previously generated the correct
+value-side bounds check from `member`, but its call-reference path restarted the
+array load at `root`. In `cpp_binding.freezeClass`, that made
+`raw.constructors[i].parameters` reinterpret the first bytes of `RawClass` as a
+dynamic-array header. Native `bind-cpp` then wrote an oversized manifest and
+terminated with `0xC0000005` on Windows or SIGSEGV on Linux; managed generation
+remained correct.
+
+Indexed reference lowering now emits the member base first, loads the array
+record from that projected address, emits the checked element place at the next
+projection ordinal, and lets any following member continue at the same depth.
+It does not add allocation, copying, dynamic dispatch, or a runtime check beyond
+the existing bounds branch. Direct array roots and mutable-container parameters
+retain their specialized current-storage paths.
+
+Fixture 1158 isolates `Container.items[index].value -> read`. Its ordered LLVM
+contract requires member place, member-array load, checked element place, final
+field place, and canonical call address; its negative contract rejects loading
+the array header from `%arg`. A dedicated native verifier assembles and executes
+the retained LLVM for every Windows/Linux Stage2 and Stage3 candidate. Native
+`bind-cpp` generation remains the full integration gate because it exercises
+the original nested constructor and method parameter arrays.
+
+## D461 — Process identifiers are captured values with zero-wrapper instance projection
+
+Status: closed; Windows/Linux fixed points and native lifecycle gates verified
+Date: 2026-08-26
+
+`sys.process.Child` remains the affine owner of a spawned process, while its
+identifier is the copied domain value `ProcessId`. `Child.id` borrows the child
+and `ProcessId.asUInt64` borrows the identifier. Neither operation queries the
+operating system, allocates, copies the native ownership token, dynamically
+dispatches, or depends on optimizer inlining: managed and self-host emitters
+lower both accessors directly to aggregate projections. Windows stores a
+process handle as the owning token and captures `GetProcessId` once after spawn;
+Linux stores the `posix_spawnp` PID in both distinct ABI fields. A copied
+`ProcessId` is observational data, not a signalling capability, because an
+operating system may reuse it after the child is reaped.
+
+This abstraction follows the instance level used by Rust `std::process::Child`,
+.NET `System.Diagnostics.Process`, and Go `os/exec.Cmd`, while retaining
+Sollang's explicit ownership and zero-wrapper lowering. The public data model is
+in `sys.process`; only the bodyless runtime contract belongs to
+`sys.runtime.process`. The spawn ABI is `{ token: UInt64, processId: UInt64,
+error: Int32 }`, so native ownership and public identity cannot be conflated by
+layout accident.
+
+Fixture 1132 pins positive identifier observation followed by a consuming wait.
+Waiting before the parent's report makes its stdout deterministic relative to
+the child. Its managed, self-host, Windows, and Linux LLVM contracts reject
+generated accessor wrapper calls and require direct field extraction. The
+self-host implementation uses canonical projection opcodes `-285` and `-286`;
+V004 caught and prevented an initial defect where the direct extraction was
+followed by a second generic unresolved call.
+
+The lifecycle gates reject either `warning Snnn` or `note Nnnn`, not warnings
+alone. Their receipt-contract verifier also owns a unique temporary directory;
+a concurrent regression gate prevents two checks from deleting the same
+default directory. The verified fixed points are
+`E8687C0080EC4B4E0A289429167AF31A158EE99D8968762DFA5C57DACFA10806`
+for Windows and
+`C7B57FF0FECA1149D01E673D0061D9B4627103420EF23D0235D94EA0A797F261`
+for Linux. Both Stage2 and Stage3 candidates spawned, observed, waited, and
+cleaned up the child with zero duplicate drop calls.
+
+## D462 — Implementation verification is focused-first and escalates on compiler evidence
+
+Status: adopted; canonical Agent verification ladder updated
+Date: 2026-08-26
+
+An implementation slice first runs only the smallest dependency-aware checks
+that prove its public contract: named or affected fixtures, structural LLVM
+assertions when relevant, `llvm-as`, native link and exact execution on the
+platforms the implementation touches. A changed compiler, runtime ABI, or
+self-host input is not by itself a reason to repeat every Windows/Linux
+Stage2/Stage3 and browser gate after each successful slice.
+
+Compiler-wide verification is an escalation path. Managed/self-host drift,
+malformed or unresolved LLVM, assembly failure, a crash or heap corruption,
+incorrect diagnostics or semantics, ABI/ownership violations, or another
+reproducible compiler-owned failure triggers the focused defect ladder and then
+the complete gates required to close that defect. Explicit release checkpoints
+also run the complete applicable catalog and fixed points. Focused success is
+reported only as success for its declared affected surface; it is never renamed
+as a full compiler verification.
+
+This policy preserves real structural and execution evidence while removing
+long fixed-point repetition from ordinary stdlib/runtime development. It also
+keeps escalation deterministic: a failure becomes a minimal fixture and
+machine-readable invariant before expensive compiler-wide verification begins.
+
+## D463 — UDP reusable-buffer receipt separates payload storage from metadata
+
+Status: adopted; focused Windows/Linux native and Windows managed/self-host differential verified
+Date: 2026-08-26
+
+`UdpSocket.receiveFromInto(buffer!)` is the allocation-free datagram receive
+path. It borrows a caller-owned growable byte buffer mutably, passes its existing
+pointer and capacity directly to `recvfrom`, and updates its logical length only
+after a successful receive. Its result is
+`DatagramReceipt { source: Endpoint, count: UIntSize }`; payload bytes remain in
+the supplied buffer. The operation performs no payload allocation or copy, no
+text conversion or DNS lookup, no wrapper call, and no dynamic dispatch.
+
+`UdpSocket.receiveFrom(maxBytes)` remains the explicit allocating convenience
+path returning `Datagram { source, bytes }`. This mirrors the reusable-buffer
+level exposed by current .NET `Socket.ReceiveFrom(Span<byte>, ...)`, Rust
+`UdpSocket::recv_from(&mut [u8])`, and Go `UDPConn.ReadFromUDPAddrPort([]byte)`,
+while preserving Sollang's instance-first pipeline form and success-only mutable
+state publication. Fixture 1159 is the focused Windows/Linux behavior and LLVM
+contract; a failure in that surface escalates under D462.
+
+## D464 — Resolved intrinsics wait for their complete argument value chain
+
+Status: adopted; focused Windows LLVM, execution, and socket regression verified
+Date: 2026-08-26
+
+Function and control-region scheduling apply the same linked-argument readiness
+rule to ordinary calls and resolved runtime intrinsics. The earlier scheduler
+limited this dependency to materialized calls and `opcode == -1` calls. A UDP
+`sendTo(destination, ping)?` could therefore be emitted before the immutable
+`ping` aggregate alias that its payload extraction referenced, producing LLVM
+whose definition did not dominate its use.
+
+The scheduler now waits for every linked argument wrapper and its canonical
+aggregate value for all call nodes. This is a shared call invariant rather than
+a socket-opcode exception, adds no runtime work, allocation, copying, or dynamic
+dispatch, and does not change source ordering. Fixture 1159 retains the failing
+send-before-alias shape with ordered self-host LLVM evidence; fixture 877 and
+readonly-reference fixtures 1110-1112 remain focused regression coverage.
+
+## D465 — A command working directory is per-child spawn configuration
+
+Status: adopted; focused Windows/Linux native and Windows managed/self-host execution verified
+Date: 2026-08-26
+
+`Command.workingDirectory(path)` mutates the owned command instance and never
+changes process-global state. Windows converts the UTF-8 path once and supplies
+it as `CreateProcessW.lpCurrentDirectory`. Linux initializes a per-spawn file
+action, adds `posix_spawn_file_actions_addchdir_np`, and destroys the action
+after `posix_spawnp`. Neither implementation calls parent
+`SetCurrentDirectory` or `chdir`, so concurrent command instances cannot race
+through a shared current directory.
+
+The runtime ABI carries the path pointer, byte length, and explicit presence
+bit beside argv. The bit distinguishes an unset directory from an intentionally
+empty `Text` without manufacturing an option wrapper or allocating on the
+default path. When unset, Linux passes the inherited environment and null file
+actions directly; the ordinary launch path keeps its existing allocation
+profile apart from argv materialization.
+
+Fixture 1160 launches the current executable, opens a relative fixture file in
+the child, and requires `cwd=true` plus exit status zero on Windows and Linux.
+Its LLVM contracts require the command-field projections, Windows
+`CreateProcessW` current-directory operand, and Linux add-chdir file action;
+negative contracts reject `_wspawnvp` and parent `chdir`. During self-host
+verification the fixture exposed a separate final intrinsic-identity defect:
+value-producing `sys.file.openRead` calls in a later logical-module fragment
+could retain an ordinary unresolved Sollang symbol. The completed-IR file pass
+now canonicalizes kind-6 and kind-9 calls by module identity and name before
+emission, and the direct-call closure gate rejects recurrence.
+
+## D466 — Raw strings never enter interpolation lowering
+
+Status: adopted; Windows/Linux self-host exact execution and fixed points verified
+Date: 2026-08-27
+
+Raw strings are literal source containers. `$name` and `$(expression)` inside
+them remain bytes; only ordinary quoted strings perform interpolation binding.
+The managed token model already preserved this distinction and returned one
+plain text segment for a raw token. The self-host lexer retained the complete
+raw span but used the same string token kind, and interpolation lowering merely
+disabled escape decoding while still scanning that span for `$`. A compiler
+fixture containing embedded source therefore tried to resolve the embedded
+program's `outer` name in the fixture itself.
+
+Self-host interpolation preparation now recognizes the raw opening delimiter
+from the authoritative token span and skips the interpolation scanner entirely.
+This is a compile-time token classification: it adds no generated wrapper,
+allocation, copy, dispatch, or runtime branch. Fixture 1187 contains an
+otherwise-unknown `$(missing.receiver -> call)` inside multiline raw text and
+must print those bytes exactly under managed and self-host compilers. Fixture
+1186 retains the real embedded projected-call source that exposed the drift;
+both are formal Stage2/Stage3 exact gates.
+
+The original 1186 also repeated full semantic-context and Typed IR checks that
+fixture 1185 already owns. Its 25-source closure remained in self-host emission
+after six minutes. The topology fixture now supplies the same projected and
+qualified call text directly to the real lexer/interpolation lowerer, while
+1185 retains runtime and direct-call receiver evidence. The resulting
+nine-source closure completed self-host emission in 18,582ms and the complete
+managed differential in 22,569ms. This is a verification-cost reduction, not a
+compiler-throughput claim. The compiler contract caps the topology closure at
+ten sources and rejects reintroduction of `selfhost/ir/typed.slg`.
+
+Formal Windows verification passed 1186 and 1187 under both generations. Linux
+Stage2 and Stage3 independently passed direct-call closure, the fixture LLVM
+contracts, `llvm-as`, and exact native execution for both. Published artifacts
+then proved Windows fixed point `B168D8BDC9F80056CCBA6433D5105506061FFC2943203926045F10046DA31AE1`
+and Linux fixed point `2890AB9DD705B3A8DACB2E0F5CE4D7E4F17F053A46EBF62B54851214BE52BC63`.
+
+## D467 — Assignments schedule and emit the same canonical value
+
+Status: adopted; Windows/Linux self-host exact execution and fixed points verified
+Date: 2026-08-27
+
+An assignment value can be represented by a non-emitting kind-9 wrapper whose
+canonical child owns the actual SSA definition. Indexed and member assignment
+emission read `assignment.operand0` directly, and function scheduling waited for
+that wrapper directly. A member assignment after a `while` could consequently
+emit `trunc i64 %v21 to i32` even though `%v21` had no definition; the real
+child expression was emitted later as `%v22`.
+
+Scheduling now resolves `aggregateValueIndex(assignment.operand0)` for indexed
+and member assignments and waits for that child. Both emitters resolve the same
+index before type classification, reference materialization, conversion, and
+store emission. This is a compile-time ordering/canonicalization repair and
+adds no generated allocation, wrapper, copy, dispatch, or runtime branch.
+
+Fixture 1189 is the minimal post-loop member-assignment reproducer and fixture
+1188 retains the real caller-buffer `std.io` path. The structural gate requires
+the arithmetic definition before the member insert and rejects the original
+undefined-wrapper cast. Managed, regenerated self-host Windows/Linux, and
+Stage2/Stage3 fixed point remain required before closure.
+
+Fixture 1189 and its real caller-buffer control 1188 passed Linux Stage2 and
+Stage3 direct-call closure, structural contracts, `llvm-as`, and exact native
+execution; the formal Windows generations had already passed the same compiler
+behavior. The published Windows and Linux fixed points are respectively
+`B168D8BDC9F80056CCBA6433D5105506061FFC2943203926045F10046DA31AE1` and
+`2890AB9DD705B3A8DACB2E0F5CE4D7E4F17F053A46EBF62B54851214BE52BC63`.
+
+## D468 — Final Typed IR is authoritative for converged call diagnostics
+
+Status: adopted; converged-call positive/negative gates and fixed points verified
+Date: 2026-08-27
+
+Module call discovery may retain an unresolved entry for an inherent flow call
+until receiver types are complete. Typed IR subsequently resolves the exact
+receiver owner, method symbol, and target module. The emitter must not reject
+that valid program by treating the preliminary call table as newer authority.
+
+Context preparation now scans final Typed IR once and records resolved kind-6
+calls in a global-AST-indexed Bool array. `isBlockingUnresolvedCall` performs an
+O(1) lookup and suppresses the preliminary diagnostic only when the converged
+node has an exact direct target or a classified intrinsic opcode. It never
+rescans the full IR per call. Statuses for genuinely unresolved targets,
+ambiguous calls, and arity errors remain blocking. Fixture 1184 protects an
+ordinary `Collector.collect` method and independently rejects accidental
+process-capture runtime selection; fixture 1047 provides a complementary
+bodyless method-resolution path through interpolation under another name. The
+unknown `println2` flow fixture is the negative control: the reusable self-host
+diagnostic verifier requires one exact unresolved-call diagnostic, a nonzero
+exit, and no LLVM target header.
+Stage2 runs it against Stage1 and Stage2; Stage3 runs it against Stage2 and
+Stage3 on both Windows and Linux so the suppression cannot silently widen
+during regeneration.
+
+Linux Stage2 and Stage3 passed fixture 1184 as an ordinary direct method with
+no process runtime, and both generations rejected `println2` exactly once
+before LLVM emission. Windows formal verification passed the corresponding
+positive and negative gates. Receipt-bound Stage2/Stage3 artifacts prove the
+same Windows and Linux fixed points recorded above.
+
+## D469 — Direct compiler-context fixtures are a pre-build schema inventory
+
+Status: adopted; pre-build inventory and Windows/Linux fixed points verified
+Date: 2026-08-27
+
+C73 added the required `finalCallResolvedByAst` field and initialized the
+production `EmitContext`, but fixtures 1000, 1100, and 1126 also construct that
+compiler context directly. The source contract did not inventory those test
+builders, so the first rebuilt Stage2 reached the exact suite before 1126
+reported the missing field.
+
+All four direct literals now initialize the field. The pre-build compiler
+contract scans authoritative Sollang sources for direct `EmitContext` literals
+and requires one final-call index initializer per literal. This keeps focused
+invariant fixtures intentionally small while turning future context-schema
+changes into an early contract failure rather than another long Stage2 retry.
+The three direct fixtures also pass the managed exact gate. Their O0 focused
+self-host compiler-module closures are not repeated as an extra gate: fixture
+1126 remains in the optimized formal Windows/Linux Stage2/Stage3 exact suites,
+which proves the native compiler path without adding another multi-minute
+duplicate closure before every bootstrap.
+
+Both formal targets completed the inventoried exact suite and published
+authenticated fixed points after the production plus three direct fixture
+constructors passed preflight. The source contract now fails before compiler
+generation if either the field or any direct constructor inventory drifts.
+
+## D470 — QUIC stream identity precedes unidirectional and abort APIs
+
+Status: QS1, QS5, and QS2 verified; QS3 is the next implementation slice
+Date: 2026-08-27
+
+The public connection path formerly constructed `streamId: 0` in both
+`openBiImpl` and `acceptBiImpl`. `openBiImpl` now reserves a unique role-correct
+identity from the connection registry, and `acceptBiImpl` pumps application
+packets until peer activity discovers the next exact identity. Repeating accept
+therefore cannot create independently mutable stream values for the same wire
+identity. Unidirectional streams and abort methods remain later slices rather
+than being layered on the former invalid alias.
+
+RFC 9000 assigns every stream ID two low bits for initiator and direction and a
+remaining sequence number; IDs are unique within a connection and cannot be
+reused. The existing `std.net.quic.stream_state.StreamIdentity` already decodes
+that shape and validates peer initiator and limits, but the live `Connection`
+API does not yet consume it. The next QUIC implementation slice therefore adds
+four allocation-free connection-local sequence families, derives IDs by
+`sequence * 4 + initiatorBit + directionBit`, checks the peer-advertised limit
+before a local open, and validates a peer-opened ID before exposing its owner.
+Focused fixtures must prove client/server and bidirectional/unidirectional ID
+families, monotonic non-reuse, exact limit failure, and rejection of a locally
+initiated ID presented as peer-opened. They also pin family sequence
+`2^60 - 1` and stream-count limit `2^60` as the respective final valid values,
+then reject larger values before multiplication or frame encoding, so unsigned
+wraparound cannot create a reused low stream ID. An oversized transport
+parameter maps to `TRANSPORT_PARAMETER_ERROR`; an oversized `MAX_STREAMS`
+frame maps to `FRAME_ENCODING_ERROR`. The shared numeric guard does not erase
+that wire-context distinction.
+
+QS1 now replaces the old `UInt64` offset ceiling with `2^62 - 1`, accepts the
+inclusive `2^60` stream-count ceiling, rejects a stream ID of `2^62`, rejects a
+stream count of `2^60 + 1`, and checks lengths before subtraction so unsigned
+wraparound cannot pass a flow-control guard. Fixture 903 passed exact output
+under the installed verified Stage3 with empty stderr. QS5 now carries the
+verified wire guard: bidirectional `initial_max_streams` rejects one-past
+`2^60` as `TRANSPORT_PARAMETER_ERROR`, while `MAX_STREAMS` and
+`STREAMS_BLOCKED` reject it as `FRAME_ENCODING_ERROR` before retention.
+Fixture 945 accepts exactly `2^60` and rejects one-past in both contexts.
+Managed execution and repaired Windows Stage2/Stage3 native exact execution
+pass with zero diagnostics. The unidirectional transport-parameter half remains
+in QG3.
+
+Peer discovery is ordered by family sequence, not packet arrival alone. A
+valid frame for a higher peer stream ID implicitly opens all lower unopened
+streams of that type. The connection therefore records the highest validated
+peer sequence, enqueues each newly implied identity in ascending order exactly
+once, and keeps received byte ranges associated with their actual stream ID.
+Both pending identities and buffered data are bounded by the negotiated stream
+and flow-control limits; exceeding an implementation resource limit fails
+explicitly rather than silently dropping a stream or aliasing its data.
+
+Opening a local stream reserves its identity but does not itself make that
+stream observable to the peer. The .NET 10 QUIC overview documents the same
+transport fact: peer acceptance can remain pending until the opener sends
+stream activity. Sollang therefore never implements `acceptBi` by mirroring a
+local `openBi` call or fabricating ID zero. QSF012 requires accept to remain
+pending before activity and to publish the exact peer identity once after the
+first STREAM-related frame.
+
+Only after that identity gate passes may the public surface add separate
+send-only and receive-only affine stream owners and directional abort. The wire
+layer then gains exact `RESET_STREAM` and `STOP_SENDING` frame codecs and state
+transitions. A graceful write `finish` remains FIN; `RESET_STREAM` terminates
+the local send side with an application error and final size;
+`STOP_SENDING` requests that the peer stop its send side. None closes the
+connection. This ordering follows the abstraction level of .NET 10
+`QuicConnection`/`QuicStream` while retaining Sollang's static dispatch, explicit
+connection/endpoint owners, and zero wrapper allocation.
+
+The current handshake advertises and retains only bidirectional stream counts
+and byte limits. Unidirectional public methods remain unavailable until
+`initial_max_stream_data_uni` and `initial_max_streams_uni` are encoded,
+decoded, bounded, and stored for both peers. An absent count preserves QUIC's
+zero-stream default; it is never replaced by a convenient nonzero fallback.
+
+The identity slice removes the former single-credit client-opens/server-accepts
+assumption. `Connection` now retains separate locally and peer-initiated send
+and receive maxima. A locally initiated bidirectional stream uses the peer's
+`bidi_remote` send allowance; a peer-initiated stream uses `bidi_local`. The
+corresponding two local receive allowances remain distinct fields even while
+their configured numeric values happen to match. Role is derived from stream
+identity, never from whether the connection object was constructed by
+`connect` or `accept`.
+
+QS2 now embeds `StreamRegistry` directly in `Connection`. Fixture 1205 proves
+zero-limit rejection without sequence advance, client IDs `0,4`, server IDs
+`1,5`, duplicate suppression, implicit peer opening `0,4,8`, and capacity
+failure before queue mutation under managed and Windows Stage3 native exact
+execution. The registry uses an explicit-capacity ring with O(1) enqueue/dequeue
+and stores raw IDs rather than stream owners or heap manager wrappers.
+`openBi` now consumes the negotiated peer count, reserves the next role-correct
+ID, and chooses the locally initiated send/receive credits. Fixture 1206 opens
+client streams 0 and 4, sends stream 4 first, accepts identities 0 then 4 once,
+and proves that request and response payloads remain attached to their exact
+owner when the application reads them in the opposite order. Managed execution
+passes with exact output. The repaired compiler reached the Windows and Linux
+Stage2/Stage3 fixed points, and fixture 1209 supplies direct native evidence
+that the identity, frame, and byte limits fail before partial mutation. QS2 is
+therefore implemented; QS3 directional FIN/reset/stop transitions are next.
+
+`acceptBi` no longer manufactures stream zero before any peer frame exists. It
+receives application packets until a valid peer-initiated bidirectional
+STREAM frame discovers at least one pending identity, then returns the oldest
+unaccepted identity. Frames for later streams and lower identities implied by a
+higher ID remain queued by their exact stream ID. Existing fixtures already
+send before accepting, so this change tightens the contract without requiring
+a fake open notification. The queue has explicit identity, frame-count, and
+byte limits; an unrelated stream's bytes are never consumed, discarded, or
+reported as a protocol error merely because another stream is currently being
+read. Out-of-order offset reassembly remains a separate bounded transport slice
+and must not be falsely claimed by the identity queue alone.
+
+The reusable contract now lives at
+`scripts/contracts/quic-stream-api.json` under
+`scripts/contracts/quic-stream-api.schema.json`. It records four authorities,
+eleven public surfaces, twelve protocol/ownership invariants, thirteen
+predeclared verification fixtures, five dependency-ordered implementation
+slices with concrete file touchpoints, and three current source gaps. The independent
+`scripts/verify-quic-stream-api-contract.ps1` schema and semantic gate is part
+of the self-host compiler preflight, so a later API shortcut, consuming-close
+regression, duplicate member, or premature unidirectional publication fails
+before a long compiler generation.
+
+- [RFC 9000 — Streams and stream types](https://www.rfc-editor.org/rfc/rfc9000.html#name-stream-types-and-identifier)
+- [RFC 9000 — RESET_STREAM](https://www.rfc-editor.org/rfc/rfc9000.html#name-reset_stream-frames)
+- [RFC 9000 — STOP_SENDING](https://www.rfc-editor.org/rfc/rfc9000.html#name-stop_sending-frames)
+- [.NET 10 QuicConnection](https://learn.microsoft.com/en-us/dotnet/api/system.net.quic.quicconnection?view=net-10.0)
+- [.NET 10 QuicStream](https://learn.microsoft.com/en-us/dotnet/api/system.net.quic.quicstream?view=net-10.0)
+- [Quinn SendStream](https://docs.rs/quinn/latest/quinn/struct.SendStream.html)
+- [Quinn RecvStream](https://docs.rs/quinn/latest/quinn/struct.RecvStream.html)
+
+## D471 — Formal fixture throughput budgets both concurrency levels
+
+Status: nested-worker inventory captured; bounded benchmark and implementation next
+Date: 2026-08-27
+
+The Stage2 exact differential suite passes `--jobs 2` to the C# fixture runner.
+That value controls concurrent fixtures only. Each fixture's self-host compiler
+process receives no explicit compiler `--jobs` argument and therefore defaults
+independently to all logical processors. Simply changing the runner to four or
+eight workers would multiply the source-local compute pools, not establish a
+larger useful CPU budget. It can increase contention during parallel lowering
+while still exposing only a few independent serial semantic tails.
+
+The next verification-speed experiment separates `fixtureJobs` from
+`compilerJobs` and holds their product within the machine CPU budget. It
+compares at least two equal-budget shapes over the same exact fixture set and
+fingerprints, requiring byte-valid LLVM, exact managed/self-host runtime
+agreement, no unexpected warnings or notes, and unchanged diagnostic gates.
+Wall time, aggregate CPU, and peak memory are recorded. A new default is
+adopted only if repeated runs improve wall time without increasing failures or
+memory beyond the fixed threshold; until then, the current formal values remain
+authoritative. This optimizes verification throughput without confusing it
+with generated-program performance or compiler phase speed.
+
+The same separation applies to incremental cold feedback generation. Its
+Stage1 seed invocation currently passes `windows` plus source paths and no
+explicit `--jobs`, while `FixtureBuildJobs` affects only the later focused
+fixture. Reusing that fixture value implicitly would conflate the two budgets.
+A future `compilerJobs` input must be explicit, reported by the native driver,
+recorded in the measurement environment, and compared at an equal total CPU
+budget; deterministic output identity remains independently verified.
+Schema v3 records only OS, architecture, and logical processor count, so the
+worker experiment requires a schema-v4 environment rather than mutating the
+frozen C77 baseline format. V4 records compiler/fixture worker budgets and
+whether each was automatic or explicit; the existing v2/v3 readers remain
+historical compatibility paths.
+
+## D472 — Native stdlib gates do not repay full-root analysis per assertion
+
+Status: repeated-root inventory captured; consolidation benchmark next
+Date: 2026-08-27
+
+The formal Windows Stage2 path launches separate `build --stdlib <root>`
+processes for Result propagation, socket endpoint observation, no-delay,
+timeout, three checked-index controls, interpolation-reference lowering, and
+projected-reference lowering. Each assertion is valuable, but every process
+repeats discovery and semantic preparation of the same complete stdlib
+fingerprint before emitting its small program. The subsequent public-stdlib and
+binary-codec gates add further intentional root emissions for different
+contracts.
+
+Verification-speed work first classifies these gates by required evidence.
+Execution-only behaviors that can coexist without changing effects or output
+order move into one deterministic native harness. LLVM-shape assertions remain
+isolated when combining them would make symbol counts, dominance, allocation,
+or forbidden-pattern checks ambiguous. Alternatively, a verified prepared or
+module-artifact product may be reused only when it is bound to the exact
+compiler, target, stdlib, fixture, options, and source fingerprints and cannot
+silently bypass analysis diagnostics.
+
+Compiler-only LLVM-shape fixtures preferentially use the already-proven exact-
+suite path: direct `windows`/`linux` emission from an explicit minimal source
+closure followed by the shared runtime-link contract. A representative
+`build --stdlib` case remains isolated to prove that public CLI path. Removing
+`--stdlib` from `build` is not a shortcut; the command correctly rejects a
+missing readable stdlib root.
+
+The replacement must retain every original named assertion, `llvm-as`, direct-
+call closure, native link and exact execution, Windows/Linux applicability,
+and zero unexpected warnings or notes. The benchmark records full-root analysis
+count, wall/CPU time, and peak memory. Old invocations are removed only after
+the consolidated path passes independently; reducing the number of behavioral
+or structural checks is forbidden.
+
+## D473 — Fixed-point drift is indexed by LLVM function identity before bridging
+
+Status: adopted; function-indexed bridge and Windows/Linux fixed points verified
+Date: 2026-08-27
+
+A 34 MB Stage2/Stage3 text diff is too large to classify reliably from its first
+shifted line. `scripts/compare-selfhost-llvm-functions.ps1` reads both complete
+LLVM modules, binds their file SHA-256 values, hashes every complete function
+body by symbol, and emits schema-v1 JSON lists for added, removed, and changed
+functions. Duplicate or unterminated definitions fail instead of producing a
+partial report. The output is a triage index, not an equivalence proof or an
+automatic bridge decision.
+
+The first use compared the process-stdio transition after Windows Stage2 passed
+7/7. It found 1,676 baseline and 1,682 candidate definitions: six additions,
+zero removals, and nine changed common functions. Every added definition was a
+configured Windows process stdio/capture helper; the changed runtime functions
+and compiler entry functions replaced legacy `run_process` or
+`run_process_to_file` calls with the configured stdio path. This bounded,
+source-explained one-generation transition qualifies for the receipt-bound
+SLG-only `Stage2Bridge`; the bridge still must complete Stage2 7/7 and an
+immediate Stage3 exact fixed point before any artifact is promoted.
+
+That bridge completed the full Windows ladder and exact Stage3 fixed point;
+Linux subsequently completed its receipt-bound Stage2 resume and Stage3 fixed
+point. Current published hashes are
+`B168D8BDC9F80056CCBA6433D5105506061FFC2943203926045F10046DA31AE1`
+for Windows and
+`2890AB9DD705B3A8DACB2E0F5CE4D7E4F17F053A46EBF62B54851214BE52BC63`
+for Linux. The function index remains diagnostic evidence only; receipt and
+full-module equality remain the promotion authority.
+
+## D474 — Portable byte streams have one caller-buffer primitive
+
+Status: contract fixed; shared trait and bounded adapters wait for fixed-point proof
+Date: 2026-08-27
+
+Current official libraries converge on a small implementation boundary. Rust
+1.97 `Read` requires only `read(&mut [u8])`, Go `io.Reader` reads into the
+caller's slice, .NET 10 `Stream.Read(Span<byte>)` fills caller memory and builds
+`ReadAtLeast` above it, and Java 25 `InputStream` exposes caller-buffer partial
+reads while warning that unbounded aggregate reads are convenience operations.
+Sollang keeps that common performance shape but makes resource limits and
+ownership stricter.
+
+The common reader and writer protocols therefore require only an instance
+partial-transfer method over explicit mutable caller storage. Implementations
+must not retain the storage and must not allocate a hidden buffer. Exact reads,
+write-all, bounded read-all, and copy are derived once. Exact memory reads stay
+transactional: a short source changes neither cursor nor destination. A general
+stream exact helper may have already consumed bytes before a later failure, so
+its documentation and result must report that behavior rather than falsely
+claiming rollback across an effectful source.
+
+Zero-sized operations complete immediately. A successful zero-byte read from a
+nonempty destination means end of input. A successful zero-byte write from a
+nonempty source is a no-progress failure so `writeAll` cannot spin forever.
+Sollang's `Result<count, error>` does not encode Go's simultaneous positive
+count and error. When an implementation discovers a terminal condition after
+producing bytes, it returns the positive progress first and preserves the
+terminal condition for the next nonempty call. Neither progress nor failure may
+be silently dropped.
+
+Aggregate convenience remains bounded by construction. `readAll` takes an
+explicit maximum byte count; copying uses reusable caller scratch storage and a
+policy instance that owns the transfer limits. This preserves the project-wide
+instance-first rule without making a global `copy` function the stateful policy
+surface. Buffering is a separate affine or owned adapter with an explicit
+capacity, never an implementation detail hidden inside every stream.
+
+Python 3.14's `readinto` reinforces the caller-buffer path. Node.js 26 provides
+a different lesson for the later async layer: duplex read and write buffering
+are independent, and a writable `highWaterMark` is backpressure signaling, not
+a hard memory limit. Sollang does not overload the synchronous transferred-byte
+count with async readiness. A future buffered or reactor adapter owns separate
+read/write capacities and an explicit wait/resume operation; its configured
+resource ceiling is a real checked limit rather than an advisory threshold.
+
+Before publishing the shared trait, a focused compiler fixture must prove
+mutable receivers, an associated outcome that preserves implementation errors,
+static dispatch, zero wrapper
+allocation, and exact caller-buffer mutation under managed and self-host native
+lowering. File and socket adapters follow only after that trait shape passes;
+the existing concrete `MemoryReader` contract remains valid meanwhile.
+
+Source inspection found that this gate is substantive, not ceremonial. The
+current trait parser accepts only `method: [move|mut] self -> Return`; it cannot
+declare an additional caller-buffer parameter. Trait implementation methods do
+use the ordinary function grammar, but `BoundTraitMethod` stores no additional
+parameters and implementation validation compares only receiver ownership and
+return type. C2026-08-27-75 tracks the resulting false acceptance risk.
+
+The language extension uses the existing Sollang method rhythm rather than a
+parallel protocol syntax:
+
+```slg
+trait Reader {
+    type Outcome
+    readInto: mut self, output: mut [UInt8; ~] -> Outcome
+}
+```
+
+Using an associated `Outcome` keeps the current associated-type contract
+honest: it can bind to `Result<Int, Error>` as a whole without pretending that
+nested associated-type substitution inside `Result<Int, Error>` already
+exists. The compiler change must carry every additional parameter's count,
+order, ownership, and type through parsing, semantic stable identity,
+incremental fingerprints, implementation validation, generic static dispatch,
+and both managed/self-host lowering. Count, ownership, and type mismatches are
+separate negative fixtures. The stdlib trait is added only after those gates
+and a regenerated fixed point pass.
+
+Derived helpers must not require an arbitrary source error type to manufacture
+Sollang's own `UnexpectedEnd`, `NoProgress`, or limit failures. A generic exact,
+write-all, or copy result therefore wraps the implementation error while adding
+the helper's own typed cases, for example `ExactError<E>.Source(E)` versus
+`UnexpectedEnd` and `WriteAllError<E>.Source(E)` versus `NoProgress`. Copy keeps
+read-side and write-side errors distinguishable rather than flattening them to
+text or one lossy integer. This lets a concrete memory, file, socket, or QUIC
+adapter preserve its native typed error while the shared deterministic loop
+still terminates on zero write progress and explicit limits.
+
+- [Rust 1.97 `std::io::Read`](https://doc.rust-lang.org/std/io/trait.Read.html)
+- [Rust 1.97 `std::io::Write`](https://doc.rust-lang.org/std/io/trait.Write.html)
+- [Go `io.Reader`](https://pkg.go.dev/io#Reader)
+- [Go `io.Writer`](https://pkg.go.dev/io#Writer)
+- [.NET 10 `Stream.Read`](https://learn.microsoft.com/en-us/dotnet/api/system.io.stream.read?view=net-10.0)
+- [.NET 10 `Stream.ReadAtLeast`](https://learn.microsoft.com/en-us/dotnet/api/system.io.stream.readatleast?view=net-10.0)
+- [Java 25 `InputStream`](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/io/InputStream.html)
+- [Java 25 `OutputStream`](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/io/OutputStream.html)
+- [Python 3.14 `io`](https://docs.python.org/3.14/library/io.html)
+- [Node.js 26 streams](https://nodejs.org/api/stream.html)
+
+## D475 — Linux Stage2 resumes only receipt-authenticated candidates
+
+Status: implemented and live interrupted-candidate resume verified
+Date: 2026-08-27
+
+The self-host contract already required Windows and Linux candidate artifacts
+to survive a canceled late gate and allowed `-ResumeCandidate` to avoid another
+expensive compiler emission. The Windows Stage2 verifier implemented that
+contract, but the Linux Stage2 verifier did not expose the option. An interrupted
+Linux run therefore left a complete 34 MB LLVM candidate, bitcode, object,
+executable, input fingerprint, and output receipt, yet an ordinary rerun would
+delete them and repeat compiler analysis and emission.
+
+Linux Stage2 now accepts `-ResumeCandidate`, mutually exclusive with `-Rebuild`.
+Before any resumed gate runs it authenticates LLVM, bitcode, executable, and the
+Linux native object against the candidate output receipt and requires the
+candidate input fingerprint to equal the current feedback seed, manifests, and
+ordered compiler/runtime sources. A missing, changed, or stale candidate fails
+fast and instructs the caller to rebuild; it never falls back silently. A valid
+candidate reruns the full behavioral and diagnostic ladder, checks input
+stability again, and only then promotes artifacts and publishes canonical
+receipts. The compiler source contract pins the option, resume path, and object
+receipt binding so Linux cannot drift behind the documented interruption
+recovery contract again.
+
+## D476 — Focused native verification forwards an explicit compiler job budget
+
+Status: explicit routing and bounded checked-index batch verified on Linux Stage2/Stage3
+Date: 2026-08-27
+
+Formal Stage2 and Stage3 expose a worker budget, but their reusable socket,
+checked-index, interpolation-reference, projected-reference, process lifecycle,
+and QUIC Endpoint helpers previously invoked `sollang build` without forwarding
+it. Each invocation expands and compiles the full standard-library source set.
+The surrounding gate therefore appeared configured while its most numerous
+focused compiler children silently used the CLI default.
+
+Every helper now has a validated `Jobs` parameter with a bounded default and
+passes `--jobs` to both Windows and Linux native builds. Windows and Linux
+Stage2/Stage3 forward their own formal budget explicitly; direct Linux Result,
+Set, and socket-no-delay builds use the same value. Static compiler contracts
+pin the helper routing and all edited PowerShell scripts must parse before a
+live gate consumes them.
+
+The first live Linux observation showed why routing evidence is insufficient:
+each checked-index full-stdlib build still consumed about 54 to 55 seconds and
+roughly one CPU core with `--jobs 4`. The three independent fixtures now run
+through a bounded batch. Outer concurrency is the smaller of fixture count and
+the formal job budget; the remaining budget is divided among compiler children.
+Artifacts are already fixture-qualified, transcripts are replayed in fixture
+order, and every failure is collected before the batch exits. Measured speedup
+is claimed only with identical LLVM and execution evidence.
+
+The corrected live batch passed all three direct-call closure, ordered LLVM,
+`llvm-as`, and exact-execution gates in 61,561ms. The immediately preceding
+sequential run completed the three LLVM files roughly 54.5 seconds apart, about
+164 seconds for the same three fixtures. On this 24-logical-core host the
+bounded outer batch therefore reduced observed wall time by about 62% without
+changing fixture evidence. This is one run on one host, not a universal
+throughput guarantee. The subsequent Linux Stage3 batch passed the same three
+direct-call closure, ordered LLVM, `llvm-as`, and exact-execution gates under
+the divided budget, completing the formal integration proof.
+
+## D477 — Captured verification drains asynchronous pipes, not relay files
+
+Status: implemented; concurrent pipe regression passed
+Date: 2026-08-27
+
+The first bounded checked-index batch launched three independent compiler
+captures successfully, but two workers failed while reading their own unique
+temporary `stderr.txt`. The process had exited, yet `Start-Process` retained a
+redirection handle briefly. A first repair added post-exit exclusive-open and
+cleanup deadlines. That passed eight short concurrent PowerShell controls but
+was not the root fix: repeated Linux exact batches produced complete compiler
+artifacts and output while three WSL relay paths retained capture files beyond
+the 5-second read or cleanup deadline. Sequential execution had hidden both
+timing windows.
+
+The shared capture helper no longer creates redirection files. It builds a
+`ProcessStartInfo` with `UseShellExecute=false`, adds every argument through the
+typed `ArgumentList`, starts asynchronous stdout and stderr pipe drains before
+the bounded wait, then joins both tasks after termination. This preserves exact
+argument boundaries, prevents pipe backpressure, keeps the existing timeout and
+process-tree kill behavior, and removes WSL file lifetime from the evidence
+path. The returned process object is disposed after the exact exit/output tuple
+is materialized.
+
+The shared contract executes eight captures concurrently and requires every
+exit code, stdout, and stderr value exactly; it also retains completed,
+nonzero, process-tree telemetry, and timed-out parent/child controls. The Linux
+Stage2/Stage3 preflight adds eight concurrent real WSL captures before any
+expensive compiler generation, while the exact batch remains the compiled-
+fixture integration proof. The abandoned file-based drain and cleanup paths
+were removed rather than retained as fallback code.
+
+## D478 — Linux fixed points execute the new exact compiler fixtures explicitly
+
+Status: adopted; Linux Stage2/Stage3 exact batches and fixed point passed
+Date: 2026-08-27
+
+C68 through C73 require Linux behavior evidence for fixtures 1184 through 1189.
+The Linux Stage2/Stage3 scripts proved compiler generation, fixed-point LLVM,
+ownership diagnostics, and several native stdlib paths, but did not execute
+those six formal exact fixtures. Closing them from the fixed-point hash alone
+would confuse compiler identity with source-behavior coverage.
+
+The reusable native exact verifier accepts a fixture root or its authoritative
+`.sources.txt` closure, compiles with the explicit target, stdlib, and job
+budget, rejects every warning/note, and requires an executable plus retained
+LLVM. It then checks direct-call closure, `llvm-as`, optional forbidden text,
+regex counts, ordered LLVM patterns, and exact stdout/exit status. The bounded
+batch runs fixtures 1184 through 1189 under the same divided worker budget and
+replays transcripts in manifest order with deterministic failure aggregation.
+
+Linux Stage2 and Stage3 now own this batch in their formal ladders. The current
+already-running Stage3 loaded its prior script body, so this generation must be
+followed by explicit batches against the newly published Stage2 and Stage3
+executables. Future runs execute the same proof in-line. C68 through C74 remain
+candidate-fixed until those live batches and the exact Linux fixed point pass.
+
+The first live Stage2 batch exposed two verifier-only defects before any ledger
+closure. PowerShell unwrapped a one-file source closure into a scalar, so the
+generic verifier could not inspect `Count`; the multi-file 1186 control passed
+direct-call closure and instead exposed an unset `$LASTEXITCODE` read after a
+PowerShell script call. The verifier now wraps the complete closure branch in
+an array, tests script success through PowerShell's invocation status, and runs
+`llvm-as` through the shared checked process-capture path. Static contracts pin
+all three rules. This failed batch is validation-system evidence, not compiler
+behavior evidence; the corrected live batch must pass before status advances.
+
+The retry command also demonstrated that a wrong shared LLVM-root argument was
+otherwise copied into all six workers and reported six times. The batch now
+validates the compiler, LLVM, standard-library, repository, and child-verifier
+path kinds once, resolves them to stable absolute identities, and only then
+fans out. A caller mistake therefore fails before it spends worker capacity or
+creates repeated low-signal errors.
+
+The corrected Linux Stage2 runs passed all six cases: 1184, 1185, and 1187
+passed together after asynchronous-pipe capture replaced WSL redirection files;
+1186, 1188, and 1189 had already passed direct-call closure, their optional
+LLVM contracts, `llvm-as`, and exact native execution. This is complete Stage2
+source-behavior evidence. Stage3 must run the same six cases against its
+published executable before C68 through C74 close.
+
+The published Linux Stage3 then passed all six cases in one bounded batch with
+the asynchronous-pipe capture path. The artifact verifier independently bound
+both generations and their receipts to current sources at fixed point
+`2890AB9DD705B3A8DACB2E0F5CE4D7E4F17F053A46EBF62B54851214BE52BC63`.
+C68 through C74 now have the required Linux source-behavior and compiler-
+identity evidence.
+
+## D479 — Canonical type identity is independent of table insertion order
+
+Status: managed/self-host permutation passed; Windows/Linux fixed-point proof pending
+Date: 2026-08-27
+
+Retaining `ExpressionTypeIdSet.referenceIndexByTypeAst` added one growable-array
+field without changing any existing public type meaning. The verified old
+Stage3 nevertheless rejected three valid `PackageAnalysis.sources` literals:
+their declared field and binding type was `[Text; ~]`, while shallow Typed IR
+retained `[SourceText; ~]` after the unrelated type-table insertion changed
+numeric ids. S028 correctly prevented a mismatched array ABI, and the managed
+compiler built and executed the same source. Weakening S028 would therefore
+hide the order-sensitive self-host defect rather than fix it.
+
+The final nominal-field contextualization already propagated a declaration's
+canonical collection type to a direct literal. It now also crosses a plain name
+when, and only when, that name resolves to a binding whose explicit declared
+canonical type exactly equals the field type and whose initializer is a
+collection literal. The name, binding, and initializer are updated together so
+storage and uses retain one ABI. A differently declared variable is not coerced.
+The retained global-AST reference index records only successful references with
+non-negative type ids; function-result searches that additionally filter array
+shape remain explicit traversals.
+
+This source change requires an explicit ManagedRecovery bridge because the
+verified old Stage3 cannot compile the valid order-perturbed compiler source.
+Managed output is only the bridge and differential oracle: the generated SLG
+compiler must compile the same source again, pass a field/type-table permutation
+fixture plus the real fixture-1043 closure, and reach normalized Stage2/Stage3
+LLVM parity on Windows and Linux before C76 closes.
+
+Fixtures 1193 and 1194 now provide that focused permutation proof. Fixture 1193
+stores an explicitly declared `[SourceText; ~]` binding into the nominal
+`Package.sources` field. Fixture 1194 preserves the same operation and exact
+runtime result while inserting an unrelated growable-array type and an unrelated
+preceding field. Both passed the managed exact gate, then the newest self-host
+compiler passed direct-call closure, LLVM contracts, `llvm-as`, native linking,
+and exact execution for both fixtures in one bounded batch. This proves the
+focused table insertion no longer changes canonical field/binding identity; the
+real compiler closure and Windows/Linux fixed points remain the closure authority.
+
+## D480 — A missing readonly-reference root is a producer defect, not a value-copy fallback
+
+Status: candidate-fixed; Windows/Linux fixed-point proof pending
+Date: 2026-08-27
+
+The first ManagedRecovery Stage1 crossed the repaired canonical-field pass but
+then trapped in `emitHoistedReferenceArgumentAllocas`. The retained compiler
+LLVM mapped the failing bounds block exactly: `referencePlaceRootBindingForOwner`
+returned `-1` for a member projected from a directly produced aggregate, and
+the hoisted prepass indexed `context.ir[-1]` to discover a nonexistent root
+type. Ordinary and while reference-argument emission contained the same
+assumption.
+
+The first repair candidate normalized the missing root to a value temporary.
+The managed negative control rejected the corresponding literal-member borrow:
+Sollang intentionally requires an addressable owner or an existing reference
+and does not permit literals or temporary values to be borrowed. The fallback
+was therefore removed before promotion.
+
+The detailed V009 evidence showed that the lost base was the outer
+`lowerResolvedContext.prepared` parameter, while the selected emission owner was
+the nested `lowerFunction` whose unrelated primary parameter was `request`.
+The member path was valid; `referencePlaceRootBindingForOwner` searched only the
+nested function's ordinary parameter chain and therefore confused lexical
+ownership with the current ABI parameter table.
+
+Emission root resolution now preserves the ordinary binding/parameter path and,
+only when that path has no root, searches the current local function's frozen
+capture table by exact source-module and symbol identity. Addressability and
+address writing independently bind the resolved capture entry to its actual
+`%capture_n` position. No field ordinal, capture ordinal, table length, or
+same-shaped parameter participates in semantic identity, and the implementation
+adds no wrapper allocation or dynamic dispatch. Fixture 1192 fixes the minimal
+shape: an unrelated local `request` parameter, an outer captured `envelope`, an
+unrelated preceding struct field, and the valid readonly projection
+`envelope.batch.values`. The literal/temporary negative control must remain
+rejected, while fixture 1043, ManagedRecovery, and Windows/Linux fixed points
+remain the closure proof.
+
+The ManagedRecovery compiler rebuilt from the repaired sources and compiled the
+real fixture-1043 closure without V009 or a bounds trap. Its focused LLVM passed
+direct-call closure, linked and executed exactly, and matched the managed
+differential oracle. Fixture 1192 then passed managed execution and the newest
+self-host compiler's direct-call closure, `llvm-as`, link, and exact native
+execution. The paired temporary-member source was rejected by both compilers;
+the self-host E22 wording now matches the managed actionable contract and tells
+the user to bind the value to an immutable name before borrowing it.
+
+The capture lookup allocates no wrapper or index structure. Ordinary roots
+inside the current function return through the existing path and are excluded
+from capture scanning by the frozen function-end boundary; only a root outside
+that range can scan the already-frozen capture slice. Formal schema-v3
+performance comparison and Windows/Linux Stage2/Stage3 fixed points remain
+required before C77 closes.
+
+## D481 — Compiler table handles must be distinct without runtime overhead
+
+Status: cross-table inventory recorded; migration waits for the current fixed point
+Date: 2026-08-27
+
+C76 and C77 were not isolated syntax mistakes. A focused inventory shows that
+`SemanticType`, `TypeReference`, `NominalField`, `TypedIrNode`, coroutine side
+tables, and `EmitContext` transport type, field, symbol, IR, function, parameter,
+and capture coordinates through the same `Int` representation. That is compact
+at runtime, but it lets a value from one frozen table be accidentally accepted
+as an index into another. Field insertion then exposes the mistake far from its
+producer.
+
+The target contract is zero-cost typed handles. `TypeId`, `FieldId`, `IrId`,
+`SymbolId`, `FunctionId`, and `CaptureId` are distinct to semantic checking but
+erase to the existing integer ABI; they must not allocate wrappers, add dynamic
+dispatch, or introduce hash lookup on LLVM emission hot paths. A table-local
+ordinal remains valid only while accompanied by its owning table identity.
+Cross-phase and cross-table records instead carry stable source-module plus
+symbol/type/AST identity and resolve the current local coordinate at the frozen
+consumer boundary.
+
+This is a staged migration, not permission to rewrite the compiler during an
+active generation. First finish C76/C77 performance and Windows/Linux fixed
+points. Then inventory every public side-table field and accessor, introduce one
+erased handle family with managed/self-host parity, and migrate boundaries in
+small groups. Each group requires a compile-time wrong-handle negative fixture,
+an unrelated-entry permutation fixture, unchanged normalized LLVM, and no
+measurable wall/CPU/peak-memory regression. Until erased handles are available,
+new tables use canonical identity records rather than adding another ambiguous
+raw `Int` link.
+
+## D482 — Bounded compiler failures preserve partial evidence before cleanup
+
+Status: candidate-fixed; formal Windows/Linux gate pending
+Date: 2026-08-27
+
+Analysis during the long SLG feedback generation found that `Invoke-ToFile`
+kept non-empty stdout as `.partial` only when the compiler returned a normal
+nonzero exit. A timeout or process-tree termination error is thrown directly by
+`Wait-VerificationProcess`; that exception skipped the nonzero branch and the
+`finally` block deleted the random stdout and stderr files. The documented
+failure-evidence contract therefore had an exception-path hole.
+
+The shared verification process helper now owns the complete bounded file
+capture and failure-artifact publication path. The one outer catch handles
+normal nonzero and wait-helper exceptions before
+temporary-file cleanup, so publication runs exactly once. Non-empty stdout moves to the non-authoritative `.partial` path,
+stderr moves to the named error path, and empty stdout does not manufacture a
+partial artifact. The catch rethrows the original timeout or compiler error, so
+evidence preservation cannot convert failure into success or replace the causal
+diagnostic; if publication itself fails, the combined error retains that causal
+message first and appends the preservation failure. The behavioral contract
+proves exact content movement, the empty negative control, and a real timeout
+that preserves flushed partial stdout/stderr; the self-host source contract
+pins the shared path.
+
+## D483 — Emitter structure failures belong in the self-host fail-fast preflight
+
+Status: superseded by D635; retained as historical structure inventory
+Date: 2026-08-27
+
+The incremental self-host gate runs the compiler source contract before an
+expensive feedback generation, but that contract did not execute the separate
+LLVM emitter module verifier. Direct execution found that `text.slg` is
+5,510/4,500 lines and `core_calls.slg`, `containers.slg`, `control.slg`, and
+`functions.slg` were respectively 4,560, 4,255, 3,844, and 3,937 lines against
+the then-active 3,000-line fragment limit. D635 later removed that numeric
+limit in favor of explicit, acyclic, independently schedulable module and
+function boundaries. `entrypoints.slg` was not the oversized owner.
+
+C2026-08-27-79 keeps two inseparable closure conditions together: split those
+large declarations along existing static same-namespace boundaries without an
+ABI, allocation, or dispatch change, then invoke
+`verify-llvm-emitter-modules.ps1` from the ordinary compiler preflight. Raising
+the limits or leaving the verifier as an optional command would preserve the
+late-failure defect. The current performance generation keeps its source
+snapshot unchanged; source splitting begins only after that measured generation
+finishes so its profiles remain comparable.
+
+Declaration-span inventory separates mechanical and semantic work.
+`core_calls.slg` and `containers.slg` already contain many independent
+top-level helpers, so cohesive groups can move to same-namespace fragments
+without changing a function body. The exact first mechanical boundaries are
+now fixed: move `core_calls.slg` declarations from `textLiteralIsRaw` at line
+2,959 through `emitCallResultFinish` into a call-lowering fragment, leaving
+2,958 lines; move `containers.slg` declarations from `writeWhileValue` at line
+2,449 through `emitOwnedDrops` into a while/ownership fragment, leaving 2,448
+lines. The moved groups contain 1,602 and 1,807 source lines respectively and
+remain in `sollang.compiler.llvm.text`, so they add no wrapper, ABI boundary,
+allocation, or dynamic dispatch. Their new manifest entries must occur exactly
+once everywhere the original fragments occur.
+
+The exact manifest inventory contains 177 affected source lists and every one
+currently contains both `core_calls.slg` and `containers.slg`; there is no
+missing-pair exception. Adding two entries by hand would create 354 repeated
+edits and make an ordinal omission likely. The split therefore uses one
+idempotent `scripts/update-llvm-emitter-fragment-manifests.ps1` updater that
+inserts each new fragment adjacent to its
+owner only when the owner occurs exactly once, rejects an orphan or duplicate,
+and has a check-only mode. The structure verifier then independently proves
+exactly-once membership in all 177 manifests. The updater is an implementation
+tool, not a second manifest authority; the checked source lists remain the
+inputs consumed by every compiler gate.
+
+In contrast, `text.slg`, `control.slg`, and
+`functions.slg` are dominated by `emitCore` (5,349 lines), `emitRegion` (3,252
+lines), and `emitFunction` (3,926 lines). Those three require phase helpers with
+explicit readonly context/frozen-state boundaries; merely moving the whole
+declaration would only move the size violation. Each extraction must retain
+instruction order and pass normalized LLVM plus runtime parity before the next.
+`emitCore` already exposes the first semantic extraction boundary: it builds
+function-end, capture, reachability, enum-consumption, and drop-type indexes
+mutably, freezes them into `CoreEmitterState`, and only then emits runtime/type
+and function LLVM. Keep the index builder as the sole mutable owner; extracted
+emission phases receive `ref EmitContext` and readonly `ref CoreEmitterState`.
+Optional phase timing belongs at those same boundaries so the structure repair
+can measure the observed single-core tail without adding a second traversal.
+For the other two giant dispatchers, extract explicit request/result phases
+before attempting cross-file deduplication. `emitFunction` separates its
+expression dispatch (approximately lines 261-3,330) from return selection and
+owned cleanup (approximately lines 3,336-3,937). `emitRegion` first extracts
+the cohesive runtime/container opcode cluster at approximately lines
+1,387-2,631. Region and function emission have similar cases but different
+owner, SSA, and cleanup contracts; merging them before each extraction proves
+normalized LLVM parity would hide those distinctions behind mode flags.
+The manifest verifier now counts each facade/module/fragment entry and includes
+a duplicate negative control; membership alone was insufficient because two
+copies can silently shift source and symbol ordinals while still satisfying
+`-contains`.
+
+## D484 — C82 worker eligibility and performance evidence follow bootstrap provenance
+
+Status: historical Stage2/performance evidence retained; current-source refresh and platform fixed points open
+Date: 2026-08-27
+
+The first C82 feedback compiler still serialized `lowerFunctionRequest`. Local
+function reachability was not the cause: fixture 1199 emitted and executed its
+reachable local scalar callback under the same pre-fix self-host. Fixture 1198
+isolated the actual gap by mapping a copyable nominal `Request` to a `Batch`
+containing an owned transferable array. The managed compiler emitted one
+callback while the pre-fix self-host emitted none. `parallelUsesComputePool`
+accepted scalar or `SourceText` input but did not reuse its recursive
+worker-transfer classification for ordinary nominal input records.
+
+That repair exposed a second, independent classifier error in the complete
+compiler route. The rebuilt O1 Stage1 generated the full compiler LLVM in
+1,023,325 ms, but the callback gate still found only the three historical
+callbacks. `lowerFunctionRequest` captures immutable lowering context. The
+semantic ownership pass had already accepted those bindings, but the self-host
+LLVM classifier rejected every non-owning capture and, conversely, skipped
+input/output ABI validation whenever any capture existed. This duplicated the
+ownership policy at the wrong layer and made safe scalars and readonly
+references select the serial fallback. Fixture 1200 combines nominal request
+and result records with a local callback that captures a readonly reference and
+a scalar; the preceding Stage1 emits zero callbacks for it while the managed
+compiler emits one and executes `batches=2`.
+
+The first fixed-capture Stage1 then proved the classifier change was active by
+emitting callback 6 for fixture 1200, but `llvm-as` rejected its environment:
+the self-host callback path had historically represented every capture as
+`ptr`. It therefore stored undefined `%capture_borrow_binding3/4` names and
+called a target whose real capture signature was `(ptr, i32)` as `(ptr, ptr)`.
+The capture environment now derives each field, load, store, alignment, and
+callback argument from the same captured binding used by the target function
+signature. Owned immutable captures retain the borrowed-pointer ABI; readonly
+references pass their pointer value; scalars remain direct values. No boxing,
+heap wrapper, or copied lowering state is introduced.
+
+The SLG emitter now classifies both parallel input and output through the
+recursive worker-transfer contract. Fixed Stage1 compiler
+`8836FA05425DBE8AA5210A01DD5A39367D7CE4AA9AB8E67E839DA5C1F1D1DB9F`
+emitted fixture 1198 with exactly one nominal input/result callback; direct-call
+closure, `llvm-as`, native link and execution, exact output, and managed
+differential passed. The emitter now always verifies worker input/output ABI,
+while capture safety remains the E18/E19 semantic invariant. Fixtures 1198,
+1199, and 1200 are formal Stage2/Stage3 exact gates.
+Generated compiler LLVM must have at least four callbacks and at least one
+nominal input/result callback before performance measurement or promotion; the
+historical three-callback compiler is a deterministic negative control.
+
+A codegen repair materializes the compiler's own new callback one bootstrap
+generation later. Therefore the valid performance comparison is not the older
+pre-fix Stage3 against fixed Stage1. Fixed Stage1 contains the corrected
+compiler semantics but its own C82 region was emitted sequentially by the old
+seed; Stage2 is generated by that Stage1 and contains the new callback. These
+adjacent generations are comparable only when they compile the same ordered
+manifests to byte-identical LLVM. A schema-bound bootstrap pair receipt records
+source, compiler, generator, LLVM, and callback-topology fingerprints; the
+benchmark authenticates the receipt and rejects profile input drift before
+mixing six alternating samples. The fingerprint implementation is shared by
+the receipt and profile producer rather than duplicated. Both bootstrap
+compilers must use O1; an O0 feedback Stage1 remains valid correctness evidence
+but is rejected as a performance control for the O1-linked Stage2.
+
+The first Stage2 attempt reached the former 1,800,000 ms verifier ceiling while
+still active, with 7,668 seconds of host-visible process-tree CPU, 3.24 GiB
+working memory, and a preserved 2,085,415-byte partial LLVM artifact. This is a
+verifier timeout, not a compiler diagnostic. Incremental, performance, Windows,
+Linux, browser Stage2, and Stage3 compiler-emission bounds now use one measured
+3,600,000 ms default with the same process-tree termination and one-minute
+telemetry. C82 remains open until the complete Stage2 generation authenticates
+the callback topology and pair receipt, the six comparable samples pass their
+predeclared thresholds, and Windows/Linux/browser fixed-point gates close.
+
+The capture-ABI-corrected SLG-first generation has now crossed that Stage2
+boundary. Stage1 compiler generation took 832,966 ms; fixture 1200 passed
+direct-call closure, typed capture structure, `llvm-as`, link/execute, and the
+managed differential. The complete Stage2 compiler LLVM took 896,769 ms and
+contains four callbacks with one nominal-transfer callback. Native link took
+60,983 ms, the bootstrap pair receipt passed, and focused Stage1/Stage2 LLVM
+parity is `249F8A5C42FF9702EF338B83F2B15BBBB44F69AF31624E10027A96B14DDC62E5`.
+At that checkpoint, the six receipt-bound performance samples and platform
+fixed points remained open, so no speedup or final compiler-stability claim
+followed from the single generation timing alone.
+
+The complete alternating benchmark subsequently passed all six samples. Every
+sample compiled the same 113-source input
+`8D582A1B1775BFCF7006E3640DF993B0CCF5D672CE91EEEB906DFF43DCF6671E`
+to the same 34,611,846-byte LLVM output
+`CC7F12EFA7EEC0C85C3256C0954DFBAFFD70EDB6A96F5EAFB3CC1E91BCC6888E`.
+The Stage1 medians were 813,929 ms wall, 5,121,062 ms CPU, and
+3,449,483,264 bytes peak working set; Stage2 medians were 773,868 ms wall,
+5,084,234 ms CPU, and 3,459,358,720 bytes peak working set. Thus wall time
+improved 4.9219 percent, CPU time improved 0.7191 percent, and peak memory grew
+0.2863 percent, passing the frozen minimum 1 percent wall improvement, maximum
+0 percent CPU regression, and maximum 2 percent memory regression thresholds.
+C82 still remains open until the Windows, Linux, and browser fixed-point gates
+pass without compiler warnings or notes.
+
+## D485 — Capability selection binds one owned container; whole-owner rebind is E28
+
+Status: focused managed/self-host diagnostic and repaired compiler source verified; fixed points open
+Date: 2026-08-28
+
+The first formal Windows C82 gate failed before its expensive Stage2 emission.
+`context_prepare.slg` created an empty `[TypedIrNode; ~]` owner and assigned the
+native-parallel or browser-sequential result to the same `ir!` name. Managed
+semantics correctly refused the whole-container replacement, but its generic
+duplicate-binding message did not explain the ownership repair, while the
+preceding self-host accepted the source and would overwrite the first owner
+slot without a drop. The earlier focused C82 fixtures did not compile the
+complete compiler source through both front ends, so they could not cover this
+compiler-of-compiler source shape.
+
+Target selection now lives in `lowerPreparedIr`, which returns exactly one
+owned Typed IR array. `prepareSnapshot` binds that result once as mutable `ir!`
+because library projection legitimately borrows and updates the selected array.
+The helper adds one direct call but no array copy, heap wrapper, virtual
+dispatch, or empty owner. Managed semantics reports the actionable whole-owner
+diagnostic. Self-host ownership validation tracks prior mutable bindings within
+the same executable root, compares their source names, excludes mutually
+exclusive declarations, and reports E28 before LLVM when the prior value owns
+container storage. The diagnostic names the actual `values!` source binding and
+directs the user to bind one selected owner or mutate through instance methods.
+
+Diagnostic fixture `mutable-owned-container-rebind` passes managed validation;
+the regenerated native self-host emits one E28 and no target LLVM. Repaired
+compiler fixture 377 rebuilds the complete reusable native compiler with zero
+warnings or notes and executes exactly. Compiler structural contracts also pin
+the helper order and Stage2/Stage3 E28 gates. Because this coherent compiler
+slice changes the measured 113-source input and generated compiler, the prior
+C82 six-sample report remains valid historical evidence for the callback change
+but cannot close performance or fixed-point acceptance for the repaired source;
+the authenticated Stage1/Stage2 pair and six samples must be regenerated.
+
+## D486 — Typed IR selects measured source-local function-lowering batches
+
+Status: compiler-wide candidate rejected; source-local production restored; focused and fixed-point verification open
+Date: 2026-08-28
+
+The current-source C82/C84 benchmark completed all six alternating samples with
+identical input and LLVM output, but failed the frozen performance thresholds.
+The Stage1 medians were 844,999 ms wall, 4,706,938 ms CPU, and 3,449,733,120
+bytes peak working set. Stage2 medians were 963,492 ms wall, 5,121,500 ms CPU,
+and 3,466,006,528 bytes peak working set: wall regressed 14.0229 percent, CPU
+regressed 8.8075 percent, and peak memory grew 0.4717 percent. The comparator's
+failure is retained as valid evidence; thresholds are not relaxed and the six
+runs are not relabeled as environmental noise.
+
+Exact LLVM function comparison found 1,699 baseline functions and 1,700
+candidate functions. The only addition was the C82 worker callback and the only
+changed existing function was its caller; the remaining 1,698 functions were
+identical. Source inspection then found the amplification: `lowerSource` ran a
+`parallel` group once per source. For the 113-source compiler, even empty or
+small function batches repeatedly published pool state, woke background
+workers, installed TLS/output sinks, and joined a barrier.
+
+The first candidate collected every `FunctionLowerRequest` once in canonical
+source/symbol order, recorded a start/count range for each source, ran one
+native `parallel` group or one browser sequential pass, and merged ranges back
+into source order. It introduced no copied compiler state, heap wrapper,
+virtual dispatch, threshold heuristic, or output reorder. Structural and
+focused correctness gates passed, so performance—not correctness—owned the
+selection. The same-seed controls kept the callback topology and LLVM output
+equal while changing only the dispatch/lifetime shape.
+
+The authenticated pair now exists. C86 seed
+`1A74485383076D1E20D7FAEF9BBAF9842F6E42901044C13B1700F5F7B673D61A`
+generated per-source baseline
+`B17949988ADBF77D5E96C264423B0E3DF6231A370C9BE11A7DB752351E6568B7`
+and compiler-wide candidate
+`82600D3EBCE5E64BBC9081D4C9EF3E8BD03AA2384888F7FFE5A92BD58A6DDDEB`.
+Both contain four callbacks and one nominal-transfer callback and bind current
+input `0B22E8D43D2EA670A4D90427354C0C04ACA804F632B10EC2EB3628AF18B4F529`.
+Output equality and the frozen thresholds remain unproven until all six samples
+complete.
+
+That controlled run completed 6/6 with identical 34,662,072-byte LLVM
+`8F71E330EDAAA62627CDEAE8076F06F5A8BDD66D2ACBE676D96D833F840E4C52`.
+Baseline medians were 873,845 ms wall, 5,482,438 ms CPU, and 2,991,718,400
+bytes peak. Candidate medians were 901,531 ms wall, 5,089,031 ms CPU, and
+3,426,119,680 bytes peak. CPU improved 7.1758 percent, but wall regressed
+3.1683 percent and peak memory grew 14.5201 percent. The frozen replay therefore
+failed rather than relaxing thresholds. Both retained LLVM files pass direct-
+call closure and `llvm-as`.
+
+The first follow-up hypothesis was that the remaining amplification was
+ownership lifetime rather than compute-group count.
+The first global implementation kept every per-function `SourceTypedIr.nodes`
+owner alive while all 113 sources performed later sequential assembly. The next
+slice passes the mutable outer result owner explicitly into `lowerSource`,
+readonly-merges each function result, and immediately replaces that array
+element with an empty `SourceTypedIr`. Replacement is O(1) and preserves order;
+there is no `take(0)`, shifting extraction, global state, or heap wrapper. The
+compiler correctly rejected both a direct mutable borrow of an owned array
+element and unsupported indexed-member assignment before the whole-element
+replacement passed fixture 377 with zero warnings or notes.
+
+Fixture 1202 now freezes the exact legal ownership shape: a readonly helper
+borrows one owned array element, then the caller replaces that complete element
+with an empty instance. Managed execution and the prompt-release O1 Stage1 pass
+with direct-call closure, LLVM assembly, and exact output. The receipt-bound C86
+seed generated that Stage1 in 664,402 ms; its compiler SHA-256 is
+`51A3BA021A5019E3937F24A6EC839EF1AE40BBDFBD9994FCDABF24612BDC3C53`.
+
+The second authenticated pair compares that compiler-wide candidate with
+per-source baseline
+`CC1C9DAACBE0D0422D9BED28E1CF7304BB7DA79A493BD30CCE1C57C6C734B4EC`.
+Both were generated by the same C86 seed from source fingerprint
+`000FDB1DDB9816DA10DAADACDD3148A902E3158342D914FEEC3AFD8BF752B977`,
+use O1, and contain four callbacks plus one nominal-transfer callback. Its six
+samples are a new measurement set; none of the first failed pair is reused.
+
+The prompt-release comparison completed all 6/6 samples with identical
+34,666,085-byte LLVM
+`42805557F8B18D66B792332219BB380B9AE60E1E851DDF8B9D539412B72CF14C`.
+Per-source baseline medians were 851,702 ms wall, 4,947,094 ms CPU, and
+3,441,139,712 bytes peak. Compiler-wide candidate medians were 855,000 ms wall,
+4,981,906 ms CPU, and 3,436,277,760 bytes peak. The candidate regressed wall
+0.3872 percent and CPU 0.7037 percent while improving peak memory 0.1413
+percent, so it failed the frozen wall and CPU gates. This second rejection
+disproved the ownership-lifetime-only hypothesis.
+
+Production therefore uses source-local batches: each source collects its
+requests, performs one native group or browser sequential pass, merges results
+in symbol order, and releases the result owners before advancing. Structural
+contracts reject the measured-slower global request/result lifetime. Both
+failed global reports remain historical evidence and the thresholds remain
+unchanged. Focused managed/self-host verification and Windows/Linux/browser
+Stage2/Stage3 fixed points remain required before C85 closes.
+
+## D487 — Control-region parallel inputs share function-parameter provenance
+
+Status: focused managed/self-host repair verified; fixed points open
+Date: 2026-08-28
+
+The first compiler-wide-group Stage1 attempt completed 34 MB of LLVM emission
+in 900,429 ms and passed direct-call closure, then `llvm-as` rejected
+`extractvalue %sollang.array.i32 %v245818`: `%v245818` had no definition. The
+enclosing `lowerFunctionRequests` function received its owned request array as
+LLVM `%arg`. Its sequential `else` path read `%arg` correctly, while the plain
+`parallel` expression inside the `if` printed its operand node number as a
+standalone `%vN`.
+
+This was a self-host emitter parity gap. Ordinary function-body `parallel` and
+control-region `tryParallel` already identify a kind-5 source whose symbol is
+the current function parameter and print `%arg`. Control-region plain
+`parallel` omitted that provenance check for both pointer and length extraction.
+The shared rule now covers both extractions.
+
+Fixture 1201 passes the same explicit `move [Int; ~]` parameter through a
+value-producing `if` into `parallel`. Managed execution printed `mapped=3`; the
+preceding self-host reproduced undefined `%v45361`; the regenerated self-host
+passes direct-call closure, LLVM contracts, assembly, link, and execution.
+Fixture 377 also rebuilds the complete native compiler with zero warnings or
+notes. Stage2 and Stage3 include 1201 as a required exact fixture. Because this
+changes compiler code after the failed pair attempt, the C85 same-seed
+controlled implementation pair and six performance samples restart from this
+coherent source before C82/C84/C85/C86 closure. An older compiler that contains
+C86 cannot truthfully generate the current candidate, so an adjacent
+Stage1/Stage2 bootstrap pair is not used for this comparison.
+
+## D488 — Stage1 performance candidates carry generator provenance
+
+Status: focused verifier contract verified; real performance and fixed points open
+Date: 2026-08-28
+
+The incremental gate previously wrote a same-basename executable SHA-256 only
+after focused execution. That receipt proves the verified binary's identity but
+does not say which seed generated it. The first controlled C85 pair producer
+therefore accepted the seed path later and copied its current hash into the
+pair. Compiler and LLVM drift were rejected, but same-seed generation was still
+an assertion rather than preserved evidence.
+
+A successfully executed Stage1 now atomically publishes a schema-bound
+`.generation.json` beside the compiler. It binds the ordered compiler input
+fingerprint, generator fingerprint, compiler and LLVM hashes, O0/O1 profile,
+seed mode, host and verification targets, focused execution, and whether the
+managed differential ran. Replacement invalidates both the executable and
+generation receipts before writing a new compiler. The C85 pair producer takes
+this candidate receipt instead of loose compiler and LLVM paths and revalidates
+all artifacts against the current sources and receipt-bound seed.
+
+The cache-hit C86 Stage1 verification published the real O1 receipt only after
+fixture 1201 passed direct-call closure, LLVM verification, native execution,
+and managed differential. A deterministic contract independently accepts the
+same-seed/current-source case and rejects a forged candidate generator and a
+stale candidate source fingerprint. The real controlled baseline, six samples,
+and platform fixed points remain required before C87 closes.
+
+The focused negative contract also rejects a candidate whose generation receipt
+omits the managed differential. Both Stage1 and the controlled baseline record
+the current-source fingerprint before expensive work and recheck it before
+publishing provenance, so a mid-run source edit cannot authenticate artifacts
+from mixed inputs.
+
+Supplying either authenticated pair also freezes the runner at three samples
+per side, 24 workers, and the predeclared 1/0/2-percent wall/CPU/peak-memory
+thresholds. The focused benchmark contract rejects a caller that tries to lower
+the wall threshold after pair authentication.
+
+## D489 — Formal SLG seeds preserve Stage3 fixed-point provenance
+
+Status: focused provenance contract verified; formal fixed points open
+Date: 2026-08-28
+
+Formal Stage2 previously called any executable with a matching sibling
+`.sha256` a verified Stage3 seed. That check proved the file had not changed
+since the text receipt was written, but it did not prove that the file came
+from a completed Stage2/Stage3 fixed point. An incremental Stage1 candidate
+could therefore satisfy the same shape and be mislabeled as Stage3.
+
+The focused and performance paths keep their Stage1 `.generation.json`
+contract, but it does not authorize formal fixed-point seeding. Windows Stage3
+now publishes a separate schema-bound `.stage3-seed.json` after its existing
+artifact and fixed-point verifier passes. The receipt binds the copied seed to
+the retained Stage2 and Stage3 executables, LLVM, bitcode, output receipts,
+Stage3 input receipt, target, and normalized fixed-point LLVM hash. Paths are
+repository-relative and cannot escape the repository.
+
+The receipt also records the exact Stage3 gate producer and the O1 native
+compiler optimization profile. These are schema-bound provenance, not inferred
+from an artifact filename or from the verifier that happens to consume it.
+
+Windows and Linux formal Stage2 rehash every bound artifact and receipt,
+recheck both artifact receipts, compare normalized Stage2 and Stage3 LLVM, and
+require the copied seed to equal the recorded Stage3 executable before using
+it. The legacy SHA receipt remains temporarily for consumers that have not yet
+migrated, but it is no longer sufficient for formal Stage2. The focused
+contract accepts the coherent fixed point and rejects a Stage1-only executable
+with a matching SHA, artifact drift, Stage3 input-receipt drift, copied-seed
+drift, and a repository path escape. Full compiler contracts and the next
+Windows/Linux fixed points remain required before C88 closes.
+
+## D490 — Authoritative format checks precede compiler self-builds
+
+Status: focused verifier wiring complete; warning-free rebuild and fixed points open
+Date: 2026-08-28
+
+The restored source-local function-lowering loop initially placed a
+52-character condition on the same line as `while`. Structural contracts and
+five focused native fixtures passed, but fixture 377 spent about thirteen
+minutes rebuilding the complete compiler before the compiler correctly emitted
+N001. The diagnostic was valid; its placement in the verification ladder was
+too late.
+
+The condition now uses the canonical two-line form. More importantly,
+incremental, Stage2, and Stage3 verification invoke the existing
+`format-authoritative-slg.ps1 -Check` gate before full compiler LLVM emission.
+That command reuses the canonical formatter over `selfhost`, `stdlib`, and
+`syntax/generated`; it does not duplicate N001/N002 rules in a PowerShell
+regex. Structural contracts pin all three preflight calls. Current-source
+format acceptance, warning-free fixture 377, and platform fixed points remain
+the closure evidence.
+
+## D491 — Formal Stage2 proves the selected seed's compiler-source ABIs first
+
+Status: Windows fixed point complete; Linux and browser closure open
+Date: 2026-08-28
+
+The first formal source-local Stage2Bridge passed fixture 1196 and then spent
+603 seconds generating 34,648,409 bytes of compiler LLVM. Direct-call closure
+passed, but `llvm-as` rejected `%v245819` because `lowerFunctionRequests` used a
+non-materialized value as the input of its control-region `parallel`. The
+current compiler sources had already repaired that C86 path and fixture 1201
+passed under the newer focused SLG compiler, but the receipt-bound older
+Stage2Bridge seed did not contain the repair.
+
+This was not a reason to weaken provenance or accept the malformed candidate.
+The formal Stage2 seed preflight previously exercised only fixture 1196. It now
+runs both 1196 and 1201 against the exact selected seed before the complete
+compiler emission. Replaying 1201 with the rejected bridge reproduces undefined
+`%v45361` and fails in about one minute, replacing a ten-minute late failure
+with a focused capability gate. Structural contracts pin the ordered fixture
+set and the shared exact verifier; neither compiler-source pattern is duplicated
+in PowerShell.
+
+Because the old fixed-point seed cannot represent the already-canonical SLG
+repair, the next generation uses explicit `ManagedRecovery`, then immediately
+builds Stage3 and requires normalized Stage2/Stage3 fixed point. Managed
+recovery is a bootstrap bridge only; it does not become the design authority or
+authorize release by itself.
+
+The repaired preflight then accepted the explicit ManagedRecovery compiler on
+both fixtures before complete emission. Formal Stage2 passed all seven phases
+and 78 of 78 differential fixtures. The immediately following SLG-produced
+Stage3 passed its 91-case preflight and all native post-generation gates.
+Stage2 and Stage3 are byte-identical at 34,657,176 LLVM bytes with SHA-256
+`202742A0F2B0CC8940E56731A9FFECFDEB8F88189B1F6BB55F729B1B353007F8`.
+The verified feedback seed is receipt-bound through
+`selfhost-slg-seed.stage3-seed.json`; the ManagedRecovery executable itself is
+not promoted as the continuing seed. Linux and browser parity remain required
+before C90 closes.
+
+## D492 — Browser networking is an explicit target capability boundary
+
+Status: current-generation browser execution verified
+Date: 2026-08-28
+
+The receipt-bound browser gate currently carries seven explicit diagnostic
+cases, but none reaches `std.net.socket`, system DNS, or the live QUIC
+transport. Those operations are native runtime intrinsics and the browser host
+does not implement them. Relying on a later unresolved runtime call would make
+the target boundary late and would not tell the user how to repair the source.
+
+A reachable socket, system-DNS, or QUIC transport operation on
+`wasm32-browser` therefore fails during target capability analysis before LLVM.
+The typed diagnostic names the unavailable `Network` capability and recommends
+an explicit browser host adapter or native target. It never inserts hidden DNS,
+proxy, or transport fallback. An imported but unreachable native networking
+declaration remains harmless, while pure endpoint, URI, packet, frame, crypto,
+and protocol-state value operations remain valid because they require no
+native transport.
+
+Closure requires managed and self-host browser agreement, no emitted Wasm or
+LLVM for the reachable negative case, a non-poisoning unreachable control, and
+receipt-bound browser execution for the pure value path. This is a capability
+contract, not a promise that browser UDP or QUIC can be implemented without a
+host adapter.
+
+The receipt-bound suite now selects existing fixture 1024 as the reachable
+socket negative control and requires the exact host-adapter diagnostic with no
+target triple. It also executes fixture 1017, which imports the QUIC surface but
+uses only endpoint parsing and presentation, as the pure non-poisoning control.
+The fresh current-generation browser compiler ran both cases on 2026-08-28.
+The complete executable and diagnostic suite passed, the independently
+recomputed input fingerprint is
+`6388DEEA3E85CCBDAE006E95624EB4F7DCD6DB2F175E1054C8428D81445B2653`, and the
+verified and published WASM share SHA-256
+`13A7A1F19F240794914ECC481E4A2AAEF1A186AE1E4EF67B5902E3DA78334746`.
+
+## D493 — Global Stage3 installation is a receipt-bound atomic replacement
+
+Status: current-generation three-platform global installation verified
+
+The Windows global installation at `P:\\Utils\\sollang` is one versioned unit:
+the published self-host Stage3 executable, the complete repository `stdlib`
+tree, and an install receipt that binds both hashes. Copying a new executable
+or overlaying selected library files onto the old directory can retain stale
+files and silently create compiler/library skew, so neither is an installation
+path.
+
+`scripts/install-verified-stage3.ps1` verifies the published Windows Stage2 and
+Stage3 output records, current input fingerprint, normalized LLVM fixed point,
+the Linux Stage3 artifact records/fixed point, and the browser Stage2 current
+input/output records before staging and again immediately before replacement.
+The browser fingerprint binds every executable and diagnostic fixture,
+expected result, verifier host, compiler source, generation script, and LLVM
+tool used by its producer. It compares every
+stdlib relative path and SHA-256, executes a staged build/run smoke, moves the
+old install to a unique sibling rollback directory, moves the staged tree into
+the canonical path, and then builds/runs from that real path with only
+`SOLLANG_LLVM_HOME` supplying LLVM discovery. The final install root contains
+only `sollang.exe`, `stdlib`, and `install.receipt.json`.
+
+Failure before the post-install proof restores the exact prior directory. A
+failure that occurs only while deleting the already-unneeded backup must retain
+the fully verified new install rather than destroying both generations.
+`scripts/verified-install-scope.ps1` rejects volume roots, the repository and
+its descendants, and cleanup outside the exact staging/backup siblings.
+`scripts/verify-verified-stage3-install-contract.ps1` keeps these positive and
+negative controls in the compiler preflight. The installation record conforms
+to `scripts/contracts/sollang-verified-install.schema.json`; schema version 2
+also records the Linux Stage3, browser WASM, and browser input fingerprints plus
+their platform-verification flags. Its final global-smoke bit is false while
+staged and becomes true only after the canonical installed path executes
+successfully. A shared self-host lock plus fixed transaction
+siblings make the next invocation restore an interrupted unverified swap or
+finish cleanup of a verified one deterministically. The installer is executed only at
+an explicit install or release checkpoint after Windows, Linux, and browser
+closure; ordinary pure-stdlib work continues with focused fixtures and does not
+rebuild or reinstall the compiler after every edit.
+
+The first schema-version-2 installation completed on 2026-08-28 after current
+Windows and Linux Stage3 fixed-point verification and the fresh browser gate.
+The canonical `P:\Utils\sollang` root contains exactly `sollang.exe`, `stdlib`,
+and `install.receipt.json`; its environment-only build/run smoke passed. The
+installation record binds compiler SHA-256
+`19D786524042DA025C7F92DF790374DC72923399DD5FE0116E0773513B8B856C`, 95 stdlib
+files under manifest SHA-256
+`00041CFC7953905D5761D5304C23B107BA977D08D24EAEDEDFBE658BB22B6BA8`, the Linux
+Stage3 binary, the browser WASM, and the browser input fingerprint. All five
+verification booleans are true, and no transaction staging or backup sibling
+remains.
+
+## D494 — Subject-when payload operands use exact binding identity
+
+Status: closed
+
+A value-producing subject-`when` arm may initially lower a binary expression
+with its right operand present and its payload-binder operand awaiting arm
+materialization. The self-host Typed IR repair previously searched completed
+binary expressions by identifier spelling and borrowed an operand from the
+first matching text. A first occurrence such as
+`DataBlocked(limit) { limit == 70_000 }` therefore produced S015, while an
+unrelated earlier `limit` could make the result depend on table and source
+order.
+
+The canonical repair now resolves the arm name through `resolvedNames`, follows
+the exact symbol to its kind-59 pattern declaration AST, and selects the
+kind-29 pattern IR with that exact symbol and AST in the same owner root. It
+runs before the broader sibling-continuation repair, which previously attached
+`not ignored` to the missing `limit == 70_000` operand and then prevented the
+identity repair from running.
+The spelling fallback is removed rather than retained as a compatibility path.
+This adds no wrapper, lookup table, allocation, or runtime cost; it replaces an
+existing source-text scan with stable compile-time identity.
+
+Fixture 1203 freezes the first-occurrence binary payload condition. Fixture
+1204 inserts unrelated nominal fields, an enum, a function, and local IR before
+the same condition and requires identical output. Completion requires managed
+execution, reproduction under the preceding Stage3, compiler structural and
+format gates, repaired native self-host exact execution, Stage2/Stage3 fixed
+point, warning/note zero, and the affected QUIC flow-control fixture.
+
+The current-source self-host compiler passes native exact execution for 1203,
+the declaration-permuted 1204, and QUIC fixture 945 after direct-call closure,
+LLVM assembly, and link. Formal Windows Stage2 passed all 7 phases, all 80
+managed/self-host differential fixtures, and all 4 native exact fixtures. Its
+Stage3 rebuild passed the same 4 native exact fixtures, source-style diagnostics,
+native formatting 13 of 13, and binary codecs 6 of 6 with zero warnings or
+notes. Stage2 and Stage3 reached normalized LLVM fixed point
+`BE15964EF9902331B2216766C1CC77A1182B4306979928B797E9E4F973A947E9`, then
+published verified feedback seed
+`CE3FC929C00369ACC4C5023CEDF7E3B891275921DA8D6517CA280A4C92DEDD2D` with
+provenance.
+
+## D495 — Try-wrapped move arguments transfer enum payload ownership once
+
+Status: closed
+
+An owned enum-pattern payload is borrowed from the enum only until the selected
+arm transfers it. The managed LLVM emitter previously decided whether to drop
+the enum owner by scanning the arm for a transfer, but that scan stopped at `?`
+and recognized only a consuming primary input. A call such as
+`enqueue(queue!, frame)?`, where `frame` is a second parameter declared `move`,
+therefore inserted the payload into projected owned storage and then dropped
+the enum subject on the successful edge. Taking the queued value later touched
+a dangling buffer and Windows terminated with heap corruption `0xC0000374`.
+
+Transfer analysis now descends through `TryExpression` and maps both the primary
+input and every additional parameter declared `move`. Fixture 1207 freezes the
+minimal enum payload -> try-wrapped helper -> projected queue -> take path and
+prints `42` with normal exit. The originating fixture 1206 sends stream 4 before
+stream 0, accepts identities 0 and 4 once, reads in owner order, replies in the
+opposite wire order, and prints `quic-multi-stream=true`. Existing fixture 1167
+continues to prove two independent connection routes. Formal ManagedRecovery
+Stage2 passed 7 of 7 phases and its 83-case differential suite. Its immediate
+Stage3 passed the 96-case preflight; both generations executed fixtures 1207
+and 1206 exactly and reached normalized fixed point
+`9666A10B7077791F9AA61E73CC7A04AD457510F8DEE0030F71A8EDC3792D0A47` with no
+unexpected warning or note.
+
+## D496 — Newline parity applies to projected assignment targets
+
+Status: closed
+
+The reference parser reads an expression once, skips optional newlines before
+`=>`, and only then distinguishes a new binding, indexed target, or field
+target. The canonical PEG grammar instead allowed `NewLine*` only in
+`BindingStatement`. A formatted field update such as
+`expression\n => connection.field` therefore made the self-host parser consume
+`connection` as a binding and report `expected End` at the following dot. The
+managed compiler accepted the same source, so a managed-recovery Stage1 could
+be generated but failed its first selected-seed exact fixture when the complete
+stdlib reached the multiline update in `std.net.quic`.
+
+Fixture 1208 isolates the 19-line grammar boundary and prints `2` under the
+managed compiler; the preceding native Stage1 rejects its projected target at
+byte 219. `IndexAssignmentStatement` and `FieldAssignmentStatement` now retain
+the same optional newline prefix as binding assignment, and the generated
+grammar table must be rebuilt from the canonical lexer and grammar. The exposing
+QUIC source remains naturally formatted: closure requires the regenerated
+self-host parser to accept fixture 1208 and the complete stdlib, followed by
+Windows Stage2/Stage3 exact execution and normalized fixed point. Formal
+ManagedRecovery Stage2 passed 7 of 7 phases, its 83-case final differential
+suite, and native exact 1208. The immediate Stage3 passed its 96-case preflight,
+executed 1208 exactly through both generations, and reached normalized fixed
+point `9666A10B7077791F9AA61E73CC7A04AD457510F8DEE0030F71A8EDC3792D0A47` with no
+unexpected warning or note.
+
+## D497 — QUIC connection policy is a prevalidated inline value
+
+Status: closed; managed, contract, and native Windows/Linux verified
+
+`ConnectionOptions` configures the initial inbound bidirectional stream count,
+pending peer-identity count, pending application-frame count, pending
+application-byte count, and `ReceiveWindowSizes` before a connection performs
+network or random effects. `ReceiveWindowSizes` distinguishes connection-wide,
+locally initiated bidirectional, and remotely initiated bidirectional receive
+credit. This follows the useful abstraction level of .NET
+`QuicConnectionOptions`/`QuicReceiveWindowSizes` and Quinn `TransportConfig`,
+but does not inherit MsQuic's power-of-two implementation restriction: the pure
+Sollang transport accepts every QUIC variable-length integer window through
+`2^62 - 1`.
+
+The simple `Endpoint.listen(identity)` and `Endpoint.connect(peer,
+certificate)` methods retain reviewed defaults. `listenWith` and `connectWith`
+accept the explicit value without a heap policy object, virtual dispatch,
+wrapper, or hot-path lookup. A reusable `Listener` retains the validated scalar
+server options inline and applies them to every accepted connection. Validation
+finishes before changing listener state, generating connection IDs, consuming
+randomness, or sending packets.
+
+Wire flow-control credit and local application-queue capacity are separate.
+RFC 9000 uses per-stream and connection credit to bound peer transmission, but
+a receiver still needs explicit local backpressure for decoded frames awaiting
+application consumption. Pending identity, frame, and byte exhaustion therefore
+returns `QueueLimitExceeded` with the exact active limit; a malformed or
+over-credit wire value remains a protocol or transport error. STREAM admission
+checks queue capacity and computes the next connection-flow value before
+observing a new peer identity. After successful identity validation, only
+infallible field/queue commits remain, so a rejected frame cannot partially
+publish a stream or alter flow accounting.
+
+Fixture 1209 independently fills identity, frame, and byte budgets. After each
+rejection it proves the existing frame remains readable and a later admissible
+frame can still publish the exact stream identity. Managed execution, the
+structural fail-before-mutation contract, and native Windows Stage3 exact
+execution pass. Linux Stage2 and Stage3 both execute fixture 1209 exactly in
+their 21-fixture native batch and QUIC ownership gate. The Linux compiler also
+reaches normalized fixed point
+`C0F4BB68A84BEA476C30428A7E59B740B2691E936F2E74D1E529074EEFAABAC7` with
+zero error output during generation.
+
+## D498 — QUIC directional control frames precede owner transitions
+
+Status: implemented and verified on Windows/Linux Stage2/Stage3
+Date: 2026-08-29
+
+QS3 begins with distinct nominal `RESET_STREAM` and `STOP_SENDING` values in
+`std.net.quic.frame`. Their wire codecs preserve exact stream IDs and
+application error codes; `RESET_STREAM` additionally preserves final size.
+Every scalar is checked against the QUIC variable-length integer ceiling before
+encoding, and truncation reports the first missing byte. Initial and Handshake
+engines explicitly reject frame types 0x04 and 0x05 because these control
+frames belong only in 0-RTT and 1-RTT application packet spaces.
+
+The live application pump retains decoded reset and stop values in separate
+bounded connection-owned queues and includes them in the shared pending-frame
+budget. This adds no wrapper allocation, parent pointer, copied stream owner,
+or dynamic dispatch. It is intentionally not the completed directional stream
+API: a matching stream must still consume the retained value, validate reset
+final size against its highest received offset and connection flow accounting,
+preserve the opposite direction, and return the peer's exact application error.
+Public `BiStream.abortSend` and `BiStream.requestStop` now emit the exact control
+frame from inline stream state. A matching owner consumes retained peer control
+state without a global stream table, validates RESET final size against stream
+and connection flow before commit, returns exact `StreamReset`/`StreamStopped`
+application errors, and leaves the opposite direction usable. Fixture 1211
+passes managed live two-stream execution and Windows/Linux Stage2/Stage3 native
+exact execution. Both platform ownership gates also preserve the opposite
+direction and exact peer application error without heap corruption.
+
+Fixture 1210 roundtrips both frame kinds with distinct IDs and final-valid
+`2^62 - 1` fields, rejects one-past before encoding, and pins exact truncated
+decode offsets. It passes managed execution plus the current Windows and Linux
+Stage3 native exact paths. The compiler's exhaustive enum matching diagnosed
+every frame consumer that needed an explicit application-space or forbidden-
+packet-space decision, so the new variants were integrated without a silent
+default arm. The machine-readable contract now classifies QS3 as `implemented`;
+bounded out-of-order STREAM reassembly remains separately visible as QG5 rather
+than holding the completed directional-control slice open.
+
+- [RFC 9000 RESET_STREAM](https://www.rfc-editor.org/rfc/rfc9000.html#name-reset_stream-frames)
+- [RFC 9000 STOP_SENDING](https://www.rfc-editor.org/rfc/rfc9000.html#name-stop_sending-frames)
+- [.NET QuicStream.CompleteWrites](https://learn.microsoft.com/en-us/dotnet/api/system.net.quic.quicstream.completewrites?view=net-10.0)
+- [.NET QuicStream.Abort](https://learn.microsoft.com/en-us/dotnet/api/system.net.quic.quicstream.abort?view=net-9.0)
+- [Quinn SendStream](https://docs.rs/quinn/latest/quinn/struct.SendStream.html)
+- [Quinn RecvStream](https://docs.rs/quinn/latest/quinn/struct.RecvStream.html)
+
+## D499 — Production and extracted assignment schedulers share canonical RHS dependencies
+
+Status: closed; Windows/Linux Stage2/Stage3 fixed points verified
+Date: 2026-08-29
+
+Fixture 1211 exposed invalid native LLVM in `receiveDatagramImpl`: a projected
+growable-array `take` completed inside a loop, then a member assignment stored
+the binary subtraction result before that result and its payload-length inputs
+were emitted. LLVM rejected the module because the value did not dominate the
+aggregate `insertvalue` use. Rewriting the QUIC subtraction would only hide a
+general compiler defect.
+
+The first repair aligned the top-level schedulers in
+`selfhost/llvm/text/function_scheduling.slg` and `selfhost/llvm/text.slg`, but
+1211 and 1212 still failed identically. Their assignments execute inside an
+`if`/loop, whose independent local scheduler lives in
+`selfhost/llvm/text/control.slg`. That third path now waits for the canonical
+aggregate RHS and all direct wrapper children too. The source contract requires
+the rule in all three locations so an incomplete emitter split fails before a
+long bootstrap.
+
+Fixture 1212 is the minimal negative control: a loop takes an owned payload from
+a projected growable-array field and immediately subtracts its length into a
+second owner field. Managed and focused repaired self-host execution both return
+`2`; the pre-repair Stage3 fails LLVM dominance. Re-running 1211 then assembled
+valid LLVM but exposed a separate heap double-free in early-return ownership
+cleanup, now isolated as fixture 1213. The repaired Stage2 must execute 1212,
+1213, and the original live QUIC fixture 1211 before Stage3 fixed-point
+comparison. The scheduling change affects compile time only and adds no
+generated wrapper, allocation, copy, dispatch, or runtime branch.
+
+## D500 — Early-return cleanup follows nested partial moves on the taken edge
+
+Status: closed; Windows/Linux Stage2/Stage3 fixed points verified
+Date: 2026-08-29
+
+After D499 made fixture 1211's LLVM valid, native execution terminated with heap
+corruption. ASAN proved that `receiveDatagramImpl` moved the owned `data` field
+from a payload returned by projected `take`, placed that field in `Result.Ok`,
+and then invoked whole-`Payload` drop glue. The generated cleanup freed the
+transferred array a second time. A non-control version already emitted the
+correct field-wise drop, so rewriting QUIC ownership or leaking the aggregate
+would hide a control-edge compiler defect.
+
+`emitOwnedDrops` already treated a full move as relevant when its nested
+ownership region contains the active early-return edge. Partial-move detection
+and field-wise drop glue now apply that same containment gate and check activity
+in the candidate move's own region. A focused Typed IR diagnostic then proved
+the move and return already shared region 15; the remaining failure came from
+using the return AST's start as the temporal cutoff. The `value.data` move is
+inside the returned `Result.Ok` expression and therefore starts after that
+cutoff even though it executes before cleanup. All `beforeAst` ownership checks
+now use the complete AST end (`start + length`). The active edge node is passed
+as a direct argument into field-wise drop glue, adding no task allocation or
+generated state. This remains a compile-time ownership decision with no wrapper,
+copy, dispatch, or runtime branch.
+
+Fixture 1213 is the minimal contract: nested `while` and `if` take a two-field
+owned payload, transfer only `data` into a returned `Result`, update an unrelated
+owner field, and require `metadata` alone to be cleaned up. Managed execution is
+the oracle; repaired self-host LLVM must assemble, execute exactly, and contain
+field-wise rather than whole-aggregate cleanup before 1211 and the Stage2/Stage3
+fixed points may pass.
+
+The repaired focused compiler emitted fixture 1213 LLVM with zero whole-
+`Payload` drops inside `takeData` and exactly one remaining-field array drop;
+the retained LLVM SHA-256 is
+`D28934DF29AA63D11E557A8181085EBB3045C3C1EC884278443DFBF0D55B5FD9`.
+Direct-call closure, LLVM verification, native execution, and the managed oracle
+all pass. The same compiler then passes original QUIC fixture 1211, including
+native execution without heap corruption, and scheduler fixture 1212. Windows
+Stage2 and Stage3 now also pass fixtures 1211, 1212, and 1213 in both native
+generations and reach normalized fixed point
+`4E13E115D5BA4E919F34FBA373436EEAA9B469DE42083E9D9CCD44FB1AC409BD`.
+Linux Stage2 and Stage3 also pass all 25 native exact fixtures, including 1211,
+1212, and 1213, and reach normalized fixed point
+`20E7BE2DBECFD5C5480D8701CA917BD8F6312D9C26DF7F90130509DB76DE57A6`.
+
+## D501 — QUIC frame enum growth validates exhaustive consumers before self-host emission
+
+Status: closed; early preflight and Windows/Linux fixed points verified
+Date: 2026-08-29
+
+The first repaired Windows Stage2 reached its final 88-case differential after
+the complete compiler emission and passed 85 cases. Fixtures 892, 941, and 942
+then failed because their explicit `frame.Value` matches had not added the new
+`ResetStream` and `StopSending` variants. The compiler's exhaustiveness
+diagnostic was correct, but the verification order found a cheap source-
+contract failure only after the expensive compiler path.
+
+Those consumers now name both variants explicitly and preserve their prior
+meaning: the codec fixture returns false for an unexpected directional frame,
+while the application-engine and owned-payload fixtures leave their success
+state unchanged. A broad `else` is intentionally rejected because it would
+hide the next protocol enum addition.
+
+`frameExhaustiveConsumerFixtures` in the QUIC stream API contract is the single
+fixture authority. `verify-quic-frame-consumers.ps1` reads that list and runs
+the managed exact cases with bounded parallelism. All four Windows/Linux
+Stage2/Stage3 gates invoke it before compiler emission, and the QUIC contract
+verifier checks the files, shared authority lookup, and gate integration. The
+focused preflight passes all three consumers in under one second on the current
+warm build; the same check would have rejected the stale matches before the
+649-second compiler generation.
+
+The following Windows Stage3 gate passed the same early preflight, all twelve
+Stage2 and all twelve Stage3 native exact fixtures, and normalized fixed point
+`4E13E115D5BA4E919F34FBA373436EEAA9B469DE42083E9D9CCD44FB1AC409BD`.
+Linux Stage2 and Stage3 run the same early exhaustive-consumer preflight and
+reach normalized fixed point
+`20E7BE2DBECFD5C5480D8701CA917BD8F6312D9C26DF7F90130509DB76DE57A6`.
+
+## D502 — GZIP decoder exposes verified output only after bounded member validation
+
+Status: implemented; formal platform closure in progress
+Date: 2026-08-29
+
+The first decoder surface is an affine instance created through
+`codec -> decoder(DecoderLimits { maxInputBytes, maxMembers })`. The domain
+value prevents two unrelated integer ceilings from being swapped at call sites.
+Each `write` accepts a caller chunk only when total accepted compressed input
+remains within `maxInputBytes`. It advances the member header, bit reservoir,
+stored block cursor, active fixed/dynamic Huffman tables, LZ history, CRC32,
+ISIZE, and member count without retaining or reparsing complete compressed
+input. Consuming `finish(output)` accepts at most `maxMembers` and appends only
+the completely verified aggregate. An input, member, truncation, checksum, or
+size failure therefore leaves caller-owned output unchanged.
+
+The DEFLATE core now separates “stop at the final block and return the aligned
+cursor” from the one-shot exact-end wrapper. This is the necessary member
+boundary for bounded concatenated GZIP and removes the old assumption that the
+only trailer begins eight bytes before the complete input ends. Existing
+single-member `decompress` retains its exact trailing-data contract.
+
+Fixture 1214 writes two independently encoded members in separate chunks,
+combining stored and fixed-Huffman payloads. It proves bounded concatenation,
+member-limit rejection, CRC failure, truncated trailer rejection, input-limit
+failure without losing previously accepted input, and caller-output
+transactionality. Managed/self-host comparison and current Windows/Linux
+Stage3 native exact execution pass. Fixture 1215 adds the resumability boundary:
+stored, fixed, dynamic, and concatenated streams are delivered one byte per
+`write`, proving that partial bit fields and dynamic-tree construction resume
+without prior-byte reparsing. Its managed exact gate passes; Windows/Linux
+self-host execution remains the current formal closure step.
+
+The decoder retains the current unverified member output because RFC 1951
+back-references need member-local history and the caller must not observe bytes
+before CRC32/ISIZE validation. It separately retains verified member output
+until consuming `finish`, preserving whole-call output transactionality. It no
+longer owns a complete compressed-input collection.
+
+## D503 — GZIP one-shot member decoding reuses the affine decoder
+
+Status: rejected after focused performance gate
+Date: 2026-08-29
+
+`Codec.decompressMembers` previously kept a second concatenated-member parser
+beside `Decoder`. That duplicated header, DEFLATE, trailer, limit, and output
+transfer policy and allowed the one-shot and chunk-fed surfaces to drift.
+
+The candidate constructed `DecoderLimits` from the complete input length,
+performed one `write`, consumed the decoder through `finish`, and removed
+`MemberDecode`, `decodeMember`, and `decodeMembers`. Fixture 1214 proved exact
+one-shot/incremental output parity.
+
+The same O1 compiler/source/input benchmark executed 10,000 two-member decodes
+per process for seven samples. The existing bulk path median was 543.7535 ms;
+the unified byte-resumable path median was 678.1542 ms, a 24.72% regression.
+The candidate is therefore rejected and the measured bulk path is restored.
+Fixture 1214 retains semantic parity across both surfaces. A later consolidation
+must share lower-level policy or decoding core without routing bulk input through
+per-byte resumability overhead, and must pass the same repeated-output gate.
+
+## D504 — Zstandard starts with bounded raw frames and an affine raw/RLE decoder
+
+Status: pure Sollang foundation implemented; formal platform closure pending
+Date: 2026-08-29
+
+`std.compress.zstd.Limits` independently fixes encoded bytes, decoded bytes,
+window bytes, data-frame count, and each skippable-frame payload before
+`Limits.codec` constructs an immutable `Codec`. Stateful work remains on
+instances: `Codec.encoder(expectedInputBytes)` and `Codec.decoder` create affine
+owners, `write` advances only that owner, and `finish: move self` consumes it.
+One-shot `compress` and `decompress` remain codec methods rather than public
+allocating globals.
+
+The first interoperable writer emits RFC 8878 independent single-segment frames
+with raw blocks bounded to 128 KiB. It writes caller chunks directly and retains
+no input. The decoder accepts raw and RLE blocks, bounded skippable frames,
+concatenated data frames, and every one-byte input boundary without retaining
+encoded input. Decoded bytes stay private until consuming `finish` observes a
+complete frame boundary, so malformed magic, header, block, size, truncation,
+or limit failure leaves caller output unchanged. Entropy-compressed blocks,
+dictionaries, and content checksums were initially separate conformance slices;
+D509 subsequently implements the checksum slice while compressed blocks and
+dictionaries retain distinct unsupported errors.
+
+Fixture 1220 proves the deterministic writer, roundtrip, an independent final
+raw frame, RLE, skippable metadata, bytewise resume, and output transactionality.
+The focused managed fixture and the machine-readable nine-surface/nine-invariant
+contract pass. Python 3.14 `compression.zstd` independently decompresses the
+exact Sollang writer vector to `abc`. Windows/Linux self-host native closure and
+the compressed-block/dictionary slices remain before claiming complete
+Zstandard support; D509 records the completed checksum contract.
+
+## D505 — Computed numeric subject-whens retain the exact producer and arm result
+
+Status: regenerated Windows candidate closed; Windows/Linux fixed point pending
+Date: 2026-08-29
+
+A numeric subject-`when` can receive a computed integer such as
+`descriptor % 4`. Self-host subject recovery previously ranked a parameter read
+above that direct kind-8 binary producer. The control compared the original
+descriptor, and a following `=>` binding retained the computed subject rather
+than the selected arm value. A direct expression-bodied subject-`when` stayed
+correct, so the defect appeared only when the result was bound and was amplified
+by consecutive controls.
+
+The repair adds direct binary values to both exact subject value-rank sets. The
+existing lexical-span, parent, integer-type, and nearest-location gates remain;
+arm comparisons begin at the control and cannot become the recovered subject.
+Fixture 1221 freezes the natural behavior and distinguishes the managed result
+`1,4,8;1,42` from the preceding self-host candidate's `1,4,8;0,31`. Fixture
+1222 executes the modified self-host Typed IR builder and requires two kind-34
+controls with kind-8 subjects plus two bindings whose operand is the control.
+The latter passes managed and preceding-candidate native execution, direct-call
+closure, and LLVM assembly. A compiler regenerated from the modified sources
+then passes 1221 and the originating Zstandard fixture 1220 with direct-call
+closure, LLVM contracts, assembly, exact execution, and warning-zero. Its
+Windows executable is 4,229,632 bytes with SHA-256
+`C89B95043E6E3F8196BF12FB5099F1E9B50619B72804AEB59136E74E8E800B73`.
+Windows/Linux Stage 2 and Stage 3 fixed point remains before full closure.
+
+## D506 — AES acceleration keeps one prepared owner and one process-stable dispatch edge
+
+Status: managed/self-host x64 parity, static-storage repair, forced-path differential, and frozen benchmark passed; platform closure pending
+Date: 2026-08-29
+
+`aes128.Key` owns one expanded 176-byte schedule in a growable array with exact
+initial capacity. Expansion allocates once during `prepare`; every block call
+passes only its three-word descriptor. A fixed 176-byte field was rejected
+because the current self-host aggregate ABI passed it inline and would force a
+hot-path schedule copy or a backend-specific temporary buffer.
+
+The self-host LLVM emitter recognizes the complete resolved
+`std.crypto.aes128.Key.encryptBlock` identity. On runtime-detected x64 targets
+it emits a baseline portable body, a separately attributed `+aes,+sse2` body,
+and one atomic resolver slot. The process feature snapshot currently records
+SSE2 and AES from CPUID leaf 1. The selected function pointer replaces the
+resolver after its first call; the nine `aesenc` instructions and final
+`aesenclast` contain no feature branch or schedule copy. Browser and other
+targets retain only the portable path.
+
+`scripts/verify-selfhost-cpu-aes-dispatch.ps1` compiles fixture 889 with the
+real SLG compiler, checks portable isolation, exact instruction counts, target
+attributes, resolver topology, and the absence of a per-call 176-byte copy,
+then assembles, links, and executes the NIST-derived AES-GCM result. The fixture
+also routes a readonly prepared-key reference through a named function before
+calling the value-receiver method, freezing the reference-to-readonly-value ABI
+load that the first focused candidate omitted.
+
+The managed emitter now recognizes the same complete
+`std.crypto.aes128.Key.encryptBlock` identity and emits the same portable,
+resolver, and `+aes,+sse2` topology while retaining its platform-owned
+`sollang_alloc` ABI. `scripts/verify-managed-cpu-aes-dispatch.ps1` freezes that
+separate allocator boundary and the same 9+1 round/no-hot-copy contract.
+Fixture 1226 adds three AES-128 known-answer vectors.
+`scripts/verify-cpu-aes-dispatch-differential.ps1` compiles them through both
+emitters, forces only verification-owned LLVM copies to portable and x64
+AES-NI, and passes all 12 backend/path/vector checks. Both compiler paths must
+emit the exact `x86_64-pc-windows-msvc` triple, and every linked verification
+artifact must inspect as COFF x86-64, AMD64, 64-bit PE32+. The internal `_x86`
+symbol suffix identifies the x86-family AES-NI specialization, not a 32-bit
+executable target. The product API retains automatic
+once dispatch and exposes no CPU selector.
+
+`scripts/run-cpu-aes-dispatch-benchmark.ps1` is an explicit promotion gate,
+not part of every Stage2/Stage3 iteration. It builds forced portable and x64 AES-NI
+copies through both emitters, alternates seven samples, checks exact output and
+artifact hashes, and freezes both AES-NI/portable median-time and maximum-peak-
+working-set ratios at 0.90 and 1.05 respectively, with a 16 MiB absolute AES-NI
+peak ceiling. The memory gate protects non-regression; it does not require a
+spurious 10 percent saving from small process-startup working sets. The final
+post-repair report passes: managed 4,719.287/14.217 ms and
+3,190,784/2,621,440 bytes; self-host 7,182.178/18.546 ms and
+12,587,008/11,456,512 bytes, portable/x64-AES-NI respectively.
+
+The first valid live report exposed 8,731,553,792 self-host portable bytes.
+Its emitter rebuilt the immutable 256-byte `sbox()` literal with `malloc` and
+256 stores on every call, while the managed emitter referenced private constant
+module data. C100 and fixture 1227 now freeze exact zero-call-allocation parity;
+the repeated benchmark proves the peak fell by more than 99.8 percent rather
+than merely hiding the allocation from a structural check.
+
+This is not a claim that CPU acceleration is complete. Complete x64 feature
+discovery, ARM64 AES, GHASH, SHA
+specialization, and platform fixed points remain independent gates.
+
+## D507 — Exact late type sealing re-runs the arithmetic width fixed point
+
+Status: focused self-host gate and complete Windows stdlib execution passed; platform fixed points pending
+Date: 2026-08-29
+
+The full stdlib exposed two independent late-type failures after a module-table
+change. A call result was already correct, but its trailing binding lost that
+type before a dotted member read, producing S017/S031 in QUIC packet protection.
+Exact binding `operand0`, reference-to-binding, and nominal-field edges now seal
+those identities immediately before code generation instead of recovering them
+from source proximity or table insertion order.
+
+That final seal also exposed a second ordering defect. The existing arithmetic
+fixed point correctly selects the widest integer operand, but it ran before the
+late binding/reference seal. GZIP and Zstandard size arithmetic and one QUIC
+stream-id expression therefore retained a 32-bit result after an operand became
+`UIntSize` or `UInt64`, producing six S008 diagnostics. The compiler now
+reapplies widest-integer result typing after exact sealing, then synchronizes
+scalar bindings and references that consume the repaired result.
+
+`scripts/verify-selfhost-late-type-sealing.ps1` compiles one bounded dependency
+closure containing the three originating surfaces, rejects any compiler
+diagnostic, links the LLVM with the required Windows system libraries, and runs
+fixture 888. The current Stage2-focused gate passes in 6.63 seconds. It is wired
+into formal Windows Stage2 and Stage3 candidate verification so the defect is
+reported before a complete stdlib or fixed-point build.
+
+The compiler regenerated after the changed-type worklist optimization also
+builds the complete stdlib and runs fixture 888 with exact `aes128=ok` output.
+The final nominal-field scan is limited to members whose base binding/reference
+actually changed during late sealing; it does not restore the former
+members-times-fields whole-table scan merely to obtain order independence.
+The final seal now lives in the existing `ir/typed/function_lowering.slg`
+responsibility fragment. This reduces `typed.slg` from 15,582 to 15,360 lines
+and `lowerResolvedContextWithMode` from 14,406 to 14,184 without raising either
+tracked structure-debt ceiling.
+
+## D508 — Readonly numeric literal tables are immutable module data
+
+Status: managed/self-host focused parity and CPU benchmark passed; platform fixed points pending
+Date: 2026-08-29
+
+A parameterless direct function body such as `table: -> [UInt8] => [1, 2]`
+returns a readonly view over compile-time numeric data. Rebuilding that data on
+every call does not express ownership and is observably worse in both time and
+memory. The managed emitter already placed the literal in private constant
+module storage; the self-host emitter instead allocated and initialized a fresh
+buffer on every call.
+
+The self-host function emitter now promotes only the exact safe shape: a direct
+readonly-slice return whose elements are all numeric literals. It emits one
+typed `private unnamed_addr constant`, then returns a borrowed pointer/length.
+Computed elements, fixed-array values, growable owners, and empty contextual
+values keep their existing storage rules. The global symbol is derived from the
+complete module/symbol identity so same-named functions cannot alias.
+
+Fixture 1227 calls an eight-byte table 1,000 times, then exercises computed
+fixed-value, literal fixed-value, and growable-owner negative controls.
+`scripts/verify-selfhost-static-readonly-array.ps1` requires the exact global,
+requires exactly one promoted table,
+isolates the exact function by symbol, rejects `malloc`/`sollang_alloc` inside
+that body, links the LLVM, and verifies exact `98225` output. The C#-regenerated
+self-host compiler passes in 0.76 seconds; the gate is part of Windows Stage2
+and Stage3. The broader CPU AES benchmark remains the allocation/performance
+promotion proof because its 256-byte S-box made the original defect visible.
+The repeated seven-sample report records a 12,587,008-byte self-host portable
+maximum instead of the original 8,731,553,792 bytes and improves its median
+from 10,835.688 ms to 7,182.178 ms.
+
+## D509 — Zstandard content checksums are bounded XXH64 instance state
+
+Status: managed and regenerated self-host focused implementation passed; platform fixed points pending
+Date: 2026-08-29
+
+RFC 8878 defines a checked frame as seed-zero XXH64 over the decoded frame
+content, followed by the low 32 bits in little-endian order. Python 3.14's
+standard `compression.zstd` similarly exposes an encoder checksum flag and
+rejects a mismatched checksum during decoding. Sollang represents that choice
+as immutable `FrameOptions { checksum }` owned by `Codec`; it is not an ambient
+global switch and does not change decoder acceptance policy.
+
+`std.hash.xxhash64.Seed` constructs a mutable scalar `Hasher`. It consumes full
+32-byte stripes into four UInt64 accumulators, retains at most the partial
+stripe, and supports `write`, `writeByte`, `checksum`, and `reset` without a
+complete-input copy. The implementation follows the canonical xxHash modular
+arithmetic and little-endian lane contract. Fixture 1228 freezes the official
+empty and `abc` values, split-write parity, and the low 32 bits of an independent
+40-byte stripe vector.
+
+The Zstandard encoder hashes each accepted caller chunk and appends the four
+checksum bytes only after its final raw block. The decoder owns one frame-local
+Hasher, hashes bytes as they are decoded, and enters an explicit checksum phase
+after the last block. A mismatch is `ChecksumMismatch` at the checksum field;
+caller output remains untouched because `finish` still transfers only the fully
+verified aggregate. Fixture 1220 compares deterministic checked encoding,
+accepts the exact checked `abc` frame produced independently by Python 3.14,
+rejects a damaged checksum, and proves destination transactionality. Entropy-
+compressed blocks and dictionaries remain separate unsupported capabilities.
+
+## D510 — Integer LLVM operations derive signedness from canonical Sollang types
+
+Status: managed and regenerated self-host focused closure passed; platform fixed points pending
+Date: 2026-08-29
+
+Sollang's `/`, `%`, `<`, `<=`, `>`, and `>=` operations cannot select one LLVM
+signed form globally. The existing named-function and control-region binary
+emitters already derived signedness from canonical integer types, but entry and
+interpolation paths duplicated the lowering and hardcoded `sdiv`, `srem`, and
+signed ordered comparisons. Fixture 1228 exposed the split: its XXH64 value has
+the high bit set, so `% 4_294_967_296` was interpreted as a signed remainder
+and returned the sign-extended UInt64 value 18446744072385675753 instead of
+2971091433.
+
+The self-host LLVM emitter now routes entry, named-function, nested-control,
+and interpolation lowering through shared signedness-aware operation helpers.
+The canonical result integer type is preferred and the canonical left operand
+is the fallback when selecting signed or unsigned LLVM instructions. Compiler
+contracts reject direct hardcoded signed division/remainder in generic entry
+or interpolation emitters, and both Stage2 and Stage3 exact inventories include
+fixture 1228 so later table or emitter refactoring cannot silently reopen the
+path split.
+
+The C#-regenerated current self-host compiler passes the expanded fixture
+exactly against the managed oracle. Its focused LLVM contains `udiv i64` for
+the high-word calculation, `urem i64` for the low-word calculation, and
+`icmp ugt`/`ult`/`uge`/`ule` for all four ordered comparisons. This is focused
+closure; formal Windows/Linux Stage2 and Stage3 fixed points remain pending.
+
+## D511 — HTTP message-body framing is a bounded affine instance layer
+
+Status: managed and regenerated self-host focused implementation passed; platform fixed points pending
+Date: 2026-08-29
+
+RFC 9112 selects a message body's framing only after the request or response
+head is known. Sollang therefore keeps head parsing pure and places framing in
+the separate `std.net.http.body` module instead of opening a socket or hiding
+transport policy in `Parser`. Official Go, .NET, and Java HTTP APIs likewise
+expose response body consumption as stateful streaming work whose resources
+must be read, closed, or cancelled; Sollang expresses the same lifecycle with
+an affine `BodyDecoder` and consuming `finish` rather than garbage-collected
+disposal.
+
+`BodyLimits -> policy` fixes encoded, decoded, chunk-line, trailer-byte, and
+trailer-field ceilings. `BodyPolicy.request(head)` and
+`BodyPolicy.responseContext(method).plan(head)` implement RFC precedence while
+rejecting Transfer-Encoding plus Content-Length and duplicate Content-Length
+under the strict security policy. HEAD, informational, 204, and 304 responses
+have no body; successful CONNECT yields a tunnel; an unframed request has no
+body while an unframed response is close-delimited.
+
+`BodyPlan.decoder` creates the state owner. `write(input, callerOutput)` returns
+separate consumed and produced counts, validates chunk sizes, data terminators,
+and trailers incrementally, and stops before the next pipelined message. The
+decoder retains only bounded line and framing state, never the complete encoded
+input. Fixture 1229 proves fixed-length and chunked delivery, trailer handling,
+pipeline preservation, framing conflict rejection, and response special cases.
+The schema-backed contract is a Windows/Linux Stage2/Stage3 preflight and the
+fixture is in the shared native exact batch. Focused managed and regenerated
+self-host execution pass exactly; platform fixed points remain before this
+slice is promoted to closed.
+
+## D512 — Self-host control values share one canonical producer contract
+
+Status: managed and regenerated self-host focused implementation passed; platform fixed points pending
+Date: 2026-08-29
+
+Three failures exposed the same structural defect: allocation, arm storage, and
+trailing-effect emission independently guessed which IR node produced a value.
+A short-circuit RHS could therefore call with an unmaterialized array literal;
+a nested `Result` match could store or load an undefined `%v*`; and a trailing
+`println` could print the `Bool` condition instead of the completed `Text` from
+an `if`.
+
+The LLVM dependency walk now schedules RHS array literals before their calls.
+Enum-match result resolution follows region parents, resolves direct payload
+bindings through one shared arm-binding helper, and uses the same concrete-arm
+predicate for result-slot allocation and emission. Missing canonical arm values
+fail as S019 instead of producing invalid LLVM. Final typed-IR sealing reconnects
+a provisional console operand only to a control value contained by the same
+source flow and exact owner, so unrelated controls cannot be selected.
+Region and function-body forwarding now follows exact result operands rather
+than equal result types; a statement-position match followed by a same-typed
+fallback expression must remain unused.
+
+Fixtures 1230, 1231, and 1232 freeze those three boundaries and are wired into
+the managed native exact batch plus Windows/Linux Stage2 and Stage3 inventories.
+Focused 1230, 1231, and 1232 self-host execution, LLVM verification, and
+managed-oracle differentials pass. The first 1232 diagnostic imported the full
+self-host frontend and exceeded four minutes; the final direct runtime fixture
+preserves the failure boundary and completes through the incremental gate in
+1.842 seconds. Formal platform fixed points remain pending.
+
+## D513 — HTTP response framing has one bounded instance owner
+
+Status: managed and regenerated self-host focused passed; platform promotion pending
+Date: 2026-08-30
+
+RFC 9110 limits valid status codes to 100 through 599, while RFC 9112 defines
+HTTP/1.x messages as octets and requires a non-persistent server to announce
+`Connection: close` on final responses. It also makes complete request-body
+consumption a prerequisite for safe connection reuse. Go's server contract
+similarly recommends reading the request body before writing a response, Java's
+fixed response handler drains the request before sending headers and bytes, and
+.NET exposes caller-controlled streams or pipes for request and response data.
+Sollang adopts those boundaries without an ambient server, hidden body copy, or
+unbounded response buffer.
+
+`std.net.http.response.ResponseLimits.policy` creates the immutable bound
+policy. `ResponsePolicy.response` validates method, version, status, reason,
+explicit body length, and connection mode before returning a mutable
+`ResponseWriter`. Ordered application fields are added through the writer
+instance. The writer rejects CR/LF injection and reserves Content-Length,
+Transfer-Encoding, Connection, and Trailer as its single framing authority.
+Every field and the complete automatic suffix are checked against independent
+head, count, name, and value bounds before mutation.
+
+Consuming `finish` yields `ResponseHead`; consuming `intoBytes` transfers its
+existing growable head buffer. Body bytes remain caller-owned and are not
+appended or copied. HEAD and 304 suppress transmission while retaining explicit
+representation length, informational and 204 responses omit Content-Length,
+205 requires zero content, and successful CONNECT exposes a tunnel. HTTP/1.0
+persistence emits keep-alive, HTTP/1.1 persistence is implicit, and close mode
+adds its field only to final responses. Fixture 1233 proves exact bytes, close,
+HEAD, 204, CONNECT, reserved-field rejection, response-splitting rejection, and
+body prohibition plus an exact 15-byte minimum-head boundary with zero warnings
+or notes. A zero name/value limit is valid and disables application fields
+without inventing an arbitrary positive minimum. The schema-backed contract is
+a formal Windows/Linux Stage2/Stage3 preflight. Socket partial-write retry is
+now supplied by `TcpStream.sendAll`; request-byte lifetime and the actual
+one-request close-mode server loop remain the next slice. This decision still
+does not claim a working server yet.
+
+## D514 — Structured callback flow receivers remain first-class call arguments
+
+Status: managed and regenerated self-host focused passed; platform promotion pending
+Date: 2026-08-30
+
+Fixture 1234 exposed a compiler-owned V001 failure in valid code shaped as a
+parallel callback whose condition and branches call `value -> function(a, b)`.
+Fixture 1235 then proved the precise boundary: all three receiver
+names resolve to the callback's semantic kind-35 role, but Typed IR contained
+zero role uses and zero ordinary definitions, so final call sealing linked only
+`a -> b`. V001 correctly stopped the compiler before malformed LLVM. Rewriting
+the source as a direct global call would hide the defect and violate Sollang's
+value-flow vocabulary.
+
+Final function lowering now indexes exact role symbols, role-owner source
+types, resolved names, and existing receivers by global AST/symbol identity.
+For `parallel` and `tryParallel`, the role type comes from the exact owner's
+already-typed source collection element; it is not guessed from spelling or a
+merely compatible definition. Each missing resolved receiver becomes a direct
+kind-5 role use with no fabricated definition, is prepended once, and leaves
+the old chain head as the authoritative second argument. Fixture 1235 now
+reports
+`resolved=3,typed=0,uses=3,definitions=0,heads=3,complete=3,parallel=3:2,root=18:2`.
+Structured callbacks also seal their final typed control root and emit that
+body inline in the serial fallback; direct user-function callbacks retain the
+worker-pool path. Role values are materialized from the current element before
+inline control emission and are not scheduled again outside the parallel loop.
+ManagedRecovery self-host fixture 1234 passes LLVM verification, execution as
+`9,10`, and the managed differential. The implementation
+does not rescan complete tables per call and lives in
+`typed/function_lowering.slg`; the already oversized `typed.slg` retains only
+the orchestration call, and its source-structure ceiling remains enforced.
+
+## D515 — Unary resolved flow calls seal the preceding stage as their sole argument
+
+Status: managed and regenerated self-host focused passed; platform promotion pending
+Date: 2026-08-30
+
+Fixture 1233 exposed a self-host Typed IR call plan for
+`reason -> byte(index) -> isFieldValueByte`: the final one-parameter function
+retained `reason: Text` as operand zero and left the preceding `byte: UInt8`
+result as operand one. LLVM correctly rejected the resulting `Text` value at an
+`i8` ABI boundary.
+
+Final call sealing now counts the resolved target's exact runtime parameter
+symbols. When a resolved flow call has one runtime parameter and a late second
+operand, that immediately preceding flow result becomes the sole operand before
+the generic argument-chain seal runs. This is shared by function and entry
+lowering through one helper, rather than duplicated inside the oversized
+lowerer. ManagedRecovery self-host fixture 1233 now passes LLVM verification,
+execution, and the managed differential without changing its source.
+
+## D516 — Imported methods require an exact receiver owner
+
+Status: managed diagnostics and originating regenerated self-host path passed; platform promotion pending
+Date: 2026-08-30
+
+Adding `TcpStream.sendRange` exposed a self-host semantic ambiguity: a lexical
+global helper with the same spelling could be replaced by any public method
+found in a same-namespace fragment or open import, even when the method's
+declared `impl` owner did not match the flow receiver. The resulting call kept
+one Endpoint argument but targeted the four-parameter TcpStream ABI, and V001
+correctly stopped malformed LLVM.
+
+Same-namespace lexical fallback now considers global functions only. Imported
+methods remain available for extension-style APIs such as
+`std.net.Endpoint -> connect`, but only when the qualified impl owner or the
+same-logical-module nominal owner equals the exact semantic receiver type.
+Fixture 1237 freezes a complete four-argument cross-fragment instance chain.
+Fixture 1238 freezes an aliased imported Endpoint method, a lexical global with
+the same name as a Stream method, named-function and main control-flow calls,
+and zero wrong-owner dispatches. The originating 1236 socket fixture passes the
+regenerated self-host path; the larger compiler-introspection fixture is kept
+as a managed diagnostic because compiling its full compiler-module closure
+still encounters separately tracked broad self-build gaps.
+
+## D517 — Socket range writes publish their successful count
+
+Status: managed and regenerated self-host focused passed; platform promotion pending
+Date: 2026-08-30
+
+`TcpStream.sendRange(bytes, offset, length)` is the zero-copy partial-write
+primitive. Windows and Linux validate the range before pointer arithmetic and
+call the existing send primitive on the caller-owned subrange. `sendAll` loops
+on that count and reports `WriteZero` rather than spinning when a successful
+write makes no progress.
+
+The first self-host LLVM emitted the correct five platform arguments but wrote
+only the Result tag on success, leaving the UIntSize payload zero. Opcode -289
+now shares the existing socket count-result store path used by send/sendTo and
+receiveInto. Fixture 1236 requires three direct range calls, three successful
+payload stores, invalid-range rejection, exact `ping`/`pong` loopback behavior,
+LLVM verification, native execution, and managed differential. The intrinsic
+adds no wrapper, allocation, payload copy, virtual dispatch, or per-call feature
+probe.
+
+## D518 — Socket receive append writes only the caller-owned tail
+
+Status: managed and regenerated self-host focused passed; platform promotion pending
+Date: 2026-08-30
+
+Incremental parsers need to preserve already received bytes while filling the
+unused capacity of the same growable owner. Repeated allocating `receive`
+followed by an append would copy every chunk, while a public offset API could
+permit an uninitialized gap. `TcpStream.receiveAppend(buffer!)` therefore
+writes exactly `[len, capacity)`, returns the received count, and publishes the
+new length only after a successful platform call.
+
+Windows and Linux share the direct four-argument platform helper. Managed and
+self-host lowering use the existing buffer pointer, length, and capacity and do
+not allocate or copy. Fixture 1239 preserves an existing `hi` prefix, appends
+the loopback `ping`, requires exact length six, and locks the direct helper plus
+success-only length publication.
+
+## D519 — HTTP close-mode orchestration keeps request bytes and transport together
+
+Status: managed focused passed; regenerated self-host and platform promotion pending
+Date: 2026-08-30
+
+The pure HTTP head parser and response writer did not yet own transport
+lifetime. `std.net.http.server` now supplies the smallest honest orchestration
+layer: immutable `ServerOptions` creates a listener-owning `Server`, `accept`
+creates a one-request `Connection`, and consuming `readRequest` reserves one
+bounded byte owner and fills it with `receiveAppend` until parsing succeeds.
+The returned affine `Request` retains that backing owner with its borrowed head
+spans and accepted transport.
+
+Consuming `respond` accepts the existing bounded `ResponseHead` and a borrowed
+caller body, rejects persistent and tunnel responses, verifies the exact body
+length, sends head and body without an intermediate copy, and closes the
+connection. Fixture 1240 performs a real loopback GET and exact close-mode 200
+response. Persistent connections, body streaming, HTTP/2, and HTTP/3 remain
+separate contracts rather than silent fallbacks.
+
+## D520 — Enum payload cleanup follows actual branch ownership
+
+Status: managed focused passed; regenerated self-host and platform promotion pending
+Date: 2026-08-30
+
+HTTP fixture 1240 first exposed heap corruption when an owned `ResponseHead`
+payload was consumed as an additional move argument but its original `Result`
+carrier was dropped later. After that was isolated, the accepted socket became
+invalid because `readRequest` moved its transport only in a terminating success
+arm and the emitter incorrectly dropped the still-live transport in the
+continuing `UnexpectedEnd` arm.
+
+Managed lowering now tracks an owned enum payload with a path-local retained
+flag. The flag is cleared at the actual move edge, so the original carrier is
+dropped only on paths that still own it. Branch merging uses each
+non-terminating arm's real local scope; it no longer pre-drops an outer owner
+merely because another arm transfers it. Terminating move arms are excluded
+from the continuing ownership merge, while genuinely inconsistent continuing
+paths remain an early compiler error. Fixture 1241 is the allocation-only
+minimal regression and fixture 1240 is the socket-backed integration proof.
+
+## D521 — Final nominal member sealing restores type and ordinal together
+
+Status: managed and regenerated self-host focused passed; platform promotion pending
+Date: 2026-08-30
+
+An enum payload binding can become nominal before the final Typed IR seal while
+one of its member projections remains unresolved. The seal therefore revisits
+both members whose base changed and members whose own type is still missing.
+Once the exact declared field is found, its canonical type and ordinal are one
+atomic contract; assigning only the type produces an invalid LLVM
+`extractvalue ..., -1`.
+
+S031 now reports the source expression, resolved base type, matching field
+count, and first matching field state. Fixture 1242 exercises four fields of
+`sys.path.RawInfo` through `Ok(raw)` and passes managed/self-host execution and
+differential comparison. Already-typed members are not rescanned, preserving
+the focused compiler-speed policy.
+
+## D522 — Path intrinsic identity is resealed after receiver repair
+
+Status: managed and regenerated self-host focused passed; platform promotion pending
+Date: 2026-08-30
+
+An imported instance call can acquire its exact receiver and function identity
+after the early intrinsic classification pass. `Path.queryRaw` must then become
+opcode -215 rather than an ordinary undefined module call. One shared helper
+classifies path runtime operations from canonical module hash, symbol kind,
+intrinsic declaration flag, and exact name; it runs before and after late
+receiver repair and rejects same-name non-intrinsics.
+
+The helper lives in `ir/typed/function_lowering.slg` instead of duplicating the
+classification in the `typed.slg` monolith. This change reduced `typed.slg` by
+45 lines and added no runtime wrapper or dispatch.
+
+## D523 — A projected flow receiver replaces its base in the ABI plan
+
+Status: managed and regenerated self-host focused passed; HTTP integration and platform promotion pending
+Date: 2026-08-30
+
+For `self.source -> compare(self.fields[index], expected)`, `self` is a
+dependency of the `self.source` projection, not a separate call argument. The
+final call-plan repair follows only the contiguous member chain whose operand
+points to the preceding receiver, promotes the complete projection to the
+head, and leaves explicit arguments in source order. This is a compile-time
+link correction with no allocation or dynamic dispatch.
+
+V001 now counts one linked slot beyond the expected ABI; an extra argument can
+no longer hide behind the previous maximum-count bound. Fixture 1243 freezes
+three ordered arguments and zero duplicated bases. The originating HTTP fixture
+1045 passes regenerated self-host LLVM verification, native execution, and the
+managed differential.
+
+## D524 — LLVM effect scheduling resolves call targets through the frozen symbol index
+
+Status: focused measurement and exact execution passed; Stage2/Stage3 promotion pending
+Date: 2026-08-30
+
+The HTTP/socket fixture showed that semantic preparation and Typed IR complete
+in about 1.3 seconds while LLVM text emission remains CPU-bound for minutes.
+One measured-path defect was structural: `callHasDeclaredEffects` rediscovered
+every ordinary target by scanning the complete Typed IR, even though readiness
+scheduling calls it from nested function-local scans and `CoreEmitterState`
+already owns the immutable global-symbol-to-function index.
+
+Effect classification now records the declaration `uses` clause and mutable
+parameter contract once per exact global symbol, then reads one frozen Bool in
+the readiness loop. `if` condition roots are indexed in one function-local
+pass, and control-region and logical-value containment are computed once per
+function instead of repeating condition and ancestor scans on every blocked-
+expression revisit. Mutable lexical roots are cached by IR
+index as well, replacing the former per-read full-function binding scan. This
+changes no effect semantics, generated LLVM, runtime representation, runtime
+allocation, or dispatch. A remaining effectful-call barrier scan now rejects
+non-binding, out-of-range, and already-scheduled nodes before its pure ancestry
+query, and terminates after the first blocker because readiness only changes
+from true to false and no other result is accumulated. Source metadata lookup
+stays after the ancestry exclusion so malformed IR retains the prior guarded
+failure boundary.
+
+The
+compiler contract rejects the former full-IR target scan and repeated
+containment discovery, and freezes the new cheap-filter/ancestry/early-exit
+order. The current expanded 1240 workload is frozen in
+`scripts/contracts/c112-http-emission.sources.txt`; fixture 1240 must still
+supply three alternating single-worker before/after timings, identical LLVM,
+assembly, link, and exact execution before the latency defect can be closed.
+
+The frozen 22-source measurement passed all six alternating samples. Baseline
+medians were 1,870 ms wall, 2,516 ms CPU, and 24,551,424 bytes peak working
+set; candidate medians were 780 ms, 812 ms, and 19,607,552 bytes. This is a
+58.29 percent wall reduction, 67.73 percent CPU reduction, and 20.14 percent
+peak-memory reduction with the exact same 511,080-byte LLVM fingerprint.
+Focused LLVM assembly, native link and execution, and managed differential also
+pass. Formal Stage2 and Stage3 remain the promotion boundary.
+
+## D525 — Projected borrowed Text roots and affine partial returns share ownership truth
+
+Status: regenerated self-host focused and ASan integration passed; platform promotion pending
+Date: 2026-08-30
+
+HTTP fixture 1240 exposed two independent ownership defects after its parser and
+socket layers became executable. First, moving `Connection.transport` into a
+returned `Request` was recorded but the explicit-return epilogue still dropped
+the complete `Connection`, closing the transferred socket. Affine native
+resources now have one semantic classifier in `semantic.context`; final Typed
+IR marks that drop obligation, and explicit and fallthrough returns both select
+field-wise partial drop glue. Pattern payload bindings are likewise invalidated
+after their consuming call or aggregate construction, not before construction
+and not only for direct call shapes.
+
+Second, `RequestHead.methodText` and `targetText` return pointer-plus-length
+views into `Request.bytes`. The E21 return-origin analysis recognized a direct
+SourceText parameter but missed `self.source -> slice(...)`. It now resolves the
+slice receiver through the canonical projected place and requires its root to
+be the exact parameter. Consequently a later reachable use after moving the
+aggregate is rejected; code that reduces the view to a scalar before the move
+remains allocation-free and valid.
+
+Fixture 1240 now evaluates its request predicate before consuming `Request`.
+Fresh O0/O1 execution and three ASan runs print exactly
+`http-one-request-server=ok`; generated LLVM skips the transferred transport in
+the explicit return cleanup. Fixture 1244 is the focused E21 negative analysis
+for a Text view returned through a projected SourceText field. Windows/Linux
+Stage2 and Stage3 fixed-point promotion remain pending under the focused-first
+policy.
+
+The ownership pass is explicitly read-only over both `SemanticSnapshot` and
+canonical Typed IR. These parameters and all helper equivalents now use `ref`;
+value parameters could otherwise acquire and release the shared dynamic arrays
+once affine ownership became authoritative. `take` detection also requires both
+the canonical `-213` operation and the written `take` identifier, preventing an
+opcode-only false classification. Fixtures 468, 493, and 1244 pass together.
+The same focused run exposed V001 double-counting a parallel role that already
+occupied the linked `operand0`. A later full compiler regeneration proved that
+`operand0` presence alone is not the inverse rule: compiler callbacks can carry
+two explicit captures while their parallel role remains implicit. V001 now
+adds one structurally proven parallel or stream role only when linked arguments
+leave exactly that runtime-parameter slot unfilled. Fixtures 498 and 500 still
+report only their intended E18/E19 diagnostic, while self-compilation covers
+the role-plus-captures case.
+
+## D526 — Brotli starts with a bounded raw-meta-block instance foundation
+
+Status: managed fixture and structural contract passed; entropy and platform promotion pending
+Date: 2026-08-30
+
+`std.compress.brotli.Limits` constructs an immutable `Codec`; compression,
+decompression, and encoder construction are inherent instance methods rather
+than ambient globals. The first pure Sollang RFC 7932 slice emits deterministic
+WBITS-16 streams containing byte-aligned uncompressed meta-blocks followed by
+an empty final meta-block. Its affine `Encoder` writes caller slices directly
+to caller-owned output, retains no complete input, enforces encoded-byte and
+meta-block ceilings across arbitrary write chunking, and consumes itself when
+validating the exact expected size at `finish`.
+
+The bounded bulk and affine incremental decoders accept every standard WBITS
+code, metadata and raw meta-blocks, reject non-canonical high length units,
+non-zero alignment padding, truncation, excess
+output/window/meta-block/metadata, and trailing bytes. Incremental `write`
+retains only bit/header/payload state and private verified output; it never
+retains encoded input or changes caller output. Consuming `finish(output)` is
+the sole output transfer point. The bulk path remains separate until a shared
+core meets a measured no-regression gate.
+
+Entropy-compressed meta-blocks return an explicit capability error instead of
+being misdecoded or silently delegated. Fixture 1245 freezes the seven-byte
+`abc` vector, one-shot and split-write encoder round trips, bytewise decoder
+resumability, the chunk-independent meta-block limit, and transactional
+truncation/padding/trailing-data failures. Entropy coding and RFC 9841
+dictionaries/framing are deliberately still open.
+
+## D527 — Brotli canonical prefix lookup has one bounded shared implementation
+
+Status: managed executable and structural contract passed; compressed meta-block integration pending
+Date: 2026-08-30
+
+RFC 7932 uses canonical prefix codes for code lengths, block types and counts,
+literals, insert-and-copy commands, distances, and context maps. Sollang keeps
+one shared `std.compress.brotli.prefix_table` implementation rather than
+introducing a separate decoder for each role. `Limits.builder` bounds the
+alphabet and table storage; `Builder.table` accepts symbol-ordered code lengths
+and validates the 704-symbol, 15-bit, complete multi-symbol code-space contract
+before constructing anything observable.
+
+The lookup representation follows the Google Brotli decoder's bounded fast
+shape: replicated entries under a configurable root and only the necessary
+second-level tables, with the RFC root-8 maximum fixed at 1,080 entries.
+`Table.read(input, position)` is a readonly instance operation that consumes
+only the actual symbol bits, returns the next explicit position, retains no
+input, and allocates nothing per symbol. Single-symbol trees consume zero bits.
+Fixture 1246 executes root and second-level paths and rejects truncation,
+oversubscribed/incomplete spaces, and excess table storage. This table is the
+required primitive for the remaining compressed-header and command pipeline;
+its existence alone is not entropy-meta-block support.
+
+References:
+
+- <https://www.rfc-editor.org/rfc/rfc7932>
+- <https://github.com/google/brotli/blob/master/csharp/org/brotli/dec/Huffman.cs>
+
+## D528 — Brotli simple and complex code descriptions converge before execution
+
+Status: managed executable and structural contract passed; tree-group integration pending
+Date: 2026-08-30
+
+`std.compress.brotli.prefix_code.Limits` constructs a bounded `Parser` over the
+single D527 lookup builder. `Parser.parse` receives caller bytes, an explicit
+bit position, alphabet size, and root width; it returns an owned lookup table
+plus the next position and never retains the encoded source. Simple one- to
+four-symbol descriptions validate distinct symbols and assign the exact RFC
+tree shapes. Complex descriptions decode the fixed 18-symbol code-length
+alphabet in its specified permutation, expand repeat codes 16 and 17 within
+the target alphabet, and account for every remaining code-space unit.
+
+Both description forms terminate in the same canonical lookup builder. This
+keeps execution independent of how a tree was represented on the wire and
+prevents a second slower Huffman path from growing inside the main Decoder.
+Fixture 1247 constructs equivalent four-symbol tables through simple and
+complex wire descriptions, decodes the same symbol sequence, and rejects
+duplicate symbols and truncation. The next integration stage must use this
+Parser for block type/count, literal, command, distance, and context-map trees;
+the parser alone does not make compressed meta-blocks supported.
+
+References:
+
+- <https://www.rfc-editor.org/rfc/rfc7932#section-3.4>
+- <https://www.rfc-editor.org/rfc/rfc7932#section-3.5>
+- <https://github.com/google/brotli/blob/master/csharp/org/brotli/dec/Decode.cs>
+
+## D529 — Brotli context maps are bounded owned values over the shared parser
+
+Status: managed executable and structural contract passed; compressed-header integration pending
+Date: 2026-08-30
+
+`std.compress.brotli.context_map.Limits` constructs a `Parser` with explicit
+entry, tree, and prefix-table ceilings. The RFC wire format permits at most 256
+trees; Sollang additionally fixes the largest literal map at 256 block types
+times 64 contexts, or 16,384 owned entries. `Parser.parse` receives borrowed
+caller bytes and an explicit bit position, then returns the exact owned map,
+tree count, and next position without retaining the encoded source.
+
+The one-tree path creates the exact all-zero map without constructing a prefix
+table. Multi-tree maps reuse D528 for their alphabet, validate zero runs before
+growth, reject out-of-range tree indexes, and apply inverse move-to-front only
+inside the parser-owned result. No malformed run or index is clamped. Fixture
+1248 proves the one-tree path, direct and inverse-move-to-front maps, zero-RLE,
+truncation, exact bit advancement, and run overflow. The main compressed-header
+parser must reuse this implementation for both literal and distance context
+maps rather than grow a second map decoder.
+
+References:
+
+- <https://www.rfc-editor.org/rfc/rfc7932#section-7>
+- <https://github.com/google/brotli/blob/master/csharp/org/brotli/dec/Decode.cs>
+
+## D530 — Brotli tree groups bound aggregate lookup storage
+
+Status: managed executable and structural contract passed; compressed-header integration pending
+Date: 2026-08-30
+
+`std.compress.brotli.tree_group.Limits` constructs a `Parser` that owns the
+consecutive prefix tables for one literal, command, or distance tree group.
+The parser applies independent ceilings to tree count, alphabet size, each
+table, and aggregate table entries. It receives borrowed input with an explicit
+position and returns owned tables with the exact next position; no encoded
+bytes, ambient cache, or fixed global table array survives the call.
+
+Every tree description reuses D528 and therefore converges on D527. Aggregate
+storage is checked before the next table is moved into the group, so an
+attacker-controlled tree count cannot turn individually valid tables into
+unbounded memory use. Fixture 1249 parses two consecutive equivalent trees and
+proves exact positioning, truncation, tree-count rejection, and aggregate-table
+rejection. Literal, command, and distance groups in the compressed header must
+all use this instance.
+
+References:
+
+- <https://www.rfc-editor.org/rfc/rfc7932#section-7>
+- <https://github.com/google/brotli/blob/master/csharp/org/brotli/dec/Decode.cs>
+
+## D531 — Brotli compressed headers compose bounded owned primitives
+
+Status: managed executable and structural contract passed; command execution and incremental integration pending
+Date: 2026-08-30
+
+`std.compress.brotli.compressed_header.Limits` constructs a `Parser` that
+composes D527 through D530 without adding a second entropy implementation. The
+parser reads exactly three block streams, distance postfix/direct parameters,
+literal context modes, literal and distance maps, and all three tree groups.
+Block type, initial block length, context entries, tree counts, individual
+tables, and aggregate table storage remain independently bounded.
+
+Single-type streams represent absent tables explicitly and keep the RFC initial
+length sentinel. Multi-type streams own both prefix tables and validate their
+first decoded block length before transfer. Distance alphabets are derived from
+the wire parameters and cannot exceed 520 symbols. Fixture 1250 starts at byte
+3 bit 0 of an independently produced .NET Brotli stream for 100 `a` bytes; it
+parses one block type per stream, one tree per group, 64/4 context entries, and
+lands at the command stream at byte 9 bit 5. This is real-wire header evidence,
+not a claim that entropy commands or incremental decoding are complete.
+
+References:
+
+- <https://www.rfc-editor.org/rfc/rfc7932#section-7>
+- <https://github.com/google/brotli/blob/master/csharp/org/brotli/dec/Decode.cs>
+
+## D532 — Brotli literal context modes are exact typed instance behavior
+
+Status: managed executable and structural contract passed
+Date: 2026-08-30
+
+`std.compress.brotli.literal_context.Mode` represents LSB6, MSB6, UTF8, and
+Signed as a public enum rather than carrying an unchecked wire integer through
+command execution. `Mode.id(previous, secondPrevious)` is an allocation-free
+readonly instance operation. The two lookup bytes required by UTF8 and Signed
+are expressed as exact ranges, so command decoding allocates no 256-byte table
+per stream or symbol.
+
+Fixture 1251 enumerates every byte and verifies the RFC Lut0, Lut1, and Lut2
+tables by their published IEEE CRC32 values `8E91EFB7`, `D01A32F4`, and
+`0DD7A0D6`; it also locks the direct LSB6/MSB6 mappings. This compact checksum
+contract catches a one-entry transcription error without embedding a second
+copy of the tables in the test.
+
+References:
+
+- <https://www.rfc-editor.org/rfc/rfc7932#section-7.1>
+- <https://github.com/google/brotli/blob/master/csharp/org/brotli/dec/Context.cs>
+
+## D533 — Brotli command execution is bounded before Decoder integration
+
+Status: managed and regenerated self-host bulk integration passed; incremental compressed-state integration and platform promotion pending
+Date: 2026-08-30
+
+`std.compress.brotli.command.Limits` constructs an affine `Executor` from the
+owned compressed header and exact expected output size. Its consuming `decode`
+reuses the existing literal, command, and distance tables, context maps, and
+block-stream switch method. Complete insert/copy mappings, the initial
+`[16, 15, 11, 4]` distance ring, short/direct/postfix distance forms, and
+overlapping LZ copies are handled in one checked path.
+
+Output, command count, and sliding-window limits are independent. Every copy
+must refer to already produced bytes within the configured window. A distance
+that denotes the static dictionary returns `UnsupportedDictionary` instead of
+reading invalid history or silently substituting bytes. Fixture 1252 decodes
+the independently produced .NET stream to exactly 100 lowercase `a` bytes,
+lands at byte 10 bit 2, and returns typed `TruncatedInput` for a shortened
+stream. The bulk `Codec.decompress` path now shares its private output with the
+executor through `decodeInto`, so compressed blocks append without a completed-
+output copy and fixture 1259 passes managed and regenerated self-host execution.
+Incremental compressed-state integration must preserve the same ownership and
+bounded-state rules across `Decoder.write` calls.
+Stable tree and context-map lengths are cached before the hot loop, and one
+produced-length scalar advances beside each output push. The instance API does
+not require repeated collection-length dispatch or a completed-output copy.
+
+References:
+
+- <https://www.rfc-editor.org/rfc/rfc7932#section-5>
+- <https://www.rfc-editor.org/rfc/rfc7932#section-8>
+- <https://github.com/google/brotli/blob/master/csharp/org/brotli/dec/Decode.cs>
+
+## D534 — Readonly projected enum payloads do not consume their receiver
+
+Status: managed and focused self-host executable passed; platform fixed points pending
+Date: 2026-08-30
+
+A readonly method may match an owned enum payload projected from `self.first`
+and then inspect `self.second`. The payload is borrowed from inline receiver
+storage; it is not an ownership transfer. Managed LLVM emission previously
+removed `self` after the first match and failed the sibling access with an
+unknown-runtime-binding error.
+
+Projected-owner cleanup now excludes owners registered in the emitter's
+borrowed-owned-local set. Consuming and mutable paths retain their existing
+transfer behavior. Fixture 1253 uses two sibling owned enum fields and locks
+the consecutive readonly matches so later library table additions cannot make
+an unrelated receiver disappear during emission. Its first current-source
+Stage1 run also exposed a self-host width bug: the arm resolver inspected the
+region wrapper but emitted the wrapped nested match, producing `store i32` of
+an `i64`. The resolver now canonicalizes both the region result and its
+aggregate value before choosing a conversion.
+
+The regenerated current-source Stage1 passes direct-call closure, LLVM
+assembly, exact `total=5` execution, and the managed differential. Platform
+Stage2/Stage3 fixed points remain the closure boundary.
+
+## D535 — Late subject conditions and nullary calls seal from canonical structure
+
+Status: managed and regenerated self-host focused passed; platform fixed points pending
+Date: 2026-08-30
+
+Final wrapper repair may replace the producer of a subject-style `when` after
+its comparison nodes were first linked. The final Typed IR boundary therefore
+refreshes every structural subject arm from its control's canonical subject.
+This prevents transparent kind-9 wrappers from reaching the binary invariant
+or LLVM comparison emitter.
+
+A resolved zero-parameter call owns no linked argument operands. The named
+flow-receiver repair now requires at least one declared runtime parameter, and
+the final call-plan seal clears both operands for a nullary call. This
+distinguishes `headerParser() -> when` from `value -> method()`: an arrow after
+the call cannot turn the preceding unrelated value into an implicit receiver.
+Fixture 1252 is the focused contract for both paths.
+
+## D536 — Enum arm values follow dependency roots across both arm forms
+
+Status: focused self-host executable passed; platform fixed points pending
+Date: 2026-08-30
+
+An enum arm's canonical result is the outer value that consumes its typed
+operands, not whichever same-typed node appears last in flat IR order. Block-
+and expression-bodied arms now share one dependency-root walk. Binding and
+region nodes are structural edges and are never promoted as value consumers;
+aggregate and dominating-control resolution follows the selected root.
+
+Fixture 1254 locks imported Brotli enum arithmetic with exact lookup values.
+Fixture 1255 locks the Typed IR topology for expression arms, imported enums,
+and a subject-style `when` binding inside a loop. The focused current-source
+Stage1 passes 1254 direct-call closure, LLVM assembly, exact execution, and the
+managed differential. Platform Stage2/Stage3 fixed points remain pending.
+
+## D537 — A moved value parameter is not an addressable reference root
+
+Status: managed and regenerated self-host production proof passed; platform fixed points pending
+Date: 2026-08-30
+
+Late semantic reference type does not change the native ABI of a moved
+aggregate parameter. A kind-10 move parameter arrives as a value and cannot be
+used directly as a `getelementptr` base. A projected readonly borrow therefore
+materializes call-scoped storage using the unwrapped owned storage type, while
+genuinely borrowed and mutable pointer parameters retain direct addressing.
+
+This rule prevents invalid LLVM such as `getelementptr ..., ptr %arg` when
+`%arg` is an aggregate value. Fixture 1252 reaches the production projection;
+the projected-reference structural contract rejects restoration of the value-
+
+## D538 — Immutable bindings consume completed subject controls
+
+Status: focused managed topology passed; self-host and platform fixed points pending
+Date: 2026-08-30
+
+When a subject-style control is the exact child of an immutable binding and
+the binding still names the control subject, final Typed IR redirects the
+binding to the completed control. Transparent-wrapper selection likewise
+prefers controls over leaves. This is an exact parent/subject identity rule,
+not a source-order heuristic.
+
+Fixture 1255 pins a bound subject `when` inside a loop. The diagnostic topology
+that motivated the rule showed control 2767 parented by binding 2679 while the
+binding still consumed subject 2765; that stale edge could store a scalar into
+an enum-typed slot.
+
+## D539 — Postfix propagation cannot replace a match arm's contextual result
+
+Status: managed and regenerated self-host focused fixtures passed; platform fixed points pending
+Date: 2026-08-30
+
+An enum-match arm can propagate `Result<A, Error>` with `?` and then produce a
+different `Result<B, Error>` through a later value-producing control. Because
+the flat postfix AST may nest that continuation below the intermediate success
+constructor, final Typed IR repairs only a structurally proven descendant
+control whose type equals the enclosing match type. It then seals both the arm
+and its region to that contextual type.
+
+Fixture 1256 deliberately separates `Read` and `Done` payloads and executes as
+`done=41` under both compilers. The production fixture 1252 previously generated
+a valid final `t72` if value but selected an intermediate `t70` constructor for
+the `t72` match result slot; both fixtures now pass regenerated self-host LLVM
+assembly, exact execution, and managed differential comparison.
+
+## D540 — Entry enum matches wait for external arm dependencies
+
+Status: managed and regenerated self-host focused passed; platform fixed points pending
+Date: 2026-08-30
+
+An entry-point enum match emits all of its arms as one control region. It cannot
+overtake an earlier top-level value merely because that value is consumed only
+inside an arm. The entry scheduler now applies the same ownership-aware prior-
+value readiness rule to enum match kind 27 that it already applies to other
+value-producing controls. Values inside separately emitted regions and values
+owned by the match remain excluded, so the rule adds no false dependency cycle.
+
+Fixture 1252 exposed the omission after the contextual Result repair advanced
+LLVM validation: `%v86`, the compressed byte slice, was used in three successful
+match arms before its constructor was emitted after `match154_merge`. The
+managed compiler remained correct; regenerated self-host LLVM assembly and
+execution now provide the focused closure evidence.
+
+## D541 — Returned aggregate graphs own moved parameter aliases exactly once
+
+Status: focused managed and self-host executable passed; platform fixed points pending
+Date: 2026-08-30
+
+A consuming function may move an owned parameter into local mutable storage and
+return that storage through several aggregate constructors. Function epilogue
+cleanup follows the complete returned value graph, resolves each transferred
+binding root to its exact source module and semantic symbol, and suppresses the
+parameter drop only for that proven alias. Direct-return syntax, type equality,
+or source spelling is not sufficient evidence.
+
+`command.Executor.decodeWithHistory` exposed the missing case by moving an
+owned byte array through `history => output!`, then returning it through
+`Decoded` and `Result.Ok`. The preceding self-host LLVM returned the array and
+then dropped `%arg2`, producing Windows heap corruption `0xC0000374`. Fixture
+1258 now preserves the history prefix, decodes 100 bytes into the same ownership
+lineage, passes LLVM assembly and exact execution, and agrees with the managed
+compiler. Platform Stage2/Stage3 fixed points remain the promotion boundary.
+
+## D542 — Brotli bulk decoding composes compressed primitives without copying output
+
+Status: focused managed and self-host executable passed; incremental and platform promotion pending
+Date: 2026-08-30
+
+`Codec.decompress` now distinguishes raw and entropy-compressed meta-blocks.
+Compressed blocks reuse the single bounded header parser and command executor,
+then append directly to the function-private output through
+`Executor.decodeInto`. The output owner is neither rebound nor copied, so prior
+meta-block bytes remain available to literal contexts and backward distances.
+The final compressed block accepts only zero alignment padding and must end at
+the exact encoded-input boundary.
+
+Fixture 1259 decodes the independently produced 11-byte .NET Brotli vector to
+exactly 100 lowercase `a` bytes through the public bulk instance API under both
+managed and regenerated self-host compilers. The byte-resumable `Decoder.write`
+still rejects compressed meta-blocks explicitly: incremental support requires
+prefix, header, and command state that crosses arbitrary caller chunks without
+retaining the complete encoded stream. Static and shared dictionaries also
+remain explicit unsupported capabilities. Platform Stage2/Stage3 fixed points
+remain the promotion boundary.
+
+## D543 — Brotli prefix lookup exposes a zero-copy resume boundary
+
+Status: focused managed and self-host executable passed; header/command integration and platform promotion pending
+Date: 2026-08-30
+
+Incremental compressed decoding must not retain every encoded chunk or retry a
+one-shot parser from the beginning. `prefix_table.Table.probe` therefore reads
+an LSB-first scalar bit window and returns either the exact additional bit count
+required or a symbol with its exact consumed-bit count. The table retains no
+input, the call allocates no lookup storage, and the caller advances its cursor
+only after a ready result. Single-symbol tables complete with zero input bits.
+
+`Table.read` now delegates to the same probe authority, preventing bulk and
+incremental lookup semantics from diverging. Fixture 1246 covers root-table,
+second-level-table, insufficient-window, and zero-bit cases and passes exact
+managed/self-host differential execution. The next integration step is to use
+this probe from resumable compressed-header and command phases; the public
+`Decoder.write` remains explicitly unsupported for compressed meta-blocks until
+those phases consume each caller byte once without retaining the complete
+encoded stream.
+
+`WindowLimits.window` adds the bounded scalar carrier used by those phases.
+`Window.fill` advances an explicit caller position and retains at most 56 unread
+bits; incomplete `read` and `symbol` calls do not mutate it, while complete
+calls consume the exact least-significant bits. The window never owns an input
+array or slice, so consecutive caller chunks do not create a hidden encoded-
+stream buffer. Fixture 1246 also freezes cross-array fixed-width reads and a
+second-level prefix symbol split across fill calls.
+
+## D544 — A leading lexical enum value owns the same flow boundary as a call
+
+Status: candidate fixed; regenerated focused execution and platform promotion pending
+Date: 2026-08-30
+
+After `Result` propagation, a bound enum name can be a sibling of the parser's
+flow wrapper even though it is the exact source value before `when`. Typed IR
+already admitted a resolved call at that boundary when its span starts with the
+flow, ends before the control, shares the control parent, and declares the
+written enum variant. Restricting that proof to kind 6 calls left an equivalent
+kind 5 lexical value with `operand0=-1` and raised S018.
+
+Initial and final enum-subject repair now share the same exact proof for a
+leading lexical value or call. The rule does not use nearest spelling or type
+equality. Fixture 1261 isolates `probe()? => probed` followed by a mutable
+instance method's `probed -> when`; fixture 1246 is the production Brotli path.
+The structural gate rejects removal of either initial or final coverage.
+
+## D545 — Nested enum payload subjects are sealed before payload typing
+
+Status: candidate fixed; focused execution and platform promotion pending
+Date: 2026-08-30
+
+A nested enum match may consume the payload binding owned by its enclosing enum
+arm. Repairing that subject only in the final invariant pass makes the match
+look canonical too late: enum payload typing has already skipped its nested arm
+bindings, and LLVM can reference their undefined SSA values.
+
+Typed IR now builds one ambiguity-preserving arm-to-payload index and reconnects
+only a missing kind-27 subject whose ancestor is an exact enum arm with one
+payload binding. This runs before enum payload typing, while the later subject
+repair stays as a defensive invariant. The indexed pass avoids a complete IR
+rescan per nested match. Fixture 1261 isolates the nested Result/Probe shape and
+fixture 1246 retains the production Brotli prefix-window path.
+
+## D546 — Structured callback receiver indexes only semantic role names
+
+Status: candidate fixed; regenerated compiler execution and platform promotion pending
+Date: 2026-08-30
+
+Structured parallel call-plan repair previously treated any linked `operand0`
+as the receiver until after fallback selection. When that node was really the
+first explicit argument after the arrow, it suppressed role recovery and was
+invalidated only afterward. The fallback index also admitted the first name
+sharing the call AST start before checking whether it was a role. Declaration-
+table growth exposed the stale shape: context and state stayed linked while the
+callback role disappeared. V001 correctly stopped six three-parameter calls in
+the compiler's two parallel LLVM-emission regions.
+
+Repair now proves that a linked receiver's complete AST ends before the exact
+called-target token before it can suppress fallback. Unlike the first arrow,
+that boundary distinguishes a valid prior pipeline stage from an explicit
+argument written after the target. The fallback index admits only a name whose
+exact source-module symbol is semantic kind 35. Role type and receiver
+materialization continue to use global AST and symbol identity; spelling and
+same-type recovery remain forbidden. Fixture 1235 is the focused call-plan
+contract, while regenerated compiler emission proves that unrelated declaration
+insertion cannot reorder these production calls.
+
+## D547 — Final nominal enum payload typing follows canonical arm tags
+
+Status: candidate fixed; focused self-host execution passed, platform promotion pending
+Date: 2026-08-30
+
+The early nested-subject repair is necessary but not sufficient. Later
+subject-control and `Result` propagation repair can make a nominal match
+canonical after the ordinary payload-typing sweep. At that point the arm tag
+already identifies the exact declaration, so repeating source-name or AST
+wrapper recovery is both slower and less authoritative.
+
+Typed IR now resolves the payload type from the exact nominal enum owner and
+canonical arm tag. One linear pass runs after the final subject-changing repair,
+seals every payload binding, and synchronizes its direct reads before call-plan
+cleanup and LLVM validation. Fixture 1261 proves distinct `NeedMore(Int)` and
+`Ready(Probed)` bindings; regenerated self-host LLVM assembles, links, executes,
+and matches the managed oracle. Fixture 1246 and platform fixed points remain
+the promotion boundary.
+
+## D548 — Final Result sealing follows the exact direct flow edge
+
+Status: focused self-host and managed differential passed; platform promotion pending
+Date: 2026-08-30
+
+A linked postfix-`?` call and its propagation wrapper can legitimately expose
+different final type views: the call retains `Result<T, E>` while the wrapper,
+binding, and read expose `T`. Final sealing therefore recovers the canonical
+Result identity from either proven node and does not require an unlinked
+producer.
+
+Flat flow can connect the resulting lexical read to the following `when`
+through `nextOperand` while both nodes retain their enclosing return as parent.
+After binding sealing, one linear pass synchronizes direct reads and assigns a
+missing enum subject only across the exact parent or next-operand edge. It does
+not search by spelling, proximity, or type equality. Fixture 1246 now passes
+direct-call closure, `llvm-as`, exact execution, and warning-zero managed
+differential; fixture 1261 remains the nested nominal non-regression control.
+
+## D549 — A propagating target is a method name, not a result binding
+
+Status: focused diagnostic verification passed; platform promotion pending
+Date: 2026-08-30
+
+Sollang reads `receiver -> method? => binding!` as an instance method named
+`method`, postfix Result propagation, and a result binding named `binding`.
+Diagnostic recovery must preserve those grammatical roles. An unresolved name
+immediately followed by `?` is not suppressed as a binding candidate; the
+compiler explains which identifier is the method and which is the binding.
+
+After this blocking semantic diagnostic, checked emission does not append V006
+or LLVM-oriented invariant output. The negative fixture
+`unknown-propagating-instance-target.slg` requires exactly one actionable
+message and no backend header, while the existing `println2` case protects the
+ordinary unresolved-call path.
+
+## D550 — A terminating first match arm does not define the bound value type
+
+Status: focused self-host and managed differential passed; platform promotion pending
+Date: 2026-08-30
+
+A `when` used as a value binding can return from the enclosing function in one
+arm and continue with a value in another. Source order does not make the
+terminating arm the result-type authority. Typed IR walks the exact arm chain
+and selects the first canonical non-Unit continuing value, retaining the old
+first-arm fallback only when no such value exists.
+
+This keeps `Err(error) { ... -> return }` followed by `Ok(value) { value }`
+typed as the payload value without adding a wrapper or allocation. Fixture 1262
+isolates the rule. The production Brotli `Decoder` constructor now binds its
+bounded `prefix.Window` without generating `freeze void`, and fixture 1245
+passes LLVM assembly, exact execution, and warning-zero managed differential.
+
+## D551 — Result propagation requires a Result-returning function owner
+
+Status: focused self-host and managed diagnostic parity passed; platform promotion pending
+Date: 2026-08-30
+
+Postfix `?` propagates the error by returning `Result.Err` from its enclosing
+function. The `main` entry point has no Result return channel, so accepting `?`
+there and attempting to invent an SSA success value would both violate the
+language contract and leave the error edge undefined.
+
+Checked self-host entrypoints now count this source error before invariant or
+LLVM emission. The diagnostic explains that entry code must explicitly match
+the Result with `-> when` and handle `Ok` and `Err`. The focused negative fixture
+requires one message, no V006 cascade, and no LLVM target header; the managed
+compiler independently rejects the same source-level misuse. Windows and Linux
+Stage2/Stage3 promotion scripts run the reusable diagnostic gate against both
+the producer and candidate compilers.
+
+## D552 — Brotli resumable state owns one parser and the negotiated window
+
+Status: focused self-host and managed differential passed; platform promotion pending
+Date: 2026-08-30
+
+Incremental compressed-meta-block decoding needs the same bounded header parser
+across successive blocks and the exact RFC window selected at stream start.
+Reconstructing parser configuration per block adds avoidable work, while
+recomputing or guessing the window later risks giving the command executor a
+different distance ceiling from the validated stream header.
+
+`Decoder` now owns one `compressed_header.Parser` created by `Codec.decoder`
+and records the negotiated window in bytes only after it passes the configured
+limit. Neither field retains encoded caller input. The existing scalar
+`prefix_table.Window` remains the sole unread-bit reservoir. This was the state
+foundation at the time of this decision; D576 completes the public
+compressed-stream path and removes the former unsupported boundary. Fixture
+1245 passes self-host direct-call closure, LLVM
+verification, exact native execution, and managed differential with the cached
+parser plus negotiated window state.
+
+## D553 — Brotli fixed code lengths resume without retaining caller input
+
+Status: focused managed and regenerated self-host verification passed; platform promotion pending
+Date: 2026-08-30
+
+RFC 7932 fixed code lengths consume two bits first and, only for the extended
+case, one or two additional bits. A streaming decoder must preserve that small
+semantic phase across chunk boundaries without copying or retaining the
+caller's encoded buffer.
+
+`FixedCodeLengthReader` therefore owns only `phase` and the partial scalar
+`value`. Its consuming `read(mut self, mut prefix.Window)` returns
+`NeedMore(requiredBits)` or `Ready(value)` through the existing bounded unread
+bit window. One explicit phase loop advances through immediately available bits;
+it does not recurse through the public instance method, allocate, dispatch
+virtually, or retain whole input. Fixture 1247 splits the 2+1+1-bit value across
+three fills and checks both the decoded value and final bit position.
+
+The expanded fixture also exposed C2026-08-30-131: late logical operators and a
+value-producing `Result` match could miss their final canonical types. The
+compiler repair derives `Bool` only from exact comparison/logical opcodes and
+derives an unknown match type only from an exact typed, non-returning arm
+terminal before existing alias and nominal-member fixed points run.
+
+## D554 — Exact flow edges close late enum typing before LLVM
+
+Status: focused managed and regenerated self-host verification passed; platform promotion pending
+Date: 2026-08-30
+
+Late enum recovery has two ordered authorities. A synthesized producer may
+replace a missing or non-materialized provisional subject, but after postfix
+Result propagation seals its receiving binding, an exact `parent` or
+`nextOperand` lexical read edge replaces every provisional subject. Spelling,
+proximity, and same-type compatibility never outrank that structural identity.
+
+Value-producing matches with a terminating first arm need a bounded two-round
+closure: late nominal typing can reveal the continuing arm terminal, which
+reveals the match, immutable binding/read aliases, and finally member accesses.
+The shared alias pass keeps both rounds linear and reduced `typed.slg` rather
+than adding another open-ended fixed point.
+
+The same exact-identity rule reaches LLVM projected mutable arguments. A
+kind-29 enum payload binding is already a materialized SSA root and has no
+initializer operand. Passing the binding itself fixed the two node `-1`
+requests exposed by `parsed.table`; V007 now diagnoses any future while-value
+bounds escape before indexing. Fixture 1247 passes direct-call closure,
+`llvm-as`, native execution, and the managed output contract.
+
+## D555 — Brotli root lookup waits for the selected code, not the table width
+
+Status: focused managed and regenerated self-host verification passed
+Date: 2026-08-30
+
+A canonical prefix table replicates a short code across every unused extension
+of its root prefix. Near end of input, unavailable high lookup bits may
+therefore be treated as zero only to select a root entry. The symbol is ready
+when that entry's own consumed width is buffered; requiring the complete root
+width falsely rejects a valid short final code. A selected long entry still
+returns `NeedMore` until its exact width is available.
+
+The repeat-16 vector in fixture 1247 ends with a three-bit symbol at bit 29 in a
+root-5 table. Both compiler paths previously reported truncated input because
+`Table.probe` required all five root bits. The corrected probe consumes the
+three available bits, reaches byte 3 bit 5, builds eight entries, and preserves
+the existing truncation negative control. Fixture 1246 now also freezes the
+more precise `NeedMore(1)` for a one-bit root entry instead of reporting the
+table's two-bit root width.
+
+## D556 — Brotli Decoder resumes the scalar compressed-header prelude
+
+Status: focused self-host and managed differential execution passed; platform fixed points pending
+Date: 2026-08-30
+
+The byte-resumable Decoder previously rejected a valid compressed meta-block at
+the `ISUNCOMPRESSED` flag, even though its bounded bit window and fixed
+code-length reader could already preserve scalar progress. Buffering the rest
+of the caller's encoded chunk would violate the ownership contract, while
+calling the bulk parser again on every write would reparse input and make chunk
+boundaries observable in performance.
+
+`compressed_header.PreludeReader` is now an instance-owned phase machine. It
+retains only block counts, the pending variable-width scalar, distance
+parameters, a typed literal context mode, and the two context-map tree counts.
+It reads through the existing 56-bit `prefix.Window`, reports exact missing
+bits, and exposes typed block/context prefix boundaries for the next slice.
+The first integrated path deliberately supports only the independent vector's
+three single-type streams and one-tree context maps; it does not claim that
+prefix tables or commands are byte-resumable yet.
+
+At this historical slice, `Decoder.write` entered the scalar compressed-prelude phase instead of failing at the
+compressed flag, preserves the reader across caller chunks, and fills only the
+number of bits the reader requests. Fixture 1263 splits bytes `248` and `37`,
+freezes the exact 13-bit result (`distancePostfixBits=3`,
+`directDistanceCodes=136`, UTF8, one literal and one distance tree), proves the
+scalar window is empty, and requires the public Decoder to reach that boundary
+before the then-unsupported prefix boundary. D576 supersedes that boundary by
+composing prefix, context, tree, and command readers through the public Decoder.
+
+## D557 — Late numeric subject controls and rights use exact flow edges
+
+Status: regenerated self-host and managed differential execution passed; platform fixed points pending
+Date: 2026-08-30
+
+The compressed-header prelude maps the integer payload of `WindowBits.Ready`
+to a typed literal-context mode through a nested subject `when`. Initial Typed
+IR lowered that control before the enclosing enum payload acquired its final
+integer identity. The control and its three comparisons therefore reached the
+backend without a left subject. Recovering only the control exposed the second
+independent defect: this production arm shape also had no preserved comparison
+right operand, so S013 correctly continued to stop emission.
+
+Final sealing now applies two bounded structural passes after nominal payload
+typing. `sealLateNumericSubjectControls` accepts exactly one same-source value
+whose `nextOperand` names the unresolved control and whose canonical type is an
+integer. `sealLateNumericSubjectConditionOperands` preserves an existing right
+operand or accepts exactly one direct arm-local `nextOperand` edge in either
+direction, then installs the control subject as the left operand. Ambiguous
+edges remain unresolved and fail the existing invariant; neither pass searches
+by spelling, proximity, or merely compatible type.
+
+Fixture 1264 freezes the minimal enum-payload topology as one numeric control
+and three complete comparison pairs. Fixture 1263 is the production proof
+through `PreludeReader.read`; direct fixture 1221 remains the non-nested numeric
+subject control. Platform fixed points remain a later promotion gate.
+
+## D558 — Assignments consume the completed numeric subject control
+
+Status: regenerated focused self-host execution passed; platform fixed points pending
+Date: 2026-08-30
+
+After D557 repaired the numeric subject and comparison operands, LLVM exposed a
+separate consumer edge: the member assignment after `value -> when` still
+stored the integer subject into `PreludeReader.literalContextMode` instead of
+the control's enum merge value. The existing final assignment repair already
+handled this exact topology for enum match kind 27 but excluded numeric subject
+control kind 34.
+
+The shared repair now accepts either value-producing control only when the
+assignment's current value operand is exactly the control subject and the
+control result is non-Unit. It replaces that operand with the completed control
+index; it does not search by result type or field type. Fixture 1263 is the
+production regression. Other if/ordered-when/control shapes remain unchanged
+until an equivalent exact producer edge is demonstrated.
+
+## D559 — Numeric subject controls share exact terminal-arm type sealing
+
+Status: regenerated focused self-host execution passed; platform fixed points pending
+Date: 2026-08-30
+
+C134 exposed that redirecting a consumer is insufficient when the numeric
+subject control has no result identity. The generated arms constructed the
+correct enum values, but `when4384_end` had neither a phi nor `%v4384` because
+the terminal-arm type sealer accepted only enum-match kind 27. Its name was
+historical; the structural contract applies to every supported value-producing
+control with the same arm/region topology.
+
+The existing bounded sealer now accepts numeric subject kind 34 beside kind 27.
+It still derives the result only from an exact typed, non-returning terminal of
+that control's arm chain and then seals the control, region, and arm identities.
+The exact assignment repair is now a reusable pass and runs once more after
+this late seal, because its earlier call must preserve already-typed enum
+behavior but cannot consume a numeric control before that control exists. This
+is a fixed dependency closure, not an open-ended fixed point. Fixture 1264 now
+requires its one numeric subject control to be non-Unit typed in addition to
+closing three comparison pairs; fixture 1263 is the production assignment and
+LLVM proof. Platform fixed points remain a later promotion gate.
+
+## D560 — Late comparison repair distinguishes values from regions
+
+Status: regenerated focused self-host execution passed; platform fixed points pending
+Date: 2026-08-30
+
+After D559 produced the numeric subject merge, LLVM exposed an undefined
+comparison right. The three recovered nodes were not integer values: they were
+kind-19 structural arm regions whose `operand0` and `operand1` happened to name
+the arm's enum result. C133 had required an exact same-arm `nextOperand` edge
+but had not required that its target be a value, so the compact and production
+topologies diverged.
+
+The integer literals are exact direct children of their comparison nodes.
+Late comparison repair therefore prefers one unambiguous direct value child,
+then uses the same explicit Typed IR value-node predicate for forward and
+reverse arm-edge recovery. Regions, assignments, and bindings are rejected even
+when their parent and continuation edges match; ambiguity still leaves the
+operand unresolved for the existing invariant to diagnose. Fixture 1264 counts
+three value rights as well as complete operands and a typed control, while
+fixture 1263 remains the production LLVM and execution proof.
+
+## D561 — Parallel callback argument rendering shares one type fallback
+
+Status: regenerated focused self-host execution passed; platform fixed points pending
+Date: 2026-08-30
+
+The strengthened 1264 self-host manifest reached a preamble bounds trap after
+all type and runtime declarations. Cached LLVM string order located the trap in
+parallel callback call-argument rendering: environment loading already used an
+actual additional argument when `callTargetParameter` returned `-1`, but the
+later call renderer indexed that missing parameter unconditionally.
+
+The call renderer now resets the exact additional-argument chain before its
+ordinal loop, uses a declared parameter type only when present, otherwise uses
+the actual argument type just as environment loading does, and advances the
+same chain once per ordinal. This removes the inconsistent consumer contract;
+it does not substitute a default type or suppress the checked bound.
+
+## D562 — Region readiness tables expose one bounded query
+
+Status: regenerated focused self-host execution passed; platform fixed points pending
+Date: 2026-08-30
+
+After D561 passed preamble generation, the complete 1264 manifest reached a
+later `emitRegion` bounds trap. Generated LLVM identified the failing index as
+a node's first operand minus `regionLocalStart`. The readiness arrays represent
+only the owning function's `[localStart, localEnd)` interval, but several
+dependency paths treated ancestry as sufficient evidence for indexing them.
+
+`localSchedulePending` now owns that boundary: it returns true only for a node
+inside the exact interval whose bit is still false. First and second operands,
+branch predecessors, slice lengths, push values, and aggregate operands share
+this query. Values outside the interval remain the responsibility of enclosing
+scheduling; no default readiness bit or unchecked subtraction is used.
+
+## D563 — A parallel callback role is not an outer capture
+
+Status: regenerated focused self-host execution passed; platform fixed points pending
+Date: 2026-08-30
+
+Once D562 let the complete 1264 manifest reach LLVM assembly, callback 112142
+stored undefined `%v206902` into a fifteenth environment field. Its target
+function accepted fourteen lexical captures and the worker `%item`, with no
+additional parameter. The body call's canonical linked role had been counted
+again as an explicit argument, so the outer function tried to capture a value
+that exists only inside the worker callback and the callback call duplicated
+the same ABI slot.
+
+`parallelAdditionalArgumentStart` is now the single boundary. It skips the
+first linked argument only when that node's exact semantic symbol is a
+structured callback role, then preserves every following explicit argument in
+source order. Field counting, environment typing, reference preparation,
+outer stores, callback loads, and final call rendering all use this boundary.
+There is no type or spelling fallback, and the direct worker path gains no
+allocation or dispatch.
+
+## D564 — Brotli prefix descriptions resume in one bounded instance
+
+Status: simple and complex focused managed execution plus structural contract passed; focused self-host execution pending
+Date: 2026-08-30
+
+[RFC 7932](https://www.rfc-editor.org/info/rfc7932/) and Google's official
+[Brotli decoder](https://github.com/google/brotli/blob/master/csharp/org/brotli/dec/Decode.cs)
+both place prefix-code descriptions before the context maps, tree groups, and
+command stream that consume them. The resumable Sollang decoder therefore
+extends that same layer instead of buffering a complete meta-block or adding a
+second streaming-only Huffman representation.
+
+`Parser.descriptionReader(alphabetSize, rootBits)` constructs one bounded
+`DescriptionReader`. Its simple-description phases preserve only semantic
+symbols, lengths, counters, and the shared scalar `prefix.Window` position.
+`read` reports the exact missing-bit count and `intoTable` moves out the same
+`prefix.Table` used by bulk parsing. A non-simple marker enters the fixed
+18-symbol code-length phase in the same instance. Its fixed reader, bounded
+code-length lookup, output cursor, prior non-zero length, repeat accumulator,
+and remaining code space are retained as semantic state; caller input is never
+retained or replayed. Repeat symbols 16 and 17 resume their extra bits in a
+separate phase before the common final table is built.
+
+Fixture 1265 splits the simple four-symbol description into three caller
+chunks, freezes `NeedMore(2)`, then `NeedMore(1)`, then `Ready`, verifies the
+decoded symbol, and confirms that seven unread bits remain available for the
+following field. The Brotli foundation contract now makes this fixture and the
+reader surface part of the native exact batch.
+
+Fixture 1266 splits a complex description into three caller chunks. Its one-
+symbol code-length alphabet expands four length-2 symbols without consuming
+payload bits, reports `NeedMore(2)` at both chunk boundaries, reaches `Ready`,
+and proves the resulting table consumes two bits for symbol zero. The contract
+and native exact batch now preserve both incremental description shapes.
+Fixture 1268 then feeds the existing official repeat-16 and repeat-17 vectors
+one byte at a time. Both reach the same bounded table sizes and retain exactly
+three and six unread bits, respectively, proving that the repeat accumulator
+and extra-bit phase resume without replaying caller input.
+The same slice removes an older silent fallback in both bulk and incremental
+simple descriptions: an encoded symbol outside a non-power-of-two alphabet is
+now `InvalidSymbol` instead of being reduced modulo the alphabet size. Fixture
+1247 fixes the alphabet-size-3 encoded-value-3 boundary.
+
+## D565 — Direct Result payload receivers require final typed convergence
+
+Status: C140 candidate fixed; focused self-host regressions and managed differentials pass
+Date: 2026-08-30
+
+Fixture 1265 exposed a compiler boundary rather than a Brotli algorithm error.
+The managed compiler accepts `Ok(table) { table -> probe(...) }`, but the
+regenerated O1 self-host leaves `probe` unresolved. The direct Result payload
+becomes a canonical nominal receiver only after the late enum subject and
+payload passes, while projected inherent-method repair currently runs earlier.
+
+The repair now converges final subject, projected-method, enum-tag, and nominal-
+payload facts in a bounded two-round sequence. It does not infer a receiver from
+the nearest preceding call: an experimental source-order recovery retained the
+focused failure and caused unrelated S018 and V001 failures in existing stdlib
+sources.
+
+The same focused path exposed two dependent late facts. The explicit `window!`
+argument reuses its exact same-symbol mutable binding, so lowering converts the
+binding's existing `nextOperand == call` proof into the receiver-to-binding
+argument chain. The newly resolved `reader! -> intoTable` consumes `move self`,
+so function cleanup indexes concrete final-call move parameters and canonical
+argument sources once before dropping owned parameters. This prevents the stale
+semantic move snapshot from freeing `reader` twice.
+
+The regenerated O1 compiler passes direct-call closure, `llvm-as`, native exact
+execution with `simple-prefix-stream=true`, and the managed differential for
+fixture 1265. Structural contracts and all 230 authoritative-source format
+checks pass. Fixtures 1263 and 1264 subsequently pass the same focused native
+and differential gates. Platform fixed-point promotion remains a later batch.
+
+## D566 — Mutable local identity survives resolution and late recovery
+
+Status: C141 candidate fixed; focused and production self-host gates pass
+Date: 2026-08-30
+
+The C140 non-regression fixture 1264 exposed an independent operand identity
+defect after direct-call closure. The compact self-host AST stores a name's
+identifier token separately from its following mutable `!`, but semantic name
+resolution compared only the identifier bytes. An immutable `SyntaxToken`
+binding with the same base spelling therefore replaced the mutable integer
+`name!` binding before Typed IR was built, and LLVM eventually received
+`icmp sge %SyntaxToken, 0`.
+
+A range-containment repair and binary-AST ancestry filtering were rejected
+because the binary already pointed to the correct name-reference IR. The actual
+second overwrite occurred in late region-local reference recovery: even though
+that reference retained its semantic symbol, the fallback compared only base
+spelling and selected the later immutable binding. The complete repair scans
+only the current name-expression token span and requires the candidate's exact
+mutable suffix during lexical lookup. Late recovery prefers an exact semantic
+symbol. Because callback/region mutable rebinds intentionally normalize their
+IR symbol to the outer storage slot, a non-exact alias remains legal only when
+both sides are binding symbols with the same mutable capability and the
+existing name/lexical-visibility gates pass. The checks reuse existing linear
+walks and add no pass, heap allocation, or runtime work.
+
+Fixture 1267 reduces the production topology to consecutive immutable and
+mutable same-base bindings and executes `mutable-name-suffix-resolution=true`.
+The structural contract pins suffix recovery, exact candidate matching, and
+semantic-symbol preference plus same-capability storage aliasing in late
+recovery.
+Focused self-host 1267 and production 1264 are the required closure evidence
+before any platform fixed-point promotion.
+
+The regenerated current O1 self-host compiler passes fixture 1267 through
+direct-call closure, `llvm-as`, exact native execution, and the managed
+differential. Fixture 1264 then compiles its complete focused compiler-source
+manifest in 274119 ms and passes the same gates. The older verified SLG seed
+still stops while emitting the changed compiler with six pre-fix V001 call-plan
+failures, so ManagedRecovery is the explicit bootstrap bridge for this
+candidate; Windows/Linux Stage2/Stage3 promotion remains pending.
+
+## D567 — Brotli context maps and tree groups resume through shared bounded state
+
+Status: implemented; focused managed fixtures and structural contract pass
+Date: 2026-08-30
+
+The compressed path previously had resumable prefix descriptions but composed
+context maps and tree groups only through whole-input parsers. The missing
+boundary is not solved by buffering caller chunks in a growable array. Both
+modules now expose affine instance readers over the existing bounded
+`prefix.Window`.
+
+`context_map.Reader` owns the tree-count and zero-run phases, bounded semantic
+values, and one installed prefix table. It returns `NeedMore`, `NeedPrefix`, or
+`Ready`; the caller constructs the canonical `DescriptionReader` and transfers
+its completed table through `installPrefix`. Only consuming `finish` exposes
+values. `tree_group.Reader` owns group order and aggregate storage while each
+tree is decoded by that same description reader. `installTree` checks the
+total-table ceiling before moving the table, and consuming `finish` rejects
+incomplete groups.
+
+Fixtures 1269 and 1270 feed the existing context-map and two-tree vectors one
+byte at a time. They prove prefix handoff, unread-bit continuation across tree
+boundaries, exact values/table counts, and no retained encoded input. Brotli
+contract version 20 records 51 public surfaces and 87 invariants. Incremental
+command execution and static dictionary use remain before the main Decoder can
+claim compressed meta-block streaming support.
+
+## D568 — Brotli command execution preserves its exact incremental phase
+
+Status: implemented through incremental block switching; focused managed fixtures and contract pass
+Date: 2026-08-30
+
+The one-shot command executor previously lost whether truncation occurred in a
+command symbol, insert/copy extra bits, a literal, a distance symbol, or its
+extra bits. Retrying it would replay output and retaining caller chunks would
+violate the bounded streaming contract.
+
+Consuming `Executor.reader(history)` now creates an affine `command.Reader`.
+It owns private output, block counters, command count, the four-distance ring,
+pending lengths, and an explicit phase. `read(window!)` advances only when the
+shared scalar window has the required bits and returns exact `NeedMore` or
+`Ready` progress. It never retains encoded input. Block exhaustion is handled
+inside the same Reader through explicit category, type-symbol, length-symbol,
+length-extra, and resume phases, so the caller never reconstructs command
+state and a stale block is never reused. `finish` consumes the reader and
+exposes output only at the exact target length.
+
+Fixture 1271 feeds the independent 100-byte compressed vector as the three-bit
+suffix of byte 9 and byte 10, produces exactly 100 lowercase `a` bytes, and
+retains six unread bits. Fixture 1272 constructs bounded single-symbol prefix
+tables and feeds every two-bit block-length extra value one bit at a time. It
+forces command plus literal and command plus distance block switches and
+requires three incomplete returns before each exact completion. Brotli contract
+version 22 records 60 surfaces and 93 invariants.
+
+## D569 — Brotli static dictionary is exact immutable module data
+
+Status: implemented; focused managed contract and fixture pass
+Date: 2026-08-30
+
+RFC 7932 defines one fixed 122,784-byte dictionary and 121 ordered transforms.
+Sollang has no binary-embed surface, and adding one compiler feature solely for
+this table would expand the language before proving a general need. Expanding
+122,784 byte literals at every resolver construction would also waste compile
+time, generated code, and runtime memory.
+
+`static_dictionary_data.dataWords()` therefore carries the exact bytes as
+15,348 little-endian immutable `UInt64` module-data words. The instance-owned
+`static_dictionary.Resolver` indexes those words directly; it does not rebuild
+a heap byte array. `Resolver.append` validates word length, distance, transform,
+dictionary bounds, and transformed output length before mutating caller output.
+Dictionary references append the actual transformed length and do not update
+the four-distance ring.
+
+Fixture 1273 covers identity, prefix/suffix, omission, ASCII and multibyte case
+transforms, invalid-transform rejection, and transactional output limits.
+Fixture 1272 additionally crosses command and distance block switches one bit
+at a time before resolving the dictionary word `time`. Contract version 23
+unpacks all module words during preflight and requires byte length 122,784,
+IEEE CRC32 `5136cb04`, all 121 transform triples, 217 affix bytes, and 50 affix
+offsets. It records 62 public surfaces and 100 invariants. Shared dictionaries
+and RFC 9841 framing remain unsupported.
+
+## D570 — Brotli block streams resume through one owned reader
+
+Status: implemented; focused managed native fixture and contract pass
+Date: 2026-08-30
+
+The scalar compressed-header prelude stopped at the first block prefix, while
+the one-shot parser decoded a complete block stream privately. Retrying the
+one-shot path would either replay bits or retain caller input, and letting the
+future Decoder coordinate raw tables would duplicate protocol state.
+
+`Parser.blockStreamReader()` now creates one bounded `BlockStreamReader` for a
+literal, command, or distance block category. It owns the type-count phase,
+installed type and length prefix tables, initial-length symbol and extra bits.
+`prefixDescription` creates the canonical prefix reader and `installPrefix`
+transfers its completed table back into the block owner. A single-type stream
+uses no tables and retains the RFC `268435456` initial-length sentinel.
+Consuming `finish` exposes the `BlockStream` only after all validation succeeds.
+
+Fixture 1274 drives both single- and two-type streams. The two-type case feeds
+the type count and two initial-length extra bits incrementally, proves the
+4- and 26-symbol prefix handoffs, and completes at the exact sixth bit without
+retaining encoded input. Contract version 24 records 67 public surfaces and
+105 invariants. The next slice composes exactly three block readers before the
+context maps and tree groups.
+
+## D571 — Mutable field transfer repairs before fallible work
+
+Status: managed compiler and focused diagnostic pass; self-host parity and platform fixed points pending
+Date: 2026-08-30
+
+`HeaderReader` must replace one completed affine `BlockStreamReader` with the
+next reader while preserving the same parent instance. Rebinding the complete
+HeaderReader would violate the no-owned-container-rebind rule, and placing the
+active reader in a heap collection would add allocation and indirection solely
+to work around ownership syntax.
+
+The managed frontend now recognizes a direct owned-field extraction from a
+mutable borrow only when the immediately following infallible statement reinitializes the
+same exact field. It reports the field path and the required
+`replacement => self.field` repair if that adjacency is missing. LLVM emission
+tracks the moved field at compile time, skips dropping its stale slot, and
+clears the mask when the replacement is stored. This adds no generated wrapper,
+allocation, copy, dispatch, or runtime branch. `HeaderReader.finishBlock`
+extracts `activeBlock`, installs its replacement, and only then invokes the
+fallible consuming finish, so every error edge observes a fully initialized
+mutable borrow. The rejected `mutable-field-move-without-repair` fixture keeps
+the actionable source diagnostic live.
+
+## D572 — Brotli HeaderReader composes the three block preludes
+
+Status: implemented; focused managed native fixture and contract pass
+Date: 2026-08-30
+
+`Parser.headerReader()` now creates one affine parent over an active
+`BlockStreamReader`, three completed block streams, distance parameters, and
+typed literal context modes. Prefix descriptions and completed tables transfer
+through the same canonical reader interfaces. The parent advances only through
+the caller-owned bounded scalar window and retains no encoded input.
+
+Fixture 1275 supplies `[248, 5]` one bit at a time, requires three ordered block
+finishes, and completes after exactly eleven bits with postfix 3, direct 136,
+distance alphabet 520, UTF8 mode, and 64 literal-context entries. Brotli
+contract version 25 records 73 public surfaces and 110 invariants. Resumable
+context maps and tree groups must next join this parent before command execution
+can be integrated into the main Decoder.
+
+## D573 — Brotli context maps resume through one reusable owner
+
+Status: implemented; focused managed native fixture and contract pass
+Date: 2026-08-31
+
+`HeaderPrelude.contextReader(parser)` consumes the completed block prelude into
+one affine `ContextReader`. The reader owns no encoded input. It advances only
+through the caller's bounded scalar `Window`, exposes the canonical prefix
+description/table handoff when a map needs a nontrivial tree, and uses
+`context_map.Reader.takeAndReset` to transfer the literal map before resetting
+the same reader for the distance map. The reset retains the configured ceilings
+and adds no wrapper, copied map, or second parsing algorithm.
+
+Fixture 1277 continues `[248, 5]` after HeaderReader completion one bit at a
+time. Both maps use the single-tree fast path, consume exactly two more bits,
+and finish at byte 1 bit 5 with literal and distance map lengths 64 and 4.
+
+## D574 — Nested owned-field transfer cleanup follows the complete path
+
+Status: managed compiler fixed; focused managed and existing self-host path-aware execution pass; platform fixed points pending
+Date: 2026-08-31
+
+`TreeReader.finish` transfers fields such as `self.prelude.blockStreams` into a
+new `Parsed` aggregate. Managed LLVM transfer tracking previously recognized
+only `owner.field`. It copied a nested field into the result, then dropped the
+complete `prelude`, freeing storage that the result still owned. Fixture 1278
+therefore ended with Windows heap corruption `0xC0000374` despite valid source.
+
+The managed emitter now records the complete root-relative projection path for
+every owned aggregate initializer. Cleanup recursively descends only through
+partially transferred structs and drops each untransferred sibling exactly
+once. Excluding a complete top-level field would leak nested siblings, so it is
+not an acceptable repair. This is compile-time bookkeeping only and adds no
+generated wrapper, allocation, copy, dispatch, or runtime branch.
+
+Fixture 1276 is the minimal contract: one nested growable array and one direct
+array move into a result while a second nested array remains for cleanup.
+Managed O1 passes direct-call closure, `llvm-as`, and exact native execution.
+The installed verified self-host compiler passes the same fixture against a
+minimal source root because its drop-task implementation already compares full
+field paths. Full current-stdlib self-host verification waits for the pending
+Stage2/Stage3 promotion; the installed seed predates later compiler and stdlib
+changes and is not treated as their completion evidence.
+
+## D575 — Brotli tree groups resume through one reusable owner
+
+Status: implemented; focused managed native fixture and contract pass
+Date: 2026-08-31
+
+`ContextPrelude.treeReader(parser)` consumes both context maps into one affine
+`TreeReader`. It reuses a single bounded `tree_group.Reader` for the literal
+256-symbol, command 704-symbol, and negotiated distance alphabets through
+`takeAndReset`. `next` exposes the exact group-local tree index, while prefix
+description and completed table ownership continue through the canonical
+reader interfaces. Consuming `finish(position)` is the only path that exposes
+the complete `Parsed` header.
+
+Fixture 1278 feeds the independently produced vector's three single-tree groups
+through one-bit caller boundaries and finishes at byte 6 bit 5. It then moves
+the completed `Parsed` header directly into the existing `command.Reader`,
+continues through byte 7 bit 2, and produces exactly 100 lowercase `a` bytes.
+Managed O1 passes direct-call closure, `llvm-as`, and exact native execution
+with `tree-reader=true`. Brotli contract version 26 records 85 public surfaces
+and 119 invariants. D576 is the succeeding slice that embeds this proven
+typestate chain and removes the former Decoder boundary.
+
+## D576 — Brotli public Decoder owns the complete compressed typestate chain
+
+Status: implemented; focused managed O1 and contract pass; self-host platform promotion pending
+Date: 2026-08-31
+
+`std.compress.brotli.compressed_stream.Reader` is the single affine owner for
+Header, HeaderPrefix, Context, ContextPrefix, Tree, TreePrefix, Command,
+Complete, and Empty states. It advances only through the shared bounded scalar
+window, moves each completed prefix table into its active reader, moves the
+completed tree header into the existing command reader, and never retains a
+caller input slice. The command reader receives prior verified history by move;
+the public Decoder receives the complete buffer back only after exact block
+completion, without a wrapper allocation or completed-output copy.
+
+`Codec.decoder()` creates a dormant instance once. `Decoder.write` activates it
+for each compressed meta-block and accounts cursor position after unread window
+bits, so alignment follows the semantic bit position rather than the raw caller
+cursor. Fixture 1279 writes an independent compressed vector one byte at a time
+and produces exactly 100 lowercase `a` bytes. Its truncated control accepts the
+first five bytes, returns `TruncatedInput` from consuming finish, and preserves
+the caller's sentinel output. Managed build is warning zero; fixtures
+1276-1280 pass direct-call closure, `llvm-as`, and exact O1 native execution.
+Brotli contract version 27 records 92 surfaces and 120 invariants. Stage2/Stage3
+fixed points remain the promotion gate.
+
+## D577 — Owned enum payload transfer uses the recursive source path
+
+Status: managed compiler fixed; focused managed and minimal self-host O1 pass; platform promotion pending
+Date: 2026-08-31
+
+Enum construction previously invalidated only a direct owned local name after
+copying its payload. A nested field projection could therefore become the enum
+payload while its aggregate owner remained scheduled for full cleanup, leaving
+two cleanup paths for the same storage. The emitter now routes every owned enum
+payload through the same recursive literal-source transfer used by aggregate
+construction. Complete root-relative field paths consume the aggregate owner
+and drop only untransferred siblings; mutability does not create a second owner.
+
+Fixture 1280 first mutates an `Envelope`, moves `envelope!.payload` into
+`Stored.Value`, and matches the payload to prove its nested growable array is
+still live. Managed reference and O1 native execution print
+`mutable-projection=true` with warning zero. The verified Stage3 seed also
+passes the same fixture against an empty stdlib through direct-call closure,
+`llvm-as`, and exact execution. C2026-08-31-144 stays candidate-fixed until the
+current full-stdlib Stage2/Stage3 fixed points close the promotion evidence.
+
+## D578 — Enum-arm joins normalize every conditionally consumed outer owner
+
+Status: managed compiler fixed; focused managed O1 pass; self-host platform promotion pending
+Date: 2026-08-31
+
+The retained-payload cleanup change initially removed the existing outer-owner
+normalization and broadened subject transfer to every owned payload binding.
+That made a read-only projected match remove its parent before an arm could read
+a sibling, and made `nextSecret` remain live on a failed nested Result arm while
+the success arm had already transferred it. Stage2 preflight correctly stopped
+with an unknown `decoded` binding in fixture 892 and inconsistent `nextSecret`
+ownership in fixtures 941 and 942.
+
+A subject owner is now removed only when an arm actually transfers its payload.
+For any other outer owned local transferred by at least one arm, non-transferring
+arms drop it and every continuing scope removes it before the ownership join.
+The cleanup labels remain the actual phi/scope predecessor labels. Fixtures 892,
+941, 942, and 1276-1280 pass warning-zero managed O1 direct-call closure,
+`llvm-as`, and exact execution. C2026-08-31-145 remains candidate-fixed until
+the current Stage2/Stage3 fixed points pass.
+
+## D579 — Read-only compiler request data crosses helpers by reference
+
+Status: managed diagnostic and self-host source fixed; focused bootstrap pass; platform promotion pending
+Date: 2026-08-31
+
+An owned field projection inside a temporary aggregate is an ownership transfer
+even when that aggregate is immediately flowed into a helper. The old
+`FlowIntrinsicRequest` stored `prepared.package.tokens` as an owned array, so
+codegen correctly consumed the complete `prepared` root and a later read failed
+with an unknown binding. The frontend now accounts for this flow-source shape
+before LLVM and reports the owner with explicit `move`/`ref` repair guidance.
+
+The token scanner only reads the array, so it now accepts a direct
+`ref [SyntaxToken; ~]` parameter instead of allocating or owning a request
+wrapper. All eight compiler call sites borrow the existing token storage. The
+new negative diagnostic proves the early error, and the focused managed
+reusable-compiler bootstrap plus fixtures 365 and 366 pass. C2026-08-31-146
+remains candidate-fixed until Stage2/Stage3 reach the current fixed point.
+
+## D580 — Owned provenance crosses only ownership-preserving operations
+
+Status: self-host compiler fixed; focused managed pass; native self-host and platform promotion pending
+Date: 2026-08-31
+
+The self-host ownership checker previously walked from any owned receiver or
+argument through an ordinary call result. That confused dependency with
+ownership origin: `self.child -> fresh` can read its receiver while returning a
+new owner created by the callee. The callee already receives its own E25 check
+if it actually returns borrowed owned input, so propagating every caller
+receiver into every owned call result created false E25 diagnostics without
+closing a real safety hole. The same walk also used nominal `typeFlags` to
+continue through `self.phase`, even though that projection is a copyable enum
+and cannot carry the enclosing owner into an arm result. Owned-escape
+provenance now stops both at projections without semantic owned storage and at
+ordinary call boundaries.
+
+The same Stage2 preflight exposed an independent E20 overreach. The move table
+retains projected observations needed by drop planning, but branch-join
+partial-move enforcement had not required the projected field itself to contain
+owned storage. A copyable `ReaderPhase` assignment was therefore treated as an
+unrepaired partial move from its enclosing affine reader. E17/E20 candidate
+selection now requires an owned field type; scalar and enum state copies remain
+ordinary assignments.
+
+Fixture 1281 returns a freshly allocated payload through a borrowed projected
+receiver selected by a copyable enum subject and assigns a copyable enum field
+inside a branch. Managed and regenerated self-host LLVM assembly, linking, and
+native execution print `7` and `1` with zero warnings. C2026-08-31-147 and
+C2026-08-31-148 remain candidate-fixed until the current Stage2/Stage3 fixed
+points pass.
+
+## D581 — Late call results reconverge their value-producing controls
+
+Status: self-host compiler fixed; focused managed and self-host native pass; platform promotion pending
+Date: 2026-08-31
+
+The self-host Typed IR previously canonicalized regions and value-producing
+`when` results before the final same-module call-result pass. In the Brotli
+compressed reader, `advanceHeader` and its sibling helpers therefore gained
+their `Result<Advance, Error>` types after the enclosing State arm regions had
+already retained an unknown or Unit type. S022 correctly rejected that stale
+parent state before LLVM, but the source arms themselves were valid and agreed.
+
+After final call-result typing, one reverse IR pass now copies each settled
+producer type into its enclosing kind-19 region and then into the owning enum
+match. Reverse order guarantees child-before-parent convergence without a name,
+source-order, or type-proximity heuristic, and adds no generated instruction or
+runtime work.
+
+Fixture 1282 sends both State variants through a mutable helper returning
+`Result<Int, Text>`, immediately matches the Result, and prints `42`. Managed
+and regenerated self-host LLVM assembly, linking, and exact native execution
+pass. C2026-08-31-149 remains candidate-fixed until the Brotli full-stdlib
+Stage2 preflight and current Stage2/Stage3 fixed points pass.
+
+## D582 — Self-host control and ownership cleanup preserve exact terminal boundaries
+
+Status: self-host compiler fixed; focused Brotli 1277-1279 native exact pass; platform fixed points pending
+Date: 2026-08-31
+
+The current Brotli self-host preflight exposed four compiler invariants rather
+than library defects. Canonical Unit shares a negative internal type id with an
+unresolved node, so terminal-arm sealing reopened a settled statement match.
+After that repair, returned enum-arm selection replaced an existing direct
+terminal with a later nested same-typed call. Field reinitialization then used
+the repairing assignment's complete AST span as if that assignment had already
+closed the move, dropping storage just transferred from the field. Finally,
+`move self` copied into a mutable lexical root made normal and early-return
+cleanup treat the ABI argument as a second owner.
+
+Unit identity now blocks unresolved sealing, returned arms preserve an exact
+direct terminal at the highest rank, and field assignment has an ownership
+query that excludes only its own repairing store. Owning lexical bindings share
+one exact move-parameter source predicate. Fallthrough cleanup accepts only a
+function-root transfer; early-return cleanup additionally proves lexical
+dominance and source precedence, so sibling branches cannot suppress a drop.
+These are compile-time decisions and add no wrapper, allocation, copy, runtime
+branch, or dispatch to generated programs.
+
+Fixtures 1283, 1284, and 1285 retain the minimal statement-control, repairing
+field assignment, and move-parameter/early-return shapes. The regenerated
+self-host compiler passes them, and minimal Brotli fixtures 1277, 1278, and
+1279 pass self-host compilation, `llvm-as`, native linking, zero-exit execution,
+and exact output. C2026-08-31-150 through C2026-08-31-153 remain candidate-fixed
+until current Stage2 and Stage3 fixed points promote the same compiler.
+
+## D583 — Late calls remain explicit until identity and control edges converge
+
+Status: self-host compiler fixed; focused suite passed; complete emission and platform fixed points pending
+Date: 2026-08-31
+
+Preliminary call discovery can leave an inherent flow call unresolved while its
+indexed receiver still has only a collection type. Function and entry Typed IR
+previously preserved that call only when an indirect library heuristic also
+matched. `paths[index] -> pathText` therefore lost the call node itself, and no
+later receiver pass could resolve what no longer existed. Every non-qualified
+status-2 flow call now remains as a provisional kind-6 node. Resolved qualified
+leaves such as enum constructors retain their separate lowering path, while
+genuine unknown calls still fail through the existing diagnostic and V006
+gates.
+
+This exposed two consumer-order boundaries. Directory opcode classification is
+now relocated after the last projected-method identity producer; no additional
+IR scan was added. A late compiler-provided file Result call now becomes the
+subject of its exact linked `when` only when one kind-6/kind-9 producer in the
+file opcode range has `nextOperand` pointing to that match. Ambiguous candidates
+remain invalid instead of falling back to source order or spelling.
+
+Fixture 1286 freezes preliminary-unresolved to final Path opcode convergence,
+1140 freezes final directory identity, and 787 freezes generic `writeAt<T>`
+Result subject linkage. The regenerated self-host compiler passes all three
+together with the ownership/control fixtures 1283-1285. C2026-08-31-154 through
+C2026-08-31-156 remain candidate-fixed until complete Stage2 and Stage3 fixed
+points pass.
+
+## D584 — Missing emitter values remain sentinels until source diagnostics
+
+Status: complete compiler emission and direct-call closure passed; platform fixed points pending
+Date: 2026-08-31
+
+The complete compiler input did not fail in the last LLVM function visible in
+redirected stdout. Its Windows output runtime wrote only 1 MiB minus 26 bytes
+of a 1 MiB flush and ignored the short count, so the truncated
+`appendJsonString` text was stale observational evidence. A debug-event probe
+captured the actual first- and second-chance illegal instruction at
+`0x1400EABF6`; stderr identified
+`matchRegionResultValueIndex:bb_dynamic_inline_bounds_fail77`.
+
+Enum-arm result discovery correctly uses `-1` for "no canonical value", but
+both its root traversal and the shared aggregate unwrapping helper indexed the
+IR before preserving that sentinel. The runtime bounds trap therefore
+preempted the emitter's existing `S019` diagnostic. Both accesses now require
+the full `0 <= index < ir.len` invariant. Missing values remain `-1` until the
+owning emitter reports them; no wrapper, allocation, generated branch, or
+runtime cost is added to compiled programs.
+
+The authoritative formatting and self-host compiler structural gates pass. The
+repaired compiler also completed the same 115-source input with exit code zero,
+36,516,001 stdout bytes, empty stderr, no illegal-instruction event, and a
+passing direct-call closure check. C2026-08-31-157 remains candidate-fixed only
+until current Stage2/Stage3 platform fixed points pass. The independently
+confirmed Windows stdout short-write defect remains tracked separately.
+
+## D585 — Windows compiler output is complete or fails explicitly
+
+Status: exact 2 MiB and complete 36.5 MiB emission passed; platform fixed points pending
+Date: 2026-08-31
+
+Windows `WriteFile` and `WriteConsoleW` report both API success and an actual
+write count. The managed and self-host output runtimes previously checked only
+the API result, cleared the 1 MiB compiler buffer, and silently discarded any
+unwritten suffix. A complete compiler run proved this was observable: stdout
+stopped at 3,145,702 bytes, exactly 3 MiB minus 26 bytes, while the compiler
+continued consuming CPU beyond that flush.
+
+Redirected UTF-8 and console UTF-16 paths now loop on positive, bounded
+progress until the requested count is complete. Zero progress, a count larger
+than the remaining range, or an API failure reaches an explicit failure path.
+Buffered and oversized direct output trap before a failed buffer is cleared,
+so a truncated LLVM module can no longer be published as success. Managed and
+self-host templates share the same contract, and the change adds no work to
+generated program logic beyond what complete output already requires.
+
+C2026-08-31-158 remains candidate-fixed until current Stage2/Stage3 fixed
+points pass. The focused runtime executable writes exactly 2,097,152 requested
+bytes through a redirected Windows pipe with exit code zero and empty stderr;
+the complete compiler run likewise exits zero with empty stderr and publishes
+all 36,516,001 bytes instead of stopping at 3,145,702.
+
+## D586 — Immutable value aliases preserve the exact producer type
+
+Status: managed and native focused gates passed; regenerated complete compiler verification pending
+Date: 2026-08-31
+
+Sollang's `value => name` binding names the value flowing through it; it does
+not introduce a Unit-valued operation or a conversion. Typed IR previously
+copied the immutable binding and read types before final producer resolution.
+For `paths[index] -> pathText => currentText`, spelling recognition first set
+opcode `-230`, but the final projected-method resolver accepted only opcode
+`-1`. The call therefore retained target/symbol/type `-1/-1/-1`; the binding
+and its read kept provisional Unit identity. The complete compiler LLVM contained
+`freeze void %v4917` even though `%v4917` was a concrete `%sollang.text`.
+
+The final resolver now accepts provisional path opcodes, resolves the exact
+declaration, and revalidates the opcode from that identity. Shared declaration-
+based result sealing types any newly resolved call before two bounded producer-
+to-binding-to-read closure rounds. Only unknown or provisional Unit aliases are
+promoted, leaving intentional Result success-payload bindings unchanged. This
+is linear work with no runtime allocation or generated-program overhead. V006
+now rejects unresolved ordinary calls and provisional path opcodes `-215/-230`
+without misclassifying compiler-owned targetless intrinsics; `V010` rejects a
+read/binding disagreement. Fixture 1288 and seven adjacent
+Result/path/file fixtures pass; the value-alias fragment is present in all 345
+typed-IR manifests. The regenerated native compiler independently passes
+fixture 1288 through direct-call closure, LLVM contracts, assembly, linking,
+exact execution, and zero-warning output. C2026-08-31-159 remains candidate-
+fixed until regenerated complete LLVM assembly and current Stage2/Stage3 fixed
+points pass.
+
+## D587 — Provisional Unit matches re-enter exact terminal-arm sealing
+
+Status: focused managed gates passed; regenerated native and complete compiler verification pending
+Date: 2026-08-31
+
+The first complete compiler generated after D586 removed the original
+`Path.pathText` alias failure and passed direct-call closure, but `llvm-as`
+found three other `freeze void` sites. They belonged to Bool-valued enum
+`when` expressions in `cli_cpp_binding.hostOutputPath`,
+`semantic.library_imports.manifestPath`, and `sys.path.Path.join`.
+Each match, receiving binding, and read agreed on the same provisional Unit
+identity, so the alias-only V010 invariant correctly saw no disagreement.
+
+The terminal-arm reseal introduced for C129 considered only an unknown match
+type. Its first C160 candidate also assumed arm-to-region-to-terminal topology,
+missing expression-bodied arms that point directly at their terminal. After
+supporting direct arms, a complete 36,591,402-byte compiler artifact passed
+direct-call closure but `llvm-as` exposed the opposite error: one Bool arm was
+enough to promote a statement-position match whose other arms were empty, so
+the emitter stored a Text result through an unallocated `%v21804_result` slot.
+
+The shared bounded resolver now follows either a direct terminal or any number
+of structural regions. Both unknown and provisional Unit matches re-enter the
+pass, but promotion requires every continuing, non-returning arm to produce the
+same canonical non-Unit identity. Empty, malformed, or differently typed arms
+keep the match in statement position. The pass then seals the match, each
+matching arm and structural region, binding, and read through the existing
+bounded closure; no source rewrite, conversion, allocation, or generated-
+program runtime work is added.
+
+V011 independently applies the same complete-arm rule and shared resolver to a
+value-producing enum or numeric-subject match that still retains Unit. The
+diagnostic tells compiler developers to repair match-result sealing rather than
+rewriting valid `when` source. Structural contracts, authoritative formatting
+over 235 sources, managed production fixture 1289, and fixture 1290's direct,
+nested, and incomplete controls pass. Regenerated native fixtures, complete
+LLVM assembly, and platform fixed points remain pending.
+
+## D588 — Typed IR context lowering is three explicit borrowed passes
+
+Status: structural and managed focused gates passed; native fixed-point verification pending
+Date: 2026-08-31
+
+`selfhost/ir/typed.slg` had become both a 15,332-line compilation unit and the
+owner of a 14,151-line `lowerResolvedContextWithMode` declaration. That shape
+made unrelated rule additions invalidate one giant unit and allowed structure
+debt to remain hidden behind a tracked exception.
+
+The facade is now 1,511 lines. Function lowering, function finalization, source
+collection, and source finalization are separate same-namespace fragments. The
+remaining context-wide sequence is explicit: normalize (2,575 lines), seal
+(1,855 lines), then finalize (1,332 lines). Each pass mutably borrows the one
+Typed IR node array and readonly-borrows semantic tables. Only the five scalar
+directory/DNS indices discovered during normalization cross later boundaries;
+there is no heap state object, aggregate table copy, virtual dispatch, or
+generated-program runtime cost.
+
+The authoritative fragment chain updates all 346 affected source manifests in
+one run. Structure verification now accepts an empty file-exception family and
+reports zero tracked file debt; all Typed IR files and declarations are below
+their limits. The full self-host source contract and managed fixture 1290 pass
+with exact output `53,53,0`. Native complete compiler generation, assembly, and
+current Stage2/Stage3 fixed points remain required before C80 is closed.
+
+## D589 — Expression type paths are one borrowed fixed-point fragment
+
+Status: structural and focused semantic gates passed; native fixed-point verification pending
+Date: 2026-08-31
+
+`expression_type_ids.resolveContext` remained a 4,678-line declaration after
+the Typed IR split. The initial attempted decomposition separated seeding,
+composite/call specialization, and path resolution, but introduced two phase
+calls and a wider mutable ABI than the responsibility boundary required. It was
+discarded after focused execution rather than retained merely because it
+compiled.
+
+The canonical split keeps seeding plus composite/call specialization inline and
+extracts only the deterministic member, index, stream, branch, and late
+container fixed point. `expression_type_ids.slg` is now 2,717 lines and
+`expression_type_ids_paths.slg` is 2,243 lines. `resolvePaths` directly borrows
+the mutable type, nominal-field, expression, and expression-index arenas and
+readonly-borrows references and flow-target indices. There is no heap state
+object, arena copy, virtual dispatch, or generated-program runtime cost. The
+single adjacency is installed in all 415 affected manifests and removes the
+tracked declaration exception.
+
+A temporary 4,932-line fully inlined A/B control reproduced the same 291 and
+644 outputs, proving those observations were not caused by the fragment. The
+291 check was stale because a canonical composite array intentionally has no
+nominal `typeSymbol`; it now verifies the parallel opcode, array kind, and Bool
+callback identity. Fixture 644 exposed C161: control-result binding repair did
+not accept a match parented directly by its producer call. Entry and ordinary
+repair now accept that exact topology, restoring the outer Int32 binding and
+control dependency. The focused 13-case semantic/control matrix, authoritative
+formatting, structure inventory, and 577-manifest gate pass. Complete native
+compiler assembly and current Stage2/Stage3 fixed points remain required.
+
+## D590 — Live sampling never amplifies user-visible telemetry
+
+Status: shared real-process contract passed
+Date: 2026-08-31
+
+The shared verification wait samples live peak working set every 5ms when a
+caller requests memory evidence. Its previous heartbeat condition checked only
+whether total elapsed time had reached 60 seconds. After that boundary every
+5ms sample emitted another status line, flooding tool output and conversation
+context while providing no new information.
+
+The wait now owns a separate `nextTelemetryAt` deadline. Each emitted message
+advances that deadline by the configured interval; production remains one
+message per 60 seconds even while memory sampling stays at 5ms. A real 700ms
+process contract uses a 100ms interval and peak-memory sampling. Its measured
+elapsed time determines the maximum legal heartbeat count, so scheduler delay
+cannot turn a correctly rate-limited eighth boundary message into a flaky
+failure. Three consecutive executions pass together with all prior capture,
+timeout, process-tree termination, and nonzero peak-memory checks. Sampling
+precision and user-visible progress cadence are independent contracts.
+
+## D591 — Exact call identity is indexed once in the semantic snapshot
+
+Status: structural and focused differential gates passed; repeated production measurement and fixed point pending
+Date: 2026-08-31
+
+Typed IR ordinary-function and entry lowering repeatedly looked up an exact
+`(sourceModule, callAst)` identity by scanning the complete prepared call table.
+The profiled compiler workload contained roughly 301,000 expressions and 9,000
+resolved calls, so this relation was expressed as an avoidable product even
+though semantic call resolution already publishes one record per call AST.
+
+`SemanticSnapshot` now owns one global-AST `callIndexByAst`, constructed once
+after call resolution. Exact call classification, result typing, parent-call
+recognition, and final call materialization perform direct lookups. Native
+workers borrow the snapshot and its index; no per-worker copy, state wrapper,
+dynamic dispatch, generated-program allocation, or runtime branch is added.
+The two genuinely different descendant-call searches remain explicit until a
+separate ancestry index can preserve their selection semantics.
+
+The source contract rejects the ten former exact-scan sites, and focused
+fixtures 103, 125, 143, 291, 293, 644, 1184, and 1286 pass. This proves the
+lookup topology and affected semantics, not yet a speedup. The same-input
+production compiler route must still produce an identical output fingerprint
+and repeated wall/CPU/peak-memory evidence before a performance improvement is
+claimed; current Stage2/Stage3 fixed points remain the promotion closure.
+
+## D592 — A resolved call result may own a materialized field projection
+
+Status: candidate fixed; regenerated focused execution and platform promotion pending
+Date: 2026-08-31
+
+The QUIC `queueStreamFrame` path exposed a missing-value producer rather than an
+invalid enum match. `streamState.identity(value.id)` lowered as a resolved call
+with canonical `StreamIdentity` result type, but its enclosing
+`.direction` path was omitted because early member classification recognized
+only local bindings, pattern bindings, and indexed bases. Imported instance
+paths also carried qualified-leaf identity, whose outer suppression gate hid
+the projection even after its exact call child was recognized. The later
+qualified-function transparency pass independently removed the same path after
+seeing that child call. The following enum match therefore retained
+`operand0 = -1` and correctly failed S018.
+
+Function and entry lowering now preserve a path with an exact resolved-call
+descendant reached only through same-start path ancestors as a member
+projection, including across the qualified-leaf suppression boundary. This
+also covers imported aliases that insert an additional path wrapper between
+the call and projection. The call must share the outer path start and end
+strictly before its trailing field suffix. The ancestry is indexed once per
+source and reused by both lowering routes rather than rescanned per expression.
+A path that is itself the callee of
+a resolved method call, or a qualified call occupying the complete path, is
+excluded, so method/function spelling cannot become a field read. A proven
+call-result field is also excluded from qualified-function transparency.
+Existing operand construction links the projection to the call result;
+the canonical late nominal-member pass resolves its field ordinal and enum
+type. This is compile-time graph preservation only: it adds no generated
+allocation, wrapper, copy, dynamic dispatch, or runtime branch.
+
+Fixture 1293 isolates `sample.identity(id).direction -> when` across imported
+modules and is part of the Stage1 seed capability preflight. Production fixture
+1209 retains the QUIC shape that revealed the defect. Fixture 1357 isolates the
+nested qualified-path wrapper and fixture 1355 keeps the full QUIC IPv6 source
+closure. Both focused native paths, complete compiler
+emission, and current Stage2/Stage3 fixed points remain required before closure.
+
+An over-broad intermediate rule accepted every qualified path with a direct call
+child. S043 and S017 immediately rejected thousands of false members because
+ordinary qualified calls have no trailing field span. That negative result is
+retained in C166; the final span proof distinguishes the two forms before IR
+materialization rather than repairing the damage later.
+
+## D593 — A match becomes a value only by complete continuing-arm agreement
+
+Status: candidate fixed; focused execution and platform promotion pending
+Date: 2026-08-31
+
+The QUIC handshake engine exposed an invalid LLVM merge after the missing
+call-result projection was restored. A statement-position enum `when` inside a
+loop mixed a value-producing mutation arm, empty arms, and arms that returned
+from the function. Late Typed IR repair promoted the whole match from the first
+canonical arm alone. LLVM consequently allocated a result slot and emitted
+branches to a merge block that statement control flow never defined.
+
+Late sealing now traverses the exact arms owned by the match and resolves each
+arm through the shared bounded terminal resolver. Explicit return terminals are
+excluded because they do not continue to a match result. Every continuing arm
+must expose the same canonical non-`Unit` type before the match is promoted;
+an empty, unresolved, or differently typed arm keeps the statement match as
+`Unit`. This aligns late repair with the existing complete-arm invariant rather
+than adding an emitter fallback for malformed IR.
+
+Fixture 1294 freezes the mixed value, empty, and early-return shape and joins
+the Stage1 seed preflight. Production fixture 1209 retains the handshake-engine
+path that exposed the undefined merge label. Focused execution, complete
+compiler assembly, and current Stage2/Stage3 fixed points remain required.
+
+The production QUIC fixture made broad `typed-ir` timing insufficient: semantic
+prepare completed in 1,135 ms and expression type IDs added 199 ms, while Typed
+IR exceeded 60 seconds. Internal cumulative boundaries now stop after source
+lowering, normalization, and sealing. They preserve the production path and
+return its real intermediate IR, allowing the expensive stage to be measured
+without repeatedly paying for LLVM emission or adding instrumentation to user
+programs.
+
+## D594 — QUIC unidirectional capability is represented by the owner type
+
+Status: implemented; focused managed and self-host native gates passed
+Date: 2026-08-31
+
+The unidirectional transport and registry foundation already retained the QUIC
+transport parameters, role-correct ID families, separate flow allowances, and
+bounded implied-peer queue. The public API remained blocked because returning
+one permissive stream with runtime read/write flags would make an invalid
+direction both late and branch-dependent.
+
+`Connection.openUni` now returns an inline `SendStream`; `Connection.acceptUni`
+returns an inline `ReceiveStream`. `SendStream` exposes only `send`, `finish`,
+`abortSend`, `id`, and `isWriteFinished`. `ReceiveStream` exposes only
+`receive`, `requestStop`, `id`, and `isReadFinished`. `BiStream` composes the
+same private inline send and receive direction values. All three owners call
+shared static direction helpers through exact projected addresses, adding no
+parent pointer, heap wrapper, copied stream state, dynamic dispatch, or runtime
+`canRead`/`canWrite` branch.
+
+Fixture 1297 opens client stream ID 2 and server stream ID 3, transfers exact
+payloads in both role-correct directions, finishes both send owners, and pairs
+each with the exact receive owner. Managed O0 LLVM contains direct
+`openUniImpl`, `acceptUniImpl`, `sendDirectionImpl`, and
+`receiveDirectionImpl` calls. The managed example gate and the Stage1
+self-host native exact route both pass execution; the latter also passes direct
+call closure and LLVM assembly. Two diagnostic fixtures prove that
+`SendStream.receive` and `ReceiveStream.send` fail during method resolution.
+The full compiler fixed-point matrix is intentionally deferred to the next
+promotion boundary. Bounded out-of-order STREAM offset reassembly is closed
+separately by D595 and QS7.
+
+## D595 — QUIC reassembly is a bounded connection value with an owner cursor
+
+Status: implemented; focused managed and self-host native exact gates passed
+Date: 2026-08-31
+
+QUIC STREAM arrival order is not application delivery order. Rejecting a future
+offset or counting every retransmitted frame again violated the ordered byte
+stream and flow-control model. A global heap stream manager would repair the
+symptom by duplicating the affine stream owners and hiding resource cost.
+
+`std.net.quic.reassembly.Queue` is instead embedded directly in `Connection`
+and remains governed by the existing shared pending-frame and pending-byte
+limits. Admission validates stream direction and queue capacity before moving
+the frame. When a concrete `BiStream` or `ReceiveStream` reads, the queue
+validates every exact-ID segment against that owner's `ReceiveFlow`. Only the
+increase in `highestReceived` reaches connection flow control, so overlap and
+retransmission consume no duplicate credit. `consumed` is the single
+contiguous-delivery cursor. Future segments remain queued, fully consumed
+duplicates are removed, overlapping prefixes are skipped, and a partial read
+requeues only the remaining suffix with FIN preserved.
+
+The common exact-offset frame is moved out without a payload copy. Byte windows
+are allocated only when overlap removal or `maxBytes` splitting requires a new
+representation. There is no parent pointer, dynamic dispatch, per-call global
+stream table, unbounded queue, or silent fallback.
+
+Fixture 1300 inserts offset 4 with FIN before offset 0, overlaps offset 4, and
+reads 3, 2, and 1 bytes. It proves ordered bytes 1 through 6, first accounting
+of six bytes, subsequent accounting of zero, final size six, and queue bytes
+draining from seven to zero. Managed execution passes together with live
+fixtures 1211 and 1297. Current self-host Stage1 also passes direct-call
+closure, LLVM assembly, native link, and exact execution. Fixture 1303
+independently pins the contextual `Queue.push` versus growable-array `push`
+collision so the queue method cannot recursively call itself through its
+`values` field. Full Stage2/Stage3 fixed-point promotion remains separate.
+
+## D596 — QUIC FIN cannot truncate previously received stream data
+
+Status: implemented; focused managed and self-host native exact gates passed
+Date: 2026-08-31
+
+A STREAM frame with FIN declares the stream's immutable final size. Checking
+only an earlier FIN was insufficient: after receiving data ending at offset
+six, a first FIN ending at offset five could previously replace the unknown
+final size even though it contradicted bytes already accepted.
+
+`ReceiveFlow.onReceive` now rejects `fin` when its end is below
+`highestReceived`, before constructing replacement flow state. Fixture 1301
+receives one byte at offset five and then declares final size five; the exact
+result is `FINAL_SIZE_ERROR` (code 6). This boundary is part of QS7 and the
+shared native exact promotion batch, alongside the ordered reassembly fixture
+1300. Managed execution, the QUIC structural contract, and current self-host
+native exact execution pass. Full Stage2/Stage3 fixed-point promotion remains
+separate.
+
+## D597 — Zstandard compressed blocks begin with bounded zero-sequence literals
+
+Status: implemented; focused managed and self-host native exact gates passed
+Date: 2026-08-31
+
+Calling every compressed block unsupported left interoperable RFC 8878 content
+outside `std.compress.zstd`, even when the block required no Huffman or FSE
+state. A compressed block with raw or RLE literals and a zero sequence count is
+a complete standards-defined unit: its decoded content is exactly the literals
+section.
+
+The incremental `Decoder` now buffers only the current declared compressed
+block, already bounded by the frame window and the 128 KiB block ceiling. It
+parses all three raw/RLE literal-size encodings, validates the exact section
+boundary and zero sequence marker, checks the regenerated output limit before
+allocation, and commits decoded bytes only after the complete block validates.
+The bytes then enter the existing frame XXH64 and transactional output path.
+Huffman literals, nonzero FSE sequence streams, and dictionaries retain the
+explicit `UnsupportedCompressedBlock` or `UnsupportedDictionary` capability
+errors; this slice is not presented as complete entropy decoding.
+
+Fixture 1304 carries hand-auditable RFC 8878 single-segment vectors for raw and
+RLE literals, delivers each byte through a separate `Decoder.write`, and pins
+explicit Huffman/nonzero-sequence rejection plus caller-output transactionality.
+The machine-readable Zstandard contract is version 3 and adds the fixture to
+the shared native exact promotion batch. Managed execution and current self-host
+direct-call closure, LLVM assembly, native exact execution, and managed
+differential pass. Full Huffman/FSE decoding remains the next Zstandard
+capability boundary; full Stage2/Stage3 fixed-point promotion remains separate.
+
+## D598 — Zstandard Huffman tables are bounded frame-local decoder state
+
+Status: implemented; focused managed and self-host native exact gates passed
+Date: 2026-08-31
+
+Huffman literals are not a reason to move Zstandard decoding into a native
+wrapper or a global table cache. RFC 8878 defines the table description,
+reverse bitstream, one/four-stream partition, and treeless reuse as explicit
+frame data. Sollang can retain those rules in a small affine `Decoder` without
+adding hidden allocation or process-wide mutable state.
+
+`std.compress.zstd.huffman.Table` stores one bounded canonical lookup and its
+maximum bit width. A direct-weight description validates the listed weights,
+infers the final weight from the complete-tree sum, rejects oversubscribed or
+incomplete trees, and limits the table to the RFC maximum of eleven bits.
+`decodeStream` starts at the final-bit marker, reads the stream in reverse, and
+must produce exactly the declared regenerated byte count while consuming the
+payload exactly. Four-stream literals validate the six-byte jump table and the
+specified quarter sizes. Treeless literals may reuse only a table established
+earlier in the same frame; frame reset discards it.
+
+Fixture 1306 locks direct weights, one stream, four streams, same-frame treeless
+reuse, invalid final-bit rejection, and caller-output transactionality. The
+hand-built vectors were cross-checked against the official `zstd` decoder.
+FSE-compressed Huffman weights and nonzero FSE sequence streams remain explicit
+capability errors. The machine-readable Zstandard contract is version 4 and
+retains fixture 1306 in the native promotion batches. During self-host
+verification this fixture exposed independent compiler defects
+C2026-08-31-175 and C2026-09-01-176. Both focused fixtures and production 1306
+now pass regenerated Stage1 direct-call closure, LLVM assembly, native exact
+execution, and managed differential. Full SLG Stage2/Stage3 fixed-point
+promotion remains the closure boundary before the candidates become closed.
+
+## D599 — Ordinary value flow is one logical operand with explicit comparison segments
+
+`->` does not have one global precedence relative to every operator. Sollang's
+left-to-right reading requires all of these forms to remain natural:
+
+```sollang
+condition == expected -> consumeBool
+text -> len == expectedLength
+ready and text -> predicate
+```
+
+The canonical grammar therefore separates `ValueFlowExpression` from
+`ValueFlowComparisonExpression`. A value-flow expression begins with a complete
+equality/comparison segment and applies ordinary function or method targets. A
+comparison wrapper may then compare the flowing result. That complete value is
+one operand of `and` or `or`. Control and junction targets plus `return` and
+stream `stop` remain at the outer flow level, so they consume the completed
+condition or transfer control rather than being mistaken for value functions.
+
+The two new grammar rules are appended after the previous final rule. Existing
+rule IDs 0 through 117 remain stable; the new rules are 118 and 119. Managed
+parser generation and self-host CST-to-AST lowering share this shape, and the
+AST uses the explicit comparison wrapper rather than recovering operands by
+type, spelling, or token proximity. Fixture 1329 is the focused managed and
+self-host execution contract. Fixture 1322 is the production-shaped parser and
+LLVM regression that originally exposed the incorrect `(Bool and Text) ->`
+interpretation.
+
+Grammar precedence wrappers remain transparent in the semantic AST. An arrow
+is owned by the nearest CST expression that contains it directly; an outer
+`FlowExpression` must not become a second semantic flow merely because a nested
+logical operand contains an arrow. This enforces one semantic flow owner per
+arrow and preserves the mutable receiver as the direct child of that owner.
+Fixture 1330 pins this topology before Typed IR ownership diagnostics can
+cascade across compiler-sized source closures. Because green CST nodes are
+preorder, the direct expression prefix is adjacent to its envelope; ownership
+classification checks that one node in constant time instead of rescanning the
+whole CST for every arrow.
+
+## D600 — Final nominal receiver production precedes projected-method resolution
+
+Status: candidate-fixed; focused managed/self-host HTTP gates passed
+Date: 2026-09-01
+
+Typed IR finalization is a dependency schedule, not a collection of
+interchangeable cleanup scans. A deeply nested imported `Result.Ok` payload can
+receive its nominal type only after the final match-subject and enum-payload
+closure. `sealLateNominalMemberTypes` then propagates that type to a projected
+receiver. Resolving projected methods before those producers leaves an
+otherwise valid instance call unresolved even though the same method works in
+a shallower control path.
+
+HTTP fixture 1240 exposed this with `Request.localEndpoint` and
+`Request.remoteEndpoint`: managed compilation and execution succeeded, while
+self-host left both subsequent `Endpoint.port` calls unresolved. Fixture 1335
+proved the shallow `Server.localEndpoint -> Endpoint.port` path already worked,
+isolating the defect to final convergence ordering rather than endpoint or
+socket semantics.
+
+The repair adds one bounded producer-to-consumer edge after the final nominal
+member seal: resolve projected methods, seal their result types, propagate
+Result and value aliases, then refresh control bindings before invariants. It
+does not introduce an endpoint spelling special case or an open-ended
+whole-IR fixed-point scan. Compiler structural contracts pin the exact order
+and pass. ManagedRecovery self-host fixture 1240 passes direct-call closure,
+LLVM assembly, link, exact execution, and managed differential; final
+Stage2/Stage3 fixed-point promotion remains the closure gate for C202.
+
+## D601 — Request-body state is an affine cursor owner that returns response authority
+
+Status: managed contract passed; focused self-host and fixed-point promotion pending
+Date: 2026-09-01
+
+HTTP head parsing may read beyond the header terminator. Discarding those bytes
+loses a body prefix or the next pipelined request; appending later transport
+reads to the head buffer can instead reallocate it and invalidate every parsed
+`SourceText` view. A hidden whole-body copy avoids neither ownership ambiguity
+nor unbounded buffering.
+
+`Request.openBody(policy, receiveBytes)` therefore consumes one `Request` into
+an affine `RequestBody`. The original bounded request buffer remains stable for
+the parsed head. Its initial body suffix is decoded directly with
+`BodyDecoder.writeRange`; later reads reuse a separate explicitly sized buffer
+through `TcpStream.receiveInto`. `RequestBody.readInto` returns after buffered
+progress or at most one receive, leaving scheduling and backpressure with the
+caller. `finish` validates decoder completion and moves the aggregate once into
+a new `Request`, retaining every byte already read after the message body.
+`leftoverCount` exposes only an owned scalar observation, not an escaping view.
+
+This matches the explicit consumed-position model used by .NET pipelines,
+Rust `BufRead`, and Go `bufio.Reader`, while preserving Sollang's affine owner
+and flow-first instance vocabulary. Reopening a completed body and nonpositive
+receive capacities are explicit errors. Fixture 1338 sends a fixed-length body
+followed by another request in one TCP write and proves exact body output plus
+the retained 38-byte suffix. Fixture 1339 proves that an already complete empty
+body returns before another transport receive. The HTTP server contract version
+3 pins 14 surfaces and 24 invariants; persistent next-request dispatch remains a separate
+capability rather than a silent behavior change.
+
+## D602 — Field assignments carry their declared numeric context end to end
+
+Status: candidate-fixed; focused managed/self-host passed, fixed point pending
+Date: 2026-09-01
+
+A value-first field assignment already identifies an exact destination field.
+Its integer literal therefore inherits that field's declared integer type in
+the same way as an argument, return, `when` arm, or struct initializer. Requiring
+`UIntSize(0)` for `0 => owner!.cursor` is workaround syntax, not a distinct
+conversion policy.
+
+Managed semantic binding now infers the right-hand value with the destination
+field type, mutable-binding context, ownership state, and yield context.
+Managed LLVM emission uses the same field type through contextual argument
+lowering. Fixture 1337 pins direct and projected numeric field assignments;
+HTTP fixture 1338 is the production consumer. C203 tracks final Stage2/Stage3
+promotion and warning-zero cleanup of obsolete constructor compensation.
+
+## D603 — Nested-arm projected transfers close their source at construction
+
+Status: candidate-fixed; focused managed/self-host passed, fixed point pending
+Date: 2026-09-01
+
+Moving selected owned fields from a `move` parameter into a returned struct is
+a path-sensitive ownership transition. The managed emitter already closes that
+transition at the struct literal: transferred paths become owned by the new
+aggregate and only untransferred sibling paths are dropped. The self-host
+emitter instead deferred the source aggregate to the common epilogue. When the
+literal occurred in the successful arm of a `Result` match, the epilogue lost
+the arm identity, freed the transferred arrays, and failed to recurse into an
+untransferred nested struct. Windows then terminated with heap corruption
+`0xC0000374` although LLVM assembly had succeeded.
+
+The self-host emitter now recognizes only projected aggregate transfers from
+the exact move parameter inside a nested ownership region. It hoists one scalar
+path-ownership bit, emits field-wise cleanup beside the completed aggregate,
+recurses through canonical nested struct types, and clears the bit afterward.
+The common epilogue drops the complete parameter only on paths where the
+transfer did not occur. This introduces no copy, heap wrapper, HTTP special
+case, or global moved suppression.
+
+Fixture 1340 removes networking while preserving the exact `move self` →
+completion `when` → two transferred fields plus one retained nested owner
+shape. It changed from reproducible empty output and heap corruption to exact
+managed/self-host output. HTTP fixtures 1338 and 1339 are the production
+consumers. Both Stage2 and Stage3 formal fixture lists consume 1340 before C204
+can close at fixed point.
+
+## D604 — Qualified call transparency follows indexed ownership and exact span
+
+Status: candidate-fixed; focused managed execution passed, fixed point pending
+Date: 2026-09-01
+
+A namespace-qualified nullary call is represented by more than one syntax
+wrapper. In `sys.process.arguments()`, the complete path owns a shorter
+namespace path, which in turn owns a `CallExpression` with the same complete
+span. The former self-host Typed IR rule recognized only a direct call child
+and keyed function transparency only by the shorter path. It consequently
+retained the complete invocation as a member projection based on the call
+result. S017 correctly rejected all 15 occurrences in the compiler driver.
+
+Ordinary and entry lowering now use the shared qualified-function parent index
+and require an exact same-span call descendant before making the complete
+wrapper transparent. A true call-result field has a strictly longer outer span
+and remains a canonical member. The repair adds no spelling lookup, wrapper,
+allocation, copy, dispatch, or runtime branch. Fixture 726 rejects every member
+node for the bare qualified call, while fixture 1293 preserves the positive
+`call().field` topology. Both focused managed executions and the compiler
+structural contract pass; Stage2 and Stage3 fixed-point promotion remain C218's
+closure boundary.
+
+## D605 — File Result matches follow exact producer or wrapper ownership
+
+Status: candidate-fixed; focused managed execution passed, fixed point pending
+Date: 2026-09-01
+
+Late wrapper synthesis may put the match edge on a transparent wrapper rather
+than directly on a compiler-provided file Result producer. Final sealing now
+accepts only those two exact ownership shapes and normalizes the canonical
+producer edge. It never chooses by source proximity or method spelling. Fixture
+787 pins opcode -221 `writeAt` as the match subject and its direct link.
+
+## D606 — Final projected Result identity receives one bounded consumer closure
+
+Status: candidate-fixed; focused managed execution passed, fixed point pending
+Date: 2026-09-01
+
+The final projected-method pass can be the first producer of canonical Result
+identity. One bounded subject, nominal-member, arm-tag, and payload closure now
+runs immediately afterward. Exact producer `nextOperand` is sufficient evidence
+when the AST wrapper no longer identifies the producer directly. Fixture 772
+passes all 38 compiler-source match subjects after its runtime path/process
+manifest was synchronized.
+
+## D607 — Exact local flow identity survives a leading builtin conversion
+
+Status: candidate-fixed; focused managed execution passed, fixed point pending
+Date: 2026-09-01
+
+Targetless builtin classification now consults the exact resolved-call entry
+first. A status-0 source-local target on the complete outer flow remains a real
+call even when the expression begins with `UInt64(...)`; nested calls inside a
+builtin argument cannot override the builtin. Fixture 787 pins the local-flow
+case and fixture 1362 retains the qualified-flow boundary. No runtime wrapper,
+allocation, dispatch, or name-based code generation was added.
+
+## D608 — Same-ABI flow bindings adopt the canonical call result
+
+Status: candidate-fixed; focused managed/self-host passed, fixed point pending
+Date: 2026-09-02
+
+A binding after a direct flow call owns the call result, not the receiver that
+the call consumed. Equal container ABI is not semantic identity: `[Text; ~]`
+and `[Item; ~]` share one growable-array representation while retaining
+different element types. Final Typed IR now accepts the unique exact child call
+by parent and consumed-receiver topology, adopts its canonical result type, and
+reconnects the binding to that result. It performs no spelling, proximity, or
+ABI-shape lookup and adds no runtime work.
+
+Fixtures 1368, 1369, and production compiler-analysis fixture 787 pass direct
+call closure, LLVM assembly, exact native execution, and managed differential.
+Stage2 and Stage3 fixed-point promotion remain pending.
+
+## D609 — Immediate call arguments cannot become inherent receiver roots
+
+Status: candidate-fixed; focused and production passed, fixed point pending
+Date: 2026-09-02
+
+In `net.loopback(port) -> unified`, `port` is an argument of the immediate
+producer, not the lexical receiver of `unified`. Receiver discovery now rejects
+bindings nested beneath a smaller call-expression argument. Direct-producer
+reuse also excludes the current outer call and same-start wrappers containing
+the trailing method token, preventing a call from selecting its own nominal
+result as its receiver.
+
+Fixture 1043 fixes the semantic nominal-return boundary and fixture 1370
+executes the ordinary wrapper exactly under managed and self-host compilers.
+The repair is AST- and span-based, contains no method-name branch, allocation,
+copy, wrapper, or runtime dispatch. Production QUIC fixture 1167 passes direct
+call closure and exact `quic-two-routes=true` execution. Formal Stage2/Stage3
+promotion remains the closure boundary.
+
+## D610 — Array each uses the collection view ABI
+
+Status: candidate-fixed; focused verification 2/2 passed, batch promotion pending
+Date: 2026-09-02
+
+The declared fixed-array value type `[N x Element]` is not the aggregate passed
+to each. Iteration consumes a collection view: fixed and slice arrays use
+`{ ptr, i64 }`, while growable and bounded-growable arrays use
+`%sollang.array.i32`. A shared static writer now selects that ABI from the
+canonical semantic collection kind in both entry and ordinary emitters;
+element pointer and load types remain independently derived from the canonical
+element type.
+
+The source AST recognizes a role body only after its role name. Literal receiver
+braces therefore cannot consume the explicit block-item token. Typed IR then
+applies the same exact element-type and equal-AST result-binding recovery to
+sequential `each` opcode `-208` and parallel role opcodes `-207`/`-209`.
+
+Fixture 1367 passes direct-call closure, LLVM assembly, exact `1`, `2`
+execution, and managed differential. Nested sequential control 1366 also
+passes. Readonly-reference emitter control 775 recompiles the compiler surface;
+a focused attempt remained CPU-active for 11 minutes and was stopped. It stays
+in the batch promotion gate rather than lengthening every edit-check loop.
+
+This adds no allocation, wrapper, copy, branch in generated user code, or
+runtime dispatch. Fixture 1367 is the fixed nominal reproducer; fixtures 1366
+and 775 retain dynamic and readonly-reference controls. Focused execution and
+formal Stage2/Stage3 promotion remain pending.
+
+## D611 — Block callbacks are recognized by structure, not target names
+
+Status: candidate-fixed; focused managed/self-host verification passed
+Date: 2026-09-02
+
+A user-defined callback such as `source -> beforeEach item { ... }` cannot be
+distinguished from an ordinary value flow by a list of known function names.
+The managed parser now stops value-flow lookahead only when the target is
+followed by optional role binders and a real body brace. The canonical self-host
+grammar parses a callback source without consuming its callback arrow, preserves
+ordinary value-flow prefix stages when another arrow follows, and rejects
+control targets including `while` from the callback alternative.
+
+This keeps `value -> readFresh -> return` an ordinary flow, keeps
+`source -> take(1) -> each item { ... }` a callback pipeline, and avoids adding
+transparent-looking CST wrapper rules that would change AST ownership. Fixture
+12 preserves a user-defined one-role block, while fixture 576 preserves the
+one-role `beforeEach` plus two-role `flatMap` table. Managed compilation and
+execution pass exact output; the rebuilt self-host compiler passes direct-call
+closure, LLVM contracts, assembly, and exact execution for fixture 576.
+
+The change adds no generated-user-code allocation, wrapper, copy, branch, or
+runtime dispatch. Current Stage2/Stage3 fixed-point promotion remains pending.
+
+## D612 — Nonblocking mode is an affine socket-owner mutation
+
+Status: candidate-fixed; focused managed/self-host execution and structural contract passed
+Date: 2026-09-02
+
+`TcpListener`, `TcpStream`, and `UdpSocket` expose the same non-consuming
+`setNonblocking(enabled)` instance operation. Lowering extracts the existing
+native handle and calls Windows `ioctlsocket(FIONBIO)` or Linux
+`fcntl(F_GETFL/F_SETFL, O_NONBLOCK)` directly. It adds no wrapper, allocation,
+copy, shadow state, virtual dispatch, or function-name branch in codegen.
+
+The existing socket-result ABI remains authoritative: success uses kind `-1`,
+failure uses payload `-1`, and Windows/Linux retryable errors map to the stable
+`WouldBlock` tag `10`. The Windows generated import library now exports
+`ioctlsocket`; fixture 1371 caught both that linker boundary and an initially
+incorrect result marker before promotion. Its managed execution toggles all
+three owner types, observes a real nonblocking accept, restores blocking mode,
+and prints exact `socket-nonblocking=true`.
+
+Self-host normalization and finalization reserve opcode `-297`, and the LLVM
+emitter lowers it directly to the same platform runtime. The rebuilt native
+self-host compiler passes direct-call closure, LLVM contracts, assembly, and
+exact fixture 1371 execution. Formal Stage2/Stage3 fixed-point promotion remains.
+
+## D613 — Readiness polling stays on the affine socket owner
+
+Status: candidate-fixed; managed and focused native execution passed
+Date: 2026-09-02
+
+`TcpListener`, `TcpStream`, and `UdpSocket` expose the same
+`poll(PollMode, Option<Duration>)` instance operation. `Read`, `Write`, and
+`Error` remain portable semantic tags. Managed and self-host lowerings map one
+owner handle to one stack-resident Windows `WSAPOLLFD` or Linux `pollfd`; no
+descriptor array allocation, wrapper, handle copy, cached readiness, virtual
+dispatch, or function-name branch is added.
+
+Finite timeout uses whole milliseconds and is clamped to the native signed
+32-bit maximum; `None` means an infinite wait and a zero timeout is a normal
+immediate observation. Read/write readiness includes terminal flags so the next
+operation can complete without blocking, while Error selects terminal flags
+only. Fixture 1372 covers listener acceptance readiness, TCP read/write/error,
+queued-data preservation, timeout false, and UDP write readiness. Self-host
+opcode `-298` passes direct-call closure, LLVM verification, native execution,
+and managed differential. Formal SLG-seeded fixed-point promotion remains.
+
+## D614 — Contextual Result regions forward the exact nested control
+
+Status: candidate-fixed; focused native differential passed
+Date: 2026-09-02
+
+Contextual type inference can represent a region's terminal `Result` as an
+enum-constructor wrapper whose direct child is a complete value-producing
+control with the same semantic `Result` identity. Retaining that wrapper made
+self-host LLVM use the nested control's overflow condition as an `Err` payload
+instead of forwarding the inner `Ok` or `Err` value.
+
+Entry and ordinary finalization now replace the wrapper only when a direct
+`if`, `when`, or related control child has the exact same type origin, module,
+and symbol. This is an operand and semantic-identity rule, not a spelling,
+source-proximity, or merely-same-payload-type heuristic. Fixture 1373 preserves
+the minimal nested-control boundary. Production fixture 1372 passes LLVM
+direct-call closure, native execution, and managed differential and prints
+exact `socket-poll=true`. Rebuilt self-host smoke fixtures 365 and 366 pass;
+formal SLG-seeded Stage2/Stage3 fixed-point promotion remains.
+
+## D615 — UDP truncation is explicit partial success
+
+Status: candidate-fixed; focused managed/self-host Windows/Linux execution passed
+Date: 2026-09-02
+
+`Datagram` and `DatagramReceipt` carry `truncated: Bool`. `count` and the
+visible byte-array length always mean bytes actually stored in caller-visible
+memory. They never change meaning by platform and never pretend that a clipped
+datagram is complete.
+
+Windows performs one `WSARecvFrom` call. `WSAEMSGSIZE` is normalized to a
+successful partial receipt with `count == capacity` and `truncated == true`;
+other errors keep the existing `SocketError` mapping. Linux supplies
+`MSG_TRUNC`, compares the returned datagram length with capacity, and publishes
+the smaller stored count plus the same Boolean. Peek retains its existing flag
+and neither platform allocates a second buffer, retries, copies a payload, or
+adds wrapper dispatch.
+
+Fixture 1374 sends an eight-byte datagram into both four-byte receiving paths
+and requires `4,true`, then receives a complete three-byte datagram as
+`3,false`. Managed and rebuilt self-host Windows execution, managed
+differential, LLVM direct-call closure, and the reusable structural contract
+pass on Windows and Linux. Formal SLG-seeded Windows/Linux Stage2/Stage3
+promotion remains.
+
+## D616 — Vectored socket send borrows payloads and preserves partial progress
+
+Status: candidate-fixed; managed and self-host Windows/Linux native execution passed
+Date: 2026-09-02
+
+`TcpStream.sendVectored([SendBuffer])` performs one gather write without
+concatenating caller payloads. `SendBuffer` stores a readonly reference to the
+caller-owned growable byte array plus an offset and length. Each range is
+validated before pointer arithmetic, the native descriptor count is bounded to
+64, and only the descriptor table is stack materialized. Windows calls
+`WSASend`; Linux calls `sendmsg(MSG_NOSIGNAL)`. Success returns the exact total
+prefix accepted by that one call, including partial progress.
+
+The first focused fixture exposed C227: a named array passed as an additional
+flow argument to a `[T]` parameter passed semantic checking but reached codegen
+without canonical slice materialization. `EmitFlowAdditionalValue` now applies
+the same structural slice conversion for all such flow calls before intrinsic
+dispatch. This is a general ABI invariant rather than a `sendVectored` name
+exception. The self-host execution then exposed and focused-fixed three parity
+defects: C228 stopped aggregate move discovery at a call boundary so a `ref`
+argument is not reclassified as a move merely because the call result enters an
+array; C229 reloads fixed and bounded-inline array values from their contextual
+slice storage before normal, explicit-return, and early-return drop calls; C230
+includes opcode `-299` in the shared socket-handle extraction path. Fixture 1375
+passes managed Windows/Linux execution and rebuilt self-host Windows/Linux
+native execution (`socket-vectored=true`). The self-host opcode, platform emission,
+Windows/Linux runtime definitions, cleanup ABI, and structural contract pass;
+formal Stage2/Stage3 promotion remains.
+
+## D617 — Socket duplication is a fallible non-consuming instance operation
+
+Status: candidate-fixed; managed and self-host Windows/Linux native execution passed
+Date: 2026-09-02
+
+`TcpListener`, `TcpStream`, and `UdpSocket` each expose
+`tryClone: self -> Result<Self, SocketError>`. The original owner remains valid,
+and success returns a second affine owner with its own consuming `close`. The
+owners share the kernel socket state and options, but no user-space wrapper,
+reference count, allocation, virtual dispatch, or raw-handle escape is added.
+The fallible name prevents descriptor exhaustion and platform errors from being
+hidden behind an infallible-looking copy operation.
+
+Windows uses `WSADuplicateSocketW` for the current process followed by
+`WSASocketW` with overlapped and non-inheritable flags. Linux uses `dup`. Both
+paths return through the existing structured socket-result ABI. Self-host
+opcode `-300` is classified centrally and materializes the cloned raw handle as
+the exact original owner type rather than a generic wrapper.
+
+Fixture 1376 closes the original listener before accept, closes the original
+stream before transmission, closes the original UDP owner before observation,
+and verifies that a no-delay change through the stream clone is visible through
+the original descriptor. Managed Windows/Linux execution prints exact
+`socket-clone=true`; the reusable structural contract and focused self-host
+Windows/Linux execution also pass. Formal SLG-seeded Stage2/Stage3 promotion
+remains.
+
+## D618 — Ledger preflights report a complete missing-evidence set
+
+Status: implemented; deterministic verifier output passed
+Date: 2026-09-02
+
+Adding the Agentic Shaping evidence gate to the compiler-defect ledger exposed
+one missing defect at a time. Repairing C218 merely advanced the same verifier
+to C219 even though eight independent rows were already incomplete. That
+first-failure behavior turned one table invariant into repeated edit-run
+cycles and hid the actual remaining count.
+
+`verify-compiler-defects.ps1` now inventories every defect at or after the
+configured evidence sequence before per-record validation and emits the exact
+ordered missing ID set in one failure. It still fails closed and does not
+weaken, synthesize, or bypass any baseline/candidate requirement. The current
+diagnostic reports all eight missing records C219 through C226 at once.
+
+## D619 — Final contextual types close exact producer edges
+
+Status: candidate-fixed; Stage1 six-fixture batch and focused Stage2 parity passed
+Date: 2026-09-02
+
+Final self-host typing must follow exact producer edges after late call, alias,
+and index repair. A qualified enum variant used as a receiver retains its parent
+enum identity; an immutable binding initialized by an index adopts that index's
+canonical element type; and a bare or negated numeric literal adopts one exact
+concrete builtin peer type after final aliases settle. Arithmetic changes its
+result type only when both operands then share the same canonical identity.
+
+These are compile-time table repairs only. They add no runtime wrapper,
+allocation, dispatch, conversion, or source cast. C234 is frozen by 1086 and
+1383, C235 by the production interpolation closure in 1173, and C236 by the
+strengthened 987 literal/index contract. Fixtures 1086, 1383, 1043, 1173, 1296,
+and 987 pass rebuilt Stage1 direct-call closure, LLVM assembly, native link,
+exact execution, and warning/note zero. The complete Stage2 compiler assembles
+and links, 1173 has exact Stage1/Stage2 LLVM parity, and Stage2 independently
+executes 987 with zero mismatches. Formal 7/7 and Stage3 promotion remain.
+
+## D620 — Stored-reference liveness follows extracted payload aliases
+
+Status: candidate-fixed; regenerated Stage1 E23 validator passed
+Date: 2026-09-02
+
+An index or call mutation cannot end a readonly loan merely because the
+reference-bearing carrier has no later direct use. A `when` pattern may already
+have extracted a payload alias whose later use still depends on the original
+owner. The ownership checker therefore retains its direct carrier-use scan as
+the fast path and runs the existing field-sensitive carrier walk only when that
+scan misses. This is a compile-time analysis fallback and adds no runtime
+allocation, wrapper, dispatch, or reference count.
+
+The formal Stage2 stored-array negative control exposed the defect after gates
+1 through 5 passed: Stage1 emitted S052 with invalid IR index -1 and terminated
+abnormally instead of rejecting the source with E23. The C# reference compiler
+already rejected the same mutation. C237 preserves the crashing baseline, and
+the regenerated Stage1 now emits exactly one E23 before LLVM with no S052,
+stderr, or abnormal termination. Formal Stage2 7/7 and Stage3 fixed-point
+promotion remain.
+
+## D621 — Logical operators validate operand types before result construction
+
+Status: candidate; managed diagnostic and structural gate passed
+Date: 2026-09-02
+
+`and` and `or` accept only `Bool` operands. A trailing flow constructor belongs
+to the final logical operand under the grammar, so `left and right ->
+Result<Bool, E>.Ok` is invalid rather than a shorthand for wrapping the entire
+predicate. The readable form binds the complete predicate once and constructs
+`Result.Ok(valid)` on the following line.
+
+The self-host finalizer already sealed the logical result as `Bool` but did not
+block a non-`Bool` operand. E29 now checks the two finalized operand edges and
+stops before LLVM with repair guidance. A direct flow operand whose terminal is
+a structured `if`, `when`, or enum match uses that control's finalized type;
+the flow wrapper's retained input type is not the expression result. The rare
+non-`Bool` flow boundary alone scans its direct control result, so the ordinary
+gate remains linear and adds no generated wrapper, allocation, or runtime
+branch. `logical-and-flow-result` freezes rejection, while
+`logical-and-flow-bool` and the HTTP fixtures freeze the valid control-flow and
+bound-predicate forms.
+
+## D622 — Imported enum matches are exhaustive at the canonical declaration
+
+Status: candidate; managed diagnostic and structural gate passed
+Date: 2026-09-02
+
+An enum `when` without `else` covers every variant in the canonical declaration
+even when the subject type arrives through an imported module. E30 resolves the
+final subject type to its declaration and compares its variant count with the
+linked non-else arm count. A stale match therefore fails before LLVM after a
+library adds a variant, with guidance to add the remaining arms or an explicit
+`else`.
+
+The gate is independent of the existing wrong-variant invariant: one proves
+that written arms belong to the selected enum, while the other proves that no
+declared arm is missing. Built-in `Option` and `Result` use their fixed two-arm
+contract. The existing `enum-non-exhaustive` diagnostic and the HTTP server's
+new `WouldBlock` arm protect the boundary.
+
+## D623 — Final control shells are transparent, not enum constructors
+
+Status: candidate-fixed; structural IR proof and managed exact execution passed
+Date: 2026-09-02
+
+A provisional control-flow or flow-expression shell can acquire a `Result`
+type before its value-producing control child is appended. Treating that shell
+as an enum constructor makes its condition look like an enum payload and emits
+an undefined SSA value after nested control merges. Final Typed IR sealing now
+builds one linear direct-control index and normalizes only a shell with exactly
+one direct control child, the same condition edge, and the same canonical result
+type into a transparent wrapper. Ambiguous parents remain untouched, and real
+value-flow enum constructors retain their declared payload.
+
+This is a compile-time table normalization with no runtime allocation, wrapper,
+dispatch, or branch. Fixture 1384 reproduces the former undefined SSA value in
+the previous Stage2 compiler and passes the managed exact route. Structural IR
+inspection proves that its two false constructors become transparent wrappers
+while the three real `Result` constructors remain constructors. Rebuilt Stage1,
+formal Stage2, and Stage3 fixed-point promotion remain pending.
+
+## D624 — HTTP request targets and framing have one bounded instance owner
+
+Status: accepted; Windows Stage2 and Stage3 fixed point passed
+Date: 2026-09-03
+
+An HTTP request target is not one unconstrained string. RFC 9112 gives origin,
+absolute, authority, and asterisk forms different method-dependent meanings.
+`std.net.http.request.RequestTarget` makes that choice explicit, while
+`RequestLimits.policy` and `RequestPolicy.request` create a bounded mutable
+writer instance. CONNECT requires authority-form and a valid explicit port;
+asterisk-form requires OPTIONS; origin-form starts with `/`; absolute-form
+validates its scheme and exact authority. Authority validation rejects
+userinfo, fragments, path/query delimiters, whitespace, controls, malformed
+IPv6 brackets, ambiguous unbracketed colons, and ports above 65535.
+
+The writer reserves Host, Content-Length, Transfer-Encoding, Connection, and
+Trailer as a single framing authority. It validates custom fields before
+mutation, computes the complete automatic suffix before appending it, emits
+exact HTTP/1.0 persistence or close policy, and consumes itself into a
+`RequestHead`. The body stays caller-owned and `intoBytes` transfers the
+existing head buffer without copying. This pure layer performs no socket, DNS,
+TLS, redirect, decompression, timeout, cancellation, or downgrade work.
+Fixture 1385 and the schema-backed contract freeze exact bytes and negative
+boundaries for managed and Stage2/Stage3 focused verification.
+
+## D625 — Nominal enum payload call wrappers are transparent parser topology
+
+Status: closed; Windows Stage2 and Stage3 fixed point passed
+Date: 2026-09-03
+
+A qualified nominal enum payload such as
+`request.RequestTarget.Origin("/")` lowers to a real kind-26 constructor and a
+same-span call-expression wrapper. The previous self-host compiler allowed that
+syntax-only wrapper to inherit the enclosing same-named `request` instance
+method. Its V001 invariant therefore compared the constructor's one payload
+with the method's seven runtime parameters and rejected valid source before
+LLVM, while the C# compiler accepted it.
+
+The ordinary-function and source-entry finalizers now convert only a kind-6
+wrapper directly owned by a kind-26 constructor whose AST span is exactly the
+constructor span into targetless transparent topology. Genuine calls inside a
+payload begin at a different span and remain untouched. C241 preserves the old
+Stage3 failure and the regenerated self-host success; fixture 1385 passes
+direct-call closure, LLVM contracts, assembly, link, exact execution, and
+warning/note zero. Formal Stage2 passed 7/7, both compiler generations passed
+the 44-fixture native exact batch, and Stage3 reached and published the complete
+compiler fixed point.
+
+## D626 — Canonical types exclusively classify enum match candidates
+
+Status: candidate-fixed; focused full-input proof passed
+Date: 2026-09-03
+
+When a Typed IR candidate has a canonical `typeId`, that identity is the sole
+authority for deciding whether it is an enum. Legacy origin/module/symbol
+metadata may be consulted only when canonical identity is absent. Previously a
+full stdlib type table let a Result-bound `BodyPlan` name retain stale
+`BodyFraming` metadata; match finalization falsely ranked the struct name above
+the already-present enum member and Stage3 stopped at S018.
+
+Ordinary-function and source-entry finalizers now share the same canonical-first
+gate. Fixture 1387 proves both a small imported-module control and the full
+130-source production-shaped input, while fixture 1386 preserves the natural
+`plan.framing -> when` HTTP client consumer. The correction is compile-time
+only and adds no generated wrapper, branch, allocation, or dispatch. Formal
+Stage2/Stage3 fixed-point promotion remains pending.
+
+## D627 — HTTP connection reuse is returned by the completed response body
+
+Status: candidate; managed exact execution and contract passed
+Date: 2026-09-03
+
+`std.net.http.client` is an affine, instance-first HTTP/1.1 transport. A
+`Client` is consumed into one `Exchange`, then one `Response`, then one
+`ResponseBody`. The transport becomes reusable only when consuming `finish`
+proves framing completion and zero unread bytes, at which point it returns
+`ResponseOutcome.Reusable(Client)`. HTTP/1.0 and HTTP/1.1 persistence plus
+comma-separated Connection tokens are explicit. Until-close framing requires
+EOF and never returns a reusable owner.
+
+The first slice preserves caller-owned request bodies and reuses the shared
+request writer, response parser, body decoder, and TCP stream primitives. It
+does not hide DNS, TLS, redirects, decompression, cancellation, downgrade, or
+pooling. Fixture 1386 proves two sequential exchanges on one accepted TCP
+connection; the schema-backed client contract freezes 15 public surfaces and
+18 invariants. Regenerated Stage3 exact execution remains pending behind C242
+and C243.
+
+## D628 — Imported readonly-reference receivers use nominal ABI identity
+
+Status: candidate-fixed; managed focused execution passed
+Date: 2026-09-03
+
+A readonly struct reference is a pointer at its function boundary. Forwarding
+it to another readonly-reference parameter keeps that pointer, while invoking a
+by-value instance method must load the struct value before the direct call. The
+previous self-host call emitter made that load conditional on exact numeric
+type-ID equality. Multi-module linking can assign different IDs to the same
+imported nominal struct, so HTTP response persistence passed `%arg` directly to
+`ResponseHead.fieldCount` and `llvm-as` rejected the pointer/value mismatch.
+
+The call boundary now accepts exact canonical equality or verified nominal
+type identity, without allocation, copying beyond the required value load,
+wrapper objects, or dynamic dispatch. The general call chain and optimized
+`while`-condition chain share this decision; the latter materializes the load
+in its loop header. Fixture 1175 remains the same-module control, fixture 1388
+isolates the imported receiver in a loop condition, and fixture 1386 retains
+the production HTTP path. Regenerated Stage2 and Stage3 fixed-point promotion
+remain pending.
+
+## D629 — Socket intrinsics consume the materialized affine receiver value
+
+Status: candidate-fixed; focused 4/4 exact execution passed
+Date: 2026-09-03
+
+Generic expression emission materializes a readonly projection from an affine
+owner before its socket intrinsic call. The specialized socket emitter must
+therefore print the referenced nominal type and that `%v<node>` value. It may
+not reuse the node's retained reference metadata and outer `%arg` pointer:
+doing so produced `extractvalue ptr %arg` in `Client.localEndpoint` even though
+the required `TcpStream` value had already been loaded.
+
+One socket receiver type/value writer now covers all 21 intrinsic receiver
+sites. Ordinary by-value receivers retain the old path; reference-backed ones
+reuse the existing generic materialization, so the change adds no wrapper,
+allocation, dynamic dispatch, or duplicate load. Fixture 1386 is the natural
+affine-wrapper consumer and now passes the combined focused exact batch. Formal
+Stage2/Stage3 fixed-point promotion remains pending.
+
+## D630 — Exact receiver methods outrank provisional global flow targets
+
+Status: candidate-fixed; focused 4/4 exact execution passed
+Date: 2026-09-03
+
+The initial LLVM failure looked like aggregate selection: an `Exchange` value
+was being stored into a `TcpStream` argument slot. Exact 130-source Typed IR
+instead proved that the `Exchange` receiver was correct and the callee was
+wrong. `firstExchange -> receive` still targeted the colliding local
+`receive(ref TcpStream)` helper. A forced third semantic-call pass did not
+change it: the final exact receiver resolver deliberately rejected every
+already-resolved global target before inspecting the receiver owner.
+
+The late resolver now treats a same-name global flow target as provisional. It
+replaces that target only when the canonical nominal receiver owns one
+unambiguous same-name inherent method; otherwise the global stays untouched.
+This preserves free-function flow syntax and adds no runtime dispatch or copy.
+Fixture 1386 requires both `Exchange.receive` calls to select the exact imported
+owner despite the same-name global helper. The final focused batch passes 1175,
+1388, 1335, and 1386 with direct-call closure, LLVM assembly, and exact native
+execution. Formal Stage2/Stage3 fixed-point promotion remains pending.
+
+## D631 — The innermost aggregate owns partial-move cleanup exactly once
+
+Status: candidate-fixed; focused 3/3 exact execution passed
+Date: 2026-09-03
+
+A move site can be nested inside a concrete target struct, an enum variant, and
+a `Result` constructor. Only the innermost aggregate that directly receives the
+moved field owns cleanup of the source aggregate's retained fields. Treating
+every enclosing aggregate as the cleanup owner emits identical drop groups more
+than once. An explicit return must additionally check the parameter's runtime
+path-ownership flag when that flag exists; it must neither repeat cleanup after
+the inner aggregate cleared the flag nor reference a flag that was not allocated.
+
+Fixture 1389 isolates `Source.moved -> Target -> Outcome.Reusable -> Result.Ok`.
+The baseline self-host executable assembled but ended with Windows heap
+corruption. ASan independently identified both frees of the same 512-byte HTTP
+buffer inside `ResponseBody.finish`. The final focused batch passes 1389, the
+production HTTP reuse fixture 1386, and adjacent ownership control 1340. Fixture
+1389 is part of the default exact and Stage2/Stage3 promotion lists. Formal
+fixed-point promotion remains pending.
+
+## D632 — All-return subject matches have no synthetic merge value
+
+Status: candidate fixed; focused 8/8 passed; formal promotion pending
+Date: 2026-09-03
+
+An all-return control is terminal only when it is the last direct child of its
+owning region. C233 already made control emission and region-return selection
+retain a merge when a later sibling exists, but the scheduler still used the
+weaker all-arms predicate and discarded that later fallback. Fixture 1352 then
+retained the merge but ended it with `ret %v99559` after removing the only node
+that could define `%v99559`.
+
+Scheduling now reuses the wrapper-aware and later-sibling-aware
+`terminatingControlReturns` predicate. The compiler contract fixes this shared
+invariant, fixture 1352 is present in default exact and Stage2/Stage3 promotion
+lists, and the rebuilt self-host compiler passes 1352 plus 1361, 1382, 1379,
+1380, 1381, and production 1355 through direct-call closure, LLVM assembly,
+link, and exact execution. Formal Stage2/Stage3 fixed-point promotion remains
+pending.
+
+## D633 — Struct fields are private by default without changing layout
+
+Status: candidate fixed; focused 7/7 passed; formal promotion pending
+Date: 2026-09-03
+
+Public nominal domain values need not expose their storage merely because the
+type crosses a module boundary, and safety must not depend on each developer
+remembering an optional modifier. Every struct field is therefore private to
+its logical module by default; only an explicit field-level `public` exports it.
+Same-namespace source fragments are one module, so factories and `impl` blocks
+retain direct access. External construction with private fields and external
+private-field reads or writes fail during semantic checking with guidance to the
+public API, before incomplete representation access can reach LLVM. The earlier
+candidate `opaque` modifier was removed rather than retained as a second safety
+mode, and existing intended public data fields were migrated explicitly.
+
+Field visibility is compile-time metadata, not a runtime wrapper. Fixture 1391
+proves same-module access, explicit public-field construction/read/write, and
+that a one-`UInt64` private representation remains exactly one LLVM aggregate
+with one factory `insertvalue`, one instance-method `extractvalue`, and no calls
+or allocations in those bodies. Fixtures 1392 and 1393 preserve self-host field
+visibility and diagnostic behavior; three focused diagnostic fixtures reject
+external construction, read, and write. `std.net.quic.StreamCount` is the first
+production consumer. QG1 remains open only until Windows/Linux Stage2 and
+Stage3 plus browser checked-compilation promotion pass.
+
+## D634 — Private-field promotion invokes the candidate compiler directly
+
+Status: focused direct gate implemented; Stage2/Stage3 promotion pending
+Date: 2026-09-04
+
+Fixture 1393 is an integrated meta-regression: it compiles 88 self-host sources
+from inside a Sollang program and, with its imported standard-library closure,
+loads 97 sources and 96,882 lines before asserting three private-field errors.
+The native exact build exceeded 3,600,000 ms even with 16 jobs; measured worker
+use declined from 16.9 to 4 effective cores. Exact diagnostic context completed
+in 131.150 s, emitter preparation in 132.801 s, and scheduling in 277.272 s.
+Function emission then concentrated on `text.emitCore` (IR node 11225), whose
+19,847 Typed IR nodes come from one 4,396-line declaration.
+
+Formal Windows and Linux Stage2 and Stage3 promotion now invoke the existing two-source
+`opaque-struct-construction`, `opaque-struct-field-read`, and
+`opaque-struct-field-write` manifests directly through each candidate compiler.
+Every case must exit with the compiler diagnostic status, contain its exact
+actionable message once, and stop before LLVM emission. The managed integrated
+1393 regression remains. This removes duplicated 97-source meta-compilation
+from native promotion without raising a timeout, hiding an error, or weakening
+coverage. The oversized `emitCore` remains tracked structural and compiler-speed
+debt; this gate change does not claim that underlying emission cost is fixed.
+
+## D635 — Module and parallel compilation boundaries replace line ceilings
+
+Status: accepted; structural contract implemented
+Date: 2026-09-04
+
+The former 5,000-line file ceiling and 3,000-line top-level declaration ceiling
+are removed. A numeric size threshold was only an indirect signal and could not
+prove that a smaller file had one responsibility or that independently safe
+work could compile concurrently.
+
+Every non-entry self-host source now requires one explicit namespace module
+boundary. Each file must keep one cohesive responsibility, expose acyclic
+dependencies through imports or typed interfaces, and produce isolated module/function
+results that can be scheduled independently and merged in canonical order.
+Same-namespace fragments remain valid compile-time decomposition only when the
+manifest gate includes each fragment exactly once and the boundary adds no
+wrapper, copy, allocation, or dynamic dispatch. The structure verifier pins the
+module declarations, rejects restoration of line-limit fields, accepts a
+6,000-line positive control, rejects two- and three-module import cycles with
+their complete chain, and verifies the deterministic `CodegenUnits` encode/merge
+surface and parallel-compilation contract.
+
+The clean Windows Stage2 rerun exercised this structure with a 29-fixture light
+batch distributed across 16 outer workers under one shared 16-job budget. All
+29 independent builds passed direct-call closure, LLVM contracts, assembly,
+and execution. The current structure check reports 128 files, 82 explicit
+acyclic modules, four multi-file modules, one entry point, zero fixed line
+limits, and a verified parallel code-generation-unit path.
+
+## D636 — Function expression emission is split into compile-time work units
+
+Status: accepted; Windows Stage2/Stage3 fixed point passed
+Date: 2026-09-04
+
+The one-hour Windows Stage2 attempt ended with five workers still running. The
+same schedule ranked exactly five unusually large Typed IR functions, and an
+earlier function-emission trace entered but did not finish the 19,847-node
+emitter function. Raising the timeout would preserve the bottleneck.
+
+`emitFunctionNamed` therefore keeps ordered orchestration while eight
+expression-category responsibilities move to
+`selfhost/llvm/text/function_expressions.slg` as statically called functions.
+The same measured pass split entry expressions, control-region expressions,
+resolved-context normalization, per-source call resolution, expression-type
+resolution, ordinary-function expression lowering, and ordinary-function
+finalization into adjacent same-namespace fragments. The ordinary finalizer now
+has five ordered static phases and expression-type resolution has six.
+
+These helpers borrow their authoritative arrays and contexts, produce no shared
+aggregate copy, and remain adjacent in every affected manifest. One attempted
+`resolvePaths` phase split was rejected during real compiler validation because
+four mutable arenas cannot be hidden in a nested owned state without changing
+the language's container mutation and partial-move contract; the single
+borrowed fixed-point function remains the honest dependency boundary. This is a
+responsibility and compilation-work split, not a numeric line ceiling. The
+split-ABI and full self-host contract gates cover the new boundaries. Windows
+Stage2 on the unchanged production manifest is the required performance and
+correctness proof; Stage3 and Linux remain blocked until it passes.
+
+The first post-split Windows run finished complete LLVM emission in 3,407
+seconds with 14,612 CPU-seconds and reached 17 simultaneously running threads.
+`llvm-as` then rejected a Bool binding initialized from an enum `when`: the
+ordinary-function binding normalizer matched a control only through its
+subject edge and missed a `when` whose exact parent was the binding. The scan
+now prioritizes that direct parent edge and is pinned by
+`1394-selfhost-when-binding-reassignment` plus the static compiler contract.
+
+The next complete Windows run emitted 39,374,777 bytes in 3,546 seconds with
+15,147 CPU-seconds and again reached 17 running threads. LLVM assembly and all
+native ownership/runtime checks passed, but the final managed differential
+gate exposed two remaining regressions: 131/133 passed, while fixture 1129 had
+lost a transparent control-producer wrapper and fixture 377 retained an older
+LLVM snapshot with redundant duplicate drop functions. The wrapper is now
+reconstructed only at final resolved-context sealing, after the control subject
+is stable, using the exact binding -> wrapper -> control ownership chain. The
+377 snapshot was refreshed through its LLVM assembly and execution validator;
+its output removes two redundant drop helpers without changing runtime
+behavior. Focused 1394 LLVM/assembly/execution/differential and the 1129/377
+pair now pass. A clean complete Windows Stage2 rerun remains required before
+Stage3 or Linux.
+
+A later profile isolated another repeated scan in control-value classification.
+In practical terms, the compiler was repeatedly walking the same function body
+to answer whether a value had a direct local binding. `CoreEmitterState` now
+builds one immutable, function-owner-bounded lookup before parallel emission,
+and `valueHasDirectBinding` answers from that lookup in constant time. The
+current 393,724-node compiler IR showed 35,775,116 visits that the old helper
+was guaranteed to repeat; every one of the 29,982 valid direct bindings stayed
+inside its owning function. The candidate native compiler passed the positive
+value-producing if, negative unused-if, 1394 direct-binding, 1129 topology, and
+377 integration checks. Its function profile also passed the former 788-node
+stopping point and completed 85 profiled functions before the bounded
+measurement was intentionally ended. This narrows a measured cost without
+changing the independent module/code-generation-unit contract, but only the
+clean Windows Stage2 run can establish the end-to-end improvement.
+
+The clean Windows Stage2 rerun then completed fixture 787 in 27 minutes 48
+seconds, producing 13,310,801 bytes of LLVM and passing direct-call closure,
+LLVM contracts, assembly, and native execution. This proves the candidate on
+the former heavy stopping path, but the duration is close to the earlier
+approximately 26-minute observation and therefore is not yet evidence of an
+end-to-end speedup. Fixtures 1217 and 1383 plus the remaining Stage2 fixed-point
+checks still determine promotion.
+
+The accepted clean Windows run completed the 39,423,046-byte Stage2 LLVM in 408
+seconds, down from the preceding 3,546-second complete emission. The full
+Stage2 run then passed 50/50 native fixtures and 134/134 managed/native
+differentials. Stage3 regenerated byte-identical LLVM and completed the Windows
+fixed-point suite. This closes the Windows performance and correctness
+prerequisite; it does not claim that every individual fixture is cold-cache
+optimal.
+
+## D637 — Aggregate wrapper resolution uses an immutable direct-child index
+
+Status: accepted; Windows Stage2/Stage3 fixed point passed
+Date: 2026-09-04
+
+The timed-out complete Windows Stage2 run isolated a second repeated global
+analysis below control-result allocation. The baseline `control-allocas`
+profile remained incomplete after about 20 minutes 17 seconds and 1,196.7 CPU
+seconds, while the reference-argument counterpart completed in about 8 minutes
+43 seconds. `irValueUsed` visits function nodes
+for each candidate control and resolves both operands through
+`aggregateValueIndex`. That helper needed only nodes whose exact `parent` is a
+transparent aggregate wrapper, but rediscovered them by scanning the complete
+owning function on every call. With 393,724 Typed IR nodes, 13,581 kind-18
+controls, and 97 aggregate-resolution occurrences (one definition and 96 call
+sites), the nested work dominated the remaining Windows LLVM-emission tail.
+
+`CoreEmitterState` now prepares one Typed-IR-order-preserving direct-child list.
+Its child heads and sibling links become immutable snapshots before parallel
+function emission, and `aggregateValueIndex` walks only the selected wrapper's
+direct children. Appending children preserves the previous ascending scan and
+therefore the established last-compatible-child selection; direct `operand0`
+still overrides the flattened child result, reference and nominal identity
+checks remain unchanged, and recursive transparent-wrapper resolution remains
+canonical. The index introduces no runtime wrapper, generated-program
+allocation, shared worker mutation, or source-order dependency.
+
+The compiler contract rejects restoration of the whole-function wrapper scan
+and requires both immutable arrays plus ordered construction. A collaboration
+audit then found one malformed-IR boundary difference: the first index accepted
+cross-function `parent` links that the former owning-function scan could never
+observe. The current implementation shares one linear Typed IR function-owner
+map for index construction and filters every indexed edge to equal owners. A
+first global `V012` attempt was rejected because structural cross-function
+parent links are valid metadata but cannot enter this function-local lookup.
+Pure fixture 1395
+executes the cross-owner exclusion rule plus fallback, first
+exact, exact-after-nonmatch, and last-exact selection order. It passes managed
+execution and regenerated Stage1 LLVM verification, linking, native execution,
+and managed differential.
+
+The first evidence run completed in 492.237 seconds and emitted
+`checked diagnostics = 621`. A follow-up without `V012` emitted 617, proving
+that the measurement plan had omitted the 12-file compiler runtime manifest and
+that the broad invariant added the other four. Both fail the predeclared
+zero-diagnostic criterion and are not candidate performance results. The
+measurement script now uses the same 133-source closure as Stage1 and must be
+rerun. That corrected run completed in 507.354 seconds with zero diagnostics,
+identical starting and ending source fingerprints
+`8F485D6B80801E4D39AB8DCD254E62366C161BD3044D57829ECEF2EEB52DCB7B`,
+and compiler SHA-256
+`2759D163C704582B9737242AB8C52E47C3769916F0CF31468C5EA9654E8BB6C2`.
+The stopped baseline was still incomplete after 1,217 seconds and had late CPU
+contention, so this proves completion and a strong improvement direction but
+does not publish a precise percentage reduction.
+
+Rebuilt Windows Stage1 generation completed in 33.155 seconds using the content-addressed
+frontend, semantic, and product caches. Fixture 1394 then passed direct-call
+closure, LLVM verification, link, exact native execution, and managed
+differential. The same-manifest `control-allocas` profile then completed in
+about 6 minutes 54 seconds with zero diagnostics. The incomplete 20-minute
+17-second baseline shared CPU with another diagnostic process near its end, so
+the apparent 66% reduction is preliminary rather than a controlled release
+number. `scripts/measure-selfhost-control-allocas.ps1` now preserves the exact
+command, compiler and source fingerprints, elapsed time, completion state, and
+logs for a clean single-process measurement. Broader nested-control and
+unused-result regressions plus complete Windows Stage2/Stage3 remain required
+before this focused improvement can authorize Linux work. If complete emission
+still remains too slow, the next
+authority is a function-local Boolean use-dependency graph whose minimum fixed
+point is frozen before parallel emission; a direct-use approximation is not
+allowed because region forwarding, nested controls, and while-body discard
+carry distinct semantics.
+
+The isolated `control-allocas` command intentionally walks qualifying functions
+sequentially so one phase can be compared without output-order or worker
+scheduling noise. Its one-core utilization is therefore expected and is not a
+claim about the production emitter, whose function tasks retain the immutable
+snapshot plus canonical-order parallel merge path.
+
+The focused behavior set then passed 9/9: 1197, 1231, 1315, 1317, 1229, 1394,
+1129, and the two Stage2 unused-if/unused-match negative controls. The seven
+ordinary fixtures passed direct-call closure, LLVM contracts, assembly, and
+exact Windows execution; 1197 and 1394 additionally passed managed
+differential. Both negative controls assembled without an unused result slot.
+The first batch invocation misspelled fixture 1129 and failed before compiling
+that case; the exact fixture name was rerun separately and passed. The driver
+also routes optional `--jobs` through the existing `sourceStart` parser for all
+checked-validation profile commands; `emitter-state --jobs 8` reported eight
+workers and zero diagnostics instead of treating the option as a source path.
+
+The complete Windows promotion passed after the controlled phase: Stage2
+emitted the full compiler in 408 seconds and completed in about 42 minutes;
+Stage3 completed in about 48 minutes and reproduced fixed-point SHA-256
+`A0AEB80BB444FF944EDB05CFA00BAE462B2E5D0917F15C42483563BD85AC3A27`.
+Both generations passed their 51-fixture exact batches, direct-call closure,
+LLVM assembly, native execution, ownership diagnostics, and runtime
+differentials. Linux remains a separate platform proof rather than part of the
+Windows acceptance claim.
+
+## D638 — Active-namespace checks include their own verification scripts
+
+Status: accepted; Stage3 preflight regression fixed
+Date: 2026-09-05
+
+The standard-library layout check deliberately scans active PowerShell scripts
+as well as sources and manifests, so a verifier cannot retain an obsolete
+namespace in a command, generated fixture, or diagnostic. The time API negative
+test still checks the exact legacy file path, but its failure message no longer
+spells the forbidden `sys.time` namespace and therefore cannot trigger the
+layout check itself. Excluding PowerShell or the time verifier would weaken the
+active-reference contract. The time API 14/10/6/3 contract and the 34-module
+layout contract both pass, with zero obsolete active/current-facing namespaces
+or paths.
+
+## D639 — Windows Stage3 seeds cross-emit Linux exact fixtures before WSL linking
+
+Status: accepted; focused Linux seed execution passed
+Date: 2026-09-05
+
+The formal Linux Stage2 verification starts from the verified Windows Stage3
+SLG seed. Running that PE executable through WSL still reports a Windows host,
+so native `build --target linux-x64` correctly rejects unsupported cross-target
+linking. The exact-fixture verifier now exposes an explicit seed-only path that
+emits checked Linux LLVM with the Windows compiler, builds a Linux object with
+the pinned clang, and links and executes the ELF with GCC inside WSL. Linux
+Stage2 and Stage3 compilers retain their native WSL build path. Fixture 1217
+passes direct-call closure, LLVM assembly, WSL link, and exact execution through
+the corrected boundary before the complete Linux Stage2 emission begins.
+
+## D640 — WSL wait telemetry names its observable CPU boundary
+
+Status: accepted; diagnostic contract updated
+Date: 2026-09-05
+
+The shared verification wait can observe the Windows `wsl.exe` process tree but
+not the Linux compiler processes running behind the WSL boundary. Reporting
+that partial counter as plain CPU made active Linux exact builds appear idle.
+Wait messages now label interval and total CPU as `host-visible`; fixture counts
+and WSL-side process inspection remain the evidence for Linux work. The bounded
+telemetry contract requires the scope label so later wording cannot silently
+restore the misleading interpretation.
+
+## D641 — Native package verification does not recurse through release authority
+
+Status: implemented; focused package contract verified
+Date: 2026-09-05
+
+The release publisher's zero-known-defect check must be unconditional and must
+finish before package filesystem work. Using that publisher itself to close the
+remaining package-verifier defects was therefore circular: the defects could
+not be closed until a dry run passed, while the dry run could not begin until
+those same defects were already closed.
+
+The package implementation now lives in `native-release-package.ps1`.
+`publish-release.ps1` retains the compiler-contract and zero-known-defect checks
+before loading and invoking that module. The focused package contract invokes
+the same module directly in an OS-created temporary directory, builds both
+native layouts and archives, checks their checksum manifest and compiler
+contents, removes stale owned staging state, and preserves an unowned sentinel
+inside the output directory. Repository-root and volume-root negative controls
+must fail before changing the synthetic repository. This breaks the verifier
+dependency cycle without adding a release bypass or weakening production
+Stage3 provenance, CLI parity, or smoke execution.
+
+## D642 — Platform fixed points share the complete native-exact fixture plan
+
+Status: accepted; Windows promotion contract corrected
+Date: 2026-09-05
+
+The Windows promotion scripts previously copied a 51-fixture subset while the
+Linux scripts consumed the native-exact verifier's broader 108-fixture plan.
+That asymmetry allowed Windows Stage2 and Stage3 to reach a fixed point before
+fixture 1253's invalid match-result SSA and the broader Brotli ownership cases
+were regenerated. The Windows completion claim is therefore withdrawn until a
+new fixed point passes the complete plan.
+
+Promoted Windows and Linux Stage2/Stage3 verification now consume one 117-case
+authoritative union plan from `verify-native-exact-fixture-batch.ps1` rather
+than duplicating platform-local lists. Seed-capability canaries remain smaller
+and explicitly named because they reject an incompatible seed before the
+expensive compiler build; they do not replace the promoted-compiler suite.

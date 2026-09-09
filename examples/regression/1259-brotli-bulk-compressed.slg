@@ -1,0 +1,31 @@
+import std.compress.brotli as brotli
+
+allByte values: [UInt8], expected: UInt8 -> Bool {
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] == expected -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+main {
+    brotli.Limits {
+        maxEncodedBytes: 1_024
+        maxDecodedBytes: 1_024
+        maxWindowBytes: 4_194_288
+        maxMetaBlocks: 16
+        maxMetadataBytes: 128
+    } -> codec -> when {
+        Err(_) { "compressed=false" -> println }
+        Ok(codec) {
+            codec -> decompress([27, 99, 0, 248, 37, 194, 2, 177, 64, 160, 3]) -> when {
+                Err(_) { "compressed=false" -> println }
+                Ok(output) {
+                    output -> allByte(97) => bytesOk
+                    "compressed=$((output -> len) == 100 and bytesOk)" -> println
+                }
+            }
+        }
+    }
+}

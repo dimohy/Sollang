@@ -13,6 +13,10 @@ namespace Sollang.Compiler.Cli;
 
 internal static class CompilerApp
 {
+    private static StringComparer SourcePathComparer => OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
     public static int Run(string[] args)
     {
         try
@@ -484,7 +488,7 @@ internal static class CompilerApp
         CompilationTarget target)
     {
         var standardLibrary = LoadStandardLibrary(sourcePaths[0]);
-        var sourcePrograms = LoadUserPrograms(sourcePaths, project, target);
+        var sourcePrograms = LoadUserPrograms(sourcePaths, project, target, standardLibrary);
         var modules = standardLibrary
             .Concat(sourcePrograms)
             .Where(static source => source.ModuleName.Length > 0)
@@ -518,7 +522,10 @@ internal static class CompilerApp
             standardLibrary.SelectMany(static source => source.Program.Functions)
                 .Concat(sourcePrograms.SelectMany(static source => source.Program.Functions))
                 .ToArray(),
-            sourcePrograms.SelectMany(static source => source.Program.Statements).ToArray());
+            sourcePrograms.SelectMany(static source => source.Program.Statements).ToArray(),
+            StyleNotes: standardLibrary.SelectMany(static source => source.Program.StyleNotes ?? [])
+                .Concat(sourcePrograms.SelectMany(static source => source.Program.StyleNotes ?? []))
+                .ToArray());
         return new LoadedCompilation(program, standardLibrary.Concat(sourcePrograms).ToArray());
     }
 
@@ -647,7 +654,7 @@ internal static class CompilerApp
     {
         foreach (var function in source.Program.Functions)
         {
-            if ((function.IsPublic || source.IsStandardLibrary)
+            if (function.IsPublic
                 && TryGetDirectSymbolName(source.ModuleName, function.Name, out var name))
             {
                 yield return (name, function.Name.Split('.'));
@@ -689,11 +696,27 @@ internal static class CompilerApp
     private static IReadOnlyList<CompilationSource> LoadUserPrograms(
         IReadOnlyList<string> sourcePaths,
         ProjectBuild? project,
-        CompilationTarget target)
+        CompilationTarget target,
+        IReadOnlyList<CompilationSource> standardLibrary)
     {
-        var loadedByPath = new Dictionary<string, CompilationSource>(StringComparer.OrdinalIgnoreCase);
+        // Explicit manifests may include ambient stdlib files. Preserve their
+        // standard-library identity and parse each normalized source path once.
+        var standardLibraryPaths = standardLibrary
+            .Select(static source => Path.GetFullPath(source.Path))
+            .ToHashSet(SourcePathComparer);
+        var explicitPaths = sourcePaths
+            .Select(Path.GetFullPath)
+            .Where(path => !standardLibraryPaths.Contains(path))
+            .Distinct(SourcePathComparer)
+            .ToArray();
+        if (explicitPaths.Length == 0)
+        {
+            return [];
+        }
+
+        var loadedByPath = new Dictionary<string, CompilationSource>(SourcePathComparer);
         var modules = new Dictionary<string, CompilationSource>(StringComparer.Ordinal);
-        foreach (var sourcePath in sourcePaths)
+        foreach (var sourcePath in explicitPaths)
         {
             AddSource(
                 Path.GetFullPath(sourcePath),
@@ -713,16 +736,16 @@ internal static class CompilerApp
 
         var root = roots.Length == 1
             ? roots[0]
-            : loadedByPath[Path.GetFullPath(sourcePaths[0])];
+            : loadedByPath[explicitPaths[0]];
         var moduleRoot = Path.GetDirectoryName(root.Path)
             ?? Directory.GetCurrentDirectory();
         var packagesByName = project?.Packages.ToDictionary(
             static package => package.Manifest.Name,
             StringComparer.Ordinal)
             ?? new Dictionary<string, ProjectPackage>(StringComparer.Ordinal);
-        var states = new Dictionary<string, ModuleVisitState>(StringComparer.OrdinalIgnoreCase);
+        var states = new Dictionary<string, ModuleVisitState>(SourcePathComparer);
         VisitImports(root, moduleRoot, packagesByName, target, loadedByPath, modules, states, []);
-        foreach (var sourcePath in sourcePaths)
+        foreach (var sourcePath in explicitPaths)
         {
             var explicitSource = loadedByPath[Path.GetFullPath(sourcePath)];
             if (!ReferenceEquals(explicitSource, root))
@@ -910,11 +933,26 @@ internal static class CompilerApp
             var parsed = ParseSourceFile(path, isStandardLibrary: true);
             var program = parsed.Program;
             var actualModule = ModuleName(program);
-            if (!string.Equals(actualModule, expectedModule, StringComparison.Ordinal))
+            var isRuntimeAbiFragment = IsRuntimeAbiFragment(relativePath);
+            if (!string.Equals(actualModule, expectedModule, StringComparison.Ordinal)
+                && !isRuntimeAbiFragment)
             {
                 throw new SollangException(
                     $"standard library file '{path}' declares namespace '{actualModule}' "
                     + $"but its path requires '{expectedModule}'");
+            }
+            if (isRuntimeAbiFragment)
+            {
+                var contractPath = Path.Combine(
+                    standardLibraryRoot,
+                    Path.Combine(actualModule.Split('.')) + ".slg");
+                if (!string.Equals(actualModule, "sys.runtime", StringComparison.Ordinal)
+                    && !File.Exists(contractPath))
+                {
+                    throw new SollangException(
+                        $"runtime ABI fragment '{path}' declares namespace '{actualModule}' "
+                        + $"without public contract source '{contractPath}'");
+                }
             }
             if (program.Statements.Count > 0)
             {
@@ -923,12 +961,17 @@ internal static class CompilerApp
             }
             if (modules.TryGetValue(actualModule, out var duplicatePath))
             {
-                throw new SollangException(
-                    $"standard library module '{actualModule}' is declared by both "
-                    + $"'{duplicatePath}' and '{path}'");
+                if (!isRuntimeAbiFragment)
+                {
+                    throw new SollangException(
+                        $"standard library module '{actualModule}' is declared by both "
+                        + $"'{duplicatePath}' and '{path}'");
+                }
             }
-
-            modules.Add(actualModule, path);
+            else
+            {
+                modules.Add(actualModule, path);
+            }
             sources.Add(new CompilationSource(
                 path,
                 program,
@@ -938,6 +981,13 @@ internal static class CompilerApp
         }
 
         return sources;
+    }
+
+    private static bool IsRuntimeAbiFragment(string relativePath)
+    {
+        var normalized = relativePath.Replace(Path.DirectorySeparatorChar, '/');
+        return normalized.StartsWith("sys/runtime/", StringComparison.Ordinal)
+            && normalized.EndsWith(".slg", StringComparison.Ordinal);
     }
 
     internal static IReadOnlyList<string> DiscoverStandardLibraryPaths(string sourcePath)
@@ -990,7 +1040,14 @@ internal static class CompilerApp
             detectEncodingFromByteOrderMarks: true);
         var sourceText = reader.ReadToEnd();
         var tokens = new Lexer(sourceText).Lex();
-        return new ParsedSource(new Parser(tokens, isStandardLibrary, openImports).Parse(), sourceBytes);
+        try
+        {
+            return new ParsedSource(new Parser(tokens, isStandardLibrary, openImports).Parse(), sourceBytes);
+        }
+        catch (SollangException exception)
+        {
+            throw new SollangException($"{path}: {exception.Message}");
+        }
     }
 
     private static ParsedSource ExpandNativeLibraries(

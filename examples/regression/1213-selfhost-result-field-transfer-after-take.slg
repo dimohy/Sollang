@@ -1,0 +1,36 @@
+# Taking an owned struct from a projected queue and returning one owned field
+# must suppress that field in cleanup while still dropping the remaining fields.
+struct Payload {
+    metadata: [UInt8; ~]
+    data: [UInt8; ~]
+}
+
+struct Queue {
+    pending: [Payload; ~]
+    bytes: UInt64
+}
+
+takeData queue: mut Queue -> Result<[UInt8; ~], UInt8> {
+    true -> while {
+        (queue.pending -> len) > 0 -> if {
+            queue.pending -> take(0) => value
+            queue.bytes - UInt64(value.data -> len) => queue.bytes
+            Result<[UInt8; ~], UInt8>.Ok(value.data) -> return
+        }
+    }
+    Result<[UInt8; ~], UInt8>.Err(0)
+}
+
+main {
+    Queue {
+        pending: [Payload {
+            metadata: [1, 2; ~]
+            data: [7, 8, 9; ~]
+        }; ~]
+        bytes: 5
+    } => queue!
+    takeData(queue!) -> when {
+        Ok(data) { "result-field-after-take=$(data -> len),$(data[2]),$(queue!.bytes)" -> println }
+        Err(error) { "result-field-after-take-error=$error" -> println }
+    }
+}

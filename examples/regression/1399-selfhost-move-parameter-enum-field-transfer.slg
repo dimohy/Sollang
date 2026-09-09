@@ -1,0 +1,41 @@
+struct OwnedValues {
+    entries: [Int; ~]
+}
+
+enum StoredValues {
+    Empty
+    Present(OwnedValues)
+}
+
+struct Holder {
+    values: StoredValues
+}
+
+enum InstallMode {
+    Transfer
+    Discard
+}
+
+impl Holder {
+    install: mut self, values: move OwnedValues, mode: InstallMode -> Unit {
+        mode -> when {
+            Transfer { StoredValues.Present(values) => self.values }
+            Discard { }
+        }
+    }
+
+    length: self -> Int => self.values -> when {
+        Empty { 0 }
+        Present(values) { values.entries -> len }
+    }
+}
+
+main {
+    Holder { values: StoredValues.Empty } => holder!
+    OwnedValues { entries: [13, 21, 34, 55; ~] } => values
+    holder! -> install(values, InstallMode.Transfer)
+    OwnedValues { entries: [89, 144; ~] } => discarded
+    holder! -> install(discarded, InstallMode.Discard)
+    holder! -> length => count
+    "move-enum-field=$count" -> println
+}

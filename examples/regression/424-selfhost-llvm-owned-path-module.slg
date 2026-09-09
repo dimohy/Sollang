@@ -2,48 +2,50 @@ import sollang.compiler.llvm.text as llvm
 
 main {
     [
-        """
-        namespace sys.path
+    """
+    namespace sys.path
 
-        public struct Path {
-            bytes: [Int; ~]
-            style: Style
-        }
+    public struct Path {
+        public bytes: [Int; ~]
+        public style: Style
+    }
 
-        public enum Style {
-            Posix
-            Windows
-        }
+    public enum Style {
+        Posix
+        Windows
+    }
 
-        public make: -> Path {
-            Path { bytes: [1, 2, 3; ~], style: Style.Posix } => path!
-            path!
-        }
+    public make: -> Path {
+        Path { bytes: [1, 2, 3; ~], style: Style.Posix } => path!
+        path!
+    }
 
-        public normalize path: move Path -> Path {
-            path.style => style
-            path.bytes => bytes!
+    impl Path {
+        public normalize: move self -> Path {
+            self.style => style
+            self.bytes => bytes!
             Path { bytes: bytes!, style: style } => normalized!
             normalized!
         }
 
-        public byteCount path: move Path -> UIntSize {
-            path.bytes -> len
+        public byteCount: self -> UIntSize {
+            self.bytes -> len
         }
-        """,
-        """
-        import sys.path
+    }
+    """,
+    """
+    import sys.path
 
-        main {
-            path.make() => source!
-            source! -> path.normalize => normalized!
-            normalized! -> path.byteCount => length
+    main {
+        path.make() => source!
+        source! -> normalize => normalized!
+        normalized! -> byteCount => length
 
-            length == 3 -> if {
-                "owned path module" -> println
-            }
+        length == 3 -> if {
+            "owned path module" -> println
         }
-        """; ~
+    }
+    """; ~
     ] => sources!
     sources! -> llvm.emit
 }

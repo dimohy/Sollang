@@ -1,13 +1,14 @@
-import sys.quic.keys as keys
-import sys.quic.protection as protection
+import std.net.quic.keys as keys
+import std.net.quic.protection as protection
 
 connectionId: -> [UInt8] => [131, 148, 200, 240, 62, 81, 87, 8]
 
 main {
     keys.deriveInitial(keys.version1(), connectionId()) => initial
-    protection.headerMask(initial.clientHeaderProtection, [209, 177, 201, 141, 215, 104, 159, 184, 236, 17, 210, 66, 177, 35, 220, 155]) => mask
+    initial.clientHeaderProtection -> protection.prepareHeader => headerKey
+    headerKey -> mask([209, 177, 201, 141, 215, 104, 159, 184, 236, 17, 210, 66, 177, 35, 220, 155]) => mask
     protection.nonce(initial.clientIv, 2) => nonce
-    (mask[0] == 67
+    mask[0] == 67
         and mask[1] == 123
         and mask[2] == 154
         and mask[3] == 236
@@ -23,7 +24,8 @@ main {
         and nonce[8] == 70
         and nonce[9] == 251
         and nonce[10] == 37
-        and nonce[11] == 94) -> if {
+        and nonce[11] == 94
+        -> if {
         "quic-header-protection=ok"
     } else {
         "quic-header-protection=failed"

@@ -175,6 +175,7 @@ internal sealed partial class LlvmEmitter
                 new HashSet<string>(StringComparer.Ordinal),
                 new HashSet<string>(StringComparer.Ordinal),
                 new HashSet<string>(StringComparer.Ordinal),
+                new Dictionary<string, HashSet<string>>(StringComparer.Ordinal),
                 new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),

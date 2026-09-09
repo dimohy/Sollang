@@ -10,7 +10,7 @@ internal sealed partial class LlvmEmitter
 {
     private void EmitDynTraitTables()
     {
-        var conversions = _program.DynTraitConversions.Values
+        var conversions = _reachableDynTraitConversions
             .DistinctBy(conversion => (conversion.DynType, conversion.ConcreteType))
             .OrderBy(conversion => conversion.DynType)
             .ThenBy(conversion => conversion.ConcreteType)

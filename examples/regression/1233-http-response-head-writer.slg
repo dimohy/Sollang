@@ -1,0 +1,153 @@
+import std.net.http as http
+import std.net.http.response as response
+
+matches head: ref response.ResponseHead, expected: Text -> Bool {
+    (head.bytes -> len) == Int(expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (head.bytes -> len) -> while {
+        head.bytes[index!] == (expected -> byte(UIntSize(index!)))
+            -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+closeResponse policy: response.ResponsePolicy -> Result<Bool, http.Error> {
+    policy -> response("GET", http.Version.Http11, 200, "OK", 4, response.ConnectionMode.Close)? => writer!
+    writer! -> field("Content-Type", "text/plain")?
+    writer! -> finish? => head
+    head.bodyDisposition -> when {
+        Send { true }
+        else { false }
+    } => sendsBody
+    head.connection -> when {
+        Close { true }
+        else { false }
+    } => closes
+    (head -> matches("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\n"))
+        and head.bodyLength == 4
+        and sendsBody
+        and closes
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+headResponse policy: response.ResponsePolicy -> Result<Bool, http.Error> {
+    policy -> response("HEAD", http.Version.Http11, 200, "OK", 9, response.ConnectionMode.Persistent)?
+        => writer
+    writer -> finish? => head
+    head.bodyDisposition -> when {
+        Suppress { true }
+        else { false }
+    } => suppresses
+    (head -> matches("HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n"))
+        and suppresses
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+noContentResponse policy: response.ResponsePolicy -> Result<Bool, http.Error> {
+    policy -> response("GET", http.Version.Http11, 204, "No Content", 0, response.ConnectionMode.Close)?
+        => writer
+    writer -> finish? => head
+    head.bodyDisposition -> when {
+        Suppress { true }
+        else { false }
+    } => suppresses
+    (head -> matches("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"))
+        and suppresses
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+tunnelResponse policy: response.ResponsePolicy -> Result<Bool, http.Error> {
+    policy -> response("CONNECT", http.Version.Http11, 200, "Connected", 0, response.ConnectionMode.Persistent)?
+        => writer
+    writer -> finish? => head
+    head.bodyDisposition -> when {
+        Tunnel { true }
+        else { false }
+    } => isTunnel
+    (head -> matches("HTTP/1.1 200 Connected\r\n\r\n"))
+        and isTunnel
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+rejectsUnsafe policy: response.ResponsePolicy -> Result<Bool, http.Error> {
+    policy -> response("GET", http.Version.Http11, 200, "OK", 0, response.ConnectionMode.Close)?
+        => reservedWriter!
+    reservedWriter! -> field("Content-Length", "0") -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            ReservedResponseField { true }
+            else { false }
+        }
+    } => reserved
+
+    policy -> response("GET", http.Version.Http11, 200, "OK", 0, response.ConnectionMode.Close)?
+        => injectedWriter!
+    injectedWriter! -> field("X-Test", "safe\r\nInjected: yes") -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidFieldValue { true }
+            else { false }
+        }
+    } => injected
+
+    policy -> response("GET", http.Version.Http11, 204, "No Content", 1, response.ConnectionMode.Close) -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            ResponseBodyNotAllowed { true }
+            else { false }
+        }
+    } => bodyRejected
+    reserved and injected and bodyRejected => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+rejectsHeadLimit: -> Bool {
+    response.ResponseLimits {
+        maxHeadBytes: 15
+        maxFieldCount: 1
+        maxFieldNameBytes: 0
+        maxFieldValueBytes: 0
+    } -> policy -> when {
+        Err(_) { false }
+        Ok(policy) => policy -> response("GET", http.Version.Http11, 200, "OK", 0, response.ConnectionMode.Persistent) -> when {
+            Ok(_) { false }
+            Err(error) => error.kind -> when {
+                ResponseHeadLimitExceeded { true }
+                else { false }
+            }
+        }
+    }
+}
+
+runChecks policy: response.ResponsePolicy -> Result<Bool, http.Error> {
+    policy -> closeResponse? => close
+    policy -> headResponse? => head
+    policy -> noContentResponse? => noContent
+    policy -> tunnelResponse? => tunnel
+    policy -> rejectsUnsafe? => unsafe
+    rejectsHeadLimit() => bounded
+    close and head and noContent and tunnel and unsafe and bounded => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+main {
+    response.ResponseLimits {
+        maxHeadBytes: 512
+        maxFieldCount: 8
+        maxFieldNameBytes: 64
+        maxFieldValueBytes: 256
+    } -> policy -> when {
+        Err(_) { "http response setup failed" -> println }
+        Ok(policy) => policy -> runChecks -> when {
+            Err(_) { "http response writer failed" -> println }
+            Ok(valid) => valid
+                -> if { "http response writer ok" } else { "http response writer failed" }
+                -> println
+        }
+    }
+}

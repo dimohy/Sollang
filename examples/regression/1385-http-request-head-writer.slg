@@ -1,0 +1,204 @@
+import std.net.http as http
+import std.net.http.request as request
+
+matches head: ref request.RequestHead, expected: Text -> Bool {
+    (head.bytes -> len) == Int(expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (head.bytes -> len) -> while {
+        head.bytes[index!] == (expected -> byte(UIntSize(index!)))
+            -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+originRequest policy: request.RequestPolicy -> Result<Bool, http.Error> {
+    policy -> request(
+    "POST",
+    request.RequestTarget.Origin("/items?x=1"),
+    http.Version.Http11,
+    "example.com",
+    4,
+    request.ConnectionMode.Close
+    )? => writer!
+    writer! -> field("Accept", "text/plain")?
+    writer! -> finish? => head
+    head.connection -> when {
+        Close { true }
+        else { false }
+    } => closes
+    (head -> matches("POST /items?x=1 HTTP/1.1\r\nAccept: text/plain\r\nHost: example.com\r\nContent-Length: 4\r\nConnection: close\r\n\r\n"))
+        and head.bodyLength == 4
+        and closes
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+absoluteRequest policy: request.RequestPolicy -> Result<Bool, http.Error> {
+    policy -> request(
+    "GET",
+    request.RequestTarget.Absolute("http://proxy.example/a?x=1"),
+    http.Version.Http10,
+    "proxy.example",
+    0,
+    request.ConnectionMode.Persistent
+    )? => writer
+    writer -> finish? => head
+    head -> matches("GET http://proxy.example/a?x=1 HTTP/1.0\r\nHost: proxy.example\r\nConnection: keep-alive\r\n\r\n")
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+specialTargets policy: request.RequestPolicy -> Result<Bool, http.Error> {
+    policy -> request(
+    "CONNECT",
+    request.RequestTarget.Authority("[::1]:443"),
+    http.Version.Http11,
+    "[::1]:443",
+    0,
+    request.ConnectionMode.Persistent
+    )? => connectWriter
+    connectWriter -> finish? => connectHead
+    policy -> request(
+    "OPTIONS",
+    request.RequestTarget.Asterisk,
+    http.Version.Http11,
+    "example.com",
+    0,
+    request.ConnectionMode.Persistent
+    )? => optionsWriter
+    optionsWriter -> finish? => optionsHead
+    policy -> request(
+    "HEAD",
+    request.RequestTarget.Origin("/metadata"),
+    http.Version.Http11,
+    "example.com",
+    0,
+    request.ConnectionMode.Persistent
+    )? => headWriter
+    headWriter -> finish? => headHead
+    connectHead -> responseSemantics -> when {
+        Connect { true }
+        else { false }
+    } => connectSemantics
+    optionsHead -> responseSemantics -> when {
+        Standard { true }
+        else { false }
+    } => optionsSemantics
+    headHead -> responseSemantics -> when {
+        Head { true }
+        else { false }
+    } => headSemantics
+    (connectHead -> matches("CONNECT [::1]:443 HTTP/1.1\r\nHost: [::1]:443\r\n\r\n"))
+        and (optionsHead -> matches("OPTIONS * HTTP/1.1\r\nHost: example.com\r\n\r\n"))
+        and (headHead -> matches("HEAD /metadata HTTP/1.1\r\nHost: example.com\r\n\r\n"))
+        and connectSemantics
+        and optionsSemantics
+        and headSemantics
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+rejectsUnsafe policy: request.RequestPolicy -> Result<Bool, http.Error> {
+    policy -> request("GET", request.RequestTarget.Origin("/"), http.Version.Http11, "example.com", 0, request.ConnectionMode.Persistent)?
+        => reservedWriter!
+    reservedWriter! -> field("Content-Length", "0") -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            ReservedRequestField { true }
+            else { false }
+        }
+    } => reserved
+
+    policy -> request("GET", request.RequestTarget.Origin("/"), http.Version.Http11, "example.com", 0, request.ConnectionMode.Persistent)?
+        => injectedWriter!
+    injectedWriter! -> field("X-Test", "safe\r\nInjected: yes") -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidFieldValue { true }
+            else { false }
+        }
+    } => injected
+
+    policy -> request("GET", request.RequestTarget.Asterisk, http.Version.Http11, "example.com", 0, request.ConnectionMode.Persistent) -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidTargetMethod { true }
+            else { false }
+        }
+    } => asteriskMethod
+
+    policy -> request("CONNECT", request.RequestTarget.Authority("example.com"), http.Version.Http11, "example.com", 0, request.ConnectionMode.Persistent) -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidTarget { true }
+            else { false }
+        }
+    } => connectPort
+
+    policy -> request("GET", request.RequestTarget.Origin("/"), http.Version.Http11, "example.com:abc", 0, request.ConnectionMode.Persistent) -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidAuthority { true }
+            else { false }
+        }
+    } => namedPort
+
+    policy -> request("GET", request.RequestTarget.Origin("/"), http.Version.Http11, "[::1]:65536", 0, request.ConnectionMode.Persistent) -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidAuthority { true }
+            else { false }
+        }
+    } => largePort
+    reserved and injected and asteriskMethod and connectPort and namedPort and largePort => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+rejectsHeadLimit: -> Bool {
+    request.RequestLimits {
+        maxHeadBytes: 27
+        maxFieldCount: 1
+        maxFieldNameBytes: 0
+        maxFieldValueBytes: 2
+    } -> policy -> when {
+        Err(_) { false }
+        Ok(policy) => policy -> request("GET", request.RequestTarget.Origin("/"), http.Version.Http11, "ab", 0, request.ConnectionMode.Persistent) -> when {
+            Err(_) { false }
+            Ok(writer) => writer -> finish -> when {
+                Ok(_) { false }
+                Err(error) => error.kind -> when {
+                    RequestHeadLimitExceeded { true }
+                    else { false }
+                }
+            }
+        }
+    }
+}
+
+runChecks policy: request.RequestPolicy -> Result<Bool, http.Error> {
+    policy -> originRequest? => origin
+    policy -> absoluteRequest? => absolute
+    policy -> specialTargets? => special
+    policy -> rejectsUnsafe? => unsafe
+    rejectsHeadLimit() => bounded
+    origin and absolute and special and unsafe and bounded => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+main {
+    request.RequestLimits {
+        maxHeadBytes: 512
+        maxFieldCount: 8
+        maxFieldNameBytes: 64
+        maxFieldValueBytes: 256
+    } -> policy -> when {
+        Err(_) { "http request setup failed" -> println }
+        Ok(policy) => policy -> runChecks -> when {
+            Err(_) { "http request writer failed" -> println }
+            Ok(valid) => valid
+                -> if { "http request writer ok" } else { "http request writer failed" }
+                -> println
+        }
+    }
+}

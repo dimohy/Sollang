@@ -1,0 +1,36 @@
+# A nested owned field extracted from a move parameter transfers exactly once.
+struct Table {
+    values: [Int; ~]
+}
+
+struct Block {
+    output: [Int; ~]
+    table: Table
+    replaces: Bool
+}
+
+impl Table {
+    copyFrom: mut self, replacement: move Table -> Unit {
+        0 => index!
+        index! < (replacement.values -> len) -> while {
+            self.values -> push(replacement.values[index!])
+            index! + 1 => index!
+        }
+    }
+}
+
+commit packet: move Block, current: mut Table -> Unit {
+    packet.table => replacement
+    current -> copyFrom(replacement)
+}
+
+main {
+    Table { values: [Int; ~] } => current!
+    Block {
+        output: [1]
+        table: Table { values: [2] }
+        replaces: true
+    } => packet
+    commit(packet, current!)
+    "nested-owned-field=$(current!.values -> len)" -> println
+}

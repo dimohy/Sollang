@@ -1,0 +1,48 @@
+enum Mode {
+    Buffered
+    Fresh
+}
+
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+struct Token {
+    bytes: [UInt8; ~]
+}
+
+consumeOwner owner: move Owner, adjustment: Int -> Int {
+    (owner.bytes -> len) + adjustment
+}
+
+consumeToken token: move Token -> Int {
+    token.bytes -> len
+}
+
+impl Owner {
+    forward: move self, token: move Token, mode: Mode -> Result<Int, Int> {
+        self => current
+        token -> consumeToken => adjustment
+        mode -> when {
+            Buffered {
+                current -> consumeOwner(adjustment) => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+            Fresh {
+                current -> consumeOwner(adjustment) => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+        }
+        Result<Int, Int>.Err(1)
+    }
+}
+
+main {
+    Owner { bytes: [1, 2, 3; ~] } -> forward(
+    Token { bytes: [4; ~] },
+    Mode.Buffered
+    ) -> when {
+        Err(_) { "two-move-parameter-consume=false" -> println }
+        Ok(count) { "two-move-parameter-consume=$(count == 4)" -> println }
+    }
+}

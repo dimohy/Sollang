@@ -1,0 +1,58 @@
+import std.net.quic as quic
+
+# Sends stream 4 before stream 0, then reads in stream-owner order. The
+# connection pump must preserve both identities and every byte by exact ID.
+routeInterleavedStreams: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificate
+
+    quic.bind(quic.loopback(0))? => clientEndpoint!
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    serverEndpoint! -> listen(identity)? => listener!
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+
+    clientEndpoint! -> connect(serverAddress, certificate)? => clientConnection!
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> openBi(clientEndpoint!)? => clientFirst!
+    clientConnection! -> openBi(clientEndpoint!)? => clientSecond!
+    clientSecond! -> send(clientConnection!, clientEndpoint!, [66])? => sentSecond
+    clientFirst! -> send(clientConnection!, clientEndpoint!, [65])? => sentFirst
+
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverFirst!
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverSecond!
+    serverFirst! -> receive(serverConnection!, serverEndpoint!, 8)? => receivedFirst
+    serverSecond! -> receive(serverConnection!, serverEndpoint!, 8)? => receivedSecond
+
+    serverSecond! -> send(serverConnection!, serverEndpoint!, [98])? => replySentSecond
+    serverFirst! -> send(serverConnection!, serverEndpoint!, [97])? => replySentFirst
+    clientFirst! -> receive(clientConnection!, clientEndpoint!, 8)? => replyFirst
+    clientSecond! -> receive(clientConnection!, clientEndpoint!, 8)? => replySecond
+
+    (clientFirst! -> id) == 0
+        and (clientSecond! -> id) == 4
+        and (serverFirst! -> id) == 0
+        and (serverSecond! -> id) == 4
+        and sentFirst == 1
+        and sentSecond == 1
+        and replySentFirst == 1
+        and replySentSecond == 1
+        and receivedFirst[0] == 65
+        and receivedSecond[0] == 66
+        and replyFirst[0] == 97
+        and replySecond[0] == 98 => routed
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    serverConnection! -> close(serverEndpoint!, 0)?
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(routed)
+}
+
+main {
+    routeInterleavedStreams() -> when {
+        Ok(routed) { "quic-multi-stream=$routed" -> println }
+        Err(error) { "quic-multi-stream-error=$(error.code)" -> println }
+    }
+}

@@ -1,0 +1,59 @@
+import sollang.compiler.semantic.type_ids as typeIds
+
+scalar origin: Int, owner: Int, symbol: Int -> typeIds.SemanticType {
+    typeIds.SemanticType {
+        kind: 1
+        origin: origin
+        module: owner
+        symbol: symbol
+        first: -1
+        second: -1
+        length: -1
+        lengthHash: 0
+        containsParameter: origin == 3
+        status: 0
+    }
+}
+
+main {
+    [scalar(3, 10, 1), scalar(1, -1, 2), scalar(1, -1, 1), scalar(3, 11, 1),
+        typeIds.SemanticType {
+            kind: 3
+            origin: -1
+            module: -1
+            symbol: -1
+            first: 0
+            second: -1
+            length: -1
+            lengthHash: 0
+            containsParameter: true
+            status: 0
+        }, scalar(0, 10, 7); ~] => types!
+    [5, 0, 0; ~] => templates
+    [5, 1, 1; ~] => agreeing
+    [5, 1, 2; ~] => conflicting
+    [0, 3; ~] => scopedTemplates
+    [1, 2; ~] => scopedActuals
+
+    types! -> typeIds.specializeManyInto(templates, agreeing, 0) => inferred
+    types! -> typeIds.specializeManyInto(templates, conflicting, 0) => conflict
+    types! -> typeIds.specializeManyInto(scopedTemplates, scopedActuals, 3) => scoped
+    types! -> typeIds.specializeManyInto(templates, agreeing, 4) => nested
+    types! -> len => internedCount
+    types! -> typeIds.specializeManyInto(templates, agreeing, 4) => repeated
+    types! -> typeIds.specializeManyInto(templates, scopedActuals, 0) => arity
+    [-1,; ~] => invalidTemplate
+    [1,; ~] => oneActual
+    types! -> typeIds.specializeManyInto(invalidTemplate, oneActual, 0) => invalid
+    types! -> typeIds.specializeInto(0, 1, 4) => legacy
+
+    inferred.status == 0 and inferred.root == 1 => inferredOk
+    conflict.status == 2 and conflict.root == -1 => conflictOk
+    scoped.status == 0 and scoped.root == 2 => scopeOk
+    nested.status == 0 and types![nested.root].first == 1
+        and not types![nested.root].containsParameter => nestedOk
+    repeated.root == nested.root and (types! -> len) == internedCount => internOk
+    arity.status == 2 and invalid.status == 2 => rejectedOk
+    legacy.status == 0 and legacy.root == nested.root => legacyOk
+    "$inferredOk,$conflictOk,$scopeOk,$nestedOk,$internOk,$rejectedOk,$legacyOk" -> println
+}

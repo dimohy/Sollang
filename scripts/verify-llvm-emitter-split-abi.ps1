@@ -10,12 +10,21 @@ $output = Join-Path $outputRoot "generator.exe"
 $temporary = [IO.Path]::ChangeExtension($output, ".slg-tmp")
 $llvm = Join-Path $temporary "generator.ll"
 $fragmentPaths = @(
+    "selfhost/llvm/text/entry_expressions.slg"
+    "selfhost/llvm/text/core_prepare.slg"
     "selfhost/llvm/text/core_calls.slg"
+    "selfhost/llvm/text/call_arguments.slg"
     "selfhost/llvm/text/ownership.slg"
     "selfhost/llvm/text/platform_io.slg"
     "selfhost/llvm/text/containers.slg"
+    "selfhost/llvm/text/container_control.slg"
     "selfhost/llvm/text/control.slg"
+    "selfhost/llvm/text/control_regions.slg"
+    "selfhost/llvm/text/control_region_expressions.slg"
     "selfhost/llvm/text/functions.slg"
+    "selfhost/llvm/text/function_expressions.slg"
+    "selfhost/llvm/text/function_calls.slg"
+    "selfhost/llvm/text/function_returns.slg"
 )
 $readonlyFragmentPaths = @(
     "selfhost/llvm/emitter/diagnostics.slg"
@@ -26,6 +35,7 @@ $readonlyFragmentPaths = @(
 
 New-Item -ItemType Directory -Force $outputRoot | Out-Null
 $sources = [IO.File]::ReadAllLines($manifest)
+$sources[0] = "examples/regression/1195-selfhost-emitter-split-abi.slg"
 & dotnet $compiler build @sources -o $output --keep-temps
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if (-not (Test-Path -LiteralPath $llvm -PathType Leaf)) {
@@ -41,8 +51,8 @@ $helperNames = foreach ($relativePath in $fragmentPaths) {
     }
 }
 $helperNames = @($helperNames | Sort-Object -Unique)
-if ($helperNames.Count -ne 176) {
-    throw "Expected 176 stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
+if ($helperNames.Count -ne 295) {
+    throw "Expected 295 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
 }
 $requiredLibraryHelpers = @(
     "isImportedLibraryFunction"
@@ -78,8 +88,8 @@ $readonlyHelpers = foreach ($relativePath in $readonlyFragmentPaths) {
     }
 }
 $readonlyHelpers = @($readonlyHelpers | Sort-Object LlvmName -Unique)
-if ($readonlyHelpers.Count -ne 50) {
-    throw "Expected 50 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
+if ($readonlyHelpers.Count -ne 91) {
+    throw "Expected 91 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
 }
 $requiredLibraryReadonlyHelpers = @(
     "libraryImportDiagnosticCount"
@@ -203,4 +213,102 @@ if ($forwardedCalls -lt 1) {
     throw "Split ABI gate did not inspect any helper-to-helper calls."
 }
 
-Write-Host "PASS LLVM emitter split ABI: stateful helpers=$($helperNames.Count), readonly helpers=$($readonlyHelpers.Count), entry-context owners=3, core-state materializations=1, helper forwards=$forwardedCalls, per-call aggregate copies=0"
+$typedComHelper = [regex]::Match(
+    $llvmText,
+    '(?m)^define [^\r\n]*@sollang_fn_sollang_compiler_ir_typed_lowerComGeneratedFunction\((?<parameters>[^)]*)\)')
+if (-not $typedComHelper.Success) {
+    throw "Generated LLVM omits the C80 Typed IR COM fragment helper."
+}
+$typedComParameters = @($typedComHelper.Groups["parameters"].Value.Split(",") | ForEach-Object { $_.Trim() })
+$typedComUserParameters = @($typedComParameters | Select-Object -Last 4)
+if ($typedComUserParameters.Count -ne 4 `
+    -or $typedComUserParameters[0] -notmatch '^ptr %' `
+    -or $typedComUserParameters[1] -notmatch '^ptr %' `
+    -or $typedComUserParameters[2] -notmatch '^ptr %') {
+    throw "Typed IR COM fragment copies its prepared snapshot or canonical tables by value: $($typedComHelper.Value)"
+}
+
+$typedComCalls = @([regex]::Matches(
+    $llvmText,
+    '(?m)^\s*(?:%[A-Za-z0-9_]+ = )?call [^\r\n]*@sollang_fn_sollang_compiler_ir_typed_lowerComGeneratedFunction\((?<arguments>[^\r\n]*)\)'))
+if ($typedComCalls.Count -lt 1) {
+    throw "Generated LLVM does not exercise the C80 Typed IR COM fragment call boundary."
+}
+foreach ($typedComCall in $typedComCalls) {
+    $arguments = @($typedComCall.Groups["arguments"].Value.Split(",") | ForEach-Object { $_.Trim() })
+    $userArguments = @($arguments | Select-Object -Last 4)
+    if ($userArguments.Count -ne 4 `
+        -or $userArguments[0] -notmatch '^ptr %' `
+        -or $userArguments[1] -notmatch '^ptr %' `
+        -or $userArguments[2] -notmatch '^ptr %') {
+        throw "Typed IR COM fragment call rematerializes its prepared snapshot or canonical tables: $($typedComCall.Value)"
+    }
+}
+
+$typedShapeHelper = [regex]::Match(
+    $llvmText,
+    '(?m)^define [^\r\n]*@sollang_fn_sollang_compiler_ir_typed_declaredArrayShapeKind\((?<parameters>[^)]*)\)')
+if (-not $typedShapeHelper.Success) {
+    throw "Generated LLVM omits the C80 Typed IR type-query fragment helper."
+}
+$typedShapeParameters = @($typedShapeHelper.Groups["parameters"].Value.Split(",") | ForEach-Object { $_.Trim() })
+$typedShapeUserParameters = @($typedShapeParameters | Select-Object -Last 3)
+if ($typedShapeUserParameters.Count -ne 3 `
+    -or $typedShapeUserParameters[0] -notmatch '^ptr %' `
+    -or $typedShapeUserParameters[1] -notmatch '^i32 %' `
+    -or $typedShapeUserParameters[2] -notmatch '^i32 %') {
+    throw "Typed IR type-query fragment copies its prepared snapshot or changed its scalar ABI: $($typedShapeHelper.Value)"
+}
+
+$typedShapeCalls = @([regex]::Matches(
+    $llvmText,
+    '(?m)^\s*(?:%[A-Za-z0-9_]+ = )?call [^\r\n]*@sollang_fn_sollang_compiler_ir_typed_declaredArrayShapeKind\((?<arguments>[^\r\n]*)\)'))
+if ($typedShapeCalls.Count -lt 1) {
+    throw "Generated LLVM does not exercise the C80 Typed IR type-query fragment call boundary."
+}
+foreach ($typedShapeCall in $typedShapeCalls) {
+    $arguments = @($typedShapeCall.Groups["arguments"].Value.Split(",") | ForEach-Object { $_.Trim() })
+    $userArguments = @($arguments | Select-Object -Last 3)
+    if ($userArguments.Count -ne 3 `
+        -or $userArguments[0] -notmatch '^ptr %' `
+        -or $userArguments[1] -notmatch '^i32 ' `
+        -or $userArguments[2] -notmatch '^i32 ') {
+        throw "Typed IR type-query fragment call copies its prepared snapshot or changed its scalar ABI: $($typedShapeCall.Value)"
+    }
+}
+
+$typedResultQueryHelper = [regex]::Match(
+    $llvmText,
+    '(?m)^define [^\r\n]*@sollang_fn_sollang_compiler_ir_typed_comGeneratedResultTypeId\((?<parameters>[^)]*)\)')
+if (-not $typedResultQueryHelper.Success) {
+    throw "Generated LLVM omits the C80 Typed IR COM result-query helper."
+}
+$typedResultQueryParameters = @($typedResultQueryHelper.Groups["parameters"].Value.Split(",") | ForEach-Object { $_.Trim() })
+$typedResultQueryUserParameters = @($typedResultQueryParameters | Select-Object -Last 4)
+if ($typedResultQueryUserParameters.Count -ne 4 `
+    -or $typedResultQueryUserParameters[0] -notmatch '^ptr %' `
+    -or $typedResultQueryUserParameters[1] -notmatch '^i32 %' `
+    -or $typedResultQueryUserParameters[2] -notmatch '^i32 %' `
+    -or $typedResultQueryUserParameters[3] -notmatch '^i32 %') {
+    throw "Typed IR COM result query copies its canonical type table or changed its scalar ABI: $($typedResultQueryHelper.Value)"
+}
+
+$typedResultQueryCalls = @([regex]::Matches(
+    $llvmText,
+    '(?m)^\s*(?:%[A-Za-z0-9_]+ = )?call [^\r\n]*@sollang_fn_sollang_compiler_ir_typed_comGeneratedResultTypeId\((?<arguments>[^\r\n]*)\)'))
+if ($typedResultQueryCalls.Count -lt 1) {
+    throw "Generated LLVM does not exercise the C80 Typed IR COM result-query boundary."
+}
+foreach ($typedResultQueryCall in $typedResultQueryCalls) {
+    $arguments = @($typedResultQueryCall.Groups["arguments"].Value.Split(",") | ForEach-Object { $_.Trim() })
+    $userArguments = @($arguments | Select-Object -Last 4)
+    if ($userArguments.Count -ne 4 `
+        -or $userArguments[0] -notmatch '^ptr %' `
+        -or $userArguments[1] -notmatch '^i32 ' `
+        -or $userArguments[2] -notmatch '^i32 ' `
+        -or $userArguments[3] -notmatch '^i32 ') {
+        throw "Typed IR COM result-query call copies its canonical type table or changed its scalar ABI: $($typedResultQueryCall.Value)"
+    }
+}
+
+Write-Host "PASS LLVM emitter split ABI: stateful helpers=$($helperNames.Count), readonly helpers=$($readonlyHelpers.Count), entry-context owners=3, core-state materializations=1, helper forwards=$forwardedCalls, typed-borrowed-tables=5, typed-com-calls=$($typedComCalls.Count), typed-shape-calls=$($typedShapeCalls.Count), typed-result-query-calls=$($typedResultQueryCalls.Count), per-call aggregate copies=0"

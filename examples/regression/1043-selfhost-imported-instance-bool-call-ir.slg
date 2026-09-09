@@ -1,0 +1,119 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.context as semanticContext
+
+struct CallScan {
+    resolvedImportedMethods: Int
+    unresolvedImportedMethod: Bool
+}
+
+scanCalls values: ref [calls.ModuleCallResolution; ~] -> CallScan {
+    0 => resolvedImportedMethods!
+    false => unresolvedImportedMethod!
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] => call
+        call.sourceModule == 1 and call.targetSourceModule == 0 and call.status == 0
+            -> if { resolvedImportedMethods! + 1 => resolvedImportedMethods! }
+        call.sourceModule == 1 and call.status == 2
+            -> if { true => unresolvedImportedMethod! }
+        index! + 1 => index!
+    }
+    CallScan {
+        resolvedImportedMethods: resolvedImportedMethods!
+        unresolvedImportedMethod: unresolvedImportedMethod!
+    }
+}
+
+verificationMessage values: ref [typedIr.TypedIrNode; ~], callScan: CallScan -> Text {
+    false => sawImportedCall!
+    false => sawTypedResult!
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] => node
+        (node.kind == 6 or node.kind == 9) and node.targetModule == 0
+            -> if {
+                true => sawImportedCall!
+                node.typeId >= 0 -> if { true => sawTypedResult! }
+            }
+        index! + 1 => index!
+    }
+    callScan.resolvedImportedMethods >= 5
+        and not callScan.unresolvedImportedMethod
+        and sawImportedCall!
+        and sawTypedResult!
+        -> if { "imported instance Bool call = valid" } else { "imported instance Bool call = invalid" }
+}
+
+# Imported value-type instance methods must remain calls. If the member path is
+# mistaken for a field projection, LLVM later tries to branch on the receiver
+# struct instead of the method's Bool result.
+main {
+    """"
+        namespace std.net
+
+        public struct Address {
+            public first: UInt8
+            public second: UInt8
+        }
+
+        public struct OtherAddress {
+            public first: UInt8
+            public second: UInt8
+        }
+
+        public struct Unified {
+            public value: UInt16
+        }
+
+        public struct Endpoint {
+            public address: Address
+            public port: UInt16
+        }
+
+        impl Address {
+            public isLoopback: self -> Bool => self.first == 127
+            public unified: self -> Unified => Unified { value: UInt16(self.first) }
+        }
+
+        impl OtherAddress {
+            public isLoopback: self -> Bool => false
+        }
+
+        public loopback: -> Address => Address { first: 127, second: 0 }
+        public loopbackAt port: UInt16 -> Address => Address { first: UInt8(port / port * 127), second: 0 }
+        public maybeLoopback: -> Result<Address, OtherAddress> => Result<Address, OtherAddress>.Ok(Address { first: 127, second: 0 })
+    """" => netSource
+    """"
+        namespace sample
+
+        import std.net as net
+
+        check endpoint: net.Endpoint, port: UInt16 -> Bool {
+            endpoint.port == port and (endpoint.address -> isLoopback)
+        }
+
+        route port: UInt16 -> net.Unified {
+            net.loopbackAt(port) -> unified
+        }
+
+        main {
+            net.loopback() -> isLoopback => direct
+            net.loopbackAt(443) -> isLoopback => directWithArgument
+            net.maybeLoopback() -> when {
+                Ok(address) { address -> isLoopback }
+                Err(error) { false }
+            } => patterned
+            net.Endpoint {
+                address: net.Address { first: 127, second: 0 }
+                port: 443
+            } -> check(443) => projected
+            direct and directWithArgument and patterned and projected -> println
+        }
+    """" => sampleSource
+
+    [netSource, sampleSource; ~] -> semanticContext.prepare => context
+    context.calls -> scanCalls => callScan
+    context -> typedIr.lowerContext => ir
+    ir -> verificationMessage(callScan) -> println
+}

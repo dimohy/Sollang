@@ -1,0 +1,248 @@
+namespace std.compress.brotli.tree_group
+
+import std.compress.brotli.tree_group as model
+import std.compress.brotli.prefix_code as prefix_code
+import std.compress.brotli.prefix_code.error as prefix_errors
+import std.compress.brotli.prefix_table as prefix
+import std.compress.brotli.tree_group.error as errors
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxTrees: Int
+    public maxAlphabetSize: Int
+    public maxTableEntries: Int
+    public maxTotalTableEntries: Int
+}
+
+public struct Parser {
+    public prefixParser: prefix_code.Parser
+    public maxTrees: Int
+    public maxAlphabetSize: Int
+    public maxTotalTableEntries: Int
+}
+
+public struct Parsed {
+    public trees: [prefix.Table; ~]
+    public position: prefix.Position
+}
+
+# Reader is the bounded aggregate owner for a sequence of resumable prefix
+# descriptions. Encoded bytes and unread bits stay in the caller's Window.
+public struct Reader {
+    public prefixParser: prefix_code.Parser
+    public maxTrees: Int
+    public maxAlphabetSize: Int
+    public alphabetSize: Int
+    public treeCount: Int
+    public rootBits: Int
+    public maxTotalTableEntries: Int
+    public treeIndex: Int
+    public totalTableEntries: Int
+    public trees: [prefix.Table; ~]
+}
+
+public enum ReaderRead {
+    NeedTree(Int)
+    Ready
+}
+
+public struct Streamed {
+    public trees: [prefix.Table; ~]
+}
+
+errorParser kind: errors.Kind, offset: UIntSize -> Result<Parser, Error> {
+    Result<Parser, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorParsed kind: errors.Kind, offset: UIntSize -> Result<Parsed, Error> {
+    Result<Parsed, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorReader kind: errors.Kind, offset: UIntSize -> Result<Reader, Error> {
+    Result<Reader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorReaderRead kind: errors.Kind, offset: UIntSize -> Result<ReaderRead, Error> {
+    Result<ReaderRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDescriptionReader kind: errors.Kind, offset: UIntSize -> Result<prefix_code.DescriptionReader, Error> {
+    Result<prefix_code.DescriptionReader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorStreamed kind: errors.Kind, offset: UIntSize -> Result<Streamed, Error> {
+    Result<Streamed, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+mapPrefixError kind: prefix_errors.Kind -> errors.Kind => kind -> when {
+    InvalidLimit { errors.Kind.InvalidLimit }
+    TruncatedInput { errors.Kind.TruncatedInput }
+    DuplicateSymbol { errors.Kind.InvalidPrefixCode }
+    InvalidCodeSpace { errors.Kind.InvalidPrefixCode }
+    TableLimitExceeded { errors.Kind.InvalidPrefixCode }
+    InvalidSymbol { errors.Kind.InvalidPrefixCode }
+}
+
+parsePrefix parser: ref Parser, input: [UInt8], position: prefix.Position, alphabetSize: Int, rootBits: Int -> Result<prefix_code.Parsed, Error> {
+    parser.prefixParser -> parse(input, position, alphabetSize, rootBits) -> when {
+        Ok(parsed) { Result<prefix_code.Parsed, Error>.Ok(parsed) }
+        Err(error) {
+            Result<prefix_code.Parsed, Error>.Err(Error {
+                kind: error.kind -> mapPrefixError
+                offset: error.offset
+            })
+        }
+    }
+}
+
+impl Limits {
+    public parser: self -> Result<Parser, Error> {
+        self.maxTrees > 0 and self.maxTrees <= 256
+            and self.maxAlphabetSize > 0 and self.maxAlphabetSize <= 704
+            and self.maxTableEntries > 0 and self.maxTableEntries <= 1_080
+            and self.maxTotalTableEntries > 0 and self.maxTotalTableEntries <= 276_480
+            -> unless { errorParser(errors.Kind.InvalidLimit, 0) -> return }
+        prefix_code.Limits {
+            maxAlphabetSize: self.maxAlphabetSize
+            maxTableEntries: self.maxTableEntries
+        } -> parser -> when {
+            Ok(prefixParser) {
+                Result<Parser, Error>.Ok(Parser {
+                    prefixParser: prefixParser
+                    maxTrees: self.maxTrees
+                    maxAlphabetSize: self.maxAlphabetSize
+                    maxTotalTableEntries: self.maxTotalTableEntries
+                })
+            }
+            Err(error) { errorParser(error.kind -> mapPrefixError, error.offset) }
+        }
+    }
+}
+
+impl Parser {
+    public reader: self, alphabetSize: Int, treeCount: Int, rootBits: Int -> Result<Reader, Error> {
+        alphabetSize > 0 and alphabetSize <= self.maxAlphabetSize
+            and rootBits > 0 and rootBits <= 15
+            -> unless { errorReader(errors.Kind.InvalidLimit, UIntSize(alphabetSize)) -> return }
+        treeCount > 0 and treeCount <= self.maxTrees
+            -> unless { errorReader(errors.Kind.TreeLimitExceeded, UIntSize(treeCount)) -> return }
+        Result<Reader, Error>.Ok(Reader {
+            prefixParser: self.prefixParser
+            maxTrees: self.maxTrees
+            maxAlphabetSize: self.maxAlphabetSize
+            alphabetSize: alphabetSize
+            treeCount: treeCount
+            rootBits: rootBits
+            maxTotalTableEntries: self.maxTotalTableEntries
+            treeIndex: 0
+            totalTableEntries: 0
+            trees: [prefix.Table; ~]
+        })
+    }
+
+    public parse: self, input: [UInt8], position: prefix.Position, alphabetSize: Int, treeCount: Int, rootBits: Int -> Result<Parsed, Error> {
+        alphabetSize > 0 and alphabetSize <= self.maxAlphabetSize
+            and rootBits > 0 and rootBits <= 15
+            -> unless { errorParsed(errors.Kind.InvalidLimit, UIntSize(alphabetSize)) -> return }
+        treeCount > 0 and treeCount <= self.maxTrees
+            -> unless { errorParsed(errors.Kind.TreeLimitExceeded, UIntSize(treeCount)) -> return }
+        [prefix.Table; ~] => trees!
+        position => current!
+        0 => totalEntries!
+        0 => treeIndex!
+        treeIndex! < treeCount -> while {
+            self -> parsePrefix(input, current!, alphabetSize, rootBits)? => parsed
+            parsed.position => current!
+            parsed.table -> entryCount => entryCount
+            totalEntries! + entryCount <= self.maxTotalTableEntries
+                -> unless {
+                    errorParsed(errors.Kind.TotalTableLimitExceeded, UIntSize(totalEntries! + entryCount)) -> return
+                }
+            totalEntries! + entryCount => totalEntries!
+            trees! -> push(parsed.table)
+            treeIndex! + 1 => treeIndex!
+        }
+        Result<Parsed, Error>.Ok(Parsed { trees: trees!, position: current! })
+    }
+}
+
+impl Reader {
+    public next: self -> ReaderRead {
+        self.treeIndex < self.treeCount -> if {
+            model.ReaderRead.NeedTree(self.treeIndex)
+        } else {
+            model.ReaderRead.Ready
+        }
+    }
+
+    public prefixDescription: self -> Result<prefix_code.DescriptionReader, Error> {
+        self.treeIndex < self.treeCount
+            -> unless { errorDescriptionReader(errors.Kind.InvalidPrefixCode, UIntSize(self.treeIndex)) -> return }
+        self.prefixParser -> descriptionReader(self.alphabetSize, self.rootBits) -> when {
+            Err(error) { errorDescriptionReader(error.kind -> mapPrefixError, error.offset) }
+            Ok(reader) { Result<prefix_code.DescriptionReader, Error>.Ok(reader) }
+        }
+    }
+
+    public installTree: mut self, table: move prefix.Table -> Result<Unit, Error> {
+        self.treeIndex < self.treeCount
+            -> unless { Result<Unit, Error>.Err(Error {
+                    kind: errors.Kind.InvalidPrefixCode
+                    offset: UIntSize(self.treeIndex)
+                }) -> return }
+        table -> entryCount => entryCount
+        self.totalTableEntries + entryCount <= self.maxTotalTableEntries
+            -> unless { Result<Unit, Error>.Err(Error {
+                    kind: errors.Kind.TotalTableLimitExceeded
+                    offset: UIntSize(self.totalTableEntries + entryCount)
+                }) -> return }
+        self.trees -> push(table)
+        self.totalTableEntries + entryCount => self.totalTableEntries
+        self.treeIndex + 1 => self.treeIndex
+        Result<Unit, Error>.Ok
+    }
+
+    public finish: move self -> Result<Streamed, Error> {
+        self.treeIndex == self.treeCount
+            -> unless { errorStreamed(errors.Kind.TruncatedInput, UIntSize(self.treeIndex)) -> return }
+        self.trees => trees
+        Result<Streamed, Error>.Ok(Streamed { trees: trees })
+    }
+
+    # Move one completed group out and reuse this same aggregate reader for the
+    # next alphabet. The replacement tree array is empty and allocates nothing.
+    public takeAndReset: mut self, alphabetSize: Int, treeCount: Int, rootBits: Int -> Result<Streamed, Error> {
+        self.treeIndex == self.treeCount
+            -> unless { errorStreamed(errors.Kind.TruncatedInput, UIntSize(self.treeIndex)) -> return }
+        alphabetSize > 0 and alphabetSize <= self.maxAlphabetSize
+            and treeCount > 0 and treeCount <= self.maxTrees
+            and rootBits > 0 and rootBits <= 15
+            -> unless { errorStreamed(errors.Kind.InvalidLimit, UIntSize(alphabetSize)) -> return }
+        self.trees => trees
+        [prefix.Table; ~] => self.trees
+        alphabetSize => self.alphabetSize
+        treeCount => self.treeCount
+        rootBits => self.rootBits
+        0 => self.treeIndex
+        0 => self.totalTableEntries
+        Result<Streamed, Error>.Ok(Streamed { trees: trees })
+    }
+}
+
+impl Streamed {
+    public intoTrees: move self -> [prefix.Table; ~] {
+        self.trees => trees
+        trees
+    }
+}
+
+impl Parsed {
+    public intoTrees: move self -> [prefix.Table; ~] {
+        self.trees => trees
+        trees
+    }
+}

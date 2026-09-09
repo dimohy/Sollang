@@ -18,6 +18,34 @@ internal sealed partial class SemanticCompiler
         Return = 8
     }
 
+    private void ValidateReadonlySliceReturnEscapes(IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        var candidates = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+        foreach (var function in functions.Values)
+            CollectFunctionTree(function, candidates);
+        foreach (var function in candidates)
+        {
+            if (function.Kind != BoundFunctionKind.User)
+                continue;
+            var sources = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
+            if (function.InputType is { } input && _types.IsSlice(input)
+                && TypeContains(function.ReturnType, input))
+                sources.Add(function.InputName ?? "it", new HashSet<string>([function.InputName ?? "it"], StringComparer.Ordinal));
+            foreach (var parameter in function.AdditionalParameters ?? [])
+                if (_types.IsSlice(parameter.Type) && TypeContains(function.ReturnType, parameter.Type))
+                    sources.Add(parameter.Name, new HashSet<string>([parameter.Name], StringComparer.Ordinal));
+            if (sources.Count == 0)
+                continue;
+            var returned = new HashSet<string>(StringComparer.Ordinal);
+            CollectBorrowedTextReturnOrigins(function.BlockBody, functions, sources, returned);
+            if (function.Body is not null && TryInferBorrowedTextOrigins(function.Body, functions, sources, out var origins))
+                returned.UnionWith(origins);
+            if (returned.Count > 0)
+                throw Error(function.Line, function.Column,
+                    $"readonly slice parameter '{string.Join(", ", returned)}' cannot escape beyond the call; return an owned copy instead");
+        }
+    }
+
     private void DiscoverReadonlyReferenceReturnOrigins(
         IReadOnlyDictionary<string, BoundFunction> functions)
     {

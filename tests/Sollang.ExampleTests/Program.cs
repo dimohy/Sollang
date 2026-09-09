@@ -5,6 +5,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
+// Compiler and native fixture streams use UTF-8 regardless of the host console code page.
+Console.OutputEncoding = new UTF8Encoding(false);
+
 var filters = new List<string>();
 var exactFilters = new List<string>();
 var affectedFiles = new List<string>();
@@ -14,7 +17,11 @@ var updateExpected = false;
 var compareCompilers = false;
 var testTarget = TestTarget.WindowsX64;
 var wslDistribution = "Ubuntu";
-var jobs = Math.Min(Environment.ProcessorCount, 8);
+// LLVM-backed cases spend a meaningful part of their lifetime in child
+// processes, so leaving half of a 24-core workstation idle lengthens the
+// repository feedback loop. Keep the cap bounded for memory predictability,
+// while allowing current development machines to overlap up to 16 cases.
+var jobs = Math.Min(Environment.ProcessorCount, 16);
 for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
 {
     switch (args[argumentIndex])
@@ -245,6 +252,7 @@ var diagnosticDir = Path.Combine(repoRoot, "examples", "regression", "diagnostic
 var affectedPaths = affectedFiles
     .Select(path => Path.GetFullPath(path, repoRoot))
     .ToHashSet(StringComparer.OrdinalIgnoreCase);
+var affectedGraph = new AffectedDependencyGraph(repoRoot, affectedPaths);
 var allDiagnosticFiles = Directory.Exists(diagnosticDir)
     ? Directory.EnumerateFiles(diagnosticDir, "*.slg")
         .Concat(Directory.EnumerateFiles(diagnosticDir, "*.project"))
@@ -262,14 +270,14 @@ var expectedFiles = allExpectedFiles
         || !File.Exists(Path.Combine(
             expectedDir,
             Path.GetFileName(file)[..^".stdout.txt".Length] + ".windows-only.txt")))
-    .Where(file => MatchesAffectedExpected(file, repoRoot, expectedDir, affectedPaths))
+    .Where(file => MatchesAffectedExpected(file, repoRoot, expectedDir, affectedPaths, affectedGraph))
     .OrderByDescending(IsExpensiveSelfHostLlvmTest)
     .ThenBy(file => file, StringComparer.Ordinal)
     .ToArray();
 var diagnosticFiles = allDiagnosticFiles
     .Where(file => suite != TestSuite.Llvm && suite != TestSuite.SelfHost && suite != TestSuite.Semantic)
     .Where(file => MatchesFilters("diagnostic/" + Path.GetFileNameWithoutExtension(file), filters, exactFilters))
-    .Where(file => MatchesAffectedDiagnostic(file, diagnosticDir, repoRoot, affectedPaths))
+    .Where(file => MatchesAffectedDiagnostic(file, diagnosticDir, repoRoot, affectedPaths, affectedGraph))
     .ToArray();
 
 if (allExpectedFiles.Length == 0)
@@ -352,6 +360,16 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
                 Console.Error.WriteLine("FAIL reusable native sollangc bootstrap");
                 Console.Error.WriteLine(driverBuild.Stdout);
                 Console.Error.WriteLine(driverBuild.Stderr);
+                return 1;
+            }
+            var driverDiagnostics = driverBuild.Stdout + driverBuild.Stderr;
+            if (Regex.IsMatch(
+                    driverDiagnostics,
+                    @"(?:^|\r?\n)(?:warning S|note N)\d{3}\b",
+                    RegexOptions.CultureInvariant))
+            {
+                Console.Error.WriteLine("FAIL reusable native sollangc bootstrap emitted a warning or note");
+                Console.Error.WriteLine(driverDiagnostics);
                 return 1;
             }
 
@@ -487,14 +505,19 @@ Parallel.ForEach(
         name + "." + TestTargetName(testTarget) + TestExecutableSuffix(testTarget));
     var commonLlvmContainsPath = Path.Combine(expectedDir, name + ".llvm.contains.txt");
     var commonLlvmNotContainsPath = Path.Combine(expectedDir, name + ".llvm.not-contains.txt");
+    var commonLlvmRegexCountsPath = Path.Combine(expectedDir, name + ".llvm.regex-counts.txt");
     var targetLlvmContainsPath = Path.Combine(expectedDir, name + ".linux-x64.llvm.contains.txt");
     var targetLlvmNotContainsPath = Path.Combine(expectedDir, name + ".linux-x64.llvm.not-contains.txt");
+    var targetLlvmRegexCountsPath = Path.Combine(expectedDir, name + ".linux-x64.llvm.regex-counts.txt");
     var llvmContainsPath = testTarget == TestTarget.LinuxX64 && File.Exists(targetLlvmContainsPath)
         ? targetLlvmContainsPath
         : commonLlvmContainsPath;
     var llvmNotContainsPath = testTarget == TestTarget.LinuxX64 && File.Exists(targetLlvmNotContainsPath)
         ? targetLlvmNotContainsPath
         : commonLlvmNotContainsPath;
+    var llvmRegexCountsPath = testTarget == TestTarget.LinuxX64 && File.Exists(targetLlvmRegexCountsPath)
+        ? targetLlvmRegexCountsPath
+        : commonLlvmRegexCountsPath;
     var wasmLlvmContainsPath = Path.Combine(expectedDir, name + ".wasm32.llvm.contains.txt");
     var sourcesPath = Path.Combine(expectedDir, name + ".sources.txt");
     var selfHostRootPath = Path.Combine(expectedDir, name + ".root.txt");
@@ -507,7 +530,9 @@ Parallel.ForEach(
     var expectedStdoutPath = File.Exists(targetStdoutPath) ? targetStdoutPath : expectedFile;
     var compileOnlyPath = Path.Combine(expectedDir, name + ".compile-only.txt");
     var compilerStderrContainsPath = Path.Combine(expectedDir, name + ".compiler.stderr.contains.txt");
-    var verifyLlvm = File.Exists(llvmContainsPath) || File.Exists(llvmNotContainsPath);
+    var verifyLlvm = File.Exists(llvmContainsPath)
+        || File.Exists(llvmNotContainsPath)
+        || File.Exists(llvmRegexCountsPath);
 
     if (!File.Exists(sourcePath) && !File.Exists(projectPath))
     {
@@ -599,6 +624,8 @@ Parallel.ForEach(
         compilerArguments.Add("--keep-temps");
     }
 
+    var unexpectedWarningsPath = Path.Combine(artifactsDir, name + ".unexpected-warnings.log");
+    File.Delete(unexpectedWarningsPath);
     var build = Run(
         "dotnet",
         compilerArguments,
@@ -616,13 +643,16 @@ Parallel.ForEach(
 
     var compilerOutput = build.Stdout + build.Stderr;
     if (!File.Exists(compilerStderrContainsPath)
-        && Regex.IsMatch(compilerOutput, @"(?:^|\r?\n)warning S\d{3}\b", RegexOptions.CultureInvariant))
+        && Regex.IsMatch(
+            compilerOutput,
+            @"(?:^|\r?\n)(?:warning S|note N)\d{3}\b",
+            RegexOptions.CultureInvariant))
     {
         File.WriteAllText(
-            Path.Combine(artifactsDir, name + ".unexpected-warnings.log"),
+            unexpectedWarningsPath,
             compilerOutput,
             new UTF8Encoding(false));
-        Console.Error.WriteLine($"FAIL {name}: unexpected Sollang compiler warning");
+        Console.Error.WriteLine($"FAIL {name}: unexpected Sollang compiler warning or note");
         Console.Error.WriteLine(compilerOutput);
         Interlocked.Increment(ref failures);
         return;
@@ -633,6 +663,7 @@ Parallel.ForEach(
             Path.ChangeExtension(outputPath, ".ll"),
             llvmContainsPath,
             llvmNotContainsPath,
+            llvmRegexCountsPath,
             out var llvmError))
     {
         Console.Error.WriteLine($"FAIL {name}: {llvmError}");
@@ -652,6 +683,8 @@ Parallel.ForEach(
             "-O1",
             "--keep-temps"
         };
+        var wasmUnexpectedWarningsPath = Path.Combine(artifactsDir, name + ".wasm32.unexpected-warnings.log");
+        File.Delete(wasmUnexpectedWarningsPath);
         var wasmBuild = Run("dotnet", wasmArguments, input: null, repoRoot);
         var wasmLlvmError = string.Empty;
         if (wasmBuild.ExitCode != 0
@@ -659,6 +692,7 @@ Parallel.ForEach(
                 Path.ChangeExtension(wasmOutputPath, ".ll"),
                 wasmLlvmContainsPath,
                 Path.Combine(expectedDir, name + ".wasm32.llvm.not-contains.txt"),
+                Path.Combine(expectedDir, name + ".wasm32.llvm.regex-counts.txt"),
                 out wasmLlvmError))
         {
             Console.Error.WriteLine($"FAIL {name}: wasm32 LLVM verification failed");
@@ -673,7 +707,7 @@ Parallel.ForEach(
             && Regex.IsMatch(wasmCompilerOutput, @"(?:^|\r?\n)warning S\d{3}\b", RegexOptions.CultureInvariant))
         {
             File.WriteAllText(
-                Path.Combine(artifactsDir, name + ".wasm32.unexpected-warnings.log"),
+                wasmUnexpectedWarningsPath,
                 wasmCompilerOutput,
                 new UTF8Encoding(false));
             Console.Error.WriteLine($"FAIL {name}: unexpected Sollang compiler warning for wasm32-browser");
@@ -1064,7 +1098,8 @@ static bool MatchesAffectedExpected(
     string expectedFile,
     string repoRoot,
     string expectedDir,
-    IReadOnlySet<string> affectedPaths)
+    IReadOnlySet<string> affectedPaths,
+    AffectedDependencyGraph affectedGraph)
 {
     if (affectedPaths.Count == 0)
     {
@@ -1072,8 +1107,14 @@ static bool MatchesAffectedExpected(
     }
 
     var name = Path.GetFileName(expectedFile)[..^".stdout.txt".Length];
+    if (affectedGraph.HasGlobalCompilerImpact)
+    {
+        return true;
+    }
+
+    var sourceFile = Path.Combine(repoRoot, "examples", "regression", name + ".slg");
     if (affectedPaths.Contains(Path.GetFullPath(expectedFile))
-        || affectedPaths.Contains(Path.Combine(repoRoot, "examples", "regression", name + ".slg"))
+        || affectedPaths.Contains(sourceFile)
         || affectedPaths.Contains(Path.Combine(expectedDir, name + ".project.txt")))
     {
         return true;
@@ -1100,14 +1141,18 @@ static bool MatchesAffectedExpected(
         }
     }
 
-    return MatchesAffectedSources(sourcesPath, repoRoot, affectedPaths);
+    var explicitSources = ReadSourceManifest(sourcesPath, repoRoot);
+    return MatchesAffectedSources(sourcesPath, repoRoot, affectedPaths)
+        || affectedGraph.DependsOnAffected(
+            File.Exists(sourceFile) ? explicitSources.Append(sourceFile) : explicitSources);
 }
 
 static bool MatchesAffectedDiagnostic(
     string sourceFile,
     string diagnosticDir,
     string repoRoot,
-    IReadOnlySet<string> affectedPaths)
+    IReadOnlySet<string> affectedPaths,
+    AffectedDependencyGraph affectedGraph)
 {
     if (affectedPaths.Count == 0)
     {
@@ -1115,6 +1160,11 @@ static bool MatchesAffectedDiagnostic(
     }
 
     var name = Path.GetFileNameWithoutExtension(sourceFile);
+    if (affectedGraph.HasGlobalCompilerImpact)
+    {
+        return true;
+    }
+
     if (affectedPaths.Contains(Path.GetFullPath(sourceFile))
         || affectedPaths.Contains(Path.Combine(diagnosticDir, name + ".stderr.contains.txt"))
         || affectedPaths.Contains(Path.Combine(diagnosticDir, name + ".windows-x64.stderr.contains.txt"))
@@ -1123,11 +1173,18 @@ static bool MatchesAffectedDiagnostic(
         return true;
     }
 
-    return MatchesAffectedSources(
-        Path.Combine(diagnosticDir, name + ".sources.txt"),
-        repoRoot,
-        affectedPaths);
+    var sourcesPath = Path.Combine(diagnosticDir, name + ".sources.txt");
+    var explicitSources = ReadSourceManifest(sourcesPath, repoRoot);
+    return MatchesAffectedSources(sourcesPath, repoRoot, affectedPaths)
+        || affectedGraph.DependsOnAffected(explicitSources.Append(sourceFile));
 }
+
+static IEnumerable<string> ReadSourceManifest(string sourcesPath, string repoRoot) =>
+    File.Exists(sourcesPath)
+        ? File.ReadLines(sourcesPath)
+            .Where(static line => !string.IsNullOrWhiteSpace(line))
+            .Select(line => Path.GetFullPath(line.Trim(), repoRoot))
+        : [];
 
 static bool MatchesAffectedSources(
     string sourcesPath,
@@ -1602,6 +1659,8 @@ static ProcessResult Run(
         RedirectStandardInput = input is not null,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
+        StandardOutputEncoding = Encoding.UTF8,
+        StandardErrorEncoding = Encoding.UTF8,
         UseShellExecute = false
     };
 
@@ -1666,6 +1725,7 @@ static bool VerifyLlvmAssertions(
     string llvmPath,
     string containsPath,
     string notContainsPath,
+    string regexCountsPath,
     out string error)
 {
     if (!File.Exists(llvmPath))
@@ -1695,6 +1755,28 @@ static bool VerifyLlvmAssertions(
         }
     }
 
+    foreach (var assertion in ReadAssertions(regexCountsPath))
+    {
+        var separator = assertion.IndexOf('\t');
+        if (separator <= 0
+            || !int.TryParse(assertion[..separator], out var expectedCount)
+            || expectedCount < 0)
+        {
+            error = $"invalid LLVM regex-count assertion '{assertion}'; expected '<count><TAB><regex>'";
+            return false;
+        }
+        var pattern = assertion[(separator + 1)..];
+        var actualCount = Regex.Matches(
+            llvm,
+            pattern,
+            RegexOptions.CultureInvariant).Count;
+        if (actualCount != expectedCount)
+        {
+            error = $"LLVM regex '{pattern}' matched {actualCount} time(s), expected {expectedCount}";
+            return false;
+        }
+    }
+
     error = "";
     return true;
 }
@@ -1719,6 +1801,141 @@ static IEnumerable<string> ReadAssertions(string path)
     return File.Exists(path)
         ? File.ReadLines(path, Encoding.UTF8).Where(line => !string.IsNullOrWhiteSpace(line))
         : [];
+}
+
+internal sealed class AffectedDependencyGraph
+{
+    private static readonly Regex NamespacePattern = new(
+        @"^\s*namespace\s+(?<name>[A-Za-z_][A-Za-z0-9_.]*)\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex ImportPattern = new(
+        @"^\s*import\s+(?<name>[A-Za-z_][A-Za-z0-9_.]*)\b",
+        RegexOptions.Compiled);
+
+    private readonly IReadOnlySet<string> _affectedPaths;
+    private readonly Dictionary<string, string[]> _moduleSources =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string[]> _sourceImports =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public AffectedDependencyGraph(string repoRoot, IReadOnlySet<string> affectedPaths)
+    {
+        _affectedPaths = affectedPaths;
+        HasGlobalCompilerImpact = affectedPaths.Any(path =>
+            IsUnder(path, Path.Combine(repoRoot, "src", "Sollang.Compiler"))
+            || IsUnder(path, Path.Combine(repoRoot, "src", "Sollang.Compiler.Generators"))
+            || IsUnder(path, Path.Combine(repoRoot, "syntax"))
+            || path.Equals(
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "Program.cs"),
+                StringComparison.OrdinalIgnoreCase));
+
+        if (affectedPaths.Count == 0)
+        {
+            return;
+        }
+
+        var stdlibRoot = Path.Combine(repoRoot, "stdlib");
+        var modules = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var source in Directory.EnumerateFiles(stdlibRoot, "*.slg", SearchOption.AllDirectories))
+        {
+            var module = ReadNamespace(source);
+            if (module is null)
+            {
+                continue;
+            }
+
+            if (!modules.TryGetValue(module, out var sources))
+            {
+                sources = [];
+                modules.Add(module, sources);
+            }
+            sources.Add(Path.GetFullPath(source));
+        }
+
+        foreach (var (module, sources) in modules)
+        {
+            _moduleSources.Add(module, sources.Order(StringComparer.Ordinal).ToArray());
+        }
+    }
+
+    public bool HasGlobalCompilerImpact { get; }
+
+    public bool DependsOnAffected(IEnumerable<string> roots)
+    {
+        if (_affectedPaths.Count == 0)
+        {
+            return true;
+        }
+
+        var pending = new Queue<string>(roots.Select(Path.GetFullPath));
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (pending.TryDequeue(out var source))
+        {
+            if (!visited.Add(source))
+            {
+                continue;
+            }
+            if (_affectedPaths.Contains(source))
+            {
+                return true;
+            }
+            if (!File.Exists(source))
+            {
+                continue;
+            }
+
+            foreach (var importedModule in ReadImports(source))
+            {
+                if (!_moduleSources.TryGetValue(importedModule, out var importedSources))
+                {
+                    continue;
+                }
+                foreach (var importedSource in importedSources)
+                {
+                    pending.Enqueue(importedSource);
+                }
+            }
+        }
+        return false;
+    }
+
+    private string[] ReadImports(string source)
+    {
+        if (_sourceImports.TryGetValue(source, out var imports))
+        {
+            return imports;
+        }
+
+        imports = File.ReadLines(source)
+            .Select(line => ImportPattern.Match(line))
+            .Where(static match => match.Success)
+            .Select(static match => match.Groups["name"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        _sourceImports.Add(source, imports);
+        return imports;
+    }
+
+    private static string? ReadNamespace(string source)
+    {
+        foreach (var line in File.ReadLines(source))
+        {
+            var match = NamespacePattern.Match(line);
+            if (match.Success)
+            {
+                return match.Groups["name"].Value;
+            }
+        }
+        return null;
+    }
+
+    private static bool IsUnder(string path, string directory)
+    {
+        var prefix = Path.GetFullPath(directory).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 internal sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);

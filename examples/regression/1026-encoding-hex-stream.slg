@@ -1,0 +1,43 @@
+import std.encoding.hex as hex
+
+run: -> Result<Unit, hex.Error> uses Console {
+    hex.lower() => lower
+    hex.upper() => upper
+    [UInt8(0), 1, 171, 205, 239, 255] => input
+    lower -> encode(input, 12)? => encoded
+    upper -> encode(input, 12)? => encodedUpper
+    lower -> decode(encoded, 6)? => decoded
+
+    lower -> decoder(3)? => stream!
+    [UInt8; ~] => streamed!
+    stream! -> write([48], streamed!)? => firstWritten
+    stream! -> write([49, 97, 98], streamed!)? => secondWritten
+    stream! -> write([99, 100], streamed!)? => thirdWritten
+    stream! -> finish?
+
+    lower -> decode([48, 49, 122, 48], 2) -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { "invalid=$(error.offset)" -> println }
+    }
+    lower -> decode([48], 1) -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { "odd=$(error.offset)" -> println }
+    }
+    lower -> encode(input, 11) -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { "limit=$(error.offset)" -> println }
+    }
+
+    "hex=$(encoded -> len),$(encoded[0]),$(encoded[11])" -> println
+    "upper=$(encodedUpper[4]),$(encodedUpper[5])" -> println
+    "decoded=$(decoded -> len),$(decoded[2]),$(decoded[5])" -> println
+    "stream=$firstWritten,$secondWritten,$thirdWritten,$(streamed![0]),$(streamed![2])" -> println
+    Result<Unit, hex.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected failure at $(error.offset)" -> println }
+    }
+}

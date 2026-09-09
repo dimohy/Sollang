@@ -1,0 +1,36 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# Reserve must remain a canonical mutation call with receiver and capacity operands.
+main {
+    [
+        "stdlib/std/compress/gzip.slg",
+        "stdlib/std/compress/gzip/error.slg"; ~
+    ] => sourcePaths
+    sourcePaths -> semanticContext.prepareFiles => context
+    context -> typedIr.lowerContext => ir
+
+    0 => reserveCalls!
+    0 => invalid!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        ((node.kind == 6 or node.kind == 9)
+            and node.opcode == -271
+            and node.operand0 >= 0
+            and node.operand1 >= 0
+            and ir[node.operand0].typeKind == 3)
+                -> if {
+            reserveCalls! + 1 => reserveCalls!
+        }
+        ((node.kind == 6 or node.kind == 9)
+            and node.opcode == -271
+            and (node.operand0 < 0
+                or node.operand1 < 0))
+                -> if {
+            invalid! + 1 => invalid!
+        }
+        index! + 1 => index!
+    }
+    "reserve=$(reserveCalls!) invalid=$(invalid!)" -> println
+}

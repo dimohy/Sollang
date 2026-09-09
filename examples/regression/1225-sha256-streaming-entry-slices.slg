@@ -1,0 +1,35 @@
+import std.crypto.sha256
+
+same left: [UInt8; 32], right: [UInt8; 32] -> Bool {
+    0 => index!
+    index! < 32 -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+expectedBlockDigest: -> [UInt8; 32] => [
+245, 165, 253, 66, 209, 106, 32, 48,
+39, 152, 239, 110, 211, 9, 151, 155,
+67, 0, 61, 35, 32, 217, 240, 232,
+234, 152, 49, 169, 39, 89, 251, 75]
+
+main {
+    sha256.create() => split!
+    split! -> update([97])
+    split! -> update([98, 99])
+    split! -> finish => splitDigest
+    [UInt8(186), 120, 22, 191, 143, 1, 207, 234, 65, 65, 64, 222, 93, 174, 34, 35, 176, 3, 97, 163, 150, 23, 122, 156, 180, 16, 255, 97, 242, 0, 21, 173] => directDigest
+
+    sha256.create() => blocks!
+    blocks! -> update([0; 32])
+    blocks! -> update([0; 32])
+    blocks! -> finish => blockDigest
+    [UInt8(245), 165, 253, 66, 209, 106, 32, 48, 39, 152, 239, 110, 211, 9, 151, 155, 67, 0, 61, 35, 32, 217, 240, 232, 234, 152, 49, 169, 39, 89, 251, 75] => directBlockDigest
+    expectedBlockDigest() => expectedDigest
+
+    same(splitDigest, directDigest) -> if { "split=ok" } else { "split=failed" } -> println
+    same(blockDigest, expectedDigest) -> if { "stream-block=ok" } else { "stream-block=failed" } -> println
+    same(directBlockDigest, expectedDigest) -> if { "direct-block=ok" } else { "direct-block=failed" } -> println
+}

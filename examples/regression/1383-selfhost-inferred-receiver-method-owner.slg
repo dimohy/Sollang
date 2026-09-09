@@ -1,0 +1,57 @@
+import sollang.compiler.semantic.context as semanticContext
+
+# An inferred receiver keeps the result owner of its initializer call. A later
+# same-name method on the initializer receiver must not replace that owner, and
+# a nullary Unit method on the inferred value must remain a call.
+main {
+    """"
+        namespace codec
+
+        public enum Polynomial {
+            Ieee
+        }
+
+        public struct Hasher {
+            public state: UInt32
+        }
+
+        impl Polynomial {
+            public hasher: self -> Hasher => Hasher { state: 1 }
+            public checksum: self, input: [UInt8] -> UInt32 => UInt32(input -> len)
+        }
+
+        impl Hasher {
+            public checksum: self -> UInt32 => self.state
+            public reset: mut self -> Unit { UInt32(0) => self.state }
+        }
+    """" => codecSource
+
+    """"
+        namespace sample
+
+        import codec
+
+        main {
+            codec.Polynomial.Ieee -> hasher => hasher!
+            hasher! -> checksum => before
+            hasher! -> reset
+            hasher! -> checksum => after
+            "before=$before,after=$after" -> println
+        }
+    """" => sampleSource
+
+    [codecSource, sampleSource; ~] -> semanticContext.prepare => context
+    0 => resolved!
+    0 => failed!
+    0 => callIndex!
+    callIndex! < (context.calls -> len) -> while {
+        context.calls[callIndex!] => call
+        call.sourceModule == 1 and call.functionSymbol >= 0
+            -> if {
+            call.status == 0 -> if { resolved! + 1 => resolved! }
+            call.status != 0 -> if { failed! + 1 => failed! }
+        }
+        callIndex! + 1 => callIndex!
+    }
+    "inferred-method-owner=$(resolved!),$(failed!)" -> println
+}

@@ -1,0 +1,25 @@
+# A Result-propagated nominal value keeps its receiver type for inherent method resolution.
+struct Counter {
+    value: Int
+}
+
+impl Counter {
+    public read: self -> Int => self.value
+}
+
+create value: Int -> Result<Counter, Int> {
+    Result<Counter, Int>.Ok(Counter { value: value })
+}
+
+readCreated value: Int -> Result<Int, Int> {
+    create(value)? => counter
+    counter -> read => result
+    Result<Int, Int>.Ok(result)
+}
+
+main {
+    readCreated(42) -> when {
+        Ok(value) { "propagated-method=$value" -> println }
+        Err(error) { "unexpected=$error" -> println }
+    }
+}

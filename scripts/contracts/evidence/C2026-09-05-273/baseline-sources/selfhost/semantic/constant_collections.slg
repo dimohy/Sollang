@@ -1,0 +1,222 @@
+namespace sollang.compiler.semantic.constant_collections
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax as syntax
+import sollang.compiler.semantic.constant_expressions as expression
+import sollang.compiler.semantic.constant_integer as arithmetic
+import syntax.generated.slg as grammar
+
+public enum Error {
+    InvalidAst(Int)
+    InvalidRange(Int)
+    ExpansionLimit(Int)
+    InvalidSelector(Int)
+    Expression(expression.Error)
+}
+
+# A computed value keeps its original expression identity. It is never encoded
+# in a source-token index or produced by rewriting the user's source text.
+public struct Constant {
+    public value: Long
+    public sourceNode: Int
+}
+
+public struct Expansion {
+    public constants: [Constant; ~]
+    public dictionary: Bool
+}
+
+enum ItemName {
+    Implicit
+    Named(syntax.SourceSpan)
+}
+
+struct Range {
+    start: Long
+    count: Int
+}
+
+compilePlan source: Text, nodes: ref [ast.AstNode; ~], root: Int, itemName: Text -> Result<expression.Plan, Error> {
+    source -> expression.compile(nodes, root, itemName) -> when {
+        Ok(plan) { Result<expression.Plan, Error>.Ok(plan) }
+        Err(error) { Error.Expression(error) -> Result<expression.Plan, Error>.Err }
+    }
+}
+
+evaluatePlan plan: mut expression.Plan, item: Long -> Result<Long, Error> {
+    plan -> evaluate(item) -> when {
+        Ok(value) { value -> Result<Long, Error>.Ok }
+        Err(error) { Error.Expression(error) -> Result<Long, Error>.Err }
+    }
+}
+
+constant source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<Long, Error> {
+    source -> compilePlan(nodes, root, "")? => plan!
+    plan! -> evaluatePlan(0)
+}
+
+range source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<Range, Error> {
+    nodes[root].operatorKind != grammar.tokenIdRange()
+        and nodes[root].operatorKind != grammar.tokenIdRangeUntil()
+        -> if {
+            Error.InvalidAst(root) -> Result<Range, Error>.Err -> return
+        }
+    -1 => first!
+    -1 => second!
+    0 => count!
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!].parent == root -> if {
+            count! + 1 => count!
+            first! < 0 -> if {
+                index! => first!
+            } else {
+                nodes[index!].start < nodes[first!].start -> if {
+                    first! => second!
+                    index! => first!
+                } else { index! => second! }
+            }
+        }
+        index! + 1 => index!
+    }
+    count! != 2 -> if {
+        Error.InvalidAst(root) -> Result<Range, Error>.Err -> return
+    }
+    source -> constant(nodes, first!)? => start
+    source -> constant(nodes, second!)? => end
+    end < start -> if {
+        Error.InvalidRange(root) -> Result<Range, Error>.Err -> return
+    }
+    end -> arithmetic.evaluateBinary(start, arithmetic.Operator.Subtract) -> when {
+        Ok(distance) { distance -> Result<Long, Error>.Ok }
+        Err(_) { Error.ExpansionLimit(root) -> Result<Long, Error>.Err }
+    }? => distance
+    Long(0) => inclusive!
+    nodes[root].operatorKind == grammar.tokenIdRange()
+        -> if { 1 => inclusive! }
+    distance > 100_000 - inclusive! -> if {
+        Error.ExpansionLimit(root) -> Result<Range, Error>.Err -> return
+    }
+    Range { start: start, count: Int(distance + inclusive!) } -> Result<Range, Error>.Ok
+}
+
+itemName source: Text, nodes: ref [ast.AstNode; ~], rangeRoot: Int, eachRoot: Int -> Result<ItemName, Error> {
+    source -> lexer.lex => tokens
+    nodes[rangeRoot].firstToken + nodes[rangeRoot].tokenCount => index!
+    nodes[eachRoot].firstToken + nodes[eachRoot].tokenCount => end
+    index! < 0 or end > (tokens -> len) -> if {
+        Error.InvalidAst(eachRoot) -> Result<ItemName, Error>.Err -> return
+    }
+    false => sawEach!
+    index! < end -> while {
+        tokens[index!] => token
+        token.kind == grammar.tokenIdLeftBrace() -> if {
+            sawEach! -> if { ItemName.Implicit -> Result<ItemName, Error>.Ok -> return }
+            Error.InvalidAst(eachRoot) -> Result<ItemName, Error>.Err -> return
+        }
+        token.kind == grammar.tokenIdIdentifier() -> if {
+            sawEach! -> if {
+                ItemName.Named(token.span) -> Result<ItemName, Error>.Ok -> return
+            }
+            (source -> slice(token.span.start, token.span.length)) != "each"
+                -> if {
+                    Error.InvalidAst(eachRoot) -> Result<ItemName, Error>.Err -> return
+                }
+            true => sawEach!
+        }
+        index! + 1 => index!
+    }
+    Error.InvalidAst(eachRoot) -> Result<ItemName, Error>.Err
+}
+
+# Expand one range or each element in its owning array/dictionary. Dictionary
+# constants are ordered key,value pairs; every value retains its selector node.
+public expand source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<Expansion, Error> {
+    root < 0 or root >= (nodes -> len) -> if {
+        Error.InvalidAst(root) -> Result<Expansion, Error>.Err -> return
+    }
+    nodes[root] => node
+    node.parent < 0 or node.parent >= (nodes -> len)
+        -> if {
+        Error.InvalidAst(root) -> Result<Expansion, Error>.Err -> return
+    }
+    nodes[node.parent].kind == 38 => dictionary
+    nodes[node.parent].kind != 37 and not dictionary
+        -> if {
+        Error.InvalidAst(root) -> Result<Expansion, Error>.Err -> return
+    }
+    node.kind == 63 and not dictionary -> if {
+        source -> range(nodes, root)? => bounds
+        [Constant; ~] => constants!
+        0 => index!
+        index! < bounds.count -> while {
+            constants! -> push(Constant { value: bounds.start + Long(index!), sourceNode: root })
+            index! + 1 => index!
+        }
+        Expansion { constants: constants!, dictionary: false } -> Result<Expansion, Error>.Ok -> return
+    }
+    node.kind != 83 -> if {
+        Error.InvalidSelector(root) -> Result<Expansion, Error>.Err -> return
+    }
+    -1 => rangeRoot!
+    -1 => first!
+    -1 => second!
+    0 => selectors!
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!].parent == root -> if {
+            nodes[index!].kind == 63 and rangeRoot! < 0 -> if {
+                index! => rangeRoot!
+            } else {
+                selectors! + 1 => selectors!
+                first! < 0 -> if {
+                    index! => first!
+                } else {
+                    nodes[index!].start < nodes[first!].start -> if {
+                        first! => second!
+                        index! => first!
+                    } else { index! => second! }
+                }
+            }
+        }
+        index! + 1 => index!
+    }
+    dictionary -> if { 2 } else { 1 } => expectedSelectors
+    rangeRoot! < 0 or selectors! != expectedSelectors
+        -> if {
+        Error.InvalidSelector(root) -> Result<Expansion, Error>.Err -> return
+    }
+    source -> range(nodes, rangeRoot!)? => bounds
+    bounds.count == 0 -> if {
+        Expansion { constants: [Constant; ~], dictionary: dictionary } -> Result<Expansion, Error>.Ok -> return
+    }
+    source -> itemName(nodes, rangeRoot!, root)? => nameSource
+    nameSource -> when {
+        Implicit { "it" }
+        Named(span) { source -> slice(span.start, span.length) }
+    } => name
+    source -> compilePlan(nodes, first!, name)? => firstPlan!
+    [Constant; ~] => constants!
+    dictionary -> if {
+        source -> compilePlan(nodes, second!, name)? => secondPlan!
+        0 => itemIndex!
+        itemIndex! < bounds.count -> while {
+            bounds.start + Long(itemIndex!) => item
+            firstPlan! -> evaluatePlan(item)? => key
+            secondPlan! -> evaluatePlan(item)? => value
+            constants! -> push(Constant { value: key, sourceNode: first! })
+            constants! -> push(Constant { value: value, sourceNode: second! })
+            itemIndex! + 1 => itemIndex!
+        }
+    } else {
+        0 => itemIndex!
+        itemIndex! < bounds.count -> while {
+            bounds.start + Long(itemIndex!) => item
+            firstPlan! -> evaluatePlan(item)? => value
+            constants! -> push(Constant { value: value, sourceNode: first! })
+            itemIndex! + 1 => itemIndex!
+        }
+    }
+    Expansion { constants: constants!, dictionary: dictionary } -> Result<Expansion, Error>.Ok
+}

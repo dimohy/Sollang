@@ -1,0 +1,55 @@
+import std.net.quic.error as errors
+import std.net.quic.stream_state as streams
+
+printPeer identity: Option<streams.StreamIdentity> -> Unit uses Console {
+    identity -> when {
+        Some(value) { "peer=$(value.id)" -> println }
+        None { "peer=none" -> println }
+    }
+}
+
+verify: -> Result<Unit, errors.Error> uses Console {
+    streams.initialStreamRegistry(false, 4, 4, 0, 0, 1, 1)? => closed!
+    closed! -> openBidirectional -> when {
+        Ok(value) { "missing-zero-limit" -> println }
+        Err(error) { "zero=$(error.code)" -> println }
+    }
+
+    streams.initialStreamRegistry(false, 4, 4, 2, 2, 4, 4)? => client!
+    client! -> openBidirectional? => clientFirst
+    client! -> openBidirectional? => clientSecond
+    client! -> openBidirectional -> when {
+        Ok(value) { "missing-client-limit" -> println }
+        Err(error) { "client=$(clientFirst.id),$(clientSecond.id),$(error.code)" -> println }
+    }
+
+    streams.initialStreamRegistry(true, 4, 4, 2, 2, 4, 4)? => server!
+    server! -> openBidirectional? => serverFirst
+    server! -> openBidirectional? => serverSecond
+    "server=$(serverFirst.id),$(serverSecond.id)" -> println
+
+    server! -> discoverPeerBidirectional(8)?
+    server! -> discoverPeerBidirectional(4)?
+    server! -> nextPeerBidirectional -> printPeer
+    server! -> nextPeerBidirectional -> printPeer
+    server! -> nextPeerBidirectional -> printPeer
+    server! -> nextPeerBidirectional -> printPeer
+
+    streams.initialStreamRegistry(true, 4, 4, 1, 1, 2, 2)? => bounded!
+    bounded! -> discoverPeerBidirectional(8) -> when {
+        Ok(done) { "missing-pending-limit" -> println }
+        Err(error) => error.kind -> when {
+            QueueLimitExceeded { "bounded=$(error.code)" -> println }
+            else { "wrong-bounded-kind=$(error.code)" -> println }
+        }
+    }
+    bounded! -> nextPeerBidirectional -> printPeer
+    Result<Unit, errors.Error>.Ok
+}
+
+main {
+    verify() -> when {
+        Ok(done) {}
+        Err(error) { "unexpected=$(error.code)" -> println }
+    }
+}

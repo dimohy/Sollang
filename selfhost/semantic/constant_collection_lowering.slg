@@ -1,0 +1,197 @@
+namespace sollang.compiler.semantic.constant_collection_lowering
+
+import sollang.compiler.ast as ast
+import sollang.compiler.semantic.constant_collections as collection
+import syntax.generated.slg as grammar
+
+# Values are separate from source tokens. Entries are ordered by the final
+# source-local AST identity, including when a selector emits several values.
+public struct Literal {
+    public astNode: Int
+    public value: Long
+}
+
+public struct Lowering {
+    public nodes: [ast.AstNode; ~]
+    public literals: [Literal; ~]
+}
+
+# Capture the span while the original AST owner is still alive. A failed
+# analysis never reparses the source to recover a consumed node index.
+public struct Failure {
+    public error: collection.Error
+    public start: UIntSize
+    public length: UIntSize
+}
+
+atNode error: collection.Error, node: ast.AstNode -> Failure {
+    Failure { error: error, start: node.start, length: node.length }
+}
+
+expand source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<collection.Expansion, Failure> {
+    source -> collection.expand(nodes, root) -> when {
+        Ok(expansion) { expansion -> Result<collection.Expansion, Failure>.Ok }
+        Err(error) {
+            error -> when {
+                InvalidAst(index) { error -> atNode(nodes[index]) }
+                InvalidRange(index) { error -> atNode(nodes[index]) }
+                ExpansionLimit(index) { error -> atNode(nodes[index]) }
+                InvalidSelector(index) { error -> atNode(nodes[index]) }
+                Expression(failure) {
+                    Failure { error: error, start: failure.start, length: failure.length }
+                }
+            } -> Result<collection.Expansion, Failure>.Err
+        }
+    }
+}
+
+withParent node: ast.AstNode, parent: Int -> ast.AstNode {
+    ast.AstNode {
+        kind: node.kind
+        parent: parent
+        cstRuleId: node.cstRuleId
+        operatorKind: node.operatorKind
+        payloadToken: node.payloadToken
+        secondaryToken: node.secondaryToken
+        tertiaryToken: node.tertiaryToken
+        flags: node.flags
+        firstToken: node.firstToken
+        tokenCount: node.tokenCount
+        start: node.start
+        length: node.length
+    }
+}
+
+number origin: ast.AstNode, parent: Int -> ast.AstNode {
+    ast.AstNode {
+        kind: 14
+        parent: parent
+        cstRuleId: grammar.ruleIdNumberExpression()
+        operatorKind: -1
+        payloadToken: origin.firstToken
+        secondaryToken: -1
+        tertiaryToken: -1
+        flags: 0
+        firstToken: origin.firstToken
+        tokenCount: origin.tokenCount
+        start: origin.start
+        length: origin.length
+    }
+}
+
+# Index children once: AST normalization can append parents after children.
+# Removing a range/selector subtree must not depend on physical parent order.
+public lower nodes: move [ast.AstNode; ~], source: Text -> Result<Lowering, Failure> {
+    [Int; ~] => roots!
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!] => node
+        node.parent >= 0 and node.parent < (nodes -> len)
+            -> if {
+                nodes[node.parent].kind => parentKind
+                (node.kind == 63 and parentKind == 37)
+                    or (node.kind == 83 and (parentKind == 37 or parentKind == 38))
+                    -> if { roots! -> push(index!) }
+            }
+        index! + 1 => index!
+    }
+    (roots! -> len) == 0 -> if {
+        Lowering { nodes: nodes, literals: [Literal; ~] } -> Result<Lowering, Failure>.Ok -> return
+    }
+
+    [Int; ~] => firstChild!
+    [Int; ~] => nextSibling!
+    [Int; ~] => replacementStart!
+    [Int; ~] => replacementCount!
+    [Int; ~] => relocated!
+    [Bool; ~] => removed!
+    0 => index!
+    index! < (nodes -> len) -> while {
+        firstChild! -> push(-1)
+        nextSibling! -> push(-1)
+        replacementStart! -> push(-1)
+        replacementCount! -> push(0)
+        relocated! -> push(-1)
+        removed! -> push(false)
+        index! + 1 => index!
+    }
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!].parent => parent
+        parent >= 0 and parent < (nodes -> len) -> if {
+            firstChild![parent] => nextSibling![index!]
+            index! => firstChild![parent]
+        }
+        index! + 1 => index!
+    }
+
+    [collection.Constant; ~] => constants!
+    roots! -> each root {
+        source -> expand(nodes, root)? => expansion
+        constants! -> len => replacementStart![root]
+        expansion.constants -> len => replacementCount![root]
+        expansion.constants -> each value { constants! -> push(value) }
+        [Int; ~] => pending!
+        pending! -> push(root)
+        0 => pendingIndex!
+        pendingIndex! < (pending! -> len) -> while {
+            pending![pendingIndex!] => current
+            true => removed![current]
+            firstChild![current] => child!
+            child! >= 0 -> while {
+                pending! -> push(child!)
+                nextSibling![child!] => child!
+            }
+            pendingIndex! + 1 => pendingIndex!
+        }
+    }
+
+    [ast.AstNode; ~] => lowered!
+    [Literal; ~] => literals!
+    0 => index!
+    index! < (nodes -> len) -> while {
+        replacementStart![index!] >= 0 -> if {
+            replacementStart![index!] => start
+            0 => item!
+            item! < replacementCount![index!] -> while {
+                constants![start + item!] => value
+                Literal { astNode: lowered! -> len, value: value.value } => literal
+                literals! -> push(literal)
+                nodes[value.sourceNode] -> number(nodes[index!].parent) => literalNode
+                lowered! -> push(literalNode)
+                item! + 1 => item!
+            }
+        } else {
+            not removed![index!] -> if {
+                lowered! -> len => relocated![index!]
+                lowered! -> push(nodes[index!])
+            }
+        }
+        index! + 1 => index!
+    }
+    0 => index!
+    index! < (lowered! -> len) -> while {
+        lowered![index!].parent => oldParent
+        oldParent >= 0 -> if {
+            lowered![index!] -> withParent(relocated![oldParent]) => node
+            node => lowered![index!]
+        }
+        index! + 1 => index!
+    }
+    Lowering { nodes: lowered!, literals: literals! } -> Result<Lowering, Failure>.Ok
+}
+
+# Ordinary source literals have no entry. Binary search avoids a dense table
+# on every source while keeping expanded collections out of whole-AST scans.
+public find literals: ref [Literal; ~], start: Int, count: Int, astNode: Int -> Option<Long> {
+    start => low!
+    start + count => high!
+    low! < high! -> while {
+        low! + (high! - low!) / 2 => middle
+        literals[middle].astNode < astNode -> if {
+            middle + 1 => low!
+        } else { middle => high! }
+    }
+    low! < start + count and literals[low!].astNode == astNode
+        -> if { literals[low!].value -> Option<Long>.Some } else { Option<Long>.None }
+}

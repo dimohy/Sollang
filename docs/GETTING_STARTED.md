@@ -807,8 +807,9 @@ branches and phi nodes, not runtime dispatch. The parser treats `true` and
 an SSA accumulator phi and returns the final accumulator value.
 
 The `sys.io` module is implemented in Sollang under `stdlib/sys/io.slg`.
-`stdlib/sys/runtime.slg` declares the lower `sys.runtime.*` intrinsic boundary.
-These files use `namespace sys.io`, `namespace sys.runtime`, and
+Responsibility files under `stdlib/sys/runtime/` declare the lower
+`sys.runtime.*` intrinsic boundary; there is no runtime monolith. These files
+use `namespace sys.io`, `namespace sys.runtime`, and
 `import sys.runtime as rt` so the module body avoids repeated fully qualified
 names. The compiler loads these standard library files before user code and
 globally aliases `print`, `println`, and `readInt` to `sys.io.print`,
@@ -908,20 +909,23 @@ main {
 }
 ```
 
-For hot native input, `sys.event.mouseEvents` returns an affine
-`EventStream<MouseEvent>`. Its queue has a fixed capacity for its whole
+For hot native mouse input, `sys.input.mouse.source` validates a bounded source
+plan, and `source -> events` consumes that plan to create an affine
+`EventStream<mouse.Event>`. Its queue has a fixed capacity for its whole
 lifetime and an explicit overflow policy. `stop` cancels and joins the producer
 before restoring the console mode:
 
 ```sollang
-import sys.event
+import sys.input.mouse
 
-main {
-    32 -> event.mouseEvents(event.EventOverflowPolicy.CoalesceMotion) => events
+readMouse: -> Result<Unit, mouse.Error> uses Console {
+    32 -> mouse.source(mouse.OverflowPolicy.CoalesceMotion)? => source
+    source -> events => events
     events -> each event {
         "mouse $(event.x),$(event.y)" -> println
         stop
     }
+    Result<Unit, mouse.Error>.Ok
 }
 ```
 
@@ -1105,14 +1109,16 @@ approved syntax.
   module as a separate source file and reads its public metadata
 - `examples/regression/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/regression/expected`: expected stdout/stdin fixtures for executable samples
-- `stdlib/sys/runtime.slg`: standard library intrinsic boundary declarations
+- `stdlib/sys/runtime/*.slg`: responsibility-split runtime ABI declarations
 - `stdlib/sys/io.slg`: Sollang implementation of `sys.io` wrappers
 - `stdlib/sys/random.slg`: Sollang wrappers for pseudo-random runtime
   intrinsics
 - `stdlib/sys/file.slg`: affine sync/async file owners, legacy sorted-`Int`
   helpers, canonical scalar I/O, and the explicit `BinarySerializable` contract
-- `stdlib/sys/event.slg`: bounded affine `EventStream<MouseEvent>` creation and
-  explicit `DropNewest`, `DropOldest`, or `CoalesceMotion` overflow policy
+- `stdlib/sys/input/mouse.slg`: validated bounded mouse `Source` plans and the
+  explicit `DropNewest`, `DropOldest`, or `CoalesceMotion` overflow policy;
+  `stdlib/sys/runtime/mouse_event.slg` contains only the consuming runtime ABI
+  that turns a moved plan into an affine `EventStream<mouse.Event>` owner
 - `stdlib/std/sequence.slg`: output-inferred lazy Range `map`, array
   `mapArray`, and allocation-free `filter`, `tap`, `beforeEach`, `afterEach`,
   `flatMap`, `take`, and `skip` stream stages

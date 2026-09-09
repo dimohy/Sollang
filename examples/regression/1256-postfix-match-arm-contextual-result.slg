@@ -1,0 +1,41 @@
+enum Choice {
+    Empty
+    Present(Int)
+}
+
+struct Error {
+    code: Int
+}
+
+struct Read {
+    value: Int
+}
+
+struct Done {
+    value: Int
+}
+
+read value: Int -> Result<Read, Error> {
+    Result<Read, Error>.Ok(Read { value: value })
+}
+
+finish choice: Choice -> Result<Done, Error> {
+    choice -> when {
+        Empty { Result<Done, Error>.Err(Error { code: 1 }) }
+        Present(value) {
+            read(value)? => current
+            current.value > 0 -> if {
+                Result<Done, Error>.Ok(Done { value: current.value + 1 })
+            } else {
+                Result<Done, Error>.Err(Error { code: 2 })
+            }
+        }
+    }
+}
+
+main {
+    Choice.Present(40) -> finish -> when {
+        Ok(done) { "done=$(done.value)" -> println }
+        Err(error) { "error=$(error.code)" -> println }
+    }
+}

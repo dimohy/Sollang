@@ -1,0 +1,40 @@
+struct Request {
+    base: Int
+    count: Int
+}
+
+struct Batch {
+    values: [Int; ~]
+}
+
+lower request: Request -> Batch {
+    [Int; ~] => values!
+    0 => index!
+    index! < request.count -> while {
+        values! -> push(request.base + index!)
+        index! + 1 => index!
+    }
+    Batch { values: values! }
+}
+
+lowerAll requests: [Request; ~] -> [Batch; ~] {
+    # Copyable request structs and owned aggregate results cross the native
+    # worker boundary directly instead of silently selecting the serial path.
+    requests -> parallel request {
+        request -> lower
+    } => batches
+    batches
+}
+
+makeRequests: -> [Request; ~] {
+    [Request; ~] => requests!
+    requests! -> push(Request { base: 10, count: 2 })
+    requests! -> push(Request { base: 20, count: 3 })
+    requests!
+}
+
+main {
+    makeRequests() => requests
+    requests -> lowerAll => batches
+    "batches=$(batches -> len)" -> println
+}

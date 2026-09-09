@@ -1,0 +1,41 @@
+enum Mode {
+    Buffered
+    Fresh
+}
+
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+consume owner: move Owner -> Int {
+    owner.bytes -> len
+}
+
+impl Owner {
+    forward: move self, fail: Bool, mode: Mode -> Result<Int, Int> {
+        self => current
+        fail -> if { Result<Int, Int>.Err(7) -> return }
+        mode -> when {
+            Buffered {
+                current -> consume => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+            Fresh {
+                current -> consume => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+        }
+        Result<Int, Int>.Err(1)
+    }
+}
+
+main {
+    Owner { bytes: [1, 2, 3; ~] } -> forward(false, Mode.Buffered) -> when {
+        Err(_) { "path-sensitive-owner-consume=false" -> println }
+        Ok(count) { "path-sensitive-owner-consume=$(count == 3)" -> println }
+    }
+    Owner { bytes: [4, 5; ~] } -> forward(true, Mode.Fresh) -> when {
+        Err(error) { "path-sensitive-owner-error=$(error == 7)" -> println }
+        Ok(_) { "path-sensitive-owner-error=false" -> println }
+    }
+}

@@ -1,0 +1,62 @@
+import std.compress.brotli.static_dictionary as dictionary
+
+sameBytes actual: [UInt8], expected: [UInt8] -> Bool {
+    (actual -> len) == (expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (actual -> len) -> while {
+        actual[index!] == expected[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+resolves resolver: dictionary.Resolver, distance: Int, expected: [UInt8] -> Result<Bool, dictionary.Error> {
+    [UInt8; ~] => output!
+    resolver -> append(4, distance, 0, output!)? => appended
+    output! -> sameBytes(expected) => bytesOk
+    Result<Bool, dictionary.Error>.Ok(appended == (expected -> len) and bytesOk)
+}
+
+check resolver: dictionary.Resolver -> Result<Bool, dictionary.Error> {
+    resolver -> resolves(1, [116, 105, 109, 101])? => identity
+    resolver -> resolves(1_025, [116, 105, 109, 101, 32])? => suffix
+    resolver -> resolves(2_049, [32, 116, 105, 109, 101, 32])? => wrapped
+    resolver -> resolves(3_073, [105, 109, 101])? => omitted
+    resolver -> resolves(4_097, [84, 105, 109, 101, 32])? => title
+    resolver -> resolves(45_057, [84, 73, 77, 69])? => upper
+    resolver -> resolves(50_177, [116, 105, 109, 105, 110, 103, 32])? => derived
+    resolver -> resolves(70_316, [75, 77, 194, 146, 32])? => fermentTwo
+    resolver -> resolves(70_160, [226, 128, 156, 83, 32])? => fermentThree
+
+    false => invalidTransform!
+    [UInt8; ~] => invalidOutput!
+    resolver -> append(4, 123_905, 0, invalidOutput!) -> when {
+        Err(_) { (invalidOutput! -> len) == 0 => invalidTransform! }
+        Ok(_) { }
+    }
+
+    false => transactional!
+    dictionary.Limits { maxOutputBytes: 3 } -> resolver? => small
+    [UInt8; ~] => limitedOutput!
+    small -> append(4, 1, 0, limitedOutput!) -> when {
+        Err(_) { (limitedOutput! -> len) == 0 => transactional! }
+        Ok(_) { }
+    }
+
+    identity and suffix and wrapped and omitted and title and upper
+        and derived and fermentTwo and fermentThree
+        and invalidTransform! and transactional! => passed
+    Result<Bool, dictionary.Error>.Ok(passed)
+}
+
+main {
+    dictionary.Limits { maxOutputBytes: 64 } -> resolver -> when {
+        Err(_) { "static-dictionary=false" -> println }
+        Ok(resolver) {
+            resolver -> check -> when {
+                Err(_) { "static-dictionary=false" -> println }
+                Ok(passed) { "static-dictionary=$passed" -> println }
+            }
+        }
+    }
+}

@@ -1,0 +1,35 @@
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+
+struct Unrelated {
+    before: UInt64
+    after: UInt64
+}
+
+enum Noise {
+    Value(UInt64)
+    Empty
+}
+
+unrelated value: UInt64 -> Bool => value == 11
+
+verifyDataBlocked: -> Result<Bool, errors.Error> {
+    Unrelated {
+        before: 1
+        after: 2
+    } => noise
+    unrelated(noise.before) => ignored
+    frames.Value.DataBlocked(70_000) -> frames.encodeValue? => encoded
+    frames.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        DataBlocked(limit) { Result<Bool, errors.Error>.Ok(limit == 70_000 and not ignored) }
+        else { Result<Bool, errors.Error>.Ok(false) }
+    }
+}
+
+main {
+    verifyDataBlocked() -> when {
+        Ok(valid) { valid -> println }
+        Err(error) { false -> println }
+    }
+}

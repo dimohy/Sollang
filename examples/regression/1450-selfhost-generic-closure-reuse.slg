@@ -1,0 +1,57 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    """"
+    identity<T> value: T -> T => value
+    struct Algorithms { }
+    impl Algorithms {
+        echo<T>: self, value: T -> T { value -> identity }
+    }
+    main {
+        Algorithms { } -> echo(300) -> println
+        Algorithms { } -> echo("nested") -> println
+        Algorithms { } -> echo(301) -> println
+    }
+    """" => source
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved!
+    prepared -> typedIr.lowerResolvedContext(resolved!) => nodes!
+    nodes! -> typedIr.materializeGenericClosure(prepared, resolved!) => instances
+    nodes! -> typedIr.bindGenericBodies(instances) => bindings
+    [Bool; ~] => seen!
+    0 => index!
+    index! < (nodes! -> len) -> while {
+        seen! -> push(false)
+        index! + 1 => index!
+    }
+    0 => calls!
+    0 => bodies!
+    0 => unresolved!
+    true => consistent!
+    instances -> each instance {
+        instance.status == 0 -> if {
+            calls! + 1 => calls!
+            not seen![instance.functionNode] -> if {
+                true => seen![instance.functionNode]
+                bodies! + 1 => bodies!
+            }
+            bindings.functionsByCall[instance.callNode] != instance.functionNode
+                or nodes![instance.callNode].typeId != nodes![instance.functionNode].typeId
+                -> if { false => consistent! }
+            instance.functionNode => nodeIndex!
+            nodeIndex! < instance.functionNode + instance.nodeCount
+                -> while {
+                nodes![nodeIndex!].typeId => typeId
+                typeId >= 0 -> if {
+                    resolved!.types[typeId].containsParameter -> if {
+                        unresolved! + 1 => unresolved!
+                    }
+                }
+                nodeIndex! + 1 => nodeIndex!
+            }
+        } else { false => consistent! }
+    }
+    "bindings=$(calls!),bodies=$(bodies!),unresolved=$(unresolved!),consistent=$(consistent!)" -> println
+}

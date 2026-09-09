@@ -1,6 +1,6 @@
-import sys.quic.error as errors
-import sys.quic.keys
-import sys.quic.packet
+import std.net.quic.error as errors
+import std.net.quic.keys
+import std.net.quic.packet
 
 destinationConnectionId: -> [UInt8] => [131, 148, 200, 240, 62, 81, 87, 8]
 empty: -> [UInt8] => []
@@ -8,23 +8,16 @@ payload: -> [UInt8] => [1, 2, 3, 4]
 
 check: -> Result<Bool, errors.Error> {
     keys.deriveInitial(keys.version2(), destinationConnectionId()) => initial
-    packet.sealInitial(
-        keys.version2(),
-        destinationConnectionId(),
-        empty(),
-        empty(),
-        2,
-        4,
-        payload(),
-        initial.clientKey,
-        initial.clientIv,
-        initial.clientHeaderProtection)? => protected
-    packet.openInitial(
-        protected,
-        2,
-        initial.clientKey,
-        initial.clientIv,
-        initial.clientHeaderProtection)? => opened
+    packet.prepare(initial.clientKey, initial.clientIv, initial.clientHeaderProtection) => protector
+    protector -> sealInitial(
+    keys.version2(),
+    destinationConnectionId(),
+    empty(),
+    empty(),
+    2,
+    4,
+    payload())? => protected
+    protector -> openInitial(protected, 2)? => opened
     Result<Bool, errors.Error>.Ok((protected -> len) == 41
         and protected[0] / 64 == 3
         and protected[1] == 107

@@ -134,6 +134,7 @@ internal sealed partial class LlvmEmitter
             RuntimeFormattedText formatted => EmitWriteFormattedText(formatted, ok, standardError),
             RuntimeText text => EmitWriteTextValue(text, ok, standardError),
             RuntimeInt integer => EmitWriteIntegerValue(integer, ok, standardError),
+            RuntimeBool boolean => EmitWriteTextValue(FormatBoolText(boolean), ok, standardError),
             _ => throw new SollangException($"unsupported runtime value {value.GetType().Name}")
         };
     }
@@ -341,6 +342,9 @@ internal sealed partial class LlvmEmitter
             case RuntimeInt integer:
                 segments.Add(FormatIntegerToScratch(integer));
                 return;
+            case RuntimeBool boolean:
+                segments.Add(FormatBoolText(boolean));
+                return;
             case RuntimeFormattedText formatted:
                 foreach (var segment in formatted.Segments)
                 {
@@ -381,6 +385,21 @@ internal sealed partial class LlvmEmitter
             : "sollang_format_u64";
         EmitCall(length, "i64", formatter, $"ptr {buffer}, i64 {printable}");
         return new RuntimeText(buffer, length);
+    }
+
+    private RuntimeText FormatBoolText(RuntimeBool value)
+    {
+        var trueText = AddGlobalString("true");
+        var falseText = AddGlobalString("false");
+        var pointer = NextTemp("format_bool_pointer");
+        EmitAssign(
+            pointer,
+            $"select i1 {value.ValueName}, ptr {trueText.Name}, ptr {falseText.Name}");
+        var length = NextTemp("format_bool_length");
+        EmitAssign(
+            length,
+            $"select i1 {value.ValueName}, i64 {trueText.Length}, i64 {falseText.Length}");
+        return new RuntimeText(pointer, length);
     }
 
     private RuntimeInt EmitSizeAsInt(string size, string prefix)
@@ -481,13 +500,15 @@ internal sealed partial class LlvmEmitter
         return new RuntimeStruct(BoundType.Range, value);
     }
 
-    private RuntimeValue EmitNameExpression(NameExpression expression)
+    private RuntimeValue EmitNameExpression(NameExpression expression, bool allowPartialOwner = false)
     {
         if (_currentFunction is { GenericParameterName: { } parameterName, SpecializedValue: { } specializedValue }
             && expression.Name == parameterName)
         {
             return new RuntimeInt(specializedValue.ToString(CultureInfo.InvariantCulture));
         }
+        if (!allowPartialOwner && _movedOwnedStructFields.TryGetValue(expression.Name, out var movedFields) && movedFields.Count > 0)
+            throw new SollangException($"owned binding '{expression.Name}' is partially moved; use only live sibling fields");
         if (_locals.ContainsKey(expression.Name))
         {
             var value = ResolveLocal(expression.Name);
@@ -705,9 +726,9 @@ internal sealed partial class LlvmEmitter
             return EmitStaticTextArrayLiteral(expression, elements.Cast<RuntimeText>().ToArray());
         }
         if (elements.Length > 0
-            && elements.All(value => value.Type == elements[0].Type)
-            && _program.Types.TryGetStaticArrayForElement(elements[0].Type, out var arrayType))
+            && elements.All(value => value.Type == elements[0].Type))
         {
+            var arrayType = _program.Types.GetOrAddFixedStaticArray(elements[0].Type, elements.Length);
             return EmitStaticInlineArrayLiteral(arrayType, elements);
         }
 
@@ -743,7 +764,8 @@ internal sealed partial class LlvmEmitter
             pointer,
             length.ToString(CultureInfo.InvariantCulture),
             allocatedLength,
-            storage);
+            storage,
+            _program.Types.GetOrAddFixedStaticArray(BoundType.Int, length));
     }
 
     private RuntimeValue EmitArrayRepeat(
@@ -782,7 +804,8 @@ internal sealed partial class LlvmEmitter
                 pointer,
                 count.ToString(CultureInfo.InvariantCulture),
                 allocatedLength,
-                useStackStorage ? RuntimeContainerStorage.Stack : RuntimeContainerStorage.Heap);
+                useStackStorage ? RuntimeContainerStorage.Stack : RuntimeContainerStorage.Heap,
+                _program.Types.GetOrAddFixedStaticArray(BoundType.Int, count));
         }
 
         var arrayType = contextualArrayType is { } expectedArray
@@ -939,7 +962,8 @@ internal sealed partial class LlvmEmitter
             pointer,
             length.ToString(CultureInfo.InvariantCulture),
             allocatedLength,
-            RuntimeContainerStorage.Heap);
+            RuntimeContainerStorage.Heap,
+            _program.Types.GetOrAddFixedStaticArray(BoundType.Text, length));
     }
 
     private RuntimeStaticInlineArray EmitStaticInlineArrayLiteral(

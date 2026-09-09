@@ -3,31 +3,39 @@ import sollang.compiler.llvm.text as llvm
 main {
     [
         """
-        namespace sys.socket
+        namespace std.net.socket
 
         public struct TcpStream {
-            token: UInt64
+            public token: UInt64
         }
 
         public enum SocketErrorKind {
             Other
         }
 
-        public struct SocketError {
-            kind: SocketErrorKind
-            code: Int32
+        public enum ShutdownDirection {
+            Receive
+            Send
+            Both
         }
 
-        public shutdown connection: TcpStream -> Result<Unit, SocketError> uses Network = intrinsic
+        public struct SocketError {
+            public kind: SocketErrorKind
+            public code: Int32
+        }
+
+        impl TcpStream {
+            public shutdown: self, direction: ShutdownDirection -> Result<Unit, SocketError> uses Network = intrinsic
+        }
         """,
         """
-        import sys.socket as socket
+        import std.net.socket as socket
 
         closeInBranch condition: Bool, connection: socket.TcpStream -> Result<Unit, socket.SocketError> uses Network {
             condition -> if {
-                socket.shutdown(connection)
+                connection -> shutdown(socket.ShutdownDirection.Both)
             } else {
-                socket.shutdown(connection)
+                connection -> shutdown(socket.ShutdownDirection.Both)
             }
         }
 

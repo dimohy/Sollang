@@ -1,0 +1,37 @@
+enum Mode {
+    Buffered
+    Fresh
+}
+
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+consume owner: move Owner, adjustment: Int -> Int {
+    (owner.bytes -> len) + adjustment
+}
+
+impl Owner {
+    forward: move self, mode: Mode -> Result<Int, Int> {
+        self => current
+        1 => adjustment
+        mode -> when {
+            Buffered {
+                current -> consume(adjustment) => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+            Fresh {
+                current -> consume(adjustment) => count
+                Result<Int, Int>.Ok(count) -> return
+            }
+        }
+        Result<Int, Int>.Err(1)
+    }
+}
+
+main {
+    Owner { bytes: [1, 2, 3; ~] } -> forward(Mode.Buffered) -> when {
+        Err(_) { "consuming-call-additional-argument=false" -> println }
+        Ok(count) { "consuming-call-additional-argument=$(count == 4)" -> println }
+    }
+}

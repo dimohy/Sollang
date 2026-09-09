@@ -1,0 +1,256 @@
+namespace std.time
+
+import sys.runtime as runtime
+import std.time as model
+
+# Duration is non-negative elapsed time measured in whole milliseconds. The
+# constructor validates that invariant before the value exists; every operation
+# after construction is an instance method.
+public struct Duration {
+    public millis: Long
+}
+
+# MonotonicInstant is meaningful only relative to another reading from the
+# same monotonic source. It is deliberately distinct from future UTC/calendar
+# values and exposes no Unix timestamp conversion.
+public struct MonotonicInstant {
+    public ticksMillis: Long
+}
+
+# UtcInstant is Unix epoch time in whole milliseconds. It is never used for
+# elapsed-time measurement because wall time can move independently.
+public struct UtcInstant {
+    public unixMillis: Long
+}
+
+# The system monotonic source has no mutable state in user space. Querying it is
+# still an explicit Clock effect.
+public struct MonotonicClock {
+    public marker: UInt8
+}
+
+public struct WallClock {
+    public marker: UInt8
+}
+
+# ManualClock is an injectable deterministic source for tests and simulations.
+# It has no ambient Clock effect; advancing it requires an explicit mutable
+# borrow and a validated Duration.
+public struct ManualClock {
+    public ticksMillis: Long
+}
+
+public struct ManualWallClock {
+    public unixMillis: Long
+}
+
+public enum ErrorKind {
+    NegativeDuration
+    NegativeResult
+    DivisionByZero
+    Overflow
+    ReversedInstant
+}
+
+public struct Error {
+    public kind: ErrorKind
+}
+
+scaledDuration value: Long, scale: Long -> Result<Duration, Error> => value < 0
+    -> if {
+        Error { kind: model.ErrorKind.NegativeDuration } -> Result<Duration, Error>.Err
+    } else {
+        value > 9_223_372_036_854_775_807 / scale -> if {
+            Error { kind: model.ErrorKind.Overflow } -> Result<Duration, Error>.Err
+        } else {
+            Duration { millis: value * scale } -> Result<Duration, Error>.Ok
+        }
+    }
+
+public milliseconds value: Long -> Result<Duration, Error> => value -> scaledDuration(1)
+
+public seconds value: Long -> Result<Duration, Error> => value -> scaledDuration(1_000)
+
+public minutes value: Long -> Result<Duration, Error> => value -> scaledDuration(60_000)
+
+public hours value: Long -> Result<Duration, Error> => value -> scaledDuration(3_600_000)
+
+public monotonicClock: -> MonotonicClock => MonotonicClock { marker: 0 }
+
+public wallClock: -> WallClock => WallClock { marker: 0 }
+
+public manualClock ticksMillis: Long -> Result<ManualClock, Error> => ticksMillis < 0
+    -> if {
+        Error { kind: model.ErrorKind.NegativeDuration } -> Result<ManualClock, Error>.Err
+    } else {
+        ManualClock { ticksMillis: ticksMillis } -> Result<ManualClock, Error>.Ok
+    }
+
+public manualWallClock unixMillis: Long -> ManualWallClock => ManualWallClock {
+    unixMillis: unixMillis
+}
+
+impl Duration {
+    public asMilliseconds: self -> Long => self.millis
+
+    public asSecondsFloor: self -> Long => self.millis / 1000
+
+    public asMinutesFloor: self -> Long => self.millis / 60_000
+
+    public asHoursFloor: self -> Long => self.millis / 3_600_000
+
+    public isZero: self -> Bool => self.millis == 0
+
+    public checkedAdd: self, other: Duration -> Result<Duration, Error> {
+        self.millis > 9_223_372_036_854_775_807 - other.millis
+            -> if {
+                Error { kind: model.ErrorKind.Overflow } -> Result<Duration, Error>.Err
+            } else {
+                Duration { millis: self.millis + other.millis } -> Result<Duration, Error>.Ok
+            }
+    }
+
+    public checkedSub: self, other: Duration -> Result<Duration, Error> {
+        self.millis < other.millis -> if {
+            Error { kind: model.ErrorKind.NegativeResult } -> Result<Duration, Error>.Err
+        } else {
+            Duration { millis: self.millis - other.millis } -> Result<Duration, Error>.Ok
+        }
+    }
+
+    public checkedMultiply: self, factor: UInt32 -> Result<Duration, Error> {
+        factor == 0 -> if {
+            Duration { millis: 0 } -> Result<Duration, Error>.Ok
+        } else {
+            Long(factor) => wideFactor
+            self.millis > 9_223_372_036_854_775_807 / wideFactor
+                -> if {
+                    Error { kind: model.ErrorKind.Overflow } -> Result<Duration, Error>.Err
+                } else {
+                    Duration { millis: self.millis * wideFactor } -> Result<Duration, Error>.Ok
+                }
+        }
+    }
+
+    public checkedDivide: self, divisor: UInt32 -> Result<Duration, Error> {
+        divisor == 0 -> if {
+            Error { kind: model.ErrorKind.DivisionByZero } -> Result<Duration, Error>.Err
+        } else {
+            Duration { millis: self.millis / Long(divisor) } -> Result<Duration, Error>.Ok
+        }
+    }
+
+    public absoluteDifference: self, other: Duration -> Duration {
+        self.millis >= other.millis -> if {
+            Duration { millis: self.millis - other.millis }
+        } else {
+            Duration { millis: other.millis - self.millis }
+        }
+    }
+
+}
+
+impl MonotonicInstant {
+    public durationSince: self, earlier: MonotonicInstant -> Result<Duration, Error> {
+        self.ticksMillis < earlier.ticksMillis -> if {
+            Error { kind: model.ErrorKind.ReversedInstant } -> Result<Duration, Error>.Err
+        } else {
+            Duration { millis: self.ticksMillis - earlier.ticksMillis }
+                -> Result<Duration, Error>.Ok
+        }
+    }
+
+    public checkedAdd: self, duration: Duration -> Result<MonotonicInstant, Error> {
+        self.ticksMillis > 9_223_372_036_854_775_807 - duration.millis
+            -> if {
+                Error { kind: model.ErrorKind.Overflow } -> Result<MonotonicInstant, Error>.Err
+            } else {
+                MonotonicInstant { ticksMillis: self.ticksMillis + duration.millis }
+                    -> Result<MonotonicInstant, Error>.Ok
+            }
+    }
+
+    public checkedSub: self, duration: Duration -> Result<MonotonicInstant, Error> {
+        self.ticksMillis < duration.millis -> if {
+            Error { kind: model.ErrorKind.ReversedInstant } -> Result<MonotonicInstant, Error>.Err
+        } else {
+            MonotonicInstant { ticksMillis: self.ticksMillis - duration.millis }
+                -> Result<MonotonicInstant, Error>.Ok
+        }
+    }
+}
+
+impl MonotonicClock {
+    public now: self -> MonotonicInstant uses Clock => MonotonicInstant {
+        ticksMillis: runtime.nowMillis()
+    }
+}
+
+impl UtcInstant {
+    public asUnixMilliseconds: self -> Long => self.unixMillis
+
+    public durationSince: self, earlier: UtcInstant -> Result<Duration, Error> {
+        self.unixMillis < earlier.unixMillis -> if {
+            Error { kind: model.ErrorKind.ReversedInstant } -> Result<Duration, Error>.Err
+        } else {
+            earlier.unixMillis < 0
+                and self.unixMillis > 9_223_372_036_854_775_807 + earlier.unixMillis
+                -> if {
+                    Error { kind: model.ErrorKind.Overflow } -> Result<Duration, Error>.Err
+                } else {
+                    Duration { millis: self.unixMillis - earlier.unixMillis }
+                        -> Result<Duration, Error>.Ok
+                }
+        }
+    }
+
+    public checkedAdd: self, duration: Duration -> Result<UtcInstant, Error> {
+        self.unixMillis > 9_223_372_036_854_775_807 - duration.millis
+            -> if {
+                Error { kind: model.ErrorKind.Overflow } -> Result<UtcInstant, Error>.Err
+            } else {
+                UtcInstant { unixMillis: self.unixMillis + duration.millis }
+                    -> Result<UtcInstant, Error>.Ok
+            }
+    }
+
+    public checkedSub: self, duration: Duration -> Result<UtcInstant, Error> {
+        self.unixMillis < -9_223_372_036_854_775_807 - Long(1) + duration.millis
+            -> if {
+                Error { kind: model.ErrorKind.Overflow } -> Result<UtcInstant, Error>.Err
+            } else {
+                UtcInstant { unixMillis: self.unixMillis - duration.millis }
+                    -> Result<UtcInstant, Error>.Ok
+            }
+    }
+}
+
+impl WallClock {
+    public now: self -> UtcInstant uses Clock => UtcInstant {
+        unixMillis: runtime.utcNowMillis()
+    }
+}
+
+impl ManualClock {
+    public now: self -> MonotonicInstant => MonotonicInstant {
+        ticksMillis: self.ticksMillis
+    }
+
+    public advance: mut self, duration: Duration -> Result<Unit, Error> {
+        self.ticksMillis > 9_223_372_036_854_775_807 - duration.millis
+            -> if {
+                Error { kind: model.ErrorKind.Overflow } -> Result<Unit, Error>.Err
+            } else {
+                self.ticksMillis + duration.millis => self.ticksMillis
+                Result<Unit, Error>.Ok
+            }
+    }
+}
+
+impl ManualWallClock {
+    public now: self -> UtcInstant => UtcInstant { unixMillis: self.unixMillis }
+
+    public set: mut self, instant: UtcInstant -> Unit {
+        instant.unixMillis => self.unixMillis
+    }
+}

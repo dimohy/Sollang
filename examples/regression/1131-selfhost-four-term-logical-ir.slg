@@ -1,0 +1,43 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        main {
+            [1; ~] => first
+            [1; ~] => second
+            [1; ~] => third
+            [1; ~] => fourth
+            [1; ~] => fifth
+            ((first -> len) == (second -> len) and (first -> len) == (third -> len) and (first -> len) == (fourth -> len) and (first -> len) == (fifth -> len)) => all!
+            0 => index!
+            all! and index! < 1 -> while {
+                false => all!
+                index! + 1 => index!
+            }
+        }
+        """; ~
+    ] -> typedIr.lower => ir
+    -1 => bindingOperand!
+    -1 => bindingType!
+    -1 => operandKind!
+    -1 => operandType!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.kind == 17
+            and node.parent == 0
+            and node.flags % 2 == 1
+            and node.operand0 >= 0
+            and ir[node.operand0].kind == 8
+            -> if {
+            node.operand0 => bindingOperand!
+            node.typeSymbol => bindingType!
+            ir[node.operand0].kind => operandKind!
+            ir[node.operand0].typeSymbol => operandType!
+        }
+        index! + 1 => index!
+    }
+    bindingOperand! >= 0 and bindingType! == operandType! => typeMatches
+    "logical binding = kind $(operandKind!), type match $typeMatches" -> println
+}

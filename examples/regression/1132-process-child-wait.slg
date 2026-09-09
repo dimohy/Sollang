@@ -1,0 +1,29 @@
+# Verifies affine process ownership through Command.spawn and Child.wait.
+import sys.process as process
+
+observeChild child: move process.Child -> Unit uses Console, Process {
+    child -> id => childId
+    childId -> asUInt64 => rawId
+    rawId > 0 => validId
+    child -> wait => result
+    "id $(validId)" -> println
+    result -> when {
+        Result<process.ExitStatus, Text>.Ok(status) => "wait $(status -> exitCode)" -> println
+        Result<process.ExitStatus, Text>.Err(error) => error -> println
+    }
+}
+
+main {
+    process.arguments() => args
+    args -> len => count
+    count > 1 -> if {
+        "child" -> println
+    } else {
+        process.command(args[0]) => command!
+        command! -> arg("--child")
+        command! -> spawn -> when {
+            Result<process.Child, Text>.Ok(child) => child -> observeChild
+            Result<process.Child, Text>.Err(error) => error -> println
+        }
+    }
+}

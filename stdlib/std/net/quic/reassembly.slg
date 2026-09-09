@@ -1,0 +1,141 @@
+namespace std.net.quic.reassembly
+
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+import std.net.quic.reassembly as model
+import std.net.quic.stream_state as streamState
+
+public struct Accounted {
+    public flow: streamState.ReceiveFlow
+    public newlyReceived: UInt64
+}
+
+# Connection-owned bounded storage. ConnectionOptions retains the shared frame
+# and byte limits; this value only owns ordered extraction and exact byte count.
+public struct Queue {
+    public values: [frames.Stream; ~]
+    public byteLength: UInt64
+}
+
+public enum TakeError {
+    Missing
+}
+
+public initial: -> Queue => Queue {
+    values: []
+    byteLength: 0
+}
+
+copyWindow bytes: [UInt8], start: Int, length: Int -> [UInt8; ~] {
+    [UInt8; ~] => output!
+    0 => index!
+    index! < length -> while {
+        output! -> push(bytes[start + index!])
+        index! + 1 => index!
+    }
+    output!
+}
+
+impl Queue {
+    public count: self -> Int => self.values -> len
+
+    public bytes: self -> UInt64 => self.byteLength
+
+    public push: mut self, value: move frames.Stream -> Unit {
+        self.byteLength + UInt64(value.data -> len) => self.byteLength
+        self.values -> push(value)
+    }
+
+    # Validate every queued frame for one owner and return only the increase in
+    # its largest received offset. QUIC connection flow control counts that
+    # increase, not retransmitted or overlapping bytes.
+    public account: self, streamId: UInt64, flow: streamState.ReceiveFlow -> Result<Accounted, errors.Error> {
+        flow => nextFlow!
+        flow.highestReceived => previousHighest
+        0 => index!
+        index! < (self.values -> len) -> while {
+            self.values[index!].id == streamId -> if {
+                UInt64(self.values[index!].data -> len) => length
+                nextFlow! -> onReceive(
+                self.values[index!].offset,
+                length,
+                self.values[index!].fin)? => nextFlow!
+            }
+            index! + 1 => index!
+        }
+        Result<Accounted, errors.Error>.Ok(Accounted {
+            flow: nextFlow!
+            newlyReceived: nextFlow!.highestReceived - previousHighest
+        })
+    }
+
+    # Return at most maxBytes from the segment that covers consumed. Fully
+    # consumed retransmissions are discarded; future segments remain bounded
+    # in this queue until their preceding bytes arrive.
+    public takeContiguous: mut self, streamId: UInt64, consumed: UInt64, maxBytes: UIntSize -> Result<frames.Stream, TakeError> {
+        0 => index!
+        index! < (self.values -> len) -> while {
+            self.values[index!].id == streamId -> if {
+                UInt64(self.values[index!].data -> len) => length
+                self.values[index!].offset + length => end
+                end < consumed
+                    or (end == consumed
+                    and not (length == 0 and self.values[index!].fin and self.values[index!].offset == consumed))
+                    -> if {
+                        self.values -> take(index!) => discarded
+                        self.byteLength - UInt64(discarded.data -> len) => self.byteLength
+                    } else {
+                        index! + 1 => index!
+                    }
+            } else {
+                index! + 1 => index!
+            }
+        }
+
+        -1 => selectedIndex!
+        UInt64(0) => selectedOffset!
+        0 => candidate!
+        candidate! < (self.values -> len) -> while {
+            self.values[candidate!].id == streamId -> if {
+                UInt64(self.values[candidate!].data -> len) => length
+                self.values[candidate!].offset + length => end
+                self.values[candidate!].offset <= consumed
+                    and (end > consumed
+                    or (length == 0 and self.values[candidate!].fin and self.values[candidate!].offset == consumed))
+                    and (selectedIndex! < 0 or self.values[candidate!].offset > selectedOffset!)
+                    -> if {
+                        candidate! => selectedIndex!
+                        self.values[candidate!].offset => selectedOffset!
+                    }
+            }
+            candidate! + 1 => candidate!
+        }
+        selectedIndex! >= 0 -> if {
+            self.values -> take(selectedIndex!) => value!
+            Int(consumed - value!.offset) => skipped
+            (value!.data -> len) - skipped => available
+            available < Int(maxBytes) -> if { available } else { Int(maxBytes) } => delivered
+            self.byteLength - UInt64(value!.data -> len) => self.byteLength
+            available - delivered => remaining
+
+            skipped != 0 or delivered != available -> if {
+                copyWindow(value!.data, skipped, delivered) => output
+                remaining > 0 -> if {
+                    copyWindow(value!.data, skipped + delivered, remaining) => remainder
+                    self -> push(frames.Stream {
+                        id: value!.id
+                        offset: consumed + UInt64(delivered)
+                        fin: value!.fin
+                        data: remainder
+                    })
+                }
+                value!.fin and remaining == 0 => value!.fin
+                consumed => value!.offset
+                output => value!.data
+            }
+            Result<frames.Stream, TakeError>.Ok(value!)
+        } else {
+            Result<frames.Stream, TakeError>.Err(model.TakeError.Missing)
+        }
+    }
+}

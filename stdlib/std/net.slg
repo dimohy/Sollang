@@ -1,0 +1,373 @@
+namespace std.net
+
+import std.net.parse_error as errors
+
+# Numeric network values are pure, owned values. Name resolution is deliberately
+# absent: a future DNS layer may produce these values, but parsing never performs
+# network access.
+public struct Ipv4Address {
+    public a: UInt8
+    public b: UInt8
+    public c: UInt8
+    public d: UInt8
+}
+
+public struct Ipv4Endpoint {
+    public address: Ipv4Address
+    public port: UInt16
+}
+
+public struct Ipv6Address {
+    public a: UInt16
+    public b: UInt16
+    public c: UInt16
+    public d: UInt16
+    public e: UInt16
+    public f: UInt16
+    public g: UInt16
+    public h: UInt16
+}
+
+# IPv6 socket metadata stays explicit. flowInfo and scopeId are not part of the
+# 128-bit address, but are required to represent an OS IPv6 socket endpoint
+# without losing link-local routing information.
+public struct Ipv6Endpoint {
+    public address: Ipv6Address
+    public port: UInt16
+    public flowInfo: UInt32
+    public scopeId: UInt32
+}
+
+public enum IpAddress {
+    V4(Ipv4Address)
+    V6(Ipv6Address)
+}
+
+public enum Endpoint {
+    V4(Ipv4Endpoint)
+    V6(Ipv6Endpoint)
+}
+
+public struct ParseError {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+parseError kind: errors.Kind, offset: UIntSize -> Result<Ipv4Address, ParseError> {
+    Result<Ipv4Address, ParseError>.Err(ParseError { kind: kind, offset: offset })
+}
+
+parseIpv6Error kind: errors.Kind, offset: UIntSize -> Result<Ipv6Address, ParseError> {
+    Result<Ipv6Address, ParseError>.Err(ParseError { kind: kind, offset: offset })
+}
+
+ipv6Part address: ref Ipv6Address, index: Int -> UInt16 {
+    index -> when {
+        == 0 { address.a }
+        == 1 { address.b }
+        == 2 { address.c }
+        == 3 { address.d }
+        == 4 { address.e }
+        == 5 { address.f }
+        == 6 { address.g }
+        else { address.h }
+    }
+}
+
+setIpv6Part address: mut Ipv6Address, index: Int, value: UInt16 -> Unit {
+    index -> when {
+        == 0 { value => address.a }
+        == 1 { value => address.b }
+        == 2 { value => address.c }
+        == 3 { value => address.d }
+        == 4 { value => address.e }
+        == 5 { value => address.f }
+        == 6 { value => address.g }
+        else { value => address.h }
+    }
+}
+
+hexValue byte: UInt8 -> Int {
+    byte >= 48 and byte <= 57 -> if { Int(byte - 48) -> return }
+    byte >= 65 and byte <= 70 -> if { Int(byte - 65) + 10 -> return }
+    byte >= 97 and byte <= 102 -> if { Int(byte - 97) + 10 -> return }
+    -1
+}
+
+finishIpv4 a: Int, b: Int, c: Int, d: Int, partCount: Int -> Result<Ipv4Address, ParseError> {
+    partCount == 4 -> unless {
+        parseError(errors.Kind.WrongPartCount, 0) -> return
+    }
+    Result<Ipv4Address, ParseError>.Ok(Ipv4Address {
+        a: UInt8(a)
+        b: UInt8(b)
+        c: UInt8(c)
+        d: UInt8(d)
+    })
+}
+
+# Parses exactly four decimal components. Empty components, signs, whitespace,
+# non-decimal characters, and values above 255 are rejected at the first
+# offending byte. DNS names are never accepted.
+public parseIpv4 text: Text -> Result<Ipv4Address, ParseError> {
+    [Int(0); 4] => parts!
+    0 => part!
+    0 => value!
+    UIntSize(0) => index!
+    UIntSize(0) => partStart!
+    false => hasDigit!
+    index! <= (text -> len) -> while {
+        index! == (text -> len) => end
+        false => separator!
+        end -> unless { (text -> byte(index!)) == 46 => separator! }
+        end or separator! -> if {
+            hasDigit! -> unless {
+                parseError(errors.Kind.InvalidPart, index!) -> return
+            }
+            part! < 4 -> unless {
+                parseError(errors.Kind.WrongPartCount, index!) -> return
+            }
+            value! <= 255 -> unless {
+                parseError(errors.Kind.InvalidPart, partStart!) -> return
+            }
+            value! => parts![part!]
+            part! + 1 => part!
+            0 => value!
+            false => hasDigit!
+            index! + 1 => partStart!
+        } else {
+            text -> byte(index!) => digit
+            digit >= 48 and digit <= 57 -> unless {
+                parseError(errors.Kind.InvalidCharacter, index!) -> return
+            }
+            value! * 10 + Int(digit - 48) => value!
+            true => hasDigit!
+        }
+        index! + 1 => index!
+    }
+    finishIpv4(parts![0], parts![1], parts![2], parts![3], part!)
+}
+
+parseIpv6Body text: Text, indexStart: UIntSize, compressedStart: Int -> Result<Ipv6Address, ParseError> {
+    Ipv6Address { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: 0, h: 0 } => address!
+    0 => part!
+    compressedStart => compressedAt!
+    indexStart => index!
+    text -> len => length
+
+    index! < length -> while {
+        part! < 8 -> unless {
+            parseIpv6Error(errors.Kind.WrongPartCount, index!) -> return
+        }
+        index! => partStart
+        0 => value!
+        0 => digits!
+
+        index! < length and (text -> byte(index!)) != 58
+            -> while {
+                text -> byte(index!) -> hexValue => digit
+                digit >= 0 -> unless {
+                    parseIpv6Error(errors.Kind.InvalidCharacter, index!) -> return
+                }
+                digits! < 4 -> unless {
+                    parseIpv6Error(errors.Kind.InvalidPart, partStart) -> return
+                }
+                value! * 16 + digit => value!
+                digits! + 1 => digits!
+                index! + 1 => index!
+            }
+
+        digits! > 0 -> unless {
+            parseIpv6Error(errors.Kind.InvalidPart, partStart) -> return
+        }
+        address! -> setIpv6Part(part!, UInt16(value!))
+        part! + 1 => part!
+
+        index! == length -> if break
+        index! + 1 => index!
+        index! == length -> if {
+            parseIpv6Error(errors.Kind.InvalidPart, index! - 1) -> return
+        }
+        (text -> byte(index!)) == 58 -> if {
+            compressedAt! < 0 -> unless {
+                parseIpv6Error(errors.Kind.InvalidPart, index!) -> return
+            }
+            part! => compressedAt!
+            index! + 1 => index!
+            index! == length -> if break
+        }
+    }
+
+    compressedAt! >= 0 -> if {
+        part! < 8 -> unless {
+            parseIpv6Error(errors.Kind.WrongPartCount, length) -> return
+        }
+        8 - part! => zeros
+        part! - 1 => source!
+        source! >= compressedAt! -> while {
+            address! -> ipv6Part(source!) => sourceValue
+            address! -> setIpv6Part(source! + zeros, sourceValue)
+            source! - 1 => source!
+        }
+        compressedAt! => zeroIndex!
+        zeroIndex! < compressedAt! + zeros -> while {
+            address! -> setIpv6Part(zeroIndex!, 0)
+            zeroIndex! + 1 => zeroIndex!
+        }
+    } else {
+        part! == 8 -> unless {
+            parseIpv6Error(errors.Kind.WrongPartCount, length) -> return
+        }
+    }
+
+    Result<Ipv6Address, ParseError>.Ok(address!)
+}
+
+# Parses the numeric hexadecimal IPv6 forms, including one compressed `::`.
+# Brackets belong to URI/authority syntax and zones belong to endpoint scope,
+# so neither is accepted here. No DNS lookup or ambient interface lookup occurs.
+public parseIpv6 text: Text -> Result<Ipv6Address, ParseError> {
+    text -> len => length
+    length > 0 -> unless { parseIpv6Error(errors.Kind.WrongPartCount, 0) -> return }
+    (text -> byte(0)) == 58 -> if {
+        length >= 2 and (text -> byte(1)) == 58 -> unless {
+            parseIpv6Error(errors.Kind.InvalidPart, 0) -> return
+        }
+        parseIpv6Body(text, 2, 0) -> return
+    }
+    parseIpv6Body(text, 0, -1)
+}
+
+public ipv4 address: Text, port: UInt16 -> Result<Ipv4Endpoint, ParseError> {
+    parseIpv4(address) -> when {
+        Ok(value) { Result<Ipv4Endpoint, ParseError>.Ok(Ipv4Endpoint { address: value, port: port }) }
+        Err(error) { Result<Ipv4Endpoint, ParseError>.Err(error) }
+    }
+}
+
+public loopback port: UInt16 -> Ipv4Endpoint => Ipv4Endpoint {
+    address: Ipv4Address { a: 127, b: 0, c: 0, d: 1 }
+    port: port
+}
+
+public anyIpv4 port: UInt16 -> Ipv4Endpoint => Ipv4Endpoint {
+    address: Ipv4Address { a: 0, b: 0, c: 0, d: 0 }
+    port: port
+}
+
+public ipv6 address: Text, port: UInt16 -> Result<Ipv6Endpoint, ParseError> {
+    parseIpv6(address) -> when {
+        Ok(value) { Result<Ipv6Endpoint, ParseError>.Ok(Ipv6Endpoint {
+                address: value
+                port: port
+                flowInfo: 0
+                scopeId: 0
+            }) }
+        Err(error) { Result<Ipv6Endpoint, ParseError>.Err(error) }
+    }
+}
+
+public ipv6Scoped address: Text, port: UInt16, scopeId: UInt32 -> Result<Ipv6Endpoint, ParseError> {
+    parseIpv6(address) -> when {
+        Ok(value) { Result<Ipv6Endpoint, ParseError>.Ok(Ipv6Endpoint {
+                address: value
+                port: port
+                flowInfo: 0
+                scopeId: scopeId
+            }) }
+        Err(error) { Result<Ipv6Endpoint, ParseError>.Err(error) }
+    }
+}
+
+public loopbackIpv6 port: UInt16 -> Ipv6Endpoint => Ipv6Endpoint {
+    address: Ipv6Address { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: 0, h: 1 }
+    port: port
+    flowInfo: 0
+    scopeId: 0
+}
+
+public anyIpv6 port: UInt16 -> Ipv6Endpoint => Ipv6Endpoint {
+    address: Ipv6Address { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, g: 0, h: 0 }
+    port: port
+    flowInfo: 0
+    scopeId: 0
+}
+
+impl Ipv4Address {
+    public isLoopback: self -> Bool => self.a == 127
+
+    public isUnspecified: self -> Bool => self.a == 0 and self.b == 0 and self.c == 0 and self.d == 0
+
+    public endpoint: self, port: UInt16 -> Endpoint => std.net.Endpoint.V4(Ipv4Endpoint {
+        address: self
+        port: port
+    })
+}
+
+impl Ipv6Address {
+    public isLoopback: self -> Bool => self.a == 0
+        and self.b == 0
+        and self.c == 0
+        and self.d == 0
+        and self.e == 0
+        and self.f == 0
+        and self.g == 0
+        and self.h == 1
+
+    public isUnspecified: self -> Bool => self.a == 0
+        and self.b == 0
+        and self.c == 0
+        and self.d == 0
+        and self.e == 0
+        and self.f == 0
+        and self.g == 0
+        and self.h == 0
+
+    public endpoint: self, port: UInt16, scopeId: UInt32 -> Endpoint => std.net.Endpoint.V6(Ipv6Endpoint {
+        address: self
+        port: port
+        flowInfo: 0
+        scopeId: scopeId
+    })
+}
+
+impl Ipv4Endpoint {
+    public unified: self -> Endpoint => std.net.Endpoint.V4(self)
+}
+
+impl Ipv6Endpoint {
+    public unified: self -> Endpoint => std.net.Endpoint.V6(self)
+}
+
+impl Endpoint {
+    public port: self -> UInt16 => self -> when {
+        V4(value) => value.port
+        V6(value) => value.port
+    }
+
+    # Returns the same numeric address and IPv6 routing metadata with a new
+    # transport port. This is a pure value transformation: it performs no DNS,
+    # socket query, allocation, or text conversion.
+    public withPort: self, port: UInt16 -> Endpoint => self -> when {
+        V4(value) => std.net.Endpoint.V4(Ipv4Endpoint {
+            address: value.address
+            port: port
+        })
+        V6(value) => std.net.Endpoint.V6(Ipv6Endpoint {
+            address: value.address
+            port: port
+            flowInfo: value.flowInfo
+            scopeId: value.scopeId
+        })
+    }
+
+    public isIpv4: self -> Bool => self -> when {
+        V4(value) => true
+        V6(value) => false
+    }
+
+    public isIpv6: self -> Bool => self -> when {
+        V4(value) => false
+        V6(value) => true
+    }
+}

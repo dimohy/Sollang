@@ -1,0 +1,1627 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.expression_types as expressionTypes
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as semanticTypes
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+# Normalize a completed source entry without copying its owned IR.
+finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], resolvedNames: ref [resolution.ResolvedName; ~], prepared: ref semanticContext.SemanticSnapshot, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], sourceIndex: Int, entryAstIndex: Int, entryIr: Int, entryExpressionStart: Int, entryHasResolvedCall: Bool, entryResultTypeIndex: Int -> Unit {
+    prepared.package.ranges[sourceIndex] => sourceRange
+    prepared.package.sources[sourceIndex] -> len => sourceLength
+    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    nodes -> len => entryExpressionEnd
+    entryExpressionStart => entryParentIr!
+    entryParentIr! < entryExpressionEnd -> while {
+        nodes[entryParentIr!] => entryIrNode!
+        prepared.package.nodes[sourceRange.astStart + entryIrNode!.astNode].parent => entryParentAst!
+        -1 => entrySemanticParent!
+        entryParentAst! >= 0 and entryParentAst! != entryAstIndex and entrySemanticParent! < 0
+            -> while {
+                entryAstToIr[entryParentAst!] >= 0 -> if {
+                    entryAstToIr[entryParentAst!] != entryParentIr!
+                        -> if {
+                            entryAstToIr[entryParentAst!] => entrySemanticParent!
+                        } else {
+                            prepared.package.nodes[sourceRange.astStart + entryParentAst!].parent => entryParentAst!
+                        }
+                } else {
+                    prepared.package.nodes[sourceRange.astStart + entryParentAst!].parent => entryParentAst!
+                }
+            }
+        entrySemanticParent! >= 0 -> if { entrySemanticParent! => entryIrNode!.parent }
+        entryIrNode! => nodes[entryParentIr!]
+        entryParentIr! + 1 => entryParentIr!
+    }
+    entryExpressionStart => entryOperandIr!
+    entryOperandIr! < entryExpressionEnd -> while {
+        nodes[entryOperandIr!] => entryOperator!
+        entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and (entryOperator!.opcode == -27 or (entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -228 or entryOperator!.opcode == -229 or entryOperator!.opcode == -236)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221 or entryOperator!.opcode == -271)) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
+            -> if {
+                -1 => entryFirstOperand!
+                -1 => entrySecondOperand!
+                UIntSize(0) => entryFirstStart!
+                UIntSize(0) => entrySecondStart!
+                false => entryOperatorHasDirectQualifiedTarget!
+                entryOperator!.kind == 6 -> if {
+                    prepared.qualifiedFunctionByParentAst[sourceRange.astStart + entryOperator!.astNode] >= 0
+                        -> if { true => entryOperatorHasDirectQualifiedTarget! }
+                }
+                entryExpressionStart => entryChildIr!
+                entryChildIr! < entryExpressionEnd -> while {
+                    nodes[entryChildIr!] => entryChild
+                    entryChild.parent == entryOperandIr!
+                        and not (entryOperatorHasDirectQualifiedTarget!
+                        and (entryChild.kind == 18 or entryChild.kind == 20 or entryChild.kind == 27 or entryChild.kind == 33 or entryChild.kind == 34))
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + entryChild.astNode].start => entryChildStart
+                            entryFirstOperand! < 0 -> if {
+                                entryChildIr! => entryFirstOperand!
+                                entryChildStart => entryFirstStart!
+                            } else {
+                                (entryOperator!.kind == 17
+                                    and entryChild.kind == 6
+                                    and ((entryChild.typeKind == 7
+                                    and entryChild.typeOrigin == 4
+                                    and entryChild.typeSymbol >= 5
+                                    and entryChild.typeSymbol <= 7)
+                                    or (entryChild.typeKind == 14
+                                    and entryChild.typeOrigin == 4
+                                    and entryChild.typeSymbol == 8))
+                                    and prepared.package.nodes[sourceRange.astStart + entryChild.astNode].length > prepared.package.nodes[sourceRange.astStart + nodes[entryFirstOperand!].astNode].length)
+                                    or (entryOperator!.kind != 17 and entryChildStart < entryFirstStart!)
+                                    -> if {
+                                        entryFirstOperand! => entrySecondOperand!
+                                        entryFirstStart! => entrySecondStart!
+                                        entryChildIr! => entryFirstOperand!
+                                        entryChildStart => entryFirstStart!
+                                    } else {
+                                        entrySecondOperand! < 0 or entryChildStart < entrySecondStart!
+                                            -> if {
+                                                entryChildIr! => entrySecondOperand!
+                                                entryChildStart => entrySecondStart!
+                                            }
+                                    }
+                            }
+                        }
+                    entryChildIr! + 1 => entryChildIr!
+                }
+                entryFirstOperand! => entryOperator!.operand0
+                entryOperator!.kind == 7 and entryOperator!.opcode != -26 and entryFirstOperand! >= 0
+                    -> if {
+                        nodes[entryFirstOperand!] => entryUnaryOperand
+                        entryUnaryOperand.typeOrigin => entryOperator!.typeOrigin
+                        entryUnaryOperand.typeModule => entryOperator!.typeModule
+                        entryUnaryOperand.typeSymbol => entryOperator!.typeSymbol
+                        entryUnaryOperand.typeId => entryOperator!.typeId
+                        entryUnaryOperand.typeKind => entryOperator!.typeKind
+                        entryUnaryOperand.typeFlags => entryOperator!.typeFlags
+                    }
+                entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -229)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -243) or (entryOperator!.opcode <= -246 and entryOperator!.opcode >= -247) or entryOperator!.opcode == -252 or (entryOperator!.opcode <= -255 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221 or entryOperator!.opcode == -271)) or entryOperator!.kind == 15 or entryOperator!.kind == 24 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
+                    -> if { entrySecondOperand! => entryOperator!.operand1 }
+                entryOperator!.kind == 22 -> if {
+                    -1 => entryOperator!.operand0
+                    entryFirstOperand! => entryOperator!.operand1
+                }
+                entryOperator! => nodes[entryOperandIr!]
+            }
+        entryOperandIr! + 1 => entryOperandIr!
+    }
+    entryExpressionStart => entryTapIr!
+    entryTapIr! < entryExpressionEnd -> while {
+        nodes[entryTapIr!] => entryTap!
+        entryTap!.kind == 36 -> if {
+            entryTap!.operand0 => entryTapSideCall
+            -1 => entryTapSource!
+            UIntSize(0) => entryTapSourceStart!
+            entryExpressionStart => entryTapSourceSearch!
+            entryTapSourceSearch! < entryExpressionEnd -> while {
+                nodes[entryTapSourceSearch!] => entryTapSourceCandidate
+                entryTapSourceCandidate.parent == entryTap!.parent and entryTapSourceSearch! != entryTapIr!
+                    -> if {
+                        prepared.package.nodes[sourceRange.astStart + entryTapSourceCandidate.astNode].start => entryTapCandidateStart
+                        prepared.package.nodes[sourceRange.astStart + entryTap!.astNode].start => entryTapStart
+                        entryTapCandidateStart < entryTapStart and (entryTapSource! < 0 or entryTapCandidateStart > entryTapSourceStart!)
+                            -> if {
+                                entryTapSourceSearch! => entryTapSource!
+                                entryTapCandidateStart => entryTapSourceStart!
+                            }
+                    }
+                entryTapSourceSearch! + 1 => entryTapSourceSearch!
+            }
+            entryTapSource! >= 0 -> if {
+                nodes[entryTapSource!] => entryTapSourceNode
+                entryTapSource! => entryTap!.operand0
+                entryTapSideCall => entryTap!.operand1
+                entryTapSourceNode.typeOrigin => entryTap!.typeOrigin
+                entryTapSourceNode.typeModule => entryTap!.typeModule
+                entryTapSourceNode.typeSymbol => entryTap!.typeSymbol
+                entryTapSourceNode.typeId => entryTap!.typeId
+                entryTapSourceNode.typeKind => entryTap!.typeKind
+                entryTapSourceNode.typeFlags => entryTap!.typeFlags
+                -1 => previousEntryTapStage!
+                UIntSize(0) => previousEntryTapStageStart!
+                entryTapSource! => entryTapStageInput!
+                true => findingEntryTapStage!
+                findingEntryTapStage! -> while {
+                    false => findingEntryTapStage!
+                    -1 => nextEntryTapStage!
+                    UIntSize(0) => nextEntryTapStageStart!
+                    entryExpressionStart => entryTapStageSearch!
+                    entryTapStageSearch! < entryExpressionEnd -> while {
+                        nodes[entryTapStageSearch!] => entryTapStageCandidate
+                        entryTapStageCandidate.parent == entryTapIr! and entryTapStageCandidate.kind == 6
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + entryTapStageCandidate.astNode].start => entryTapStageStart
+                                previousEntryTapStage! < 0 or entryTapStageStart > previousEntryTapStageStart!
+                                    -> if {
+                                        nextEntryTapStage! < 0 or entryTapStageStart < nextEntryTapStageStart!
+                                            -> if {
+                                                entryTapStageSearch! => nextEntryTapStage!
+                                                entryTapStageStart => nextEntryTapStageStart!
+                                            }
+                                    }
+                            }
+                        entryTapStageSearch! + 1 => entryTapStageSearch!
+                    }
+                    nextEntryTapStage! >= 0 -> if {
+                        nextEntryTapStage! -> bindTapStageInput(entryTapStageInput!, nodes)
+                        nextEntryTapStage! => entryTap!.operand1
+                        nextEntryTapStage! => entryTapStageInput!
+                        nextEntryTapStage! => previousEntryTapStage!
+                        nextEntryTapStageStart! => previousEntryTapStageStart!
+                        true => findingEntryTapStage!
+                    }
+                }
+                entryTap!.parent >= 0 -> if {
+                    nodes[entryTap!.parent] => entryTapParent!
+                    entryTapParent!.kind == 6 and entryTapParent!.operand1 == entryTapIr!
+                        -> if {
+                            entryTapIr! => entryTapParent!.operand0
+                            -1 => entryTapParent!.operand1
+                            entryTapParent! => nodes[entryTap!.parent]
+                        }
+                }
+                entryTap! => nodes[entryTapIr!]
+            }
+        }
+        entryTapIr! + 1 => entryTapIr!
+    }
+    entryExpressionStart => entryBranchIr!
+    entryBranchIr! < entryExpressionEnd -> while {
+        nodes[entryBranchIr!] => entryBranch!
+        entryBranch!.kind == 37 or entryBranch!.kind == 38
+            -> if {
+                -1 => entryBranchSource!
+                UIntSize(0) => entryBranchSourceStart!
+                entryExpressionStart => entryBranchSourceSearch!
+                entryBranchSourceSearch! < entryExpressionEnd
+                    -> while {
+                        nodes[entryBranchSourceSearch!] => entryBranchSourceCandidate
+                        entryBranchSourceCandidate.parent == entryBranch!.parent and entryBranchSourceSearch! != entryBranchIr!
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + entryBranchSourceCandidate.astNode].start => entryBranchCandidateStart
+                                prepared.package.nodes[sourceRange.astStart + entryBranch!.astNode].start => entryBranchStart
+                                entryBranchCandidateStart < entryBranchStart and (entryBranchSource! < 0 or entryBranchCandidateStart > entryBranchSourceStart!)
+                                    -> if {
+                                        entryBranchSourceSearch! => entryBranchSource!
+                                        entryBranchCandidateStart => entryBranchSourceStart!
+                                    }
+                            }
+                        entryBranchSourceSearch! + 1 => entryBranchSourceSearch!
+                    }
+                -1 => entryPreviousBranchArm!
+                UIntSize(0) => entryPreviousBranchArmStart!
+                -1 => entryFirstBranchArm!
+                true => entryFindingBranchArm!
+                entryFindingBranchArm! -> while {
+                    false => entryFindingBranchArm!
+                    -1 => entryNextBranchArm!
+                    UIntSize(0) => entryNextBranchArmStart!
+                    entryExpressionStart => entryBranchArmSearch!
+                    entryBranchArmSearch! < entryExpressionEnd -> while {
+                        nodes[entryBranchArmSearch!] => entryBranchArmCandidate
+                        entryBranchArmCandidate.parent == entryBranchIr! and entryBranchArmCandidate.kind == 39
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + entryBranchArmCandidate.astNode].start => entryBranchArmStart
+                                entryPreviousBranchArm! < 0 or entryBranchArmStart > entryPreviousBranchArmStart!
+                                    -> if {
+                                        entryNextBranchArm! < 0 or entryBranchArmStart < entryNextBranchArmStart!
+                                            -> if {
+                                                entryBranchArmSearch! => entryNextBranchArm!
+                                                entryBranchArmStart => entryNextBranchArmStart!
+                                            }
+                                    }
+                            }
+                        entryBranchArmSearch! + 1 => entryBranchArmSearch!
+                    }
+                    entryNextBranchArm! >= 0 -> if {
+                        nodes[entryNextBranchArm!] => entryNextBranchArmNode!
+                        -1 => entryPreviousBranchStage!
+                        UIntSize(0) => entryPreviousBranchStageStart!
+                        -1 => entryFirstBranchStage!
+                        -1 => entryFinalBranchStage!
+                        true => entryFindingBranchStage!
+                        entryFindingBranchStage! -> while {
+                            false => entryFindingBranchStage!
+                            -1 => entryNextBranchStage!
+                            UIntSize(0) => entryNextBranchStageStart!
+                            entryExpressionStart => entryBranchStageSearch!
+                            entryBranchStageSearch! < entryExpressionEnd
+                                -> while {
+                                    nodes[entryBranchStageSearch!] => entryBranchStageCandidate
+                                    entryBranchStageCandidate.parent == entryNextBranchArm! and entryBranchStageCandidate.kind == 6
+                                        -> if {
+                                            prepared.package.nodes[sourceRange.astStart + entryBranchStageCandidate.astNode].start => entryBranchStageStart
+                                            entryPreviousBranchStage! < 0 or entryBranchStageStart > entryPreviousBranchStageStart!
+                                                -> if {
+                                                    entryNextBranchStage! < 0 or entryBranchStageStart < entryNextBranchStageStart!
+                                                        -> if {
+                                                            entryBranchStageSearch! => entryNextBranchStage!
+                                                            entryBranchStageStart => entryNextBranchStageStart!
+                                                        }
+                                                }
+                                        }
+                                    entryBranchStageSearch! + 1 => entryBranchStageSearch!
+                                }
+                            entryNextBranchStage! >= 0 -> if {
+                                entryFirstBranchStage! < 0 -> if { entryNextBranchStage! => entryFirstBranchStage! }
+                                entryNextBranchStage! => entryFinalBranchStage!
+                                entryNextBranchStage! => entryPreviousBranchStage!
+                                entryNextBranchStageStart! => entryPreviousBranchStageStart!
+                                true => entryFindingBranchStage!
+                            }
+                        }
+                        entryFirstBranchStage! => entryNextBranchArmNode!.operand0
+                        entryFinalBranchStage! => entryNextBranchArmNode!.operand1
+                        entryFinalBranchStage! >= 0 -> if {
+                            nodes[entryFinalBranchStage!] => entryFinalBranchStageNode
+                            entryFinalBranchStageNode.typeOrigin => entryNextBranchArmNode!.typeOrigin
+                            entryFinalBranchStageNode.typeModule => entryNextBranchArmNode!.typeModule
+                            entryFinalBranchStageNode.typeSymbol => entryNextBranchArmNode!.typeSymbol
+                            entryFinalBranchStageNode.typeId => entryNextBranchArmNode!.typeId
+                            entryFinalBranchStageNode.typeKind => entryNextBranchArmNode!.typeKind
+                            entryFinalBranchStageNode.typeFlags => entryNextBranchArmNode!.typeFlags
+                        }
+                        -1 => entryNextBranchArmNode!.nextOperand
+                        entryNextBranchArmNode! => nodes[entryNextBranchArm!]
+                        entryFirstBranchArm! < 0 -> if { entryNextBranchArm! => entryFirstBranchArm! }
+                        entryPreviousBranchArm! >= 0 -> if {
+                            nodes[entryPreviousBranchArm!] => entryPreviousBranchArmNode!
+                            entryNextBranchArm! => entryPreviousBranchArmNode!.nextOperand
+                            entryPreviousBranchArmNode! => nodes[entryPreviousBranchArm!]
+                        }
+                        entryNextBranchArm! => entryPreviousBranchArm!
+                        entryNextBranchArmStart! => entryPreviousBranchArmStart!
+                        true => entryFindingBranchArm!
+                    }
+                }
+                entryBranchSource! >= 0 and entryFirstBranchArm! >= 0
+                    -> if {
+                        entryFirstBranchArm! => entryBranch!.operand0
+                        entryBranchSource! => entryBranch!.operand1
+                        entryBranch!.parent >= 0 -> if {
+                            nodes[entryBranch!.parent] => entryBranchParent!
+                            entryBranchParent!.kind == 6 and entryBranchParent!.operand1 == entryBranchIr!
+                                -> if {
+                                    entryBranchIr! => entryBranchParent!.operand0
+                                    -1 => entryBranchParent!.operand1
+                                    entryBranchParent! => nodes[entryBranch!.parent]
+                                }
+                            entryBranchParent!.kind == 17 and entryBranchParent!.operand0 == entryBranchSource!
+                                -> if {
+                                    entryBranchIr! => entryBranchParent!.operand0
+                                    entryBranch!.typeOrigin => entryBranchParent!.typeOrigin
+                                    entryBranch!.typeModule => entryBranchParent!.typeModule
+                                    entryBranch!.typeSymbol => entryBranchParent!.typeSymbol
+                                    entryBranch!.typeId => entryBranchParent!.typeId
+                                    entryBranch!.typeKind => entryBranchParent!.typeKind
+                                    entryBranch!.typeFlags => entryBranchParent!.typeFlags
+                                    entryBranchParent! => nodes[entryBranch!.parent]
+                                    entryExpressionStart => entryBranchBindingUseIndex!
+                                    entryBranchBindingUseIndex! < entryExpressionEnd
+                                        -> while {
+                                            nodes[entryBranchBindingUseIndex!] => entryBranchBindingUse!
+                                            entryBranchBindingUse!.kind == 5 and entryBranchBindingUse!.operand0 == entryBranch!.parent
+                                                -> if {
+                                                    entryBranch!.typeOrigin => entryBranchBindingUse!.typeOrigin
+                                                    entryBranch!.typeModule => entryBranchBindingUse!.typeModule
+                                                    entryBranch!.typeSymbol => entryBranchBindingUse!.typeSymbol
+                                                    entryBranch!.typeId => entryBranchBindingUse!.typeId
+                                                    entryBranch!.typeKind => entryBranchBindingUse!.typeKind
+                                                    entryBranch!.typeFlags => entryBranchBindingUse!.typeFlags
+                                                    entryBranchBindingUse! => nodes[entryBranchBindingUseIndex!]
+                                                }
+                                            entryBranchBindingUseIndex! + 1 => entryBranchBindingUseIndex!
+                                        }
+                                }
+                        }
+                        entryBranch! => nodes[entryBranchIr!]
+                    }
+            }
+        entryBranchIr! + 1 => entryBranchIr!
+    }
+    entryExpressionStart => entryPartitionIr!
+    entryPartitionIr! < entryExpressionEnd -> while {
+        nodes[entryPartitionIr!] => entryPartition!
+        entryPartition!.kind == 40 -> if {
+            -1 => entryPartitionSource!
+            UIntSize(0) => entryPartitionSourceStart!
+            entryExpressionStart => entryPartitionSourceSearch!
+            entryPartitionSourceSearch! < entryExpressionEnd
+                -> while {
+                    nodes[entryPartitionSourceSearch!] => entryPartitionSourceCandidate
+                    entryPartitionSourceCandidate.parent == entryPartition!.parent and entryPartitionSourceSearch! != entryPartitionIr!
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + entryPartitionSourceCandidate.astNode].start => entryPartitionCandidateStart
+                            prepared.package.nodes[sourceRange.astStart + entryPartition!.astNode].start => entryPartitionStart
+                            entryPartitionCandidateStart < entryPartitionStart and (entryPartitionSource! < 0 or entryPartitionCandidateStart > entryPartitionSourceStart!)
+                                -> if {
+                                    entryPartitionSourceSearch! => entryPartitionSource!
+                                    entryPartitionCandidateStart => entryPartitionSourceStart!
+                                }
+                        }
+                    entryPartitionSourceSearch! + 1 => entryPartitionSourceSearch!
+                }
+            -1 => entryFirstPartitionRoute!
+            -1 => entryPreviousPartitionRoute!
+            UIntSize(0) => entryPreviousPartitionRouteStart!
+            0 => entryPartitionRouteOrdinal!
+            true => entryFindingPartitionRoute!
+            entryFindingPartitionRoute! -> while {
+                false => entryFindingPartitionRoute!
+                -1 => entryNextPartitionRoute!
+                UIntSize(0) => entryNextPartitionRouteStart!
+                entryExpressionStart => entryPartitionRouteSearch!
+                entryPartitionRouteSearch! < entryExpressionEnd
+                    -> while {
+                        nodes[entryPartitionRouteSearch!] => entryPartitionRouteCandidate
+                        entryPartitionRouteCandidate.parent == entryPartitionIr! and (entryPartitionRouteCandidate.kind == 41 or entryPartitionRouteCandidate.kind == 42)
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + entryPartitionRouteCandidate.astNode].start => entryPartitionRouteStart
+                                entryPreviousPartitionRoute! < 0 or entryPartitionRouteStart > entryPreviousPartitionRouteStart!
+                                    -> if {
+                                        entryNextPartitionRoute! < 0 or entryPartitionRouteStart < entryNextPartitionRouteStart!
+                                            -> if {
+                                                entryPartitionRouteSearch! => entryNextPartitionRoute!
+                                                entryPartitionRouteStart => entryNextPartitionRouteStart!
+                                            }
+                                    }
+                            }
+                        entryPartitionRouteSearch! + 1 => entryPartitionRouteSearch!
+                    }
+                entryNextPartitionRoute! >= 0 -> if {
+                    nodes[entryNextPartitionRoute!] => entryNextPartitionRouteNode!
+                    entryPartitionRouteOrdinal! => entryNextPartitionRouteNode!.opcode
+                    -1 => entryNextPartitionRouteNode!.nextOperand
+                    entryNextPartitionRouteNode!.kind == 41 -> if {
+                        entryExpressionStart => entryPartitionPredicateSearch!
+                        -1 => entryPartitionPredicate!
+                        UIntSize(0) => entryPartitionPredicateStart!
+                        entryPartitionPredicateSearch! < entryExpressionEnd
+                            -> while {
+                                nodes[entryPartitionPredicateSearch!] => entryPartitionPredicateCandidate
+                                entryPartitionPredicateCandidate.parent == entryNextPartitionRoute! and (entryPartitionPredicate! < 0 or prepared.package.nodes[sourceRange.astStart + entryPartitionPredicateCandidate.astNode].start < entryPartitionPredicateStart!)
+                                    -> if {
+                                        entryPartitionPredicateSearch! => entryPartitionPredicate!
+                                        prepared.package.nodes[sourceRange.astStart + entryPartitionPredicateCandidate.astNode].start => entryPartitionPredicateStart!
+                                    }
+                                entryPartitionPredicateSearch! + 1 => entryPartitionPredicateSearch!
+                            }
+                        entryPartitionPredicate! => entryNextPartitionRouteNode!.operand0
+                    }
+                    entryNextPartitionRouteNode! => nodes[entryNextPartitionRoute!]
+                    entryFirstPartitionRoute! < 0 -> if { entryNextPartitionRoute! => entryFirstPartitionRoute! }
+                    entryPreviousPartitionRoute! >= 0 -> if {
+                        nodes[entryPreviousPartitionRoute!] => entryPreviousPartitionRouteNode!
+                        entryNextPartitionRoute! => entryPreviousPartitionRouteNode!.nextOperand
+                        entryPreviousPartitionRouteNode! => nodes[entryPreviousPartitionRoute!]
+                    }
+                    entryNextPartitionRoute! => entryPreviousPartitionRoute!
+                    entryNextPartitionRouteStart! => entryPreviousPartitionRouteStart!
+                    entryPartitionRouteOrdinal! + 1 => entryPartitionRouteOrdinal!
+                    true => entryFindingPartitionRoute!
+                }
+            }
+            entryPartitionSource! >= 0 and entryFirstPartitionRoute! >= 0
+                -> if {
+                    entryPartitionSource! => entryPartition!.operand0
+                    entryFirstPartitionRoute! => entryPartition!.operand1
+                    entryPartition!.parent >= 0 -> if {
+                        nodes[entryPartition!.parent] => entryPartitionParent!
+                        entryPartitionParent!.kind == 17 and entryPartitionParent!.operand0 == entryPartitionSource!
+                            -> if {
+                                entryPartitionIr! => entryPartitionParent!.operand0
+                                entryPartition!.typeOrigin => entryPartitionParent!.typeOrigin
+                                entryPartition!.typeModule => entryPartitionParent!.typeModule
+                                entryPartition!.typeSymbol => entryPartitionParent!.typeSymbol
+                                entryPartition!.typeId => entryPartitionParent!.typeId
+                                entryPartition!.typeKind => entryPartitionParent!.typeKind
+                                entryPartition!.typeFlags => entryPartitionParent!.typeFlags
+                                entryPartitionParent! => nodes[entryPartition!.parent]
+                            }
+                    }
+                    entryPartition! => nodes[entryPartitionIr!]
+                }
+        }
+        entryPartitionIr! + 1 => entryPartitionIr!
+    }
+    entryExpressionStart => entryStreamJoinIr!
+    entryStreamJoinIr! < entryExpressionEnd -> while {
+        nodes[entryStreamJoinIr!] => entryStreamJoin!
+        entryStreamJoin!.kind == 43 -> if {
+            -1 => entryStreamJoinSource!
+            UIntSize(0) => entryStreamJoinSourceStart!
+            entryExpressionStart => entryStreamJoinSourceSearch!
+            entryStreamJoinSourceSearch! < entryExpressionEnd
+                -> while {
+                    nodes[entryStreamJoinSourceSearch!] => entryStreamJoinSourceCandidate
+                    entryStreamJoinSourceCandidate.parent == entryStreamJoin!.parent and entryStreamJoinSourceSearch! != entryStreamJoinIr!
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + entryStreamJoinSourceCandidate.astNode].start => entryStreamJoinCandidateStart
+                            prepared.package.nodes[sourceRange.astStart + entryStreamJoin!.astNode].start => entryStreamJoinStart
+                            entryStreamJoinCandidateStart < entryStreamJoinStart and (entryStreamJoinSource! < 0 or entryStreamJoinCandidateStart > entryStreamJoinSourceStart!)
+                                -> if {
+                                    entryStreamJoinSourceSearch! => entryStreamJoinSource!
+                                    entryStreamJoinCandidateStart => entryStreamJoinSourceStart!
+                                }
+                        }
+                    entryStreamJoinSourceSearch! + 1 => entryStreamJoinSourceSearch!
+                }
+            entryStreamJoinSource! >= 0 -> if {
+                entryStreamJoinSource! => entryStreamJoin!.operand0
+                prepared.package.nodes[sourceRange.astStart + entryStreamJoin!.astNode] => entryStreamJoinAst
+                prepared.package.sources[sourceIndex] -> len => entryStreamJoinTextLength
+                prepared.package.sources[sourceIndex] -> slice(UIntSize(0), entryStreamJoinTextLength) => entryStreamJoinText
+                entryStreamJoinAst.length == 3 -> if { 0 => entryStreamJoin!.opcode }
+                entryStreamJoinAst.length == 5 -> if { 1 => entryStreamJoin!.opcode }
+                entryStreamJoinAst.length == 6 -> if {
+                    (entryStreamJoinText -> byte(entryStreamJoinAst.start)) == 99
+                        -> if { 2 => entryStreamJoin!.opcode } else { 3 => entryStreamJoin!.opcode }
+                }
+                entryStreamJoin!.parent >= 0 -> if {
+                    nodes[entryStreamJoin!.parent] => entryStreamJoinParent!
+                    entryStreamJoinParent!.kind == 17 and entryStreamJoinParent!.operand0 == entryStreamJoinSource!
+                        -> if {
+                            entryStreamJoinIr! => entryStreamJoinParent!.operand0
+                            entryStreamJoin!.typeOrigin => entryStreamJoinParent!.typeOrigin
+                            entryStreamJoin!.typeModule => entryStreamJoinParent!.typeModule
+                            entryStreamJoin!.typeSymbol => entryStreamJoinParent!.typeSymbol
+                            entryStreamJoin!.typeId => entryStreamJoinParent!.typeId
+                            entryStreamJoin!.typeKind => entryStreamJoinParent!.typeKind
+                            entryStreamJoin!.typeFlags => entryStreamJoinParent!.typeFlags
+                            entryStreamJoinParent! => nodes[entryStreamJoin!.parent]
+                        }
+                }
+                entryStreamJoin! => nodes[entryStreamJoinIr!]
+            }
+        }
+        entryStreamJoinIr! + 1 => entryStreamJoinIr!
+    }
+    0 => qualifiedEntryCallMapSearch!
+    qualifiedEntryCallMapSearch! < sourceRange.astCount
+        -> while {
+            prepared.package.nodes[sourceRange.astStart + qualifiedEntryCallMapSearch!] => qualifiedEntryCallMapNode
+            qualifiedEntryCallMapNode.kind == 11
+                and qualifiedEntryCallMapNode.cstRuleId == grammar.ruleIdCallExpression()
+                and qualifiedEntryCallMapNode.parent >= 0
+                and prepared.package.nodes[sourceRange.astStart + qualifiedEntryCallMapNode.parent].kind == 36
+                and entryAstToIr[qualifiedEntryCallMapSearch!] >= 0
+                -> if {
+                    entryAstToIr[qualifiedEntryCallMapSearch!] => entryAstToIr[qualifiedEntryCallMapNode.parent]
+                }
+            qualifiedEntryCallMapSearch! + 1 => qualifiedEntryCallMapSearch!
+        }
+    entryExpressionStart => entryCanonicalIndexResultIr!
+    entryCanonicalIndexResultIr! < entryExpressionEnd
+        -> while {
+            nodes[entryCanonicalIndexResultIr!] => entryCanonicalIndexResult!
+            entryCanonicalIndexResult!.kind == 15 and entryCanonicalIndexResult!.operand1 < 0 and entryCanonicalIndexResult!.operand0 >= entryExpressionStart and nodes[entryCanonicalIndexResult!.operand0].kind == 26
+                -> if {
+                    nodes[entryCanonicalIndexResult!.operand0] => entryWrappedConstructor
+                    9 => entryCanonicalIndexResult!.kind
+                    -1 => entryCanonicalIndexResult!.opcode
+                    entryWrappedConstructor.typeOrigin => entryCanonicalIndexResult!.typeOrigin
+                    entryWrappedConstructor.typeModule => entryCanonicalIndexResult!.typeModule
+                    entryWrappedConstructor.typeSymbol => entryCanonicalIndexResult!.typeSymbol
+                    entryWrappedConstructor.typeId => entryCanonicalIndexResult!.typeId
+                    entryWrappedConstructor.typeKind => entryCanonicalIndexResult!.typeKind
+                    entryWrappedConstructor.typeFlags => entryCanonicalIndexResult!.typeFlags
+                    entryCanonicalIndexResult! => nodes[entryCanonicalIndexResultIr!]
+                }
+            entryCanonicalIndexResult!.kind == 15 and entryCanonicalIndexResult!.typeId < 0 and entryCanonicalIndexResult!.operand0 >= entryExpressionStart
+                -> if {
+                    nodes[entryCanonicalIndexResult!.operand0] => entryCanonicalIndexedValue
+                    entryCanonicalIndexedValue.typeId >= 0 -> if {
+                        frozenRecursiveSemanticTypes[entryCanonicalIndexedValue.typeId] => entryCanonicalContainerType!
+                        entryCanonicalContainerType!.kind == 8 and entryCanonicalContainerType!.first >= 0
+                            -> if {
+                                frozenRecursiveSemanticTypes[entryCanonicalContainerType!.first] => entryCanonicalContainerType!
+                            }
+                        -1 => entryCanonicalElementTypeId!
+                        entryCanonicalContainerType!.kind == 2 or entryCanonicalContainerType!.kind == 3 or entryCanonicalContainerType!.kind == 4
+                            -> if { entryCanonicalContainerType!.first => entryCanonicalElementTypeId! }
+                        entryCanonicalContainerType!.kind == 5 -> if { entryCanonicalContainerType!.second => entryCanonicalElementTypeId! }
+                        entryCanonicalElementTypeId! >= 0 -> if {
+                            frozenRecursiveSemanticTypes[entryCanonicalElementTypeId!] => entryCanonicalElementType
+                            entryCanonicalElementTypeId! => entryCanonicalIndexResult!.typeId
+                            entryCanonicalElementType.kind => entryCanonicalIndexResult!.typeKind
+                            recursiveTypeFlags[entryCanonicalElementTypeId!] => entryCanonicalIndexResult!.typeFlags
+                            entryCanonicalElementType.origin => entryCanonicalIndexResult!.typeOrigin
+                            entryCanonicalElementType.module => entryCanonicalIndexResult!.typeModule
+                            entryCanonicalElementType.symbol => entryCanonicalIndexResult!.typeSymbol
+                            (entryCanonicalElementType.kind >= 2 and entryCanonicalElementType.kind <= 6) or entryCanonicalElementType.kind == 8
+                                -> if { 10 + entryCanonicalElementType.kind => entryCanonicalIndexResult!.typeOrigin }
+                            entryCanonicalElementType.kind == 2 or entryCanonicalElementType.kind == 3 or entryCanonicalElementType.kind == 4 or entryCanonicalElementType.kind == 6 or entryCanonicalElementType.kind == 8
+                                -> if {
+                                    entryCanonicalElementType.first >= 0 -> if {
+                                        frozenRecursiveSemanticTypes[entryCanonicalElementType.first].module => entryCanonicalIndexResult!.typeModule
+                                        frozenRecursiveSemanticTypes[entryCanonicalElementType.first].symbol => entryCanonicalIndexResult!.typeSymbol
+                                    }
+                                }
+                            entryCanonicalElementType.kind == 5 -> if {
+                                entryCanonicalElementType.first >= 0 -> if { frozenRecursiveSemanticTypes[entryCanonicalElementType.first].symbol => entryCanonicalIndexResult!.typeModule }
+                                entryCanonicalElementType.second >= 0 -> if { frozenRecursiveSemanticTypes[entryCanonicalElementType.second].symbol => entryCanonicalIndexResult!.typeSymbol }
+                            }
+                            entryCanonicalIndexResult! => nodes[entryCanonicalIndexResultIr!]
+                        }
+                    }
+                }
+            entryCanonicalIndexResultIr! + 1 => entryCanonicalIndexResultIr!
+        }
+    # Mirror function lowering: a composite generic enum
+    # constructor's outer member syntax is a type qualifier, not
+    # a runtime field projection.
+    # Mirror ordinary functions for qualified nominal payload variants. The
+    # same-span call is syntax-only and must not carry a colliding method ABI.
+    entryExpressionStart => entryNominalConstructorCallIr!
+    entryNominalConstructorCallIr! < entryExpressionEnd
+        -> while {
+            nodes[entryNominalConstructorCallIr!] => entryNominalConstructor
+            entryNominalConstructor.kind == 26
+                and entryNominalConstructor.operand0 >= entryExpressionStart
+                and entryNominalConstructor.operand0 < entryExpressionEnd
+                -> if {
+                    entryNominalConstructor.operand0 => entryNominalCallWrapperIr
+                    nodes[entryNominalCallWrapperIr] => entryNominalCallWrapper!
+                    prepared.package.nodes[sourceRange.astStart + entryNominalConstructor.astNode]
+                        => entryNominalConstructorAst
+                    prepared.package.nodes[sourceRange.astStart + entryNominalCallWrapper!.astNode]
+                        => entryNominalCallWrapperAst
+                    entryNominalCallWrapper!.kind == 6
+                        and entryNominalCallWrapper!.parent == entryNominalConstructorCallIr!
+                        and entryNominalCallWrapperAst.start == entryNominalConstructorAst.start
+                        and entryNominalCallWrapperAst.length == entryNominalConstructorAst.length
+                        -> if {
+                            9 => entryNominalCallWrapper!.kind
+                            -1 => entryNominalCallWrapper!.symbol
+                            -1 => entryNominalCallWrapper!.targetModule
+                            -1 => entryNominalCallWrapper!.opcode
+                            entryNominalCallWrapper! => nodes[entryNominalCallWrapperIr]
+                        }
+                }
+            entryNominalConstructorCallIr! + 1 => entryNominalConstructorCallIr!
+        }
+    entryExpressionStart => entryCanonicalConstructorMemberIr!
+    entryCanonicalConstructorMemberIr! < entryExpressionEnd
+        -> while {
+            nodes[entryCanonicalConstructorMemberIr!] => entryCanonicalConstructorMember!
+            entryCanonicalConstructorMember!.kind == 13
+                and entryCanonicalConstructorMember!.operand0 >= entryExpressionStart
+                and entryCanonicalConstructorMember!.operand0 < entryExpressionEnd
+                -> if {
+                    entryCanonicalConstructorMember!.operand0 => entryConstructorWrapperIr!
+                    nodes[entryConstructorWrapperIr!] => entryConstructorWrapper!
+                    entryConstructorWrapper!.kind == 9 and entryConstructorWrapper!.opcode == -1
+                        -> if {
+                            entryConstructorWrapper!.kind == 9
+                                and entryConstructorWrapper!.opcode == -1
+                                and entryConstructorWrapper!.operand0 >= entryExpressionStart
+                                and entryConstructorWrapper!.operand0 < entryExpressionEnd
+                                -> while {
+                                    entryConstructorWrapper!.operand0 => entryConstructorWrapperIr!
+                                    nodes[entryConstructorWrapperIr!] => entryConstructorWrapper!
+                                }
+                            entryConstructorWrapper!.kind == 26 -> if {
+                                entryCanonicalConstructorMember!.targetModule >= 0
+                                    -> if {
+                                        entryCanonicalConstructorMember!.targetModule => entryConstructorWrapper!.targetModule
+                                        entryCanonicalConstructorMember!.symbol => entryConstructorWrapper!.symbol
+                                    }
+                                entryConstructorWrapper! => nodes[entryConstructorWrapperIr!]
+                                9 => entryCanonicalConstructorMember!.kind
+                                -1 => entryCanonicalConstructorMember!.opcode
+                                entryConstructorWrapper!.typeOrigin => entryCanonicalConstructorMember!.typeOrigin
+                                entryConstructorWrapper!.typeModule => entryCanonicalConstructorMember!.typeModule
+                                entryConstructorWrapper!.typeSymbol => entryCanonicalConstructorMember!.typeSymbol
+                                entryConstructorWrapper!.typeId => entryCanonicalConstructorMember!.typeId
+                                entryConstructorWrapper!.typeKind => entryCanonicalConstructorMember!.typeKind
+                                entryConstructorWrapper!.typeFlags => entryCanonicalConstructorMember!.typeFlags
+                                entryCanonicalConstructorMember! => nodes[entryCanonicalConstructorMemberIr!]
+                            }
+                        }
+                }
+            entryCanonicalConstructorMemberIr! + 1 => entryCanonicalConstructorMemberIr!
+        }
+    entryExpressionStart => entrySiblingIr!
+    entrySiblingIr! < entryExpressionEnd -> while {
+        nodes[entrySiblingIr!] => entrySibling!
+        false => preserveEntryTapArgumentLink!
+        -1 => entryNextSibling!
+        UIntSize(0) => entryNextSiblingStart!
+        entryExpressionStart => entrySiblingSearch!
+        entrySiblingSearch! < entryExpressionEnd -> while {
+            nodes[entrySiblingSearch!] => entrySiblingCandidate
+            entrySiblingCandidate.kind == 6
+                and entrySiblingCandidate.parent >= 0
+                and nodes[entrySiblingCandidate.parent].kind == 36
+                and entrySiblingCandidate.operand0 == entrySiblingIr!
+                -> if { true => preserveEntryTapArgumentLink! }
+            entrySibling!.parent >= 0
+                and (nodes[entrySibling!.parent].kind == 14 or nodes[entrySibling!.parent].kind == 16)
+                and entrySiblingCandidate.kind == 3 and entrySibling!.kind == 3 => entryNumericLiteralOrder
+            entrySiblingCandidate.parent == entrySibling!.parent
+                and ((entryNumericLiteralOrder and entrySiblingCandidate.astNode > entrySibling!.astNode)
+                or (not entryNumericLiteralOrder and prepared.package.nodes[sourceRange.astStart + entrySiblingCandidate.astNode].start > prepared.package.nodes[sourceRange.astStart + entrySibling!.astNode].start))
+                -> if {
+                    prepared.package.nodes[sourceRange.astStart + entrySiblingCandidate.astNode].start => entrySiblingCandidateStart
+                    entryNextSibling! < 0
+                        or (entryNumericLiteralOrder and nodes[entryNextSibling!].kind == 3 and entrySiblingCandidate.astNode < nodes[entryNextSibling!].astNode)
+                        or ((not entryNumericLiteralOrder or nodes[entryNextSibling!].kind != 3) and entrySiblingCandidateStart < entryNextSiblingStart!)
+                        -> if {
+                            entrySiblingSearch! => entryNextSibling!
+                            entrySiblingCandidateStart => entryNextSiblingStart!
+                        }
+                }
+            entrySiblingSearch! + 1 => entrySiblingSearch!
+        }
+        preserveEntryTapArgumentLink! -> unless {
+            entryNextSibling! => entrySibling!.nextOperand
+        }
+        entrySibling! => nodes[entrySiblingIr!]
+        entrySiblingIr! + 1 => entrySiblingIr!
+    }
+
+    entryExpressionStart => entryFoldIr!
+    entryFoldIr! < entryExpressionEnd -> while {
+        nodes[entryFoldIr!] => entryFold!
+        entryFold!.kind == 32 -> if {
+            entryFold!.operand0 => entryFoldInitial
+            entryFold!.operand1 => entryFoldRegion
+            -1 => entryFoldSource!
+            UIntSize(0) => entryFoldSourceStart!
+            entryExpressionStart => entryFoldSourceSearch!
+            entryFoldSourceSearch! < entryExpressionEnd -> while {
+                nodes[entryFoldSourceSearch!] => entryFoldSourceCandidate
+                false => entryFoldSourceSupported!
+                entryFoldSourceCandidate.kind == 31 -> if { true => entryFoldSourceSupported! }
+                entryFoldSourceCandidate.typeId >= 0 -> if {
+                    frozenRecursiveSemanticTypes[entryFoldSourceCandidate.typeId].kind == 3
+                        -> if { true => entryFoldSourceSupported! }
+                }
+                prepared.package.nodes[sourceRange.astStart + entryFoldSourceCandidate.astNode].start => entryFoldSourceCandidateStart
+                entryFoldSourceSupported! and entryFoldSourceCandidate.parent == entryFold!.parent and entryFoldSourceCandidateStart < prepared.package.nodes[sourceRange.astStart + entryFold!.astNode].start and (entryFoldSource! < 0 or entryFoldSourceCandidateStart > entryFoldSourceStart!)
+                    -> if {
+                        entryFoldSourceSearch! => entryFoldSource!
+                        entryFoldSourceCandidateStart => entryFoldSourceStart!
+                    }
+                entryFoldSourceSearch! + 1 => entryFoldSourceSearch!
+            }
+            entryFoldSource! >= 0 -> if {
+                entryFoldSource! => entryFold!.operand0
+                entryFoldInitial => entryFold!.operand1
+                entryFoldRegion => entryFold!.nextOperand
+                entryFold! => nodes[entryFoldIr!]
+                entryFold!.parent >= entryExpressionStart -> if {
+                    nodes[entryFold!.parent] => entryFoldBinding!
+                    entryFoldBinding!.kind == 17 -> if {
+                        entryFoldIr! => entryFoldBinding!.operand0
+                        entryFoldBinding! => nodes[entryFold!.parent]
+                    }
+                }
+            }
+        }
+        entryFoldIr! + 1 => entryFoldIr!
+    }
+
+    entryExpressionStart => entryControlIrIndex!
+    entryControlIrIndex! < entryExpressionEnd -> while {
+        nodes[entryControlIrIndex!] => entryControl!
+        entryControl!.kind == 19 -> if {
+            -1 => entryFirstRegionChild!
+            -1 => entryLastRegionChild!
+            UIntSize(0) => entryFirstRegionChildStart!
+            UIntSize(0) => entryLastRegionChildStart!
+            entryExpressionStart => entryRegionChildSearch!
+            entryRegionChildSearch! < entryExpressionEnd
+                -> while {
+                    nodes[entryRegionChildSearch!].parent == entryControlIrIndex!
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + nodes[entryRegionChildSearch!].astNode].start => entryRegionChildStart
+                            entryFirstRegionChild! < 0 or entryRegionChildStart < entryFirstRegionChildStart!
+                                -> if {
+                                    entryRegionChildSearch! => entryFirstRegionChild!
+                                    entryRegionChildStart => entryFirstRegionChildStart!
+                                }
+                            entryLastRegionChild! < 0 or entryRegionChildStart > entryLastRegionChildStart! or (entryRegionChildStart == entryLastRegionChildStart! and (nodes[entryRegionChildSearch!].kind == 18 or nodes[entryRegionChildSearch!].kind == 20) and nodes[entryLastRegionChild!].kind != 18 and nodes[entryLastRegionChild!].kind != 20)
+                                -> if {
+                                    entryRegionChildSearch! => entryLastRegionChild!
+                                    entryRegionChildStart => entryLastRegionChildStart!
+                                }
+                        }
+                    entryRegionChildSearch! + 1 => entryRegionChildSearch!
+                }
+            entryFirstRegionChild! => entryControl!.operand0
+            entryLastRegionChild! >= 0
+                and nodes[entryLastRegionChild!].kind == 6
+                and nodes[entryLastRegionChild!].operand1 >= entryExpressionStart
+                and nodes[entryLastRegionChild!].operand1 < entryExpressionEnd
+                and nodes[nodes[entryLastRegionChild!].operand1].parent == entryControlIrIndex!
+                -> if {
+                    nodes[entryLastRegionChild!].operand1 => entryLastRegionChild!
+                }
+            entryLastRegionChild! >= 0 and nodes[entryLastRegionChild!].kind == 26
+                -> if {
+                    nodes[entryLastRegionChild!] => entryContextualEnumWrapper
+                    -1 => entryContextualEnumControl!
+                    entryExpressionStart => entryContextualEnumChildSearch!
+                    entryContextualEnumChildSearch! < entryExpressionEnd
+                        -> while {
+                            nodes[entryContextualEnumChildSearch!] => entryContextualEnumChild
+                            entryContextualEnumChild.parent == entryLastRegionChild!
+                                and (entryContextualEnumChild.kind == 18
+                                or entryContextualEnumChild.kind == 20
+                                or entryContextualEnumChild.kind == 27
+                                or entryContextualEnumChild.kind == 34)
+                                and entryContextualEnumChild.typeOrigin == entryContextualEnumWrapper.typeOrigin
+                                and entryContextualEnumChild.typeModule == entryContextualEnumWrapper.typeModule
+                                and entryContextualEnumChild.typeSymbol == entryContextualEnumWrapper.typeSymbol
+                                -> if { entryContextualEnumChildSearch! => entryContextualEnumControl! }
+                            entryContextualEnumChildSearch! + 1 => entryContextualEnumChildSearch!
+                        }
+                    entryContextualEnumControl! >= 0 -> if { entryContextualEnumControl! => entryLastRegionChild! }
+                }
+            true => entryNestedRegionUnwrap!
+            entryLastRegionChild! >= 0
+                and entryNestedRegionUnwrap!
+                and nodes[entryLastRegionChild!].kind == 9
+                and nodes[entryLastRegionChild!].opcode == -1
+                -> while {
+                    -1 => entryNestedRegionResult!
+                    UIntSize(0) => entryNestedRegionResultStart!
+                    entryExpressionStart => entryNestedResultSearch!
+                    entryNestedResultSearch! < entryExpressionEnd
+                        -> while {
+                            nodes[entryNestedResultSearch!].parent == entryLastRegionChild!
+                                -> if {
+                                    prepared.package.nodes[sourceRange.astStart + nodes[entryNestedResultSearch!].astNode].start => entryNestedResultStart
+                                    entryNestedRegionResult! < 0
+                                        or entryNestedResultStart > entryNestedRegionResultStart!
+                                        or (entryNestedResultStart == entryNestedRegionResultStart!
+                                        and (nodes[entryNestedResultSearch!].kind == 18 or nodes[entryNestedResultSearch!].kind == 20)
+                                        and nodes[entryNestedRegionResult!].kind != 18
+                                        and nodes[entryNestedRegionResult!].kind != 20)
+                                        -> if {
+                                            entryNestedResultSearch! => entryNestedRegionResult!
+                                            entryNestedResultStart => entryNestedRegionResultStart!
+                                        }
+                                }
+                            entryNestedResultSearch! + 1 => entryNestedResultSearch!
+                        }
+                    entryNestedRegionResult! >= 0 -> if { entryNestedRegionResult! => entryLastRegionChild! } else { false => entryNestedRegionUnwrap! }
+                }
+            entryLastRegionChild! => entryControl!.operand1
+            entryControl! => nodes[entryControlIrIndex!]
+        }
+        entryControl!.kind == 30 and prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].kind == 82
+            -> if {
+                -1 => entryTryOperandIr!
+                entryExpressionStart => entryTryOperandSearch!
+                entryTryOperandSearch! < entryExpressionEnd -> while {
+                    nodes[entryTryOperandSearch!].parent == entryControlIrIndex!
+                        -> if { entryTryOperandSearch! => entryTryOperandIr! }
+                    entryTryOperandSearch! + 1 => entryTryOperandSearch!
+                }
+                entryTryOperandIr! >= 0 -> if {
+                    nodes[entryTryOperandIr!] => directEntryTryOperand
+                    directEntryTryOperand.typeId < 0
+                        or directEntryTryOperand.typeId >= (frozenRecursiveSemanticTypes -> len)
+                        or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].kind != 7
+                        or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].origin != 4
+                        or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].symbol != 1
+                        -> if { -1 => entryTryOperandIr! }
+                }
+                entryTryOperandIr! < 0 -> if {
+                    0 => entryTryAstChildSearch!
+                    entryTryAstChildSearch! < sourceRange.astCount
+                        -> while {
+                            prepared.package.nodes[sourceRange.astStart + entryTryAstChildSearch!].parent == entryControl!.astNode
+                                -> if {
+                                    UIntSize(0) => entryTryFlowOperandStart!
+                                    entryExpressionStart => entryTryFlowOperandSearch!
+                                    entryTryFlowOperandSearch! < entryExpressionEnd
+                                        -> while {
+                                            nodes[entryTryFlowOperandSearch!] => entryTryFlowOperandCandidate
+                                            entryTryFlowOperandCandidate.astNode => entryTryFlowOperandAncestor!
+                                            false => entryTryFlowOperandDescends!
+                                            entryTryFlowOperandAncestor! >= 0 and not entryTryFlowOperandDescends!
+                                                -> while {
+                                                    entryTryFlowOperandAncestor! == entryTryAstChildSearch!
+                                                        -> if { true => entryTryFlowOperandDescends! } else {
+                                                            prepared.package.nodes[sourceRange.astStart + entryTryFlowOperandAncestor!].parent => entryTryFlowOperandAncestor!
+                                                        }
+                                                }
+                                            entryTryFlowOperandDescends!
+                                                and entryTryFlowOperandCandidate.typeId >= 0
+                                                and entryTryFlowOperandCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
+                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].kind == 7
+                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].origin == 4
+                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].symbol == 1
+                                                -> if {
+                                                    prepared.package.nodes[sourceRange.astStart + entryTryFlowOperandCandidate.astNode].start => entryTryFlowOperandCandidateStart
+                                                    entryTryOperandIr! < 0 or entryTryFlowOperandCandidateStart >= entryTryFlowOperandStart!
+                                                        -> if {
+                                                            entryTryFlowOperandSearch! => entryTryOperandIr!
+                                                            entryTryFlowOperandCandidateStart => entryTryFlowOperandStart!
+                                                        }
+                                                }
+                                            entryTryFlowOperandSearch! + 1 => entryTryFlowOperandSearch!
+                                        }
+                                }
+                            entryTryAstChildSearch! + 1 => entryTryAstChildSearch!
+                        }
+                }
+                true => entryTryOperandUnwrap!
+                entryTryOperandIr! >= 0 and entryTryOperandUnwrap! and nodes[entryTryOperandIr!].kind == 9 and nodes[entryTryOperandIr!].opcode == -1
+                    -> while {
+                        -1 => nestedEntryTryOperand!
+                        entryExpressionStart => nestedEntryTryOperandSearch!
+                        nestedEntryTryOperandSearch! < entryExpressionEnd
+                            -> while {
+                                nodes[nestedEntryTryOperandSearch!].parent == entryTryOperandIr!
+                                    -> if { nestedEntryTryOperandSearch! => nestedEntryTryOperand! }
+                                nestedEntryTryOperandSearch! + 1 => nestedEntryTryOperandSearch!
+                            }
+                        nestedEntryTryOperand! >= 0 -> if { nestedEntryTryOperand! => entryTryOperandIr! } else { false => entryTryOperandUnwrap! }
+                    }
+                entryTryOperandIr! >= 0 -> if {
+                    entryTryOperandIr! => entryControl!.operand0
+                    nodes[entryTryOperandIr!] => entryTryOperand
+                    entryTryOperand.typeId >= 0 and frozenRecursiveSemanticTypes[entryTryOperand.typeId].kind == 7 and frozenRecursiveSemanticTypes[entryTryOperand.typeId].origin == 4 and frozenRecursiveSemanticTypes[entryTryOperand.typeId].symbol == 1 and frozenRecursiveSemanticTypes[entryTryOperand.typeId].first >= 0
+                        -> if {
+                            frozenRecursiveSemanticTypes[entryTryOperand.typeId].first => entryTryPayloadTypeId
+                            frozenRecursiveSemanticTypes[entryTryPayloadTypeId] => entryTryPayloadType
+                            entryTryPayloadTypeId => entryControl!.typeId
+                            entryTryPayloadType.kind => entryControl!.typeKind
+                            recursiveTypeFlags[entryTryPayloadTypeId] => entryControl!.typeFlags
+                            entryTryPayloadType.origin => entryControl!.typeOrigin
+                            entryTryPayloadType.module => entryControl!.typeModule
+                            entryTryPayloadType.symbol => entryControl!.typeSymbol
+                        }
+                    entryControl! => nodes[entryControlIrIndex!]
+                    entryControl!.parent >= entryExpressionStart and nodes[entryControl!.parent].kind == 17
+                        -> if {
+                            nodes[entryControl!.parent] => entryTryBinding!
+                            entryControlIrIndex! => entryTryBinding!.operand0
+                            entryControl!.typeId => entryTryBinding!.typeId
+                            entryControl!.typeKind => entryTryBinding!.typeKind
+                            entryControl!.typeFlags => entryTryBinding!.typeFlags
+                            entryControl!.typeOrigin => entryTryBinding!.typeOrigin
+                            entryControl!.typeModule => entryTryBinding!.typeModule
+                            entryControl!.typeSymbol => entryTryBinding!.typeSymbol
+                            entryTryBinding! => nodes[entryControl!.parent]
+                        }
+                }
+            }
+        entryControl!.kind == 27 -> if {
+            prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].parent => entryMatchFlowAst
+            false => entryMatchUsesEnumPattern!
+            0 => entryMatchPatternSearch!
+            entryMatchPatternSearch! < sourceRange.astCount
+                -> while {
+                    prepared.package.nodes[sourceRange.astStart + entryMatchPatternSearch!] => entryMatchPatternCandidate
+                    entryMatchPatternCandidate.parent => entryMatchPatternOwner!
+                    entryMatchPatternOwner! >= 0 and prepared.package.nodes[sourceRange.astStart + entryMatchPatternOwner!].kind == 70
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + entryMatchPatternOwner!].parent => entryMatchPatternOwner!
+                        }
+                    entryMatchPatternCandidate.kind == 59
+                        and entryMatchPatternOwner! >= 0
+                        and prepared.package.nodes[sourceRange.astStart + entryMatchPatternOwner!].kind == 58
+                        and prepared.package.nodes[sourceRange.astStart + entryMatchPatternOwner!].parent == entryControl!.astNode
+                        -> if {
+                            true => entryMatchUsesEnumPattern!
+                        }
+                    entryMatchPatternSearch! + 1 => entryMatchPatternSearch!
+                }
+            -1 => entryMatchSubject!
+            false => entryMatchSubjectEnum!
+            UIntSize(0) => entryMatchSubjectStart!
+            1000000 => entryMatchSubjectDistance!
+            -1 => entryMatchMemberSubject!
+            UIntSize(0) => entryMatchMemberSubjectStart!
+            -1 => entryMatchFirstArm!
+            entryExpressionStart => entryMatchSearch!
+            entryMatchSearch! < entryExpressionEnd -> while {
+                nodes[entryMatchSearch!] => entryMatchCandidate
+                prepared.package.nodes[sourceRange.astStart + entryMatchCandidate.astNode] => entryMatchCandidateAst
+                entryMatchCandidateAst.parent => entryMatchCandidateAncestor!
+                1 => entryMatchCandidateDistance!
+                entryMatchCandidate.astNode == entryMatchFlowAst => entryMatchCandidateBelongs!
+                entryMatchCandidateBelongs! -> if { 0 => entryMatchCandidateDistance! }
+                entryMatchCandidateAncestor! >= 0 and not entryMatchCandidateBelongs!
+                    -> while {
+                        entryMatchCandidateAncestor! == entryMatchFlowAst
+                            -> if { true => entryMatchCandidateBelongs! } else {
+                                prepared.package.nodes[sourceRange.astStart + entryMatchCandidateAncestor!].parent => entryMatchCandidateAncestor!
+                                entryMatchCandidateDistance! + 1 => entryMatchCandidateDistance!
+                            }
+                    }
+                false => entryMatchCandidateEnum!
+                entryMatchCandidate.typeId < 0 and entryMatchCandidate.typeKind == 7 and entryMatchCandidate.typeOrigin == 4
+                    -> if { true => entryMatchCandidateEnum! }
+                entryMatchCandidate.typeModule => entryMatchCandidateEnumModule!
+                entryMatchCandidate.typeSymbol => entryMatchCandidateEnumSymbol!
+                entryMatchCandidate.typeOrigin => entryMatchCandidateEnumOrigin!
+                entryMatchCandidate.typeId >= 0 -> if {
+                    frozenRecursiveSemanticTypes[entryMatchCandidate.typeId] => entryMatchCandidateResolvedType
+                    entryMatchCandidateResolvedType.kind == 7 => entryMatchCandidateEnum!
+                    entryMatchCandidateResolvedType.module => entryMatchCandidateEnumModule!
+                    entryMatchCandidateResolvedType.symbol => entryMatchCandidateEnumSymbol!
+                    entryMatchCandidateResolvedType.origin => entryMatchCandidateEnumOrigin!
+                }
+                not entryMatchCandidateEnum!
+                    and entryMatchCandidate.typeId < 0
+                    and (entryMatchCandidateEnumOrigin! == 0 or entryMatchCandidateEnumOrigin! == 2)
+                    and entryMatchCandidateEnumModule! >= 0
+                    and entryMatchCandidateEnumModule! < (prepared.package.ranges -> len)
+                    -> if {
+                        prepared.package.ranges[entryMatchCandidateEnumModule!] => entryMatchCandidateEnumRange
+                        entryMatchCandidateEnumSymbol! >= 0 and entryMatchCandidateEnumSymbol! < entryMatchCandidateEnumRange.symbolCount
+                            -> if {
+                                prepared.package.symbols[entryMatchCandidateEnumRange.symbolStart + entryMatchCandidateEnumSymbol!] => entryMatchCandidateEnumDeclaration
+                                entryMatchCandidateEnumDeclaration.astNode >= 0
+                                    and prepared.package.nodes[entryMatchCandidateEnumRange.astStart + entryMatchCandidateEnumDeclaration.astNode].kind == 4
+                                    -> if {
+                                        true => entryMatchCandidateEnum!
+                                    }
+                            }
+                    }
+                (entryMatchCandidate.typeOrigin == 1 and ((entryMatchCandidate.typeSymbol >= 2 and entryMatchCandidate.typeSymbol <= 14) or (entryMatchCandidate.typeSymbol >= 19 and entryMatchCandidate.typeSymbol <= 22))) => entryMatchCandidateInteger
+                entryMatchUsesEnumPattern!
+                    and entryMatchCandidateBelongs!
+                    and entryMatchCandidateDistance! == 1
+                    and entryMatchCandidate.kind == 13
+                    and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start
+                    -> if {
+                        entryMatchMemberSubject! < 0 or entryMatchCandidateAst.start > entryMatchMemberSubjectStart!
+                            -> if {
+                                entryMatchSearch! => entryMatchMemberSubject!
+                                entryMatchCandidateAst.start => entryMatchMemberSubjectStart!
+                            }
+                    }
+                entryMatchCandidateBelongs! and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and ((entryMatchUsesEnumPattern! and entryMatchCandidateEnum!) or (not entryMatchUsesEnumPattern! and entryMatchCandidateInteger))
+                    -> if {
+                        entryMatchSubject! < 0 or (entryMatchCandidateEnum! and not entryMatchSubjectEnum!) or (((entryMatchCandidateEnum! and entryMatchSubjectEnum!) or (not entryMatchCandidateEnum! and not entryMatchSubjectEnum!)) and (entryMatchCandidateDistance! < entryMatchSubjectDistance! or (entryMatchCandidateDistance! == entryMatchSubjectDistance! and entryMatchCandidateAst.start > entryMatchSubjectStart!)))
+                            -> if {
+                                entryMatchSearch! => entryMatchSubject!
+                                entryMatchCandidateEnum! => entryMatchSubjectEnum!
+                                entryMatchCandidateAst.start => entryMatchSubjectStart!
+                                entryMatchCandidateDistance! => entryMatchSubjectDistance!
+                            }
+                    }
+                entryMatchCandidate.kind == 19 and entryMatchCandidate.parent == entryControlIrIndex! and entryMatchFirstArm! < 0
+                    -> if { entryMatchSearch! => entryMatchFirstArm! }
+                entryMatchSearch! + 1 => entryMatchSearch!
+            }
+            entryMatchUsesEnumPattern! and entryMatchSubject! < 0 and entryMatchMemberSubject! >= 0
+                -> if { entryMatchMemberSubject! => entryMatchSubject! }
+            entryMatchSubject! => entryControl!.operand0
+            entryMatchFirstArm! => entryControl!.operand1
+            not entryMatchUsesEnumPattern! -> if {
+                34 => entryControl!.kind
+                entryMatchFirstArm! => entrySubjectWhenArmIndex!
+                entrySubjectWhenArmIndex! >= 0 and entrySubjectWhenArmIndex! < entryExpressionEnd and nodes[entrySubjectWhenArmIndex!].parent == entryControlIrIndex!
+                    -> while {
+                        nodes[entrySubjectWhenArmIndex!] => entrySubjectWhenArm
+                        entrySubjectWhenArm.operand0 >= entryExpressionStart and entrySubjectWhenArm.operand0 < entryExpressionEnd and nodes[entrySubjectWhenArm.operand0].kind == 8 and nodes[entrySubjectWhenArm.operand0].operand1 < 0
+                            -> if {
+                                nodes[entrySubjectWhenArm.operand0] => entrySubjectWhenCondition!
+                                entrySubjectWhenCondition!.operand0 => entrySubjectWhenCondition!.operand1
+                                entryMatchSubject! => entrySubjectWhenCondition!.operand0
+                                entrySubjectWhenCondition! => nodes[entrySubjectWhenArm.operand0]
+                            }
+                        entrySubjectWhenArm.nextOperand => entrySubjectWhenArmIndex!
+                    }
+            }
+            entryControl! => nodes[entryControlIrIndex!]
+        }
+        entryControl!.kind == 33 -> if {
+            -1 => entryFirstWhenArm!
+            entryExpressionStart => entryWhenArmSearch!
+            entryWhenArmSearch! < entryExpressionEnd -> while {
+                nodes[entryWhenArmSearch!] => entryWhenArmCandidate
+                entryWhenArmCandidate.kind == 19 and entryWhenArmCandidate.parent == entryControlIrIndex!
+                    -> if {
+                        entryFirstWhenArm! < 0 -> if { entryWhenArmSearch! => entryFirstWhenArm! }
+                        entryWhenArmCandidate.operand0 >= entryExpressionStart and nodes[entryWhenArmCandidate.operand0].kind == 8 and nodes[entryWhenArmCandidate.operand0].operand1 < 0
+                            -> if {
+                                nodes[entryWhenArmCandidate.operand0] => entryWhenCondition!
+                                -1 => entryWhenConditionNameAst!
+                                0 => entryWhenConditionAstSearch!
+                                entryWhenConditionAstSearch! < sourceRange.astCount
+                                    -> while {
+                                        prepared.package.nodes[sourceRange.astStart + entryWhenConditionAstSearch!].kind == 15 and prepared.package.nodes[sourceRange.astStart + entryWhenConditionAstSearch!].parent == entryWhenCondition!.astNode
+                                            -> if { entryWhenConditionAstSearch! => entryWhenConditionNameAst! }
+                                        entryWhenConditionAstSearch! + 1 => entryWhenConditionAstSearch!
+                                    }
+                                -1 => entryWhenConditionNameIr!
+                                entryWhenConditionNameAst! >= 0 -> if {
+                                    -1 => entryWhenConditionPatternSymbolIndex!
+                                    0 => entryWhenConditionPatternResolutionSearch!
+                                    entryWhenConditionPatternResolutionSearch! < (resolvedNames -> len)
+                                        -> while {
+                                            resolvedNames[entryWhenConditionPatternResolutionSearch!] => entryWhenConditionPatternResolution
+                                            entryWhenConditionPatternResolution.astNode == entryWhenConditionNameAst!
+                                                and entryWhenConditionPatternResolution.symbol >= 0
+                                                -> if {
+                                                    prepared.package.symbols[sourceRange.symbolStart + entryWhenConditionPatternResolution.symbol] => entryWhenConditionPatternSymbol
+                                                    entryWhenConditionPatternSymbol.astNode >= 0
+                                                        and prepared.package.nodes[sourceRange.astStart + entryWhenConditionPatternSymbol.astNode].kind == 59
+                                                        -> if { entryWhenConditionPatternResolution.symbol => entryWhenConditionPatternSymbolIndex! }
+                                                }
+                                            entryWhenConditionPatternResolutionSearch! + 1 => entryWhenConditionPatternResolutionSearch!
+                                        }
+                                    entryExpressionStart => entryWhenConditionPatternSearch!
+                                    entryWhenConditionPatternSearch! < entryExpressionEnd and entryWhenConditionNameIr! < 0
+                                        -> while {
+                                            nodes[entryWhenConditionPatternSearch!] => entryWhenConditionPatternCandidate
+                                            entryWhenConditionPatternCandidate.kind == 29 and entryWhenConditionPatternCandidate.symbol == entryWhenConditionPatternSymbolIndex!
+                                                and entryWhenConditionPatternCandidate.astNode == prepared.package.symbols[sourceRange.symbolStart + entryWhenConditionPatternSymbolIndex!].astNode
+                                                -> if { entryWhenConditionPatternSearch! => entryWhenConditionNameIr! }
+                                            entryWhenConditionPatternSearch! + 1 => entryWhenConditionPatternSearch!
+                                        }
+                                }
+                                entryWhenConditionNameIr! >= 0 -> if {
+                                    entryWhenCondition!.operand0 => entryWhenCondition!.operand1
+                                    entryWhenConditionNameIr! => entryWhenCondition!.operand0
+                                    entryWhenCondition! => nodes[entryWhenArmCandidate.operand0]
+                                }
+                            }
+                    }
+                entryWhenArmSearch! + 1 => entryWhenArmSearch!
+            }
+            entryFirstWhenArm! => entryControl!.operand0
+            -1 => entryControl!.operand1
+            entryControl! => nodes[entryControlIrIndex!]
+        }
+        entryControl!.kind == 18 or entryControl!.kind == 20
+            -> if {
+                prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].parent => entryControlFlowAst
+                -1 => entryConditionIr!
+                UIntSize(0) => entryConditionStart!
+                1000000 => entryConditionDistance!
+                entryExpressionStart => entryConditionSearch!
+                entryConditionSearch! < entryExpressionEnd -> while {
+                    nodes[entryConditionSearch!] => entryConditionCandidate
+                    prepared.package.nodes[sourceRange.astStart + entryConditionCandidate.astNode].parent => entryConditionAncestor!
+                    1 => entryCandidateConditionDistance!
+                    false => entryConditionBelongsToFlow!
+                    entryConditionAncestor! >= 0 and not entryConditionBelongsToFlow!
+                        -> while {
+                            entryConditionAncestor! == entryControlFlowAst
+                                -> if { true => entryConditionBelongsToFlow! } else {
+                                    prepared.package.nodes[sourceRange.astStart + entryConditionAncestor!].parent => entryConditionAncestor!
+                                    entryCandidateConditionDistance! + 1 => entryCandidateConditionDistance!
+                                }
+                        }
+                    entryConditionBelongsToFlow! and ((entryConditionCandidate.typeOrigin == 1 and entryConditionCandidate.typeSymbol == 23) or (entryConditionCandidate.typeId >= 0 and frozenRecursiveSemanticTypes[entryConditionCandidate.typeId].origin == 1 and frozenRecursiveSemanticTypes[entryConditionCandidate.typeId].symbol == 23)) and prepared.package.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start + prepared.package.nodes[sourceRange.astStart + entryConditionCandidate.astNode].length <= prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start => entryCandidateStart
+                            entryConditionIr! < 0 or entryCandidateConditionDistance! < entryConditionDistance! or (entryCandidateConditionDistance! == entryConditionDistance! and entryCandidateStart > entryConditionStart!)
+                                -> if {
+                                    entryConditionSearch! => entryConditionIr!
+                                    entryCandidateStart => entryConditionStart!
+                                    entryCandidateConditionDistance! => entryConditionDistance!
+                                }
+                        }
+                    entryConditionSearch! + 1 => entryConditionSearch!
+                }
+                entryConditionIr! < 0 and entryControl!.parent >= entryExpressionStart and nodes[entryControl!.parent].astNode >= 0 and prepared.package.nodes[sourceRange.astStart + nodes[entryControl!.parent].astNode].start + prepared.package.nodes[sourceRange.astStart + nodes[entryControl!.parent].astNode].length <= prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and nodes[entryControl!.parent].kind != 19 and ((nodes[entryControl!.parent].typeOrigin == 1 and nodes[entryControl!.parent].typeSymbol == 23) or (nodes[entryControl!.parent].typeId >= 0 and frozenRecursiveSemanticTypes[nodes[entryControl!.parent].typeId].origin == 1 and frozenRecursiveSemanticTypes[nodes[entryControl!.parent].typeId].symbol == 23))
+                    -> if {
+                        entryControl!.parent => entryEnclosingConditionIr
+                        nodes[entryEnclosingConditionIr].parent => entryControl!.parent
+                        entryEnclosingConditionIr => entryConditionIr!
+                    }
+                true => entryConditionUnwrap!
+                entryConditionIr! >= 0
+                    and entryConditionUnwrap!
+                    and nodes[entryConditionIr!].kind == 9
+                    and nodes[entryConditionIr!].typeOrigin == 1
+                    and nodes[entryConditionIr!].typeSymbol == 0
+                    -> while {
+                        -1 => entryNestedConditionResult!
+                        UIntSize(0) => entryNestedConditionStart!
+                        entryExpressionStart => entryNestedConditionSearch!
+                        entryNestedConditionSearch! < entryExpressionEnd
+                            -> while {
+                                nodes[entryNestedConditionSearch!].parent == entryConditionIr!
+                                    -> if {
+                                        prepared.package.nodes[sourceRange.astStart + nodes[entryNestedConditionSearch!].astNode].start => entryNestedCandidateStart
+                                        entryNestedConditionResult! < 0 or entryNestedCandidateStart > entryNestedConditionStart!
+                                            -> if {
+                                                entryNestedConditionSearch! => entryNestedConditionResult!
+                                                entryNestedCandidateStart => entryNestedConditionStart!
+                                            }
+                                    }
+                                entryNestedConditionSearch! + 1 => entryNestedConditionSearch!
+                            }
+                        entryNestedConditionResult! >= 0 -> if { entryNestedConditionResult! => entryConditionIr! } else { false => entryConditionUnwrap! }
+                    }
+                -1 => entryThenRegion!
+                -1 => entryElseRegion!
+                entryExpressionStart => entryRegionSearch!
+                entryRegionSearch! < entryExpressionEnd -> while {
+                    nodes[entryRegionSearch!] => entryRegionCandidate
+                    entryRegionCandidate.kind == 19 and entryRegionCandidate.parent == entryControlIrIndex!
+                        -> if {
+                            entryThenRegion! < 0 -> if { entryRegionSearch! => entryThenRegion! } else { entryRegionSearch! => entryElseRegion! }
+                        }
+                    entryRegionSearch! + 1 => entryRegionSearch!
+                }
+                entryConditionIr! => entryControl!.operand0
+                entryThenRegion! => entryControl!.operand1
+                entryControl!.kind == 18 -> if { entryElseRegion! => entryControl!.nextOperand } else { -1 => entryControl!.nextOperand }
+                entryControl! => nodes[entryControlIrIndex!]
+                entryControl!.kind == 20 and entryConditionIr! >= 0
+                    -> if {
+                        nodes[entryConditionIr!] => entryLoopCondition!
+                        entryControlIrIndex! => entryLoopCondition!.parent
+                        entryLoopCondition! => nodes[entryConditionIr!]
+                    }
+            }
+        entryControlIrIndex! + 1 => entryControlIrIndex!
+    }
+
+    entryExpressionEnd - 1 => entryControlTypeIndex!
+    entryControlTypeIndex! >= entryExpressionStart
+        -> while {
+            nodes[entryControlTypeIndex!] => entryControlTypeNode!
+            entryControlTypeNode!.kind == 19 and entryControlTypeNode!.operand1 >= entryExpressionStart
+                -> if {
+                    false => entryControlRegionRedirected!
+                    nodes[entryControlTypeNode!.operand1].kind == 6 and nodes[entryControlTypeNode!.operand1].operand1 >= entryExpressionStart and nodes[nodes[entryControlTypeNode!.operand1].operand1].parent == entryControlTypeIndex!
+                        -> if {
+                            nodes[entryControlTypeNode!.operand1].operand1 => entryControlTypeNode!.operand1
+                            true => entryControlRegionRedirected!
+                        }
+                    entryControlRegionRedirected! -> if {
+                        nodes[entryControlTypeNode!.operand1] => entryControlRegionValue
+                        entryControlRegionValue.typeOrigin => entryControlTypeNode!.typeOrigin
+                        entryControlRegionValue.typeModule => entryControlTypeNode!.typeModule
+                        entryControlRegionValue.typeSymbol => entryControlTypeNode!.typeSymbol
+                        entryControlRegionValue.typeId => entryControlTypeNode!.typeId
+                        entryControlRegionValue.typeKind => entryControlTypeNode!.typeKind
+                        entryControlRegionValue.typeFlags => entryControlTypeNode!.typeFlags
+                        entryControlTypeNode! => nodes[entryControlTypeIndex!]
+                    }
+                    nodes[entryControlTypeNode!.operand1] => entryControlRegionResult
+                    not (entryControlRegionResult.typeOrigin == 1 and entryControlRegionResult.typeSymbol == 0)
+                        -> if {
+                            entryControlRegionResult.typeOrigin => entryControlTypeNode!.typeOrigin
+                            entryControlRegionResult.typeModule => entryControlTypeNode!.typeModule
+                            entryControlRegionResult.typeSymbol => entryControlTypeNode!.typeSymbol
+                            entryControlRegionResult.typeId => entryControlTypeNode!.typeId
+                            entryControlRegionResult.typeKind => entryControlTypeNode!.typeKind
+                            entryControlRegionResult.typeFlags => entryControlTypeNode!.typeFlags
+                            entryControlTypeNode! => nodes[entryControlTypeIndex!]
+                        }
+                }
+            false => entryControlHasNestedResult!
+            entryControlTypeNode!.kind == 18 and entryControlTypeNode!.operand1 >= entryExpressionStart and entryControlTypeNode!.nextOperand >= entryExpressionStart
+                -> if {
+                    nodes[entryControlTypeNode!.operand1] => entryControlThenRegionNode
+                    nodes[entryControlTypeNode!.nextOperand] => entryControlElseRegionNode
+                    entryControlThenRegionNode.operand1 >= entryExpressionStart and nodes[entryControlThenRegionNode.operand1].kind == 18
+                        -> if { true => entryControlHasNestedResult! }
+                    entryControlElseRegionNode.operand1 >= entryExpressionStart and nodes[entryControlElseRegionNode.operand1].kind == 18
+                        -> if { true => entryControlHasNestedResult! }
+                }
+            entryControlTypeNode!.kind == 18 and entryControlTypeNode!.typeOrigin == 1 and entryControlTypeNode!.typeSymbol == 0 and entryControlTypeNode!.operand1 >= entryExpressionStart and entryControlTypeNode!.nextOperand >= entryExpressionStart
+                -> if {
+                    nodes[entryControlTypeNode!.operand1] => entryControlThenType
+                    nodes[entryControlTypeNode!.nextOperand] => entryControlElseType
+                    entryControlThenType.typeOrigin == entryControlElseType.typeOrigin and entryControlThenType.typeModule == entryControlElseType.typeModule and entryControlThenType.typeSymbol == entryControlElseType.typeSymbol
+                        -> if {
+                            entryControlThenType.typeOrigin => entryControlTypeNode!.typeOrigin
+                            entryControlThenType.typeModule => entryControlTypeNode!.typeModule
+                            entryControlThenType.typeSymbol => entryControlTypeNode!.typeSymbol
+                            entryControlThenType.typeId => entryControlTypeNode!.typeId
+                            entryControlThenType.typeKind => entryControlTypeNode!.typeKind
+                            entryControlThenType.typeFlags => entryControlTypeNode!.typeFlags
+                            entryControlTypeNode! => nodes[entryControlTypeIndex!]
+                        }
+                }
+            entryControlTypeIndex! - 1 => entryControlTypeIndex!
+        }
+
+    entryExpressionStart => entryBindingControlResultIndex!
+    entryBindingControlResultIndex! < entryExpressionEnd
+        -> while {
+            nodes[entryBindingControlResultIndex!] => entryBindingControlResult!
+            -1 => entryBindingFlowControlResult!
+            entryBindingControlResult!.kind == 17
+                and entryBindingControlResult!.operand0 >= entryExpressionStart
+                and entryBindingControlResult!.operand0 < entryExpressionEnd
+                -> if {
+                    entryExpressionStart => entryBindingFlowControlSearch!
+                    entryBindingFlowControlSearch! < entryExpressionEnd
+                        -> while {
+                            nodes[entryBindingFlowControlSearch!] => entryBindingFlowControlCandidate
+                            (entryBindingFlowControlCandidate.kind == 27 or entryBindingFlowControlCandidate.kind == 34)
+                                and entryBindingFlowControlCandidate.operand0 == entryBindingControlResult!.operand0
+                                and (entryBindingFlowControlCandidate.parent == entryBindingControlResultIndex!
+                                or entryBindingFlowControlCandidate.parent == entryBindingControlResult!.operand0
+                                or nodes[entryBindingControlResult!.operand0].nextOperand == entryBindingFlowControlSearch!)
+                                -> if {
+                                    entryBindingFlowControlSearch! => entryBindingFlowControlResult!
+                                }
+                            entryBindingFlowControlSearch! + 1 => entryBindingFlowControlSearch!
+                        }
+                }
+            entryBindingFlowControlResult! >= 0 -> if {
+                entryBindingFlowControlResult! => entryBindingControlResult!.operand0
+                entryBindingControlResult! => nodes[entryBindingControlResultIndex!]
+            }
+            entryBindingControlResult!.kind == 17
+                and entryBindingControlResult!.operand0 >= entryExpressionStart
+                and entryBindingControlResult!.operand0 < entryExpressionEnd
+                and entryBindingControlResult!.nextOperand >= entryExpressionStart
+                and entryBindingControlResult!.nextOperand < entryExpressionEnd
+                and nodes[entryBindingControlResult!.nextOperand].kind == 6
+                and nodes[entryBindingControlResult!.nextOperand].operand0 < 0
+                and not ((nodes[entryBindingControlResult!.operand0].kind == 27 or nodes[entryBindingControlResult!.operand0].kind == 34)
+                and nodes[entryBindingControlResult!.operand0].operand0 == entryBindingControlResult!.nextOperand)
+                -> if {
+                    nodes[entryBindingControlResult!.nextOperand] => entryBindingFlowCall!
+                    entryBindingControlResult!.operand0 => entryBindingFlowCall!.operand0
+                    entryBindingFlowCall! => nodes[entryBindingControlResult!.nextOperand]
+                }
+            entryBindingControlResult!.kind == 17 and entryBindingControlResult!.operand0 >= entryExpressionStart and nodes[entryBindingControlResult!.operand0].kind == 9 and nodes[entryBindingControlResult!.operand0].opcode == -1
+                -> if {
+                    entryBindingControlResult!.operand0 => entryBindingControlWrapper
+                    -1 => entryBindingWrapperResult!
+                    UIntSize(0) => entryBindingWrapperResultLength!
+                    false => entryBindingWrapperIsControl!
+                    entryExpressionStart => entryBindingControlSearch!
+                    entryBindingControlSearch! < entryExpressionEnd
+                        -> while {
+                            nodes[entryBindingControlSearch!].parent => entryBindingControlOwner!
+                            true => entryBindingControlOwnerSearching!
+                            entryBindingControlOwnerSearching! -> while {
+                                false => entryBindingControlOwnerSearching!
+                                entryBindingControlOwner! >= entryExpressionStart
+                                    and entryBindingControlOwner! < entryExpressionEnd
+                                    and entryBindingControlOwner! != entryBindingControlWrapper
+                                    and nodes[entryBindingControlOwner!].kind == 9
+                                    and nodes[entryBindingControlOwner!].opcode == -1
+                                    -> if {
+                                        nodes[entryBindingControlOwner!].parent => entryBindingControlOwner!
+                                        true => entryBindingControlOwnerSearching!
+                                    }
+                            }
+                            (nodes[entryBindingControlSearch!].kind == 18
+                                or nodes[entryBindingControlSearch!].kind == 27
+                                or nodes[entryBindingControlSearch!].kind == 33
+                                or nodes[entryBindingControlSearch!].kind == 34)
+                                and entryBindingControlOwner! == entryBindingControlWrapper
+                                -> if {
+                                    entryBindingControlSearch! => entryBindingWrapperResult!
+                                    true => entryBindingWrapperIsControl!
+                                }
+                            not entryBindingWrapperIsControl! and nodes[entryBindingControlSearch!].parent == entryBindingControlWrapper and nodes[entryBindingControlSearch!].kind != 17 and not (nodes[entryBindingControlSearch!].typeOrigin == 1 and nodes[entryBindingControlSearch!].typeSymbol == 0)
+                                -> if {
+                                    prepared.package.nodes[sourceRange.astStart + nodes[entryBindingControlSearch!].astNode].length => entryBindingWrapperCandidateLength
+                                    entryBindingWrapperResult! < 0 or entryBindingWrapperCandidateLength > entryBindingWrapperResultLength!
+                                        -> if {
+                                            entryBindingControlSearch! => entryBindingWrapperResult!
+                                            entryBindingWrapperCandidateLength => entryBindingWrapperResultLength!
+                                        }
+                                }
+                            entryBindingControlSearch! + 1 => entryBindingControlSearch!
+                        }
+                    entryBindingWrapperResult! >= 0 -> if { entryBindingWrapperResult! => entryBindingControlResult!.operand0 }
+                    entryBindingControlResult! => nodes[entryBindingControlResultIndex!]
+                }
+            entryBindingControlResultIndex! + 1 => entryBindingControlResultIndex!
+        }
+
+    # Entry lowering obeys the same assignment dependency
+    # invariant as ordinary function bodies.
+    entryExpressionStart => entryAssignmentControlResultIndex!
+    entryAssignmentControlResultIndex! < entryExpressionEnd
+        -> while {
+            nodes[entryAssignmentControlResultIndex!] => entryAssignmentControlResult!
+            (entryAssignmentControlResult!.kind == 24 or entryAssignmentControlResult!.kind == 25)
+                and entryAssignmentControlResult!.operand0 >= entryExpressionStart
+                and entryAssignmentControlResult!.operand0 < entryExpressionEnd
+                -> if {
+                    entryExpressionStart => entryAssignmentFlowControlSearch!
+                    entryAssignmentFlowControlSearch! < entryExpressionEnd
+                        -> while {
+                            nodes[entryAssignmentFlowControlSearch!] => entryAssignmentFlowControlCandidate
+                            (entryAssignmentFlowControlCandidate.kind == 27
+                                or entryAssignmentFlowControlCandidate.kind == 34)
+                                and entryAssignmentFlowControlCandidate.operand0 == entryAssignmentControlResult!.operand0
+                                -> if {
+                                    entryAssignmentFlowControlSearch! => entryAssignmentControlResult!.operand0
+                                }
+                            entryAssignmentFlowControlSearch! + 1 => entryAssignmentFlowControlSearch!
+                        }
+                    entryAssignmentControlResult! => nodes[entryAssignmentControlResultIndex!]
+                }
+            (entryAssignmentControlResult!.kind == 24 or entryAssignmentControlResult!.kind == 25)
+                and entryAssignmentControlResult!.operand0 >= entryExpressionStart
+                and entryAssignmentControlResult!.operand0 < entryExpressionEnd
+                and nodes[entryAssignmentControlResult!.operand0].kind == 9
+                and nodes[entryAssignmentControlResult!.operand0].opcode == -1
+                -> if {
+                    entryAssignmentControlResult!.operand0 => entryAssignmentControlWrapper
+                    entryExpressionStart => entryAssignmentControlSearch!
+                    entryAssignmentControlSearch! < entryExpressionEnd
+                        -> while {
+                            nodes[entryAssignmentControlSearch!].parent == entryAssignmentControlWrapper
+                                and (nodes[entryAssignmentControlSearch!].kind == 18
+                                or nodes[entryAssignmentControlSearch!].kind == 27
+                                or nodes[entryAssignmentControlSearch!].kind == 33
+                                or nodes[entryAssignmentControlSearch!].kind == 34)
+                                -> if {
+                                    entryAssignmentControlSearch! => entryAssignmentControlResult!.operand0
+                                }
+                            entryAssignmentControlSearch! + 1 => entryAssignmentControlSearch!
+                        }
+                    entryAssignmentControlResult! => nodes[entryAssignmentControlResultIndex!]
+                }
+            entryAssignmentControlResultIndex! + 1 => entryAssignmentControlResultIndex!
+        }
+
+    # Entry bodies need the same role-result edge repair as
+    # ordinary functions. The role call and its `=>` binding
+    # share one AST node, so the generic child pass cannot
+    # discover this operand.
+    entryExpressionStart => entryRoleBindingIndex!
+    entryRoleBindingIndex! < entryExpressionEnd -> while {
+        nodes[entryRoleBindingIndex!] => entryRoleBinding!
+        entryRoleBinding!.kind == 17 and entryRoleBinding!.operand0 < 0 and prepared.package.nodes[sourceRange.astStart + entryRoleBinding!.astNode].kind == 48
+            -> if {
+                entryExpressionStart => entryRoleCallSearch!
+                entryRoleCallSearch! < entryExpressionEnd -> while {
+                    nodes[entryRoleCallSearch!].kind == 6 and nodes[entryRoleCallSearch!].astNode == entryRoleBinding!.astNode and (nodes[entryRoleCallSearch!].opcode == -207 or nodes[entryRoleCallSearch!].opcode == -208 or nodes[entryRoleCallSearch!].opcode == -209)
+                        -> if { entryRoleCallSearch! => entryRoleBinding!.operand0 }
+                    entryRoleCallSearch! + 1 => entryRoleCallSearch!
+                }
+                entryRoleBinding! => nodes[entryRoleBindingIndex!]
+            }
+        entryRoleBindingIndex! + 1 => entryRoleBindingIndex!
+    }
+
+    entryExpressionStart => entryBindingNameIr!
+    entryBindingNameIr! < entryExpressionEnd -> while {
+        nodes[entryBindingNameIr!] => entryBindingName!
+        entryBindingName!.kind == 5 -> if {
+            entryExpressionStart => entryBindingDefinitionSearch!
+            entryBindingDefinitionSearch! < entryExpressionEnd
+                -> while {
+                    (nodes[entryBindingDefinitionSearch!].kind == 17 or nodes[entryBindingDefinitionSearch!].kind == 29) and nodes[entryBindingDefinitionSearch!].symbol == entryBindingName!.symbol and nodes[entryBindingDefinitionSearch!].astNode >= 0 and entryBindingName!.astNode >= 0 and prepared.package.nodes[sourceRange.astStart + nodes[entryBindingDefinitionSearch!].astNode].start <= prepared.package.nodes[sourceRange.astStart + entryBindingName!.astNode].start and entryBindingDefinitionSearch! != entryBindingName!.parent and nodes[entryBindingDefinitionSearch!].operand0 != entryBindingNameIr!
+                        -> if {
+                            entryBindingDefinitionSearch! => entryBindingName!.operand0
+                        }
+                    entryBindingDefinitionSearch! + 1 => entryBindingDefinitionSearch!
+                }
+            entryBindingName! => nodes[entryBindingNameIr!]
+        }
+        entryBindingNameIr! + 1 => entryBindingNameIr!
+    }
+
+    entryExpressionStart => entryMemberAssignmentIr!
+    entryMemberAssignmentIr! < entryExpressionEnd
+        -> while {
+            nodes[entryMemberAssignmentIr!] => entryMemberAssignment!
+            entryMemberAssignment!.kind == 25 -> if {
+                prepared.package.nodes[sourceRange.astStart + entryMemberAssignment!.astNode] => entryMemberAssignmentAst
+                prepared.package.tokens[sourceRange.tokenStart + entryMemberAssignmentAst.payloadToken] => entryMemberOwnerName
+                -1 => entryMemberOwnerBinding!
+                UIntSize(0) => entryMemberOwnerStart!
+                entryExpressionStart => entryMemberOwnerSearch!
+                entryMemberOwnerSearch! < entryMemberAssignmentIr!
+                    -> while {
+                        nodes[entryMemberOwnerSearch!] => entryMemberOwnerCandidate
+                        entryMemberOwnerCandidate.kind == 17 and entryMemberOwnerCandidate.flags == 1 and entryMemberOwnerCandidate.payloadToken >= 0
+                            -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + entryMemberOwnerCandidate.payloadToken] => entryMemberCandidateName
+                                entryMemberOwnerName.span.length == entryMemberCandidateName.span.length => entryMemberOwnerEqual!
+                                UIntSize(0) => entryMemberOwnerByte!
+                                entryMemberOwnerEqual! and entryMemberOwnerByte! < entryMemberOwnerName.span.length
+                                    -> while {
+                                        (source -> byte(entryMemberOwnerName.span.start + entryMemberOwnerByte!)) != (source -> byte(entryMemberCandidateName.span.start + entryMemberOwnerByte!))
+                                            -> if { false => entryMemberOwnerEqual! }
+                                        entryMemberOwnerByte! + 1 => entryMemberOwnerByte!
+                                    }
+                                entryMemberOwnerEqual!
+                                    and (entryMemberOwnerSearch! -> mutableAssignmentBindingVisible(entryMemberAssignmentIr!, nodes, prepared))
+                                    -> if {
+                                        prepared.package.nodes[sourceRange.astStart + entryMemberOwnerCandidate.astNode].start => entryMemberCandidateStart
+                                        entryMemberOwnerBinding! < 0 or entryMemberCandidateStart > entryMemberOwnerStart!
+                                            -> if {
+                                                entryMemberOwnerSearch! => entryMemberOwnerBinding!
+                                                entryMemberCandidateStart => entryMemberOwnerStart!
+                                            }
+                                    }
+                            }
+                        entryMemberOwnerSearch! + 1 => entryMemberOwnerSearch!
+                    }
+                entryMemberOwnerBinding! >= 0 -> if {
+                    entryMemberOwnerBinding! => entryMemberAssignment!.operand1
+                    nodes[entryMemberOwnerBinding!].symbol => entryMemberAssignment!.symbol
+                    entryMemberAssignment! => nodes[entryMemberAssignmentIr!]
+                }
+            }
+            entryMemberAssignmentIr! + 1 => entryMemberAssignmentIr!
+        }
+
+    entryExpressionStart => entryCanonicalBindingIr!
+    entryCanonicalBindingIr! < entryExpressionEnd
+        -> while {
+            nodes[entryCanonicalBindingIr!] => entryCanonicalBinding!
+            entryCanonicalBinding!.kind == 17 and entryCanonicalBinding!.operand0 >= entryExpressionStart and nodes[entryCanonicalBinding!.operand0].kind == 9 and nodes[entryCanonicalBinding!.operand0].opcode == -27 and nodes[entryCanonicalBinding!.operand0].operand0 >= entryExpressionStart and nodes[nodes[entryCanonicalBinding!.operand0].operand0].kind == 6 and ((nodes[nodes[entryCanonicalBinding!.operand0].operand0].typeKind == 7 and nodes[nodes[entryCanonicalBinding!.operand0].operand0].typeOrigin == 4 and nodes[nodes[entryCanonicalBinding!.operand0].operand0].typeSymbol >= 5 and nodes[nodes[entryCanonicalBinding!.operand0].operand0].typeSymbol <= 7) or (nodes[nodes[entryCanonicalBinding!.operand0].operand0].typeKind == 14 and nodes[nodes[entryCanonicalBinding!.operand0].operand0].typeOrigin == 4 and nodes[nodes[entryCanonicalBinding!.operand0].operand0].typeSymbol == 8))
+                -> if {
+                    nodes[entryCanonicalBinding!.operand0].operand0 => entryCanonicalBinding!.operand0
+                }
+            entryCanonicalBinding!.kind == 17 and entryCanonicalBinding!.operand0 >= entryExpressionStart and nodes[entryCanonicalBinding!.operand0].kind == 9 and nodes[entryCanonicalBinding!.operand0].opcode == -1 and nodes[entryCanonicalBinding!.operand0].operand0 >= entryExpressionStart
+                -> if {
+                    nodes[entryCanonicalBinding!.operand0].operand0 => entryCanonicalBinding!.operand0
+                }
+            # A builtin owner such as `Arena(8)` has a canonical
+            # origin/symbol even when no recursive type ID is
+            # needed. Preserve that marker on main bindings so
+            # ownership and sendability see the same type as a
+            # function-local binding.
+            entryCanonicalBinding!.kind == 17
+                and entryCanonicalBinding!.operand0 >= entryExpressionStart
+                and nodes[entryCanonicalBinding!.operand0].typeOrigin >= 0
+                -> if {
+                    nodes[entryCanonicalBinding!.operand0] => entryCanonicalBindingValue
+                    entryCanonicalBinding! -> mayRefreshValueAlias(entryCanonicalBindingValue)
+                        -> if {
+                            entryCanonicalBindingValue.typeOrigin => entryCanonicalBinding!.typeOrigin
+                            entryCanonicalBindingValue.typeModule => entryCanonicalBinding!.typeModule
+                            entryCanonicalBindingValue.typeSymbol => entryCanonicalBinding!.typeSymbol
+                            entryCanonicalBindingValue.typeId => entryCanonicalBinding!.typeId
+                            entryCanonicalBindingValue.typeKind => entryCanonicalBinding!.typeKind
+                            entryCanonicalBindingValue.typeFlags => entryCanonicalBinding!.typeFlags
+                            entryCanonicalBinding! => nodes[entryCanonicalBindingIr!]
+                        }
+                }
+            entryCanonicalBindingIr! + 1 => entryCanonicalBindingIr!
+        }
+    entryExpressionStart => entryCanonicalBindingReadIr!
+    entryCanonicalBindingReadIr! < entryExpressionEnd
+        -> while {
+            nodes[entryCanonicalBindingReadIr!] => entryCanonicalBindingRead!
+            # Entry-point expressions can read a binding allocated
+            # before the current expression slice. Its canonical
+            # initializer type remains authoritative, matching the
+            # ordinary function lowering path above.
+            entryCanonicalBindingRead!.kind == 5
+                and entryCanonicalBindingRead!.operand0 >= 0
+                and nodes[entryCanonicalBindingRead!.operand0].kind == 17
+                and nodes[entryCanonicalBindingRead!.operand0].typeOrigin >= 0
+                -> if {
+                    nodes[entryCanonicalBindingRead!.operand0] => entryCanonicalReadBinding
+                    entryCanonicalReadBinding.typeOrigin => entryCanonicalBindingRead!.typeOrigin
+                    entryCanonicalReadBinding.typeModule => entryCanonicalBindingRead!.typeModule
+                    entryCanonicalReadBinding.typeSymbol => entryCanonicalBindingRead!.typeSymbol
+                    entryCanonicalReadBinding.typeId => entryCanonicalBindingRead!.typeId
+                    entryCanonicalReadBinding.typeKind => entryCanonicalBindingRead!.typeKind
+                    entryCanonicalReadBinding.typeFlags => entryCanonicalBindingRead!.typeFlags
+                    entryCanonicalBindingRead! => nodes[entryCanonicalBindingReadIr!]
+                }
+            entryCanonicalBindingReadIr! + 1 => entryCanonicalBindingReadIr!
+        }
+    entryExpressionStart => entryAggregateIrIndex!
+    entryAggregateIrIndex! < entryExpressionEnd -> while {
+        nodes[entryAggregateIrIndex!] => entryAggregate!
+        entryAggregate!.kind == 12 or entryAggregate!.kind == 14 or entryAggregate!.kind == 16 or entryAggregate!.kind == 35
+            -> if {
+                -1 => entryFirstFieldOperand!
+                entryExpressionStart => entryFieldOperandSearch!
+                entryFieldOperandSearch! < entryExpressionEnd
+                    -> while {
+                        nodes[entryFieldOperandSearch!].parent == entryAggregateIrIndex!
+                            -> if {
+                                entryFirstFieldOperand! < 0 or prepared.package.nodes[sourceRange.astStart + nodes[entryFieldOperandSearch!].astNode].start < prepared.package.nodes[sourceRange.astStart + nodes[entryFirstFieldOperand!].astNode].start
+                                    -> if { entryFieldOperandSearch! => entryFirstFieldOperand! }
+                            }
+                        entryFieldOperandSearch! + 1 => entryFieldOperandSearch!
+                    }
+                entryFirstFieldOperand! => entryAggregate!.operand0
+                entryAggregate! => nodes[entryAggregateIrIndex!]
+            }
+        entryAggregateIrIndex! + 1 => entryAggregateIrIndex!
+    }
+    nodes[entryIr] => entryNode!
+    -1 => entryResultIr!
+    entryResultTypeIndex >= 0 -> if {
+        entryAstToIr[inferred[entryResultTypeIndex].astNode] => entryResultIr!
+        entryResultIr! < 0 -> if {
+            1000000 => entryResultOperandDistance!
+            entryExpressionStart => entryResultOperandSearch!
+            entryResultOperandSearch! < entryExpressionEnd
+                -> while {
+                    prepared.package.nodes[sourceRange.astStart + nodes[entryResultOperandSearch!].astNode].parent => entryResultOperandAncestor!
+                    1 => entryResultCandidateDistance!
+                    false => entryResultCandidateBelongs!
+                    entryResultOperandAncestor! >= 0 and not entryResultCandidateBelongs!
+                        -> while {
+                            entryResultOperandAncestor! == inferred[entryResultTypeIndex].astNode
+                                -> if { true => entryResultCandidateBelongs! } else {
+                                    prepared.package.nodes[sourceRange.astStart + entryResultOperandAncestor!].parent => entryResultOperandAncestor!
+                                    entryResultCandidateDistance! + 1 => entryResultCandidateDistance!
+                                }
+                        }
+                    entryResultCandidateBelongs! and entryResultCandidateDistance! < entryResultOperandDistance!
+                        -> if {
+                            entryResultOperandSearch! => entryResultIr!
+                            entryResultCandidateDistance! => entryResultOperandDistance!
+                        }
+                    entryResultOperandSearch! + 1 => entryResultOperandSearch!
+                }
+        }
+    }
+    entryResultIr! < 0 and entryHasResolvedCall
+        -> if {
+            UIntSize(0) => entryLatestCallStart!
+            entryExpressionStart => entryLatestCallSearch!
+            entryLatestCallSearch! < entryExpressionEnd -> while {
+                nodes[entryLatestCallSearch!] => entryLatestCall
+                entryLatestCall.kind == 6 and entryLatestCall.parent == entryIr
+                    -> if {
+                        prepared.package.nodes[sourceRange.astStart + entryLatestCall.astNode].start => entryLatestCallStart
+                        entryResultIr! < 0 or entryLatestCallStart >= entryLatestCallStart!
+                            -> if {
+                                entryLatestCallSearch! => entryResultIr!
+                                entryLatestCallStart => entryLatestCallStart!
+                            }
+                    }
+                entryLatestCallSearch! + 1 => entryLatestCallSearch!
+            }
+        }
+    entryResultIr! >= 0 and nodes[entryResultIr!].kind == 9
+        -> if {
+            entryExpressionStart => entryResultControlSearch!
+            entryResultControlSearch! < entryExpressionEnd
+                -> while {
+                    (nodes[entryResultControlSearch!].kind == 18 or nodes[entryResultControlSearch!].kind == 20) and nodes[entryResultControlSearch!].parent == entryResultIr!
+                        -> if { entryResultControlSearch! => entryResultIr! }
+                    entryResultControlSearch! + 1 => entryResultControlSearch!
+                }
+        }
+    entryResultIr! => entryNode!.operand0
+    entryNode! => nodes[entryIr]
+}

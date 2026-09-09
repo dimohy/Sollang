@@ -1,0 +1,50 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.symbols as symbols
+
+# Projected receivers remain complete while qualified function paths stay qualified.
+main {
+    """
+    "$(outer.inner -> read)" -> println
+    "$(42 -> formatter.render)" -> println
+    """ => source
+    source -> lexer.lex => tokens
+    [ast.AstNode; ~] => sourceNodes
+    [symbols.Symbol; ~] => symbolTable
+
+    interpolation.PreparedInterpolationRequest {
+        source: source
+        nodes: sourceNodes
+        tokens: tokens
+        symbols: symbolTable
+    } -> interpolation.lowerPrepared => interpolations
+
+    0 => projectedCalls!
+    0 => memberChains!
+    "" => projectedCallPayload!
+    "" => memberPayload!
+    "" => memberBasePayload!
+    interpolations -> each node {
+        node.kind == 10
+            and node.parent < 0
+            and node.operand0 >= 0
+            and interpolations[node.operand0].kind == 5
+            -> if {
+                projectedCalls! + 1 => projectedCalls!
+                source -> slice(node.payloadStart, node.payloadLength) => projectedCallPayload!
+            }
+        node.kind == 5
+            and node.operand0 >= 0
+            and interpolations[node.operand0].kind == 1
+            -> if {
+                memberChains! + 1 => memberChains!
+                source -> slice(node.payloadStart, node.payloadLength) => memberPayload!
+                interpolations[node.operand0] => memberBase
+                source -> slice(memberBase.payloadStart, memberBase.payloadLength) => memberBasePayload!
+            }
+    }
+    "projected-call=$(projectedCalls!) member-chain=$(memberChains!) qualified-call-not-unresolved=$(projectedCalls! == 1)" -> println
+    "projected-call-payload=$(projectedCallPayload!)" -> println
+    "member-payload=$(memberPayload!) member-base=$(memberBasePayload!)" -> println
+}

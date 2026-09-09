@@ -1,0 +1,145 @@
+import std.compress.brotli as brotli
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.literal_context as contexts
+import std.compress.brotli.prefix_table as prefix
+
+printCheck label: Text, value: Bool -> Unit uses Console {
+    "$(label)=$(value)" -> println
+}
+
+isUtf8 mode: contexts.Mode -> Bool => mode -> when {
+    Utf8 { true }
+    else { false }
+}
+
+checkPreludeWindow parser: headers.Parser, window: mut prefix.Window -> Bool {
+    parser -> preludeReader => reader!
+    window -> fill([248], prefix.Position { byteIndex: 0, bitIndex: 0 }, 8) -> when {
+        Err(_) { false -> return }
+        Ok(position) { position }
+    } => firstPosition
+    reader! -> read(window) -> when {
+        Err(_) { false -> return }
+        Ok(progress) { progress }
+    } => firstProgress
+    firstProgress -> when {
+        NeedMore(bits) { bits == 1 }
+        else { false }
+    } => firstNeedsOne
+
+    window -> fill([37], prefix.Position { byteIndex: 0, bitIndex: 0 }, 8) -> when {
+        Err(_) { false -> return }
+        Ok(position) { position }
+    } => secondPosition
+    reader! -> read(window) -> when {
+        Err(_) { false -> return }
+        Ok(progress) { progress }
+    } => secondProgress
+    secondProgress -> when {
+        Ready(prelude) {
+            prelude.literalBlockTypes == 1
+                and prelude.commandBlockTypes == 1
+                and prelude.distanceBlockTypes == 1
+                and prelude.distancePostfixBits == 3
+                and prelude.directDistanceCodes == 136
+                and (prelude.literalContextMode -> isUtf8)
+                and prelude.literalTreeCount == 1
+                and prelude.distanceTreeCount == 1
+        }
+        else { false }
+    } => ready
+    firstNeedsOne and ready
+        and firstPosition.byteIndex == 1 and firstPosition.bitIndex == 0
+        and secondPosition.byteIndex == 0 and secondPosition.bitIndex == 5
+        and (window -> available) == 0
+}
+
+checkPreludeParser parser: headers.Parser -> Bool {
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+        Err(_) { false }
+        Ok(window) {
+            window => window!
+            parser -> checkPreludeWindow(window!)
+        }
+    }
+}
+
+checksPreludeChunks: -> Bool {
+    headers.Limits {
+        maxBlockTypes: 256
+        maxBlockLength: 16_793_840
+        maxContextEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Err(_) { false }
+        Ok(parser) { parser -> checkPreludeParser }
+    }
+}
+
+checkDecoder decoder: move brotli.Decoder -> Bool {
+    decoder => decoder!
+    decoder! -> write([27]) -> when {
+        Err(_) { false -> return }
+        Ok(count) { count == 1 -> unless { false -> return } }
+    }
+    decoder! -> write([99]) -> when {
+        Err(_) { false -> return }
+        Ok(count) { count == 1 -> unless { false -> return } }
+    }
+    decoder! -> write([0]) -> when {
+        Err(_) { false -> return }
+        Ok(count) { count == 1 -> unless { false -> return } }
+    }
+    decoder! -> write([248]) -> when {
+        Err(_) { false -> return }
+        Ok(count) { count == 1 -> unless { false -> return } }
+    }
+    decoder! -> write([37]) -> when {
+        Err(_) { false -> return }
+        Ok(count) { count == 1 -> unless { false -> return } }
+    }
+    [UInt8; ~] => output!
+    output! -> push(7)
+    decoder! -> finish(output!) -> when {
+        Ok(_) { false }
+        Err(error) {
+            error.kind -> when {
+                TruncatedInput { (output! -> len) == 1 and output![0] == 7 }
+                else { false }
+            }
+        }
+    }
+}
+
+checkDecoderResult result: move Result<brotli.Decoder, brotli.Error> -> Result<Bool, brotli.Error> {
+    result? => decoder
+    decoder -> checkDecoder => checked
+    Result<Bool, brotli.Error>.Ok(checked)
+}
+
+checkCodec codec: brotli.Codec -> Bool {
+    codec -> decoder -> checkDecoderResult -> when {
+        Err(_) { false }
+        Ok(value) { value }
+    }
+}
+
+checksDecoderProgress: -> Bool {
+    brotli.Limits {
+        maxEncodedBytes: 1_024
+        maxDecodedBytes: 1_024
+        maxWindowBytes: 4_194_288
+        maxMetaBlocks: 8
+        maxMetadataBytes: 32
+    } -> codec -> when {
+        Err(_) { false }
+        Ok(codec) { codec -> checkCodec }
+    }
+}
+
+main {
+    printCheck("prelude-chunks", checksPreludeChunks())
+    printCheck("decoder-progress", checksDecoderProgress())
+}

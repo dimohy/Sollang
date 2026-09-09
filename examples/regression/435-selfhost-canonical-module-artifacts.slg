@@ -7,7 +7,7 @@ import sollang.compiler.semantic.type_ids as typeIds
 sameWords left: [UInt64; ~], right: [UInt64; ~] -> Bool {
     (left -> len) == (right -> len) => same!
     0 => index!
-    (same! and index! < (left -> len)) -> while {
+    same! and index! < (left -> len) -> while {
         left[index!] == right[index!] -> unless { false => same! }
         index! + 1 => index!
     }
@@ -15,8 +15,15 @@ sameWords left: [UInt64; ~], right: [UInt64; ~] -> Bool {
 }
 
 main {
-    "namespace zeta\npublic twice value: Int -> Int => value * 2\n" => zeta
-    "namespace alpha\npublic next value: Int -> Int => value + 1\n" => alpha
+    # Embedded compiler inputs keep their source structure as raw multiline text.
+    """
+    namespace zeta
+    public twice value: Int -> Int => value * 2
+    """ => zeta
+    """
+    namespace alpha
+    public next value: Int -> Int => value + 1
+    """ => alpha
 
     [zeta, alpha; ~] => firstSources
     firstSources -> context.prepare => firstSnapshot
@@ -28,8 +35,8 @@ main {
     first! -> artifacts.validate => validation
     validation.status == 0 and validation.moduleCount == 2 and validation.nodeCount > 0
         -> if {
-        "canonical artifact valid"
-    } else { "unexpected validation" } -> println
+            "canonical artifact valid"
+        } else { "unexpected validation" } -> println
 
     [alpha, zeta; ~] => secondSources
     secondSources -> context.prepare => secondSnapshot
@@ -48,10 +55,10 @@ main {
     [typeIds.SemanticType; ~] => decodedTypes!
     decoded.typeTable.types -> each currentType { decodedTypes! -> push(currentType) }
     decodedIr! -> artifacts.encode(firstModules, decodedTypes!) => roundTrip
-    (decoded.status == 0 and (decoded.ir -> len) == (firstIr -> len) and (first! -> sameWords(roundTrip)))
+    decoded.status == 0 and (decoded.ir -> len) == (firstIr -> len) and (first! -> sameWords(roundTrip))
         -> if {
-        "rehydration stable"
-    } else { "rehydration failed" } -> println
+            "rehydration stable"
+        } else { "rehydration failed" } -> println
 
     first![9] + 1 => first![9]
     first! -> artifacts.validate => corrupted

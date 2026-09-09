@@ -1,0 +1,39 @@
+import sys.process as process
+import examples.qualified_method_tool as tool
+import examples.qualified_method_tool2 as tool2
+import examples.qualified_method_tool3 as tool3
+import examples.qualified_method_tool4 as tool4
+
+processCode result: Result<Int, Text> -> Int => result -> when {
+    Result<Int, Text>.Ok(code) => code
+    Result<Int, Text>.Err(error) => -1
+}
+
+executeProgram output: Text, arguments: [Text; ~] -> Int uses Process {
+    [Text; ~] => argv!
+    argv! -> push(output)
+    arguments -> each argument { argv! -> push(argument) }
+    process.Command {
+        argv: argv!
+        workingDirectoryValue: ""
+        hasWorkingDirectory: false
+        environmentChanges: [process.EnvironmentChange; ~]
+        inheritsEnvironment: true
+        standardInput: process.Input.Inherit
+        standardOutput: process.Output.Inherit
+        standardError: process.Output.Inherit
+    } => command
+    command -> run -> processCode
+}
+
+# A process instance result remains the final value after an each callback.
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 1 -> if {
+        "child" -> println
+    } else {
+        ["--child"; ~] => childArguments
+        arguments[0] -> executeProgram(childArguments) => status
+        "status=$status" -> println
+    }
+}

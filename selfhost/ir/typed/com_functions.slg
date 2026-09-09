@@ -1,0 +1,132 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+
+# Generated COM members are already fully resolved. Keep their compact IR
+# construction separate from source-body lowering and borrow every prepared
+# table so the fragment boundary adds no aggregate copy or allocation.
+lowerComGeneratedFunction prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], request: FunctionLowerRequest -> SourceTypedIr {
+    [TypedIrNode; ~] => results!
+    prepared.package.ranges[request.sourceIndex] => sourceRange
+    prepared.package.symbols[sourceRange.symbolStart + request.symbolIndex] => function
+    -1 => receiverInterfaceTypeId!
+    0 => interfaceTypeSearch!
+    interfaceTypeSearch! < (recursiveTypes -> len)
+        -> while {
+            recursiveTypes[interfaceTypeSearch!] => candidate
+            candidate.kind == 9
+                and candidate.origin == 0
+                and candidate.module == request.sourceIndex
+                and candidate.symbol == function.parent -> if {
+                    interfaceTypeSearch! => receiverInterfaceTypeId!
+                }
+            interfaceTypeSearch! + 1 => interfaceTypeSearch!
+        }
+    function.parent => resultInterfaceSymbol!
+    function.flags / 131072 % 2 == 1 -> if { function.secondaryTypeNode => resultInterfaceSymbol! }
+    receiverInterfaceTypeId! => interfaceTypeId!
+    function.flags / 131072 % 2 == 1 -> if {
+        0 => queryInterfaceTypeSearch!
+        queryInterfaceTypeSearch! < (recursiveTypes -> len)
+            -> while {
+                recursiveTypes[queryInterfaceTypeSearch!] => candidate
+                candidate.kind == 9
+                    and candidate.origin == 0
+                    and candidate.module == request.sourceIndex
+                    and candidate.symbol == resultInterfaceSymbol!
+                    -> if {
+                        queryInterfaceTypeSearch! => interfaceTypeId!
+                    }
+                queryInterfaceTypeSearch! + 1 => queryInterfaceTypeSearch!
+            }
+    }
+    interfaceTypeId! => resultTypeId!
+    function.flags / 4096 % 2 == 1 or function.flags / 131072 % 2 == 1
+        -> if {
+            0 => activationResultSearch!
+            activationResultSearch! < (recursiveTypes -> len)
+                -> while {
+                    recursiveTypes[activationResultSearch!] => candidate
+                    candidate.kind == 7
+                        and candidate.origin == 4
+                        and candidate.symbol == 1
+                        and candidate.first == interfaceTypeId!
+                        and candidate.second == 5 -> if {
+                            activationResultSearch! => resultTypeId!
+                        }
+                    activationResultSearch! + 1 => activationResultSearch!
+                }
+        }
+    recursiveTypes[resultTypeId!] => resultType
+    10 + resultType.kind => resultOrigin
+    request.sourceIndex => resultModule
+    function.parent => resultSymbol
+    results! -> push(TypedIrNode {
+        kind: 0
+        parent: -1
+        sourceModule: request.sourceIndex
+        astNode: function.astNode
+        symbol: request.symbolIndex
+        targetModule: request.sourceIndex
+        typeOrigin: resultOrigin
+        typeModule: resultModule
+        typeSymbol: resultInterfaceSymbol!
+        typeId: resultTypeId!
+        typeKind: resultType.kind
+        typeFlags: recursiveTypeFlags[resultTypeId!]
+        payloadToken: function.nameToken
+        opcode: -1
+        operand0: 1
+        operand1: function.flags / 8192 % 2 == 1 or function.flags / 131072 % 2 == 1
+            -> if { 2 } else { -1 }
+        nextOperand: -1
+        flags: function.flags
+    })
+    results! -> push(TypedIrNode {
+        kind: 1
+        parent: 0
+        sourceModule: request.sourceIndex
+        astNode: function.astNode
+        symbol: request.symbolIndex
+        targetModule: -1
+        typeOrigin: resultOrigin
+        typeModule: resultModule
+        typeSymbol: resultSymbol
+        typeId: resultTypeId!
+        typeKind: resultType.kind
+        typeFlags: recursiveTypeFlags[resultTypeId!]
+        payloadToken: -1
+        opcode: -1
+        operand0: -1
+        operand1: -1
+        nextOperand: -1
+        flags: 0
+    })
+    function.flags / 8192 % 2 == 1 or function.flags / 131072 % 2 == 1
+        -> if {
+            prepared.package.symbols[sourceRange.symbolStart + function.parent] => interfaceSymbol
+            results! -> push(TypedIrNode {
+                kind: 10
+                parent: 0
+                sourceModule: request.sourceIndex
+                astNode: function.astNode
+                symbol: -1
+                targetModule: request.sourceIndex
+                typeOrigin: 19
+                typeModule: request.sourceIndex
+                typeSymbol: function.parent
+                typeId: receiverInterfaceTypeId!
+                typeKind: 9
+                typeFlags: recursiveTypeFlags[receiverInterfaceTypeId!]
+                payloadToken: interfaceSymbol.nameToken
+                opcode: -1
+                operand0: -1
+                operand1: -1
+                nextOperand: -1
+                flags: 512 + 16384
+            })
+        }
+    SourceTypedIr { nodes: results! } => generated
+    generated
+}

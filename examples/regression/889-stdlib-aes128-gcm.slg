@@ -1,4 +1,4 @@
-import sys.crypto.aes128_gcm as gcm
+import std.crypto.aes128_gcm as gcm
 
 zero16: -> [UInt8; 16] => [0; 16]
 
@@ -6,17 +6,32 @@ zero12: -> [UInt8; 12] => [0; 12]
 
 empty: -> [UInt8] => []
 
+struct PreparedPacket {
+    packet: gcm.Key
+}
+
+sealedHasExactShape protector: ref PreparedPacket, iv: [UInt8; 12], plaintext: [UInt8; 16] -> Bool {
+    protector.packet -> seal(iv, empty(), plaintext) => sealed
+    sealed.ciphertext -> len => ciphertextLength
+    sealed.tag -> len => tagLength
+    ciphertextLength == 16 and tagLength == 16
+}
+
 main {
     zero16() => key
     zero12() => iv
     zero16() => plaintext
-    gcm.seal(key, iv, empty(), plaintext) => sealed
-    gcm.open(key, iv, empty(), sealed.ciphertext, sealed.tag) => opened
+    key -> gcm.prepare => protector
+    key -> gcm.prepare => nestedProtector
+    PreparedPacket { packet: nestedProtector } => preparedPacket
+    protector -> seal(iv, empty(), plaintext) => sealed
+    protector -> open(iv, empty(), sealed.ciphertext, sealed.tag) => opened
     opened -> when {
         Plaintext(decoded) { (decoded -> len) == 16 and decoded[0] == 0 and decoded[15] == 0 }
         InvalidTag(code) { false }
     } => openedMatches
-    (openedMatches
+    sealedHasExactShape(preparedPacket, iv, plaintext)
+        and openedMatches
         and sealed.ciphertext[0] == 3
         and sealed.ciphertext[1] == 136
         and sealed.ciphertext[2] == 218
@@ -48,7 +63,8 @@ main {
         and sealed.tag[12] == 18
         and sealed.tag[13] == 87
         and sealed.tag[14] == 189
-        and sealed.tag[15] == 223) -> if {
+        and sealed.tag[15] == 223
+        -> if {
         "aes128-gcm=ok"
     } else {
         "aes128-gcm=failed"

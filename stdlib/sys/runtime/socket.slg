@@ -1,0 +1,136 @@
+namespace std.net.socket
+
+import std.net as net
+import std.time
+
+# Compiler/runtime ABI bindings for the public std.net.socket resource model.
+# This fragment deliberately contains no user-level wrapper implementations.
+impl ListenOptions {
+    public listen: self -> Result<TcpListener, SocketError> uses Network = intrinsic
+}
+
+impl DatagramBindOptions {
+    public bind: self -> Result<UdpSocket, SocketError> uses Network = intrinsic
+}
+
+impl net.Endpoint {
+    public connect: self -> Result<TcpStream, SocketError> uses Network = intrinsic
+}
+
+impl Reactor {
+    # Waits once for the borrowed registration set and publishes at most the
+    # caller-owned event-buffer capacity. No registration or result allocation
+    # occurs on the hot path.
+    public waitInto: self, events: mut [ReadyEvent; ~], timeout: Option<std.time.Duration> -> Result<UIntSize, SocketError> uses Network = intrinsic
+}
+
+impl TcpListener {
+    # Creates an independently owned descriptor for the same kernel socket.
+    # Closing either owner does not invalidate the other owner.
+    public tryClone: self -> Result<TcpListener, SocketError> uses Network = intrinsic
+
+    public setNonblocking: self, enabled: Bool -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public poll: self, mode: PollMode, timeout: Option<std.time.Duration> -> Result<Bool, SocketError> uses Network = intrinsic
+
+    public accept: self -> Result<TcpStream, SocketError> uses Network = intrinsic
+
+    public localEndpoint: self -> Result<net.Endpoint, SocketError> uses Network = intrinsic
+
+    public localPort: self -> Result<UInt16, SocketError> uses Network = intrinsic
+
+    public close: move self -> Unit uses Network = intrinsic
+}
+
+impl TcpStream {
+    # The clone shares stream state and socket options while retaining an
+    # independent close lifetime. Concurrent I/O coordination stays explicit.
+    public tryClone: self -> Result<TcpStream, SocketError> uses Network = intrinsic
+
+    public setNonblocking: self, enabled: Bool -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public poll: self, mode: PollMode, timeout: Option<std.time.Duration> -> Result<Bool, SocketError> uses Network = intrinsic
+
+    public receive: self, maxBytes: UIntSize -> Result<[UInt8; ~], SocketError> uses Network = intrinsic
+
+    public receiveInto: self, buffer: mut [UInt8; ~] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    # Observes queued stream bytes without consuming them. The caller-owned
+    # buffer length is published only after a successful native receive.
+    public peekInto: self, buffer: mut [UInt8; ~] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    public receiveAppend: self, buffer: mut [UInt8; ~] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    # Receives into the ordered caller-owned segment capacities with one native
+    # scatter operation. Successful bytes are published across segment lengths
+    # in order; failure leaves every visible length unchanged.
+    public receiveVectored: self, buffers: mut [ReceiveBuffer; ~] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    public send: self, bytes: ref [UInt8; ~] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    public sendRange: self, bytes: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    # Sends the ordered buffer views with one native scatter/gather operation.
+    # Partial success is preserved as the exact total prefix byte count.
+    public sendVectored: self, buffers: [SendBuffer] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    public sendText: self, text: Text -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    public localPort: self -> Result<UInt16, SocketError> uses Network = intrinsic
+
+    public localEndpoint: self -> Result<net.Endpoint, SocketError> uses Network = intrinsic
+
+    public remoteEndpoint: self -> Result<net.Endpoint, SocketError> uses Network = intrinsic
+
+    public setNoDelay: self, enabled: Bool -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public noDelay: self -> Result<Bool, SocketError> uses Network = intrinsic
+
+    public setKeepAlive: self, enabled: Bool -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public keepAlive: self -> Result<Bool, SocketError> uses Network = intrinsic
+
+    # None disables linger; Some(duration) requests graceful close for a
+    # positive duration, rounded upward to the kernel's whole-second unit.
+    public setLinger: self, timeout: Option<std.time.Duration> -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public linger: self -> Result<Option<std.time.Duration>, SocketError> uses Network = intrinsic
+
+    public setReadTimeout: self, timeout: Option<std.time.Duration> -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public readTimeout: self -> Result<Option<std.time.Duration>, SocketError> uses Network = intrinsic
+
+    public setWriteTimeout: self, timeout: Option<std.time.Duration> -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public writeTimeout: self -> Result<Option<std.time.Duration>, SocketError> uses Network = intrinsic
+
+    public shutdown: self, direction: ShutdownDirection -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public close: move self -> Unit uses Network = intrinsic
+}
+
+impl UdpSocket {
+    # Creates a second affine owner for the same kernel socket state.
+    public tryClone: self -> Result<UdpSocket, SocketError> uses Network = intrinsic
+
+    public setNonblocking: self, enabled: Bool -> Result<Unit, SocketError> uses Network = intrinsic
+
+    public poll: self, mode: PollMode, timeout: Option<std.time.Duration> -> Result<Bool, SocketError> uses Network = intrinsic
+
+    public localEndpoint: self -> Result<net.Endpoint, SocketError> uses Network = intrinsic
+
+    public localPort: self -> Result<UInt16, SocketError> uses Network = intrinsic
+
+    public sendTo: self, endpoint: net.Endpoint, bytes: ref [UInt8; ~] -> Result<UIntSize, SocketError> uses Network = intrinsic
+
+    public receiveFrom: self, maxBytes: UIntSize -> Result<Datagram, SocketError> uses Network = intrinsic
+
+    public receiveFromInto: self, buffer: mut [UInt8; ~] -> Result<DatagramReceipt, SocketError> uses Network = intrinsic
+
+    # Observes the next datagram without removing it from the socket queue.
+    # The caller-owned buffer is filled directly and its visible length is
+    # published only after success, exactly like receiveFromInto.
+    public peekFromInto: self, buffer: mut [UInt8; ~] -> Result<DatagramReceipt, SocketError> uses Network = intrinsic
+
+    public close: move self -> Unit uses Network = intrinsic
+}

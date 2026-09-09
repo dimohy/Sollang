@@ -1,0 +1,52 @@
+import sollang.compiler.ir.typed as typedIr
+main {
+    [
+        """
+        # A direct value-producing control is the enum match subject.
+        enum Error {
+            Rejected
+        }
+        
+        struct Buffer {
+            values: [Long; ~]
+        }
+        
+        setAt values: mut [Long; ~], index: Int, value: Long -> Unit {
+            value => values[index]
+        }
+        
+        impl Buffer {
+            update: mut self, value: Long, reject: Bool -> Result<Long, Error> {
+                self.values -> setAt(0, value)
+                reject -> if {
+                    Error.Rejected -> Result<Long, Error>.Err
+                } else {
+                    value -> Result<Long, Error>.Ok
+                } -> when {
+                    Ok(result) { result -> Result<Long, Error>.Ok }
+                    Err(error) { error -> Result<Long, Error>.Err -> return }
+                }
+            }
+        }
+        
+        main {
+            Buffer { values: [1; ~] } => buffer!
+            buffer! -> update(7, true) -> when {
+                Ok(value) { "unexpected=$value" -> println }
+                Err(_) { "rejected" -> println }
+            }
+            buffer! -> update(11, false) -> when {
+                Ok(value) { "reused=$value" -> println }
+                Err(_) { "unexpected-error" -> println }
+            }
+            "stored=$(buffer!.values[0])" -> println
+        }
+        """; ~
+    ]=> sources
+    sources -> typedIr.lower => nodes
+    0 => index!
+    nodes -> each node {
+        "i=$(index!) kind=$(node.kind) parent=$(node.parent) ast=$(node.astNode) op=$(node.opcode) a=$(node.operand0) b=$(node.operand1) next=$(node.nextOperand) type=$(node.typeId) symbol=$(node.symbol)" -> println
+        index! + 1 => index!
+    }
+}

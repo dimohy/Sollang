@@ -8,10 +8,6 @@ internal sealed partial class LlvmEmitter
 {
     private void EmitArenaFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
         ClearLocalState();
@@ -27,6 +23,10 @@ internal sealed partial class LlvmEmitter
             BindAllFunctionParameters(function);
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, BoundType.Arena, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);

@@ -1,0 +1,19 @@
+import sample.imported_ref_receiver as model
+
+# A readonly reference to an imported struct remains a pointer at the function
+# boundary. Calling its by-value instance method inside a loop must load the
+# nominally identical struct value even when module linking assigned a distinct
+# canonical type id to the reference payload and the callee receiver.
+readInsideLoop counter: ref model.Counter -> Int {
+    0 => value!
+    value! < (counter -> read) -> while {
+        value! + 1 => value!
+    }
+    value!
+}
+
+main {
+    model.Counter { value: 42 } => counter
+    counter -> readInsideLoop => value
+    "imported-ref-struct-loop=$value" -> println
+}

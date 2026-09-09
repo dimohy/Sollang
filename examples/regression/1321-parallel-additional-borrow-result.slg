@@ -1,0 +1,25 @@
+struct Context {
+    delta: Int
+}
+
+borrow value: ref Context -> ref Context {
+    value
+}
+
+shift value: Int, context: ref Context -> Int {
+    value + context.delta
+}
+
+run values: [Int; ~], contextOwner: ref Context -> [Int; ~] {
+    contextOwner -> borrow => context
+    values -> parallel value {
+        value -> shift(context)
+    } => shifted
+    shifted
+}
+
+main {
+    Context { delta: 4 } => context
+    [1, 5; ~] -> run(context) => shifted
+    "$(shifted[0]),$(shifted[1])" -> println
+}

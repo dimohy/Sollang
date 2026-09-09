@@ -1,0 +1,57 @@
+import sollang.compiler.ir.typed as typedIr
+
+# An ordinary method in the canonical namespace must not become a runtime
+# intrinsic merely because its spelling matches one. Intrinsic identity is the
+# declaration contract, not a name heuristic.
+main {
+    [
+    """
+    namespace sys.path
+
+    public struct Path {
+        public value: Text
+    }
+
+    impl Path {
+        public pathText: self -> Text {
+            self.value
+        }
+
+        public intrinsic: self -> Text {
+            self.value
+        }
+    }
+    """,
+    """
+    import sys.path as path
+
+    inspect value: ref path.Path -> Text {
+        value -> pathText
+    }
+
+    main { }
+    """; ~
+    ] => sources
+    sources -> typedIr.lower => ir
+    false => ordinary!
+    false => intrinsic!
+    false => declarationIntrinsic!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.kind == 6 and node.targetModule == 0 and node.symbol >= 0)
+            -> if {
+                node.opcode == -1 -> if { true => ordinary! }
+                node.opcode == -230 -> if { true => intrinsic! }
+            }
+        node.kind == 0 and node.flags / 128 % 2 == 1
+            -> if { true => declarationIntrinsic! }
+        index! + 1 => index!
+    }
+    ordinary! and not intrinsic! and not declarationIntrinsic!
+        -> if {
+            "ordinary pathText = call"
+        } else {
+            "ordinary pathText = misclassified"
+        } -> println
+}

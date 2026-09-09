@@ -1,0 +1,602 @@
+namespace std.net.http.request
+
+import std.net.http.error as errors
+import std.net.http as http
+import std.net.http.request as model
+
+# Pure bounded HTTP/1.x request-head writing. A typed target prevents method
+# and request-target form drift. The writer owns only head bytes; request body
+# storage remains caller-owned for a later transport to send without copying.
+public struct RequestLimits {
+    public maxHeadBytes: Int
+    public maxFieldCount: Int
+    public maxFieldNameBytes: Int
+    public maxFieldValueBytes: Int
+}
+
+public struct RequestPolicy {
+    public limits: RequestLimits
+}
+
+public enum RequestTarget {
+    Origin(Text)
+    Absolute(Text)
+    Authority(Text)
+    Asterisk
+}
+
+public enum ConnectionMode {
+    Persistent
+    Close
+}
+
+public enum ResponseSemantics {
+    Standard
+    Head
+    Connect
+}
+
+public struct RequestWriter {
+    public limits: RequestLimits
+    public bytes: [UInt8; ~]
+    public authority: Text
+    public fieldCount: Int
+    public automaticFieldCount: Int
+    public includeContentLength: Bool
+    public includeConnectionClose: Bool
+    public includeConnectionKeepAlive: Bool
+    public bodyLength: UIntSize
+    public connection: ConnectionMode
+    public semantics: ResponseSemantics
+}
+
+public struct RequestHead {
+    public bytes: [UInt8; ~]
+    public bodyLength: UIntSize
+    public connection: ConnectionMode
+    public semantics: ResponseSemantics
+}
+
+requestError kind: errors.Kind, offset: UIntSize -> http.Error => http.Error {
+    kind: kind
+    offset: offset
+}
+
+policyError kind: errors.Kind -> Result<RequestPolicy, http.Error> {
+    Result<RequestPolicy, http.Error>.Err(requestError(kind, 0))
+}
+
+writerError kind: errors.Kind, offset: UIntSize -> Result<RequestWriter, http.Error> {
+    Result<RequestWriter, http.Error>.Err(requestError(kind, offset))
+}
+
+fieldError kind: errors.Kind, offset: UIntSize -> Result<Unit, http.Error> {
+    Result<Unit, http.Error>.Err(requestError(kind, offset))
+}
+
+headError kind: errors.Kind, offset: UIntSize -> Result<RequestHead, http.Error> {
+    Result<RequestHead, http.Error>.Err(requestError(kind, offset))
+}
+
+isTokenByte byte: UInt8 -> Bool {
+    (byte >= 48 and byte <= 57)
+        or (byte >= 65 and byte <= 90)
+        or (byte >= 97 and byte <= 122)
+        or byte == 33
+        or byte == 35
+        or byte == 36
+        or byte == 37
+        or byte == 38
+        or byte == 39
+        or byte == 42
+        or byte == 43
+        or byte == 45
+        or byte == 46
+        or byte == 94
+        or byte == 95
+        or byte == 96
+        or byte == 124
+        or byte == 126
+}
+
+isFieldValueByte byte: UInt8 -> Bool {
+    byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+}
+
+isAlphaByte byte: UInt8 -> Bool {
+    (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122)
+}
+
+isSchemeByte byte: UInt8 -> Bool {
+    (byte -> isAlphaByte)
+        or (byte >= 48 and byte <= 57)
+        or byte == 43
+        or byte == 45
+        or byte == 46
+}
+
+isTargetByte byte: UInt8 -> Bool => byte > 32 and byte != 127
+
+asciiEqualIgnoreCase value: Text, expected: Text -> Bool {
+    (value -> len) == (expected -> len) -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => left!
+        expected -> byte(index!) => right!
+        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
+        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! == right! -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+classifyResponseSemantics method: Text -> ResponseSemantics {
+    method -> asciiEqualIgnoreCase("HEAD") -> if {
+        model.ResponseSemantics.Head -> return
+    }
+    method -> asciiEqualIgnoreCase("CONNECT") -> if {
+        model.ResponseSemantics.Connect -> return
+    }
+    model.ResponseSemantics.Standard
+}
+
+asciiEqualIgnoreCaseRange value: Text, start: UIntSize, length: UIntSize, expected: Text -> Bool {
+    length == (expected -> len) -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < length -> while {
+        value -> byte(start + index!) => left!
+        expected -> byte(index!) => right!
+        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
+        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! == right! -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+isReservedField name: Text -> Bool {
+    (name -> asciiEqualIgnoreCase("Host"))
+        or (name -> asciiEqualIgnoreCase("Content-Length"))
+        or (name -> asciiEqualIgnoreCase("Transfer-Encoding"))
+        or (name -> asciiEqualIgnoreCase("Connection"))
+        or (name -> asciiEqualIgnoreCase("Trailer"))
+}
+
+appendText output: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        output -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+}
+
+appendVersion output: mut [UInt8; ~], version: http.Version -> Unit {
+    version -> when {
+        Http10 { appendText(output, "HTTP/1.0") }
+        Http11 { appendText(output, "HTTP/1.1") }
+    }
+}
+
+appendTarget output: mut [UInt8; ~], target: RequestTarget -> Unit {
+    target -> when {
+        Origin(value) { appendText(output, value) }
+        Absolute(value) { appendText(output, value) }
+        Authority(value) { appendText(output, value) }
+        Asterisk { output -> push(42) }
+    }
+}
+
+targetLength target: RequestTarget -> UIntSize => target -> when {
+    Origin(value) { value -> len }
+    Absolute(value) { value -> len }
+    Authority(value) { value -> len }
+    Asterisk { UIntSize(1) }
+}
+
+decimalLength value: UIntSize -> Int {
+    value == 0 -> if { 1 -> return }
+    value => remaining!
+    0 => length!
+    remaining! > 0 -> while {
+        remaining! / 10 => remaining!
+        length! + 1 => length!
+    }
+    length!
+}
+
+appendDecimal output: mut [UInt8; ~], value: UIntSize -> Unit {
+    [UInt8(0); 20] => digits!
+    value => remaining!
+    0 => count!
+    remaining! == 0 -> if {
+        output -> push(48)
+        return
+    }
+    remaining! > 0 -> while {
+        UInt8(remaining! % 10) + 48 => digits![count!]
+        remaining! / 10 => remaining!
+        count! + 1 => count!
+    }
+    count! > 0 -> while {
+        count! - 1 => count!
+        output -> push(digits![count!])
+    }
+}
+
+appendField output: mut [UInt8; ~], name: Text, value: Text -> Unit {
+    appendText(output, name)
+    appendText(output, ": ")
+    appendText(output, value)
+    appendText(output, "\r\n")
+}
+
+appendContentLength output: mut [UInt8; ~], length: UIntSize -> Unit {
+    appendText(output, "Content-Length: ")
+    appendDecimal(output, length)
+    appendText(output, "\r\n")
+}
+
+validateMethod method: Text -> Result<Unit, http.Error> {
+    (method -> len) > 0 -> unless {
+        fieldError(errors.Kind.InvalidMethod, 0) -> return
+    }
+    UIntSize(0) => index!
+    index! < (method -> len) -> while {
+        method -> byte(index!) -> isTokenByte -> unless {
+            fieldError(errors.Kind.InvalidMethod, index!) -> return
+        }
+        index! + 1 => index!
+    }
+    Result<Unit, http.Error>.Ok
+}
+
+isValidPortRange authority: Text, start: UIntSize -> Bool {
+    start < (authority -> len) -> unless { false -> return }
+    0 => port!
+    start => index!
+    index! < (authority -> len) -> while {
+        authority -> byte(index!) => byte
+        byte >= 48 and byte <= 57 -> unless { false -> return }
+        port! <= (65_535 - Int(byte - 48)) / 10 -> unless { false -> return }
+        port! * 10 + Int(byte - 48) => port!
+        index! + 1 => index!
+    }
+    true
+}
+
+validateAuthority authority: Text -> Result<Unit, http.Error> {
+    (authority -> len) > 0 -> unless {
+        fieldError(errors.Kind.InvalidAuthority, 0) -> return
+    }
+    UIntSize(0) => index!
+    index! < (authority -> len) -> while {
+        authority -> byte(index!) => byte
+        (byte >= 33 and byte <= 126)
+            and byte != 64
+            and byte != 35
+            and byte != 47
+            and byte != 63
+            -> unless {
+                fieldError(errors.Kind.InvalidAuthority, index!) -> return
+            }
+        index! + 1 => index!
+    }
+    (authority -> byte(0)) == 91 -> if {
+        UIntSize(1) => close!
+        close! < (authority -> len) and (authority -> byte(close!)) != 93
+            -> while {
+                close! + 1 => close!
+            }
+        close! > 1 and close! < (authority -> len) -> unless {
+            fieldError(errors.Kind.InvalidAuthority, close!) -> return
+        }
+        close! + 1 < (authority -> len) -> if {
+            (authority -> byte(close! + 1)) == 58 -> unless {
+                fieldError(errors.Kind.InvalidAuthority, close! + 1) -> return
+            }
+            authority -> isValidPortRange(close! + 2) -> unless {
+                fieldError(errors.Kind.InvalidAuthority, close! + 1) -> return
+            }
+        }
+    } else {
+        false => foundColon!
+        UIntSize(0) => scan!
+        scan! < (authority -> len) -> while {
+            (authority -> byte(scan!)) == 58 -> if {
+                foundColon! -> if {
+                    fieldError(errors.Kind.InvalidAuthority, scan!) -> return
+                }
+                true => foundColon!
+            }
+            (authority -> byte(scan!)) == 91 or (authority -> byte(scan!)) == 93
+                -> if {
+                    fieldError(errors.Kind.InvalidAuthority, scan!) -> return
+                }
+            scan! + 1 => scan!
+        }
+        foundColon! -> if {
+            UIntSize(0) => colon!
+            UIntSize(0) => colonSearch!
+            colonSearch! < (authority -> len) -> while {
+                (authority -> byte(colonSearch!)) == 58 -> if { colonSearch! => colon! }
+                colonSearch! + 1 => colonSearch!
+            }
+            colon! > 0 and (authority -> isValidPortRange(colon! + 1))
+                -> unless {
+                    fieldError(errors.Kind.InvalidAuthority, colon!) -> return
+                }
+        }
+    }
+    Result<Unit, http.Error>.Ok
+}
+
+hasExplicitPort authority: Text -> Bool {
+    (authority -> len) >= 3 -> unless { false -> return }
+    (authority -> byte(0)) == 91 -> if {
+        UIntSize(1) => close!
+        close! < (authority -> len) and (authority -> byte(close!)) != 93
+            -> while {
+                close! + 1 => close!
+            }
+        close! > 1 and close! + 2 < (authority -> len)
+            -> unless { false -> return }
+        (authority -> byte(close! + 1)) == 58 -> unless { false -> return }
+        authority -> isValidPortRange(close! + 2) -> return
+    }
+    UIntSize(0) => colon!
+    false => found!
+    UIntSize(0) => scan!
+    scan! < (authority -> len) -> while {
+        (authority -> byte(scan!)) == 58 -> if {
+            found! -> if { false -> return }
+            scan! => colon!
+            true => found!
+        }
+        scan! + 1 => scan!
+    }
+    found! and colon! > 0 and colon! + 1 < (authority -> len)
+        -> unless { false -> return }
+    authority -> isValidPortRange(colon! + 1)
+}
+
+validateTarget method: Text, target: RequestTarget, authority: Text -> Result<Unit, http.Error> {
+    target -> when {
+        Origin(value) {
+            method -> asciiEqualIgnoreCase("CONNECT") -> if {
+                fieldError(errors.Kind.InvalidTargetMethod, 0) -> return
+            }
+            (value -> len) > 0 and (value -> byte(0)) == 47
+                -> unless {
+                    fieldError(errors.Kind.InvalidTarget, 0) -> return
+                }
+            UIntSize(0) => index!
+            index! < (value -> len) -> while {
+                value -> byte(index!) => byte
+                (byte -> isTargetByte) and byte != 35 -> unless {
+                    fieldError(errors.Kind.InvalidTarget, index!) -> return
+                }
+                index! + 1 => index!
+            }
+        }
+        Absolute(value) {
+            method -> asciiEqualIgnoreCase("CONNECT") -> if {
+                fieldError(errors.Kind.InvalidTargetMethod, 0) -> return
+            }
+            (value -> len) > 0 and (value -> byte(0) -> isAlphaByte)
+                -> unless {
+                    fieldError(errors.Kind.InvalidTarget, 0) -> return
+                }
+            UIntSize(1) => schemeEnd!
+            schemeEnd! < (value -> len) and (value -> byte(schemeEnd!)) != 58
+                -> while {
+                    value -> byte(schemeEnd!) -> isSchemeByte -> unless {
+                        fieldError(errors.Kind.InvalidTarget, schemeEnd!) -> return
+                    }
+                    schemeEnd! + 1 => schemeEnd!
+                }
+            schemeEnd! > 0 and schemeEnd! + 3 <= (value -> len)
+                -> unless {
+                    fieldError(errors.Kind.InvalidTarget, schemeEnd!) -> return
+                }
+            (value -> byte(schemeEnd! + 1)) == 47 and (value -> byte(schemeEnd! + 2)) == 47
+                -> unless { fieldError(errors.Kind.InvalidTarget, schemeEnd! + 1) -> return }
+            schemeEnd! + 3 => authorityStart
+            authorityStart => authorityEnd!
+            authorityEnd! < (value -> len)
+                and (value -> byte(authorityEnd!)) != 47
+                and (value -> byte(authorityEnd!)) != 63
+                and (value -> byte(authorityEnd!)) != 35
+                -> while { authorityEnd! + 1 => authorityEnd! }
+            authorityEnd! > authorityStart -> unless {
+                fieldError(errors.Kind.InvalidTarget, authorityStart) -> return
+            }
+            value -> asciiEqualIgnoreCaseRange(authorityStart, authorityEnd! - authorityStart, authority)
+                -> unless { fieldError(errors.Kind.InvalidAuthority, authorityStart) -> return }
+            UIntSize(0) => index!
+            index! < (value -> len) -> while {
+                value -> byte(index!) => byte
+                (byte -> isTargetByte) and byte != 35 -> unless {
+                    fieldError(errors.Kind.InvalidTarget, index!) -> return
+                }
+                index! + 1 => index!
+            }
+        }
+        Authority(value) {
+            method -> asciiEqualIgnoreCase("CONNECT") -> unless {
+                fieldError(errors.Kind.InvalidTargetMethod, 0) -> return
+            }
+            value -> asciiEqualIgnoreCase(authority) -> unless {
+                fieldError(errors.Kind.InvalidAuthority, 0) -> return
+            }
+            value -> hasExplicitPort -> unless {
+                fieldError(errors.Kind.InvalidTarget, 0) -> return
+            }
+        }
+        Asterisk {
+            method -> asciiEqualIgnoreCase("OPTIONS") -> unless {
+                fieldError(errors.Kind.InvalidTargetMethod, 0) -> return
+            }
+        }
+    }
+    Result<Unit, http.Error>.Ok
+}
+
+impl RequestLimits {
+    public policy: self -> Result<RequestPolicy, http.Error> {
+        self.maxHeadBytes >= 27
+            and self.maxFieldCount >= 1
+            and self.maxFieldNameBytes >= 0
+            and self.maxFieldValueBytes > 0
+            -> unless { policyError(errors.Kind.InvalidRequestLimit) -> return }
+        Result<RequestPolicy, http.Error>.Ok(RequestPolicy { limits: self })
+    }
+}
+
+impl RequestPolicy {
+    public request: self, method: Text, target: RequestTarget, version: http.Version, authority: Text, bodyLength: UIntSize, connection: ConnectionMode -> Result<RequestWriter, http.Error> {
+        validateMethod(method)?
+        validateAuthority(authority)?
+        Int(authority -> len) <= self.limits.maxFieldValueBytes
+            -> unless {
+                writerError(errors.Kind.FieldValueLimitExceeded, authority -> len) -> return
+            }
+        validateTarget(method, target, authority)?
+
+        method -> classifyResponseSemantics => semantics
+        bodyLength > 0 => includeContentLength
+        connection -> when {
+            Close { true }
+            Persistent { false }
+        } => includeConnectionClose
+        connection -> when {
+            Close { false }
+            Persistent => version -> when {
+                Http10 { true }
+                Http11 { false }
+            }
+        } => includeConnectionKeepAlive
+        1 => automaticFieldCount!
+        includeContentLength -> if { automaticFieldCount! + 1 => automaticFieldCount! }
+        includeConnectionClose or includeConnectionKeepAlive
+            -> if { automaticFieldCount! + 1 => automaticFieldCount! }
+        automaticFieldCount! <= self.limits.maxFieldCount
+            -> unless {
+                writerError(errors.Kind.FieldCountLimitExceeded, 0) -> return
+            }
+
+        Int(method -> len) + Int(target -> targetLength) + 12 => initialLength
+        initialLength <= self.limits.maxHeadBytes -> unless {
+            writerError(errors.Kind.RequestHeadLimitExceeded, UIntSize(initialLength)) -> return
+        }
+        [UInt8; ~] => bytes!
+        appendText(bytes!, method)
+        bytes! -> push(32)
+        appendTarget(bytes!, target)
+        bytes! -> push(32)
+        appendVersion(bytes!, version)
+        appendText(bytes!, "\r\n")
+        Result<RequestWriter, http.Error>.Ok(RequestWriter {
+            limits: self.limits
+            bytes: bytes!
+            authority: authority
+            fieldCount: 0
+            automaticFieldCount: automaticFieldCount!
+            includeContentLength: includeContentLength
+            includeConnectionClose: includeConnectionClose
+            includeConnectionKeepAlive: includeConnectionKeepAlive
+            bodyLength: bodyLength
+            connection: connection
+            semantics: semantics
+        })
+    }
+}
+
+impl RequestWriter {
+    public field: mut self, name: Text, value: Text -> Result<Unit, http.Error> {
+        (name -> len) > 0 -> unless { fieldError(errors.Kind.InvalidFieldName, 0) -> return }
+        Int(name -> len) <= self.limits.maxFieldNameBytes
+            -> unless {
+                fieldError(errors.Kind.FieldNameLimitExceeded, name -> len) -> return
+            }
+        Int(value -> len) <= self.limits.maxFieldValueBytes
+            -> unless {
+                fieldError(errors.Kind.FieldValueLimitExceeded, value -> len) -> return
+            }
+        UIntSize(0) => nameIndex!
+        nameIndex! < (name -> len) -> while {
+            name -> byte(nameIndex!) -> isTokenByte -> unless {
+                fieldError(errors.Kind.InvalidFieldName, nameIndex!) -> return
+            }
+            nameIndex! + 1 => nameIndex!
+        }
+        name -> isReservedField -> if {
+            fieldError(errors.Kind.ReservedRequestField, 0) -> return
+        }
+        UIntSize(0) => valueIndex!
+        valueIndex! < (value -> len) -> while {
+            value -> byte(valueIndex!) -> isFieldValueByte
+                -> unless {
+                    fieldError(errors.Kind.InvalidFieldValue, valueIndex!) -> return
+                }
+            valueIndex! + 1 => valueIndex!
+        }
+        self.fieldCount + self.automaticFieldCount < self.limits.maxFieldCount
+            -> unless {
+                fieldError(errors.Kind.FieldCountLimitExceeded, UIntSize(self.fieldCount)) -> return
+            }
+        (self.bytes -> len) + Int(name -> len) + Int(value -> len) + 4 => requiredHeadBytes
+        requiredHeadBytes <= self.limits.maxHeadBytes
+            -> unless {
+                fieldError(errors.Kind.RequestHeadLimitExceeded, UIntSize(self.bytes -> len)) -> return
+            }
+        appendField(self.bytes, name, value)
+        self.fieldCount + 1 => self.fieldCount
+        Result<Unit, http.Error>.Ok
+    }
+
+    public finish: move self -> Result<RequestHead, http.Error> {
+        self.limits => limits
+        self.authority => authority
+        self.bodyLength => bodyLength
+        self.connection => connection
+        self.semantics => semantics
+        self.includeContentLength => includeContentLength
+        self.includeConnectionClose => includeConnectionClose
+        self.includeConnectionKeepAlive => includeConnectionKeepAlive
+        self.bytes => bytes!
+        10 + Int(authority -> len) => suffixLength!
+        includeContentLength -> if {
+            suffixLength! + 18 + decimalLength(bodyLength) => suffixLength!
+        }
+        includeConnectionClose -> if { suffixLength! + 19 => suffixLength! }
+        includeConnectionKeepAlive -> if { suffixLength! + 24 => suffixLength! }
+        (bytes! -> len) + suffixLength! <= limits.maxHeadBytes
+            -> unless {
+                headError(errors.Kind.RequestHeadLimitExceeded, UIntSize(bytes! -> len)) -> return
+            }
+        appendField(bytes!, "Host", authority)
+        includeContentLength -> if { appendContentLength(bytes!, bodyLength) }
+        includeConnectionClose -> if { appendField(bytes!, "Connection", "close") }
+        includeConnectionKeepAlive -> if { appendField(bytes!, "Connection", "keep-alive") }
+        appendText(bytes!, "\r\n")
+        includeConnectionClose
+            -> if { model.ConnectionMode.Close } else { model.ConnectionMode.Persistent }
+            => finalConnection
+        Result<RequestHead, http.Error>.Ok(RequestHead {
+            bytes: bytes!
+            bodyLength: bodyLength
+            connection: finalConnection
+            semantics: semantics
+        })
+    }
+}
+
+impl RequestHead {
+    public responseSemantics: self -> ResponseSemantics => self.semantics
+
+    public intoBytes: move self -> [UInt8; ~] {
+        self.bytes => bytes
+        bytes
+    }
+}

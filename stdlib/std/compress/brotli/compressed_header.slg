@@ -1,0 +1,1583 @@
+namespace std.compress.brotli.compressed_header
+
+import std.compress.brotli.compressed_header as model
+import std.compress.brotli.compressed_header.error as errors
+import std.compress.brotli.context_map as context_maps
+import std.compress.brotli.context_map.error as context_errors
+import std.compress.brotli.literal_context as contexts
+import std.compress.brotli.prefix_code as prefix_code
+import std.compress.brotli.prefix_code.error as prefix_errors
+import std.compress.brotli.prefix_table as prefix
+import std.compress.brotli.prefix_table.error as table_errors
+import std.compress.brotli.tree_group as tree_groups
+import std.compress.brotli.tree_group.error as group_errors
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxBlockTypes: Int
+    public maxBlockLength: Int
+    public maxContextEntries: Int
+    public maxTrees: Int
+    public maxTableEntries: Int
+    public maxTotalTableEntries: Int
+}
+
+public struct Parser {
+    public prefixParser: prefix_code.Parser
+    public contextParser: context_maps.Parser
+    public treeParser: tree_groups.Parser
+    public maxBlockTypes: Int
+    public maxBlockLength: Int
+    public maxTrees: Int
+}
+
+public enum PreludePhase {
+    BlockHasValue
+    BlockWidth
+    BlockRemainder
+    BlockPrefix
+    DistancePostfix
+    DirectDistanceGroups
+    ContextMode
+    LiteralMapHasTreeCount
+    LiteralMapWidth
+    LiteralMapRemainder
+    LiteralMapPrefix
+    DistanceMapHasTreeCount
+    DistanceMapWidth
+    DistanceMapRemainder
+    DistanceMapPrefix
+    Finished
+}
+
+# PreludeReader owns only semantic scalars. Encoded bytes remain owned by each
+# caller and unread bits remain in the separately bounded prefix.Window.
+public struct PreludeReader {
+    public phase: PreludePhase
+    public maxBlockTypes: Int
+    public maxTrees: Int
+    public blockIndex: Int
+    public pendingWidth: Int
+    public pendingCount: Int
+    public literalBlockTypes: Int
+    public commandBlockTypes: Int
+    public distanceBlockTypes: Int
+    public distancePostfixBits: Int
+    public directDistanceCodes: Int
+    public literalContextMode: contexts.Mode
+    public literalTreeCount: Int
+    public distanceTreeCount: Int
+}
+
+public struct Prelude {
+    public literalBlockTypes: Int
+    public commandBlockTypes: Int
+    public distanceBlockTypes: Int
+    public distancePostfixBits: Int
+    public directDistanceCodes: Int
+    public literalContextMode: contexts.Mode
+    public literalTreeCount: Int
+    public distanceTreeCount: Int
+}
+
+public enum PreludeRead {
+    NeedMore(Int)
+    NeedBlockPrefix(Int)
+    NeedLiteralMapPrefix(Int)
+    NeedDistanceMapPrefix(Int)
+    Ready(Prelude)
+}
+
+public enum TableSlot {
+    Absent
+    Present(prefix.Table)
+}
+
+public enum BlockStreamPhase {
+    HasTypeCount
+    TypeCountWidth
+    TypeCountRemainder
+    TypePrefix
+    LengthPrefix
+    InitialLengthSymbol
+    InitialLengthExtra
+    Finished
+}
+
+# BlockStreamReader owns only bounded semantic state and installed prefix
+# tables. Encoded bytes remain with the caller and unread bits remain in the
+# shared scalar Window.
+public struct BlockStreamReader {
+    public prefixParser: prefix_code.Parser
+    public maxBlockTypes: Int
+    public maxBlockLength: Int
+    public phase: BlockStreamPhase
+    public pendingWidth: Int
+    public typeCount: Int
+    public lengthCode: Int
+    public initialLength: Int
+    public typeTable: TableSlot
+    public lengthTable: TableSlot
+}
+
+public enum BlockStreamRead {
+    NeedMore(Int)
+    NeedPrefix(Int)
+    Ready
+}
+
+public enum HeaderPhase {
+    BlockStream
+    DistancePostfix
+    DirectDistanceGroups
+    ContextMode
+    PreludeReady
+}
+
+# HeaderReader composes exactly three BlockStreamReader instances in wire order.
+# Completing a block is consuming so the finished table owners cannot remain
+# aliased with the next active reader.
+public struct HeaderReader {
+    public parser: Parser
+    public activeBlock: BlockStreamReader
+    public phase: HeaderPhase
+    public blockIndex: Int
+    public blockStreams: [BlockStream; ~]
+    public distancePostfixBits: Int
+    public directDistanceCodes: Int
+    public contextModes: [contexts.Mode; ~]
+}
+
+public enum HeaderRead {
+    NeedMore(Int)
+    NeedBlockPrefix(Int)
+    NeedBlockFinish(Int)
+    Ready
+}
+
+public struct HeaderPrelude {
+    public blockStreams: [BlockStream; ~]
+    public distancePostfixBits: Int
+    public directDistanceCodes: Int
+    public distanceCodeCount: Int
+    public contextModes: [contexts.Mode; ~]
+    public literalContextEntryCount: Int
+}
+
+public enum ContextPhase {
+    LiteralMap
+    DistanceMap
+    Finished
+}
+
+public struct ContextReader {
+    public prelude: HeaderPrelude
+    public reader: context_maps.Reader
+    public phase: ContextPhase
+    public literalContextMap: [Int; ~]
+    public distanceContextMap: [Int; ~]
+    public literalTreeCount: Int
+    public distanceTreeCount: Int
+}
+
+public enum ContextRead {
+    NeedMore(Int)
+    NeedPrefix(Int)
+    Ready
+}
+
+public struct ContextPrelude {
+    public blockStreams: [BlockStream; ~]
+    public distancePostfixBits: Int
+    public directDistanceCodes: Int
+    public distanceCodeCount: Int
+    public contextModes: [contexts.Mode; ~]
+    public literalContextMap: [Int; ~]
+    public distanceContextMap: [Int; ~]
+    public literalTreeCount: Int
+    public distanceTreeCount: Int
+}
+
+public enum TreePhase {
+    Literal
+    Command
+    Distance
+    Finished
+}
+
+public struct TreeReader {
+    public prelude: ContextPrelude
+    public reader: tree_groups.Reader
+    public phase: TreePhase
+    public literalTrees: [prefix.Table; ~]
+    public commandTrees: [prefix.Table; ~]
+    public distanceTrees: [prefix.Table; ~]
+}
+
+public enum TreeRead {
+    NeedTree(Int)
+    Ready
+}
+
+public struct BlockStream {
+    public typeCount: Int
+    public initialLength: Int
+    public typeTable: TableSlot
+    public lengthTable: TableSlot
+}
+
+public struct BlockSwitch {
+    public typeIndex: Int
+    public length: Int
+    public position: prefix.Position
+}
+
+public struct Parsed {
+    public blockStreams: [BlockStream; ~]
+    public distancePostfixBits: Int
+    public directDistanceCodes: Int
+    public distanceCodeCount: Int
+    public contextModes: [contexts.Mode; ~]
+    public literalContextMap: [Int; ~]
+    public distanceContextMap: [Int; ~]
+    public literalTrees: [prefix.Table; ~]
+    public commandTrees: [prefix.Table; ~]
+    public distanceTrees: [prefix.Table; ~]
+    public position: prefix.Position
+}
+
+struct Bits {
+    value: Int
+    position: prefix.Position
+}
+
+struct ParsedBlockStream {
+    value: BlockStream
+    position: prefix.Position
+}
+
+enum WindowBits {
+    NeedMore(Int)
+    Ready(Int)
+}
+
+errorParser kind: errors.Kind, offset: UIntSize -> Result<Parser, Error> {
+    Result<Parser, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorParsed kind: errors.Kind, offset: UIntSize -> Result<Parsed, Error> {
+    Result<Parsed, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBits kind: errors.Kind, offset: UIntSize -> Result<Bits, Error> {
+    Result<Bits, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBlockStream kind: errors.Kind, offset: UIntSize -> Result<ParsedBlockStream, Error> {
+    Result<ParsedBlockStream, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorPublicBlockStream kind: errors.Kind, offset: UIntSize -> Result<BlockStream, Error> {
+    Result<BlockStream, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBlockStreamRead kind: errors.Kind, offset: UIntSize -> Result<BlockStreamRead, Error> {
+    Result<BlockStreamRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDescriptionReader kind: errors.Kind, offset: UIntSize -> Result<prefix_code.DescriptionReader, Error> {
+    Result<prefix_code.DescriptionReader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorHeaderReader kind: errors.Kind, offset: UIntSize -> Result<HeaderReader, Error> {
+    Result<HeaderReader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorHeaderRead kind: errors.Kind, offset: UIntSize -> Result<HeaderRead, Error> {
+    Result<HeaderRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorHeaderPrelude kind: errors.Kind, offset: UIntSize -> Result<HeaderPrelude, Error> {
+    Result<HeaderPrelude, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorContextReader kind: errors.Kind, offset: UIntSize -> Result<ContextReader, Error> {
+    Result<ContextReader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorContextRead kind: errors.Kind, offset: UIntSize -> Result<ContextRead, Error> {
+    Result<ContextRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorContextPrelude kind: errors.Kind, offset: UIntSize -> Result<ContextPrelude, Error> {
+    Result<ContextPrelude, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorTreeReader kind: errors.Kind, offset: UIntSize -> Result<TreeReader, Error> {
+    Result<TreeReader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorTreeRead kind: errors.Kind, offset: UIntSize -> Result<TreeRead, Error> {
+    Result<TreeRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBlockSwitch kind: errors.Kind, offset: UIntSize -> Result<BlockSwitch, Error> {
+    Result<BlockSwitch, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorPreludeRead kind: errors.Kind, offset: UIntSize -> Result<PreludeRead, Error> {
+    Result<PreludeRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorProbe kind: errors.Kind, offset: UIntSize -> Result<prefix.Probe, Error> {
+    Result<prefix.Probe, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorWindowBits kind: errors.Kind, offset: UIntSize -> Result<WindowBits, Error> {
+    Result<WindowBits, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+powerOfTwo exponent: Int -> Int {
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+readBits input: [UInt8], position: prefix.Position, width: Int -> Result<Bits, Error> {
+    input -> len => inputLength
+    position.byteIndex => byteIndex!
+    position.bitIndex => bitIndex!
+    0 => value!
+    1 => place!
+    0 => read!
+    read! < width -> while {
+        byteIndex! < inputLength
+            -> unless { errorBits(errors.Kind.TruncatedInput, UIntSize(byteIndex!)) -> return }
+        (Int(input[byteIndex!]) / (bitIndex! -> powerOfTwo)) % 2 => bit
+        bit == 1 -> if { value! + place! => value! }
+        place! * 2 => place!
+        read! + 1 => read!
+        bitIndex! + 1 => bitIndex!
+        bitIndex! == 8 -> if {
+            0 => bitIndex!
+            byteIndex! + 1 => byteIndex!
+        }
+    }
+    Result<Bits, Error>.Ok(Bits {
+        value: value!
+        position: prefix.Position { byteIndex: byteIndex!, bitIndex: bitIndex! }
+    })
+}
+
+readVarLenUnsignedByte input: [UInt8], position: prefix.Position -> Result<Bits, Error> {
+    input -> readBits(position, 1)? => hasValue
+    hasValue.value == 0 -> if { Result<Bits, Error>.Ok(hasValue) -> return }
+    input -> readBits(hasValue.position, 3)? => width
+    width.value == 0 -> if {
+        Result<Bits, Error>.Ok(Bits { value: 1, position: width.position }) -> return
+    }
+    input -> readBits(width.position, width.value)? => remainder
+    Result<Bits, Error>.Ok(Bits {
+        value: (width.value -> powerOfTwo) + remainder.value
+        position: remainder.position
+    })
+}
+
+mapPrefixError kind: prefix_errors.Kind -> errors.Kind => kind -> when {
+    InvalidLimit { errors.Kind.InvalidLimit }
+    TruncatedInput { errors.Kind.TruncatedInput }
+    DuplicateSymbol { errors.Kind.InvalidPrefixCode }
+    InvalidCodeSpace { errors.Kind.InvalidPrefixCode }
+    TableLimitExceeded { errors.Kind.InvalidPrefixCode }
+    InvalidSymbol { errors.Kind.InvalidPrefixCode }
+}
+
+mapTableError kind: table_errors.Kind -> errors.Kind => kind -> when {
+    TruncatedInput { errors.Kind.TruncatedInput }
+    else { errors.Kind.InvalidPrefixCode }
+}
+
+readWindowBits window: mut prefix.Window, width: Int -> Result<WindowBits, Error> {
+    window -> read(width) -> when {
+        Err(error) { errorWindowBits(error.kind -> mapTableError, error.offset) -> return }
+        Ok(read) {
+            read -> when {
+                Incomplete(bits) { Result<WindowBits, Error>.Ok(model.WindowBits.NeedMore(bits)) }
+                Complete(value) { Result<WindowBits, Error>.Ok(model.WindowBits.Ready(Int(value))) }
+            }
+        }
+    }
+}
+
+mapContextError kind: context_errors.Kind -> errors.Kind => kind -> when {
+    InvalidLimit { errors.Kind.InvalidLimit }
+    TruncatedInput { errors.Kind.TruncatedInput }
+    else { errors.Kind.InvalidContextMap }
+}
+
+mapGroupError kind: group_errors.Kind -> errors.Kind => kind -> when {
+    InvalidLimit { errors.Kind.InvalidLimit }
+    TruncatedInput { errors.Kind.TruncatedInput }
+    else { errors.Kind.InvalidTreeGroup }
+}
+
+contextMapReader parser: ref Parser, entryCount: Int -> Result<context_maps.Reader, Error> {
+    parser.contextParser -> reader(entryCount) -> when {
+        Err(error) {
+            Result<context_maps.Reader, Error>.Err(Error {
+                kind: error.kind -> mapContextError
+                offset: error.offset
+            })
+        }
+        Ok(reader) { Result<context_maps.Reader, Error>.Ok(reader) }
+    }
+}
+
+treeGroupReader parser: ref Parser, alphabetSize: Int, treeCount: Int -> Result<tree_groups.Reader, Error> {
+    parser.treeParser -> reader(alphabetSize, treeCount, 8) -> when {
+        Err(error) {
+            Result<tree_groups.Reader, Error>.Err(Error {
+                kind: error.kind -> mapGroupError
+                offset: error.offset
+            })
+        }
+        Ok(reader) { Result<tree_groups.Reader, Error>.Ok(reader) }
+    }
+}
+
+parsePrefix parser: ref Parser, input: [UInt8], position: prefix.Position, alphabetSize: Int -> Result<prefix_code.Parsed, Error> {
+    parser.prefixParser -> parse(input, position, alphabetSize, 8) -> when {
+        Ok(parsed) { Result<prefix_code.Parsed, Error>.Ok(parsed) }
+        Err(error) {
+            Result<prefix_code.Parsed, Error>.Err(Error {
+                kind: error.kind -> mapPrefixError
+                offset: error.offset
+            })
+        }
+    }
+}
+
+parseContext parser: ref Parser, input: [UInt8], position: prefix.Position, entryCount: Int -> Result<context_maps.Parsed, Error> {
+    parser.contextParser -> parse(input, position, entryCount) -> when {
+        Ok(parsed) { Result<context_maps.Parsed, Error>.Ok(parsed) }
+        Err(error) {
+            Result<context_maps.Parsed, Error>.Err(Error {
+                kind: error.kind -> mapContextError
+                offset: error.offset
+            })
+        }
+    }
+}
+
+parseTrees parser: ref Parser, input: [UInt8], position: prefix.Position, alphabetSize: Int, treeCount: Int -> Result<tree_groups.Parsed, Error> {
+    parser.treeParser -> parse(input, position, alphabetSize, treeCount, 8) -> when {
+        Ok(parsed) { Result<tree_groups.Parsed, Error>.Ok(parsed) }
+        Err(error) {
+            Result<tree_groups.Parsed, Error>.Err(Error {
+                kind: error.kind -> mapGroupError
+                offset: error.offset
+            })
+        }
+    }
+}
+
+readSymbol table: ref prefix.Table, input: [UInt8], position: prefix.Position -> Result<prefix.Decoded, Error> {
+    table -> read(input, position) -> when {
+        Ok(decoded) { Result<prefix.Decoded, Error>.Ok(decoded) }
+        Err(error) {
+            Result<prefix.Decoded, Error>.Err(Error {
+                kind: error.kind -> mapTableError
+                offset: error.offset
+            })
+        }
+    }
+}
+
+blockLengthOffset code: Int -> Int => code -> when {
+    == 0 { 1 }
+    == 1 { 5 }
+    == 2 { 9 }
+    == 3 { 13 }
+    == 4 { 17 }
+    == 5 { 25 }
+    == 6 { 33 }
+    == 7 { 41 }
+    == 8 { 49 }
+    == 9 { 65 }
+    == 10 { 81 }
+    == 11 { 97 }
+    == 12 { 113 }
+    == 13 { 145 }
+    == 14 { 177 }
+    == 15 { 209 }
+    == 16 { 241 }
+    == 17 { 305 }
+    == 18 { 369 }
+    == 19 { 497 }
+    == 20 { 753 }
+    == 21 { 1_265 }
+    == 22 { 2_289 }
+    == 23 { 4_337 }
+    == 24 { 8_433 }
+    else { 16_625 }
+}
+
+blockLengthBits code: Int -> Int => code -> when {
+    <= 3 { 2 }
+    <= 7 { 3 }
+    <= 11 { 4 }
+    <= 15 { 5 }
+    <= 17 { 6 }
+    == 18 { 7 }
+    == 19 { 8 }
+    == 20 { 9 }
+    == 21 { 10 }
+    == 22 { 11 }
+    == 23 { 12 }
+    == 24 { 13 }
+    else { 24 }
+}
+
+parseBlockStream parser: ref Parser, input: [UInt8], position: prefix.Position -> Result<ParsedBlockStream, Error> {
+    input -> readVarLenUnsignedByte(position)? => encodedTypeCount
+    encodedTypeCount.value + 1 => typeCount
+    typeCount <= parser.maxBlockTypes
+        -> unless { errorBlockStream(errors.Kind.BlockTypeLimitExceeded, UIntSize(typeCount)) -> return }
+    typeCount == 1 -> if {
+        Result<ParsedBlockStream, Error>.Ok(ParsedBlockStream {
+            value: BlockStream {
+                typeCount: typeCount
+                initialLength: 268_435_456
+                typeTable: model.TableSlot.Absent
+                lengthTable: model.TableSlot.Absent
+            }
+            position: encodedTypeCount.position
+        }) -> return
+    }
+    parser -> parsePrefix(input, encodedTypeCount.position, typeCount + 2)? => parsedType
+    parser -> parsePrefix(input, parsedType.position, 26)? => parsedLength
+    parsedLength.table -> readSymbol(input, parsedLength.position)? => lengthCode
+    lengthCode.symbol -> blockLengthBits => extraWidth
+    input -> readBits(lengthCode.position, extraWidth)? => extra
+    (lengthCode.symbol -> blockLengthOffset) + extra.value => initialLength
+    initialLength <= parser.maxBlockLength
+        -> unless {
+            errorBlockStream(errors.Kind.BlockLengthLimitExceeded, UIntSize(initialLength)) -> return
+        }
+    Result<ParsedBlockStream, Error>.Ok(ParsedBlockStream {
+        value: BlockStream {
+            typeCount: typeCount
+            initialLength: initialLength
+            typeTable: model.TableSlot.Present(parsedType.table)
+            lengthTable: model.TableSlot.Present(parsedLength.table)
+        }
+        position: extra.position
+    })
+}
+
+preludeValue reader: ref PreludeReader -> Prelude {
+    Prelude {
+        literalBlockTypes: reader.literalBlockTypes
+        commandBlockTypes: reader.commandBlockTypes
+        distanceBlockTypes: reader.distanceBlockTypes
+        distancePostfixBits: reader.distancePostfixBits
+        directDistanceCodes: reader.directDistanceCodes
+        literalContextMode: reader.literalContextMode
+        literalTreeCount: reader.literalTreeCount
+        distanceTreeCount: reader.distanceTreeCount
+    }
+}
+
+impl Limits {
+    public parser: self -> Result<Parser, Error> {
+        self.maxBlockTypes > 0 and self.maxBlockTypes <= 256
+            and self.maxBlockLength > 0 and self.maxBlockLength <= 16_793_840
+            and self.maxContextEntries > 0 and self.maxContextEntries <= 16_384
+            and self.maxTrees > 0 and self.maxTrees <= 256
+            and self.maxTableEntries > 0 and self.maxTableEntries <= 1_080
+            and self.maxTotalTableEntries > 0 and self.maxTotalTableEntries <= 276_480
+            -> unless { errorParser(errors.Kind.InvalidLimit, 0) -> return }
+        prefix_code.Limits {
+            maxAlphabetSize: 704
+            maxTableEntries: self.maxTableEntries
+        } -> parser -> when {
+            Err(error) { errorParser(error.kind -> mapPrefixError, error.offset) }
+            Ok(prefixParser) {
+                context_maps.Limits {
+                    maxEntries: self.maxContextEntries
+                    maxTrees: self.maxTrees
+                    maxTableEntries: self.maxTableEntries
+                } -> parser -> when {
+                    Err(error) { errorParser(error.kind -> mapContextError, error.offset) }
+                    Ok(contextParser) {
+                        tree_groups.Limits {
+                            maxTrees: self.maxTrees
+                            maxAlphabetSize: 704
+                            maxTableEntries: self.maxTableEntries
+                            maxTotalTableEntries: self.maxTotalTableEntries
+                        } -> parser -> when {
+                            Err(error) { errorParser(error.kind -> mapGroupError, error.offset) }
+                            Ok(treeParser) {
+                                Result<Parser, Error>.Ok(Parser {
+                                    prefixParser: prefixParser
+                                    contextParser: contextParser
+                                    treeParser: treeParser
+                                    maxBlockTypes: self.maxBlockTypes
+                                    maxBlockLength: self.maxBlockLength
+                                    maxTrees: self.maxTrees
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Parser {
+    public headerReader: self -> HeaderReader {
+        HeaderReader {
+            parser: self
+            activeBlock: self -> blockStreamReader
+            phase: model.HeaderPhase.BlockStream
+            blockIndex: 0
+            blockStreams: [BlockStream; ~]
+            distancePostfixBits: 0
+            directDistanceCodes: 0
+            contextModes: [contexts.Mode; ~]
+        }
+    }
+
+    public blockStreamReader: self -> BlockStreamReader {
+        BlockStreamReader {
+            prefixParser: self.prefixParser
+            maxBlockTypes: self.maxBlockTypes
+            maxBlockLength: self.maxBlockLength
+            phase: model.BlockStreamPhase.HasTypeCount
+            pendingWidth: 0
+            typeCount: 0
+            lengthCode: 0
+            initialLength: 268_435_456
+            typeTable: model.TableSlot.Absent
+            lengthTable: model.TableSlot.Absent
+        }
+    }
+
+    public preludeReader: self -> PreludeReader {
+        PreludeReader {
+            phase: model.PreludePhase.BlockHasValue
+            maxBlockTypes: self.maxBlockTypes
+            maxTrees: self.maxTrees
+            blockIndex: 0
+            pendingWidth: 0
+            pendingCount: 0
+            literalBlockTypes: 0
+            commandBlockTypes: 0
+            distanceBlockTypes: 0
+            distancePostfixBits: 0
+            directDistanceCodes: 0
+            literalContextMode: contexts.Mode.Lsb6
+            literalTreeCount: 0
+            distanceTreeCount: 0
+        }
+    }
+
+    public parse: self, input: [UInt8], position: prefix.Position -> Result<Parsed, Error> {
+        [BlockStream; ~] => blockStreams!
+        position => current!
+        0 => streamIndex!
+        streamIndex! < 3 -> while {
+            self -> parseBlockStream(input, current!)? => parsedStream
+            parsedStream.position => current!
+            blockStreams! -> push(parsedStream.value)
+            streamIndex! + 1 => streamIndex!
+        }
+
+        input -> readBits(current!, 2)? => distancePostfix
+        input -> readBits(distancePostfix.position, 4)? => directDistanceGroups
+        directDistanceGroups.position => current!
+        16 + directDistanceGroups.value * (distancePostfix.value -> powerOfTwo) => directDistanceCodes
+        directDistanceCodes + 48 * (distancePostfix.value -> powerOfTwo) => distanceCodeCount
+
+        [contexts.Mode; ~] => contextModes!
+        0 => modeIndex!
+        modeIndex! < blockStreams![0].typeCount -> while {
+            input -> readBits(current!, 2)? => mode
+            mode.position => current!
+            mode.value -> when {
+                == 0 { contexts.Mode.Lsb6 }
+                == 1 { contexts.Mode.Msb6 }
+                == 2 { contexts.Mode.Utf8 }
+                else { contexts.Mode.Signed }
+            } => contextMode
+            contextModes! -> push(contextMode)
+            modeIndex! + 1 => modeIndex!
+        }
+
+        self -> parseContext(input, current!, blockStreams![0].typeCount * 64)? => literalMap
+        literalMap.position => current!
+        literalMap.treeCount => literalTreeCount
+        literalMap -> intoValues => literalContextMap
+        self -> parseContext(input, current!, blockStreams![2].typeCount * 4)? => distanceMap
+        distanceMap.position => current!
+        distanceMap.treeCount => distanceTreeCount
+        distanceMap -> intoValues => distanceContextMap
+
+        self -> parseTrees(input, current!, 256, literalTreeCount)? => literalGroup
+        literalGroup.position => current!
+        literalGroup -> intoTrees => literalTrees
+        self -> parseTrees(input, current!, 704, blockStreams![1].typeCount)? => commandGroup
+        commandGroup.position => current!
+        commandGroup -> intoTrees => commandTrees
+        self -> parseTrees(input, current!, distanceCodeCount, distanceTreeCount)? => distanceGroup
+        distanceGroup.position => current!
+        distanceGroup -> intoTrees => distanceTrees
+
+        Result<Parsed, Error>.Ok(Parsed {
+            blockStreams: blockStreams!
+            distancePostfixBits: distancePostfix.value
+            directDistanceCodes: directDistanceCodes
+            distanceCodeCount: distanceCodeCount
+            contextModes: contextModes!
+            literalContextMap: literalContextMap
+            distanceContextMap: distanceContextMap
+            literalTrees: literalTrees
+            commandTrees: commandTrees
+            distanceTrees: distanceTrees
+            position: current!
+        })
+    }
+}
+
+impl HeaderReader {
+    public prefixDescription: self -> Result<prefix_code.DescriptionReader, Error> {
+        self.phase -> when {
+            BlockStream { self.activeBlock -> prefixDescription }
+            else { errorDescriptionReader(errors.Kind.InvalidPrefixCode, UIntSize(self.blockIndex)) }
+        }
+    }
+
+    public installPrefix: mut self, table: move prefix.Table -> Result<Unit, Error> {
+        self.phase -> when {
+            BlockStream { true }
+            else { false }
+        } => acceptsPrefix
+        acceptsPrefix -> unless {
+            Result<Unit, Error>.Err(Error {
+                kind: errors.Kind.InvalidPrefixCode
+                offset: UIntSize(self.blockIndex)
+            }) -> return
+        }
+        self.activeBlock -> installPrefix(table)
+    }
+
+    public finishBlock: mut self -> Result<Unit, Error> {
+        self.phase -> when {
+            BlockStream { }
+            else {
+                Result<Unit, Error>.Err(Error {
+                    kind: errors.Kind.InvalidPrefixCode
+                    offset: UIntSize(self.blockIndex)
+                }) -> return
+            }
+        }
+        self.activeBlock => activeBlock
+        self.parser -> blockStreamReader => self.activeBlock
+        activeBlock -> finish? => blockStream
+        self.blockStreams -> push(blockStream)
+        self.blockIndex + 1 => self.blockIndex
+        self.blockIndex < 3 -> if {
+            model.HeaderPhase.BlockStream
+        } else {
+            model.HeaderPhase.DistancePostfix
+        } => self.phase
+        Result<Unit, Error>.Ok
+    }
+
+    public read: mut self, window: mut prefix.Window -> Result<HeaderRead, Error> {
+        true -> while {
+            self.phase -> when {
+                BlockStream {
+                    self.activeBlock -> read(window) -> when {
+                        Err(error) { Result<HeaderRead, Error>.Err(error) -> return }
+                        Ok(progress) {
+                            progress -> when {
+                                NeedMore(bits) { Result<HeaderRead, Error>.Ok(model.HeaderRead.NeedMore(bits)) -> return }
+                                NeedPrefix(alphabetSize) {
+                                    Result<HeaderRead, Error>.Ok(model.HeaderRead.NeedBlockPrefix(alphabetSize)) -> return
+                                }
+                                Ready {
+                                    Result<HeaderRead, Error>.Ok(model.HeaderRead.NeedBlockFinish(self.blockIndex)) -> return
+                                }
+                            }
+                        }
+                    }
+                }
+                DistancePostfix {
+                    window -> readWindowBits(2)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<HeaderRead, Error>.Ok(model.HeaderRead.NeedMore(bits)) -> return }
+                        Ready(value) {
+                            value => self.distancePostfixBits
+                            model.HeaderPhase.DirectDistanceGroups => self.phase
+                        }
+                    }
+                }
+                DirectDistanceGroups {
+                    window -> readWindowBits(4)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<HeaderRead, Error>.Ok(model.HeaderRead.NeedMore(bits)) -> return }
+                        Ready(groups) {
+                            16 + groups * (self.distancePostfixBits -> powerOfTwo) => self.directDistanceCodes
+                            model.HeaderPhase.ContextMode => self.phase
+                        }
+                    }
+                }
+                ContextMode {
+                    (self.blockStreams -> len) == 3
+                        -> unless { errorHeaderRead(errors.Kind.InvalidPrefixCode, UIntSize(self.blockIndex)) -> return }
+                    (self.contextModes -> len) < self.blockStreams[0].typeCount
+                        -> if {
+                            window -> readWindowBits(2)? => read
+                            read -> when {
+                                NeedMore(bits) { Result<HeaderRead, Error>.Ok(model.HeaderRead.NeedMore(bits)) -> return }
+                                Ready(value) {
+                                    value -> when {
+                                        == 0 { contexts.Mode.Lsb6 }
+                                        == 1 { contexts.Mode.Msb6 }
+                                        == 2 { contexts.Mode.Utf8 }
+                                        else { contexts.Mode.Signed }
+                                    } => contextMode
+                                    self.contextModes -> push(contextMode)
+                                }
+                            }
+                        } else {
+                            model.HeaderPhase.PreludeReady => self.phase
+                        }
+                }
+                PreludeReady { Result<HeaderRead, Error>.Ok(model.HeaderRead.Ready) -> return }
+            }
+        }
+        errorHeaderRead(errors.Kind.InvalidPrefixCode, UIntSize(self.blockIndex))
+    }
+
+    public finishPrelude: move self -> Result<HeaderPrelude, Error> {
+        self.phase -> when {
+            PreludeReady { }
+            else { errorHeaderPrelude(errors.Kind.TruncatedInput, UIntSize(self.blockIndex)) -> return }
+        }
+        (self.blockStreams -> len) == 3 and (self.contextModes -> len) == self.blockStreams[0].typeCount
+            -> unless { errorHeaderPrelude(errors.Kind.TruncatedInput, UIntSize(self.blockIndex)) -> return }
+        self.distancePostfixBits -> powerOfTwo => distancePostfixCount
+        self.blockStreams[0].typeCount * 64 => literalContextEntryCount
+        Result<HeaderPrelude, Error>.Ok(HeaderPrelude {
+            blockStreams: self.blockStreams
+            distancePostfixBits: self.distancePostfixBits
+            directDistanceCodes: self.directDistanceCodes
+            distanceCodeCount: self.directDistanceCodes + 48 * distancePostfixCount
+            contextModes: self.contextModes
+            literalContextEntryCount: literalContextEntryCount
+        })
+    }
+}
+
+impl HeaderPrelude {
+    public contextReader: move self, parser: ref Parser -> Result<ContextReader, Error> {
+        parser -> contextMapReader(self.literalContextEntryCount)? => reader
+        Result<ContextReader, Error>.Ok(ContextReader {
+            prelude: self
+            reader: reader
+            phase: model.ContextPhase.LiteralMap
+            literalContextMap: [Int; ~]
+            distanceContextMap: [Int; ~]
+            literalTreeCount: 0
+            distanceTreeCount: 0
+        })
+    }
+}
+
+impl ContextReader {
+    public prefixDescription: self -> Result<prefix_code.DescriptionReader, Error> {
+        self.phase -> when {
+            Finished { errorDescriptionReader(errors.Kind.InvalidContextMap, UIntSize(self.literalContextMap -> len)) }
+            else {
+                self.reader -> prefixDescription -> when {
+                    Err(error) { errorDescriptionReader(error.kind -> mapContextError, error.offset) }
+                    Ok(reader) { Result<prefix_code.DescriptionReader, Error>.Ok(reader) }
+                }
+            }
+        }
+    }
+
+    public installPrefix: mut self, table: move prefix.Table -> Result<Unit, Error> {
+        self.phase -> when {
+            Finished { false }
+            else { true }
+        } => acceptsPrefix
+        acceptsPrefix -> unless {
+            Result<Unit, Error>.Err(Error {
+                kind: errors.Kind.InvalidContextMap
+                offset: UIntSize(self.literalContextMap -> len)
+            }) -> return
+        }
+        self.reader -> installPrefix(table) -> when {
+            Err(error) {
+                Result<Unit, Error>.Err(Error {
+                    kind: error.kind -> mapContextError
+                    offset: error.offset
+                })
+            }
+            Ok(_) { Result<Unit, Error>.Ok }
+        }
+    }
+
+    public read: mut self, window: mut prefix.Window -> Result<ContextRead, Error> {
+        true -> while {
+            self.phase -> when {
+                Finished { Result<ContextRead, Error>.Ok(model.ContextRead.Ready) -> return }
+                else {
+                    self.reader -> read(window) -> when {
+                        Err(error) { errorContextRead(error.kind -> mapContextError, error.offset) -> return }
+                        Ok(progress) {
+                            progress -> when {
+                                NeedMore(bits) { Result<ContextRead, Error>.Ok(model.ContextRead.NeedMore(bits)) -> return }
+                                NeedPrefix(alphabetSize) {
+                                    Result<ContextRead, Error>.Ok(model.ContextRead.NeedPrefix(alphabetSize)) -> return
+                                }
+                                Ready {
+                                    self.phase -> when {
+                                        LiteralMap {
+                                            self.prelude.blockStreams[2].typeCount * 4 => distanceEntryCount
+                                            self.reader -> takeAndReset(distanceEntryCount) -> when {
+                                                Err(error) {
+                                                    errorContextRead(error.kind -> mapContextError, error.offset) -> return
+                                                }
+                                                Ok(streamed) {
+                                                    streamed.treeCount => self.literalTreeCount
+                                                    streamed -> intoValues => self.literalContextMap
+                                                    model.ContextPhase.DistanceMap => self.phase
+                                                }
+                                            }
+                                        }
+                                        DistanceMap {
+                                            self.reader -> takeAndReset(1) -> when {
+                                                Err(error) {
+                                                    errorContextRead(error.kind -> mapContextError, error.offset) -> return
+                                                }
+                                                Ok(streamed) {
+                                                    streamed.treeCount => self.distanceTreeCount
+                                                    streamed -> intoValues => self.distanceContextMap
+                                                    model.ContextPhase.Finished => self.phase
+                                                }
+                                            }
+                                        }
+                                        else { }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        errorContextRead(errors.Kind.InvalidContextMap, UIntSize(self.literalContextMap -> len))
+    }
+
+    public finish: move self -> Result<ContextPrelude, Error> {
+        self.phase -> when {
+            Finished { }
+            else { errorContextPrelude(errors.Kind.TruncatedInput, UIntSize(self.literalContextMap -> len)) -> return }
+        }
+        Result<ContextPrelude, Error>.Ok(ContextPrelude {
+            blockStreams: self.prelude.blockStreams
+            distancePostfixBits: self.prelude.distancePostfixBits
+            directDistanceCodes: self.prelude.directDistanceCodes
+            distanceCodeCount: self.prelude.distanceCodeCount
+            contextModes: self.prelude.contextModes
+            literalContextMap: self.literalContextMap
+            distanceContextMap: self.distanceContextMap
+            literalTreeCount: self.literalTreeCount
+            distanceTreeCount: self.distanceTreeCount
+        })
+    }
+}
+
+impl ContextPrelude {
+    public treeReader: move self, parser: ref Parser -> Result<TreeReader, Error> {
+        parser -> treeGroupReader(256, self.literalTreeCount)? => reader
+        Result<TreeReader, Error>.Ok(TreeReader {
+            prelude: self
+            reader: reader
+            phase: model.TreePhase.Literal
+            literalTrees: [prefix.Table; ~]
+            commandTrees: [prefix.Table; ~]
+            distanceTrees: [prefix.Table; ~]
+        })
+    }
+}
+
+impl TreeReader {
+    public next: mut self -> Result<TreeRead, Error> {
+        true -> while {
+            self.phase -> when {
+                Finished { Result<TreeRead, Error>.Ok(model.TreeRead.Ready) -> return }
+                else {
+                    self.reader -> next -> when {
+                        NeedTree(index) { Result<TreeRead, Error>.Ok(model.TreeRead.NeedTree(index)) -> return }
+                        Ready {
+                            self.phase -> when {
+                                Literal {
+                                    self.reader -> takeAndReset(704, self.prelude.blockStreams[1].typeCount, 8) -> when {
+                                        Err(error) { errorTreeRead(error.kind -> mapGroupError, error.offset) -> return }
+                                        Ok(streamed) {
+                                            streamed -> intoTrees => self.literalTrees
+                                            model.TreePhase.Command => self.phase
+                                        }
+                                    }
+                                }
+                                Command {
+                                    self.reader -> takeAndReset(
+                                    self.prelude.distanceCodeCount,
+                                    self.prelude.distanceTreeCount,
+                                    8
+                                    ) -> when {
+                                        Err(error) { errorTreeRead(error.kind -> mapGroupError, error.offset) -> return }
+                                        Ok(streamed) {
+                                            streamed -> intoTrees => self.commandTrees
+                                            model.TreePhase.Distance => self.phase
+                                        }
+                                    }
+                                }
+                                Distance {
+                                    self.reader -> takeAndReset(1, 1, 1) -> when {
+                                        Err(error) { errorTreeRead(error.kind -> mapGroupError, error.offset) -> return }
+                                        Ok(streamed) {
+                                            streamed -> intoTrees => self.distanceTrees
+                                            model.TreePhase.Finished => self.phase
+                                        }
+                                    }
+                                }
+                                else { }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        errorTreeRead(errors.Kind.InvalidTreeGroup, UIntSize(self.literalTrees -> len))
+    }
+
+    public prefixDescription: self -> Result<prefix_code.DescriptionReader, Error> {
+        self.phase -> when {
+            Finished { errorDescriptionReader(errors.Kind.InvalidTreeGroup, UIntSize(self.literalTrees -> len)) }
+            else {
+                self.reader -> prefixDescription -> when {
+                    Err(error) { errorDescriptionReader(error.kind -> mapGroupError, error.offset) }
+                    Ok(reader) { Result<prefix_code.DescriptionReader, Error>.Ok(reader) }
+                }
+            }
+        }
+    }
+
+    public installTree: mut self, table: move prefix.Table -> Result<Unit, Error> {
+        self.phase -> when {
+            Finished { false }
+            else { true }
+        } => acceptsTree
+        acceptsTree -> unless {
+            Result<Unit, Error>.Err(Error {
+                kind: errors.Kind.InvalidTreeGroup
+                offset: UIntSize(self.literalTrees -> len)
+            }) -> return
+        }
+        self.reader -> installTree(table) -> when {
+            Err(error) {
+                Result<Unit, Error>.Err(Error {
+                    kind: error.kind -> mapGroupError
+                    offset: error.offset
+                })
+            }
+            Ok(_) { Result<Unit, Error>.Ok }
+        }
+    }
+
+    public finish: move self, position: prefix.Position -> Result<Parsed, Error> {
+        self.phase -> when {
+            Finished { }
+            else { errorParsed(errors.Kind.TruncatedInput, UIntSize(self.literalTrees -> len)) -> return }
+        }
+        Result<Parsed, Error>.Ok(Parsed {
+            blockStreams: self.prelude.blockStreams
+            distancePostfixBits: self.prelude.distancePostfixBits
+            directDistanceCodes: self.prelude.directDistanceCodes
+            distanceCodeCount: self.prelude.distanceCodeCount
+            contextModes: self.prelude.contextModes
+            literalContextMap: self.prelude.literalContextMap
+            distanceContextMap: self.prelude.distanceContextMap
+            literalTrees: self.literalTrees
+            commandTrees: self.commandTrees
+            distanceTrees: self.distanceTrees
+            position: position
+        })
+    }
+}
+
+impl BlockStreamReader {
+    public prefixDescription: self -> Result<prefix_code.DescriptionReader, Error> {
+        self.phase -> when {
+            TypePrefix {
+                self.prefixParser -> descriptionReader(self.typeCount + 2, 8) -> when {
+                    Err(error) { errorDescriptionReader(error.kind -> mapPrefixError, error.offset) }
+                    Ok(reader) { Result<prefix_code.DescriptionReader, Error>.Ok(reader) }
+                }
+            }
+            LengthPrefix {
+                self.prefixParser -> descriptionReader(26, 8) -> when {
+                    Err(error) { errorDescriptionReader(error.kind -> mapPrefixError, error.offset) }
+                    Ok(reader) { Result<prefix_code.DescriptionReader, Error>.Ok(reader) }
+                }
+            }
+            else { errorDescriptionReader(errors.Kind.InvalidPrefixCode, UIntSize(self.typeCount)) }
+        }
+    }
+
+    public installPrefix: mut self, table: move prefix.Table -> Result<Unit, Error> {
+        self.phase -> when {
+            TypePrefix {
+                model.TableSlot.Present(table) => self.typeTable
+                model.BlockStreamPhase.LengthPrefix => self.phase
+            }
+            LengthPrefix {
+                model.TableSlot.Present(table) => self.lengthTable
+                model.BlockStreamPhase.InitialLengthSymbol => self.phase
+            }
+            else {
+                Result<Unit, Error>.Err(Error {
+                    kind: errors.Kind.InvalidPrefixCode
+                    offset: UIntSize(self.typeCount)
+                }) -> return
+            }
+        }
+        Result<Unit, Error>.Ok
+    }
+
+    public read: mut self, window: mut prefix.Window -> Result<BlockStreamRead, Error> {
+        true -> while {
+            self.phase -> when {
+                HasTypeCount {
+                    window -> readWindowBits(1)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<BlockStreamRead, Error>.Ok(model.BlockStreamRead.NeedMore(bits)) -> return }
+                        Ready(hasValue) {
+                            hasValue == 0 -> if {
+                                1 => self.typeCount
+                                model.BlockStreamPhase.Finished => self.phase
+                            } else {
+                                model.BlockStreamPhase.TypeCountWidth => self.phase
+                            }
+                        }
+                    }
+                }
+                TypeCountWidth {
+                    window -> readWindowBits(3)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<BlockStreamRead, Error>.Ok(model.BlockStreamRead.NeedMore(bits)) -> return }
+                        Ready(width) {
+                            width == 0 -> if {
+                                2 <= self.maxBlockTypes
+                                    -> unless {
+                                        errorBlockStreamRead(errors.Kind.BlockTypeLimitExceeded, 2) -> return
+                                    }
+                                2 => self.typeCount
+                                model.BlockStreamPhase.TypePrefix => self.phase
+                            } else {
+                                width => self.pendingWidth
+                                model.BlockStreamPhase.TypeCountRemainder => self.phase
+                            }
+                        }
+                    }
+                }
+                TypeCountRemainder {
+                    window -> readWindowBits(self.pendingWidth)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<BlockStreamRead, Error>.Ok(model.BlockStreamRead.NeedMore(bits)) -> return }
+                        Ready(remainder) {
+                            (self.pendingWidth -> powerOfTwo) + remainder + 1 => typeCount
+                            typeCount <= self.maxBlockTypes
+                                -> unless {
+                                    errorBlockStreamRead(errors.Kind.BlockTypeLimitExceeded, UIntSize(typeCount)) -> return
+                                }
+                            typeCount => self.typeCount
+                            model.BlockStreamPhase.TypePrefix => self.phase
+                        }
+                    }
+                }
+                TypePrefix {
+                    Result<BlockStreamRead, Error>.Ok(model.BlockStreamRead.NeedPrefix(self.typeCount + 2)) -> return
+                }
+                LengthPrefix {
+                    Result<BlockStreamRead, Error>.Ok(model.BlockStreamRead.NeedPrefix(26)) -> return
+                }
+                InitialLengthSymbol {
+                    self.lengthTable -> when {
+                        Absent { errorBlockStreamRead(errors.Kind.InvalidPrefixCode, UIntSize(self.typeCount)) -> return }
+                        Present(table) {
+                            window -> symbol(table) -> when {
+                                Err(error) { errorBlockStreamRead(error.kind -> mapTableError, error.offset) -> return }
+                                Ok(probed) {
+                                    probed -> when {
+                                        NeedMore(bits) {
+                                            Result<BlockStreamRead, Error>.Ok(model.BlockStreamRead.NeedMore(bits)) -> return
+                                        }
+                                        Ready(decoded) {
+                                            decoded.symbol => self.lengthCode
+                                            model.BlockStreamPhase.InitialLengthExtra => self.phase
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                InitialLengthExtra {
+                    self.lengthCode -> blockLengthBits => extraWidth
+                    window -> readWindowBits(extraWidth)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<BlockStreamRead, Error>.Ok(model.BlockStreamRead.NeedMore(bits)) -> return }
+                        Ready(extra) {
+                            (self.lengthCode -> blockLengthOffset) + extra => initialLength
+                            initialLength <= self.maxBlockLength
+                                -> unless {
+                                    errorBlockStreamRead(errors.Kind.BlockLengthLimitExceeded, UIntSize(initialLength)) -> return
+                                }
+                            initialLength => self.initialLength
+                            model.BlockStreamPhase.Finished => self.phase
+                        }
+                    }
+                }
+                Finished { Result<BlockStreamRead, Error>.Ok(model.BlockStreamRead.Ready) -> return }
+            }
+        }
+        errorBlockStreamRead(errors.Kind.InvalidPrefixCode, UIntSize(self.typeCount))
+    }
+
+    public finish: move self -> Result<BlockStream, Error> {
+        self.phase -> when {
+            Finished { }
+            else { errorPublicBlockStream(errors.Kind.TruncatedInput, UIntSize(self.typeCount)) -> return }
+        }
+        Result<BlockStream, Error>.Ok(BlockStream {
+            typeCount: self.typeCount
+            initialLength: self.initialLength
+            typeTable: self.typeTable
+            lengthTable: self.lengthTable
+        })
+    }
+}
+
+impl PreludeReader {
+    public read: mut self, window: mut prefix.Window -> Result<PreludeRead, Error> {
+        true -> while {
+            self.phase -> when {
+                BlockHasValue {
+                    window -> readWindowBits(1)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(hasValue) {
+                            hasValue == 0 -> if {
+                                self.blockIndex -> when {
+                                    == 0 { 1 => self.literalBlockTypes }
+                                    == 1 { 1 => self.commandBlockTypes }
+                                    else { 1 => self.distanceBlockTypes }
+                                }
+                                self.blockIndex + 1 => self.blockIndex
+                                self.blockIndex == 3 -> if {
+                                    model.PreludePhase.DistancePostfix => self.phase
+                                } else {
+                                    model.PreludePhase.BlockHasValue => self.phase
+                                }
+                            } else {
+                                model.PreludePhase.BlockWidth => self.phase
+                            }
+                        }
+                    }
+                }
+                BlockWidth {
+                    window -> readWindowBits(3)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(width) {
+                            width == 0 -> if {
+                                2 <= self.maxBlockTypes
+                                    -> unless { errorPreludeRead(errors.Kind.BlockTypeLimitExceeded, 2) -> return }
+                                2 => self.pendingCount
+                                model.PreludePhase.BlockPrefix => self.phase
+                                Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedBlockPrefix(2)) -> return
+                            } else {
+                                width => self.pendingWidth
+                                model.PreludePhase.BlockRemainder => self.phase
+                            }
+                        }
+                    }
+                }
+                BlockRemainder {
+                    window -> readWindowBits(self.pendingWidth)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(remainder) {
+                            (self.pendingWidth -> powerOfTwo) + remainder + 1 => typeCount
+                            typeCount <= self.maxBlockTypes
+                                -> unless {
+                                    errorPreludeRead(errors.Kind.BlockTypeLimitExceeded, UIntSize(typeCount)) -> return
+                                }
+                            typeCount => self.pendingCount
+                            model.PreludePhase.BlockPrefix => self.phase
+                            Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedBlockPrefix(typeCount)) -> return
+                        }
+                    }
+                }
+                BlockPrefix {
+                    Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedBlockPrefix(self.pendingCount)) -> return
+                }
+                DistancePostfix {
+                    window -> readWindowBits(2)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(value) {
+                            value => self.distancePostfixBits
+                            model.PreludePhase.DirectDistanceGroups => self.phase
+                        }
+                    }
+                }
+                DirectDistanceGroups {
+                    window -> readWindowBits(4)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(groups) {
+                            16 + groups * (self.distancePostfixBits -> powerOfTwo) => self.directDistanceCodes
+                            model.PreludePhase.ContextMode => self.phase
+                        }
+                    }
+                }
+                ContextMode {
+                    window -> readWindowBits(2)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(value) {
+                            value -> when {
+                                == 0 { contexts.Mode.Lsb6 }
+                                == 1 { contexts.Mode.Msb6 }
+                                == 2 { contexts.Mode.Utf8 }
+                                else { contexts.Mode.Signed }
+                            } => self.literalContextMode
+                            model.PreludePhase.LiteralMapHasTreeCount => self.phase
+                        }
+                    }
+                }
+                LiteralMapHasTreeCount {
+                    window -> readWindowBits(1)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(hasTreeCount) {
+                            hasTreeCount == 0 -> if {
+                                1 => self.literalTreeCount
+                                model.PreludePhase.DistanceMapHasTreeCount => self.phase
+                            } else {
+                                model.PreludePhase.LiteralMapWidth => self.phase
+                            }
+                        }
+                    }
+                }
+                LiteralMapWidth {
+                    window -> readWindowBits(3)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(width) {
+                            width == 0 -> if {
+                                2 => self.literalTreeCount
+                                model.PreludePhase.LiteralMapPrefix => self.phase
+                                Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedLiteralMapPrefix(2)) -> return
+                            }
+                            width => self.pendingWidth
+                            model.PreludePhase.LiteralMapRemainder => self.phase
+                        }
+                    }
+                }
+                LiteralMapRemainder {
+                    window -> readWindowBits(self.pendingWidth)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(remainder) {
+                            (self.pendingWidth -> powerOfTwo) + remainder + 1 => treeCount
+                            treeCount <= self.maxTrees
+                                -> unless { errorPreludeRead(errors.Kind.InvalidContextMap, UIntSize(treeCount)) -> return }
+                            treeCount => self.literalTreeCount
+                            model.PreludePhase.LiteralMapPrefix => self.phase
+                            Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedLiteralMapPrefix(treeCount)) -> return
+                        }
+                    }
+                }
+                LiteralMapPrefix {
+                    Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedLiteralMapPrefix(self.literalTreeCount)) -> return
+                }
+                DistanceMapHasTreeCount {
+                    window -> readWindowBits(1)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(hasTreeCount) {
+                            hasTreeCount == 0 -> if {
+                                1 => self.distanceTreeCount
+                                model.PreludePhase.Finished => self.phase
+                            } else {
+                                model.PreludePhase.DistanceMapWidth => self.phase
+                            }
+                        }
+                    }
+                }
+                DistanceMapWidth {
+                    window -> readWindowBits(3)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(width) {
+                            width == 0 -> if {
+                                2 => self.distanceTreeCount
+                                model.PreludePhase.DistanceMapPrefix => self.phase
+                                Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedDistanceMapPrefix(2)) -> return
+                            }
+                            width => self.pendingWidth
+                            model.PreludePhase.DistanceMapRemainder => self.phase
+                        }
+                    }
+                }
+                DistanceMapRemainder {
+                    window -> readWindowBits(self.pendingWidth)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedMore(bits)) -> return }
+                        Ready(remainder) {
+                            (self.pendingWidth -> powerOfTwo) + remainder + 1 => treeCount
+                            treeCount <= self.maxTrees
+                                -> unless { errorPreludeRead(errors.Kind.InvalidContextMap, UIntSize(treeCount)) -> return }
+                            treeCount => self.distanceTreeCount
+                            model.PreludePhase.DistanceMapPrefix => self.phase
+                            Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedDistanceMapPrefix(treeCount)) -> return
+                        }
+                    }
+                }
+                DistanceMapPrefix {
+                    Result<PreludeRead, Error>.Ok(model.PreludeRead.NeedDistanceMapPrefix(self.distanceTreeCount)) -> return
+                }
+                Finished {
+                    Result<PreludeRead, Error>.Ok(model.PreludeRead.Ready(self -> preludeValue)) -> return
+                }
+            }
+        }
+        # The exhaustive phase loop always returns when it needs caller bits,
+        # reaches a prefix boundary, or completes the scalar prelude.
+        errorPreludeRead(errors.Kind.InvalidPrefixCode, 0)
+    }
+}
+
+impl BlockStream {
+    public typeSymbol: self, window: mut prefix.Window -> Result<prefix.Probe, Error> {
+        self.typeCount > 1
+            -> unless { errorProbe(errors.Kind.InvalidBlockSwitch, 0) -> return }
+        self.typeTable -> when {
+            Absent { errorProbe(errors.Kind.InvalidBlockSwitch, 0) }
+            Present(table) {
+                window -> symbol(table) -> when {
+                    Err(error) { errorProbe(error.kind -> mapTableError, error.offset) }
+                    Ok(probed) { Result<prefix.Probe, Error>.Ok(probed) }
+                }
+            }
+        }
+    }
+
+    public lengthSymbol: self, window: mut prefix.Window -> Result<prefix.Probe, Error> {
+        self.lengthTable -> when {
+            Absent { errorProbe(errors.Kind.InvalidBlockSwitch, 0) }
+            Present(table) {
+                window -> symbol(table) -> when {
+                    Err(error) { errorProbe(error.kind -> mapTableError, error.offset) }
+                    Ok(probed) { Result<prefix.Probe, Error>.Ok(probed) }
+                }
+            }
+        }
+    }
+
+    public lengthExtraBits: self, code: Int -> Result<Int, Error> {
+        code >= 0 and code < 26
+            -> unless { errorInt(errors.Kind.InvalidBlockSwitch, UIntSize(code)) -> return }
+        Result<Int, Error>.Ok(code -> blockLengthBits)
+    }
+
+    public switchedType: self, code: Int, previousType: Int, currentType: Int -> Result<Int, Error> {
+        code >= 0 and code < self.typeCount + 2
+            -> unless { errorInt(errors.Kind.InvalidBlockSwitch, UIntSize(code)) -> return }
+        code == 0 -> if {
+            previousType
+        } else {
+            code == 1 -> if { currentType + 1 } else { code - 2 }
+        } => nextType!
+        nextType! >= self.typeCount -> if { nextType! - self.typeCount => nextType! }
+        nextType! >= 0 and nextType! < self.typeCount
+            -> unless { errorInt(errors.Kind.InvalidBlockSwitch, UIntSize(nextType!)) -> return }
+        Result<Int, Error>.Ok(nextType!)
+    }
+
+    public decodedLength: self, code: Int, extra: Int -> Result<Int, Error> {
+        code >= 0 and code < 26 and extra >= 0
+            -> unless { errorInt(errors.Kind.InvalidBlockSwitch, UIntSize(code)) -> return }
+        (code -> blockLengthOffset) + extra => length
+        length > 0
+            -> unless { errorInt(errors.Kind.InvalidBlockSwitch, UIntSize(length)) -> return }
+        Result<Int, Error>.Ok(length)
+    }
+
+    public switch: self, input: [UInt8], position: prefix.Position, previousType: Int, currentType: Int -> Result<BlockSwitch, Error> {
+        self.typeCount > 1
+            -> unless { errorBlockSwitch(errors.Kind.InvalidBlockSwitch, UIntSize(position.byteIndex)) -> return }
+        self.typeTable -> when {
+            Absent { errorBlockSwitch(errors.Kind.InvalidBlockSwitch, UIntSize(position.byteIndex)) }
+            Present(typeTable) {
+                typeTable -> readSymbol(input, position)? => typeCode
+                self.lengthTable -> when {
+                    Absent { errorBlockSwitch(errors.Kind.InvalidBlockSwitch, UIntSize(typeCode.position.byteIndex)) }
+                    Present(lengthTable) {
+                        lengthTable -> readSymbol(input, typeCode.position)? => lengthCode
+                        lengthCode.symbol -> blockLengthBits => extraWidth
+                        input -> readBits(lengthCode.position, extraWidth)? => extra
+                        typeCode.symbol == 0 -> if {
+                            previousType
+                        } else {
+                            typeCode.symbol == 1 -> if { currentType + 1 } else { typeCode.symbol - 2 }
+                        } => nextType!
+                        nextType! >= self.typeCount -> if { nextType! - self.typeCount => nextType! }
+                        (lengthCode.symbol -> blockLengthOffset) + extra.value => length
+                        length <= 0 -> if {
+                            errorBlockSwitch(errors.Kind.InvalidBlockSwitch, UIntSize(extra.position.byteIndex))
+                        } else {
+                            Result<BlockSwitch, Error>.Ok(BlockSwitch {
+                                typeIndex: nextType!
+                                length: length
+                                position: extra.position
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

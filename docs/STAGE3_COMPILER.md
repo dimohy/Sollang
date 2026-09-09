@@ -21,13 +21,31 @@ sollang bind-cpp <source-or-project> [options]
 ```
 
 Project, product, package, workspace, dependency, lock-file, diagnostic,
-stdout/stderr, and exit-code behavior is checked against the C# reference
-compiler during development. The C# compiler is an oracle and bootstrap input,
-not a release asset.
+stdout/stderr, and exit-code behavior is checked against the C# bootstrap after
+the `.slg` candidate passes its focused proof. The C# compiler is a recovery
+bootstrap and independent oracle, not the design authority or a release asset.
+
+## Development authority order
+
+Normal compiler work follows this order:
+
+1. implement the contract in the `.slg` self-host compiler;
+2. compile it with the newest compatible verified SLG executable and run the
+   focused Typed IR, LLVM, and execution fixture; prefer fixed-point Stage 3,
+   while a receipt-bound Stage 2 may bridge one generation when the older Stage
+   3 cannot represent current source;
+3. implement the same contract in C# and run the managed differential oracle;
+4. require Stage 2/Stage 3 fixed-point convergence before release or global
+   installation.
+
+If no verified SLG seed can parse or represent the new compiler source, a
+minimal C# bootstrap bridge may precede step 1. That exception must be explicit
+and cannot become a second semantic authority.
 
 ## Bootstrap and fixed-point proof
 
-The release chain is:
+The cold trust-bootstrap release chain, used only when a verified SLG seed is
+unavailable or when rebuilding the complete trust proof, is:
 
 1. the C# bootstrap compiles the complete `.slg` compiler into Stage 2;
 2. Stage 2 compiles the same ordered source manifest into Stage 3;
@@ -36,12 +54,20 @@ The release chain is:
 5. the immutable native executable must pass the complete public CLI matrix;
 6. the packaged executable hash must equal that verified Stage 3 executable.
 
-Current fixed-point evidence:
+After the fixed-point and artifact gates pass, the Stage 3 verifier publishes a
+schema-bound `.stage3-seed.json` beside the copied feedback seed. Formal SLG
+Stage 2 accepts that seed only after rehashing the retained Stage 2 and Stage 3
+executables, LLVM, bitcode, completion receipts, and Stage 3 input receipt. The
+receipt also fixes the target, Stage 3 gate producer, O1 optimization profile,
+and normalized fixed-point LLVM hash. A sibling executable SHA-256 or a Stage 1
+generation receipt alone does not authorize formal fixed-point seeding.
+
+Current fixed-point evidence for the 2026-08-25 source tree:
 
 | Target | LLVM bytes | Normalized LLVM SHA-256 | Native executable SHA-256 |
 | --- | ---: | --- | --- |
-| Windows x64 | 28,802,282 | `7C4A882A4F806486EA717859DC7FCC55CAD940A806F4F811E1D2F519C5D2A55D` | `D7005D5AC02EF46A13C77B534EDB1124E46B9CC9DBBE17DFE7F6FE35E20AEF97` |
-| Linux x64 | 28,781,912 | `E09C5A33281E093AAC982E3C66656BF3D98A9A94518FFC4628A40033DF312D47` | `001838A4B3DA37D7493201BBA64DEF24EA35773C14CD0DE90F8837ED91D1055C` |
+| Windows x64 | 30,318,335 | `E46E5C75F457F738B09EEF86DF8380124BD0F953BEC19684F129F02561DC98FC` | `C9ED64FB9E1F33FB3F078D50DD1B6D2E20975FC0C79C3082F75159B9494A0585` |
+| Linux x64 | 30,297,787 | `DAD5300890F22B96A05EADA3FA84CF03CE6606679E7BFA79B89804558096F4CE` | `AD21BC826C944A270716AA57A12E137E7AEDAAB56579FED2771554D8BDB62CE1` |
 
 The complete logical catalog contains 20 user examples, 995 regression cases,
 and 274 diagnostics. Windows passes 1269/1269 selected cases. Linux passes all
@@ -60,7 +86,12 @@ the following retained matrices:
 
 ## Native-only release boundary
 
-`publish-release.ps1` accepts only the hash-bound fixed-point executables. For
+`publish-release.ps1` accepts only a complete receipt-bound fixed-point artifact
+set. A custom `WindowsStage3Path` or `LinuxStage3Path` must retain its sibling
+Stage 2 compiler, Stage 3 LLVM/bitcode, Linux object, and published input/output
+receipts; packaging recomputes the current ordered-source input fingerprint
+and rechecks Stage2/Stage3 normalized LLVM equality before copying the
+executable. For
 0.4 it rejects `.dll`, `.deps.json`, `.runtimeconfig.json`, `.pdb`, and Stage
 driver files, verifies `sollang --version`, and uses the compiler and bundled
 standard library to build and run a smoke program before archiving.

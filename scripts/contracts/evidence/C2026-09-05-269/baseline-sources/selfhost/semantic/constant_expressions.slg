@@ -1,0 +1,253 @@
+namespace sollang.compiler.semantic.constant_expressions
+
+import sollang.compiler.ast as ast
+import sollang.compiler.syntax as syntax
+import sollang.compiler.semantic.constant_integer as arithmetic
+import syntax.generated.slg as grammar
+
+public enum ErrorKind {
+    NonConstant
+    Overflow
+    DivisionByZero
+    InvalidAst
+}
+
+public struct Error {
+    public kind: ErrorKind
+    public start: UIntSize
+    public length: UIntSize
+}
+
+struct Binary {
+    operation: arithmetic.Operator
+    left: Int
+    right: Int
+}
+
+enum Operation {
+    Literal(Long)
+    Item
+    Negate(Int)
+    Binary(Binary)
+}
+
+struct Instruction {
+    operation: Operation
+    start: UIntSize
+    length: UIntSize
+}
+
+# The plan owns its reusable value slots. Evaluation never reparses the source
+# or scans AST nodes, and each operand refers to an earlier instruction.
+public struct Plan {
+    instructions: [Instruction; ~]
+    values: [Long; ~]
+}
+
+failure kind: ErrorKind, node: ast.AstNode -> Error {
+    Error { kind: kind, start: node.start, length: node.length }
+}
+
+integer source: Text, node: ast.AstNode -> Result<Long, Error> {
+    Long(0) => value!
+    UIntSize(0) => offset!
+    node.length == 0 -> if {
+        ErrorKind.NonConstant -> failure(node) -> Result<Long, Error>.Err -> return
+    }
+    offset! < node.length -> while {
+        source -> byte(node.start + offset!) => current
+        current != 95 -> if {
+            current < 48 or current > 57 -> if {
+                ErrorKind.NonConstant -> failure(node) -> Result<Long, Error>.Err -> return
+            }
+            Long(current) - 48 => digit
+            value! > (9_223_372_036_854_775_807 - digit) / 10
+                -> if {
+                    ErrorKind.Overflow -> failure(node) -> Result<Long, Error>.Err -> return
+                }
+            value! * 10 + digit => value!
+        }
+        offset! + 1 => offset!
+    }
+    value! -> Result<Long, Error>.Ok
+}
+
+operator kind: Int -> Option<arithmetic.Operator> {
+    kind == grammar.tokenIdPlus() -> if {
+        arithmetic.Operator.Add -> Option<arithmetic.Operator>.Some -> return
+    }
+    kind == grammar.tokenIdMinus() -> if {
+        arithmetic.Operator.Subtract -> Option<arithmetic.Operator>.Some -> return
+    }
+    kind == grammar.tokenIdStar() -> if {
+        arithmetic.Operator.Multiply -> Option<arithmetic.Operator>.Some -> return
+    }
+    kind == grammar.tokenIdSlash() -> if {
+        arithmetic.Operator.Divide -> Option<arithmetic.Operator>.Some -> return
+    }
+    kind == grammar.tokenIdPercent() -> if {
+        arithmetic.Operator.Remainder -> Option<arithmetic.Operator>.Some -> return
+    }
+    Option<arithmetic.Operator>.None
+}
+
+operation source: Text, node: ast.AstNode, itemName: Text, childCount: Int, left: Int, right: Int -> Result<Operation, Error> {
+    node.kind == 14 and childCount == 0 -> if {
+        source -> integer(node)? => value
+        Operation.Literal(value) -> Result<Operation, Error>.Ok -> return
+    }
+    node.kind == 15 and childCount == 0 -> if {
+        source -> slice(node.start, node.length) => name
+        name == itemName and (itemName -> len) > 0 -> if {
+            Operation.Item -> Result<Operation, Error>.Ok -> return
+        }
+    }
+    node.kind == 22 and childCount == 1
+        and node.operatorKind == grammar.tokenIdMinus()
+        -> if {
+            Operation.Negate(left) -> Result<Operation, Error>.Ok -> return
+        }
+    (node.kind == 20 or node.kind == 21) and childCount == 2
+        -> if {
+            node.operatorKind -> operator -> when {
+                Some(selected) {
+                    Operation.Binary(Binary { operation: selected, left: left, right: right }) => binary
+                    binary -> Result<Operation, Error>.Ok -> return
+                }
+                None {}
+            }
+        }
+    ErrorKind.NonConstant -> failure(node) -> Result<Operation, Error>.Err
+}
+
+# Build a source-local child graph once. A reverse breadth-first traversal is
+# topological even when AST normalization appends synthetic binary nodes.
+public compile source: Text, nodes: ref [ast.AstNode; ~], root: Int, itemName: Text -> Result<Plan, Error> {
+    nodes -> len => count
+    root < 0 or root >= count -> if {
+        Error { kind: ErrorKind.InvalidAst, start: 0, length: 0 } => error
+        error -> Result<Plan, Error>.Err -> return
+    }
+    [Int; ~] => firstChild!
+    [Int; ~] => nextSibling!
+    [Int; ~] => mapped!
+    [Bool; ~] => selected!
+    0 => index!
+    index! < count -> while {
+        firstChild! -> push(-1)
+        nextSibling! -> push(-1)
+        mapped! -> push(-1)
+        selected! -> push(false)
+        index! + 1 => index!
+    }
+    0 => edge!
+    edge! < count -> while {
+        nodes[edge!].parent => parent
+        parent >= count -> if {
+            ErrorKind.InvalidAst -> failure(nodes[edge!]) -> Result<Plan, Error>.Err -> return
+        }
+        parent >= 0 -> if {
+            firstChild![parent] => nextSibling![edge!]
+            edge! => firstChild![parent]
+        }
+        edge! + 1 => edge!
+    }
+    [Int; ~] => work!
+    work! -> push(root)
+    true => selected![root]
+    0 => visit!
+    visit! < (work! -> len) -> while {
+        firstChild![work![visit!]] => child!
+        child! >= 0 -> while {
+            selected![child!] -> if {
+                ErrorKind.InvalidAst -> failure(nodes[child!]) -> Result<Plan, Error>.Err -> return
+            }
+            true => selected![child!]
+            work! -> push(child!)
+            nextSibling![child!] => child!
+        }
+        visit! + 1 => visit!
+    }
+    [Instruction; ~] => instructions!
+    [Long; ~] => values!
+    work! -> len => remaining!
+    remaining! > 0 -> while {
+        remaining! - 1 => remaining!
+        work![remaining!] => current
+        firstChild![current] => child!
+        -1 => leftAst!
+        -1 => rightAst!
+        0 => childCount!
+        child! >= 0 -> while {
+            childCount! + 1 => childCount!
+            leftAst! < 0 -> if {
+                child! => leftAst!
+            } else {
+                nodes[child!].start < nodes[leftAst!].start -> if {
+                    leftAst! => rightAst!
+                    child! => leftAst!
+                } else {
+                    child! => rightAst!
+                }
+            }
+            nextSibling![child!] => child!
+        }
+        -1 => left!
+        -1 => right!
+        leftAst! >= 0 -> if { mapped![leftAst!] => left! }
+        rightAst! >= 0 -> if { mapped![rightAst!] => right! }
+        # Precedence rules retain a one-child shell around a unary expression.
+        # Its scanned operator belongs to that child, not to a binary operation.
+        childCount! == 1 and (nodes[current].kind == 20 or nodes[current].kind == 21)
+            -> if {
+                left! => mapped![current]
+                continue
+            }
+        source -> operation(nodes[current], itemName, childCount!, left!, right!)? => value
+        instructions! -> len => instructionIndex
+        instructions! -> push(Instruction {
+            operation: value
+            start: nodes[current].start
+            length: nodes[current].length
+        })
+        values! -> push(0)
+        instructionIndex => mapped![current]
+    }
+    Plan { instructions: instructions!, values: values! } -> Result<Plan, Error>.Ok
+}
+
+setAt values: mut [Long; ~], index: Int, value: Long -> Unit {
+    value => values[index]
+}
+
+impl Plan {
+    public evaluate: mut self, item: Long -> Result<Long, Error> {
+        0 => index!
+        index! < (self.instructions -> len) -> while {
+            self.instructions[index!] => instruction
+            instruction.operation -> when {
+                Literal(value) { value -> Result<Long, arithmetic.Error>.Ok }
+                Item { item -> Result<Long, arithmetic.Error>.Ok }
+                Negate(operand) {
+                    Long(0) -> arithmetic.evaluateBinary(self.values[operand], arithmetic.Operator.Subtract)
+                }
+                Binary(binary) {
+                    self.values[binary.left] -> arithmetic.evaluateBinary(self.values[binary.right], binary.operation)
+                }
+            } => evaluated
+            evaluated -> when {
+                Ok(value) { self.values -> setAt(index!, value) }
+                Err(error) {
+                    error -> when {
+                        Overflow => ErrorKind.Overflow
+                        DivisionByZero => ErrorKind.DivisionByZero
+                    } => kind
+                    Error { kind: kind, start: instruction.start, length: instruction.length } => failure
+                    failure -> Result<Long, Error>.Err -> return
+                }
+            }
+            index! + 1 => index!
+        }
+        self.values[index! - 1] -> Result<Long, Error>.Ok
+    }
+}

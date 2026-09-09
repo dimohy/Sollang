@@ -1,0 +1,57 @@
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    # A nominal path inside a factory argument must not replace the factory's
+    # canonical result type when resolving the bound value's instance method.
+    """"
+        namespace fixture.conversion
+
+        public struct FirstValue {
+            public value: Int
+        }
+
+        public struct SecondValue {
+            public value: Int
+        }
+
+        impl FirstValue {
+            public identity: self -> Int => self.value
+        }
+
+        impl SecondValue {
+            public identity: self -> Int => self.value
+        }
+
+        public convert input: FirstValue -> SecondValue => SecondValue {
+            value: input.value + 1
+        }
+    """" => librarySource
+
+    """"
+        namespace sample
+
+        import fixture.conversion as conversion
+
+        main {
+            conversion.FirstValue { value: 41 } -> conversion.convert => converted
+            converted -> identity => answer
+            answer -> println
+        }
+    """" => sampleSource
+
+    [librarySource, sampleSource; ~] -> semanticContext.prepare => prepared
+    0 => correctOwner!
+    0 => wrongOwner!
+    0 => failed!
+    0 => callIndex!
+    callIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[callIndex!] => call
+        call.sourceModule == 1 -> if {
+            call.status != 0 -> if { failed! + 1 => failed! }
+            call.functionSymbol == 7 -> if { correctOwner! + 1 => correctOwner! }
+            call.functionSymbol == 5 -> if { wrongOwner! + 1 => wrongOwner! }
+        }
+        callIndex! + 1 => callIndex!
+    }
+    "qualified-result-owner=$(correctOwner!),wrong=$(wrongOwner!),failed=$(failed!)" -> println
+}

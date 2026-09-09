@@ -1,0 +1,30 @@
+import sollang.compiler.llvm.invariant_rules as invariantRules
+
+# The function-boundary failure and aggregate child ordering rules remain a
+# small independently compilable unit, separate from full compiler emission.
+main {
+    invariantRules.irParentOwnerAccepted(2, 6, 4, 0) => crossOwner
+    invariantRules.irParentOwnerAccepted(2, 6, 0, 0) => sameOwner
+    invariantRules.irParentOwnerAccepted(-1, 6, 4, -1) => noParent
+
+    -1 => selected!
+    false => exactSelected!
+    invariantRules.aggregateChildReplacesSelection(true, false, exactSelected!)
+        -> if { 1 => selected! }
+    invariantRules.aggregateChildReplacesSelection(true, false, exactSelected!)
+        -> if { 2 => selected! }
+    invariantRules.aggregateChildReplacesSelection(true, true, exactSelected!)
+        -> if {
+            3 => selected!
+            true => exactSelected!
+        }
+    invariantRules.aggregateChildReplacesSelection(true, false, exactSelected!)
+        -> if { 4 => selected! }
+    invariantRules.aggregateChildReplacesSelection(false, true, exactSelected!)
+        -> if { 4 => selected! }
+    invariantRules.aggregateChildReplacesSelection(true, true, exactSelected!)
+        -> if { 5 => selected! }
+
+    selected! => finalSelected
+    "parent owners=$crossOwner,$sameOwner,$noParent; selected=$finalSelected" -> println
+}

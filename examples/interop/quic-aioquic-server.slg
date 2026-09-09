@@ -1,27 +1,27 @@
 import sys.io as io
-import sys.quic as quic
+import std.net.quic as quic
 import sys.runtime as runtime
 
 serve: -> Result<Unit, quic.QuicError> uses Network, Random, Clock, Console {
     quic.generateIdentity()? => identity
-    quic.bind(
-        quic.Ipv4Endpoint { a: 127, b: 0, c: 0, d: 1, port: 44_433 },
-        identity,
-        [])? => endpoint
+    quic.bind(quic.loopback(44_433))? => endpoint!
+    endpoint! -> listen(identity)? => listener!
     io.println("ready=44433")
     runtime.flushStandardOutput()
-    quic.accept(endpoint)? => connection!
+    listener! -> accept(endpoint!)? => connection!
+    listener! -> close(endpoint!)
     io.println("accepted")
     runtime.flushStandardOutput()
-    quic.acceptBi(connection!)? => channel!
+    connection! -> acceptBi(endpoint!)? => channel!
     io.println("stream-open")
     runtime.flushStandardOutput()
-    quic.receive(connection!, channel!, 16)? => request
+    channel! -> receive(connection!, endpoint!, 16)? => request
     io.println("stream-read")
     runtime.flushStandardOutput()
-    quic.send(connection!, channel!, [112, 111, 110, 103])? => sent
-    quic.finish(connection!, channel!)?
-    quic.close(connection!, 0)?
+    channel! -> send(connection!, endpoint!, [112, 111, 110, 103])? => sent
+    channel! -> finish(connection!, endpoint!)?
+    connection! -> close(endpoint!, 0)?
+    endpoint! -> close
     io.println("received=$(request -> len)")
     Result<Unit, quic.QuicError>.Ok
 }

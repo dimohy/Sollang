@@ -1,0 +1,56 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+borrow bytes: ref [UInt8; ~] -> ref [UInt8; ~] {
+    bytes
+}
+
+sendBuffer bytes: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> socket.SendBuffer {
+    socket.SendBuffer {
+        bytes: bytes -> borrow
+        offset: offset
+        length: length
+    }
+}
+
+# Sends two caller-owned byte ranges with one native gather operation.
+observe local: net.Endpoint -> Result<Bool, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: local
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localEndpoint? => endpoint
+    endpoint -> connect? => client
+    listener -> accept? => server
+
+    [UInt8(10), 11, 12; ~] => first
+    [UInt8(20), 21, 22, 23; ~] => second
+    [
+        first -> sendBuffer(1, 2),
+        second -> sendBuffer(0, 3)
+    ] => buffers
+
+    client -> sendVectored(buffers)? => sent
+    server -> receive(16)? => received
+    client -> close
+    server -> close
+    listener -> close
+
+    Result<Bool, socket.SocketError>.Ok(
+        sent == 5
+            and (received -> len) == 5
+            and received[0] == 11
+            and received[1] == 12
+            and received[2] == 20
+            and received[3] == 21
+            and received[4] == 22)
+}
+
+main {
+    net.loopback(0) -> unified -> observe -> when {
+        Ok(valid) { "socket-vectored=$valid" -> println }
+        Err(error) { "socket-vectored-error=$(error.code)" -> println }
+    }
+}

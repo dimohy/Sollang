@@ -1,0 +1,102 @@
+namespace std.compress.brotli.literal_context
+
+# RFC 7932 section 7.1 literal context modes. UTF8 and Signed use the exact
+# 256-entry Lut0/Lut1/Lut2 mappings expressed as allocation-free ranges.
+public enum Mode {
+    Lsb6
+    Msb6
+    Utf8
+    Signed
+}
+
+utf8Last byte: Int -> Int => byte -> when {
+    <= 8 { 0 }
+    <= 10 { 4 }
+    <= 12 { 0 }
+    == 13 { 4 }
+    <= 31 { 0 }
+    == 32 { 8 }
+    == 33 { 12 }
+    == 34 { 16 }
+    <= 36 { 12 }
+    == 37 { 20 }
+    == 38 { 12 }
+    == 39 { 16 }
+    == 40 { 24 }
+    == 41 { 28 }
+    <= 43 { 12 }
+    == 44 { 32 }
+    == 45 { 12 }
+    == 46 { 36 }
+    == 47 { 12 }
+    <= 57 { 44 }
+    <= 59 { 32 }
+    == 60 { 24 }
+    == 61 { 40 }
+    == 62 { 28 }
+    <= 64 { 12 }
+    == 65 { 48 }
+    <= 68 { 52 }
+    == 69 { 48 }
+    <= 72 { 52 }
+    == 73 { 48 }
+    <= 78 { 52 }
+    == 79 { 48 }
+    <= 84 { 52 }
+    == 85 { 48 }
+    <= 90 { 52 }
+    == 91 { 24 }
+    == 92 { 12 }
+    == 93 { 28 }
+    <= 96 { 12 }
+    == 97 { 56 }
+    <= 100 { 60 }
+    == 101 { 56 }
+    <= 104 { 60 }
+    == 105 { 56 }
+    <= 110 { 60 }
+    == 111 { 56 }
+    <= 116 { 60 }
+    == 117 { 56 }
+    <= 122 { 60 }
+    == 123 { 24 }
+    == 124 { 12 }
+    == 125 { 28 }
+    == 126 { 12 }
+    == 127 { 0 }
+    <= 191 { byte % 2 }
+    else { 2 + byte % 2 }
+}
+
+utf8Second byte: Int -> Int => byte -> when {
+    <= 32 { 0 }
+    <= 47 { 1 }
+    <= 57 { 2 }
+    <= 64 { 1 }
+    <= 90 { 2 }
+    <= 96 { 1 }
+    <= 122 { 3 }
+    <= 126 { 1 }
+    <= 223 { 0 }
+    else { 2 }
+}
+
+signedClass byte: Int -> Int => byte -> when {
+    == 0 { 0 }
+    <= 15 { 1 }
+    <= 63 { 2 }
+    <= 127 { 3 }
+    <= 191 { 4 }
+    <= 239 { 5 }
+    <= 254 { 6 }
+    else { 7 }
+}
+
+impl Mode {
+    public id: self, previous: UInt8, secondPrevious: UInt8 -> Int => self -> when {
+        Lsb6 { Int(previous) % 64 }
+        Msb6 { Int(previous) / 4 }
+        Utf8 { (Int(previous) -> utf8Last) + (Int(secondPrevious) -> utf8Second) }
+        Signed { (Int(previous) -> signedClass) * 8 + (Int(secondPrevious) -> signedClass) }
+    }
+}

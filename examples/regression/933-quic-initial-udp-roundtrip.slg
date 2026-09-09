@@ -1,8 +1,9 @@
-import sys.quic.error as errors
-import sys.quic.initial_engine as initial
-import sys.quic.keys
-import sys.quic.tls_hello as hello
-import sys.socket as socket
+import std.net.quic.error as errors
+import std.net as net
+import std.net.quic.initial_engine as initial
+import std.net.quic.keys
+import std.net.quic.tls_hello as hello
+import std.net.socket as socket
 
 randomBytes: -> [UInt8; 32] => [1; 32]
 clientKeyShare: -> [UInt8; 32] => [2; 32]
@@ -15,29 +16,29 @@ ioError code: Int32 -> errors.Error {
     errors.Error { kind: errors.Kind.Io, code: UInt64(UInt32(code)) }
 }
 
-bind endpoint: socket.Endpoint -> Result<socket.UdpSocket, errors.Error> uses Network {
-    socket.bindDatagram({ endpoint: endpoint, reuseAddress: true }) -> when {
+bindQuic endpoint: net.Endpoint -> Result<socket.UdpSocket, errors.Error> uses Network {
+    socket.DatagramBindOptions { endpoint: endpoint, reuseAddress: true } -> bind -> when {
         Ok(datagram) { Result<socket.UdpSocket, errors.Error>.Ok(datagram) }
         Err(error) { Result<socket.UdpSocket, errors.Error>.Err(ioError(error.code)) }
     }
 }
 
-localPort datagram: socket.UdpSocket -> Result<UInt16, errors.Error> uses Network {
-    socket.localPort(datagram) -> when {
+quicLocalPort datagram: socket.UdpSocket -> Result<UInt16, errors.Error> uses Network {
+    datagram -> localPort -> when {
         Ok(port) { Result<UInt16, errors.Error>.Ok(port) }
         Err(error) { Result<UInt16, errors.Error>.Err(ioError(error.code)) }
     }
 }
 
-sendTo datagram: socket.UdpSocket, endpoint: socket.Endpoint, bytes: ref [UInt8; ~] -> Result<UIntSize, errors.Error> uses Network {
-    socket.sendTo(datagram, endpoint, bytes) -> when {
+sendQuic datagram: socket.UdpSocket, endpoint: net.Endpoint, bytes: ref [UInt8; ~] -> Result<UIntSize, errors.Error> uses Network {
+    datagram -> sendTo(endpoint, bytes) -> when {
         Ok(count) { Result<UIntSize, errors.Error>.Ok(count) }
         Err(error) { Result<UIntSize, errors.Error>.Err(ioError(error.code)) }
     }
 }
 
-receiveFrom datagram: socket.UdpSocket, maxBytes: UIntSize -> Result<socket.Datagram, errors.Error> uses Network {
-    socket.receiveFrom(datagram, maxBytes) -> when {
+receiveQuic datagram: socket.UdpSocket, maxBytes: UIntSize -> Result<socket.Datagram, errors.Error> uses Network {
+    datagram -> receiveFrom(maxBytes) -> when {
         Ok(received) { Result<socket.Datagram, errors.Error>.Ok(received) }
         Err(error) { Result<socket.Datagram, errors.Error>.Err(ioError(error.code)) }
     }
@@ -52,9 +53,9 @@ requireFullDatagram count: UIntSize, expected: UIntSize -> Result<Unit, errors.E
 }
 
 roundtrip: -> Result<Bool, errors.Error> uses Network {
-    socket.Endpoint { address: "127.0.0.1", port: 0 } -> bind? => server
-    server -> localPort? => serverPort
-    socket.Endpoint { address: "127.0.0.1", port: 0 } -> bind? => client
+    net.loopback(0) -> unified -> bindQuic? => server
+    server -> quicLocalPort? => serverPort
+    net.loopback(0) -> unified -> bindQuic? => client
 
     hello.encodeClientHello(
         randomBytes(),
@@ -68,19 +69,18 @@ roundtrip: -> Result<Bool, errors.Error> uses Network {
         clientSourceConnectionId(),
         0,
         clientHello)? => clientPacket
-    socket.Endpoint { address: "127.0.0.1", port: serverPort } => serverEndpoint
-    sendTo(client, serverEndpoint, clientPacket)? => clientSent
+    net.loopback(serverPort) -> unified => serverEndpoint
+    sendQuic(client, serverEndpoint, clientPacket)? => clientSent
     requireFullDatagram(clientSent, UIntSize(clientPacket -> len))?
 
-    receiveFrom(server, 2_048)? => request
+    receiveQuic(server, 2_048)? => request
     initial.acceptClientInitial(request.bytes, 0)? => accepted
     hello.encodeServerHello(randomBytes(), serverKeyShare())? => serverHello
     initial.encodeServerInitial(accepted, serverSourceConnectionId(), 0, serverHello)? => serverPacket
-    socket.Endpoint { address: "127.0.0.1", port: request.sourcePort } => clientEndpoint
-    sendTo(server, clientEndpoint, serverPacket)? => serverSent
+    sendQuic(server, request.source, serverPacket)? => serverSent
     requireFullDatagram(serverSent, UIntSize(serverPacket -> len))?
 
-    receiveFrom(client, 2_048)? => response
+    receiveQuic(client, 2_048)? => response
     initial.openServerInitial(
         response.bytes,
         keys.version2(),

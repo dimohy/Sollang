@@ -1,0 +1,231 @@
+namespace std.net.socket
+
+import std.net as net
+import std.net.socket as model
+
+public struct ListenOptions {
+    public endpoint: net.Endpoint
+    public backlog: Int
+    public reuseAddress: Bool
+}
+
+public struct DatagramBindOptions {
+    public endpoint: net.Endpoint
+    public reuseAddress: Bool
+}
+
+# TcpListener and TcpStream are affine native resources. Their private tokens
+# cannot be constructed or copied by user code, and scope exit closes the
+# underlying socket exactly once.
+public struct TcpListener {
+    public token: UInt64
+}
+
+public struct TcpStream {
+    public token: UInt64
+}
+
+public struct UdpSocket {
+    public token: UInt64
+}
+
+# A zero-copy view used by TcpStream.sendVectored. The descriptor borrows the
+# caller-owned growable byte buffer; only the small descriptor array is walked
+# before the single platform send call.
+public struct SendBuffer {
+    public bytes: ref [UInt8; ~]
+    public offset: UIntSize
+    public length: UIntSize
+}
+
+# A caller-owned writable segment used by TcpStream.receiveVectored. The
+# descriptor owns its reusable storage; the call mutably borrows the descriptor
+# array and publishes each segment length only after a successful native read.
+public struct ReceiveBuffer {
+    public bytes: [UInt8; ~]
+}
+
+impl ReceiveBuffer {
+    public receivedLength: self -> Int => self.bytes -> len
+
+    public byteAt: self, index: Int -> UInt8 => self.bytes[index]
+}
+
+# The declaration order is the native shutdown ABI on Windows and Linux:
+# receive=0, send=1, both=2. Intrinsic lowering passes the tag directly.
+public enum ShutdownDirection {
+    Receive
+    Send
+    Both
+}
+
+# Read and Write report whether the next operation can complete without
+# blocking. Error observes terminal/error readiness without consuming data.
+public enum PollMode {
+    Read
+    Write
+    Error
+}
+
+# Interest is separate from readiness: callers describe what should wake the
+# reactor, while ReadyEvent reports every condition observed by that wait.
+public enum InterestMode {
+    Read
+    Write
+    ReadWrite
+}
+
+public enum SocketSource {
+    Listener(ref TcpListener)
+    Stream(ref TcpStream)
+    Datagram(ref UdpSocket)
+}
+
+public struct Interest {
+    public key: UInt64
+    public source: SocketSource
+    public mode: InterestMode
+}
+
+public struct ReadyEvent {
+    public key: UInt64
+    public readable: Bool
+    public writable: Bool
+    public error: Bool
+}
+
+# A reusable multi-socket wait policy. The value owns its explicit event limit
+# and retains registered socket borrows until clear releases them.
+public struct Reactor {
+    public maximumEvents: UIntSize
+    public interests: [Interest; ~]
+}
+
+borrowListener value: ref TcpListener -> ref TcpListener => value
+
+borrowStream value: ref TcpStream -> ref TcpStream => value
+
+borrowDatagram value: ref UdpSocket -> ref UdpSocket => value
+
+impl Reactor {
+    public registerListener: mut self, listener: ref TcpListener, key: UInt64 -> Result<Unit, SocketError> {
+        UIntSize(self.interests -> len) >= self.maximumEvents
+            -> if {
+                Result<Unit, SocketError>.Err(SocketError { kind: model.SocketErrorKind.InvalidArgument, code: 0 }) -> return
+            }
+        self.interests -> push(Interest { key: key, source: model.SocketSource.Listener(borrowListener(listener)), mode: model.InterestMode.Read })
+        Result<Unit, SocketError>.Ok
+    }
+
+    public registerStream: mut self, connection: ref TcpStream, key: UInt64, mode: InterestMode -> Result<Unit, SocketError> {
+        UIntSize(self.interests -> len) >= self.maximumEvents
+            -> if {
+                Result<Unit, SocketError>.Err(SocketError { kind: model.SocketErrorKind.InvalidArgument, code: 0 }) -> return
+            }
+        self.interests -> push(Interest { key: key, source: model.SocketSource.Stream(borrowStream(connection)), mode: mode })
+        Result<Unit, SocketError>.Ok
+    }
+
+    public registerDatagram: mut self, datagram: ref UdpSocket, key: UInt64, mode: InterestMode -> Result<Unit, SocketError> {
+        UIntSize(self.interests -> len) >= self.maximumEvents
+            -> if {
+                Result<Unit, SocketError>.Err(SocketError { kind: model.SocketErrorKind.InvalidArgument, code: 0 }) -> return
+            }
+        self.interests -> push(Interest { key: key, source: model.SocketSource.Datagram(borrowDatagram(datagram)), mode: mode })
+        Result<Unit, SocketError>.Ok
+    }
+
+    public clear: mut self -> Unit {
+        [Interest; ~] => self.interests
+    }
+
+    public registrationCount: self -> UIntSize => UIntSize(self.interests -> len)
+}
+
+impl ReadyEvent {
+    public registrationKey: self -> UInt64 => self.key
+
+    public canRead: self -> Bool => self.readable
+
+    public canWrite: self -> Bool => self.writable
+
+    public hasError: self -> Bool => self.error
+}
+
+# The source is the same numeric endpoint value accepted by sendTo. Truncated
+# reports that the caller-selected maximum discarded a datagram tail; bytes
+# always contains only the stored prefix.
+public struct Datagram {
+    public source: net.Endpoint
+    public bytes: [UInt8; ~]
+    public truncated: Bool
+}
+
+# Allocation-free UDP receipt metadata. The payload itself remains in the
+# caller-owned growable buffer passed to UdpSocket.receiveFromInto. Count is
+# the stored prefix length on every platform, while truncated reports loss.
+public struct DatagramReceipt {
+    public source: net.Endpoint
+    public count: UIntSize
+    public truncated: Bool
+}
+
+public enum SocketErrorKind {
+    InvalidAddress
+    InvalidArgument
+    AddressInUse
+    ConnectionRefused
+    ConnectionReset
+    TimedOut
+    Interrupted
+    Unsupported
+    Other
+    WriteZero
+    WouldBlock
+}
+
+public struct SocketError {
+    public kind: SocketErrorKind
+    public code: Int32
+}
+
+impl TcpStream {
+    # Completes the caller-owned byte range without copying it. A successful
+    # zero-byte kernel write cannot make progress and is reported explicitly
+    # instead of spinning forever.
+    public sendAll: self, bytes: ref [UInt8; ~] -> Result<Unit, SocketError> uses Network {
+        UIntSize(bytes -> len) => length
+        UIntSize(0) => offset!
+        offset! < length -> while {
+            self -> sendRange(bytes, offset!, length - offset!)? => sent
+            sent == 0 -> if {
+                Result<Unit, SocketError>.Err(SocketError {
+                    kind: model.SocketErrorKind.WriteZero
+                    code: 0
+                }) -> return
+            }
+            offset! + sent => offset!
+        }
+        Result<Unit, SocketError>.Ok
+    }
+}
+
+# Runtime bindings for these public resource types live in
+# stdlib/sys/runtime/socket.slg. Keeping the ABI declarations in a separate
+# source fragment preserves direct intrinsic lowering without a wrapper frame.
+# `TcpStream.receive(maxBytes)` and `UdpSocket.receiveFrom(maxBytes)` are the
+# allocating convenience paths. High-throughput code reserves a growable byte
+# buffer once and calls `receiveInto(buffer!)` or `receiveFromInto(buffer!)`;
+# the runtime receives directly into its capacity and publishes the received
+# length only after success. `receiveAppend(buffer!)` instead writes into the
+# unused tail and extends the existing length after success, allowing bounded
+# parsers to accumulate split input without an intermediate allocation or copy.
+# `peekInto(buffer!)` follows the same caller-owned stream-buffer contract but
+# leaves queued bytes available for the next peek or consuming receive.
+# Keep-alive and linger remain instance policies on the same affine stream.
+# Linger uses Option<Duration>: None disables it and Some uses the kernel's
+# effective whole-second duration without allocating or caching a policy object.
+# Synchronous read/write timeouts use Option<std.time.Duration>: Some(duration)
+# sets a positive relative timeout and None restores blocking behavior. Absolute
+# deadlines belong to the future asynchronous reactor rather than these kernel
+# socket options.

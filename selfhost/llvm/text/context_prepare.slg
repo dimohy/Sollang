@@ -1,0 +1,1139 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.environment_runtime as environmentRuntime
+import sollang.compiler.llvm.emitter.socket_runtime as socketRuntime
+import sollang.compiler.llvm.emitter.dns_runtime as dnsRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.constant_collection_lowering as constantLowering
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sollang.compiler.source_style as sourceStyle
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+import sys.runtime as runtime
+
+
+# Build the by-value dependency graph once. Pointer-backed containers terminate
+# layout dependencies even when their element recursively names the owner.
+valueLayoutCycles types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], references: ref [typeIds.TypeReference; ~], ranges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~], referenceByAst: ref [Int; ~] -> [Bool; ~] {
+    [Int; ~] => heads!
+    [Int; ~] => pending!
+    [Int; ~] => owners!
+    [Int; ~] => next!
+    [Bool; ~] => cyclic!
+    types -> each current {
+        heads! -> push(-1)
+        pending! -> push(0)
+        cyclic! -> push(false)
+    }
+    # Source ranges already assign disjoint symbol offsets. Reuse that identity
+    # instead of packing module/symbol pairs or comparing every nominal field.
+    [Int; ~] => canonicalBySymbol!
+    [Int; ~] => firstVariant!
+    [Int; ~] => nextVariant!
+    declarations -> each declaration {
+        canonicalBySymbol! -> push(-1)
+        firstVariant! -> push(-1)
+        nextVariant! -> push(-1)
+    }
+    [Int; ~] => canonicalByType!
+    [Int; ~] => firstField!
+    0 => typeIndex!
+    typeIndex! < (types -> len) -> while {
+        types[typeIndex!] => current
+        typeIndex! => canonical!
+        current.kind == 1 and (current.origin == 0 or current.origin == 2)
+            and current.module >= 0 and current.module < (ranges -> len)
+            -> if {
+                ranges[current.module] => sourceRange
+                current.symbol >= 0 and current.symbol < sourceRange.symbolCount
+                    -> if {
+                        sourceRange.symbolStart + current.symbol => symbolIndex
+                        canonicalBySymbol![symbolIndex] < 0
+                            -> if { typeIndex! => canonicalBySymbol![symbolIndex] }
+                        canonicalBySymbol![symbolIndex] => canonical!
+                    }
+            }
+        canonicalByType! -> push(canonical!)
+        firstField! -> push(-1)
+        typeIndex! + 1 => typeIndex!
+    }
+    [Int; ~] => nextField!
+    0 => fieldIndex!
+    fieldIndex! < (fields -> len) -> while {
+        fields[fieldIndex!] => field
+        nextField! -> push(-1)
+        field.status == 0 and field.ownerType >= 0 and field.ownerType < (types -> len)
+            and field.fieldType >= 0
+            -> if {
+                canonicalByType![field.ownerType] => owner
+                firstField![owner] => nextField![fieldIndex!]
+                fieldIndex! => firstField![owner]
+            }
+        fieldIndex! + 1 => fieldIndex!
+    }
+    ranges -> each sourceRange {
+        0 => symbolIndex!
+        symbolIndex! < sourceRange.symbolCount -> while {
+            sourceRange.symbolStart + symbolIndex! => globalSymbol
+            declarations[globalSymbol] => declaration
+            declaration.kind == 27 and declaration.parent >= 0
+                and declaration.parent < sourceRange.symbolCount
+                -> if {
+                    sourceRange.symbolStart + declaration.parent => parentSymbol
+                    firstVariant![parentSymbol] => nextVariant![globalSymbol]
+                    globalSymbol => firstVariant![parentSymbol]
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    }
+    0 => owner!
+    owner! < (types -> len) -> while {
+        types[owner!] => current
+        [Int; ~] => dependencies!
+        canonicalByType![owner!] != owner! -> if {
+            # Alias nodes share the declaration's complete by-value dependency set.
+            dependencies! -> push(canonicalByType![owner!])
+        } else {
+            ((current.kind == 4 and current.length > 0) or current.kind == 12) and current.first >= 0
+                -> if {
+                    dependencies! -> push(current.first)
+                }
+            current.kind == 13 or (current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1))
+                -> if {
+                    current.first >= 0 -> if { dependencies! -> push(current.first) }
+                    current.second >= 0 -> if { dependencies! -> push(current.second) }
+                }
+            current.kind == 1 or current.kind == 10 -> if {
+                firstField![owner!] => fieldCursor!
+                fieldCursor! >= 0 -> while {
+                    dependencies! -> push(fields[fieldCursor!].fieldType)
+                    nextField![fieldCursor!] => fieldCursor!
+                }
+            }
+            current.kind == 1 and (current.origin == 0 or current.origin == 2)
+                and current.module >= 0 and current.module < (ranges -> len)
+                -> if {
+                    ranges[current.module] => sourceRange
+                    current.symbol >= 0 and current.symbol < sourceRange.symbolCount
+                        -> if {
+                            firstVariant![sourceRange.symbolStart + current.symbol] => variantIndex!
+                            variantIndex! >= 0 -> while {
+                                declarations[variantIndex!] => variant
+                                variant.typeNode >= 0 -> if {
+                                    referenceByAst[sourceRange.astStart + variant.typeNode] => referenceIndex
+                                    referenceIndex >= 0 -> if {
+                                        references[referenceIndex] => reference
+                                        reference.status == 0 and reference.typeId >= 0
+                                            -> if { dependencies! -> push(reference.typeId) }
+                                    }
+                                }
+                                nextVariant![variantIndex!] => variantIndex!
+                            }
+                        }
+                }
+        }
+        dependencies! -> each dependency {
+            dependency >= 0 and dependency < (types -> len)
+                -> if {
+                    owners! -> push(owner!)
+                    next! -> push(heads![dependency])
+                    (owners! -> len) - 1 => heads![dependency]
+                    pending![owner!] + 1 => pending![owner!]
+                }
+        }
+        owner! + 1 => owner!
+    }
+    [Int; ~] => ready!
+    0 => seed!
+    seed! < (types -> len) -> while {
+        pending![seed!] == 0 -> if { ready! -> push(seed!) }
+        seed! + 1 => seed!
+    }
+    0 => cursor!
+    cursor! < (ready! -> len) -> while {
+        heads![ready![cursor!]] => edge!
+        edge! >= 0 -> while {
+            owners![edge!] => dependent
+            pending![dependent] - 1 => pending![dependent]
+            pending![dependent] == 0 -> if { ready! -> push(dependent) }
+            next![edge!] => edge!
+        }
+        cursor! + 1 => cursor!
+    }
+    0 => resultIndex!
+    resultIndex! < (types -> len) -> while {
+        pending![resultIndex!] > 0 => cyclic![resultIndex!]
+        resultIndex! + 1 => resultIndex!
+    }
+    cyclic!
+}
+
+lowerPreparedIr prepared: semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, supportsComputePool: Bool -> [typedIr.TypedIrNode; ~] {
+    supportsComputePool -> if {
+        prepared -> typedIr.lowerResolvedContextParallel(recursiveTypes) => parallelIr
+        parallelIr -> return
+    }
+    prepared -> typedIr.lowerResolvedContext(recursiveTypes) => sequentialIr
+    sequentialIr
+}
+
+prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.SemanticSnapshot, libraries: move libraryImports.LibraryCatalog, libraryCalls: move [libraryImports.LibraryFunctionResolution; ~] -> emitterContext.EmitContext {
+    request.pointerBitWidth => pointerBitWidth
+    request.targetArchitecture => targetArchitecture
+    request.cpuDispatchPolicy => cpuDispatchPolicy
+    request.requiredCpuFeatures => requiredCpuFeatures
+    request.allowedCpuFeatures => allowedCpuFeatures
+    request.forbiddenCpuFeatures => forbiddenCpuFeatures
+    request.supportsComputePool => supportsComputePool
+    request.expectedPathStyle => expectedPathStyle
+    prepared -> expressionTypeIds.resolveContext => recursiveTypes!
+    prepared -> lowerPreparedIr(recursiveTypes!, supportsComputePool) => ir!
+    ir! -> typedIr.materializeContextualArrayOwners(prepared, recursiveTypes!)
+    ir! -> typedLibraryImports.projectLibraries(prepared, libraries, libraryCalls) => libraryCallDiagnostics
+    ir! -> typedIr.planGenericCalls(prepared, recursiveTypes!.types) => genericCallPlans
+    ir! -> typedIr.materializeGenericClosure(prepared, recursiveTypes!) => genericInstances
+    ir! -> typedIr.bindGenericBodies(genericInstances) => genericBodies
+    ir! -> typedIr.materializeContextualArrayOwners(prepared, recursiveTypes!)
+    # Call discovery precedes final receiver typing. Build one compact global
+    # AST index after generic closure convergence so every later diagnostic is O(1)
+    # instead of rescanning the full IR for each preliminary call entry.
+    [Bool; ~] => finalCallResolvedByAst!
+    0 => finalCallAstInit!
+    finalCallAstInit! < (prepared.package.nodes -> len)
+        -> while {
+            finalCallResolvedByAst! -> push(false)
+            finalCallAstInit! + 1 => finalCallAstInit!
+        }
+    0 => finalCallIrIndex!
+    finalCallIrIndex! < (ir! -> len)
+        -> while {
+            ir![finalCallIrIndex!] => finalCall
+            (finalCall.kind == 6 or (finalCall.kind == 9 and finalCall.opcode != -1))
+                and finalCall.sourceModule >= 0
+                and finalCall.sourceModule < (prepared.package.ranges -> len)
+                and finalCall.astNode >= 0
+                and ((finalCall.symbol >= 0 and finalCall.targetModule >= 0)
+                or finalCall.opcode != -1)
+                -> if {
+                    prepared.package.ranges[finalCall.sourceModule] => finalCallRange
+                    finalCall.astNode < finalCallRange.astCount -> if {
+                        true => finalCallResolvedByAst![finalCallRange.astStart + finalCall.astNode]
+                    }
+                }
+            finalCallIrIndex! + 1 => finalCallIrIndex!
+        }
+    prepared -> streamIr.build(ir!, recursiveTypes!) => streamPlan
+    false => usesConcurrentStreamJoins!
+    0 => concurrentStreamJoinSearch!
+    concurrentStreamJoinSearch! < (streamPlan.junctions -> len)
+        -> while {
+            streamPlan.junctions[concurrentStreamJoinSearch!] => concurrentStreamJoin
+            concurrentStreamJoin.kind == 2 and (concurrentStreamJoin.policy == 1 or concurrentStreamJoin.policy == 3)
+                -> if {
+                    concurrentStreamJoin.inputStart => concurrentStreamInputSearch!
+                    concurrentStreamInputSearch! < concurrentStreamJoin.inputStart + concurrentStreamJoin.inputCount
+                        -> while {
+                            streamPlan.junctionInputs[concurrentStreamInputSearch!].typeId => concurrentStreamInputTypeId
+                            concurrentStreamInputTypeId >= 0 and concurrentStreamInputTypeId < (recursiveTypes!.types -> len)
+                                -> if {
+                                    recursiveTypes!.types[concurrentStreamInputTypeId] => concurrentStreamInputType
+                                    concurrentStreamInputType.kind == 7 and concurrentStreamInputType.symbol == 4
+                                        -> if { true => usesConcurrentStreamJoins! }
+                                }
+                            concurrentStreamInputSearch! + 1 => concurrentStreamInputSearch!
+                        }
+                }
+            concurrentStreamJoinSearch! + 1 => concurrentStreamJoinSearch!
+        }
+    prepared -> ownershipCheck.analyzeResolvedLoweredContext(ir!, recursiveTypes!.types) => ownershipDiagnostics
+    [typeIds.SemanticType; ~] => semanticTypes!
+    [typeIds.TypeReference; ~] => signatureTypeReferences!
+    recursiveTypes!.references -> each reference { signatureTypeReferences! -> push(reference) }
+    [typeTerms.TypeTerm; ~] => signatureTypeTerms!
+    prepared.package.terms -> each term { signatureTypeTerms! -> push(term) }
+    0 => semanticTypeCopyIndex351!
+    semanticTypeCopyIndex351! < (recursiveTypes!.types -> len)
+        -> while {
+            recursiveTypes!.types[semanticTypeCopyIndex351!] => semanticType
+            semanticTypes! -> push(semanticType)
+            semanticTypeCopyIndex351! + 1 => semanticTypeCopyIndex351!
+        }
+
+    [typeIds.NominalField; ~] => semanticFields!
+    0 => semanticFieldCopyIndex353!
+    semanticFieldCopyIndex353! < (recursiveTypes!.fields -> len)
+        -> while {
+            recursiveTypes!.fields[semanticFieldCopyIndex353!] => semanticField
+            semanticFields! -> push(semanticField)
+            semanticFieldCopyIndex353! + 1 => semanticFieldCopyIndex353!
+        }
+    [nominalTypes.NominalType; ~] => nominal!
+    0 => nominalTypeCopyIndex355!
+    nominalTypeCopyIndex355! < (prepared.nominal -> len)
+        -> while {
+            prepared.nominal[nominalTypeCopyIndex355!] => nominalType
+            nominal! -> push(nominalType)
+            nominalTypeCopyIndex355! + 1 => nominalTypeCopyIndex355!
+        }
+    [compositeTypes.CompositeType; ~] => composite!
+    0 => compositeTypeCopyIndex357!
+    compositeTypeCopyIndex357! < (prepared.composite -> len)
+        -> while {
+            prepared.composite[compositeTypeCopyIndex357!] => compositeType
+            composite! -> push(compositeType)
+            compositeTypeCopyIndex357! + 1 => compositeTypeCopyIndex357!
+        }
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    0 => moduleIdentityCopyIndex359!
+    moduleIdentityCopyIndex359! < (prepared.modules -> len)
+        -> while {
+            prepared.modules[moduleIdentityCopyIndex359!] => moduleIdentity
+            moduleIdentities! -> push(moduleIdentity)
+            moduleIdentityCopyIndex359! + 1 => moduleIdentityCopyIndex359!
+        }
+    [modules.ImportEdge; ~] => importEdges!
+    0 => importEdgeCopyIndex!
+    importEdgeCopyIndex! < (prepared.imports -> len)
+        -> while {
+            importEdges! -> push(prepared.imports[importEdgeCopyIndex!])
+            importEdgeCopyIndex! + 1 => importEdgeCopyIndex!
+        }
+    [moduleResolve.ResolvedImport; ~] => resolvedImports!
+    0 => resolvedImportCopyIndex!
+    resolvedImportCopyIndex! < (prepared.resolvedImports -> len)
+        -> while {
+            resolvedImports! -> push(prepared.resolvedImports[resolvedImportCopyIndex!])
+            resolvedImportCopyIndex! + 1 => resolvedImportCopyIndex!
+        }
+    [analysis.SourceAnalysisRange; ~] => analysisRanges!
+    0 => sourceRangeCopyIndex361!
+    sourceRangeCopyIndex361! < (prepared.package.ranges -> len)
+        -> while {
+            prepared.package.ranges[sourceRangeCopyIndex361!] => sourceRange
+            analysisRanges! -> push(sourceRange)
+            sourceRangeCopyIndex361! + 1 => sourceRangeCopyIndex361!
+        }
+    [ast.AstNode; ~] => analysisNodes!
+    [constantLowering.Literal; ~] => constantLiterals!
+    prepared.package.constantLiterals -> each literal { constantLiterals! -> push(literal) }
+    [constantLowering.Failure; ~] => constantFailures!
+    prepared.package.constantFailures -> each failure { constantFailures! -> push(failure) }
+    0 => nodeCopyIndex363!
+    nodeCopyIndex363! < (prepared.package.nodes -> len)
+        -> while {
+            prepared.package.nodes[nodeCopyIndex363!] => node
+            analysisNodes! -> push(node)
+            nodeCopyIndex363! + 1 => nodeCopyIndex363!
+        }
+    [syntax.SyntaxToken; ~] => analysisTokens!
+    0 => tokenCopyIndex365!
+    tokenCopyIndex365! < (prepared.package.tokens -> len)
+        -> while {
+            prepared.package.tokens[tokenCopyIndex365!] => token
+            analysisTokens! -> push(token)
+            tokenCopyIndex365! + 1 => tokenCopyIndex365!
+        }
+    [symbols.Symbol; ~] => analysisSymbols!
+    0 => symbolCopyIndex367!
+    symbolCopyIndex367! < (prepared.package.symbols -> len)
+        -> while {
+            prepared.package.symbols[symbolCopyIndex367!] => symbol
+            analysisSymbols! -> push(symbol)
+            symbolCopyIndex367! + 1 => symbolCopyIndex367!
+        }
+    [calls.ModuleCallResolution; ~] => analysisCalls!
+    0 => callCopyIndex368!
+    callCopyIndex368! < (prepared.calls -> len) -> while {
+        analysisCalls! -> push(prepared.calls[callCopyIndex368!])
+        callCopyIndex368! + 1 => callCopyIndex368!
+    }
+    [interpolation.InterpolationSourceRange; ~] => analysisInterpolationRanges!
+    [interpolation.InterpolationNode; ~] => analysisInterpolations!
+    0 => interpolationSourceIndex!
+    interpolationSourceIndex! < (prepared.package.sources -> len)
+        -> while {
+            prepared.package.ranges[interpolationSourceIndex!] => interpolationSourceRange
+            [ast.AstNode; ~] => interpolationNodes!
+            0 => interpolationAstIndex!
+            interpolationAstIndex! < interpolationSourceRange.astCount
+                -> while {
+                    interpolationNodes! -> push(prepared.package.nodes[interpolationSourceRange.astStart + interpolationAstIndex!])
+                    interpolationAstIndex! + 1 => interpolationAstIndex!
+                }
+            [syntax.SyntaxToken; ~] => interpolationTokens!
+            0 => interpolationTokenIndex!
+            interpolationTokenIndex! < interpolationSourceRange.tokenCount
+                -> while {
+                    interpolationTokens! -> push(prepared.package.tokens[interpolationSourceRange.tokenStart + interpolationTokenIndex!])
+                    interpolationTokenIndex! + 1 => interpolationTokenIndex!
+                }
+            [symbols.Symbol; ~] => interpolationSymbols!
+            0 => interpolationSymbolIndex!
+            interpolationSymbolIndex! < interpolationSourceRange.symbolCount
+                -> while {
+                    interpolationSymbols! -> push(prepared.package.symbols[interpolationSourceRange.symbolStart + interpolationSymbolIndex!])
+                    interpolationSymbolIndex! + 1 => interpolationSymbolIndex!
+                }
+            prepared.package.sources[interpolationSourceIndex!] -> len => interpolationSourceLength
+            prepared.package.sources[interpolationSourceIndex!] -> slice(UIntSize(0), interpolationSourceLength) => interpolationSource
+            interpolation.PreparedInterpolationRequest {
+                source: interpolationSource
+                nodes: interpolationNodes!
+                tokens: interpolationTokens!
+                symbols: interpolationSymbols!
+            } => interpolationRequest
+            interpolationRequest -> interpolation.lowerPrepared => sourceInterpolations
+            analysisInterpolations! -> len => interpolationStart
+            analysisInterpolationRanges! -> push(interpolation.InterpolationSourceRange {
+                sourceModule: interpolationSourceIndex!
+                nodeStart: interpolationStart
+                nodeCount: sourceInterpolations -> len
+            })
+            0 => sourceInterpolationIndex!
+            sourceInterpolationIndex! < (sourceInterpolations -> len)
+                -> while {
+                    sourceInterpolations[sourceInterpolationIndex!] => globalInterpolation!
+                    globalInterpolation!.parent >= 0 -> if { globalInterpolation!.parent + interpolationStart => globalInterpolation!.parent }
+                    globalInterpolation!.operand0 >= 0 -> if { globalInterpolation!.operand0 + interpolationStart => globalInterpolation!.operand0 }
+                    globalInterpolation!.operand1 >= 0 -> if { globalInterpolation!.operand1 + interpolationStart => globalInterpolation!.operand1 }
+                    globalInterpolation!.operand2 >= 0 -> if { globalInterpolation!.operand2 + interpolationStart => globalInterpolation!.operand2 }
+                    analysisInterpolations! -> push(globalInterpolation!)
+                    sourceInterpolationIndex! + 1 => sourceInterpolationIndex!
+                }
+            interpolationSourceIndex! + 1 => interpolationSourceIndex!
+        }
+    [typeIds.SemanticType; ~] => layoutTypes!
+    0 => layoutTypeCopyIndex418!
+    layoutTypeCopyIndex418! < (semanticTypes! -> len)
+        -> while {
+            semanticTypes![layoutTypeCopyIndex418!] => layoutType
+            layoutTypes! -> push(layoutType)
+            layoutTypeCopyIndex418! + 1 => layoutTypeCopyIndex418!
+        }
+    [typeIds.NominalField; ~] => layoutFields!
+    0 => layoutFieldCopyIndex420!
+    layoutFieldCopyIndex420! < (semanticFields! -> len)
+        -> while {
+            semanticFields![layoutFieldCopyIndex420!] => layoutField
+            layoutFields! -> push(layoutField)
+            layoutFieldCopyIndex420! + 1 => layoutFieldCopyIndex420!
+        }
+    TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: pointerBitWidth } => layoutRequest
+    layoutRequest -> layoutsFor => layouts
+    typeIds.enumPayloadEdges(semanticTypes!, signatureTypeReferences!, analysisRanges!, analysisSymbols!, recursiveTypes!.referenceIndexByTypeAst) => payloadEdges
+    prepared -> semanticContext.ownedResourceSeeds(semanticTypes!) => resourceSeeds
+    typeIds.classifyWithResources(semanticTypes!, semanticFields!, payloadEdges, resourceSeeds) => typeTraits!
+    [Int; ~] => typeSizes!
+    0 => typeSizeCopyIndex424!
+    typeSizeCopyIndex424! < (layouts.sizes -> len)
+        -> while {
+            layouts.sizes[typeSizeCopyIndex424!] => typeSize
+            typeSizes! -> push(typeSize)
+            typeSizeCopyIndex424! + 1 => typeSizeCopyIndex424!
+        }
+    [Int; ~] => typeAligns!
+    0 => typeAlignCopyIndex426!
+    typeAlignCopyIndex426! < (layouts.aligns -> len)
+        -> while {
+            layouts.aligns[typeAlignCopyIndex426!] => typeAlign
+            typeAligns! -> push(typeAlign)
+            typeAlignCopyIndex426! + 1 => typeAlignCopyIndex426!
+        }
+    [Int; ~] => typeLayoutStatuses!
+    0 => layoutStatusCopyIndex428!
+    layoutStatusCopyIndex428! < (layouts.statuses -> len)
+        -> while {
+            layouts.statuses[layoutStatusCopyIndex428!] => layoutStatus
+            typeLayoutStatuses! -> push(layoutStatus)
+            layoutStatusCopyIndex428! + 1 => layoutStatusCopyIndex428!
+        }
+    # Nominal enums share the same tagged payload ABI as Result/Option. The
+    # recursive type arena represents their declaration identity as a nominal
+    # type, so recover variant payload type uses from the flat AST before the
+    # emitter freezes layout and ownership tables.
+    [Bool; ~] => nominalEnumFlags!
+    0 => nominalEnumFlagIndex!
+    nominalEnumFlagIndex! < (semanticTypes! -> len)
+        -> while {
+            nominalEnumFlags! -> push(false)
+            nominalEnumFlagIndex! + 1 => nominalEnumFlagIndex!
+        }
+    # Enum payloads and the aggregates that contain them form one recursive
+    # layout graph. Recompute both sides until neither changes: a struct can
+    # grow after a nested enum is recovered, and that struct can itself be the
+    # payload of Result/Option or another nominal enum.
+    semanticTypes! -> valueLayoutCycles(semanticFields!, signatureTypeReferences!, analysisRanges!, analysisSymbols!, recursiveTypes!.referenceIndexByTypeAst) => cyclicLayouts
+    false => hasCyclicLayout!
+    0 => cyclicLayoutIndex!
+    cyclicLayoutIndex! < (cyclicLayouts -> len) -> while {
+        cyclicLayouts[cyclicLayoutIndex!] -> if {
+            3 => typeLayoutStatuses![cyclicLayoutIndex!]
+            true => hasCyclicLayout!
+        }
+        cyclicLayoutIndex! + 1 => cyclicLayoutIndex!
+    }
+    not hasCyclicLayout! => aggregateLayoutChanged!
+    aggregateLayoutChanged! -> while {
+        false => aggregateLayoutChanged!
+        0 => intrinsicEnumLayoutIndex!
+        intrinsicEnumLayoutIndex! < (semanticTypes! -> len)
+            -> while {
+                semanticTypes![intrinsicEnumLayoutIndex!] => intrinsicEnumType
+                intrinsicEnumType.kind == 7
+                    and intrinsicEnumType.origin == 4
+                    and (intrinsicEnumType.symbol == 0 or intrinsicEnumType.symbol == 1)
+                    -> if {
+                        0 => intrinsicEnumPayloadSize!
+                        [intrinsicEnumType.first, intrinsicEnumType.second; ~] => intrinsicEnumPayloads
+                        0 => intrinsicEnumPayloadIndex!
+                        intrinsicEnumPayloadIndex! < (intrinsicEnumPayloads -> len)
+                            -> while {
+                                intrinsicEnumPayloads[intrinsicEnumPayloadIndex!] => intrinsicEnumPayload
+                                intrinsicEnumPayload >= 0 -> if {
+                                    typeSizes![intrinsicEnumPayload] => intrinsicEnumResolvedPayloadSize!
+                                    semanticTypes![intrinsicEnumPayload] => intrinsicEnumPayloadType
+                                    intrinsicEnumPayloadType.kind == 1 -> if {
+                                        0 => intrinsicNominalPayloadSize!
+                                        1 => intrinsicNominalPayloadAlign!
+                                        false => intrinsicNominalPayloadHasField!
+                                        0 => intrinsicNominalFieldIndex!
+                                        intrinsicNominalFieldIndex! < (semanticFields! -> len)
+                                            -> while {
+                                                semanticFields![intrinsicNominalFieldIndex!] => intrinsicNominalField
+                                                intrinsicNominalField.ownerType >= 0 -> if {
+                                                    semanticTypes![intrinsicNominalField.ownerType] => intrinsicNominalOwner
+                                                    intrinsicNominalField.status == 0
+                                                        and intrinsicNominalOwner.module == intrinsicEnumPayloadType.module
+                                                        and intrinsicNominalOwner.symbol == intrinsicEnumPayloadType.symbol
+                                                        and intrinsicNominalField.fieldType >= 0
+                                                        and typeLayoutStatuses![intrinsicNominalField.fieldType] == 0
+                                                        -> if {
+                                                            true => intrinsicNominalPayloadHasField!
+                                                            typeAligns![intrinsicNominalField.fieldType] > intrinsicNominalPayloadAlign!
+                                                                -> if { typeAligns![intrinsicNominalField.fieldType] => intrinsicNominalPayloadAlign! }
+                                                            ((intrinsicNominalPayloadSize! + typeAligns![intrinsicNominalField.fieldType] - 1) / typeAligns![intrinsicNominalField.fieldType]) * typeAligns![intrinsicNominalField.fieldType] => intrinsicNominalPayloadSize!
+                                                            intrinsicNominalPayloadSize! + typeSizes![intrinsicNominalField.fieldType] => intrinsicNominalPayloadSize!
+                                                        }
+                                                }
+                                                intrinsicNominalFieldIndex! + 1 => intrinsicNominalFieldIndex!
+                                            }
+                                        intrinsicNominalPayloadHasField! -> if {
+                                            ((intrinsicNominalPayloadSize! + intrinsicNominalPayloadAlign! - 1) / intrinsicNominalPayloadAlign!) * intrinsicNominalPayloadAlign! => intrinsicNominalPayloadSize!
+                                            intrinsicNominalPayloadSize! > intrinsicEnumResolvedPayloadSize!
+                                                -> if { intrinsicNominalPayloadSize! => intrinsicEnumResolvedPayloadSize! }
+                                        }
+                                        0 => intrinsicEnumPayloadCandidateIndex!
+                                        intrinsicEnumPayloadCandidateIndex! < (semanticTypes! -> len)
+                                            -> while {
+                                                semanticTypes![intrinsicEnumPayloadCandidateIndex!] => intrinsicEnumPayloadCandidate
+                                                intrinsicEnumPayloadCandidate.status == 0
+                                                    and intrinsicEnumPayloadCandidate.kind == 1
+                                                    and intrinsicEnumPayloadCandidate.module == intrinsicEnumPayloadType.module
+                                                    and intrinsicEnumPayloadCandidate.symbol == intrinsicEnumPayloadType.symbol
+                                                    and typeSizes![intrinsicEnumPayloadCandidateIndex!] > intrinsicEnumResolvedPayloadSize!
+                                                    -> if {
+                                                        typeSizes![intrinsicEnumPayloadCandidateIndex!] => intrinsicEnumResolvedPayloadSize!
+                                                    }
+                                                intrinsicEnumPayloadCandidateIndex! + 1 => intrinsicEnumPayloadCandidateIndex!
+                                            }
+                                    }
+                                    intrinsicEnumResolvedPayloadSize! > intrinsicEnumPayloadSize!
+                                        -> if { intrinsicEnumResolvedPayloadSize! => intrinsicEnumPayloadSize! }
+                                }
+                                intrinsicEnumPayloadIndex! + 1 => intrinsicEnumPayloadIndex!
+                            }
+                        (intrinsicEnumPayloadSize! + 7) / 8 => intrinsicEnumPayloadWords
+                        8 + intrinsicEnumPayloadWords * 8 => intrinsicEnumSize
+                        typeSizes![intrinsicEnumLayoutIndex!] != intrinsicEnumSize
+                            or typeAligns![intrinsicEnumLayoutIndex!] != 8
+                            or typeLayoutStatuses![intrinsicEnumLayoutIndex!] != 0
+                            -> if { true => aggregateLayoutChanged! }
+                        intrinsicEnumSize => typeSizes![intrinsicEnumLayoutIndex!]
+                        8 => typeAligns![intrinsicEnumLayoutIndex!]
+                        0 => typeLayoutStatuses![intrinsicEnumLayoutIndex!]
+                    }
+                intrinsicEnumLayoutIndex! + 1 => intrinsicEnumLayoutIndex!
+            }
+        0 => nominalEnumLayoutIndex!
+        nominalEnumLayoutIndex! < (semanticTypes! -> len)
+            -> while {
+                semanticTypes![nominalEnumLayoutIndex!] => nominalEnumType
+                -1 => nominalEnumAst!
+                nominalEnumType.kind == 1 and (nominalEnumType.origin == 0 or nominalEnumType.origin == 2) and nominalEnumType.module >= 0 and nominalEnumType.module < (analysisRanges! -> len)
+                    -> if {
+                        analysisRanges![nominalEnumType.module] => nominalEnumRange
+                        nominalEnumType.symbol >= 0 and nominalEnumType.symbol < nominalEnumRange.symbolCount
+                            -> if {
+                                analysisSymbols![nominalEnumRange.symbolStart + nominalEnumType.symbol] => nominalEnumSymbol
+                                nominalEnumSymbol.astNode >= 0 -> if {
+                                    analysisNodes![nominalEnumRange.astStart + nominalEnumSymbol.astNode].kind == 4
+                                        -> if { nominalEnumSymbol.astNode => nominalEnumAst! }
+                                }
+                            }
+                    }
+                nominalEnumAst! >= 0 -> if {
+                    true => nominalEnumFlags![nominalEnumLayoutIndex!]
+                    0 => nominalEnumPayloadSize!
+                    false => nominalEnumOwns!
+                    false => nominalEnumReachesHeap!
+                    # Only a variant's complete payload annotation denotes its
+                    # stored value. Canonical references carry semantic arena IDs;
+                    # legacy nominal/composite canonical IDs are syntax registries.
+                    signatureTypeReferences! -> each payloadReference {
+                        payloadReference.status == 0
+                            and payloadReference.sourceModule == nominalEnumType.module
+                            and payloadReference.typeId >= 0
+                            and payloadReference.typeId < (typeSizes! -> len)
+                            -> if {
+                                analysisRanges![nominalEnumType.module] => payloadRange
+                                analysisNodes![payloadRange.astStart + payloadReference.typeAst] => payloadTypeNode
+                                payloadTypeNode.parent >= 0 -> if {
+                                    analysisNodes![payloadRange.astStart + payloadTypeNode.parent] => payloadVariant
+                                    payloadVariant.kind == 27 and payloadVariant.parent == nominalEnumAst!
+                                        -> if {
+                                            typeSizes![payloadReference.typeId] > nominalEnumPayloadSize!
+                                                -> if { typeSizes![payloadReference.typeId] => nominalEnumPayloadSize! }
+                                            typeTraits![payloadReference.typeId] % 2 == 1
+                                                -> if { true => nominalEnumOwns! }
+                                            (typeTraits![payloadReference.typeId] / 2) % 2 == 1
+                                                -> if { true => nominalEnumReachesHeap! }
+                                        }
+                                }
+                            }
+                    }
+                    (nominalEnumPayloadSize! + 7) / 8 => nominalEnumPayloadWords
+                    8 + nominalEnumPayloadWords * 8 => nominalEnumSize
+                    typeSizes![nominalEnumLayoutIndex!] != nominalEnumSize
+                        or typeAligns![nominalEnumLayoutIndex!] != 8
+                        or typeLayoutStatuses![nominalEnumLayoutIndex!] != 0
+                        -> if { true => aggregateLayoutChanged! }
+                    nominalEnumSize => typeSizes![nominalEnumLayoutIndex!]
+                    8 => typeAligns![nominalEnumLayoutIndex!]
+                    0 => typeLayoutStatuses![nominalEnumLayoutIndex!]
+                    # Preserve canonical resource reachability during layout refinement.
+                    ((typeTraits![nominalEnumLayoutIndex!] / 4) % 2) * 4 => nominalEnumTraits!
+                    nominalEnumOwns! -> if { nominalEnumTraits! + 1 => nominalEnumTraits! }
+                    nominalEnumReachesHeap! -> if { nominalEnumTraits! + 2 => nominalEnumTraits! }
+                    typeTraits![nominalEnumLayoutIndex!] != nominalEnumTraits!
+                        -> if { true => aggregateLayoutChanged! }
+                    nominalEnumTraits! => typeTraits![nominalEnumLayoutIndex!]
+                }
+                nominalEnumLayoutIndex! + 1 => nominalEnumLayoutIndex!
+            }
+        # Enum declarations are recovered after the first recursive layout pass.
+        # Reflow nominal structs and fixed arrays that contain those enums so their
+        # stored size matches LLVM's padded aggregate stride (for example Path is
+        # 32 bytes, not the unpadded 24-byte field sum).
+        true => nominalDependentLayoutChanged!
+        nominalDependentLayoutChanged! -> while {
+            false => nominalDependentLayoutChanged!
+            0 => nominalDependentLayoutIndex!
+            nominalDependentLayoutIndex! < (semanticTypes! -> len)
+                -> while {
+                    semanticTypes![nominalDependentLayoutIndex!] => nominalDependentType
+                    (nominalDependentType.kind == 1
+                        and (nominalDependentType.origin == 0 or nominalDependentType.origin == 2))
+                        or nominalDependentType.kind == 10 -> if {
+                            0 => nominalDependentSize!
+                            1 => nominalDependentAlign!
+                            true => nominalDependentReady!
+                            false => nominalDependentHasField!
+                            0 => nominalDependentFieldIndex!
+                            nominalDependentFieldIndex! < (semanticFields! -> len)
+                                -> while {
+                                    semanticFields![nominalDependentFieldIndex!] => nominalDependentField
+                                    nominalDependentField.status == 0 and nominalDependentField.ownerType == nominalDependentLayoutIndex!
+                                        -> if {
+                                            true => nominalDependentHasField!
+                                            nominalDependentField.fieldType < 0 or typeLayoutStatuses![nominalDependentField.fieldType] != 0
+                                                -> if {
+                                                    false => nominalDependentReady!
+                                                } else {
+                                                    typeAligns![nominalDependentField.fieldType] > nominalDependentAlign!
+                                                        -> if {
+                                                            typeAligns![nominalDependentField.fieldType] => nominalDependentAlign!
+                                                        }
+                                                    ((nominalDependentSize! + typeAligns![nominalDependentField.fieldType] - 1) / typeAligns![nominalDependentField.fieldType]) * typeAligns![nominalDependentField.fieldType] => nominalDependentSize!
+                                                    nominalDependentSize! + typeSizes![nominalDependentField.fieldType] => nominalDependentSize!
+                                                }
+                                        }
+                                    nominalDependentFieldIndex! + 1 => nominalDependentFieldIndex!
+                                }
+                            nominalDependentReady!
+                                and (nominalDependentHasField! or nominalDependentType.kind == 10)
+                                -> if {
+                                    ((nominalDependentSize! + nominalDependentAlign! - 1) / nominalDependentAlign!) * nominalDependentAlign! => nominalDependentSize!
+                                    typeSizes![nominalDependentLayoutIndex!] != nominalDependentSize! or typeAligns![nominalDependentLayoutIndex!] != nominalDependentAlign!
+                                        -> if {
+                                            nominalDependentSize! => typeSizes![nominalDependentLayoutIndex!]
+                                            nominalDependentAlign! => typeAligns![nominalDependentLayoutIndex!]
+                                            0 => typeLayoutStatuses![nominalDependentLayoutIndex!]
+                                            true => nominalDependentLayoutChanged!
+                                            true => aggregateLayoutChanged!
+                                        }
+                                }
+                        }
+                    nominalDependentType.kind == 4
+                        and nominalDependentType.first >= 0
+                        and nominalDependentType.length >= 0
+                        and typeLayoutStatuses![nominalDependentType.first] == 0
+                        -> if {
+                            typeSizes![nominalDependentType.first] * nominalDependentType.length => nominalDependentArraySize
+                            typeAligns![nominalDependentType.first] => nominalDependentArrayAlign
+                            typeSizes![nominalDependentLayoutIndex!] != nominalDependentArraySize or typeAligns![nominalDependentLayoutIndex!] != nominalDependentArrayAlign
+                                -> if {
+                                    nominalDependentArraySize => typeSizes![nominalDependentLayoutIndex!]
+                                    nominalDependentArrayAlign => typeAligns![nominalDependentLayoutIndex!]
+                                    0 => typeLayoutStatuses![nominalDependentLayoutIndex!]
+                                    true => nominalDependentLayoutChanged!
+                                    true => aggregateLayoutChanged!
+                                }
+                        }
+                    nominalDependentLayoutIndex! + 1 => nominalDependentLayoutIndex!
+                }
+        }
+        # Imported and local references can have distinct canonical type IDs
+        # for the same nominal declaration. Only one representative owns the
+        # recovered field table, so publish its converged layout to every
+        # equivalent (module, symbol) identity before sizing outer enums.
+        0 => nominalLayoutPublishIndex!
+        nominalLayoutPublishIndex! < (semanticTypes! -> len)
+            -> while {
+                semanticTypes![nominalLayoutPublishIndex!] => nominalLayoutPublishType
+                nominalLayoutPublishType.kind == 1
+                    -> if {
+                        typeSizes![nominalLayoutPublishIndex!] => publishedNominalSize!
+                        typeAligns![nominalLayoutPublishIndex!] => publishedNominalAlign!
+                        0 => publishedNominalFieldSize!
+                        1 => publishedNominalFieldAlign!
+                        false => publishedNominalHasField!
+                        0 => publishedNominalFieldIndex!
+                        publishedNominalFieldIndex! < (semanticFields! -> len)
+                            -> while {
+                                semanticFields![publishedNominalFieldIndex!] => publishedNominalField
+                                publishedNominalField.ownerType >= 0 -> if {
+                                    semanticTypes![publishedNominalField.ownerType] => publishedNominalOwner
+                                    publishedNominalField.status == 0
+                                        and publishedNominalOwner.module == nominalLayoutPublishType.module
+                                        and publishedNominalOwner.symbol == nominalLayoutPublishType.symbol
+                                        and publishedNominalField.fieldType >= 0
+                                        and typeLayoutStatuses![publishedNominalField.fieldType] == 0
+                                        -> if {
+                                            true => publishedNominalHasField!
+                                            typeAligns![publishedNominalField.fieldType] > publishedNominalFieldAlign!
+                                                -> if { typeAligns![publishedNominalField.fieldType] => publishedNominalFieldAlign! }
+                                            ((publishedNominalFieldSize! + typeAligns![publishedNominalField.fieldType] - 1) / typeAligns![publishedNominalField.fieldType]) * typeAligns![publishedNominalField.fieldType] => publishedNominalFieldSize!
+                                            publishedNominalFieldSize! + typeSizes![publishedNominalField.fieldType] => publishedNominalFieldSize!
+                                        }
+                                }
+                                publishedNominalFieldIndex! + 1 => publishedNominalFieldIndex!
+                            }
+                        publishedNominalHasField! -> if {
+                            ((publishedNominalFieldSize! + publishedNominalFieldAlign! - 1) / publishedNominalFieldAlign!) * publishedNominalFieldAlign! => publishedNominalFieldSize!
+                            publishedNominalFieldSize! > publishedNominalSize!
+                                -> if { publishedNominalFieldSize! => publishedNominalSize! }
+                            publishedNominalFieldAlign! > publishedNominalAlign!
+                                -> if { publishedNominalFieldAlign! => publishedNominalAlign! }
+                        }
+                        0 => nominalLayoutCandidateIndex!
+                        nominalLayoutCandidateIndex! < (semanticTypes! -> len)
+                            -> while {
+                                semanticTypes![nominalLayoutCandidateIndex!] => nominalLayoutCandidate
+                                nominalLayoutCandidate.status == 0
+                                    and nominalLayoutCandidate.kind == 1
+                                    and nominalLayoutCandidate.module == nominalLayoutPublishType.module
+                                    and nominalLayoutCandidate.symbol == nominalLayoutPublishType.symbol
+                                    -> if {
+                                        typeSizes![nominalLayoutCandidateIndex!] > publishedNominalSize!
+                                            -> if { typeSizes![nominalLayoutCandidateIndex!] => publishedNominalSize! }
+                                        typeAligns![nominalLayoutCandidateIndex!] > publishedNominalAlign!
+                                            -> if { typeAligns![nominalLayoutCandidateIndex!] => publishedNominalAlign! }
+                                    }
+                                nominalLayoutCandidateIndex! + 1 => nominalLayoutCandidateIndex!
+                            }
+                        typeSizes![nominalLayoutPublishIndex!] != publishedNominalSize!
+                            or typeAligns![nominalLayoutPublishIndex!] != publishedNominalAlign!
+                            -> if {
+                                publishedNominalSize! => typeSizes![nominalLayoutPublishIndex!]
+                                publishedNominalAlign! => typeAligns![nominalLayoutPublishIndex!]
+                                0 => typeLayoutStatuses![nominalLayoutPublishIndex!]
+                                true => aggregateLayoutChanged!
+                            }
+                    }
+                nominalLayoutPublishIndex! + 1 => nominalLayoutPublishIndex!
+            }
+    }
+    ir! -> typedIr.movesFrom => moves
+    [Text; ~] => contextSources!
+    0 => contextSourceIndex!
+    contextSourceIndex! < (request.sources -> len)
+        -> while {
+            contextSources! -> push(request.sources[contextSourceIndex!])
+            contextSourceIndex! + 1 => contextSourceIndex!
+        }
+    emitterContext.EmitContext {
+        initializerDiagnostics: [emitterContext.InitializerDiagnostic; ~]
+        sources: contextSources!
+        ranges: analysisRanges!
+        nodes: analysisNodes!
+        constantLiterals: constantLiterals!
+        constantFailures: constantFailures!
+        tokens: analysisTokens!
+        symbols: analysisSymbols!
+        calls: analysisCalls!
+        finalCallResolvedByAst: finalCallResolvedByAst!
+        libraries: libraries
+        libraryCalls: libraryCalls
+        libraryCallDiagnostics: libraryCallDiagnostics
+        interpolationRanges: analysisInterpolationRanges!
+        interpolations: analysisInterpolations!
+        ir: ir!
+        genericCallPlans: genericCallPlans
+        genericBodies: genericBodies
+        streamPlan: streamPlan
+        moves: moves
+        nominal: nominal!
+        composite: composite!
+        modules: moduleIdentities!
+        imports: importEdges!
+        resolvedImports: resolvedImports!
+        types: semanticTypes!
+        typeReferences: signatureTypeReferences!
+        typeTerms: signatureTypeTerms!
+        fields: semanticFields!
+        typeSizes: typeSizes!
+        typeAligns: typeAligns!
+        typeLayoutStatuses: typeLayoutStatuses!
+        typeTraits: typeTraits!
+        pointerBitWidth: pointerBitWidth
+        targetArchitecture: targetArchitecture
+        cpuDispatchPolicy: cpuDispatchPolicy
+        requiredCpuFeatures: requiredCpuFeatures
+        allowedCpuFeatures: allowedCpuFeatures
+        forbiddenCpuFeatures: forbiddenCpuFeatures
+        supportsComputePool: supportsComputePool
+        expectedPathStyle: expectedPathStyle
+        usesConcurrentStreamJoins: usesConcurrentStreamJoins!
+        ownershipDiagnostics: ownershipDiagnostics
+    } => context!
+    context! -> diagnostics.analyzeNominalInitializers(prepared.qualified) => initializerDiagnostics
+    initializerDiagnostics => context!.initializerDiagnostics
+    context!
+}
+
+prepare request: ref PrepareRequest -> emitterContext.EmitContext {
+    request.sources -> semanticContext.prepare => prepared
+    request -> prepareSnapshot(prepared, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~])
+}
+
+prepareNative request: ref PrepareRequest -> emitterContext.EmitContext {
+    request.sources -> semanticContext.prepareParallel => prepared
+    request -> prepareSnapshot(prepared, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~])
+}
+
+emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context -> diagnostics.usesParallelRuntime => capturesParallelOutput
+    context -> diagnostics.usesTextRuntime => usesTextOutput
+    context -> diagnostics.usesStandardError => usesStandardError
+    context -> diagnostics.usesProcessRuntime => needsProcessRuntime
+    context -> diagnostics.usesProcessCapture => needsProcessCapture
+    context -> diagnostics.usesEnvironmentRuntime => needsEnvironmentRuntime
+    context -> diagnostics.usesArgumentsRuntime => needsArgumentsRuntime
+    context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
+    context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> diagnostics.usesSocketRuntime => needsSocketRuntime
+    context -> diagnostics.usesDnsRuntime => needsDnsRuntime
+    context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
+    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
+    usesTextOutput or capturesParallelOutput -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime(usesStandardError) }
+    capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime() }
+    context -> diagnostics.usesIntMaterialization
+        -> if { numberFormat.emitIntFormatRuntime() }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
+    context -> diagnostics.usesBoolInterpolation
+        -> if { numberFormat.emitBoolTextRuntime() }
+    usesStandardError and (context -> diagnostics.usesIntInterpolation)
+        -> if { numberFormat.emitIntStandardErrorRuntime() }
+    usesStandardError and (context -> diagnostics.usesBoolInterpolation)
+        -> if { numberFormat.emitBoolStandardErrorRuntime() }
+    context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
+    context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
+    -1 => runtimeModule!
+    0 => runtimeModuleSearch!
+    runtimeModuleSearch! < (context.modules -> len)
+        -> while {
+            context.modules[runtimeModuleSearch!] => moduleIdentity
+            moduleIdentity.pathHash == 12254170256457402476
+                -> if { moduleIdentity.sourceIndex => runtimeModule! }
+            runtimeModuleSearch! + 1 => runtimeModuleSearch!
+        }
+    needsOwnedFileRuntime or needsSourceTextRuntime or needsProcessRuntime or runtimeModule! >= 0
+        -> if {
+            "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
+        }
+    capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins
+        -> if {
+            "declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)" -> println
+        }
+    capturesParallelOutput or needsProcessRuntime or needsMouseEventsRuntime or needsConcurrentStreamJoins
+        -> if {
+            "declare dllimport i32 @WaitForSingleObject(ptr, i32)" -> println
+        }
+    needsOwnedFileRuntime or needsDirectoryRuntime or needsSourceTextRuntime or runtimeModule! >= 0 or capturesParallelOutput or needsProcessRuntime or needsMouseEventsRuntime or needsConcurrentStreamJoins
+        -> if {
+            "declare dllimport i32 @CloseHandle(ptr)" -> println
+        }
+    needsDirectoryRuntime -> if {
+        "declare dllimport i32 @CreateDirectoryA(ptr, ptr)" -> println
+        "declare dllimport i32 @GetFileAttributesA(ptr)" -> println
+        "declare dllimport ptr @FindFirstFileA(ptr, ptr)" -> println
+        "declare dllimport i32 @FindNextFileA(ptr, ptr)" -> println
+        "declare dllimport i32 @FindClose(ptr)" -> println
+        "declare dllimport void @SetLastError(i32)" -> println
+        "declare dllimport i32 @GetLastError()" -> println
+        "declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
+        "declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)" -> println
+        "declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)" -> println
+        not usesTextOutput and not capturesParallelOutput
+            -> if {
+                "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
+            }
+        "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+    }
+    needsArgumentsRuntime -> if {
+        "declare dllimport ptr @GetCommandLineW()" -> println
+        "declare dllimport ptr @CommandLineToArgvW(ptr, ptr)" -> println
+        "declare dllimport ptr @LocalFree(ptr)" -> println
+        not needsDirectoryRuntime -> if {
+            "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+        }
+    }
+    needsEnvironmentRuntime -> if {
+        "declare ptr @_wgetenv(ptr)" -> println
+        not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime
+            -> if {
+                "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
+            }
+        not needsDirectoryRuntime and not needsArgumentsRuntime
+            -> if {
+                "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+            }
+        environmentRuntime.emitTypeRuntime()
+    }
+    needsOwnedFileRuntime and runtimeModule! < 0
+        -> if {
+            not usesTextOutput and not capturesParallelOutput
+                -> if {
+                    "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
+                }
+        }
+    needsProcessRuntime -> if {
+        "declare dllimport ptr @GetCurrentProcess()" -> println
+        "declare dllimport i32 @DuplicateHandle(ptr, ptr, ptr, ptr, i32, i32, i32)" -> println
+        "declare dllimport i32 @CreateProcessW(ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr)" -> println
+        "declare dllimport ptr @GetEnvironmentStringsW()" -> println
+        "declare dllimport i32 @FreeEnvironmentStringsW(ptr)" -> println
+        "declare dllimport i32 @CompareStringOrdinal(ptr, i32, ptr, i32, i32)" -> println
+        "declare dllimport i32 @GetProcessId(ptr)" -> println
+        "declare dllimport i32 @GetExitCodeProcess(ptr, ptr)" -> println
+        "declare dllimport i32 @TerminateProcess(ptr, i32)" -> println
+        needsProcessCapture -> if {
+            "declare dllimport i32 @CreatePipe(ptr, ptr, ptr, i32)" -> println
+            "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println
+            not needsDirectoryRuntime -> if { "declare dllimport i32 @GetLastError()" -> println }
+        }
+        not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime and not needsEnvironmentRuntime
+            -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
+        processRuntime.emitProcessTypeRuntime()
+    }
+    needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
+    needsSocketRuntime -> if { "declare i64 @strlen(ptr)" -> println }
+    comInteropCount > 0 -> if { nativeInteropCount == 0 -> comRuntime.emitWindowsComRuntime }
+    context -> emitCore(state)
+    needsSocketRuntime -> if { socketRuntime.emitWindowsRuntime() }
+    needsDnsRuntime -> if { dnsRuntime.emitWindowsRuntime() }
+    needsEnvironmentRuntime -> if { environmentRuntime.emitWindowsRuntime() }
+    needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime() }
+    needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime() }
+    needsProcessCapture -> if { processRuntime.emitWindowsProcessCaptureRuntime() }
+    needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory() }
+    needsOwnedFileRuntime -> if { llvmRuntime.emitWindowsOwnedFile() }
+    runtimeModule! >= 0 -> if {
+        runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
+        runtimeSymbols -> llvmRuntime.emitWindows
+    }
+    needsSourceTextRuntime -> if {
+        runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations() }
+        llvmRuntime.emitWindowsSourceText()
+        needsStandardInputSourceTextRuntime -> if {
+            not usesTextOutput and not capturesParallelOutput
+                -> if { "declare dllimport ptr @GetStdHandle(i32)" -> println }
+            not needsOwnedFileRuntime and not needsProcessCapture
+                -> if { "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println }
+            not needsDirectoryRuntime and not needsProcessCapture
+                -> if { "declare dllimport i32 @GetLastError()" -> println }
+            llvmRuntime.emitWindowsStandardInputSourceText()
+        }
+    }
+}
+
+emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context -> diagnostics.usesParallelRuntime => capturesParallelOutput
+    context -> diagnostics.usesTextRuntime => usesTextOutput
+    context -> diagnostics.usesStandardError => usesStandardError
+    context -> diagnostics.usesProcessRuntime => needsProcessRuntime
+    context -> diagnostics.usesProcessCapture => needsProcessCapture
+    context -> diagnostics.usesEnvironmentRuntime => needsEnvironmentRuntime
+    context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
+    context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
+    context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
+    context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> diagnostics.usesSocketRuntime => needsSocketRuntime
+    context -> diagnostics.usesDnsRuntime => needsDnsRuntime
+    context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
+    -1 => runtimeModule!
+    0 => runtimeModuleSearch!
+    runtimeModuleSearch! < (context.modules -> len)
+        -> while {
+            context.modules[runtimeModuleSearch!] => moduleIdentity
+            moduleIdentity.pathHash == 12254170256457402476
+                -> if { moduleIdentity.sourceIndex => runtimeModule! }
+            runtimeModuleSearch! + 1 => runtimeModuleSearch!
+        }
+    capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins
+        -> if {
+            "declare i32 @pthread_create(ptr, ptr, ptr, ptr)" -> println
+            "declare i32 @pthread_join(i64, ptr)" -> println
+        }
+    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
+    usesTextOutput or capturesParallelOutput -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime(usesStandardError) }
+    capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime() }
+    context -> diagnostics.usesIntMaterialization
+        -> if { numberFormat.emitIntFormatRuntime() }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
+    context -> diagnostics.usesBoolInterpolation
+        -> if { numberFormat.emitBoolTextRuntime() }
+    usesStandardError and (context -> diagnostics.usesIntInterpolation)
+        -> if { numberFormat.emitIntStandardErrorRuntime() }
+    usesStandardError and (context -> diagnostics.usesBoolInterpolation)
+        -> if { numberFormat.emitBoolStandardErrorRuntime() }
+    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
+    needsEnvironmentRuntime -> if { environmentRuntime.emitTypeRuntime() }
+    needsSocketRuntime -> if { socketRuntime.emitTypeRuntime() }
+    context -> emitCore(state)
+    needsSocketRuntime or needsDirectoryRuntime or needsProcessRuntime
+        -> if {
+            "declare ptr @__errno_location()" -> println
+            "declare i64 @strlen(ptr)" -> println
+        }
+    needsSocketRuntime -> if { socketRuntime.emitLinuxRuntime() }
+    needsDnsRuntime -> if { dnsRuntime.emitLinuxRuntime() }
+    needsEnvironmentRuntime -> if { environmentRuntime.emitLinuxRuntime() }
+    needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
+    capturesParallelOutput
+        or needsSocketRuntime
+        or (needsMouseEventsRuntime and usesTextOutput)
+        => hasCloseDeclaration
+    needsProcessRuntime -> if {
+        hasCloseDeclaration -> processRuntime.emitLinuxProcessRuntime
+    }
+    needsProcessCapture -> if {
+        "declare i32 @pipe2(ptr, i32)" -> println
+        "declare i64 @read(i32, ptr, i64)" -> println
+        processRuntime.emitLinuxProcessCaptureRuntime()
+    }
+    needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }
+    needsOwnedFileRuntime -> if { not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile }
+    runtimeModule! >= 0 -> if {
+        runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
+        runtimeSymbols -> llvmRuntime.emitLinux
+    }
+    needsSourceTextRuntime -> if {
+        not needsProcessRuntime and not needsOwnedFileRuntime
+            -> if { "declare i32 @open(ptr, i32, i32)" -> println }
+        not capturesParallelOutput and not needsProcessRuntime and not needsOwnedFileRuntime
+            -> if { "declare i32 @close(i32)" -> println }
+        llvmRuntime.emitLinuxSourceTextDeclarations()
+        llvmRuntime.emitLinuxSourceText()
+        needsStandardInputSourceTextRuntime -> if {
+            not capturesParallelOutput and not needsMouseEventsRuntime
+                -> if { "declare i64 @read(i32, ptr, i64)" -> println }
+            llvmRuntime.emitLinuxStandardInputSourceText()
+        }
+    }
+}
+
+emitPreparedWasmContext context: emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context -> diagnostics.usesStandardError => usesStandardError
+    context -> diagnostics.usesTextRuntime
+        -> if { usesStandardError -> textOutputRuntime.emitWasmTextRuntime }
+    context -> diagnostics.usesIntMaterialization
+        -> if { numberFormat.emitIntFormatRuntime() }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
+    context -> diagnostics.usesBoolInterpolation
+        -> if { numberFormat.emitBoolTextRuntime() }
+    usesStandardError and (context -> diagnostics.usesIntInterpolation)
+        -> if { numberFormat.emitIntStandardErrorRuntime() }
+    usesStandardError and (context -> diagnostics.usesBoolInterpolation)
+        -> if { numberFormat.emitBoolStandardErrorRuntime() }
+    "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)" -> println
+    "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)" -> println
+    context -> emitCore(state)
+}
+
+emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
+    context -> prepareScheduledCoreEmitterState => state
+    state -> bodyScheduleDiagnosticCount => scheduleDiagnostics
+    scheduleDiagnostics == 0 -> if {
+        context -> emitPreparedWindowsContext(state)
+    } else { state -> emitBodyScheduleDiagnostics }
+}
+emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
+    context -> prepareScheduledCoreEmitterState => state
+    state -> bodyScheduleDiagnosticCount => scheduleDiagnostics
+    scheduleDiagnostics == 0 -> if {
+        context -> emitPreparedLinuxContext(state)
+    } else { state -> emitBodyScheduleDiagnostics }
+}
+emitWasmContext context: emitterContext.EmitContext -> Unit uses Console {
+    context -> prepareScheduledCoreEmitterState => state
+    state -> bodyScheduleDiagnosticCount => scheduleDiagnostics
+    scheduleDiagnostics == 0 -> if {
+        context -> emitPreparedWasmContext(state)
+    } else { state -> emitBodyScheduleDiagnostics }
+}

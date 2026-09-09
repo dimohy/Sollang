@@ -1,0 +1,568 @@
+namespace std.net.quic.stream_state
+
+import std.net.quic.error as errors
+import std.net.quic.stream_state as model
+import std.net.quic.transport_parameters as transport
+
+public enum Initiator {
+    Client
+    Server
+}
+
+public enum Direction {
+    Bidirectional
+    Unidirectional
+}
+
+public struct StreamIdentity {
+    public id: UInt64
+    public sequence: UInt64
+    public initiator: Initiator
+    public direction: Direction
+}
+
+public struct ReceiveFlow {
+    public maximum: UInt64
+    public highestReceived: UInt64
+    public consumed: UInt64
+    public finalKnown: Bool
+    public finalSize: UInt64
+}
+
+public struct SendFlow {
+    public maximum: UInt64
+    public sent: UInt64
+    public finalKnown: Bool
+    public finalSize: UInt64
+}
+
+public struct ConnectionFlow {
+    public receiveMaximum: UInt64
+    public received: UInt64
+    public consumed: UInt64
+    public sendMaximum: UInt64
+    public sent: UInt64
+}
+
+public struct StreamLimits {
+    public bidirectional: UInt64
+    public unidirectional: UInt64
+}
+
+# Connection-owned stream identity state. The bounded ring storage is
+# embedded directly in Connection through this value; there is no stream-manager
+# object, dynamic dispatch, front-removal shift, or per-operation wrapper allocation.
+public struct StreamRegistry {
+    public localIsServer: Bool
+    public nextLocalBidirectional: UInt64
+    public nextLocalUnidirectional: UInt64
+    public peerBidirectionalSeen: Bool
+    public peerUnidirectionalSeen: Bool
+    public highestPeerBidirectional: UInt64
+    public highestPeerUnidirectional: UInt64
+    public localBidirectionalLimit: UInt64
+    public localUnidirectionalLimit: UInt64
+    public peerBidirectionalLimit: UInt64
+    public peerUnidirectionalLimit: UInt64
+    public pendingPeerBidirectionalLimit: Int
+    public pendingPeerBidirectional: [UInt64; ~]
+    public pendingPeerBidirectionalHead: Int
+    public pendingPeerBidirectionalTail: Int
+    public pendingPeerBidirectionalCount: Int
+    public pendingPeerUnidirectionalLimit: Int
+    public pendingPeerUnidirectional: [UInt64; ~]
+    public pendingPeerUnidirectionalHead: Int
+    public pendingPeerUnidirectionalTail: Int
+    public pendingPeerUnidirectionalCount: Int
+}
+
+transportError code: UInt64 -> errors.Error => errors.Error { kind: errors.Kind.Transport, code: code }
+maximumStreamId: -> UInt64 => 4_611_686_018_427_387_903
+maximumOffset: -> UInt64 => 4_611_686_018_427_387_903
+
+writePendingIdentity values: mut [UInt64; ~], index: Int, streamId: UInt64 -> Unit {
+    streamId => values[index]
+}
+
+public identity id: UInt64 -> StreamIdentity => StreamIdentity {
+    id: id
+    sequence: id / 4
+    initiator: id % 2 == 0 -> if { model.Initiator.Client } else { model.Initiator.Server }
+    direction: id % 4 < 2 -> if { model.Direction.Bidirectional } else { model.Direction.Unidirectional }
+}
+
+public validatePeerOpened id: UInt64, localIsServer: Bool, maximumBidirectional: UInt64, maximumUnidirectional: UInt64 -> Result<StreamIdentity, errors.Error> {
+    id <= maximumStreamId() -> unless {
+        Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamLimitError())) -> return
+    }
+    maximumBidirectional -> transport.streamCount? => validMaximumBidirectional
+    maximumUnidirectional -> transport.streamCount? => validMaximumUnidirectional
+    identity(id) => identified
+    identified.initiator -> when {
+        Client { localIsServer }
+        Server { not localIsServer }
+    } => peerInitiated
+    peerInitiated -> unless {
+        Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamStateError())) -> return
+    }
+    identified.direction -> when {
+        Bidirectional { validMaximumBidirectional -> value }
+        Unidirectional { validMaximumUnidirectional -> value }
+    } => limit
+    identified.sequence < limit -> if {
+        Result<StreamIdentity, errors.Error>.Ok(identified)
+    } else {
+        Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamLimitError()))
+    }
+}
+
+public initialReceiveFlow maximum: UInt64 -> ReceiveFlow => ReceiveFlow {
+    maximum: maximum
+    highestReceived: 0
+    consumed: 0
+    finalKnown: false
+    finalSize: 0
+}
+
+impl ReceiveFlow {
+    public onReset: self, finalSize: UInt64 -> Result<ReceiveFlow, errors.Error> {
+        finalSize <= maximumOffset() -> unless {
+            Result<ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+        }
+        finalSize <= self.maximum -> unless {
+            Result<ReceiveFlow, errors.Error>.Err(transportError(errors.flowControlError())) -> return
+        }
+        finalSize >= self.highestReceived -> unless {
+            Result<ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+        }
+        self.finalKnown and finalSize != self.finalSize
+            -> if {
+                Result<ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+            }
+        Result<ReceiveFlow, errors.Error>.Ok(ReceiveFlow {
+            maximum: self.maximum
+            highestReceived: finalSize
+            consumed: self.consumed
+            finalKnown: true
+            finalSize: finalSize
+        })
+    }
+
+    public onReceive: self, offset: UInt64, length: UInt64, fin: Bool -> Result<ReceiveFlow, errors.Error> {
+        length <= maximumOffset()
+            and offset <= maximumOffset() - length
+            -> unless {
+                Result<ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+            }
+        offset + length => end
+        end <= self.maximum -> unless {
+            Result<ReceiveFlow, errors.Error>.Err(transportError(errors.flowControlError())) -> return
+        }
+        self.finalKnown and end > self.finalSize -> if {
+            Result<ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+        }
+        fin and end < self.highestReceived -> if {
+            Result<ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+        }
+        fin and self.finalKnown and end != self.finalSize
+            -> if {
+                Result<ReceiveFlow, errors.Error>.Err(transportError(errors.finalSizeError())) -> return
+            }
+        ReceiveFlow {
+            maximum: self.maximum
+            highestReceived: end > self.highestReceived
+                -> if { end } else { self.highestReceived }
+            consumed: self.consumed
+            finalKnown: self.finalKnown or fin
+            finalSize: fin -> if { end } else { self.finalSize }
+        } -> Result<ReceiveFlow, errors.Error>.Ok
+    }
+
+    public onConsumed: self, bytes: UInt64 -> Result<ReceiveFlow, errors.Error> {
+        bytes <= self.highestReceived - self.consumed
+            -> if {
+                ReceiveFlow {
+                    maximum: self.maximum
+                    highestReceived: self.highestReceived
+                    consumed: self.consumed + bytes
+                    finalKnown: self.finalKnown
+                    finalSize: self.finalSize
+                } -> Result<ReceiveFlow, errors.Error>.Ok
+            } else {
+                Result<ReceiveFlow, errors.Error>.Err(transportError(errors.streamStateError()))
+            }
+    }
+}
+
+public initialSendFlow maximum: UInt64 -> SendFlow => SendFlow {
+    maximum: maximum
+    sent: 0
+    finalKnown: false
+    finalSize: 0
+}
+
+impl SendFlow {
+    public onMaxStreamData: self, maximum: UInt64 -> SendFlow => SendFlow {
+        maximum: maximum > self.maximum -> if { maximum } else { self.maximum }
+        sent: self.sent
+        finalKnown: self.finalKnown
+        finalSize: self.finalSize
+    }
+
+    public reserveSend: self, length: UInt64, fin: Bool -> Result<SendFlow, errors.Error> {
+        length <= maximumOffset()
+            and self.sent <= maximumOffset() - length
+            -> unless {
+                Result<SendFlow, errors.Error>.Err(transportError(errors.flowControlError())) -> return
+            }
+        self.sent + length => end
+        end <= self.maximum -> unless {
+            Result<SendFlow, errors.Error>.Err(transportError(errors.flowControlError())) -> return
+        }
+        self.finalKnown -> if {
+            Result<SendFlow, errors.Error>.Err(transportError(errors.streamStateError())) -> return
+        }
+        SendFlow {
+            maximum: self.maximum
+            sent: end
+            finalKnown: fin
+            finalSize: fin -> if { end } else { 0 }
+        } -> Result<SendFlow, errors.Error>.Ok
+    }
+}
+
+public initialConnectionFlow receiveMaximum: UInt64, sendMaximum: UInt64 -> ConnectionFlow => ConnectionFlow {
+    receiveMaximum: receiveMaximum
+    received: 0
+    consumed: 0
+    sendMaximum: sendMaximum
+    sent: 0
+}
+
+public initialStreamLimits bidirectional: UInt64, unidirectional: UInt64 -> StreamLimits => StreamLimits {
+    bidirectional: bidirectional
+    unidirectional: unidirectional
+}
+
+public initialStreamRegistry localIsServer: Bool, localBidirectionalLimit: UInt64, localUnidirectionalLimit: UInt64, peerBidirectionalLimit: UInt64, peerUnidirectionalLimit: UInt64, pendingPeerBidirectionalLimit: Int, pendingPeerUnidirectionalLimit: Int -> Result<StreamRegistry, errors.Error> {
+    localBidirectionalLimit -> transport.streamCount? => validLocalBidirectionalLimit
+    localUnidirectionalLimit -> transport.streamCount? => validLocalUnidirectionalLimit
+    peerBidirectionalLimit -> transport.streamCount? => validPeerBidirectionalLimit
+    peerUnidirectionalLimit -> transport.streamCount? => validPeerUnidirectionalLimit
+    pendingPeerBidirectionalLimit > 0 and pendingPeerUnidirectionalLimit > 0
+        -> unless {
+            Result<StreamRegistry, errors.Error>.Err(errors.Error {
+                kind: errors.Kind.InvalidArgument
+                code: 0
+            }) -> return
+        }
+    [UInt64; ~] => pending!
+    0 => pendingIndex!
+    pendingIndex! < pendingPeerBidirectionalLimit
+        -> while {
+            pending! -> push(0)
+            pendingIndex! + 1 => pendingIndex!
+        }
+    [UInt64; ~] => pendingUnidirectional!
+    0 => pendingUnidirectionalIndex!
+    pendingUnidirectionalIndex! < pendingPeerUnidirectionalLimit
+        -> while {
+            pendingUnidirectional! -> push(0)
+            pendingUnidirectionalIndex! + 1 => pendingUnidirectionalIndex!
+        }
+    Result<StreamRegistry, errors.Error>.Ok(StreamRegistry {
+        localIsServer: localIsServer
+        nextLocalBidirectional: 0
+        nextLocalUnidirectional: 0
+        peerBidirectionalSeen: false
+        peerUnidirectionalSeen: false
+        highestPeerBidirectional: 0
+        highestPeerUnidirectional: 0
+        localBidirectionalLimit: validLocalBidirectionalLimit -> value
+        localUnidirectionalLimit: validLocalUnidirectionalLimit -> value
+        peerBidirectionalLimit: validPeerBidirectionalLimit -> value
+        peerUnidirectionalLimit: validPeerUnidirectionalLimit -> value
+        pendingPeerBidirectionalLimit: pendingPeerBidirectionalLimit
+        pendingPeerBidirectional: pending!
+        pendingPeerBidirectionalHead: 0
+        pendingPeerBidirectionalTail: 0
+        pendingPeerBidirectionalCount: 0
+        pendingPeerUnidirectionalLimit: pendingPeerUnidirectionalLimit
+        pendingPeerUnidirectional: pendingUnidirectional!
+        pendingPeerUnidirectionalHead: 0
+        pendingPeerUnidirectionalTail: 0
+        pendingPeerUnidirectionalCount: 0
+    })
+}
+
+impl StreamRegistry {
+    public onPeerBidirectionalLimit: mut self, maximum: UInt64 -> Result<Unit, errors.Error> {
+        maximum -> transport.streamCount? => validMaximum
+        validMaximum -> value => maximumValue
+        maximumValue > self.peerBidirectionalLimit -> if {
+            maximumValue => self.peerBidirectionalLimit
+        }
+        Result<Unit, errors.Error>.Ok
+    }
+
+    public onPeerUnidirectionalLimit: mut self, maximum: UInt64 -> Result<Unit, errors.Error> {
+        maximum -> transport.streamCount? => validMaximum
+        validMaximum -> value => maximumValue
+        maximumValue > self.peerUnidirectionalLimit -> if {
+            maximumValue => self.peerUnidirectionalLimit
+        }
+        Result<Unit, errors.Error>.Ok
+    }
+
+    public openBidirectional: mut self -> Result<StreamIdentity, errors.Error> {
+        self.nextLocalBidirectional < self.peerBidirectionalLimit
+            -> unless {
+                Result<StreamIdentity, errors.Error>.Err(
+                transportError(errors.streamLimitError())) -> return
+            }
+        self.localIsServer -> if { UInt64(1) } else { UInt64(0) } => initiatorBit
+        self.nextLocalBidirectional * 4 + initiatorBit => streamId
+        self.nextLocalBidirectional + 1 => self.nextLocalBidirectional
+        Result<StreamIdentity, errors.Error>.Ok(identity(streamId))
+    }
+
+    public openUnidirectional: mut self -> Result<StreamIdentity, errors.Error> {
+        self.nextLocalUnidirectional < self.peerUnidirectionalLimit
+            -> unless {
+                Result<StreamIdentity, errors.Error>.Err(
+                transportError(errors.streamLimitError())) -> return
+            }
+        self.localIsServer -> if { UInt64(3) } else { UInt64(2) } => typeBits
+        self.nextLocalUnidirectional * 4 + typeBits => streamId
+        self.nextLocalUnidirectional + 1 => self.nextLocalUnidirectional
+        Result<StreamIdentity, errors.Error>.Ok(identity(streamId))
+    }
+
+    public discoverPeerBidirectional: mut self, streamId: UInt64 -> Result<Unit, errors.Error> {
+        validatePeerOpened(streamId, self.localIsServer, self.localBidirectionalLimit, 0)? => identified
+        identified.direction -> when {
+            Unidirectional {
+                Result<Unit, errors.Error>.Err(
+                transportError(errors.streamStateError())) -> return
+            }
+            Bidirectional {}
+        }
+        self.peerBidirectionalSeen and identified.sequence <= self.highestPeerBidirectional
+            -> if { Result<Unit, errors.Error>.Ok -> return }
+        self.peerBidirectionalSeen -> if {
+            self.highestPeerBidirectional + 1
+        } else {
+            UInt64(0)
+        } => firstSequence
+        identified.sequence + 1 - firstSequence => newlyOpened
+        UInt64(self.pendingPeerBidirectionalCount) + newlyOpened <= UInt64(self.pendingPeerBidirectionalLimit)
+            -> unless {
+                Result<Unit, errors.Error>.Err(errors.Error {
+                    kind: errors.Kind.QueueLimitExceeded
+                    code: UInt64(self.pendingPeerBidirectionalLimit)
+                }) -> return
+            }
+        self.localIsServer -> if { UInt64(0) } else { UInt64(1) } => peerInitiatorBit
+        firstSequence => sequence!
+        sequence! <= identified.sequence -> while {
+            writePendingIdentity(
+            self.pendingPeerBidirectional,
+            self.pendingPeerBidirectionalTail,
+            sequence! * 4 + peerInitiatorBit)
+            (self.pendingPeerBidirectionalTail + 1) % self.pendingPeerBidirectionalLimit => self.pendingPeerBidirectionalTail
+            self.pendingPeerBidirectionalCount + 1 => self.pendingPeerBidirectionalCount
+            sequence! + 1 => sequence!
+        }
+        true => self.peerBidirectionalSeen
+        identified.sequence => self.highestPeerBidirectional
+        Result<Unit, errors.Error>.Ok
+    }
+
+    public discoverPeerUnidirectional: mut self, streamId: UInt64 -> Result<Unit, errors.Error> {
+        validatePeerOpened(streamId, self.localIsServer, 0, self.localUnidirectionalLimit)? => identified
+        identified.direction -> when {
+            Bidirectional {
+                Result<Unit, errors.Error>.Err(
+                transportError(errors.streamStateError())) -> return
+            }
+            Unidirectional {}
+        }
+        self.peerUnidirectionalSeen and identified.sequence <= self.highestPeerUnidirectional
+            -> if { Result<Unit, errors.Error>.Ok -> return }
+        self.peerUnidirectionalSeen -> if {
+            self.highestPeerUnidirectional + 1
+        } else {
+            UInt64(0)
+        } => firstSequence
+        identified.sequence + 1 - firstSequence => newlyOpened
+        UInt64(self.pendingPeerUnidirectionalCount) + newlyOpened <= UInt64(self.pendingPeerUnidirectionalLimit)
+            -> unless {
+                Result<Unit, errors.Error>.Err(errors.Error {
+                    kind: errors.Kind.QueueLimitExceeded
+                    code: UInt64(self.pendingPeerUnidirectionalLimit)
+                }) -> return
+            }
+        self.localIsServer -> if { UInt64(2) } else { UInt64(3) } => peerTypeBits
+        firstSequence => sequence!
+        sequence! <= identified.sequence -> while {
+            writePendingIdentity(
+            self.pendingPeerUnidirectional,
+            self.pendingPeerUnidirectionalTail,
+            sequence! * 4 + peerTypeBits)
+            (self.pendingPeerUnidirectionalTail + 1) % self.pendingPeerUnidirectionalLimit => self.pendingPeerUnidirectionalTail
+            self.pendingPeerUnidirectionalCount + 1 => self.pendingPeerUnidirectionalCount
+            sequence! + 1 => sequence!
+        }
+        true => self.peerUnidirectionalSeen
+        identified.sequence => self.highestPeerUnidirectional
+        Result<Unit, errors.Error>.Ok
+    }
+
+    public observeInboundBidirectional: mut self, streamId: UInt64 -> Result<Unit, errors.Error> {
+        streamId <= maximumStreamId() -> unless {
+            Result<Unit, errors.Error>.Err(
+            transportError(errors.streamLimitError())) -> return
+        }
+        identity(streamId) => identified
+        identified.direction -> when {
+            Unidirectional {
+                Result<Unit, errors.Error>.Err(
+                transportError(errors.streamStateError())) -> return
+            }
+            Bidirectional {}
+        }
+        identified.initiator -> when {
+            Client { self.localIsServer }
+            Server { not self.localIsServer }
+        } => peerInitiated
+        peerInitiated -> if {
+            self -> discoverPeerBidirectional(streamId)
+        } else {
+            identified.sequence < self.nextLocalBidirectional
+                -> if {
+                    Result<Unit, errors.Error>.Ok
+                } else {
+                    Result<Unit, errors.Error>.Err(
+                    transportError(errors.streamStateError()))
+                }
+        }
+    }
+
+    public observeInboundUnidirectional: mut self, streamId: UInt64 -> Result<Unit, errors.Error> {
+        streamId <= maximumStreamId() -> unless {
+            Result<Unit, errors.Error>.Err(
+            transportError(errors.streamLimitError())) -> return
+        }
+        identity(streamId) => identified
+        identified.direction -> when {
+            Bidirectional {
+                Result<Unit, errors.Error>.Err(
+                transportError(errors.streamStateError())) -> return
+            }
+            Unidirectional {}
+        }
+        identified.initiator -> when {
+            Client { self.localIsServer }
+            Server { not self.localIsServer }
+        } => peerInitiated
+        peerInitiated -> if {
+            self -> discoverPeerUnidirectional(streamId)
+        } else {
+            # A locally initiated unidirectional stream has no receive side.
+            # Any inbound STREAM frame for it is a STREAM_STATE_ERROR even
+            # when the local stream identity was already reserved.
+            Result<Unit, errors.Error>.Err(
+            transportError(errors.streamStateError()))
+        }
+    }
+
+    public nextPeerBidirectional: mut self -> Option<StreamIdentity> {
+        self.pendingPeerBidirectionalCount == 0 -> if {
+            Option<StreamIdentity>.None
+        } else {
+            self.pendingPeerBidirectional[self.pendingPeerBidirectionalHead] => streamId
+            (self.pendingPeerBidirectionalHead + 1) % self.pendingPeerBidirectionalLimit => self.pendingPeerBidirectionalHead
+            self.pendingPeerBidirectionalCount - 1 => self.pendingPeerBidirectionalCount
+            Option<StreamIdentity>.Some(identity(streamId))
+        }
+    }
+
+    public nextPeerUnidirectional: mut self -> Option<StreamIdentity> {
+        self.pendingPeerUnidirectionalCount == 0 -> if {
+            Option<StreamIdentity>.None
+        } else {
+            self.pendingPeerUnidirectional[self.pendingPeerUnidirectionalHead] => streamId
+            (self.pendingPeerUnidirectionalHead + 1) % self.pendingPeerUnidirectionalLimit => self.pendingPeerUnidirectionalHead
+            self.pendingPeerUnidirectionalCount - 1 => self.pendingPeerUnidirectionalCount
+            Option<StreamIdentity>.Some(identity(streamId))
+        }
+    }
+}
+
+impl ConnectionFlow {
+    public onMaxData: self, maximum: UInt64 -> ConnectionFlow => ConnectionFlow {
+        receiveMaximum: self.receiveMaximum
+        received: self.received
+        consumed: self.consumed
+        sendMaximum: maximum > self.sendMaximum -> if { maximum } else { self.sendMaximum }
+        sent: self.sent
+    }
+
+    public onReceive: self, newlyReceived: UInt64 -> Result<ConnectionFlow, errors.Error> {
+        newlyReceived <= self.receiveMaximum - self.received
+            -> if {
+                ConnectionFlow {
+                    receiveMaximum: self.receiveMaximum
+                    received: self.received + newlyReceived
+                    consumed: self.consumed
+                    sendMaximum: self.sendMaximum
+                    sent: self.sent
+                } -> Result<ConnectionFlow, errors.Error>.Ok
+            } else {
+                Result<ConnectionFlow, errors.Error>.Err(transportError(errors.flowControlError()))
+            }
+    }
+
+    public onConsumed: self, bytes: UInt64 -> Result<ConnectionFlow, errors.Error> {
+        bytes <= self.received - self.consumed -> if {
+            ConnectionFlow {
+                receiveMaximum: self.receiveMaximum
+                received: self.received
+                consumed: self.consumed + bytes
+                sendMaximum: self.sendMaximum
+                sent: self.sent
+            } -> Result<ConnectionFlow, errors.Error>.Ok
+        } else {
+            Result<ConnectionFlow, errors.Error>.Err(transportError(errors.streamStateError()))
+        }
+    }
+
+    public reserveSend: self, bytes: UInt64 -> Result<ConnectionFlow, errors.Error> {
+        bytes <= self.sendMaximum - self.sent -> if {
+            ConnectionFlow {
+                receiveMaximum: self.receiveMaximum
+                received: self.received
+                consumed: self.consumed
+                sendMaximum: self.sendMaximum
+                sent: self.sent + bytes
+            } -> Result<ConnectionFlow, errors.Error>.Ok
+        } else {
+            Result<ConnectionFlow, errors.Error>.Err(transportError(errors.flowControlError()))
+        }
+    }
+}
+
+impl StreamLimits {
+    public onMaxStreams: self, bidirectional: Bool, maximum: UInt64 -> StreamLimits => StreamLimits {
+        bidirectional: bidirectional -> if {
+            maximum > self.bidirectional -> if { maximum } else { self.bidirectional }
+        } else {
+            self.bidirectional
+        }
+        unidirectional: bidirectional -> if {
+            self.unidirectional
+        } else {
+            maximum > self.unidirectional -> if { maximum } else { self.unidirectional }
+        }
+    }
+}

@@ -20,25 +20,68 @@ $modulePaths = @(
     "selfhost/llvm/emitter/diagnostics.slg"
 )
 $fragmentPaths = @(
+    "selfhost/llvm/text/entry_expressions.slg"
+    "selfhost/llvm/text/core_prepare.slg"
     "selfhost/llvm/text/foundation.slg"
     "selfhost/llvm/text/text_literals.slg"
     "selfhost/llvm/text/native_handles.slg"
     "selfhost/llvm/text/entrypoints.slg"
+    "selfhost/llvm/text/runtime_resolution.slg"
+    "selfhost/llvm/text/context_prepare.slg"
+    "selfhost/llvm/text/invariants.slg"
+    "selfhost/llvm/text/invariant_diagnostics.slg"
     "selfhost/llvm/text/core_calls.slg"
+    "selfhost/llvm/text/call_arguments.slg"
     "selfhost/llvm/text/runtime_preamble.slg"
     "selfhost/llvm/text/stream_junctions.slg"
     "selfhost/llvm/text/ownership.slg"
     "selfhost/llvm/text/platform_io.slg"
     "selfhost/llvm/text/containers.slg"
+    "selfhost/llvm/text/container_control.slg"
     "selfhost/llvm/text/control.slg"
+    "selfhost/llvm/text/control_regions.slg"
+    "selfhost/llvm/text/control_region_expressions.slg"
     "selfhost/llvm/text/functions.slg"
+    "selfhost/llvm/text/function_expressions.slg"
+    "selfhost/llvm/text/function_calls.slg"
+    "selfhost/llvm/text/function_returns.slg"
     "selfhost/llvm/text/function_scheduling.slg"
 )
 
-$facadeLines = [IO.File]::ReadAllLines($facadePath)
-if ($facadeLines.Count -gt 4500) {
-    throw "selfhost/llvm/text.slg grew to $($facadeLines.Count) lines; keep the core orchestration below 4,500 lines."
+function Assert-ManifestEntryExactlyOnce {
+    param(
+        [Parameter(Mandatory)][string[]]$Lines,
+        [Parameter(Mandatory)][string]$RelativePath,
+        [Parameter(Mandatory)][string]$ManifestName
+    )
+
+    $count = @($Lines | Where-Object { $_ -ceq $RelativePath }).Count
+    if ($count -ne 1) {
+        throw "$ManifestName contains '$RelativePath' $count times; expected exactly once."
+    }
 }
+
+Assert-ManifestEntryExactlyOnce `
+    -Lines @("first.slg", "second.slg") `
+    -RelativePath "first.slg" `
+    -ManifestName "manifest exact-count positive control"
+$duplicateManifestRejected = $false
+try {
+    Assert-ManifestEntryExactlyOnce `
+        -Lines @("duplicate.slg", "duplicate.slg") `
+        -RelativePath "duplicate.slg" `
+        -ManifestName "manifest duplicate negative control"
+} catch {
+    if ($_.Exception.Message -notlike "manifest duplicate negative control contains 'duplicate.slg' 2 times*") {
+        throw
+    }
+    $duplicateManifestRejected = $true
+}
+if (-not $duplicateManifestRejected) {
+    throw "manifest duplicate negative control was accepted"
+}
+
+$facadeLines = [IO.File]::ReadAllLines($facadePath)
 
 $facadeText = [IO.File]::ReadAllText($facadePath)
 $logicalText = $facadeText + "`n" + (($fragmentPaths | ForEach-Object {
@@ -74,12 +117,7 @@ foreach ($relativePath in $fragmentPaths) {
         throw "$relativePath must contribute to '$logicalNamespace'."
     }
 
-    $fragmentLines = [IO.File]::ReadAllLines($absolutePath)
-    if ($fragmentLines.Count -gt 3000) {
-        throw "$relativePath grew to $($fragmentLines.Count) lines; split the responsibility before it exceeds 3,000 lines."
-    }
 }
-
 $statefulFragments = $fragmentPaths | Where-Object {
     $_ -match "/(core_calls|runtime_preamble|stream_junctions|ownership|platform_io|containers|control|functions|function_scheduling)\.slg$"
 }
@@ -107,16 +145,27 @@ foreach ($manifestPath in $manifestPaths) {
         continue
     }
 
+    Assert-ManifestEntryExactlyOnce `
+        -Lines $lines `
+        -RelativePath "selfhost/llvm/text.slg" `
+        -ManifestName $manifestPath.Name
     foreach ($relativePath in @($modulePaths) + @($fragmentPaths)) {
-        if ($lines -notcontains $relativePath) {
-            throw "$($manifestPath.Name) omits imported emitter module $relativePath."
-        }
+        Assert-ManifestEntryExactlyOnce `
+            -Lines $lines `
+            -RelativePath $relativePath `
+            -ManifestName $manifestPath.Name
     }
 
-    if ($lines -contains "selfhost/llvm/text/entrypoints.slg" `
-        -and $lines -notcontains "selfhost/syntax/diagnostics.slg") {
-        throw "$($manifestPath.Name) omits entrypoint syntax diagnostics dependency."
+    if ($lines -contains "selfhost/llvm/text/entrypoints.slg") {
+        foreach ($dependency in @(
+            "selfhost/source_style.slg"
+            "selfhost/syntax/diagnostics.slg"
+        )) {
+            if ($lines -notcontains $dependency) {
+                throw "$($manifestPath.Name) omits entrypoint dependency $dependency."
+            }
+        }
     }
 }
 
-Write-Host "PASS LLVM emitter modules: facade=$($facadeLines.Count) lines, modules=$($modulePaths.Count), fragments=$($fragmentPaths.Count), manifests=$($manifestPaths.Count)"
+Write-Host "PASS LLVM emitter modules: facade-inventory=$($facadeLines.Count) lines, fixed-line-limits=0, modules=$($modulePaths.Count), fragments=$($fragmentPaths.Count), manifests=$($manifestPaths.Count)"

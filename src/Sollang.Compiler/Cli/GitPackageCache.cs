@@ -68,7 +68,14 @@ internal static class GitPackageCache
         Directory.CreateDirectory(temporary);
         try
         {
-            RunGit(repository, "--git-dir", repository, "--work-tree", temporary, "checkout", "--force", resolved, "--", ".");
+            // Git for Windows cannot initialize a work tree whose physical path
+            // exceeds MAX_PATH, even with core.longpaths. Export the exact commit
+            // through the locked bare repository's index instead: --prefix supports
+            // long destination paths without making that destination a work tree.
+            RunGit(repository, "--git-dir", repository, "read-tree", resolved);
+            var prefix = temporary.Replace('\\', '/') + "/";
+            RunGit(repository, "--git-dir", repository,
+                "--work-tree", repository, "checkout-index", "--all", "--force", "--prefix=" + prefix);
             RejectLinks(temporary);
             Directory.CreateDirectory(revisionRoot);
             Directory.Move(temporary, content);
@@ -133,6 +140,13 @@ internal static class GitPackageCache
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        // This applies to object writes during fetch as well as exported files.
+        // Keep the setting process-local; do not change the user's Git config.
+        if (OperatingSystem.IsWindows())
+        {
+            start.ArgumentList.Add("-c");
+            start.ArgumentList.Add("core.longpaths=true");
+        }
         foreach (var argument in arguments)
         {
             start.ArgumentList.Add(argument);

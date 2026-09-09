@@ -1,0 +1,123 @@
+import std.net as net
+import std.net.http as http
+import std.net.http.body as body
+import std.net.http.response as response
+import std.net.http.server as server
+import std.net.socket as socket
+
+bytesEqual left: ref [UInt8; ~], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+decodeRequest request: move server.Request, policy: body.BodyPolicy, output: mut [UInt8; ~] -> Result<server.Request, server.Error> uses Network {
+    request -> openBody(policy, 16)? => reader!
+    false => complete!
+    not complete! -> while {
+        reader! -> readInto(output)? => progress
+        progress.complete => complete!
+    }
+    reader! -> finish
+}
+
+readResponse connection: move socket.TcpStream -> Result<[UInt8; ~], socket.SocketError> uses Network {
+    [UInt8; ~] => bytes!
+    bytes! -> reserve(256)
+    false => complete!
+    not complete! -> while {
+        connection -> receiveAppend(bytes!)? => received
+        received == 0 -> if { true => complete! }
+    }
+    connection -> close
+    Result<[UInt8; ~], socket.SocketError>.Ok(bytes!)
+}
+
+main {
+    net.loopback(43183) -> unified => endpoint
+    http.limits(1_024, 256, 16, 64, 512) -> when {
+        Err(_) { "http-request-body-cursor=setup-failed" -> println }
+        Ok(requestLimits) => body.BodyLimits {
+            maxEncodedBytes: 256
+            maxDecodedBytes: 256
+            maxChunkLineBytes: 64
+            maxTrailerBytes: 64
+            maxTrailerFields: 4
+        } -> policy -> when {
+            Err(_) { "http-request-body-cursor=setup-failed" -> println }
+            Ok(bodyPolicy) => server.ServerOptions {
+                listener: socket.ListenOptions {
+                    endpoint: endpoint
+                    backlog: 8
+                    reuseAddress: true
+                }
+                requestLimits: requestLimits
+            } -> listen -> when {
+                Err(_) { "http-request-body-cursor=listen-failed" -> println }
+                Ok(service) {
+                    endpoint -> connect -> when {
+                        Err(_) { "http-request-body-cursor=connect-failed" -> println }
+                        Ok(client) {
+                            client -> sendText("POST /upload HTTP/1.1\r\nHost: loopback\r\nContent-Length: 3\r\n\r\nabcGET /next HTTP/1.1\r\nHost: loopback\r\n\r\n") -> when {
+                                Err(_) { "http-request-body-cursor=send-failed" -> println }
+                                Ok(_) => service -> accept -> when {
+                                    Err(_) { "http-request-body-cursor=accept-failed" -> println }
+                                    Ok(connection) => connection -> readRequest -> when {
+                                        Err(_) { "http-request-body-cursor=read-failed" -> println }
+                                        Ok(request) {
+                                            [UInt8; ~] => decodedBody!
+                                            request -> decodeRequest(bodyPolicy, decodedBody!) -> when {
+                                                Err(_) { "http-request-body-cursor=decode-failed" -> println }
+                                                Ok(completedRequest) {
+                                                    decodedBody! -> bytesEqual([97, 98, 99]) => bodyMatches
+                                                    completedRequest -> leftoverCount == 38 => leftoverMatches
+                                                    response.ResponseLimits {
+                                                        maxHeadBytes: 512
+                                                        maxFieldCount: 8
+                                                        maxFieldNameBytes: 64
+                                                        maxFieldValueBytes: 256
+                                                    } -> policy -> when {
+                                                        Err(_) { "http-request-body-cursor=response-policy-failed" -> println }
+                                                        Ok(responsePolicy) => responsePolicy -> response("POST", completedRequest.head.version, 200, "OK", 2, response.ConnectionMode.Close) -> when {
+                                                            Err(_) { "http-request-body-cursor=response-head-failed" -> println }
+                                                            Ok(writer) => writer -> finish -> when {
+                                                                Err(_) { "http-request-body-cursor=response-finish-failed" -> println }
+                                                                Ok(head) {
+                                                                    [UInt8(111), 107; ~] => responseBody
+                                                                    completedRequest -> respond(head, responseBody) -> when {
+                                                                        Err(_) { "http-request-body-cursor=respond-failed" -> println }
+                                                                        Ok(_) => client -> readResponse -> when {
+                                                                            Err(_) { "http-request-body-cursor=client-read-failed" -> println }
+                                                                            Ok(received) {
+                                                                                service -> close
+                                                                                bodyMatches
+                                                                                    and leftoverMatches
+                                                                                    and (received -> len) > 2
+                                                                                    and received[(received -> len) - 2] == 111
+                                                                                    and received[(received -> len) - 1] == 107
+                                                                                    -> if { "http-request-body-cursor=ok" } else { "http-request-body-cursor=failed" }
+                                                                                    -> println
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

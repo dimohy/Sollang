@@ -1,0 +1,48 @@
+# Guards the browser compiler's module-fragment identity storage shape.
+struct Identity {
+    sourceIndex: Int
+    pathHash: UInt64
+    pathStart: UIntSize
+    pathLength: UIntSize
+    importCount: Int
+}
+
+main {
+    UInt64(7794543808165292697) => expectedHash
+    [Identity; ~] => identities!
+    # Five or more elements cross the initial four-slot capacity and force a
+    # moving realloc, so this fixture covers both in-place reuse and growth.
+    1..6 -> each index {
+        identities! -> push(Identity {
+            sourceIndex: index
+            pathHash: expectedHash
+            pathStart: 0
+            pathLength: 12
+            importCount: 0
+        })
+    }
+    0 => matching!
+    identities! -> each identity {
+        identity.pathHash == expectedHash
+            -> if { matching! + 1 => matching! }
+    }
+    identities![0].pathHash == expectedHash => firstMatches
+    identities![5].pathHash == expectedHash => lastMatches
+    (identities! -> len) == 6 -> if {
+        matching! == 6 -> if {
+            "fragment identities preserved" -> println
+        } else {
+            firstMatches -> if {
+                lastMatches -> if {
+                    "fragment identity iteration corrupted" -> println
+                } else {
+                    "fragment identity last hash corrupted" -> println
+                }
+            } else {
+                "fragment identity first hash corrupted" -> println
+            }
+        }
+    } else {
+        "fragment identity length corrupted" -> println
+    }
+}

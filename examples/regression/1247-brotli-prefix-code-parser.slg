@@ -1,0 +1,185 @@
+import std.compress.brotli.prefix_code as codes
+import std.compress.brotli.prefix_code.error as code_errors
+import std.compress.brotli.prefix_table as prefix
+
+kindCode kind: code_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    TruncatedInput { 1 }
+    DuplicateSymbol { 2 }
+    InvalidCodeSpace { 3 }
+    TableLimitExceeded { 4 }
+    InvalidSymbol { 5 }
+}
+
+failsWith result: Result<codes.Parsed, codes.Error>, expectedKind: Int -> Bool {
+    result -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == expectedKind }
+    }
+}
+
+decodesFour table: ref prefix.Table, input: [UInt8], position: prefix.Position -> Bool {
+    table -> read(input, position) -> when {
+        Err(_) { false }
+        Ok(first) {
+            table -> read(input, first.position) -> when {
+                Err(_) { false }
+                Ok(second) {
+                    table -> read(input, second.position) -> when {
+                        Err(_) { false }
+                        Ok(third) {
+                            table -> read(input, third.position) -> when {
+                                Err(_) { false }
+                                Ok(fourth) {
+                                    first.symbol == 0 and second.symbol == 1
+                                        and third.symbol == 2 and fourth.symbol == 3
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+printCheck label: Text, value: Bool -> Unit uses Console {
+    "$(label)=$(value)" -> println
+}
+
+checksStreamFixed parser: codes.Parser -> Bool {
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+        Err(_) { false -> return }
+        Ok(window) { window }
+    } => window!
+    parser -> fixedCodeLengthReader => fixedReader!
+    window! -> fill([15], prefix.Position { byteIndex: 0, bitIndex: 0 }, 2) -> when {
+        Err(_) { false -> return }
+        Ok(position) { position }
+    } => firstPosition
+    fixedReader! -> read(window!) -> when {
+        Err(_) { false -> return }
+        Ok(read) { read }
+    } => firstFixed
+    firstFixed -> when {
+        NeedMore(bits) { bits == 1 }
+        Ready(_) { false }
+    } => needsThird
+    window! -> fill([15], firstPosition, 1) -> when {
+        Err(_) { false -> return }
+        Ok(position) { position }
+    } => secondPosition
+    fixedReader! -> read(window!) -> when {
+        Err(_) { false -> return }
+        Ok(read) { read }
+    } => secondFixed
+    secondFixed -> when {
+        NeedMore(bits) { bits == 1 }
+        Ready(_) { false }
+    } => needsFourth
+    window! -> fill([15], secondPosition, 1) -> when {
+        Err(_) { false -> return }
+        Ok(position) { position }
+    } => finalPosition
+    fixedReader! -> read(window!) -> when {
+        Err(_) { false -> return }
+        Ok(read) { read }
+    } => finalFixed
+    finalFixed -> when {
+        NeedMore(_) { false }
+        Ready(value) { value == 5 }
+    } => fixedReady
+    needsThird and needsFourth and fixedReady
+        and finalPosition.byteIndex == 0 and finalPosition.bitIndex == 4
+}
+
+main {
+    codes.Limits { maxAlphabetSize: 704, maxTableEntries: 1_080 } -> parser -> when {
+        Err(_) { "parser=false" -> println }
+        Ok(parser) {
+            [UInt8(77), 14, 27] => simpleInput
+            parser -> parse(
+            simpleInput,
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4,
+            2) -> when {
+                Err(_) { printCheck("simple", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "simple",
+                    parsed.position.byteIndex == 1 and parsed.position.bitIndex == 5
+                        and (parsed.table -> decodesFour(simpleInput, parsed.position)))
+                }
+            }
+
+            [UInt8(220), 61, 54] => complexInput
+            parser -> parse(
+            complexInput,
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4,
+            2) -> when {
+                Err(_) { printCheck("complex", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "complex",
+                    parsed.position.byteIndex == 1 and parsed.position.bitIndex == 6
+                        and (parsed.table -> decodesFour(complexInput, parsed.position)))
+                }
+            }
+
+            [UInt8(192), 1, 112, 14] => repeatPreviousInput
+            parser -> parse(
+            repeatPreviousInput,
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            8,
+            3) -> when {
+                Err(_) { printCheck("repeat-16", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "repeat-16",
+                    parsed.position.byteIndex == 3 and parsed.position.bitIndex == 5
+                        and (parsed.table -> entryCount) == 8)
+                }
+            }
+
+            [UInt8(28), 0, 103, 1] => repeatZeroInput
+            parser -> parse(
+            repeatZeroInput,
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            10,
+            2) -> when {
+                Err(_) { printCheck("repeat-17", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "repeat-17",
+                    parsed.position.byteIndex == 3 and parsed.position.bitIndex == 2
+                        and (parsed.table -> entryCount) == 4)
+                }
+            }
+
+            printCheck(
+            "duplicate",
+            parser -> parse(
+            [5],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4,
+            2) -> failsWith(2))
+            printCheck(
+            "truncated",
+            parser -> parse(
+            [],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4,
+            2) -> failsWith(1))
+            printCheck(
+            "invalid-symbol",
+            parser -> parse(
+            [49],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            3,
+            2) -> failsWith(5))
+
+            printCheck("stream-fixed", parser -> checksStreamFixed)
+        }
+    }
+}

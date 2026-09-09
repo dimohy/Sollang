@@ -1,0 +1,64 @@
+struct Document {
+    uri: [UInt8; ~]
+    text: [UInt8; ~]
+}
+
+upsert documents: mut [Document; ~], uri: move [UInt8; ~], text: move [UInt8; ~] -> Int {
+    documents -> len => index
+    documents -> push(Document { uri: uri, text: text })
+    index
+}
+
+documentTextLength document: ref Document -> Int {
+    document.text -> len
+}
+
+dispatchFirst documents: mut [Document; ~] -> Int {
+    [UInt8(1); ~] => uri
+    [UInt8(2), 3; ~] => text
+    documents -> upsert(uri, text) => index
+    documents[index] -> documentTextLength
+}
+
+dispatchSecond offset: Int, documents: mut [Document; ~] -> Int {
+    [UInt8(1); ~] => uri
+    [UInt8(2), 3; ~] => text
+    documents -> upsert(uri, text) => index
+    documents[index] -> documentTextLength => length
+    offset + length
+}
+
+dispatchControl documents: mut [Document; ~], enabled: Bool -> Int {
+    enabled -> if {
+        [UInt8(1); ~] => uri
+        [UInt8(2), 3; ~] => text
+        documents -> upsert(uri, text) => index
+        documents[index] -> documentTextLength
+    } else {
+        0
+    }
+}
+
+dispatchWhile documents: mut [Document; ~] -> Int {
+    [UInt8(1); ~] => uri
+    [UInt8(2), 3; ~] => text
+    documents -> upsert(uri, text) => index
+    0 => iteration!
+    iteration! < (documents[index] -> documentTextLength)
+        -> while {
+        iteration! + 1 => iteration!
+    }
+    iteration!
+}
+
+main {
+    [Document; ~] => first!
+    [Document; ~] => second!
+    [Document; ~] => control!
+    [Document; ~] => loop!
+    first! -> dispatchFirst => firstLength
+    0 -> dispatchSecond(second!) => secondLength
+    control! -> dispatchControl(true) => controlLength
+    loop! -> dispatchWhile => whileLength
+    "$(firstLength),$(first! -> len);$(secondLength),$(second! -> len);$(controlLength),$(control! -> len);$(whileLength),$(loop! -> len)" -> println
+}

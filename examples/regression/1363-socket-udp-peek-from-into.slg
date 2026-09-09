@@ -1,0 +1,59 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+# Two peeks observe the same queued datagram; receiveFromInto then consumes it.
+struct Observation {
+    firstCount: UIntSize
+    secondCount: UIntSize
+    receivedCount: UIntSize
+    lengthsMatch: Bool
+    sourcesMatch: Bool
+    bytesMatch: Bool
+}
+
+roundtrip local: net.Endpoint -> Result<Observation, socket.SocketError> uses Network {
+    socket.DatagramBindOptions {
+        endpoint: local
+        reuseAddress: true
+    } -> bind? => receiver
+    receiver -> localPort? => receiverPort
+    socket.DatagramBindOptions {
+        endpoint: net.loopback(0) -> unified
+        reuseAddress: true
+    } -> bind? => sender
+    sender -> localPort? => senderPort
+    [UInt8(112), 101, 101, 107; ~] => payload
+    sender -> sendTo(net.loopback(receiverPort) -> unified, payload)? => sent
+    [UInt8; 16~] => first!
+    [UInt8; 16~] => second!
+    [UInt8; 16~] => received!
+    receiver -> peekFromInto(first!)? => firstReceipt
+    receiver -> peekFromInto(second!)? => secondReceipt
+    receiver -> receiveFromInto(received!)? => receivedReceipt
+    firstReceipt.source -> port => firstPort
+    secondReceipt.source -> port => secondPort
+    receivedReceipt.source -> port => receivedPort
+    first! -> len => firstLength
+    second! -> len => secondLength
+    received! -> len => receivedLength
+    sender -> close
+    receiver -> close
+    Result<Observation, socket.SocketError>.Ok(Observation {
+        firstCount: firstReceipt.count
+        secondCount: secondReceipt.count
+        receivedCount: receivedReceipt.count
+        lengthsMatch: sent == UIntSize(firstLength) and firstLength == secondLength and secondLength == receivedLength
+        sourcesMatch: firstPort == senderPort and secondPort == senderPort and receivedPort == senderPort
+        bytesMatch: first![0] == second![0] and second![0] == received![0] and first![3] == second![3] and second![3] == received![3]
+    })
+}
+
+main {
+    net.loopback(0) -> unified -> roundtrip -> when {
+        Ok(observation) {
+            "udp-peek=$(observation.firstCount),$(observation.secondCount),$(observation.receivedCount),$(observation.lengthsMatch),$(observation.sourcesMatch),$(observation.bytesMatch)" -> println
+        }
+        Err(error) { "udp-error=$(error.code)" -> println }
+    }
+}

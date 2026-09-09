@@ -1,0 +1,34 @@
+# Copying a scalar enum field must preserve a live borrow from its sibling.
+enum Version {
+    Http10
+    Http11
+}
+
+struct Head {
+    method: Text
+    version: Version
+}
+
+struct Packet {
+    head: Head
+    data: [Int; ~]
+}
+
+methodText head: Head -> Text => head.method
+
+number version: Version -> Int => version -> when {
+    Http10 { 10 }
+    Http11 { 11 }
+}
+
+main {
+    Packet {
+        head: Head { method: "GET", version: Version.Http11 }
+        data: [7]
+    } => packet
+    packet.head -> methodText => method
+    packet.head.version => version
+    method -> println
+    version -> number -> println
+    packet.data[0] -> println
+}

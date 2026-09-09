@@ -11,21 +11,21 @@ import sollang.compiler.semantic.types as types
 import syntax.generated.slg as grammar
 
 public struct CompositeType {
-    sourceModule: Int
-    typeAst: Int
-    canonical: Int
-    kind: Int
-    elementOrigin: Int
-    elementModule: Int
-    elementSymbol: Int
-    keyOrigin: Int
-    keyModule: Int
-    keySymbol: Int
-    valueOrigin: Int
-    valueModule: Int
-    valueSymbol: Int
-    lengthToken: Int
-    status: Int
+    public sourceModule: Int
+    public typeAst: Int
+    public canonical: Int
+    public kind: Int
+    public elementOrigin: Int
+    public elementModule: Int
+    public elementSymbol: Int
+    public keyOrigin: Int
+    public keyModule: Int
+    public keySymbol: Int
+    public valueOrigin: Int
+    public valueModule: Int
+    public valueSymbol: Int
+    public lengthToken: Int
+    public status: Int
 }
 
 # Component origins match nominal_types: 0 local, 1 builtin, 3 generic.
@@ -52,231 +52,231 @@ public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeI
         0 => typeIndex!
         typeIndex! < sourceRange.typeCount -> while {
             package.typeUses[sourceRange.typeStart + typeIndex!] => typeUse
-            ((typeUse.kind >= 2 and typeUse.kind <= 6) or typeUse.kind == 8 or typeUse.kind == 12 or typeUse.kind == 13)
+            (typeUse.kind >= 2 and typeUse.kind <= 6) or typeUse.kind == 8 or typeUse.kind == 12 or typeUse.kind == 13
                 -> if {
-                [-1, -1, -1; ~] => componentTokens!
-                package.nodes[sourceRange.astStart + typeUse.astNode] => typeNode
-                0 => identifierOrdinal!
-                typeNode.firstToken => tokenIndex!
-                tokenIndex! < typeNode.firstToken + typeNode.tokenCount
-                    -> while {
-                    package.tokens[sourceRange.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
-                        -> if {
-                        (typeUse.kind == 5 or typeUse.kind == 13) -> if {
-                            identifierOrdinal! == 0 -> if { tokenIndex! => componentTokens![1] }
-                            identifierOrdinal! == 1 -> if { tokenIndex! => componentTokens![2] }
-                        } else {
-                            (typeUse.kind == 6 or typeUse.kind == 8) -> if {
-                                identifierOrdinal! == 1 -> if { tokenIndex! => componentTokens![0] }
-                            } else {
-                                identifierOrdinal! == 0 -> if { tokenIndex! => componentTokens![0] }
-                            }
-                        }
-                        identifierOrdinal! + 1 => identifierOrdinal!
-                    }
-                    tokenIndex! + 1 => tokenIndex!
-                }
-
-                -1 => typeOwnerFunction!
-                typeNode.parent => ownerAst!
-                (ownerAst! >= 0 and typeOwnerFunction! < 0) -> while {
-                    0 => ownerSymbolIndex!
-                    ownerSymbolIndex! < sourceRange.symbolCount -> while {
-                        package.symbols[sourceRange.symbolStart + ownerSymbolIndex!] => ownerCandidate
-                        (ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!)
-                            -> if { ownerSymbolIndex! => typeOwnerFunction! }
-                        ownerSymbolIndex! + 1 => ownerSymbolIndex!
-                    }
-                    typeOwnerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
-                }
-
-                [-1, -1, -1; ~] => componentOrigins!
-                [-1, -1, -1; ~] => componentModules!
-                [-1, -1, -1; ~] => componentSymbols!
-                0 => status!
-                0 => componentSlot!
-                componentSlot! < 3 -> while {
-                    componentTokens![componentSlot!] >= 0 -> if {
-                        package.tokens[sourceRange.tokenStart + componentTokens![componentSlot!]] => componentName
-                        -1 => builtinIndex!
-                        0 => builtinSearch!
-                        (builtinSearch! < (builtinNames -> len) and builtinIndex! < 0)
-                            -> while {
-                            builtinNames[builtinSearch!] => builtinName
-                            componentName.span.length == (builtinName -> len) => equal!
-                            UIntSize(0) => nameByte!
-                            (equal! and nameByte! < componentName.span.length)
-                                -> while {
-                                source -> byte(componentName.span.start + nameByte!) => leftByte
-                                builtinName -> byte(nameByte!) => rightByte
-                                leftByte != rightByte -> if { false => equal! }
-                                nameByte! + 1 => nameByte!
-                            }
-                            equal! -> if { builtinSearch! => builtinIndex! }
-                            builtinSearch! + 1 => builtinSearch!
-                        }
-                        builtinIndex! >= 0 -> if {
-                            1 => componentOrigins![componentSlot!]
-                            -1 => componentModules![componentSlot!]
-                            builtinIndex! => componentSymbols![componentSlot!]
-                        } else {
-                            -1 => componentSymbol!
-                            0 => symbolIndex!
-                            (symbolIndex! < sourceRange.symbolCount and componentSymbol! < 0)
-                                -> while {
-                                package.symbols[sourceRange.symbolStart + symbolIndex!] => candidate
-                                ((candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == typeOwnerFunction!))
-                                    -> if {
-                                    package.tokens[sourceRange.tokenStart + candidate.nameToken] => candidateName
-                                    componentName.span.length == candidateName.span.length => equal!
-                                    UIntSize(0) => nameByte!
-                                    (equal! and nameByte! < componentName.span.length)
-                                        -> while {
-                                        source -> byte(componentName.span.start + nameByte!) => leftByte
-                                        source -> byte(candidateName.span.start + nameByte!) => rightByte
-                                        leftByte != rightByte -> if { false => equal! }
-                                        nameByte! + 1 => nameByte!
-                                    }
-                                    equal! -> if { symbolIndex! => componentSymbol! }
-                                }
-                                symbolIndex! + 1 => symbolIndex!
-                            }
-                            sourceIndex! => componentSourceModule!
-                            componentSymbol! < 0 -> if {
-                                identities[sourceIndex!] => currentIdentity
-                                0 => siblingModuleIndex!
-                                siblingModuleIndex! < (identities -> len) -> while {
-                                    identities[siblingModuleIndex!] => siblingIdentity
-                                    (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash)
-                                        -> if {
-                                        siblingIdentity.sourceIndex => siblingSourceIndex
-                                        package.sources[siblingSourceIndex] -> len => siblingSourceLength
-                                        package.sources[siblingSourceIndex] -> slice(UIntSize(0), siblingSourceLength) => siblingSource
-                                        package.ranges[siblingSourceIndex] => siblingRange
-                                        0 => siblingSymbolIndex!
-                                        (siblingSymbolIndex! < siblingRange.symbolCount and componentSymbol! < 0)
-                                            -> while {
-                                            package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingCandidate
-                                            (siblingCandidate.parent < 0 and (siblingCandidate.kind == 3 or siblingCandidate.kind == 4))
-                                                -> if {
-                                                package.tokens[siblingRange.tokenStart + siblingCandidate.nameToken] => siblingName
-                                                componentName.span.length == siblingName.span.length => siblingEqual!
-                                                UIntSize(0) => siblingNameByte!
-                                                (siblingEqual! and siblingNameByte! < componentName.span.length)
-                                                    -> while {
-                                                    (source -> byte(componentName.span.start + siblingNameByte!)) != (siblingSource -> byte(siblingName.span.start + siblingNameByte!))
-                                                        -> if {
-                                                        false => siblingEqual!
-                                                    }
-                                                    siblingNameByte! + 1 => siblingNameByte!
-                                                }
-                                                siblingEqual! -> if {
-                                                    siblingSymbolIndex! => componentSymbol!
-                                                    siblingSourceIndex => componentSourceModule!
-                                                }
-                                            }
-                                            siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                    [-1, -1, -1; ~] => componentTokens!
+                    package.nodes[sourceRange.astStart + typeUse.astNode] => typeNode
+                    0 => identifierOrdinal!
+                    typeNode.firstToken => tokenIndex!
+                    tokenIndex! < typeNode.firstToken + typeNode.tokenCount
+                        -> while {
+                            package.tokens[sourceRange.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    typeUse.kind == 5 or typeUse.kind == 13 -> if {
+                                        identifierOrdinal! == 0 -> if { tokenIndex! => componentTokens![1] }
+                                        identifierOrdinal! == 1 -> if { tokenIndex! => componentTokens![2] }
+                                    } else {
+                                        typeUse.kind == 6 or typeUse.kind == 8 -> if {
+                                            identifierOrdinal! == 1 -> if { tokenIndex! => componentTokens![0] }
+                                        } else {
+                                            identifierOrdinal! == 0 -> if { tokenIndex! => componentTokens![0] }
                                         }
                                     }
-                                    siblingModuleIndex! + 1 => siblingModuleIndex!
+                                    identifierOrdinal! + 1 => identifierOrdinal!
+                                }
+                            tokenIndex! + 1 => tokenIndex!
+                        }
+
+                    -1 => typeOwnerFunction!
+                    typeNode.parent => ownerAst!
+                    ownerAst! >= 0 and typeOwnerFunction! < 0 -> while {
+                        0 => ownerSymbolIndex!
+                        ownerSymbolIndex! < sourceRange.symbolCount -> while {
+                            package.symbols[sourceRange.symbolStart + ownerSymbolIndex!] => ownerCandidate
+                            ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!
+                                -> if { ownerSymbolIndex! => typeOwnerFunction! }
+                            ownerSymbolIndex! + 1 => ownerSymbolIndex!
+                        }
+                        typeOwnerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
+                    }
+
+                    [-1, -1, -1; ~] => componentOrigins!
+                    [-1, -1, -1; ~] => componentModules!
+                    [-1, -1, -1; ~] => componentSymbols!
+                    0 => status!
+                    0 => componentSlot!
+                    componentSlot! < 3 -> while {
+                        componentTokens![componentSlot!] >= 0 -> if {
+                            package.tokens[sourceRange.tokenStart + componentTokens![componentSlot!]] => componentName
+                            -1 => builtinIndex!
+                            0 => builtinSearch!
+                            builtinSearch! < (builtinNames -> len) and builtinIndex! < 0
+                                -> while {
+                                    builtinNames[builtinSearch!] => builtinName
+                                    componentName.span.length == (builtinName -> len) => equal!
+                                    UIntSize(0) => nameByte!
+                                    equal! and nameByte! < componentName.span.length
+                                        -> while {
+                                            source -> byte(componentName.span.start + nameByte!) => leftByte
+                                            builtinName -> byte(nameByte!) => rightByte
+                                            leftByte != rightByte -> if { false => equal! }
+                                            nameByte! + 1 => nameByte!
+                                        }
+                                    equal! -> if { builtinSearch! => builtinIndex! }
+                                    builtinSearch! + 1 => builtinSearch!
+                                }
+                            builtinIndex! >= 0 -> if {
+                                1 => componentOrigins![componentSlot!]
+                                -1 => componentModules![componentSlot!]
+                                builtinIndex! => componentSymbols![componentSlot!]
+                            } else {
+                                -1 => componentSymbol!
+                                0 => symbolIndex!
+                                symbolIndex! < sourceRange.symbolCount and componentSymbol! < 0
+                                    -> while {
+                                        package.symbols[sourceRange.symbolStart + symbolIndex!] => candidate
+                                        (candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == typeOwnerFunction!)
+                                            -> if {
+                                                package.tokens[sourceRange.tokenStart + candidate.nameToken] => candidateName
+                                                componentName.span.length == candidateName.span.length => equal!
+                                                UIntSize(0) => nameByte!
+                                                equal! and nameByte! < componentName.span.length
+                                                    -> while {
+                                                        source -> byte(componentName.span.start + nameByte!) => leftByte
+                                                        source -> byte(candidateName.span.start + nameByte!) => rightByte
+                                                        leftByte != rightByte -> if { false => equal! }
+                                                        nameByte! + 1 => nameByte!
+                                                    }
+                                                equal! -> if { symbolIndex! => componentSymbol! }
+                                            }
+                                        symbolIndex! + 1 => symbolIndex!
+                                    }
+                                sourceIndex! => componentSourceModule!
+                                componentSymbol! < 0 -> if {
+                                    identities[sourceIndex!] => currentIdentity
+                                    0 => siblingModuleIndex!
+                                    siblingModuleIndex! < (identities -> len) -> while {
+                                        identities[siblingModuleIndex!] => siblingIdentity
+                                        siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash
+                                            -> if {
+                                                siblingIdentity.sourceIndex => siblingSourceIndex
+                                                package.sources[siblingSourceIndex] -> len => siblingSourceLength
+                                                package.sources[siblingSourceIndex] -> slice(UIntSize(0), siblingSourceLength) => siblingSource
+                                                package.ranges[siblingSourceIndex] => siblingRange
+                                                0 => siblingSymbolIndex!
+                                                siblingSymbolIndex! < siblingRange.symbolCount and componentSymbol! < 0
+                                                    -> while {
+                                                        package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingCandidate
+                                                        siblingCandidate.parent < 0 and (siblingCandidate.kind == 3 or siblingCandidate.kind == 4)
+                                                            -> if {
+                                                                package.tokens[siblingRange.tokenStart + siblingCandidate.nameToken] => siblingName
+                                                                componentName.span.length == siblingName.span.length => siblingEqual!
+                                                                UIntSize(0) => siblingNameByte!
+                                                                siblingEqual! and siblingNameByte! < componentName.span.length
+                                                                    -> while {
+                                                                        (source -> byte(componentName.span.start + siblingNameByte!)) != (siblingSource -> byte(siblingName.span.start + siblingNameByte!))
+                                                                            -> if {
+                                                                                false => siblingEqual!
+                                                                            }
+                                                                        siblingNameByte! + 1 => siblingNameByte!
+                                                                    }
+                                                                siblingEqual! -> if {
+                                                                    siblingSymbolIndex! => componentSymbol!
+                                                                    siblingSourceIndex => componentSourceModule!
+                                                                }
+                                                            }
+                                                        siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                                                    }
+                                            }
+                                        siblingModuleIndex! + 1 => siblingModuleIndex!
+                                    }
+                                }
+                                componentSymbol! >= 0 -> if {
+                                    0 => componentOrigin!
+                                    package.ranges[componentSourceModule!] => componentSourceRange
+                                    package.symbols[componentSourceRange.symbolStart + componentSymbol!].kind == 32
+                                        -> if {
+                                            3 => componentOrigin!
+                                        }
+                                    componentOrigin! => componentOrigins![componentSlot!]
+                                    componentSourceModule! => componentModules![componentSlot!]
+                                    componentSymbol! => componentSymbols![componentSlot!]
+                                } else {
+                                    2 => status!
                                 }
                             }
-                            componentSymbol! >= 0 -> if {
-                                0 => componentOrigin!
-                                package.ranges[componentSourceModule!] => componentSourceRange
-                                package.symbols[componentSourceRange.symbolStart + componentSymbol!].kind == 32
-                                    -> if {
-                                    3 => componentOrigin!
-                                }
-                                componentOrigin! => componentOrigins![componentSlot!]
-                                componentSourceModule! => componentModules![componentSlot!]
-                                componentSymbol! => componentSymbols![componentSlot!]
-                            } else {
-                                2 => status!
-                            }
                         }
+                        componentSlot! + 1 => componentSlot!
                     }
-                    componentSlot! + 1 => componentSlot!
-                }
-                (typeUse.kind != 5 and typeUse.kind != 13 and componentOrigins![0] < 0)
-                    -> if {
-                    0 => importedTypeIndex!
-                    importedTypeIndex! < (importedTypes -> len) -> while {
-                        importedTypes[importedTypeIndex!] => importedType
-                        (importedType.sourceModule == sourceIndex! and importedType.typeAst == typeUse.astNode and importedType.status == 0)
-                            -> if {
-                            package -> typeIds.intrinsicNominalSymbol(identities, importedType.targetModule, importedType.targetSymbol) => intrinsicSymbol
-                            intrinsicSymbol >= 0 -> if {
-                                1 => componentOrigins![0]
-                                -1 => componentModules![0]
-                                intrinsicSymbol => componentSymbols![0]
-                            } else {
-                                2 => componentOrigins![0]
-                                importedType.targetModule => componentModules![0]
-                                importedType.targetSymbol => componentSymbols![0]
-                            }
-                            0 => status!
-                        }
-                        importedTypeIndex! + 1 => importedTypeIndex!
-                    }
-                }
-                -1 => canonicalCompositeTypeId!
-                0 => canonicalReferenceSearch!
-                canonicalReferenceSearch! < (semanticTypeSet.references -> len)
-                    -> while {
-                    semanticTypeSet.references[canonicalReferenceSearch!] => canonicalReference
-                    (canonicalReference.status == 0 and canonicalReference.sourceModule == sourceIndex! and canonicalReference.typeAst == typeUse.astNode)
+                    typeUse.kind != 5 and typeUse.kind != 13 and componentOrigins![0] < 0
                         -> if {
-                        semanticTypeSet.types[canonicalReference.typeId].kind == typeUse.kind
-                            -> if {
-                            canonicalReference.typeId => canonicalCompositeTypeId!
-                        }
-                    }
-                    canonicalReferenceSearch! + 1 => canonicalReferenceSearch!
-                }
-                canonicalCompositeTypeId! >= 0 -> if {
-                    semanticTypeSet.types[canonicalCompositeTypeId!] => canonicalComposite
-                    0 => canonicalChildIndex!
-                    canonicalChildIndex! < 2 -> while {
-                        canonicalComposite.first => canonicalChildTypeId!
-                        canonicalChildIndex! == 1 -> if { canonicalComposite.second => canonicalChildTypeId! }
-                        canonicalChildTypeId! >= 0 -> if {
-                            semanticTypeSet.types[canonicalChildTypeId!] => canonicalChild
-                            canonicalChild.kind == 1 -> if {
-                                canonicalChildIndex! => canonicalComponentSlot!
-                                (typeUse.kind == 5 or typeUse.kind == 13) -> if { canonicalComponentSlot! + 1 => canonicalComponentSlot! }
-                                canonicalChild.origin => componentOrigins![canonicalComponentSlot!]
-                                canonicalChild.module => componentModules![canonicalComponentSlot!]
-                                canonicalChild.symbol => componentSymbols![canonicalComponentSlot!]
+                            0 => importedTypeIndex!
+                            importedTypeIndex! < (importedTypes -> len) -> while {
+                                importedTypes[importedTypeIndex!] => importedType
+                                importedType.sourceModule == sourceIndex! and importedType.typeAst == typeUse.astNode and importedType.status == 0
+                                    -> if {
+                                        package -> typeIds.intrinsicNominalSymbol(identities, importedType.targetModule, importedType.targetSymbol) => intrinsicSymbol
+                                        intrinsicSymbol >= 0 -> if {
+                                            1 => componentOrigins![0]
+                                            -1 => componentModules![0]
+                                            intrinsicSymbol => componentSymbols![0]
+                                        } else {
+                                            2 => componentOrigins![0]
+                                            importedType.targetModule => componentModules![0]
+                                            importedType.targetSymbol => componentSymbols![0]
+                                        }
+                                        0 => status!
+                                    }
+                                importedTypeIndex! + 1 => importedTypeIndex!
                             }
                         }
-                        canonicalChildIndex! + 1 => canonicalChildIndex!
+                    -1 => canonicalCompositeTypeId!
+                    0 => canonicalReferenceSearch!
+                    canonicalReferenceSearch! < (semanticTypeSet.references -> len)
+                        -> while {
+                            semanticTypeSet.references[canonicalReferenceSearch!] => canonicalReference
+                            canonicalReference.status == 0 and canonicalReference.sourceModule == sourceIndex! and canonicalReference.typeAst == typeUse.astNode
+                                -> if {
+                                    semanticTypeSet.types[canonicalReference.typeId].kind == typeUse.kind
+                                        -> if {
+                                            canonicalReference.typeId => canonicalCompositeTypeId!
+                                        }
+                                }
+                            canonicalReferenceSearch! + 1 => canonicalReferenceSearch!
+                        }
+                    canonicalCompositeTypeId! >= 0 -> if {
+                        semanticTypeSet.types[canonicalCompositeTypeId!] => canonicalComposite
+                        0 => canonicalChildIndex!
+                        canonicalChildIndex! < 2 -> while {
+                            canonicalComposite.first => canonicalChildTypeId!
+                            canonicalChildIndex! == 1 -> if { canonicalComposite.second => canonicalChildTypeId! }
+                            canonicalChildTypeId! >= 0 -> if {
+                                semanticTypeSet.types[canonicalChildTypeId!] => canonicalChild
+                                canonicalChild.kind == 1 -> if {
+                                    canonicalChildIndex! => canonicalComponentSlot!
+                                    typeUse.kind == 5 or typeUse.kind == 13 -> if { canonicalComponentSlot! + 1 => canonicalComponentSlot! }
+                                    canonicalChild.origin => componentOrigins![canonicalComponentSlot!]
+                                    canonicalChild.module => componentModules![canonicalComponentSlot!]
+                                    canonicalChild.symbol => componentSymbols![canonicalComponentSlot!]
+                                }
+                            }
+                            canonicalChildIndex! + 1 => canonicalChildIndex!
+                        }
+                        typeUse.kind == 5 or typeUse.kind == 13 -> if {
+                            componentOrigins![1] >= 0 and componentOrigins![2] >= 0
+                                -> if { 0 => status! } else { 2 => status! }
+                        } else {
+                            componentOrigins![0] >= 0 -> if { 0 => status! } else { 2 => status! }
+                        }
                     }
-                    (typeUse.kind == 5 or typeUse.kind == 13) -> if {
-                        (componentOrigins![1] >= 0 and componentOrigins![2] >= 0)
-                            -> if { 0 => status! } else { 2 => status! }
-                    } else {
-                        componentOrigins![0] >= 0 -> if { 0 => status! } else { 2 => status! }
-                    }
+                    results! -> push(CompositeType {
+                        sourceModule: sourceIndex!
+                        typeAst: typeUse.astNode
+                        canonical: typeUse.canonical
+                        kind: typeUse.kind
+                        elementOrigin: componentOrigins![0]
+                        elementModule: componentModules![0]
+                        elementSymbol: componentSymbols![0]
+                        keyOrigin: componentOrigins![1]
+                        keyModule: componentModules![1]
+                        keySymbol: componentSymbols![1]
+                        valueOrigin: componentOrigins![2]
+                        valueModule: componentModules![2]
+                        valueSymbol: componentSymbols![2]
+                        lengthToken: typeUse.lengthToken
+                        status: status!
+                    })
                 }
-                results! -> push(CompositeType {
-                    sourceModule: sourceIndex!
-                    typeAst: typeUse.astNode
-                    canonical: typeUse.canonical
-                    kind: typeUse.kind
-                    elementOrigin: componentOrigins![0]
-                    elementModule: componentModules![0]
-                    elementSymbol: componentSymbols![0]
-                    keyOrigin: componentOrigins![1]
-                    keyModule: componentModules![1]
-                    keySymbol: componentSymbols![1]
-                    valueOrigin: componentOrigins![2]
-                    valueModule: componentModules![2]
-                    valueSymbol: componentSymbols![2]
-                    lengthToken: typeUse.lengthToken
-                    status: status!
-                })
-            }
             typeIndex! + 1 => typeIndex!
         }
         sourceIndex! + 1 => sourceIndex!

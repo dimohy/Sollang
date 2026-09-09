@@ -1,0 +1,111 @@
+import std.compress.brotli.context_map as context_maps
+import std.compress.brotli.context_map.error as context_errors
+import std.compress.brotli.prefix_table as prefix
+
+kindCode kind: context_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    TruncatedInput { 1 }
+    InvalidPrefixCode { 2 }
+    TreeLimitExceeded { 3 }
+    RunLengthExceeded { 4 }
+    InvalidTreeIndex { 5 }
+}
+
+failsWith result: Result<context_maps.Parsed, context_maps.Error>, expectedKind: Int -> Bool {
+    result -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == expectedKind }
+    }
+}
+
+equals values: [Int], expected: [Int] -> Bool {
+    (values -> len) == (expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] == expected[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+printCheck label: Text, value: Bool -> Unit uses Console {
+    "$(label)=$(value)" -> println
+}
+
+main {
+    context_maps.Limits {
+        maxEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+    } -> parser -> when {
+        Err(_) { "parser=false" -> println }
+        Ok(parser) {
+            parser -> parse(
+            [0],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4) -> when {
+                Err(_) { printCheck("single", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "single",
+                    parsed.treeCount == 1
+                        and parsed.position.byteIndex == 0 and parsed.position.bitIndex == 1
+                        and (parsed.values -> equals([0, 0, 0, 0])))
+                }
+            }
+
+            parser -> parse(
+            [161, 52],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4) -> when {
+                Err(_) { printCheck("plain", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "plain",
+                    parsed.treeCount == 2
+                        and parsed.position.byteIndex == 2 and parsed.position.bitIndex == 0
+                        and (parsed.values -> equals([0, 1, 1, 0])))
+                }
+            }
+
+            parser -> parse(
+            [161, 236],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4) -> when {
+                Err(_) { printCheck("move-to-front", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "move-to-front",
+                    parsed.position.byteIndex == 2 and parsed.position.bitIndex == 0
+                        and (parsed.values -> equals([1, 1, 0, 1])))
+                }
+            }
+
+            parser -> parse(
+            [17, 146, 204, 0],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            3) -> when {
+                Err(_) { printCheck("zero-run", false) }
+                Ok(parsed) {
+                    printCheck(
+                    "zero-run",
+                    parsed.position.byteIndex == 3 and parsed.position.bitIndex == 1
+                        and (parsed.values -> equals([0, 0, 1])))
+                }
+            }
+
+            printCheck(
+            "run-overflow",
+            parser -> parse(
+            [17, 146, 204, 0],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            1) -> failsWith(4))
+            printCheck(
+            "truncated",
+            parser -> parse(
+            [],
+            prefix.Position { byteIndex: 0, bitIndex: 0 },
+            4) -> failsWith(1))
+        }
+    }
+}

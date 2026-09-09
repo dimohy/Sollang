@@ -1,0 +1,156 @@
+import std.compress.brotli.prefix_table as prefix
+import std.compress.brotli.prefix_table.error as prefix_errors
+
+kindCode kind: prefix_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    InvalidCodeLength { 1 }
+    InvalidCodeSpace { 2 }
+    TableLimitExceeded { 3 }
+    TruncatedInput { 4 }
+}
+
+failsTableWith result: Result<prefix.Table, prefix.Error>, expectedKind: Int -> Bool {
+    result -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == expectedKind }
+    }
+}
+
+failsDecodedWith result: Result<prefix.Decoded, prefix.Error>, expectedKind: Int -> Bool {
+    result -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == expectedKind }
+    }
+}
+
+printCheck label: Text, value: Bool -> Unit uses Console {
+    "$(label)=$(value)" -> println
+}
+
+run: -> Result<Unit, prefix.Error> uses Console {
+    prefix.Limits { maxSymbols: 704, maxTableEntries: 1_080 } -> builder? => builder
+    builder -> table([1, 2, 3, 3], 2)? => table
+    [UInt8(218), 1] => encoded
+    prefix.Position { byteIndex: 0, bitIndex: 0 } => position!
+    table -> read(encoded, position!)? => first
+    first.position => position!
+    table -> read(encoded, position!)? => second
+    second.position => position!
+    table -> read(encoded, position!)? => third
+    third.position => position!
+    table -> read(encoded, position!)? => fourth
+    fourth.position => position!
+    printCheck(
+    "canonical",
+    first.symbol == 0 and second.symbol == 1
+        and third.symbol == 2 and fourth.symbol == 3
+        and position!.byteIndex == 1 and position!.bitIndex == 1)
+
+    builder -> table([0, 0, 1], 2)? => single
+    single -> read([], prefix.Position { byteIndex: 0, bitIndex: 0 })? => only
+    printCheck(
+    "single",
+    only.symbol == 2 and only.position.byteIndex == 0 and only.position.bitIndex == 0)
+
+    builder -> table([1, 3, 3, 3, 3], 2)? => subtable
+    printCheck("subtable", (subtable -> entryCount) == 8)
+    [UInt8(233), 14] => subtableEncoded
+    prefix.Position { byteIndex: 0, bitIndex: 0 } => subtablePosition!
+    subtable -> read(subtableEncoded, subtablePosition!)? => subtableFirst
+    subtableFirst.position => subtablePosition!
+    subtable -> read(subtableEncoded, subtablePosition!)? => subtableSecond
+    subtableSecond.position => subtablePosition!
+    subtable -> read(subtableEncoded, subtablePosition!)? => subtableThird
+    subtableThird.position => subtablePosition!
+    subtable -> read(subtableEncoded, subtablePosition!)? => subtableFourth
+    printCheck(
+    "subtable-read",
+    subtableFirst.symbol == 1 and subtableSecond.symbol == 2
+        and subtableThird.symbol == 3 and subtableFourth.symbol == 4)
+
+    table -> probe(0, 0)? => rootProbe
+    rootProbe -> when {
+        NeedMore(bits) { bits == 1 }
+        Ready(_) { false }
+    } => rootNeedsBits
+    table -> probe(0, 2)? => readyRootProbe
+    readyRootProbe -> when {
+        NeedMore(_) { false }
+        Ready(decoded) { decoded.symbol == 0 and decoded.consumedBits == 1 }
+    } => rootReady
+    subtable -> probe(1, 2)? => subtableProbe
+    subtableProbe -> when {
+        NeedMore(bits) { bits == 1 }
+        Ready(_) { false }
+    } => subtableNeedsBit
+    subtable -> probe(1, 3)? => readySubtableProbe
+    readySubtableProbe -> when {
+        NeedMore(_) { false }
+        Ready(decoded) { decoded.symbol == 1 and decoded.consumedBits == 3 }
+    } => subtableReady
+    single -> probe(0, 0)? => singleProbe
+    singleProbe -> when {
+        NeedMore(_) { false }
+        Ready(decoded) { decoded.symbol == 2 and decoded.consumedBits == 0 }
+    } => singleReady
+    printCheck(
+    "resumable",
+    rootNeedsBits and rootReady and subtableNeedsBit and subtableReady and singleReady)
+
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window? => window!
+    window! -> fill([233], prefix.Position { byteIndex: 0, bitIndex: 0 }, 2)? => firstWindowPosition
+    window! -> symbol(subtable)? => incompleteSymbol
+    incompleteSymbol -> when {
+        NeedMore(bits) { bits == 1 }
+        Ready(_) { false }
+    } => windowNeedsBit
+    window! -> fill([233], firstWindowPosition, 3)? => secondWindowPosition
+    window! -> symbol(subtable)? => completeSymbol
+    completeSymbol -> when {
+        NeedMore(_) { false }
+        Ready(decoded) { decoded.symbol == 1 and decoded.consumedBits == 3 }
+    } => windowSymbol
+    printCheck(
+    "window-symbol",
+    windowNeedsBit and windowSymbol and (window! -> available) == 0
+        and secondWindowPosition.byteIndex == 0 and secondWindowPosition.bitIndex == 3)
+
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window? => chunkWindow!
+    chunkWindow! -> fill([171], prefix.Position { byteIndex: 0, bitIndex: 0 }, 8)? => firstChunkPosition
+    chunkWindow! -> read(4)? => firstRead
+    firstRead -> when {
+        Incomplete(_) { false }
+        Complete(value) { value == 11 }
+    } => firstNibble
+    chunkWindow! -> fill([12], prefix.Position { byteIndex: 0, bitIndex: 0 }, 12)? => secondChunkPosition
+    chunkWindow! -> read(12)? => secondRead
+    secondRead -> when {
+        Incomplete(_) { false }
+        Complete(value) { value == 202 }
+    } => acrossChunks
+    printCheck(
+    "window-chunks",
+    firstNibble and acrossChunks and (chunkWindow! -> available) == 0
+        and firstChunkPosition.byteIndex == 1 and firstChunkPosition.bitIndex == 0
+        and secondChunkPosition.byteIndex == 1 and secondChunkPosition.bitIndex == 0)
+    printCheck(
+    "truncated",
+    table -> read([], prefix.Position { byteIndex: 0, bitIndex: 0 }) -> failsDecodedWith(4))
+    printCheck(
+    "invalid-space",
+    (builder -> table([1, 1, 1], 2) -> failsTableWith(2))
+        and (builder -> table([2, 2], 2) -> failsTableWith(2)))
+
+    prefix.Limits { maxSymbols: 704, maxTableEntries: 4 } -> builder? => limited
+    printCheck(
+    "table-limit",
+    limited -> table([1, 3, 3, 3, 3], 2) -> failsTableWith(3))
+    Result<Unit, prefix.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) { }
+        Err(error) { "unexpected-error=$(error.kind -> kindCode)" -> println }
+    }
+}

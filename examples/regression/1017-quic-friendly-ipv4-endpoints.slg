@@ -1,0 +1,50 @@
+import std.net.quic as quic
+import std.net.quic.error as errors
+import std.net as net
+
+matches endpoint: net.Endpoint, a: UInt8, b: UInt8, c: UInt8, d: UInt8, port: UInt16 -> Bool {
+    endpoint -> when {
+        V4(value) => value.address.a == a
+            and value.address.b == b
+            and value.address.c == c
+            and value.address.d == d
+            and value.port == port
+        V6(value) => false
+    }
+}
+
+verifyEndpoints: -> Result<Bool, quic.QuicError> {
+    quic.ipv4("192.0.2.42", 44_434)? => parsed
+
+    quic.ipv4("127..0.1", 44_434) -> when {
+        Ok(unexpected) { Result<Bool, quic.QuicError>.Ok(false) -> return }
+        Err(error) {
+            error.code == errors.noViablePath()
+                -> unless { Result<Bool, quic.QuicError>.Err(error) -> return }
+        }
+    }
+
+    quic.ipv4("256.0.0.1", 44_434) -> when {
+        Ok(unexpected) { Result<Bool, quic.QuicError>.Ok(false) -> return }
+        Err(error) {
+            error.code == errors.noViablePath()
+                -> unless { Result<Bool, quic.QuicError>.Err(error) -> return }
+        }
+    }
+
+    quic.loopback(44_435) => loopback
+    quic.anyAddress(0) => any
+    any -> withPort(44_436) => rebound
+    Result<Bool, quic.QuicError>.Ok(
+        matches(parsed, 192, 0, 2, 42, 44_434)
+            and matches(loopback, 127, 0, 0, 1, 44_435)
+            and matches(any, 0, 0, 0, 0, 0)
+            and matches(rebound, 0, 0, 0, 0, 44_436))
+}
+
+main {
+    verifyEndpoints() -> when {
+        Ok(valid) { valid -> if { "quic-endpoint=ok" } else { "quic-endpoint=failed" } -> println }
+        Err(error) { "quic-endpoint-error=$(error.code)" -> println }
+    }
+}

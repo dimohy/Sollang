@@ -1,0 +1,64 @@
+import std.time as time
+
+verify: -> Result<Unit, time.Error> uses Console {
+    time.hours(2)? => twoHours
+    time.minutes(30)? => thirtyMinutes
+    twoHours -> checkedAdd(thirtyMinutes)? => combined
+    combined -> checkedSub(twoHours)? => difference
+    difference -> checkedMultiply(3)? => multiplied
+    multiplied -> checkedDivide(2)? => divided
+    twoHours -> absoluteDifference(combined) => absolute
+
+    (twoHours -> asHoursFloor) == 2 and (combined -> asMinutesFloor) == 150
+        -> if { "units=true" } else { "units=false" }
+        -> println
+    (difference -> asMinutesFloor) == 30
+        and (multiplied -> asMinutesFloor) == 90
+        and (divided -> asMinutesFloor) == 45
+        and (absolute -> asMinutesFloor) == 30
+        -> if { "arithmetic=true" } else { "arithmetic=false" }
+        -> println
+
+    time.manualClock(1_000)? => clock
+    clock -> now => before
+    before -> checkedAdd(combined)? => later
+    later -> checkedSub(combined)? => restored
+    later -> durationSince(before)? => elapsed
+    restored -> durationSince(before)? => restoredElapsed
+    (elapsed -> asMilliseconds) == 9_000_000
+        and (restoredElapsed -> asMilliseconds) == 0
+        -> if { "monotonic=true" } else { "monotonic=false" }
+        -> println
+
+    time.manualWallClock(-1_000) => wall
+    wall -> now => epochBefore
+    epochBefore -> checkedAdd(twoHours)? => epochAfter
+    epochAfter -> checkedSub(twoHours)? => epochRestored
+    epochAfter -> durationSince(epochBefore)? => wallElapsed
+    (wallElapsed -> asMilliseconds) == 7_200_000
+        and (epochRestored -> asUnixMilliseconds) == -1_000
+        -> if { "utc=true" } else { "utc=false" }
+        -> println
+
+    thirtyMinutes -> checkedSub(twoHours) -> when {
+        Ok(value) { "negative=false" }
+        Err(error) { "negative=true" }
+    } -> println
+    thirtyMinutes -> checkedDivide(0) -> when {
+        Ok(value) { "zero-divisor=false" }
+        Err(error) { "zero-divisor=true" }
+    } -> println
+    time.hours(9_223_372_036_854_775_807) -> when {
+        Ok(value) { "scale-overflow=false" }
+        Err(error) { "scale-overflow=true" }
+    } -> println
+
+    Result<Unit, time.Error>.Ok
+}
+
+main {
+    verify() -> when {
+        Ok(_) => "time=ok" -> println
+        Err(error) => "time=error" -> println
+    }
+}

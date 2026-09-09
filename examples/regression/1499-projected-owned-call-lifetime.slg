@@ -1,0 +1,53 @@
+struct AuditOwner { values: [Int; ~] }
+struct AuditPair { left: AuditOwner, right: AuditOwner }
+makeAuditPair: -> AuditPair {
+    AuditPair { left: AuditOwner { values: [7,; ~] }, right: AuditOwner { values: [8, 9,; ~] } }
+}
+consumeAuditOwner owner: move AuditOwner -> Int { owner.values -> len }
+consumeAdditionalAudit marker: Int, owner: move AuditOwner -> Int { owner.values -> len }
+observeAuditOwner owner: ref AuditOwner -> Int { owner.values -> len }
+impl AuditPair {
+    directAudit: move self -> Int {
+        self.left -> consumeAuditOwner => first
+        self.right -> consumeAuditOwner => second
+        first + second
+    }
+    callAudit: move self -> Int {
+        consumeAuditOwner(self.left) => first
+        0 -> consumeAdditionalAudit(self.right) => second
+        first + second
+    }
+    siblingAudit: move self -> Int {
+        self.left -> consumeAuditOwner => first
+        self.right -> observeAuditOwner => observed
+        self.right -> consumeAuditOwner => second
+        first + observed + second
+    }
+    terminalAudit: move self -> Int {
+        0 => index
+        index < 1 -> while { self.left -> consumeAuditOwner -> return }
+        0
+    }
+    repairAudit: mut self -> Int {
+        0 => index!
+        index! < 2 -> while {
+            self.left => transferred
+            AuditOwner { values: [1,; ~] } => self.left
+            transferred -> consumeAuditOwner => count
+            index! + 1 => index!
+        }
+        self.right.values -> len
+    }
+}
+main {
+    makeAuditPair() => direct
+    direct -> directAudit -> println
+    makeAuditPair() => called
+    called -> callAudit -> println
+    makeAuditPair() => sibling
+    sibling -> siblingAudit -> println
+    makeAuditPair() => terminal
+    terminal -> terminalAudit -> println
+    makeAuditPair() => repaired!
+    repaired! -> repairAudit -> println
+}

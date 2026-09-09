@@ -1,0 +1,40 @@
+struct Source {
+    moved: [Int; ~]
+    retained: [Int; ~]
+}
+
+struct Target {
+    moved: [Int; ~]
+}
+
+enum Outcome {
+    Closed
+    Reusable(Target)
+}
+
+impl Source {
+    finish: move self, reusable: Bool -> Result<Outcome, Int> {
+        reusable -> if {
+            Result<Outcome, Int>.Ok(Outcome.Reusable(Target {
+                moved: self.moved
+            })) -> return
+        }
+        Result<Outcome, Int>.Ok(Outcome.Closed)
+    }
+}
+
+main {
+    Source {
+        moved: [41, 42; ~]
+        retained: [91, 92; ~]
+    } -> finish(true) -> when {
+        Err(_) { "nested-aggregate-partial-move=false" -> println }
+        Ok(outcome) => outcome -> when {
+            Closed { "nested-aggregate-partial-move=false" -> println }
+            Reusable(target) {
+                (target.moved -> len) == 2 and target.moved[1] == 42 => valid
+                "nested-aggregate-partial-move=$valid" -> println
+            }
+        }
+    }
+}

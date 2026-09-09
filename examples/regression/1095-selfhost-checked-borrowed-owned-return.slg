@@ -1,0 +1,138 @@
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# A borrowed owning parameter cannot be embedded into an owned return value.
+# The self-host compiler must emit actionable E25 and stop before LLVM output.
+main {
+    [
+    """
+    struct BufferOwner {
+        bytes: [UInt8; ~]
+    }
+
+    wrap bytes: [UInt8; ~] -> BufferOwner {
+        BufferOwner { bytes: bytes }
+    }
+
+    main { }
+    """; ~
+    ] => borrowedSources
+    borrowedSources -> llvm.emitLinuxChecked => borrowedDiagnosticCount
+    "borrowed-blocked=$borrowedDiagnosticCount" -> println
+
+    [
+    """
+    struct BufferOwner {
+        bytes: [UInt8; ~]
+    }
+
+    wrap bytes: move [UInt8; ~] -> BufferOwner {
+        BufferOwner { bytes: bytes }
+    }
+
+    main { }
+    """; ~
+    ] => movedSources
+    movedSources -> ownershipCheck.analyze -> len => movedDiagnosticCount
+    "moved-blocked=$movedDiagnosticCount" -> println
+
+    # Borrowed owned values also cannot enter a longer-lived owned field.
+    [
+    """
+    struct BufferOwner {
+        bytes: [UInt8; ~]
+    }
+
+    store owner: mut BufferOwner, bytes: [UInt8; ~] -> Unit {
+        bytes => owner.bytes
+    }
+
+    main { }
+    """; ~
+    ] => borrowedFieldSources
+    borrowedFieldSources -> llvm.emitLinuxChecked => borrowedFieldDiagnosticCount
+    "borrowed-field-blocked=$borrowedFieldDiagnosticCount" -> println
+
+    [
+    """
+    struct BufferOwner {
+        bytes: [UInt8; ~]
+    }
+
+    store owner: mut BufferOwner, bytes: move [UInt8; ~] -> Unit {
+        bytes => owner.bytes
+    }
+
+    main { }
+    """; ~
+    ] => movedFieldSources
+    movedFieldSources -> ownershipCheck.analyze -> len => movedFieldDiagnosticCount
+    "moved-field-blocked=$movedFieldDiagnosticCount" -> println
+
+    # The same transfer rule applies to owned indexed storage.
+    [
+    """
+    struct BufferOwner {
+        bytes: [UInt8; ~]
+    }
+
+    store slots: mut [BufferOwner; ~], bytes: [UInt8; ~] -> Unit {
+        BufferOwner { bytes: bytes } => slots[0]
+    }
+
+    main { }
+    """; ~
+    ] => borrowedIndexSources
+    borrowedIndexSources -> llvm.emitLinuxChecked => borrowedIndexDiagnosticCount
+    "borrowed-index-blocked=$borrowedIndexDiagnosticCount" -> println
+
+    [
+    """
+    struct BufferOwner {
+        bytes: [UInt8; ~]
+    }
+
+    store slots: mut [BufferOwner; ~], bytes: move [UInt8; ~] -> Unit {
+        BufferOwner { bytes: bytes } => slots[0]
+    }
+
+    main { }
+    """; ~
+    ] => movedIndexSources
+    movedIndexSources -> ownershipCheck.analyze -> len => movedIndexDiagnosticCount
+    "moved-index-blocked=$movedIndexDiagnosticCount" -> println
+
+    # Container intrinsics are ownership boundaries too: embedding a borrowed
+    # affine owner in an aggregate passed to push must fail before LLVM output.
+    [
+    """
+    struct Holder {
+        bytes: [UInt8; ~]
+    }
+
+    store holders: mut [Holder; ~], bytes: [UInt8; ~] -> Unit {
+        holders -> push(Holder { bytes: bytes })
+    }
+
+    main { }
+    """; ~
+    ] => borrowedPushSources
+    borrowedPushSources -> llvm.emitLinuxChecked => borrowedPushDiagnosticCount
+    "borrowed-push-blocked=$borrowedPushDiagnosticCount" -> println
+
+    [
+    """
+    struct Holder {
+        bytes: [UInt8; ~]
+    }
+
+    store holders: mut [Holder; ~], bytes: move [UInt8; ~] -> Unit {
+        holders -> push(Holder { bytes: bytes })
+    }
+
+    main { }
+    """; ~
+    ] => movedPushSources
+    movedPushSources -> ownershipCheck.analyze -> len => movedPushDiagnosticCount
+    "moved-push-blocked=$movedPushDiagnosticCount" -> println
+}

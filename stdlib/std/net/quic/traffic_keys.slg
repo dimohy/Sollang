@@ -1,0 +1,29 @@
+namespace std.net.quic.traffic_keys
+
+import std.crypto.tls13_keys as tls13
+import std.crypto.tls13_hkdf as hkdf
+import std.net.quic.keys as versions
+import std.net.quic.packet
+
+public struct Keys {
+    public protector: packet.Protector
+}
+
+empty: -> [UInt8] => []
+
+public derive version: UInt32, secret: [UInt8; 32] -> Keys {
+    version == versions.version2() -> if { "quicv2 key" } else { "quic key" } => keyLabel
+    version == versions.version2() -> if { "quicv2 iv" } else { "quic iv" } => ivLabel
+    version == versions.version2() -> if { "quicv2 hp" } else { "quic hp" } => headerProtectionLabel
+    secret -> hkdf.expandLabel16(keyLabel, empty()) => key
+    secret -> hkdf.expandLabel12(ivLabel, empty()) => iv
+    secret -> hkdf.expandLabel16(headerProtectionLabel, empty()) => headerProtection
+    packet.prepare(key, iv, headerProtection) => protector
+    Keys {
+        protector: protector
+    }
+}
+
+public nextSecret current: [UInt8] -> [UInt8; 32] {
+    current -> tls13.updateTrafficSecret
+}

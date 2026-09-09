@@ -513,7 +513,7 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
             return;
         }
-        if (_usesNetwork && structure.Name is ("sys.socket.TcpListener" or "sys.socket.TcpStream" or "sys.socket.UdpSocket"))
+        if (_usesNetwork && structure.Name is ("std.net.socket.TcpListener" or "std.net.socket.TcpStream" or "std.net.socket.UdpSocket"))
         {
             var handle = NextTemp("drop_socket_handle");
             EmitAssign(handle, $"extractvalue {llvmType} %value, 0");
@@ -522,6 +522,16 @@ internal sealed partial class LlvmEmitter
                 "void",
                 "sollang_platform_close_socket",
                 $"i64 {handle}");
+            EmitInstruction("ret void");
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+            return;
+        }
+        if (_usesChildProcesses && structure.Name == "sys.process.Child")
+        {
+            var handle = NextTemp("drop_process_child_handle");
+            EmitAssign(handle, $"extractvalue {llvmType} %value, 0");
+            EmitCall(target: null, "void", "sollang_drop_process_child", $"i64 {handle}");
             EmitInstruction("ret void");
             EmitFunctionLine("}");
             EmitFunctionLine();

@@ -4,10 +4,12 @@ import sollang.compiler.llvm.codegen_units as codegenUnits
 import sollang.compiler.ir.module_artifacts as moduleArtifacts
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.module_interfaces as moduleInterfaces
 import sollang.compiler.semantic.module_cache as moduleCache
 import sollang.compiler.semantic.module_cache_io as moduleCacheIo
 import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.ownership_check as ownershipCheck
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.cli_project as cliProject
 import sollang.compiler.cli_package_lock as cliLock
@@ -34,13 +36,13 @@ processCode result: Result<Int, Text> -> Int => result -> when {
 processFileCode result: Result<Int, Text> -> Int uses Console {
     -1 => code!
     result -> when {
-    Ok(value) {
-        value => code!
-    }
-    Err(error) {
-        "sollang: " -> print
-        error -> println
-    }
+        Ok(value) {
+            value => code!
+        }
+        Err(error) {
+            "sollang: " -> print
+            error -> println
+        }
     }
     code!
 }
@@ -56,17 +58,18 @@ relayEmitterDiagnostics output: Text -> Unit uses Console, File {
 textEquals left: Text, right: Text -> Bool {
     (left -> len) == (right -> len) => matches!
     UIntSize(0) => index!
-    (matches! and index! < (left -> len)) -> while {
-        (left -> byte(index!)) != (right -> byte(index!)) -> if {
-            false => matches!
-        }
+    matches! and index! < (left -> len) -> while {
+        (left -> byte(index!)) != (right -> byte(index!))
+            -> if {
+                false => matches!
+            }
         index! + 1 => index!
     }
     matches!
 }
 
 pathTextAt paths: [path.Path; ~], index: Int -> Text {
-    path.pathText(paths[index])
+    paths[index] -> pathText
 }
 
 printVersion: -> Unit uses Console {
@@ -114,16 +117,16 @@ parsePositiveInt value: Text -> Int {
     0 => parsed!
     (value -> len) > 0 => valid!
     UIntSize(0) => index!
-    (valid! and index! < (value -> len)) -> while {
+    valid! and index! < (value -> len) -> while {
         value -> byte(index!) => digit
-        (digit < 48 or digit > 57) -> if {
+        digit < 48 or digit > 57 -> if {
             false => valid!
         } else {
             parsed! * 10 + Int(digit - 48) => parsed!
         }
         index! + 1 => index!
     }
-    (valid! and parsed! > 0) -> if { parsed! } else { -1 }
+    valid! and parsed! > 0 -> if { parsed! } else { -1 }
 }
 
 configureWorkerLimit optionStart: UIntSize -> Int uses Process {
@@ -260,6 +263,12 @@ emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {
     }
 }
 
+runPrepare: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    "semantic prepare = $(snapshot.package.ranges -> len),$(snapshot.package.symbols -> len),$(snapshot.package.nodes -> len)" -> println
+}
+
 runInterfaceCache: -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
     UIntSize(4) -> collectPaths => paths
@@ -268,7 +277,7 @@ runInterfaceCache: -> Unit uses Console, File, Process {
     current -> moduleCacheIo.publish(arguments[2], arguments[3]) => published
     arguments[2] -> moduleCacheIo.load => loaded
     snapshot.package -> moduleCache.reuseAnalyzed(loaded, 1) => reuse
-    (published and reuse.status == 0) -> if { 1 } else { 0 } => persistent
+    published and reuse.status == 0 -> if { 1 } else { 0 } => persistent
     "module cache = $(reuse.status),$(reuse.hits),$(reuse.misses),$(reuse.bodyOnlyConsumerHits),$persistent" -> println
 }
 
@@ -286,8 +295,233 @@ runModuleArtifacts: -> Unit uses Console, File, Process {
     [typedIr.TypedIrNode; ~] => decodedIr!
     decoded.ir -> each node { decodedIr! -> push(node) }
     decodedIr! -> len => decodedNodeCount
-    (validation.nodeCount > 0 and decoded.status == 0 and decodedNodeCount == validation.nodeCount) -> if { 1 } else { 0 } => hasNodes
+    validation.nodeCount > 0 and decoded.status == 0 and decodedNodeCount == validation.nodeCount
+        -> if { 1 } else { 0 } => hasNodes
     "module artifacts = $(validation.status),$(validation.moduleCount),$hasNodes" -> println
+}
+
+runTypedIr: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> typedIr.lowerContext => ir
+    "typed ir = $(ir -> len)" -> println
+}
+
+runTypedIrPhase phase: Int -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> expressionTypeIds.resolveContext => recursiveTypes
+    snapshot -> typedIr.profileResolvedContext(recursiveTypes, phase) => ir
+    "typed ir phase = $phase,$(ir -> len)" -> println
+}
+
+runTypedIrNormalizeCandidates: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> expressionTypeIds.resolveContext => recursiveTypes
+    snapshot -> typedIr.profileResolvedContext(recursiveTypes, 0) => ir
+    0 => nullaryFlowSources!
+    0 => globalWrapperBindings!
+    0 => unresolvedControls!
+    0 => unresolvedMatches!
+    0 => bindingNodes!
+    0 => nodeIndex!
+    nodeIndex! < (ir -> len) -> while {
+        ir[nodeIndex!] => node
+        node.kind == 5
+            and node.parent >= 0
+            and ir[node.parent].kind == 6
+            and ir[node.parent].operand0 == nodeIndex!
+            -> if { nullaryFlowSources! + 1 => nullaryFlowSources! }
+        node.kind == 17
+            and node.operand0 >= 0
+            and ir[node.operand0].kind == 9
+            and ir[node.operand0].opcode == -1
+            -> if { globalWrapperBindings! + 1 => globalWrapperBindings! }
+        (node.kind == 18 or node.kind == 20) and node.operand0 < 0 and node.sourceModule >= 0
+            -> if { unresolvedControls! + 1 => unresolvedControls! }
+        node.kind == 27 and node.operand0 < 0 and node.sourceModule >= 0
+            -> if { unresolvedMatches! + 1 => unresolvedMatches! }
+        node.kind == 17 -> if { bindingNodes! + 1 => bindingNodes! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    "normalize candidates = $(nullaryFlowSources!),$(globalWrapperBindings!),$(unresolvedControls!),$(unresolvedMatches!),$(bindingNodes!)" -> println
+}
+
+runTypedIrPrefix: -> Unit uses Console, File, Process {
+    sys.process.arguments() => arguments
+    arguments[2] -> parsePositiveInt => sourceLimit
+    sourceLimit > 0 -> unless { exitFailure() }
+    UIntSize(3) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> expressionTypeIds.resolveContext => recursiveTypes
+    snapshot -> typedIr.profileResolvedContextPrefix(recursiveTypes, sourceLimit) => ir
+    "typed ir prefix = $sourceLimit,$(ir -> len)" -> println
+}
+
+runTypedIrFunctionPrefix: -> Unit uses Console, File, Process {
+    sys.process.arguments() => arguments
+    arguments[2] -> parsePositiveInt => sourceLimit
+    arguments[3] -> parsePositiveInt => functionLimit
+    sourceLimit > 0 and functionLimit > 0 -> unless { exitFailure() }
+    UIntSize(4) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> expressionTypeIds.resolveContext => recursiveTypes
+    snapshot -> typedIr.profileResolvedContextFunctionPrefix(recursiveTypes, sourceLimit, functionLimit) => ir
+    "typed ir function prefix = $sourceLimit,$functionLimit,$(ir -> len)" -> println
+}
+
+runTypedIrCalls: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    0 => resolutionIndex!
+    resolutionIndex! < (snapshot.calls -> len) -> while {
+        snapshot.calls[resolutionIndex!] => resolution
+        snapshot.package.ranges[resolution.sourceModule] => resolutionRange
+        snapshot.package.nodes[resolutionRange.astStart + resolution.callAst] => resolutionNode
+        "resolution $(resolution.sourceModule):$(resolution.callAst) kind $(resolutionNode.kind) start $(resolutionNode.start) length $(resolutionNode.length) parent $(resolutionNode.parent) first $(resolutionNode.firstToken) target $(resolution.targetModule):$(resolution.functionSymbol) source $(resolution.targetSourceModule) status $(resolution.status)" -> println
+        resolutionIndex! + 1 => resolutionIndex!
+    }
+    snapshot -> typedIr.lowerContext => ir
+    0 => callIndex!
+    callIndex! < (ir -> len) -> while {
+        ir[callIndex!] => call
+        call.kind == 6 -> if {
+            "call $(callIndex!) source $(call.sourceModule) ast $(call.astNode) target $(call.targetModule):$(call.symbol) operand $(call.operand0) parent $(call.parent) type $(call.typeId)" -> println
+        }
+        callIndex! + 1 => callIndex!
+    }
+}
+
+runTypedIrMoves: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> typedIr.lowerContext => ir
+    ir -> typedIr.movesFrom => moves
+    0 => moveIndex!
+    moveIndex! < (moves -> len) -> while {
+        moves[moveIndex!] => moveEvent
+        "move site $(moveEvent.siteIr) binding $(moveEvent.bindingIr) source $(moveEvent.sourceModule) symbol $(moveEvent.symbol) region $(moveEvent.regionIr) member $(moveEvent.memberIr)" -> println
+        moveIndex! + 1 => moveIndex!
+    }
+}
+
+runTypedIrNodes: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> typedIr.lowerContext => ir
+    0 => nodeIndex!
+    nodeIndex! < (ir -> len) -> while {
+        ir[nodeIndex!] => node
+        "node $(nodeIndex!) kind $(node.kind) parent $(node.parent) source $(node.sourceModule) ast $(node.astNode) symbol $(node.symbol) target $(node.targetModule) type $(node.typeId)/$(node.typeKind)/$(node.typeOrigin)/$(node.typeModule)/$(node.typeSymbol)/$(node.typeFlags) payload $(node.payloadToken) opcode $(node.opcode) operands $(node.operand0)/$(node.operand1)/$(node.nextOperand) flags $(node.flags)" -> println
+        nodeIndex! + 1 => nodeIndex!
+    }
+}
+
+runAstNodes: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    0 => sourceIndex!
+    sourceIndex! < (snapshot.package.ranges -> len)
+        -> while {
+            snapshot.package.ranges[sourceIndex!] => sourceRange
+            0 => astIndex!
+            astIndex! < sourceRange.astCount -> while {
+                snapshot.package.nodes[sourceRange.astStart + astIndex!] => node
+                "ast source $(sourceIndex!) node $(astIndex!) kind $(node.kind) parent $(node.parent) start $(node.start) length $(node.length) tokens $(node.firstToken)/$(node.tokenCount) payload $(node.payloadToken) operator $(node.operatorKind) rule $(node.cstRuleId) flags $(node.flags)" -> println
+                astIndex! + 1 => astIndex!
+            }
+            sourceIndex! + 1 => sourceIndex!
+        }
+}
+
+# Print the exact qualified-path records consumed by call resolution. This
+# keeps path ownership diagnosis out of ad-hoc AST inference.
+runQualifiedResolutions: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    0 => resolutionIndex!
+    resolutionIndex! < (snapshot.qualified -> len)
+        -> while {
+            snapshot.qualified[resolutionIndex!] => resolved
+            snapshot.package.ranges[resolved.sourceModule] => sourceRange
+            snapshot.package.nodes[sourceRange.astStart + resolved.pathAst] => pathNode
+            "qualified $(resolutionIndex!) source $(resolved.sourceModule) ast $(resolved.pathAst) kind $(pathNode.kind) parent $(pathNode.parent) start $(pathNode.start) length $(pathNode.length) tokens $(pathNode.firstToken)/$(pathNode.tokenCount) target $(resolved.targetModule):$(resolved.targetSymbol) status $(resolved.status)" -> println
+            resolutionIndex! + 1 => resolutionIndex!
+        }
+}
+
+# Print the exact source-local symbol ordinals used by call and emission
+# identities. This keeps missing-definition diagnosis out of declaration-order
+# guesses when a call target survives without a reachable function body.
+runSymbols: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    0 => sourceIndex!
+    sourceIndex! < (snapshot.package.ranges -> len)
+        -> while {
+            snapshot.package.ranges[sourceIndex!] => sourceRange
+            0 => symbolIndex!
+            symbolIndex! < sourceRange.symbolCount -> while {
+                snapshot.package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
+                -1 => nameStart!
+                -1 => nameLength!
+                symbol.nameToken >= 0 and symbol.nameToken < sourceRange.tokenCount
+                    -> if {
+                        snapshot.package.tokens[sourceRange.tokenStart + symbol.nameToken] => nameToken
+                        Int(nameToken.span.start) => nameStart!
+                        Int(nameToken.span.length) => nameLength!
+                    }
+                "symbol source $(sourceIndex!) local $(symbolIndex!) kind $(symbol.kind) parent $(symbol.parent) ast $(symbol.astNode) nameToken $(symbol.nameToken) span $(nameStart!)/$(nameLength!)" -> println
+                symbolIndex! + 1 => symbolIndex!
+            }
+            sourceIndex! + 1 => sourceIndex!
+        }
+}
+
+runOwnership: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> typedIr.lowerContext => ir
+    snapshot -> ownershipCheck.analyzeLoweredContext(ir) => diagnostics
+    diagnostics -> len => diagnosticCount
+    "ownership diagnostics = $diagnosticCount" -> println
+    0 => diagnosticIndex!
+    diagnosticIndex! < diagnosticCount -> while {
+        diagnostics[diagnosticIndex!] => diagnostic
+        "ownership diagnostic code $(diagnostic.code) source $(diagnostic.sourceModule) actual $(diagnostic.actualOrigin)/$(diagnostic.actualModule)/$(diagnostic.actualSymbol)/$(diagnostic.actualBuiltin)" -> println
+        diagnosticIndex! + 1 => diagnosticIndex!
+    }
+}
+
+runCheckedValidation profilePhase: Int -> Unit uses Console, File, Process {
+    UIntSize(2) -> sourceStart => validationPathStart
+    validationPathStart -> collectPaths => paths
+    paths -> llvm.validateCheckedFiles(profilePhase) => diagnostics
+    "checked diagnostics = $diagnostics" -> println
+}
+
+runExpressionTypeIds: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> expressionTypeIds.resolveContext => resolved
+    "expression type ids = $(resolved.types -> len),$(resolved.expressions -> len)" -> println
+}
+
+runExpressionTypeRecords: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> expressionTypeIds.resolveContext => resolved
+    0 => expressionIndex!
+    expressionIndex! < (resolved.expressions -> len)
+        -> while {
+            resolved.expressions[expressionIndex!] => expression
+            snapshot.package.ranges[expression.sourceModule] => sourceRange
+            snapshot.package.nodes[sourceRange.astStart + expression.astNode] => node
+            resolved.types[expression.typeId] => expressionType
+            "expression $(expressionIndex!) source $(expression.sourceModule) ast $(expression.astNode) kind $(node.kind) parent $(node.parent) start $(node.start) type $(expression.typeId)/$(expressionType.kind)/$(expressionType.origin)/$(expressionType.module)/$(expressionType.symbol)/$(expressionType.first)/$(expressionType.second)/$(expressionType.length) status $(expression.status)" -> println
+            expressionIndex! + 1 => expressionIndex!
+        }
 }
 
 runCodegenUnits: -> Unit uses Console {
@@ -310,11 +544,12 @@ runCodegenUnits: -> Unit uses Console {
     units -> codegenUnits.encode(compilerHash, targetHash, configurationHash) => artifact
     artifact -> codegenUnits.validate(compilerHash, targetHash, configurationHash) => validation
     artifact -> codegenUnits.merge(compilerHash, targetHash, configurationHash) => merged
-    (validation.status == 0 and merged.status == 0) -> if {
-        "codegen units = $(validation.status),$(validation.moduleCount),$(merged.byteLength)" -> println
-    } else {
-        "codegen units = $(validation.status),0,0" -> println
-    }
+    validation.status == 0 and merged.status == 0
+        -> if {
+            "codegen units = $(validation.status),$(validation.moduleCount),$(merged.byteLength)" -> println
+        } else {
+            "codegen units = $(validation.status),0,0" -> println
+        }
 }
 
 buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
@@ -326,14 +561,13 @@ buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
         emitArgv! -> push(arguments[6])
     }
     sourcePaths -> each sourcePath { emitArgv! -> push(sourcePath) }
-    process.RunToFileRequest {
-        argv: emitArgv!
-        output: arguments[2]
-    } -> process.runToFile -> processCode => emitCode
+    process.Command { argv: emitArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => emitCommand
+    emitCommand -> runToFile(arguments[2]) -> processCode => emitCode
 
     emitCode == 0 -> if {
         [arguments[4], arguments[2], "-O1", "-Wno-override-module", "-o", arguments[3]; ~] => clangArgv
-        clangArgv -> process.run -> processCode => clangCode
+        process.Command { argv: clangArgv, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
+        clangCommand -> run -> processCode => clangCode
         clangCode >= 0 -> if {
             "native build = $(clangCode)" -> println
         } else {
@@ -341,6 +575,25 @@ buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
         }
     } else {
         "compiler emission failed" -> println
+    }
+}
+
+runSemanticTypeRecords: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot.semantic.types -> len => typeCount
+    0 => typeIndex!
+    typeIndex! < typeCount -> while {
+        snapshot.semantic.types[typeIndex!] => semanticType
+        "semantic type $(typeIndex!) kind $(semanticType.kind) origin $(semanticType.origin) module $(semanticType.module) symbol $(semanticType.symbol) first $(semanticType.first) second $(semanticType.second) length $(semanticType.length) status $(semanticType.status)" -> println
+        typeIndex! + 1 => typeIndex!
+    }
+    snapshot.semantic.fields -> len => fieldCount
+    0 => fieldIndex!
+    fieldIndex! < fieldCount -> while {
+        snapshot.semantic.fields[fieldIndex!] => field
+        "semantic field $(fieldIndex!) owner $(field.ownerType) type $(field.fieldType) ordinal $(field.ordinal) status $(field.status)" -> println
+        fieldIndex! + 1 => fieldIndex!
     }
 }
 
@@ -445,7 +698,7 @@ executableDirectory executable: Text -> Text {
     UIntSize(0) => index!
     index! < (executable -> len) -> while {
         executable -> byte(index!) => current
-        (current == 47 or current == 92) -> if {
+        current == 47 or current == 92 -> if {
             index! => lastSeparator!
             true => found!
         }
@@ -489,7 +742,8 @@ executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOptio
         emitArgv! -> push(jobs)
     }
     sources -> each source { emitArgv! -> push(source) }
-    process.RunToFileRequest { argv: emitArgv!, output: llvmPath } -> process.runToFile -> processFileCode => emitCode
+    process.Command { argv: emitArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => emitCommand
+    emitCommand -> runToFile(llvmPath) -> processFileCode => emitCode
     emitCode != 0 -> if {
         emitCode > 0 -> if { llvmPath -> relayEmitterDiagnostics }
         emitCode -> return
@@ -504,12 +758,13 @@ executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOptio
         clangArgv! -> push("-lws2_32")
         clangArgv! -> push("-lbcrypt")
     }
-    clangArgv! -> process.run -> processCode => clangCode
+    process.Command { argv: clangArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
+    clangCommand -> run -> processCode => clangCode
     clangCode != 0 -> if {
         "sollang: native linker failed with exit code $clangCode" -> println
         clangCode -> return
     }
-    (keepTemps and not quiet) -> if { "Kept $llvmPath" -> println }
+    keepTemps and not quiet -> if { "Kept $llvmPath" -> println }
     not quiet -> if { "Wrote $output" -> println }
     0
 }
@@ -546,7 +801,8 @@ executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, st
         emitArgv! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
-    process.RunToFileRequest { argv: emitArgv!, output: llvmPath } -> process.runToFile -> processFileCode => emitCode
+    process.Command { argv: emitArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => emitCommand
+    emitCommand -> runToFile(llvmPath) -> processFileCode => emitCode
     emitCode != 0 -> if {
         emitCode > 0 -> if { llvmPath -> relayEmitterDiagnostics }
         emitCode -> return
@@ -561,12 +817,13 @@ executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, st
         clangArgv! -> push("-lws2_32")
         clangArgv! -> push("-lbcrypt")
     }
-    clangArgv! -> process.run -> processCode => clangCode
+    process.Command { argv: clangArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => clangCommand
+    clangCommand -> run -> processCode => clangCode
     clangCode != 0 -> if {
         "sollang: native linker failed with exit code $clangCode" -> println
         clangCode -> return
     }
-    (keepTemps and not quiet) -> if { "Kept $llvmPath" -> println }
+    keepTemps and not quiet -> if { "Kept $llvmPath" -> println }
     not quiet -> if { "Wrote $output" -> println }
     0
 }
@@ -575,7 +832,8 @@ executeNativeProgram output: Text, programArguments: [Text; ~] -> Int uses Proce
     [Text; ~] => runArgv!
     runArgv! -> push(output)
     programArguments -> each programArgument { runArgv! -> push(programArgument) }
-    runArgv! -> process.run -> processCode
+    process.Command { argv: runArgv!, workingDirectoryValue: "", hasWorkingDirectory: false, environmentChanges: [process.EnvironmentChange; ~], inheritsEnvironment: true, standardInput: process.Input.Inherit, standardOutput: process.Output.Inherit, standardError: process.Output.Inherit } => runCommand
+    runCommand -> run -> processCode
 }
 
 runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
@@ -663,19 +921,21 @@ runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
     0 => status!
     UIntSize(2) => index!
     index! < argumentCount -> while {
-        arguments[index!] -> textEquals("--project") -> if {
-            index! + 1 < argumentCount -> if {
-                index! + 1 => index!
-                arguments[index!] => projectOption!
-            } else { 1 => status! }
-        } else {
-            arguments[index!] -> textEquals("--workspace") -> if {
-                2 => status!
+        arguments[index!] -> textEquals("--project")
+            -> if {
+                index! + 1 < argumentCount -> if {
+                    index! + 1 => index!
+                    arguments[index!] => projectOption!
+                } else { 1 => status! }
             } else {
-                arguments[index!] => invalidOption!
-                3 => status!
+                arguments[index!] -> textEquals("--workspace")
+                    -> if {
+                        2 => status!
+                    } else {
+                        arguments[index!] => invalidOption!
+                        3 => status!
+                    }
             }
-        }
         index! + 1 => index!
     }
     status! != 0 -> if {
@@ -707,7 +967,7 @@ runNativeResolve hostTarget: Int -> Int uses Console, File, Process {
         1 -> return
     }
     packageManifests! -> cliLock.destination(hostStyle) => lockPath
-    path.pathText(lockPath) => lockPathText
+    lockPath -> pathText => lockPathText
     packageManifests! -> len => packageCount
     "Resolved $packageCount package(s) into $lockPathText" -> println
     0
@@ -755,17 +1015,18 @@ testOutputName projectName: Text, explicitSources: [Text; ~] -> Text {
     UIntSize(0) => index!
     index! < sourceLength -> while {
         source -> byte(index!) => current
-        (current == 47 or current == 92) -> if { index! + 1 => nameStart! }
+        current == 47 or current == 92 -> if { index! + 1 => nameStart! }
         index! + 1 => index!
     }
     sourceLength => nameEnd!
     sourceLength >= 4 -> if {
-        ((source -> byte(sourceLength - 4)) == 46
+        (source -> byte(sourceLength - 4)) == 46
             and (source -> byte(sourceLength - 3)) == 115
             and (source -> byte(sourceLength - 2)) == 108
-            and (source -> byte(sourceLength - 1)) == 103) -> if {
-            sourceLength - 4 => nameEnd!
-        }
+            and (source -> byte(sourceLength - 1)) == 103
+            -> if {
+                sourceLength - 4 => nameEnd!
+            }
     }
     source -> slice(nameStart!, nameEnd! - nameStart!)
 }
@@ -788,38 +1049,42 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     UIntSize(2) => index!
     index! < (arguments -> len) -> while {
         arguments[index!] => argument
-        ((argument -> textEquals("--project")) or (argument -> textEquals("--llvm")) or (argument -> textEquals("--stdlib")) or (argument -> textEquals("--target")) or (argument -> textEquals("--filter")) or (argument -> textEquals("--jobs"))) -> if {
-            ((argument -> textEquals("--filter")) and filterSpecified!) -> if {
-                "sollang: --filter may be specified only once" -> println
-                1 -> return
-            }
-            index! + 1 < (arguments -> len) -> if {
-                index! + 1 => index!
-                argument -> textEquals("--project") -> if { arguments[index!] => projectOption! }
-                argument -> textEquals("--llvm") -> if { arguments[index!] => llvmHome! }
-                argument -> textEquals("--stdlib") -> if { arguments[index!] => stdlibOption! }
-                argument -> textEquals("--target") -> if { arguments[index!] -> parseNativeTarget => target! }
-                argument -> textEquals("--filter") -> if {
-                    arguments[index!] => filter!
-                    true => filterSpecified!
+        (argument -> textEquals("--project")) or (argument -> textEquals("--llvm")) or (argument -> textEquals("--stdlib")) or (argument -> textEquals("--target")) or (argument -> textEquals("--filter")) or (argument -> textEquals("--jobs"))
+            -> if {
+                (argument -> textEquals("--filter")) and filterSpecified!
+                    -> if {
+                        "sollang: --filter may be specified only once" -> println
+                        1 -> return
+                    }
+                index! + 1 < (arguments -> len) -> if {
+                    index! + 1 => index!
+                    argument -> textEquals("--project") -> if { arguments[index!] => projectOption! }
+                    argument -> textEquals("--llvm") -> if { arguments[index!] => llvmHome! }
+                    argument -> textEquals("--stdlib") -> if { arguments[index!] => stdlibOption! }
+                    argument -> textEquals("--target") -> if { arguments[index!] -> parseNativeTarget => target! }
+                    argument -> textEquals("--filter") -> if {
+                        arguments[index!] => filter!
+                        true => filterSpecified!
+                    }
+                    argument -> textEquals("--jobs") -> if { arguments[index!] => jobs! }
+                } else {
+                    argument -> textEquals("--filter") -> if {
+                        "sollang: missing value for --filter" -> println
+                        1 -> return
+                    } else { 1 => status! }
                 }
-                argument -> textEquals("--jobs") -> if { arguments[index!] => jobs! }
             } else {
-                argument -> textEquals("--filter") -> if {
-                    "sollang: missing value for --filter" -> println
-                    1 -> return
-                } else { 1 => status! }
+                (argument -> textEquals("-O0")) or (argument -> textEquals("-O1")) or (argument -> textEquals("-O2")) or (argument -> textEquals("-O3"))
+                    -> if {
+                        argument => optimization!
+                    } else {
+                        (argument -> len) > 0 and (argument -> byte(UIntSize(0))) == 45
+                            -> if {
+                                argument => invalidOption!
+                                2 => status!
+                            } else { explicitSources! -> push(argument) }
+                    }
             }
-        } else {
-            ((argument -> textEquals("-O0")) or (argument -> textEquals("-O1")) or (argument -> textEquals("-O2")) or (argument -> textEquals("-O3"))) -> if {
-                argument => optimization!
-            } else {
-                (argument -> len) > 0 and (argument -> byte(UIntSize(0))) == 45 -> if {
-                    argument => invalidOption!
-                    2 => status!
-                } else { explicitSources! -> push(argument) }
-            }
-        }
         index! + 1 => index!
     }
     status! != 0 -> if {
@@ -870,10 +1135,11 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
             sourcePaths! -> push(current)
         }
     }
-    ((sourcePaths! -> len) == 0 and (explicitSources! -> len) == 0) -> if {
-        "sollang: no tests found; declare a zero-input Bool function whose name starts with 'test_'" -> println
-        1 -> return
-    }
+    (sourcePaths! -> len) == 0 and (explicitSources! -> len) == 0
+        -> if {
+            "sollang: no tests found; declare a zero-input Bool function whose name starts with 'test_'" -> println
+            1 -> return
+        }
     sourcePaths! -> len => candidatePathCount
     candidatePathCount + (explicitSources! -> len) => candidateSourceCount
 
@@ -904,10 +1170,11 @@ runNativeTest hostTarget: Int -> Int uses Console, File, Process, Environment {
     "$sollangDirectory/test" -> materialize(testDirectoryStorage!) => testDirectory
     target! -> testTargetName => targetName
     "$testDirectory/$targetName" -> materialize(targetDirectoryStorage!) => targetDirectory
-    ((sollangDirectory -> ensureDirectory) and (testDirectory -> ensureDirectory) and (targetDirectory -> ensureDirectory)) -> unless {
-        "sollang: failed to create native test output directory" -> println
-        1 -> return
-    }
+    (sollangDirectory -> ensureDirectory) and (testDirectory -> ensureDirectory) and (targetDirectory -> ensureDirectory)
+        -> unless {
+            "sollang: failed to create native test output directory" -> println
+            1 -> return
+        }
     projectName! -> testOutputName(explicitSources!) => testName
     target! -> testOutputSuffix => outputSuffix
     "$targetDirectory/$testName$outputSuffix" -> materialize(outputStorage!) => output
@@ -973,94 +1240,97 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
             argument -> textEquals("--") -> if {
                 true => parsingProgramArguments!
             } else {
-                ((argument -> textEquals("-o")) or (argument -> textEquals("--output"))) -> if {
-                    index! + 1 < argumentCount -> if {
-                        index! + 1 => index!
-                        arguments[index!] => outputOption!
-                    } else { 1 => status! }
-                } else {
-                    argument -> textEquals("--llvm") -> if {
+                (argument -> textEquals("-o")) or (argument -> textEquals("--output"))
+                    -> if {
                         index! + 1 < argumentCount -> if {
                             index! + 1 => index!
-                            arguments[index!] => llvmHome!
-                        } else { 2 => status! }
+                            arguments[index!] => outputOption!
+                        } else { 1 => status! }
                     } else {
-                        argument -> textEquals("--stdlib") -> if {
+                        argument -> textEquals("--llvm") -> if {
                             index! + 1 < argumentCount -> if {
                                 index! + 1 => index!
-                                arguments[index!] => stdlibRoot!
-                            } else { 3 => status! }
+                                arguments[index!] => llvmHome!
+                            } else { 2 => status! }
                         } else {
-                            argument -> textEquals("--target") -> if {
+                            argument -> textEquals("--stdlib") -> if {
                                 index! + 1 < argumentCount -> if {
                                     index! + 1 => index!
-                                    arguments[index!] -> parseNativeTarget => target!
-                                    target! < 0 -> if { 4 => status! }
-                                } else { 5 => status! }
+                                    arguments[index!] => stdlibRoot!
+                                } else { 3 => status! }
                             } else {
-                                argument -> textEquals("--jobs") -> if {
+                                argument -> textEquals("--target") -> if {
                                     index! + 1 < argumentCount -> if {
                                         index! + 1 => index!
-                                        (arguments[index!] -> parsePositiveInt) > 0 -> if {
-                                            arguments[index!] => jobs!
-                                        } else { 6 => status! }
-                                    } else { 6 => status! }
+                                        arguments[index!] -> parseNativeTarget => target!
+                                        target! < 0 -> if { 4 => status! }
+                                    } else { 5 => status! }
                                 } else {
-                                    argument -> textEquals("--keep-temps") -> if {
-                                        true => keepTemps!
+                                    argument -> textEquals("--jobs") -> if {
+                                        index! + 1 < argumentCount -> if {
+                                            index! + 1 => index!
+                                            (arguments[index!] -> parsePositiveInt) > 0 -> if {
+                                                arguments[index!] => jobs!
+                                            } else { 6 => status! }
+                                        } else { 6 => status! }
                                     } else {
-                                        ((argument -> textEquals("-O0")) or (argument -> textEquals("-O1")) or (argument -> textEquals("-O2")) or (argument -> textEquals("-O3"))) -> if {
-                                            argument => optimization!
+                                        argument -> textEquals("--keep-temps") -> if {
+                                            true => keepTemps!
                                         } else {
-                                            argument -> textEquals("--project") -> if {
-                                                index! + 1 < argumentCount -> if {
-                                                    index! + 1 => index!
-                                                    arguments[index!] => projectOption!
-                                                } else { 7 => status! }
-                                            } else {
-                                                argument -> textEquals("--workspace") -> if {
-                                                    index! + 1 < argumentCount -> if {
-                                                        index! + 1 => index!
-                                                        arguments[index!] => workspaceOption!
-                                                    } else { 7 => status! }
+                                            (argument -> textEquals("-O0")) or (argument -> textEquals("-O1")) or (argument -> textEquals("-O2")) or (argument -> textEquals("-O3"))
+                                                -> if {
+                                                    argument => optimization!
                                                 } else {
-                                                    argument -> textEquals("--package") -> if {
+                                                    argument -> textEquals("--project") -> if {
                                                         index! + 1 < argumentCount -> if {
                                                             index! + 1 => index!
-                                                            arguments[index!] => packageOption!
+                                                            arguments[index!] => projectOption!
                                                         } else { 7 => status! }
                                                     } else {
-                                                        argument -> textEquals("--product") -> if {
+                                                        argument -> textEquals("--workspace") -> if {
                                                             index! + 1 < argumentCount -> if {
                                                                 index! + 1 => index!
-                                                                arguments[index!] => productOption!
+                                                                arguments[index!] => workspaceOption!
                                                             } else { 7 => status! }
                                                         } else {
-                                                            argument -> textEquals("--locked") -> if {
-                                                                true => locked!
+                                                            argument -> textEquals("--package") -> if {
+                                                                index! + 1 < argumentCount -> if {
+                                                                    index! + 1 => index!
+                                                                    arguments[index!] => packageOption!
+                                                                } else { 7 => status! }
                                                             } else {
-                                                                argument -> textEquals("--library") -> if {
-                                                                    true => library!
+                                                                argument -> textEquals("--product") -> if {
+                                                                    index! + 1 < argumentCount -> if {
+                                                                        index! + 1 => index!
+                                                                        arguments[index!] => productOption!
+                                                                    } else { 7 => status! }
                                                                 } else {
-                                                                    (argument -> len) > 0 and (argument -> byte(UIntSize(0))) == 45 -> if {
-                                                                        argument => invalidOption!
-                                                                        8 => status!
+                                                                    argument -> textEquals("--locked") -> if {
+                                                                        true => locked!
                                                                     } else {
-                                                                        sources! -> push(argument)
+                                                                        argument -> textEquals("--library") -> if {
+                                                                            true => library!
+                                                                        } else {
+                                                                            (argument -> len) > 0 and (argument -> byte(UIntSize(0))) == 45
+                                                                                -> if {
+                                                                                    argument => invalidOption!
+                                                                                    8 => status!
+                                                                                } else {
+                                                                                    sources! -> push(argument)
+                                                                                }
+                                                                        }
                                                                     }
                                                                 }
                                                             }
                                                         }
                                                     }
                                                 }
-                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
             }
         }
         index! + 1 => index!
@@ -1075,38 +1345,44 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         1 -> return
     }
     llvmHome! -> toolchain.llvmHome => llvmHome!
-    ((projectOption! -> len) > 0 and (workspaceOption! -> len) > 0) -> if {
-        "sollang: --project cannot be combined with --workspace" -> println
-        1 -> return
-    }
-    ((sources! -> len) > 0 and ((projectOption! -> len) > 0 or (workspaceOption! -> len) > 0)) -> if {
-        "sollang: --project/--workspace cannot be combined with explicit source files" -> println
-        1 -> return
-    }
-    ((sources! -> len) > 0 and (productOption! -> len) > 0) -> if {
-        "sollang: --product requires a project build" -> println
-        1 -> return
-    }
-    ((sources! -> len) > 0 and (packageOption! -> len) > 0) -> if {
-        "sollang: --package requires a workspace build" -> println
-        1 -> return
-    }
-    ((packageOption! -> len) > 0 and (projectOption! -> len) > 0) -> if {
-        "sollang: --package cannot be combined with --project" -> println
-        1 -> return
-    }
-    (locked! and (sources! -> len) > 0) -> if {
+    (projectOption! -> len) > 0 and (workspaceOption! -> len) > 0
+        -> if {
+            "sollang: --project cannot be combined with --workspace" -> println
+            1 -> return
+        }
+    (sources! -> len) > 0 and ((projectOption! -> len) > 0 or (workspaceOption! -> len) > 0)
+        -> if {
+            "sollang: --project/--workspace cannot be combined with explicit source files" -> println
+            1 -> return
+        }
+    (sources! -> len) > 0 and (productOption! -> len) > 0
+        -> if {
+            "sollang: --product requires a project build" -> println
+            1 -> return
+        }
+    (sources! -> len) > 0 and (packageOption! -> len) > 0
+        -> if {
+            "sollang: --package requires a workspace build" -> println
+            1 -> return
+        }
+    (packageOption! -> len) > 0 and (projectOption! -> len) > 0
+        -> if {
+            "sollang: --package cannot be combined with --project" -> println
+            1 -> return
+        }
+    locked! and (sources! -> len) > 0 -> if {
         "sollang: --locked requires a project or workspace build" -> println
         1 -> return
     }
-    (library! and target! == 2) -> if {
+    library! and target! == 2 -> if {
         "sollang: --library currently supports windows-x64 and linux-x64" -> println
         1 -> return
     }
-    (not runAfterBuild and parsingProgramArguments!) -> if {
-        "sollang: build does not accept program arguments after --" -> println
-        1 -> return
-    }
+    not runAfterBuild and parsingProgramArguments!
+        -> if {
+            "sollang: build does not accept program arguments after --" -> println
+            1 -> return
+        }
     (workspaceOption! -> len) > 0 -> if {
         workspaceOption! -> cliWorkspace.load(packageOption!, workspaceManifestStorage!, workspaceProjectStorage!) => workspaceInput
         workspaceInput.status != 0 -> if {
@@ -1162,34 +1438,195 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
     }
 }
 
+runInternalCompilerCommand command: Text, pathStart: UIntSize -> Bool uses Console, File, Process {
+    command -> textEquals("llvm-codegen-units") -> if {
+        runCodegenUnits()
+        true -> return
+    }
+    command -> textEquals("typed-ir") -> if {
+        runTypedIr()
+        true -> return
+    }
+    command -> textEquals("typed-ir-index") -> if {
+        -1 -> runTypedIrPhase
+        true -> return
+    }
+    command -> textEquals("typed-ir-lower") -> if {
+        0 -> runTypedIrPhase
+        true -> return
+    }
+    command -> textEquals("typed-ir-prefix") -> if {
+        runTypedIrPrefix()
+        true -> return
+    }
+    command -> textEquals("typed-ir-function-prefix")
+        -> if {
+            runTypedIrFunctionPrefix()
+            true -> return
+        }
+    command -> textEquals("typed-ir-normalize") -> if {
+        1 -> runTypedIrPhase
+        true -> return
+    }
+    command -> textEquals("typed-ir-normalize-candidates")
+        -> if {
+            runTypedIrNormalizeCandidates()
+            true -> return
+        }
+    command -> textEquals("typed-ir-seal") -> if {
+        2 -> runTypedIrPhase
+        true -> return
+    }
+    command -> textEquals("typed-ir-calls") -> if {
+        runTypedIrCalls()
+        true -> return
+    }
+    command -> textEquals("typed-ir-moves") -> if {
+        runTypedIrMoves()
+        true -> return
+    }
+    command -> textEquals("typed-ir-nodes") -> if {
+        runTypedIrNodes()
+        true -> return
+    }
+    command -> textEquals("ast-nodes") -> if {
+        runAstNodes()
+        true -> return
+    }
+    command -> textEquals("qualified-resolutions")
+        -> if {
+            runQualifiedResolutions()
+            true -> return
+        }
+    command -> textEquals("symbols") -> if {
+        runSymbols()
+        true -> return
+    }
+    command -> textEquals("ownership") -> if {
+        runOwnership()
+        true -> return
+    }
+    command -> textEquals("validate") -> if {
+        0 -> runCheckedValidation
+        true -> return
+    }
+    command -> textEquals("diagnostic-counts") -> if {
+        7 -> runCheckedValidation
+        true -> return
+    }
+    command -> textEquals("emitter-state") -> if {
+        1 -> runCheckedValidation
+        true -> return
+    }
+    command -> textEquals("schedule") -> if {
+        2 -> runCheckedValidation
+        true -> return
+    }
+    command -> textEquals("preamble") -> if {
+        3 -> runCheckedValidation
+        true -> return
+    }
+    command -> textEquals("functions") -> if {
+        4 -> runCheckedValidation
+        true -> return
+    }
+    command -> textEquals("control-allocas") -> if {
+        5 -> runCheckedValidation
+        true -> return
+    }
+    command -> textEquals("reference-allocas") -> if {
+        6 -> runCheckedValidation
+        true -> return
+    }
+    command -> textEquals("expression-type-ids") -> if {
+        runExpressionTypeIds()
+        true -> return
+    }
+    command -> textEquals("expression-type-records")
+        -> if {
+            runExpressionTypeRecords()
+            true -> return
+        }
+    command -> textEquals("semantic-type-records")
+        -> if {
+            runSemanticTypeRecords()
+            true -> return
+        }
+    command -> textEquals("module-artifacts") -> if {
+        runModuleArtifacts()
+        true -> return
+    }
+    command -> textEquals("interface-cache") -> if {
+        runInterfaceCache()
+        true -> return
+    }
+    command -> textEquals("fingerprint") -> if {
+        pathStart -> emitFingerprints
+        true -> return
+    }
+    command -> textEquals("build-windows") -> if {
+        pathStart -> buildWindows
+        true -> return
+    }
+    command -> textEquals("windows-root") -> if {
+        pathStart -> emitWindowsRoot
+        true -> return
+    }
+    command -> textEquals("linux-root") -> if {
+        pathStart -> emitLinuxRoot
+        true -> return
+    }
+    command -> textEquals("wasm-root") -> if {
+        pathStart -> emitWasmRoot
+        true -> return
+    }
+    command -> textEquals("linux") -> if {
+        pathStart -> emitLinuxFiles
+        true -> return
+    }
+    command -> textEquals("wasm") -> if {
+        pathStart -> emitWasmFiles
+        true -> return
+    }
+    command -> textEquals("windows") -> if {
+        pathStart -> emitWindowsFiles
+        true -> return
+    }
+    false
+}
+
 dispatchArguments: -> Unit uses Console, File, Process, Environment {
     sys.process.arguments() => arguments
     (arguments -> len) == 2 -> if {
-        ((arguments[1] -> textEquals("--version")) or (arguments[1] -> textEquals("-v"))) -> if {
-            printVersion()
+        (arguments[1] -> textEquals("--version")) or (arguments[1] -> textEquals("-v"))
+            -> if {
+                printVersion()
+                process.exit(0)
+            }
+        (arguments[1] -> textEquals("--help")) or (arguments[1] -> textEquals("-h")) or (arguments[1] -> textEquals("help"))
+            -> if {
+                printHelp()
+                process.exit(0)
+            }
+    }
+    arguments[1] -> textEquals("language-server")
+        -> if {
+            (arguments -> len) != 2 -> if {
+                "sollang: usage: sollang language-server" -> runtime.eprintln
+                process.exit(1)
+            }
+            cliLanguageServer.run()
             process.exit(0)
         }
-        ((arguments[1] -> textEquals("--help")) or (arguments[1] -> textEquals("-h")) or (arguments[1] -> textEquals("help"))) -> if {
-            printHelp()
-            process.exit(0)
-        }
-    }
-    arguments[1] -> textEquals("language-server") -> if {
-        (arguments -> len) != 2 -> if {
-            "sollang: usage: sollang language-server" -> runtime.eprintln
-            process.exit(1)
-        }
-        cliLanguageServer.run()
-        process.exit(0)
-    }
     arguments[1] -> textEquals("bind-cpp") -> if {
         cliCppBinding.run() => exitCode
         process.exit(exitCode)
     }
-    ((arguments -> len) >= 3 and (arguments[1] -> textEquals("grammar")) and (arguments[2] -> textEquals("build"))) -> if {
-        cliGrammar.run() => exitCode
-        process.exit(exitCode)
-    }
+    (arguments -> len) >= 3 and (arguments[1] -> textEquals("grammar")) and (arguments[2] -> textEquals("build"))
+        -> if {
+            cliGrammar.run() => exitCode
+            process.exit(exitCode)
+        }
     path.nativeStyle() -> when {
         Windows { 0 }
         Posix { 1 }
@@ -1226,16 +1663,21 @@ dispatchArguments: -> Unit uses Console, File, Process, Environment {
         UIntSize(2) -> emitTestFiles(1)
         process.exit(0)
     }
-    arguments[1] -> textEquals("windows-stdlib") -> if {
-        UIntSize(2) -> emitRootAndFiles(0)
-        process.exit(0)
-    }
+    arguments[1] -> textEquals("windows-stdlib")
+        -> if {
+            UIntSize(2) -> emitRootAndFiles(0)
+            process.exit(0)
+        }
     arguments[1] -> textEquals("linux-stdlib") -> if {
         UIntSize(2) -> emitRootAndFiles(1)
         process.exit(0)
     }
     arguments[1] -> textEquals("wasm-stdlib") -> if {
         UIntSize(2) -> emitRootAndFiles(2)
+        process.exit(0)
+    }
+    arguments[1] -> textEquals("prepare") -> if {
+        runPrepare()
         process.exit(0)
     }
     UIntSize(2) => optionStart!
@@ -1245,53 +1687,12 @@ dispatchArguments: -> Unit uses Console, File, Process, Environment {
     workers < 0 -> if {
         "; sollang error: --jobs expects a positive integer" -> println
     } else {
-    workers > 0 -> if { "; sollang workers = $workers" -> println }
-    arguments[1] -> textEquals("llvm-codegen-units") -> if {
-        runCodegenUnits()
-    } else {
-    arguments[1] -> textEquals("module-artifacts") -> if {
-        runModuleArtifacts()
-    } else {
-    arguments[1] -> textEquals("interface-cache") -> if {
-        runInterfaceCache()
-    } else {
-    arguments[1] -> textEquals("fingerprint") -> if {
-        pathStart -> emitFingerprints
-    } else {
-    arguments[1] -> textEquals("build-windows") -> if {
-        pathStart -> buildWindows
-    } else {
-    arguments[1] -> textEquals("windows-root") -> if {
-        pathStart -> emitWindowsRoot
-    } else {
-    arguments[1] -> textEquals("linux-root") -> if {
-        pathStart -> emitLinuxRoot
-    } else {
-    arguments[1] -> textEquals("wasm-root") -> if {
-        pathStart -> emitWasmRoot
-    } else {
-    arguments[1] -> textEquals("linux") -> if {
-        pathStart -> emitLinuxFiles
-    } else {
-        arguments[1] -> textEquals("wasm") -> if {
-            pathStart -> emitWasmFiles
-        } else {
-            arguments[1] -> textEquals("windows") -> if {
-                pathStart -> emitWindowsFiles
-            } else {
-                printBuildUsage()
-                process.exit(1)
-            }
+        workers > 0 -> if { "; sollang workers = $workers" -> println }
+        arguments[1] -> runInternalCompilerCommand(pathStart) => handled
+        not handled -> if {
+            printBuildUsage()
+            process.exit(1)
         }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
     }
 }
 

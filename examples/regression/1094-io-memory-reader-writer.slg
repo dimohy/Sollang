@@ -1,0 +1,57 @@
+import std.io as io
+
+run: -> Result<Bool, io.Error> uses Console {
+    io.memoryWriter(5)? => writer!
+    [UInt8(1), 2, 3] => first
+    [UInt8(4), 5, 6] => second
+    writer! -> write(first) => firstWritten
+    writer! -> write(second) => secondWritten
+    "$firstWritten,$secondWritten,$(writer! -> byteCount),$(writer! -> remainingCapacity)" -> println
+
+    [UInt8(7)] => overflow
+    writer! -> writeAll(overflow) -> when {
+        Ok(count) { "unexpected-write=$count" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                OutputLimitExceeded { "write-limit@$(failure -> errorOffset)" -> println }
+                else { "wrong-write-error" -> println }
+            }
+        }
+    }
+
+    writer! -> intoBytes => bytes
+    io.memoryReader(bytes, 3)? => reader!
+    reader! -> read(2)? => firstRead
+    firstRead -> when {
+        Bytes(chunk) { "chunk=$(chunk -> len),$(chunk[0]),$(chunk[1])" -> println }
+        End { "unexpected-end" -> println }
+    }
+
+    reader! -> readExact(3)? => exact
+    "exact=$(exact -> len),$(exact[0]),$(exact[1]),$(exact[2]),pos=$(reader! -> position)" -> println
+
+    reader! -> read(1)? => finalRead
+    finalRead -> when {
+        Bytes(chunk) { "unexpected-chunk=$(chunk -> len)" -> println }
+        End { "end=$(reader! -> isEnd)" -> println }
+    }
+
+    reader! -> seek(4)?
+    reader! -> readExact(2) -> when {
+        Ok(chunk) { "unexpected-exact=$(chunk -> len)" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                UnexpectedEnd { "short@$(failure -> errorOffset),pos=$(reader! -> position)" -> println }
+                else { "wrong-read-error" -> println }
+            }
+        }
+    }
+    Result<Bool, io.Error>.Ok(true)
+}
+
+main {
+    run() -> when {
+        Ok(value) { }
+        Err(failure) { "unexpected-error@$(failure -> errorOffset)" -> println }
+    }
+}

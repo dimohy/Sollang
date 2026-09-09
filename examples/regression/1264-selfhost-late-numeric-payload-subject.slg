@@ -1,0 +1,51 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A numeric subject nested in an enum payload arm closes both comparison operands
+# and acquires the exact value type shared by its terminal arms.
+main {
+    """"
+        namespace sample
+
+        enum Read {
+            NeedMore(Int)
+            Ready(Int)
+        }
+
+        select read: Read -> Int => read -> when {
+            NeedMore(bits) { bits }
+            Ready(value) {
+                value -> when {
+                    == 0 { 10 }
+                    == 1 { 11 }
+                    == 2 { 12 }
+                    else { 13 }
+                }
+            }
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    0 => controls!
+    0 => completeConditions!
+    0 => typedControls!
+    0 => valueConditions!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.kind == 34 -> if {
+            controls! + 1 => controls!
+            node.typeId >= 0 and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+                -> if { typedControls! + 1 => typedControls! }
+        }
+        node.kind == 8 and node.parent >= 0 and ir[node.parent].kind == 19
+            and node.operand0 >= 0 and node.operand1 >= 0
+            -> if {
+                completeConditions! + 1 => completeConditions!
+                ir[node.operand1].kind != 19 -> if { valueConditions! + 1 => valueConditions! }
+            }
+        index! + 1 => index!
+    }
+    "controls=$(controls!),conditions=$(completeConditions!),typed=$(typedControls!),values=$(valueConditions!)" -> println
+}

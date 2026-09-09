@@ -1,0 +1,63 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+struct Observation {
+    intoCount: UIntSize
+    intoLength: Int
+    intoTruncated: Bool
+    allocatedLength: Int
+    allocatedTruncated: Bool
+    completeCount: UIntSize
+    completeTruncated: Bool
+    bytesMatch: Bool
+}
+
+observe local: net.Endpoint -> Result<Observation, socket.SocketError> uses Network {
+    socket.DatagramBindOptions {
+        endpoint: local
+        reuseAddress: true
+    } -> bind? => receiver
+    receiver -> localPort? => receiverPort
+    socket.DatagramBindOptions {
+        endpoint: net.loopback(0) -> unified
+        reuseAddress: true
+    } -> bind? => sender
+    net.loopback(receiverPort) -> unified => destination
+    [UInt8(1), 2, 3, 4, 5, 6, 7, 8; ~] => oversized
+    sender -> sendTo(destination, oversized)? => ignoredFirst
+    [UInt8; 4~] => into!
+    receiver -> receiveFromInto(into!)? => intoReceipt
+    sender -> sendTo(destination, oversized)? => ignoredSecond
+    receiver -> receiveFrom(4)? => allocated
+    [UInt8(9), 10, 11; ~] => complete
+    sender -> sendTo(destination, complete)? => ignoredComplete
+    [UInt8; 4~] => completeInto!
+    receiver -> receiveFromInto(completeInto!)? => completeReceipt
+    sender -> close
+    receiver -> close
+    Result<Observation, socket.SocketError>.Ok(Observation {
+        intoCount: intoReceipt.count
+        intoLength: into! -> len
+        intoTruncated: intoReceipt.truncated
+        allocatedLength: allocated.bytes -> len
+        allocatedTruncated: allocated.truncated
+        completeCount: completeReceipt.count
+        completeTruncated: completeReceipt.truncated
+        bytesMatch: into![0] == 1
+            and into![3] == 4
+            and allocated.bytes[0] == 1
+            and allocated.bytes[3] == 4
+            and completeInto![0] == 9
+            and completeInto![2] == 11
+    })
+}
+
+main {
+    net.loopback(0) -> unified -> observe -> when {
+        Ok(value) {
+            "udp-truncation=$(value.intoCount),$(value.intoLength),$(value.intoTruncated),$(value.allocatedLength),$(value.allocatedTruncated),$(value.completeCount),$(value.completeTruncated),$(value.bytesMatch)" -> println
+        }
+        Err(error) { "udp-error=$(error.code)" -> println }
+    }
+}

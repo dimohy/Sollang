@@ -1,0 +1,2048 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.expression_types as expressionTypes
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as semanticTypes
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+# Seal contextual and control-flow types after normalization.
+sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], runtimeSymbols: ref LateRuntimeSymbols -> [Int; ~] {
+    # A bare integer literal in binary arithmetic or comparison adopts the
+    # exact type of its independently typed peer. Without this final
+    # contextualization,
+    # `UInt16(value) / 16` keeps the right operand as Int, forcing an i32 LLVM
+    # operation even though the semantic result and downstream ABI are UInt16.
+    0 => contextualBinaryLiteralIndex!
+    contextualBinaryLiteralIndex! < (nodes -> len)
+        -> while {
+            nodes[contextualBinaryLiteralIndex!] => contextualBinary
+            (contextualBinary.opcode >= grammar.tokenIdPlus()
+                and contextualBinary.opcode <= grammar.tokenIdPercent())
+                => contextualBinaryArithmetic
+            (contextualBinaryArithmetic
+                or contextualBinary.opcode == grammar.tokenIdEqualEqual()
+                or contextualBinary.opcode == grammar.tokenIdBangEqual()
+                or (contextualBinary.opcode >= grammar.tokenIdLessEqual()
+                and contextualBinary.opcode <= grammar.tokenIdGreater()))
+                => contextualBinaryNumericOperands
+            contextualBinary.kind == 8
+                and contextualBinaryNumericOperands
+                and contextualBinary.operand0 >= 0
+                and contextualBinary.operand1 >= 0 -> if {
+                    nodes[contextualBinary.operand0] => contextualBinaryLeft!
+                    nodes[contextualBinary.operand1] => contextualBinaryRight!
+                    contextualBinaryLeft!.kind == 3
+                        and contextualBinaryRight!.typeKind == 1
+                        and contextualBinaryRight!.typeOrigin == 1
+                        and contextualBinaryRight!.typeSymbol >= 2
+                        and contextualBinaryRight!.typeSymbol <= 14
+                        -> if {
+                            contextualBinaryRight!.typeId => contextualBinaryLeft!.typeId
+                            contextualBinaryRight!.typeKind => contextualBinaryLeft!.typeKind
+                            contextualBinaryRight!.typeOrigin => contextualBinaryLeft!.typeOrigin
+                            contextualBinaryRight!.typeModule => contextualBinaryLeft!.typeModule
+                            contextualBinaryRight!.typeSymbol => contextualBinaryLeft!.typeSymbol
+                            contextualBinaryRight!.typeFlags => contextualBinaryLeft!.typeFlags
+                            contextualBinaryLeft! => nodes[contextualBinary.operand0]
+                        }
+                    contextualBinaryRight!.kind == 3
+                        and contextualBinaryLeft!.typeKind == 1
+                        and contextualBinaryLeft!.typeOrigin == 1
+                        and contextualBinaryLeft!.typeSymbol >= 2
+                        and contextualBinaryLeft!.typeSymbol <= 14 -> if {
+                            contextualBinaryLeft!.typeId => contextualBinaryRight!.typeId
+                            contextualBinaryLeft!.typeKind => contextualBinaryRight!.typeKind
+                            contextualBinaryLeft!.typeOrigin => contextualBinaryRight!.typeOrigin
+                            contextualBinaryLeft!.typeModule => contextualBinaryRight!.typeModule
+                            contextualBinaryLeft!.typeSymbol => contextualBinaryRight!.typeSymbol
+                            contextualBinaryLeft!.typeFlags => contextualBinaryRight!.typeFlags
+                            contextualBinaryRight! => nodes[contextualBinary.operand1]
+                        }
+                    # A negated literal is an operator node around the literal,
+                    # so contextualize both nodes from the independently typed
+                    # peer. Otherwise `-9_223_372_036_854_775_807 - Long(1)`
+                    # lowers the first subtraction as i32 before the outer
+                    # arithmetic widens to Long.
+                    contextualBinaryLeft!.kind == 7
+                        and contextualBinaryLeft!.opcode == grammar.tokenIdMinus()
+                        and contextualBinaryLeft!.operand0 >= 0
+                        and nodes[contextualBinaryLeft!.operand0].kind == 3
+                        and contextualBinaryRight!.typeKind == 1
+                        and contextualBinaryRight!.typeOrigin == 1
+                        and contextualBinaryRight!.typeSymbol >= 2
+                        and contextualBinaryRight!.typeSymbol <= 14
+                        -> if {
+                            nodes[contextualBinaryLeft!.operand0] => contextualBinaryLeftLiteral!
+                            contextualBinaryRight!.typeId => contextualBinaryLeftLiteral!.typeId
+                            contextualBinaryRight!.typeKind => contextualBinaryLeftLiteral!.typeKind
+                            contextualBinaryRight!.typeOrigin => contextualBinaryLeftLiteral!.typeOrigin
+                            contextualBinaryRight!.typeModule => contextualBinaryLeftLiteral!.typeModule
+                            contextualBinaryRight!.typeSymbol => contextualBinaryLeftLiteral!.typeSymbol
+                            contextualBinaryRight!.typeFlags => contextualBinaryLeftLiteral!.typeFlags
+                            contextualBinaryLeftLiteral! => nodes[contextualBinaryLeft!.operand0]
+                            contextualBinaryRight!.typeId => contextualBinaryLeft!.typeId
+                            contextualBinaryRight!.typeKind => contextualBinaryLeft!.typeKind
+                            contextualBinaryRight!.typeOrigin => contextualBinaryLeft!.typeOrigin
+                            contextualBinaryRight!.typeModule => contextualBinaryLeft!.typeModule
+                            contextualBinaryRight!.typeSymbol => contextualBinaryLeft!.typeSymbol
+                            contextualBinaryRight!.typeFlags => contextualBinaryLeft!.typeFlags
+                            contextualBinaryLeft! => nodes[contextualBinary.operand0]
+                        }
+                    contextualBinaryRight!.kind == 7
+                        and contextualBinaryRight!.opcode == grammar.tokenIdMinus()
+                        and contextualBinaryRight!.operand0 >= 0
+                        and nodes[contextualBinaryRight!.operand0].kind == 3
+                        and contextualBinaryLeft!.typeKind == 1
+                        and contextualBinaryLeft!.typeOrigin == 1
+                        and contextualBinaryLeft!.typeSymbol >= 2
+                        and contextualBinaryLeft!.typeSymbol <= 14
+                        -> if {
+                            nodes[contextualBinaryRight!.operand0] => contextualBinaryRightLiteral!
+                            contextualBinaryLeft!.typeId => contextualBinaryRightLiteral!.typeId
+                            contextualBinaryLeft!.typeKind => contextualBinaryRightLiteral!.typeKind
+                            contextualBinaryLeft!.typeOrigin => contextualBinaryRightLiteral!.typeOrigin
+                            contextualBinaryLeft!.typeModule => contextualBinaryRightLiteral!.typeModule
+                            contextualBinaryLeft!.typeSymbol => contextualBinaryRightLiteral!.typeSymbol
+                            contextualBinaryLeft!.typeFlags => contextualBinaryRightLiteral!.typeFlags
+                            contextualBinaryRightLiteral! => nodes[contextualBinaryRight!.operand0]
+                            contextualBinaryLeft!.typeId => contextualBinaryRight!.typeId
+                            contextualBinaryLeft!.typeKind => contextualBinaryRight!.typeKind
+                            contextualBinaryLeft!.typeOrigin => contextualBinaryRight!.typeOrigin
+                            contextualBinaryLeft!.typeModule => contextualBinaryRight!.typeModule
+                            contextualBinaryLeft!.typeSymbol => contextualBinaryRight!.typeSymbol
+                            contextualBinaryLeft!.typeFlags => contextualBinaryRight!.typeFlags
+                            contextualBinaryRight! => nodes[contextualBinary.operand1]
+                        }
+                    nodes[contextualBinary.operand0] => contextualBinaryCanonicalLeft
+                    nodes[contextualBinary.operand1] => contextualBinaryCanonicalRight
+                    contextualBinaryArithmetic
+                        and contextualBinaryCanonicalLeft.typeId >= 0
+                        and contextualBinaryCanonicalLeft.typeId == contextualBinaryCanonicalRight.typeId
+                        and contextualBinaryCanonicalLeft.typeKind == 1
+                        and contextualBinaryCanonicalLeft.typeOrigin == 1
+                        and contextualBinaryCanonicalLeft.typeSymbol >= 2
+                        and contextualBinaryCanonicalLeft.typeSymbol <= 14
+                        -> if {
+                            contextualBinary => contextualBinaryResult!
+                            contextualBinaryCanonicalLeft.typeId => contextualBinaryResult!.typeId
+                            contextualBinaryCanonicalLeft.typeKind => contextualBinaryResult!.typeKind
+                            contextualBinaryCanonicalLeft.typeOrigin => contextualBinaryResult!.typeOrigin
+                            contextualBinaryCanonicalLeft.typeModule => contextualBinaryResult!.typeModule
+                            contextualBinaryCanonicalLeft.typeSymbol => contextualBinaryResult!.typeSymbol
+                            contextualBinaryCanonicalLeft.typeFlags => contextualBinaryResult!.typeFlags
+                            contextualBinaryResult! => nodes[contextualBinaryLiteralIndex!]
+                        }
+                }
+            contextualBinaryLiteralIndex! + 1 => contextualBinaryLiteralIndex!
+        }
+    # `take` consumes one collection entry and therefore produces the
+    # collection's element/value, never the receiver container. Operand links
+    # are final at this boundary, so settle the canonical result without AST
+    # shape heuristics.
+    0 => takeResultTypeRepairIndex!
+    takeResultTypeRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[takeResultTypeRepairIndex!] => takeResultTypeRepair!
+            takeResultTypeRepair!.kind == 9
+                and takeResultTypeRepair!.opcode == -213
+                and takeResultTypeRepair!.operand0 >= 0
+                and nodes[takeResultTypeRepair!.operand0].typeId >= 0
+                -> if {
+                    nodes[takeResultTypeRepair!.operand0].typeId => takeResultReceiverTypeId!
+                    frozenRecursiveSemanticTypes[takeResultReceiverTypeId!] => takeResultReceiverType!
+                    takeResultReceiverType!.kind == 8 -> if {
+                        takeResultReceiverType!.first => takeResultReceiverTypeId!
+                        frozenRecursiveSemanticTypes[takeResultReceiverTypeId!] => takeResultReceiverType!
+                    }
+                    -1 => takeResultElementTypeId!
+                    takeResultReceiverType!.kind == 3 or takeResultReceiverType!.kind == 4 or takeResultReceiverType!.kind == 12
+                        -> if { takeResultReceiverType!.first => takeResultElementTypeId! }
+                    takeResultReceiverType!.kind == 5 -> if { takeResultReceiverType!.second => takeResultElementTypeId! }
+                    takeResultElementTypeId! >= 0 -> if {
+                        frozenRecursiveSemanticTypes[takeResultElementTypeId!] => takeResultElementType
+                        takeResultElementTypeId! => takeResultTypeRepair!.typeId
+                        takeResultElementType.kind => takeResultTypeRepair!.typeKind
+                        takeResultElementType.origin => takeResultTypeRepair!.typeOrigin
+                        takeResultElementType.module => takeResultTypeRepair!.typeModule
+                        takeResultElementType.symbol => takeResultTypeRepair!.typeSymbol
+                        recursiveTypeFlags[takeResultElementTypeId!] => takeResultTypeRepair!.typeFlags
+                        takeResultTypeRepair! => nodes[takeResultTypeRepairIndex!]
+                    }
+                }
+            takeResultTypeRepairIndex! + 1 => takeResultTypeRepairIndex!
+        }
+    # A pipeline enum match consumes the terminal value before its first arm.
+    # Earlier passes may initially attach the lexical source name or leave the
+    # subject unresolved when an outer binding receives its type from a
+    # value-producing control expression. Once all canonical binding/reference
+    # types exist, select the nearest proven enum value in the exact owning flow
+    # before the match AST. This is the same structural ownership rule used
+    # during initial lowering, but without stale provisional types.
+    0 => enumSubjectTerminalRepairIndex!
+    enumSubjectTerminalRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[enumSubjectTerminalRepairIndex!] => enumSubjectTerminalRepair!
+            enumSubjectTerminalRepair!.kind == 27
+                and enumSubjectTerminalRepair!.sourceModule >= 0
+                -> if {
+                    prepared.package.ranges[enumSubjectTerminalRepair!.sourceModule] => enumSubjectTerminalRange
+                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalRepair!.astNode] => enumSubjectTerminalMatchAst
+                    enumSubjectTerminalMatchAst.parent => enumSubjectTerminalFlowAst
+                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalFlowAst] => enumSubjectTerminalFlowNode
+                    -1 => enumSubjectTerminalPatternToken!
+                    0 => enumSubjectTerminalPatternSearch!
+                    enumSubjectTerminalPatternSearch! < enumSubjectTerminalRange.astCount
+                        -> while {
+                            prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternSearch!] => enumSubjectTerminalPatternCandidate
+                            enumSubjectTerminalPatternCandidate.parent => enumSubjectTerminalPatternOwner!
+                            enumSubjectTerminalPatternOwner! >= 0
+                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].kind == 70
+                                -> if {
+                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].parent => enumSubjectTerminalPatternOwner!
+                                }
+                            enumSubjectTerminalPatternToken! < 0
+                                and enumSubjectTerminalPatternCandidate.kind == 59
+                                and enumSubjectTerminalPatternCandidate.payloadToken >= 0
+                                and enumSubjectTerminalPatternOwner! >= 0
+                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].kind == 58
+                                and prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalPatternOwner!].parent == enumSubjectTerminalRepair!.astNode
+                                -> if {
+                                    enumSubjectTerminalPatternCandidate.payloadToken => enumSubjectTerminalPatternToken!
+                                }
+                            enumSubjectTerminalPatternSearch! + 1 => enumSubjectTerminalPatternSearch!
+                        }
+                    -1 => enumSubjectTerminalLast!
+                    0 => enumSubjectTerminalLastValueRank!
+                    UIntSize(0) => enumSubjectTerminalLastStart!
+                    UIntSize(0) => enumSubjectTerminalLastEnd!
+                    1000000 => enumSubjectTerminalLastDistance!
+                    0 => enumSubjectTerminalCandidateSearch!
+                    enumSubjectTerminalCandidateSearch! < (nodes -> len)
+                        -> while {
+                            nodes[enumSubjectTerminalCandidateSearch!] => enumSubjectTerminalCandidate
+                            enumSubjectTerminalCandidate.sourceModule == enumSubjectTerminalRepair!.sourceModule
+                                and enumSubjectTerminalCandidate.astNode >= 0
+                                and enumSubjectTerminalCandidate.astNode < enumSubjectTerminalRange.astCount
+                                and enumSubjectTerminalCandidate.typeId >= 0
+                                and enumSubjectTerminalCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
+                                -> if {
+                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalCandidate.astNode] => enumSubjectTerminalCandidateAst
+                                    enumSubjectTerminalCandidateAst.start + enumSubjectTerminalCandidateAst.length => enumSubjectTerminalCandidateEnd
+                                    enumSubjectTerminalCandidateAst.parent => enumSubjectTerminalAncestor!
+                                    1 => enumSubjectTerminalDistance!
+                                    enumSubjectTerminalCandidate.astNode == enumSubjectTerminalFlowAst => enumSubjectTerminalBelongs!
+                                    enumSubjectTerminalBelongs! -> if { 0 => enumSubjectTerminalDistance! }
+                                    enumSubjectTerminalAncestor! >= 0 and not enumSubjectTerminalBelongs!
+                                        -> while {
+                                            enumSubjectTerminalAncestor! == enumSubjectTerminalFlowAst
+                                                -> if {
+                                                    true => enumSubjectTerminalBelongs!
+                                                } else {
+                                                    prepared.package.nodes[enumSubjectTerminalRange.astStart + enumSubjectTerminalAncestor!].parent => enumSubjectTerminalAncestor!
+                                                    enumSubjectTerminalDistance! + 1 => enumSubjectTerminalDistance!
+                                                }
+                                        }
+                                    false => enumSubjectTerminalIsEnum!
+                                    0 => enumSubjectTerminalCandidateValueRank!
+                                    enumSubjectTerminalCandidate.kind == 5 -> if { 1 => enumSubjectTerminalCandidateValueRank! }
+                                    (enumSubjectTerminalCandidate.kind == 5 or enumSubjectTerminalCandidate.kind == 6)
+                                        or enumSubjectTerminalCandidate.kind == 8
+                                        or enumSubjectTerminalCandidate.kind == 9
+                                        or enumSubjectTerminalCandidate.kind == 12
+                                        or enumSubjectTerminalCandidate.kind == 13
+                                        or enumSubjectTerminalCandidate.kind == 14
+                                        or enumSubjectTerminalCandidate.kind == 15
+                                        or enumSubjectTerminalCandidate.kind == 16
+                                        or enumSubjectTerminalCandidate.kind == 18
+                                        or enumSubjectTerminalCandidate.kind == 26
+                                        or enumSubjectTerminalCandidate.kind == 27
+                                        or enumSubjectTerminalCandidate.kind == 29
+                                        or (enumSubjectTerminalCandidate.kind >= 31 and enumSubjectTerminalCandidate.kind <= 43)
+                                        -> if { 2 => enumSubjectTerminalCandidateValueRank! }
+                                    frozenRecursiveSemanticTypes[enumSubjectTerminalCandidate.typeId] => enumSubjectTerminalType
+                                    enumSubjectTerminalType.kind == 7 and enumSubjectTerminalType.origin == 4 and (enumSubjectTerminalType.symbol == 0 or enumSubjectTerminalType.symbol == 1)
+                                        -> if { true => enumSubjectTerminalIsEnum! }
+                                    enumSubjectTerminalType.kind == 1 -> if {
+                                        enumSubjectTerminalType.module => enumSubjectTerminalOwnerSource!
+                                        enumSubjectTerminalType.origin == 2 -> if {
+                                            enumSubjectTerminalType.module >= 0 and enumSubjectTerminalType.module < (prepared.modules -> len)
+                                                -> if { prepared.modules[enumSubjectTerminalType.module].sourceIndex => enumSubjectTerminalOwnerSource! }
+                                        }
+                                        enumSubjectTerminalOwnerSource! >= 0 and enumSubjectTerminalOwnerSource! < (prepared.package.ranges -> len)
+                                            -> if {
+                                                prepared.package.ranges[enumSubjectTerminalOwnerSource!] => enumSubjectTerminalOwnerRange
+                                                enumSubjectTerminalType.symbol >= 0 and enumSubjectTerminalType.symbol < enumSubjectTerminalOwnerRange.symbolCount
+                                                    -> if {
+                                                        prepared.package.symbols[enumSubjectTerminalOwnerRange.symbolStart + enumSubjectTerminalType.symbol] => enumSubjectTerminalDeclaration
+                                                        enumSubjectTerminalDeclaration.astNode >= 0 and prepared.package.nodes[enumSubjectTerminalOwnerRange.astStart + enumSubjectTerminalDeclaration.astNode].kind == 4
+                                                            -> if { true => enumSubjectTerminalIsEnum! }
+                                                    }
+                                            }
+                                    }
+                                    true => enumSubjectTerminalPatternCompatible!
+                                    enumSubjectTerminalPatternToken! >= 0 and enumSubjectTerminalIsEnum!
+                                        -> if {
+                                            prepared.package.tokens[enumSubjectTerminalRange.tokenStart + enumSubjectTerminalPatternToken!] => enumSubjectTerminalPattern
+                                            enumSubjectTerminalRepair!.sourceModule -> nominalVariantTagForType(enumSubjectTerminalType, enumSubjectTerminalPattern, prepared) => enumSubjectTerminalPatternTag
+                                            enumSubjectTerminalPatternTag < 0 -> if { false => enumSubjectTerminalPatternCompatible! }
+                                        }
+                                    enumSubjectTerminalCandidate.kind == 6
+                                        and enumSubjectTerminalCandidate.parent == enumSubjectTerminalRepair!.parent
+                                        and enumSubjectTerminalCandidateAst.start == enumSubjectTerminalFlowNode.start
+                                        and enumSubjectTerminalCandidateEnd <= enumSubjectTerminalMatchAst.start
+                                        and enumSubjectTerminalPatternCompatible!
+                                        -> if {
+                                            true => enumSubjectTerminalBelongs!
+                                            0 => enumSubjectTerminalDistance!
+                                            3 => enumSubjectTerminalCandidateValueRank!
+                                        }
+                                    enumSubjectTerminalCandidateValueRank! > enumSubjectTerminalLastValueRank! => betterTerminalSubjectRank
+                                    (enumSubjectTerminalCandidateValueRank! == enumSubjectTerminalLastValueRank!
+                                        and (enumSubjectTerminalDistance! < enumSubjectTerminalLastDistance!
+                                        or (enumSubjectTerminalDistance! == enumSubjectTerminalLastDistance!
+                                        and (enumSubjectTerminalCandidateEnd > enumSubjectTerminalLastEnd!
+                                        or (enumSubjectTerminalCandidateEnd == enumSubjectTerminalLastEnd!
+                                        and enumSubjectTerminalCandidateAst.start < enumSubjectTerminalLastStart!))))) => betterTerminalSubjectLocation
+                                    enumSubjectTerminalBelongs!
+                                        and enumSubjectTerminalIsEnum!
+                                        and enumSubjectTerminalPatternCompatible!
+                                        and enumSubjectTerminalCandidateAst.start < enumSubjectTerminalMatchAst.start
+                                        and (enumSubjectTerminalLast! < 0
+                                        or betterTerminalSubjectRank
+                                        or betterTerminalSubjectLocation) -> if {
+                                            enumSubjectTerminalCandidateSearch! => enumSubjectTerminalLast!
+                                            enumSubjectTerminalCandidateValueRank! => enumSubjectTerminalLastValueRank!
+                                            enumSubjectTerminalCandidateAst.start => enumSubjectTerminalLastStart!
+                                            enumSubjectTerminalCandidateEnd => enumSubjectTerminalLastEnd!
+                                            enumSubjectTerminalDistance! => enumSubjectTerminalLastDistance!
+                                        }
+                                }
+                            enumSubjectTerminalCandidateSearch! + 1 => enumSubjectTerminalCandidateSearch!
+                        }
+                    enumSubjectTerminalLast! >= 0 and enumSubjectTerminalLast! != enumSubjectTerminalRepair!.operand0
+                        -> if {
+                            enumSubjectTerminalLast! => enumSubjectTerminalRepair!.operand0
+                            enumSubjectTerminalRepair! => nodes[enumSubjectTerminalRepairIndex!]
+                        }
+                }
+            enumSubjectTerminalRepairIndex! + 1 => enumSubjectTerminalRepairIndex!
+        }
+    # A chained control is the canonical subject of the control that follows it.
+    # The broad AST/rank repair above can otherwise select the terminal value of
+    # the producer's last arm. That value is branch-local and makes region
+    # scheduling wait for an arm that only the producer itself can emit. Preserve
+    # the explicit producer -> consumer edge when the provisional subject is
+    # proven to be inside that producer. This is one linear producer pass plus
+    # parent-chain walks; it does not add a consumer scan per control use.
+    0 => chainedControlSubjectRepairIndex!
+    chainedControlSubjectRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[chainedControlSubjectRepairIndex!] => chainedControlProducer
+            chainedControlProducer.nextOperand => chainedControlNext!
+            # An if node uses nextOperand for its else arm, not the following stage.
+            chainedControlProducer.kind == 18
+                -> if { -1 => chainedControlNext! }
+            chainedControlProducer.parent => chainedControlWrapper!
+            # Flow normalization may move the following-stage edge onto a
+            # transparent parent shell. Follow only that exact owner chain.
+            chainedControlNext! < 0 and chainedControlWrapper! >= 0
+                and chainedControlWrapper! < (nodes -> len)
+                and nodes[chainedControlWrapper!].kind == 9
+                and nodes[chainedControlWrapper!].opcode == -1
+                -> while {
+                    nodes[chainedControlWrapper!].nextOperand => chainedControlNext!
+                    nodes[chainedControlWrapper!].parent => chainedControlWrapper!
+                }
+            (chainedControlProducer.kind == 18 or chainedControlProducer.kind == 27
+                or chainedControlProducer.kind == 33 or chainedControlProducer.kind == 34)
+                and chainedControlNext! >= 0
+                and chainedControlNext! < (nodes -> len)
+                -> if {
+                    chainedControlNext! => chainedControlConsumerIndex
+                    nodes[chainedControlConsumerIndex] => chainedControlConsumer!
+                    (chainedControlConsumer!.kind == 27 or chainedControlConsumer!.kind == 34)
+                        and chainedControlConsumer!.operand0 >= 0
+                        and chainedControlConsumer!.operand0 < (nodes -> len)
+                        -> if {
+                            chainedControlConsumer!.operand0 => chainedControlSubjectAncestor!
+                            false => chainedControlSubjectInside!
+                            chainedControlSubjectAncestor! >= 0
+                                and not chainedControlSubjectInside!
+                                -> while {
+                                    chainedControlSubjectAncestor! == chainedControlSubjectRepairIndex!
+                                        -> if {
+                                            true => chainedControlSubjectInside!
+                                        } else {
+                                            nodes[chainedControlSubjectAncestor!].parent => chainedControlSubjectAncestor!
+                                        }
+                                }
+                            chainedControlSubjectInside!
+                                and chainedControlConsumer!.operand0 != chainedControlSubjectRepairIndex!
+                                -> if {
+                                    chainedControlSubjectRepairIndex! => chainedControlConsumer!.operand0
+                                    chainedControlConsumer! => nodes[chainedControlConsumerIndex]
+                                }
+                        }
+                }
+            chainedControlSubjectRepairIndex! + 1 => chainedControlSubjectRepairIndex!
+        }
+    nodes -> repairReturnedEnumMatchResults(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    # Once an enum match has a canonical numeric result type, propagate that
+    # context into a direct negated-literal arm result. The unary node and its
+    # literal can otherwise retain the default Int type even when a preceding
+    # payload arm establishes Long, causing LLVM to emit i32 subtraction and
+    # select an unrelated same-typed payload temporary for the arm result.
+    0 => enumArmNegatedLiteralRepairIndex!
+    enumArmNegatedLiteralRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[enumArmNegatedLiteralRepairIndex!] => enumArmNegatedLiteralMatch
+            enumArmNegatedLiteralMatch.kind == 27
+                and enumArmNegatedLiteralMatch.typeId >= 0
+                and enumArmNegatedLiteralMatch.typeId < (frozenRecursiveSemanticTypes -> len)
+                -> if {
+                    frozenRecursiveSemanticTypes[enumArmNegatedLiteralMatch.typeId] => enumArmNegatedLiteralResultType
+                    enumArmNegatedLiteralResultType.kind == 1
+                        and enumArmNegatedLiteralResultType.origin == 1
+                        and enumArmNegatedLiteralResultType.symbol >= 2
+                        and enumArmNegatedLiteralResultType.symbol <= 14
+                        -> if {
+                            enumArmNegatedLiteralMatch.operand1 => enumArmNegatedLiteralArmIndex!
+                            enumArmNegatedLiteralArmIndex! >= 0 -> while {
+                                nodes[enumArmNegatedLiteralArmIndex!] => enumArmNegatedLiteralArm
+                                0 => enumArmNegatedLiteralCandidateIndex!
+                                enumArmNegatedLiteralCandidateIndex! < (nodes -> len)
+                                    -> while {
+                                        nodes[enumArmNegatedLiteralCandidateIndex!] => enumArmNegatedLiteralCandidate!
+                                        enumArmNegatedLiteralCandidate!.kind == 7
+                                            and enumArmNegatedLiteralCandidate!.opcode == grammar.tokenIdMinus()
+                                            and enumArmNegatedLiteralCandidate!.parent == enumArmNegatedLiteralArmIndex!
+                                            and enumArmNegatedLiteralCandidate!.operand0 >= 0
+                                            and enumArmNegatedLiteralCandidate!.operand0 < (nodes -> len)
+                                            and nodes[enumArmNegatedLiteralCandidate!.operand0].kind == 3
+                                            -> if {
+                                                nodes[enumArmNegatedLiteralCandidate!.operand0] => enumArmNegatedLiteralValue!
+                                                enumArmNegatedLiteralMatch.typeId => enumArmNegatedLiteralValue!.typeId
+                                                enumArmNegatedLiteralResultType.kind => enumArmNegatedLiteralValue!.typeKind
+                                                enumArmNegatedLiteralResultType.origin => enumArmNegatedLiteralValue!.typeOrigin
+                                                enumArmNegatedLiteralResultType.module => enumArmNegatedLiteralValue!.typeModule
+                                                enumArmNegatedLiteralResultType.symbol => enumArmNegatedLiteralValue!.typeSymbol
+                                                recursiveTypeFlags[enumArmNegatedLiteralMatch.typeId] => enumArmNegatedLiteralValue!.typeFlags
+                                                enumArmNegatedLiteralValue! => nodes[enumArmNegatedLiteralCandidate!.operand0]
+                                                enumArmNegatedLiteralMatch.typeId => enumArmNegatedLiteralCandidate!.typeId
+                                                enumArmNegatedLiteralResultType.kind => enumArmNegatedLiteralCandidate!.typeKind
+                                                enumArmNegatedLiteralResultType.origin => enumArmNegatedLiteralCandidate!.typeOrigin
+                                                enumArmNegatedLiteralResultType.module => enumArmNegatedLiteralCandidate!.typeModule
+                                                enumArmNegatedLiteralResultType.symbol => enumArmNegatedLiteralCandidate!.typeSymbol
+                                                recursiveTypeFlags[enumArmNegatedLiteralMatch.typeId] => enumArmNegatedLiteralCandidate!.typeFlags
+                                                enumArmNegatedLiteralCandidate! => nodes[enumArmNegatedLiteralCandidateIndex!]
+                                            }
+                                        enumArmNegatedLiteralCandidateIndex! + 1 => enumArmNegatedLiteralCandidateIndex!
+                                    }
+                                enumArmNegatedLiteralArm.nextOperand => enumArmNegatedLiteralArmIndex!
+                            }
+                        }
+                }
+            enumArmNegatedLiteralRepairIndex! + 1 => enumArmNegatedLiteralRepairIndex!
+        }
+    nodes -> repairNestedEnumPayloadSubjects
+    # Enum payload bindings use the canonical subject and exact arm variant.
+    # Option/Result carry payload ids; nominal enums resolve the declared type AST.
+    0 => enumPayloadTypeRepairIndex!
+    enumPayloadTypeRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[enumPayloadTypeRepairIndex!] => enumPayloadTypeRepair!
+            enumPayloadTypeRepair!.kind == 29
+                and enumPayloadTypeRepair!.parent >= 0
+                and nodes[enumPayloadTypeRepair!.parent].kind == 19
+                and nodes[enumPayloadTypeRepair!.parent].parent >= 0
+                and nodes[nodes[enumPayloadTypeRepair!.parent].parent].kind == 27
+                -> if {
+                    nodes[enumPayloadTypeRepair!.parent] => enumPayloadArm
+                    nodes[enumPayloadArm.parent] => enumPayloadMatch
+                    -1 => enumPayloadTypeId!
+                    enumPayloadMatch.operand0 >= 0 -> if {
+                        nodes[enumPayloadMatch.operand0] => enumPayloadSubject
+                        enumPayloadSubject.typeId >= 0 -> if {
+                            frozenRecursiveSemanticTypes[enumPayloadSubject.typeId] => enumPayloadSubjectType
+                            enumPayloadSubjectType.kind == 7 and enumPayloadSubjectType.origin == 4
+                                -> if {
+                                    enumPayloadSubjectType.symbol == 0 -> if { enumPayloadSubjectType.first => enumPayloadTypeId! }
+                                    enumPayloadSubjectType.symbol == 1 -> if {
+                                        enumPayloadArm.opcode == 0 -> if { enumPayloadSubjectType.first => enumPayloadTypeId! } else { enumPayloadSubjectType.second => enumPayloadTypeId! }
+                                    }
+                                }
+                            enumPayloadSubjectType.kind == 1 -> if {
+                                enumPayloadSubjectType.module => enumPayloadOwnerSource!
+                                enumPayloadSubjectType.origin == 2 -> if {
+                                    enumPayloadSubjectType.module >= 0 and enumPayloadSubjectType.module < (prepared.modules -> len)
+                                        -> if {
+                                            prepared.modules[enumPayloadSubjectType.module].sourceIndex => enumPayloadOwnerSource!
+                                        }
+                                }
+                                enumPayloadOwnerSource! >= 0 and enumPayloadOwnerSource! < (prepared.package.ranges -> len)
+                                    -> if {
+                                        prepared.package.ranges[enumPayloadTypeRepair!.sourceModule] => enumPayloadUseRange
+                                        -1 => enumPayloadPatternAst!
+                                        0 => enumPayloadPatternSearch!
+                                        enumPayloadPatternSearch! < enumPayloadUseRange.astCount
+                                            -> while {
+                                                prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternSearch!] => enumPayloadPatternCandidate
+                                                enumPayloadPatternCandidate.parent => enumPayloadPatternParent!
+                                                enumPayloadPatternParent! >= 0 and prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternParent!].kind == 70
+                                                    -> if {
+                                                        prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternParent!].parent => enumPayloadPatternParent!
+                                                    }
+                                                enumPayloadPatternCandidate.kind == 59 and enumPayloadPatternParent! == enumPayloadArm.astNode
+                                                    -> if { enumPayloadPatternSearch! => enumPayloadPatternAst! }
+                                                enumPayloadPatternSearch! + 1 => enumPayloadPatternSearch!
+                                            }
+                                        enumPayloadPatternAst! >= 0 -> if {
+                                            prepared.package.nodes[enumPayloadUseRange.astStart + enumPayloadPatternAst!] => enumPayloadPattern
+                                            prepared.package.tokens[enumPayloadUseRange.tokenStart + enumPayloadPattern.payloadToken] => enumPayloadPatternName
+                                            prepared.package.ranges[enumPayloadOwnerSource!] => enumPayloadOwnerRange
+                                            0 => enumPayloadVariantOrdinal!
+                                            0 => enumPayloadVariantSearch!
+                                            enumPayloadVariantSearch! < enumPayloadOwnerRange.symbolCount
+                                                -> while {
+                                                    prepared.package.symbols[enumPayloadOwnerRange.symbolStart + enumPayloadVariantSearch!] => enumPayloadVariant
+                                                    enumPayloadVariant.kind == 27 and enumPayloadVariant.parent == enumPayloadSubjectType.symbol and enumPayloadVariant.nameToken >= 0
+                                                        -> if {
+                                                            prepared.package.tokens[enumPayloadOwnerRange.tokenStart + enumPayloadVariant.nameToken] => enumPayloadVariantName
+                                                            enumPayloadPatternName.span.length == enumPayloadVariantName.span.length => enumPayloadVariantEqual!
+                                                            UIntSize(0) => enumPayloadVariantByte!
+                                                            enumPayloadVariantEqual! and enumPayloadVariantByte! < enumPayloadPatternName.span.length
+                                                                -> while {
+                                                                    (prepared.package.sources[enumPayloadTypeRepair!.sourceModule] -> byte(enumPayloadPatternName.span.start + enumPayloadVariantByte!)) != (prepared.package.sources[enumPayloadOwnerSource!] -> byte(enumPayloadVariantName.span.start + enumPayloadVariantByte!))
+                                                                        -> if { false => enumPayloadVariantEqual! }
+                                                                    enumPayloadVariantByte! + 1 => enumPayloadVariantByte!
+                                                                }
+                                                            (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadVariant.typeNode >= 0
+                                                                -> if {
+                                                                    -1 => enumPayloadReferenceIndex!
+                                                                    enumPayloadVariant.typeNode < enumPayloadOwnerRange.astCount
+                                                                        -> if { recursiveTypes.referenceIndexByTypeAst[enumPayloadOwnerRange.astStart + enumPayloadVariant.typeNode] => enumPayloadReferenceIndex! }
+                                                                    enumPayloadReferenceIndex! >= 0 and recursiveTypes.references[enumPayloadReferenceIndex!].status == 0
+                                                                        -> if { recursiveTypes.references[enumPayloadReferenceIndex!].typeId => enumPayloadTypeId! }
+                                                                }
+                                                            (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadTypeId! < 0
+                                                                -> if {
+                                                                    0 => enumPayloadNestedReferenceSearch!
+                                                                    enumPayloadNestedReferenceSearch! < (recursiveTypes.references -> len)
+                                                                        -> while {
+                                                                            recursiveTypes.references[enumPayloadNestedReferenceSearch!] => enumPayloadNestedReference
+                                                                            enumPayloadNestedReference.status == 0 and enumPayloadNestedReference.sourceModule == enumPayloadOwnerSource! and enumPayloadNestedReference.typeAst >= 0
+                                                                                -> if {
+                                                                                    enumPayloadNestedReference.typeAst => enumPayloadNestedAncestor!
+                                                                                    false => enumPayloadNestedBelongs!
+                                                                                    enumPayloadNestedAncestor! >= 0 and not enumPayloadNestedBelongs!
+                                                                                        -> while {
+                                                                                            enumPayloadNestedAncestor! == enumPayloadVariant.astNode
+                                                                                                -> if {
+                                                                                                    true => enumPayloadNestedBelongs!
+                                                                                                } else {
+                                                                                                    prepared.package.nodes[enumPayloadOwnerRange.astStart + enumPayloadNestedAncestor!].parent => enumPayloadNestedAncestor!
+                                                                                                }
+                                                                                        }
+                                                                                    enumPayloadNestedBelongs! -> if { enumPayloadNestedReference.typeId => enumPayloadTypeId! }
+                                                                                }
+                                                                            enumPayloadNestedReferenceSearch! + 1 => enumPayloadNestedReferenceSearch!
+                                                                        }
+                                                                }
+                                                            (enumPayloadVariantEqual! or enumPayloadVariantOrdinal! == enumPayloadArm.opcode) and enumPayloadTypeId! < 0
+                                                                -> if {
+                                                                    0 => enumPayloadNominalSearch!
+                                                                    enumPayloadNominalSearch! < (prepared.nominal -> len)
+                                                                        -> while {
+                                                                            prepared.nominal[enumPayloadNominalSearch!] => enumPayloadNominal
+                                                                            enumPayloadNominal.status == 0 and enumPayloadNominal.sourceModule == enumPayloadOwnerSource! and enumPayloadNominal.typeAst >= 0
+                                                                                -> if {
+                                                                                    enumPayloadNominal.typeAst => enumPayloadNominalAncestor!
+                                                                                    false => enumPayloadNominalBelongs!
+                                                                                    enumPayloadNominalAncestor! >= 0 and not enumPayloadNominalBelongs!
+                                                                                        -> while {
+                                                                                            enumPayloadNominalAncestor! == enumPayloadVariant.astNode
+                                                                                                -> if {
+                                                                                                    true => enumPayloadNominalBelongs!
+                                                                                                } else {
+                                                                                                    prepared.package.nodes[enumPayloadOwnerRange.astStart + enumPayloadNominalAncestor!].parent => enumPayloadNominalAncestor!
+                                                                                                }
+                                                                                        }
+                                                                                    enumPayloadNominalBelongs! -> if { enumPayloadNominal.canonical => enumPayloadTypeId! }
+                                                                                }
+                                                                            enumPayloadNominalSearch! + 1 => enumPayloadNominalSearch!
+                                                                        }
+                                                                }
+                                                            enumPayloadVariantOrdinal! + 1 => enumPayloadVariantOrdinal!
+                                                        }
+                                                    enumPayloadVariantSearch! + 1 => enumPayloadVariantSearch!
+                                                }
+                                        }
+                                        # The arm opcode is the canonical declaration
+                                        # ordinal.  Pattern AST wrappers are source-shape
+                                        # metadata and may be normalized away, so payload
+                                        # typing must not depend on rediscovering one.
+                                        enumPayloadTypeId! < 0 -> if {
+                                            prepared.package.ranges[enumPayloadOwnerSource!] => enumPayloadOrdinalRange
+                                            0 => enumPayloadOrdinal!
+                                            0 => enumPayloadOrdinalSymbolSearch!
+                                            enumPayloadOrdinalSymbolSearch! < enumPayloadOrdinalRange.symbolCount
+                                                -> while {
+                                                    prepared.package.symbols[enumPayloadOrdinalRange.symbolStart + enumPayloadOrdinalSymbolSearch!] => enumPayloadOrdinalVariant
+                                                    enumPayloadOrdinalVariant.kind == 27 and enumPayloadOrdinalVariant.parent == enumPayloadSubjectType.symbol
+                                                        -> if {
+                                                            enumPayloadOrdinal! == enumPayloadArm.opcode and enumPayloadOrdinalVariant.typeNode >= 0
+                                                                -> if {
+                                                                    -1 => enumPayloadOrdinalReferenceIndex!
+                                                                    enumPayloadOrdinalVariant.typeNode < enumPayloadOrdinalRange.astCount
+                                                                        -> if { recursiveTypes.referenceIndexByTypeAst[enumPayloadOrdinalRange.astStart + enumPayloadOrdinalVariant.typeNode] => enumPayloadOrdinalReferenceIndex! }
+                                                                    enumPayloadOrdinalReferenceIndex! >= 0 and recursiveTypes.references[enumPayloadOrdinalReferenceIndex!].status == 0
+                                                                        -> if { recursiveTypes.references[enumPayloadOrdinalReferenceIndex!].typeId => enumPayloadTypeId! }
+                                                                    0 => enumPayloadOrdinalNominalSearch!
+                                                                    enumPayloadOrdinalNominalSearch! < (prepared.nominal -> len) and enumPayloadTypeId! < 0
+                                                                        -> while {
+                                                                            prepared.nominal[enumPayloadOrdinalNominalSearch!] => enumPayloadOrdinalNominal
+                                                                            enumPayloadOrdinalNominal.status == 0 and enumPayloadOrdinalNominal.sourceModule == enumPayloadOwnerSource! and enumPayloadOrdinalNominal.typeAst == enumPayloadOrdinalVariant.typeNode
+                                                                                -> if { enumPayloadOrdinalNominal.canonical => enumPayloadTypeId! }
+                                                                            enumPayloadOrdinalNominalSearch! + 1 => enumPayloadOrdinalNominalSearch!
+                                                                        }
+                                                                }
+                                                            enumPayloadOrdinal! + 1 => enumPayloadOrdinal!
+                                                        }
+                                                    enumPayloadOrdinalSymbolSearch! + 1 => enumPayloadOrdinalSymbolSearch!
+                                                }
+                                        }
+                                    }
+                            }
+                        }
+                    }
+                    enumPayloadTypeId! >= 0 and enumPayloadTypeId! < (frozenRecursiveSemanticTypes -> len)
+                        -> if {
+                            frozenRecursiveSemanticTypes[enumPayloadTypeId!] => enumPayloadCanonicalType
+                            enumPayloadTypeId! => enumPayloadTypeRepair!.typeId
+                            enumPayloadCanonicalType.kind => enumPayloadTypeRepair!.typeKind
+                            enumPayloadCanonicalType.origin => enumPayloadTypeRepair!.typeOrigin
+                            enumPayloadCanonicalType.module => enumPayloadTypeRepair!.typeModule
+                            enumPayloadCanonicalType.symbol => enumPayloadTypeRepair!.typeSymbol
+                            recursiveTypeFlags[enumPayloadTypeId!] => enumPayloadTypeRepair!.typeFlags
+                            enumPayloadTypeRepair! => nodes[enumPayloadTypeRepairIndex!]
+                        }
+                }
+            enumPayloadTypeRepairIndex! + 1 => enumPayloadTypeRepairIndex!
+        }
+    # Enum payload typing is finalized after the general reference pass above.
+    # Re-synchronize direct pattern reads here so a previously unresolved
+    # payload cannot retain Unit while its binding has acquired the canonical
+    # payload identity.  LLVM must see one type on both sides of the SSA alias.
+    0 => enumPayloadReferenceRepairIndex!
+    enumPayloadReferenceRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[enumPayloadReferenceRepairIndex!] => enumPayloadReferenceRepair!
+            enumPayloadReferenceRepair!.kind == 5
+                and enumPayloadReferenceRepair!.operand0 >= 0
+                and enumPayloadReferenceRepair!.operand0 < (nodes -> len)
+                and nodes[enumPayloadReferenceRepair!.operand0].kind == 29
+                -> if {
+                    nodes[enumPayloadReferenceRepair!.operand0] => enumPayloadReferenceBinding
+                    enumPayloadReferenceBinding.typeId => enumPayloadReferenceRepair!.typeId
+                    enumPayloadReferenceBinding.typeKind => enumPayloadReferenceRepair!.typeKind
+                    enumPayloadReferenceBinding.typeOrigin => enumPayloadReferenceRepair!.typeOrigin
+                    enumPayloadReferenceBinding.typeModule => enumPayloadReferenceRepair!.typeModule
+                    enumPayloadReferenceBinding.typeSymbol => enumPayloadReferenceRepair!.typeSymbol
+                    enumPayloadReferenceBinding.typeFlags => enumPayloadReferenceRepair!.typeFlags
+                    enumPayloadReferenceRepair! => nodes[enumPayloadReferenceRepairIndex!]
+                }
+            enumPayloadReferenceRepairIndex! + 1 => enumPayloadReferenceRepairIndex!
+        }
+    # Pattern and imported nominal bindings can retain their exact legacy
+    # nominal identity before recursive inference publishes typeId. Canonicalize
+    # only a unique semantic-type match; ambiguous or absent matches remain
+    # invalid and are rejected by S017 before member emission.
+    0 => nominalIdentityRepairIndex!
+    nominalIdentityRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[nominalIdentityRepairIndex!] => nominalIdentityRepair!
+            nominalIdentityRepair!.typeId < 0
+                and nominalIdentityRepair!.typeKind == 1
+                and (nominalIdentityRepair!.typeOrigin == 0 or nominalIdentityRepair!.typeOrigin == 2)
+                and nominalIdentityRepair!.typeModule >= 0
+                and nominalIdentityRepair!.typeSymbol >= 0 -> if {
+                    -1 => nominalIdentityMatch!
+                    false => nominalIdentityAmbiguous!
+                    0 => nominalIdentityTypeSearch!
+                    nominalIdentityTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                        -> while {
+                            frozenRecursiveSemanticTypes[nominalIdentityTypeSearch!] => nominalIdentityType
+                            nominalIdentityType.kind == 1
+                                and nominalIdentityType.origin == nominalIdentityRepair!.typeOrigin
+                                and nominalIdentityType.module == nominalIdentityRepair!.typeModule
+                                and nominalIdentityType.symbol == nominalIdentityRepair!.typeSymbol
+                                -> if {
+                                    nominalIdentityMatch! >= 0 -> if { true => nominalIdentityAmbiguous! } else { nominalIdentityTypeSearch! => nominalIdentityMatch! }
+                                }
+                            nominalIdentityTypeSearch! + 1 => nominalIdentityTypeSearch!
+                        }
+                    nominalIdentityMatch! >= 0 and not nominalIdentityAmbiguous!
+                        -> if {
+                            nominalIdentityMatch! => nominalIdentityRepair!.typeId
+                            recursiveTypeFlags[nominalIdentityMatch!] => nominalIdentityRepair!.typeFlags
+                            nominalIdentityRepair! => nodes[nominalIdentityRepairIndex!]
+                        }
+                }
+            nominalIdentityRepairIndex! + 1 => nominalIdentityRepairIndex!
+        }
+    # A canonical type id is authoritative. Earlier shallow inference can
+    # discover a useful id before its legacy origin/module/symbol projection is
+    # updated (notably array indexing through imported intrinsic nominals).
+    # Synchronize every node once at the IR boundary so emitters never observe
+    # a canonical id paired with stale structural fields.
+    0 => canonicalTypeProjectionIndex!
+    canonicalTypeProjectionIndex! < (nodes -> len)
+        -> while {
+            nodes[canonicalTypeProjectionIndex!] => canonicalTypeProjection!
+            canonicalTypeProjection!.typeId >= 0 -> if {
+                frozenRecursiveSemanticTypes[canonicalTypeProjection!.typeId] => canonicalProjectedType
+                canonicalProjectedType.kind => canonicalTypeProjection!.typeKind
+                canonicalProjectedType.origin => canonicalTypeProjection!.typeOrigin
+                canonicalProjectedType.module => canonicalTypeProjection!.typeModule
+                canonicalProjectedType.symbol => canonicalTypeProjection!.typeSymbol
+                recursiveTypeFlags[canonicalTypeProjection!.typeId] => canonicalTypeProjection!.typeFlags
+                (canonicalProjectedType.kind >= 2 and canonicalProjectedType.kind <= 6) or canonicalProjectedType.kind == 8
+                    -> if {
+                        10 + canonicalProjectedType.kind => canonicalTypeProjection!.typeOrigin
+                        canonicalProjectedType.kind == 5 -> if {
+                            frozenRecursiveSemanticTypes[canonicalProjectedType.first].symbol => canonicalTypeProjection!.typeModule
+                            frozenRecursiveSemanticTypes[canonicalProjectedType.second].symbol => canonicalTypeProjection!.typeSymbol
+                        } else {
+                            frozenRecursiveSemanticTypes[canonicalProjectedType.first].module => canonicalTypeProjection!.typeModule
+                            frozenRecursiveSemanticTypes[canonicalProjectedType.first].symbol => canonicalTypeProjection!.typeSymbol
+                        }
+                    }
+                canonicalTypeProjection! => nodes[canonicalTypeProjectionIndex!]
+            }
+            canonicalTypeProjectionIndex! + 1 => canonicalTypeProjectionIndex!
+        }
+    # Enum payload bindings receive their canonical nominal type after the
+    # primary member pass. Re-run nominal field projection for members whose
+    # base is now known; otherwise a valid `payload.field` keeps typeId -1 and
+    # later struct construction cannot select the field ABI.
+    0 => lateNominalMemberIndex!
+    lateNominalMemberIndex! < (nodes -> len) -> while {
+        nodes[lateNominalMemberIndex!] => lateNominalMember!
+        lateNominalMember!.kind == 13
+            and lateNominalMember!.typeId < 0
+            and lateNominalMember!.operand0 >= 0
+            and nodes[lateNominalMember!.operand0].typeId >= 0
+            -> if {
+                nodes[lateNominalMember!.operand0] => lateNominalMemberBase
+                lateNominalMemberBase.typeId => lateNominalOwnerType!
+                frozenRecursiveSemanticTypes[lateNominalOwnerType!].kind == 8
+                    -> if {
+                        frozenRecursiveSemanticTypes[lateNominalOwnerType!].first => lateNominalOwnerType!
+                    }
+                lateNominalOwnerType! >= 0 and frozenRecursiveSemanticTypes[lateNominalOwnerType!].kind == 1
+                    -> if {
+                        prepared.package.ranges[lateNominalMember!.sourceModule] => lateNominalMemberRange
+                        prepared.package.nodes[lateNominalMemberRange.astStart + lateNominalMember!.astNode] => lateNominalMemberAst
+                        lateNominalMemberAst.firstToken => lateNominalMemberTokenIndex!
+                        false => lateNominalMemberMatched!
+                        lateNominalMemberTokenIndex! < lateNominalMemberAst.firstToken + lateNominalMemberAst.tokenCount
+                            and not lateNominalMemberMatched! -> while {
+                                prepared.package.tokens[lateNominalMemberRange.tokenStart + lateNominalMemberTokenIndex!] => lateNominalMemberToken
+                                lateNominalMemberToken.kind == grammar.tokenIdIdentifier()
+                                    -> if {
+                                        0 => lateNominalFieldSearch!
+                                        lateNominalFieldSearch! < (recursiveTypes.fields -> len) and not lateNominalMemberMatched!
+                                            -> while {
+                                                recursiveTypes.fields[lateNominalFieldSearch!] => lateNominalField
+                                                lateNominalField.status == 0
+                                                    and lateNominalField.ownerType == lateNominalOwnerType!
+                                                    -> if {
+                                                        prepared.package.ranges[lateNominalField.sourceModule] => lateNominalFieldRange
+                                                        lateNominalField.labelToken => lateNominalFieldNameToken!
+                                                        lateNominalFieldNameToken! < 0 and lateNominalField.fieldSymbol >= 0
+                                                            -> if {
+                                                                prepared.package.symbols[lateNominalFieldRange.symbolStart + lateNominalField.fieldSymbol].nameToken => lateNominalFieldNameToken!
+                                                            }
+                                                        lateNominalFieldNameToken! >= 0 -> if {
+                                                            prepared.package.tokens[lateNominalFieldRange.tokenStart + lateNominalFieldNameToken!] => lateNominalFieldToken
+                                                            lateNominalMemberToken.span.length == lateNominalFieldToken.span.length => lateNominalFieldEqual!
+                                                            UIntSize(0) => lateNominalFieldByte!
+                                                            lateNominalFieldEqual! and lateNominalFieldByte! < lateNominalMemberToken.span.length
+                                                                -> while {
+                                                                    (prepared.package.sources[lateNominalMember!.sourceModule] -> byte(lateNominalMemberToken.span.start + lateNominalFieldByte!)) != (prepared.package.sources[lateNominalField.sourceModule] -> byte(lateNominalFieldToken.span.start + lateNominalFieldByte!))
+                                                                        -> if {
+                                                                            false => lateNominalFieldEqual!
+                                                                        }
+                                                                    lateNominalFieldByte! + 1 => lateNominalFieldByte!
+                                                                }
+                                                            lateNominalFieldEqual! -> if {
+                                                                lateNominalField.ordinal => lateNominalMember!.symbol
+                                                                lateNominalField.sourceModule => lateNominalMember!.targetModule
+                                                                lateNominalField.fieldType => lateNominalMember!.typeId
+                                                                frozenRecursiveSemanticTypes[lateNominalField.fieldType] => lateNominalMemberType
+                                                                lateNominalMemberType.kind => lateNominalMember!.typeKind
+                                                                lateNominalMemberType.origin => lateNominalMember!.typeOrigin
+                                                                lateNominalMemberType.module => lateNominalMember!.typeModule
+                                                                lateNominalMemberType.symbol => lateNominalMember!.typeSymbol
+                                                                recursiveTypeFlags[lateNominalField.fieldType] => lateNominalMember!.typeFlags
+                                                                true => lateNominalMemberMatched!
+                                                            }
+                                                        }
+                                                    }
+                                                lateNominalFieldSearch! + 1 => lateNominalFieldSearch!
+                                            }
+                                    }
+                                lateNominalMemberTokenIndex! + 1 => lateNominalMemberTokenIndex!
+                            }
+                        lateNominalMemberMatched! -> if { lateNominalMember! => nodes[lateNominalMemberIndex!] }
+                    }
+            }
+        lateNominalMemberIndex! + 1 => lateNominalMemberIndex!
+    }
+    nodes -> sealEachRoleTypes(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    # Structural-product member identity depends on the base's canonical type.
+    # That type is finalized by the projection above for reads of a binding
+    # whose product has no legacy nominal origin. Resolve the label once more
+    # at this authoritative boundary instead of exposing an untyped member to
+    # LLVM emission.
+    0 => structuralMemberRepairIndex!
+    structuralMemberRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[structuralMemberRepairIndex!] => structuralMember!
+            structuralMember!.kind == 13 and structuralMember!.symbol < 0 and structuralMember!.operand0 >= 0
+                -> if {
+                    nodes[structuralMember!.operand0] => structuralMemberBase
+                    structuralMemberBase.typeKind == 10 and structuralMemberBase.typeId >= 0
+                        -> if {
+                            prepared.package.ranges[structuralMember!.sourceModule] => structuralMemberRange
+                            prepared.package.nodes[structuralMemberRange.astStart + structuralMember!.astNode] => structuralMemberAst
+                            prepared.package.nodes[structuralMemberRange.astStart + structuralMemberBase.astNode] => structuralMemberBaseAst
+                            structuralMemberBaseAst.start + structuralMemberBaseAst.length => structuralMemberBaseEnd
+                            structuralMemberAst.firstToken => structuralMemberTokenIndex!
+                            structuralMemberTokenIndex! < structuralMemberAst.firstToken + structuralMemberAst.tokenCount
+                                and prepared.package.tokens[structuralMemberRange.tokenStart + structuralMemberTokenIndex!].span.start < structuralMemberBaseEnd
+                                -> while {
+                                    structuralMemberTokenIndex! + 1 => structuralMemberTokenIndex!
+                                }
+                            false => structuralMemberMatched!
+                            structuralMemberTokenIndex! < structuralMemberAst.firstToken + structuralMemberAst.tokenCount and not structuralMemberMatched!
+                                -> while {
+                                    prepared.package.tokens[structuralMemberRange.tokenStart + structuralMemberTokenIndex!] => structuralMemberToken
+                                    structuralMemberToken.kind == grammar.tokenIdIdentifier()
+                                        -> if {
+                                            0 => structuralFieldSearch!
+                                            structuralFieldSearch! < (recursiveTypes.fields -> len) and not structuralMemberMatched!
+                                                -> while {
+                                                    recursiveTypes.fields[structuralFieldSearch!] => structuralField
+                                                    structuralField.status == 0
+                                                        and structuralField.ownerType == structuralMemberBase.typeId
+                                                        and structuralField.labelToken >= 0 -> if {
+                                                            prepared.package.ranges[structuralField.sourceModule] => structuralFieldRange
+                                                            prepared.package.tokens[structuralFieldRange.tokenStart + structuralField.labelToken] => structuralFieldToken
+                                                            structuralMemberToken.span.length == structuralFieldToken.span.length => structuralFieldEqual!
+                                                            UIntSize(0) => structuralFieldByte!
+                                                            structuralFieldEqual! and structuralFieldByte! < structuralMemberToken.span.length
+                                                                -> while {
+                                                                    (prepared.package.sources[structuralMember!.sourceModule] -> byte(structuralMemberToken.span.start + structuralFieldByte!)) != (prepared.package.sources[structuralField.sourceModule] -> byte(structuralFieldToken.span.start + structuralFieldByte!))
+                                                                        -> if { false => structuralFieldEqual! }
+                                                                    structuralFieldByte! + 1 => structuralFieldByte!
+                                                                }
+                                                            structuralFieldEqual! -> if {
+                                                                structuralField.ordinal => structuralMember!.symbol
+                                                                structuralField.sourceModule => structuralMember!.targetModule
+                                                                structuralField.fieldType => structuralMember!.typeId
+                                                                frozenRecursiveSemanticTypes[structuralField.fieldType] => structuralMemberType
+                                                                structuralMemberType.kind => structuralMember!.typeKind
+                                                                structuralMemberType.origin => structuralMember!.typeOrigin
+                                                                structuralMemberType.module => structuralMember!.typeModule
+                                                                structuralMemberType.symbol => structuralMember!.typeSymbol
+                                                                recursiveTypeFlags[structuralField.fieldType] => structuralMember!.typeFlags
+                                                                true => structuralMemberMatched!
+                                                            }
+                                                        }
+                                                    structuralFieldSearch! + 1 => structuralFieldSearch!
+                                                }
+                                        }
+                                    structuralMemberTokenIndex! + 1 => structuralMemberTokenIndex!
+                                }
+                            structuralMemberMatched! -> if { structuralMember! => nodes[structuralMemberRepairIndex!] }
+                        }
+                }
+            structuralMemberRepairIndex! + 1 => structuralMemberRepairIndex!
+        }
+    # Bare integer, decimal, and negated numeric literals at a native ABI call
+    # adopt the exact declared parameter type. This runs at the final IR
+    # boundary so later canonical projection cannot restore the default Int
+    # type. The source literal is reused directly: no conversion node, copy, or
+    # runtime work is introduced.
+    # Empty collection literals have no element from which to infer shape.
+    # A resolved ordinary call supplies the authoritative parameter type; copy
+    # that canonical identity before LLVM scheduling so even `[]` is a real
+    # slice/fixed/growable SSA value rather than an untyped placeholder.
+    0 => contextualCallLiteralIndex!
+    contextualCallLiteralIndex! < (nodes -> len)
+        -> while {
+            nodes[contextualCallLiteralIndex!] => contextualCallLiteral
+            (contextualCallLiteral.kind == 6 or contextualCallLiteral.kind == 9)
+                and contextualCallLiteral.symbol >= 0
+                and contextualCallLiteral.operand0 >= 0 -> if {
+                    contextualCallLiteral.targetModule => contextualCallTargetModule!
+                    contextualCallTargetModule! < 0 -> if { contextualCallLiteral.sourceModule => contextualCallTargetModule! }
+                    -1 => contextualCallFunctionIndex!
+                    0 => contextualCallFunctionSearch!
+                    contextualCallFunctionSearch! < (nodes -> len) and contextualCallFunctionIndex! < 0
+                        -> while {
+                            nodes[contextualCallFunctionSearch!] => contextualCallFunctionCandidate
+                            contextualCallFunctionCandidate.kind == 0
+                                and contextualCallFunctionCandidate.sourceModule == contextualCallTargetModule!
+                                and contextualCallFunctionCandidate.symbol == contextualCallLiteral.symbol
+                                -> if {
+                                    contextualCallFunctionSearch! => contextualCallFunctionIndex!
+                                }
+                            contextualCallFunctionSearch! + 1 => contextualCallFunctionSearch!
+                        }
+                    contextualCallFunctionIndex! >= 0 -> if {
+                        contextualCallLiteral.operand0 => contextualCallArgumentIndex!
+                        nodes[contextualCallFunctionIndex!].operand1 => contextualCallParameterIndex!
+                        true => contextualCallPrimaryParameter!
+                        contextualCallArgumentIndex! >= 0 and contextualCallParameterIndex! >= 0
+                            -> while {
+                                nodes[contextualCallArgumentIndex!] => contextualCallArgument!
+                                nodes[contextualCallParameterIndex!] => contextualCallParameter
+                                contextualCallArgument!.kind == 14
+                                    and ((contextualCallParameter.typeKind == 2
+                                    or contextualCallParameter.typeKind == 3
+                                    or contextualCallParameter.typeKind == 4
+                                    or contextualCallParameter.typeKind == 12)
+                                    or contextualCallParameter.typeOrigin == 12
+                                    or contextualCallParameter.typeOrigin == 13
+                                    or contextualCallParameter.typeOrigin == 14)
+                                    -> if {
+                                        # A nonempty fixed literal owns its storage even when
+                                        # borrowed by a slice parameter. Its contextual element
+                                        # type is materialized in the shared mutable type arena.
+                                        not (contextualCallArgument!.operand0 >= 0
+                                            and contextualCallArgument!.typeKind == 4
+                                            and (contextualCallParameter.typeKind == 2
+                                            or contextualCallParameter.typeOrigin == 12))
+                                            -> if {
+                                                contextualCallParameter.typeId => contextualCallArgument!.typeId
+                                                contextualCallParameter.typeKind => contextualCallArgument!.typeKind
+                                                contextualCallParameter.typeOrigin => contextualCallArgument!.typeOrigin
+                                                contextualCallParameter.typeModule => contextualCallArgument!.typeModule
+                                                contextualCallParameter.typeSymbol => contextualCallArgument!.typeSymbol
+                                                contextualCallParameter.typeFlags => contextualCallArgument!.typeFlags
+                                                contextualCallArgument! => nodes[contextualCallArgumentIndex!]
+                                            }
+                                        contextualCallParameter.typeId >= 0 -> if {
+                                            frozenRecursiveSemanticTypes[contextualCallParameter.typeId] => contextualCallCollectionType
+                                            contextualCallCollectionType.first >= 0 -> if {
+                                                frozenRecursiveSemanticTypes[contextualCallCollectionType.first] => contextualCallElementType
+                                                contextualCallArgument!.operand0 => contextualCallElementIndex!
+                                                contextualCallElementIndex! >= 0 -> while {
+                                                    nodes[contextualCallElementIndex!] => contextualCallElement!
+                                                    contextualCallElement!.kind == 3
+                                                        or (contextualCallElement!.kind == 7
+                                                        and contextualCallElement!.opcode == grammar.tokenIdMinus()
+                                                        and contextualCallElement!.operand0 >= 0
+                                                        and nodes[contextualCallElement!.operand0].kind == 3)
+                                                        -> if {
+                                                            contextualCallCollectionType.first => contextualCallElement!.typeId
+                                                            contextualCallElementType.kind => contextualCallElement!.typeKind
+                                                            contextualCallElementType.origin => contextualCallElement!.typeOrigin
+                                                            contextualCallElementType.module => contextualCallElement!.typeModule
+                                                            contextualCallElementType.symbol => contextualCallElement!.typeSymbol
+                                                            recursiveTypeFlags[contextualCallCollectionType.first] => contextualCallElement!.typeFlags
+                                                            contextualCallElement! => nodes[contextualCallElementIndex!]
+                                                        }
+                                                    contextualCallElement!.nextOperand => contextualCallElementIndex!
+                                                }
+                                            }
+                                        }
+                                    }
+                                contextualCallArgument!.nextOperand => contextualCallArgumentIndex!
+                                contextualCallPrimaryParameter! -> if {
+                                    nodes[contextualCallFunctionIndex!].nextOperand => contextualCallParameterIndex!
+                                    false => contextualCallPrimaryParameter!
+                                } else {
+                                    contextualCallParameter.nextOperand => contextualCallParameterIndex!
+                                }
+                            }
+                    }
+                }
+            contextualCallLiteralIndex! + 1 => contextualCallLiteralIndex!
+        }
+    0 => contextualNativeCallIndex!
+    contextualNativeCallIndex! < (nodes -> len)
+        -> while {
+            nodes[contextualNativeCallIndex!] => contextualNativeCall
+            false => contextualNativeTarget!
+            contextualNativeCall.kind == 6 and contextualNativeCall.targetModule >= 0 and contextualNativeCall.targetModule < (prepared.package.ranges -> len) and contextualNativeCall.symbol >= 0
+                -> if {
+                    prepared.package.ranges[contextualNativeCall.targetModule] => contextualNativeTargetRange
+                    contextualNativeCall.symbol < contextualNativeTargetRange.symbolCount
+                        -> if {
+                            prepared.package.symbols[contextualNativeTargetRange.symbolStart + contextualNativeCall.symbol] => contextualNativeTargetSymbol
+                            contextualNativeTargetSymbol.kind == 7 and contextualNativeTargetSymbol.flags / 128 % 2 == 1
+                                -> if { true => contextualNativeTarget! }
+                        }
+                }
+            contextualNativeTarget! -> if {
+                -1 => contextualNativeFunctionIndex!
+                0 => contextualNativeFunctionSearch!
+                contextualNativeFunctionSearch! < (nodes -> len)
+                    -> while {
+                        nodes[contextualNativeFunctionSearch!] => contextualNativeFunctionCandidate
+                        contextualNativeFunctionCandidate.kind == 0 and contextualNativeFunctionCandidate.sourceModule == contextualNativeCall.targetModule and contextualNativeFunctionCandidate.symbol == contextualNativeCall.symbol and contextualNativeFunctionCandidate.flags / 128 % 2 == 1
+                            -> if {
+                                contextualNativeFunctionSearch! => contextualNativeFunctionIndex!
+                            }
+                        contextualNativeFunctionSearch! + 1 => contextualNativeFunctionSearch!
+                    }
+                contextualNativeFunctionIndex! >= 0 -> if {
+                    nodes[contextualNativeFunctionIndex!] => contextualNativeFunction
+                    contextualNativeCall.operand0 < 0 and contextualNativeFunction.operand1 >= 0 and contextualNativeCall.sourceModule >= 0 and contextualNativeCall.astNode >= 0
+                        -> if {
+                            prepared.package.ranges[contextualNativeCall.sourceModule] => contextualNativeCallRange
+                            prepared.package.nodes[contextualNativeCallRange.astStart + contextualNativeCall.astNode] => contextualNativeCallAst
+                            nodes[contextualNativeFunction.operand1] => contextualNativePrimaryType
+                            -1 => contextualNativeRecoveredBinding!
+                            UIntSize(0) => contextualNativeRecoveredStart!
+                            0 => contextualNativeBindingSearch!
+                            contextualNativeBindingSearch! < contextualNativeCallIndex!
+                                -> while {
+                                    nodes[contextualNativeBindingSearch!] => contextualNativeBinding
+                                    contextualNativeBinding.kind == 17
+                                        and contextualNativeBinding.sourceModule == contextualNativeCall.sourceModule
+                                        and contextualNativeBinding.operand0 >= 0
+                                        and contextualNativeBinding.astNode >= 0
+                                        and contextualNativeBinding.typeId == contextualNativePrimaryType.typeId
+                                        -> if {
+                                            prepared.package.nodes[contextualNativeCallRange.astStart + contextualNativeBinding.astNode].start => contextualNativeBindingStart
+                                            contextualNativeBindingStart <= contextualNativeCallAst.start and (contextualNativeRecoveredBinding! < 0 or contextualNativeBindingStart >= contextualNativeRecoveredStart!)
+                                                -> if {
+                                                    contextualNativeBindingSearch! => contextualNativeRecoveredBinding!
+                                                    contextualNativeBindingStart => contextualNativeRecoveredStart!
+                                                }
+                                        }
+                                    contextualNativeBindingSearch! + 1 => contextualNativeBindingSearch!
+                                }
+                            contextualNativeRecoveredBinding! >= 0 -> if {
+                                contextualNativeCall => contextualNativeRecoveredCall!
+                                nodes[contextualNativeRecoveredBinding!].operand0 => contextualNativeRecoveredCall!.operand0
+                                contextualNativeRecoveredCall! => nodes[contextualNativeCallIndex!]
+                            }
+                        }
+                    contextualNativeCall.operand0 => contextualNativeArgumentIndex!
+                    contextualNativeFunction.operand1 => contextualNativeParameterIndex!
+                    true => contextualNativePrimaryParameter!
+                    contextualNativeArgumentIndex! >= 0 and contextualNativeParameterIndex! >= 0
+                        -> while {
+                            nodes[contextualNativeArgumentIndex!] => contextualNativeArgument!
+                            nodes[contextualNativeParameterIndex!] => contextualNativeParameter
+                            contextualNativeArgumentIndex! => contextualNativeLiteralIndex!
+                            contextualNativeArgument!.kind == 7 and contextualNativeArgument!.operand1 >= 0 and nodes[contextualNativeArgument!.operand1].kind == 3
+                                -> if {
+                                    contextualNativeArgument!.operand1 => contextualNativeLiteralIndex!
+                                    contextualNativeParameter.typeOrigin => contextualNativeArgument!.typeOrigin
+                                    contextualNativeParameter.typeModule => contextualNativeArgument!.typeModule
+                                    contextualNativeParameter.typeSymbol => contextualNativeArgument!.typeSymbol
+                                    contextualNativeParameter.typeId => contextualNativeArgument!.typeId
+                                    contextualNativeParameter.typeKind => contextualNativeArgument!.typeKind
+                                    contextualNativeParameter.typeFlags => contextualNativeArgument!.typeFlags
+                                    contextualNativeArgument! => nodes[contextualNativeArgumentIndex!]
+                                }
+                            nodes[contextualNativeLiteralIndex!] => contextualNativeLiteral!
+                            contextualNativeLiteral!.kind == 3 -> if {
+                                contextualNativeParameter.typeOrigin => contextualNativeLiteral!.typeOrigin
+                                contextualNativeParameter.typeModule => contextualNativeLiteral!.typeModule
+                                contextualNativeParameter.typeSymbol => contextualNativeLiteral!.typeSymbol
+                                contextualNativeParameter.typeId => contextualNativeLiteral!.typeId
+                                contextualNativeParameter.typeKind => contextualNativeLiteral!.typeKind
+                                contextualNativeParameter.typeFlags => contextualNativeLiteral!.typeFlags
+                                contextualNativeLiteral! => nodes[contextualNativeLiteralIndex!]
+                            }
+                            contextualNativeArgument!.nextOperand => contextualNativeArgumentIndex!
+                            contextualNativePrimaryParameter! -> if {
+                                contextualNativeFunction.nextOperand => contextualNativeParameterIndex!
+                                false => contextualNativePrimaryParameter!
+                            } else {
+                                contextualNativeParameter.nextOperand => contextualNativeParameterIndex!
+                            }
+                        }
+                }
+            }
+            contextualNativeCallIndex! + 1 => contextualNativeCallIndex!
+        }
+    # Canonicalize value-producing control results from the completed regions.
+    # Earlier semantic inference can observe a nested literal before a terminal
+    # flow call. At this boundary the region operands are final, so a reverse
+    # linear pass settles nested controls first without runtime work.
+    [Int; ~] => finalWrappedValueByNode!
+    0 => finalWrappedSeed!
+    finalWrappedSeed! < (nodes -> len) -> while {
+        finalWrappedValueByNode! -> push(-1)
+        finalWrappedSeed! + 1 => finalWrappedSeed!
+    }
+    0 => finalWrappedSearch!
+    finalWrappedSearch! < (nodes -> len) -> while {
+        nodes[finalWrappedSearch!] => finalWrappedCandidate
+        finalWrappedCandidate.parent >= 0
+            and finalWrappedCandidate.parent < (nodes -> len)
+            and nodes[finalWrappedCandidate.parent].kind == 9
+            and nodes[finalWrappedCandidate.parent].opcode == -1
+            and (finalWrappedCandidate.kind == 2
+            or finalWrappedCandidate.kind == 3
+            or finalWrappedCandidate.kind == 4
+            or finalWrappedCandidate.kind == 5
+            or finalWrappedCandidate.kind == 6
+            or (finalWrappedCandidate.kind == 9 and finalWrappedCandidate.opcode != -1)
+            or finalWrappedCandidate.kind == 12
+            or finalWrappedCandidate.kind == 14
+            or finalWrappedCandidate.kind == 16
+            or finalWrappedCandidate.kind == 18
+            or finalWrappedCandidate.kind == 26
+            or finalWrappedCandidate.kind == 27
+            or finalWrappedCandidate.kind == 34) -> if {
+                false => finalWrappedExistingIsControl!
+                finalWrappedValueByNode![finalWrappedCandidate.parent] >= 0
+                    -> if {
+                        nodes[finalWrappedValueByNode![finalWrappedCandidate.parent]] => finalWrappedExisting
+                        finalWrappedExisting.kind == 18
+                            or finalWrappedExisting.kind == 27
+                            or finalWrappedExisting.kind == 33
+                            or finalWrappedExisting.kind == 34
+                            -> if { true => finalWrappedExistingIsControl! }
+                    }
+                finalWrappedCandidate.kind == 18
+                    or finalWrappedCandidate.kind == 27
+                    or finalWrappedCandidate.kind == 33
+                    or finalWrappedCandidate.kind == 34
+                    or not finalWrappedExistingIsControl!
+                    -> if { finalWrappedSearch! => finalWrappedValueByNode![finalWrappedCandidate.parent] }
+            }
+        finalWrappedSearch! + 1 => finalWrappedSearch!
+    }
+    0 => finalWrapperTypeIndex!
+    finalWrapperTypeIndex! < (nodes -> len) -> while {
+        nodes[finalWrapperTypeIndex!] => finalWrapperType!
+        finalWrapperType!.kind == 9
+            and finalWrapperType!.opcode == -1
+            and finalWrappedValueByNode![finalWrapperTypeIndex!] >= 0
+            -> if {
+                nodes[finalWrappedValueByNode![finalWrapperTypeIndex!]] => finalWrapperConcreteValue
+                finalWrapperConcreteValue.typeId => finalWrapperType!.typeId
+                finalWrapperConcreteValue.typeKind => finalWrapperType!.typeKind
+                finalWrapperConcreteValue.typeOrigin => finalWrapperType!.typeOrigin
+                finalWrapperConcreteValue.typeModule => finalWrapperType!.typeModule
+                finalWrapperConcreteValue.typeSymbol => finalWrapperType!.typeSymbol
+                finalWrapperConcreteValue.typeFlags => finalWrapperType!.typeFlags
+                finalWrapperType! => nodes[finalWrapperTypeIndex!]
+            }
+        finalWrapperTypeIndex! + 1 => finalWrapperTypeIndex!
+    }
+    # Late compiler-provided producers such as readAt/writeAt are attached to
+    # the syntactic flow wrapper after the per-source match pass. The `when`
+    # subject is that concrete producer, never the operandless wrapper itself.
+    0 => finalWrappedMatchIndex!
+    finalWrappedMatchIndex! < (nodes -> len) -> while {
+        nodes[finalWrappedMatchIndex!] => finalWrappedMatch!
+        (finalWrappedMatch!.kind == 27 or finalWrappedMatch!.kind == 34)
+            and finalWrappedMatch!.operand0 >= 0
+            and finalWrappedMatch!.operand0 < (nodes -> len)
+            and nodes[finalWrappedMatch!.operand0].kind == 9
+            and nodes[finalWrappedMatch!.operand0].opcode == -1
+            and finalWrappedValueByNode![finalWrappedMatch!.operand0] >= 0
+            -> if {
+                finalWrappedValueByNode![finalWrappedMatch!.operand0] => finalWrappedMatchSubject
+                nodes[finalWrappedMatchSubject].nextOperand == finalWrappedMatchIndex!
+                    and nodes[finalWrappedMatchSubject].typeKind == 7
+                    -> if {
+                        finalWrappedMatchSubject => finalWrappedMatch!.operand0
+                        finalWrappedMatch! => nodes[finalWrappedMatchIndex!]
+                    }
+            }
+        finalWrappedMatch!.kind == 27 or finalWrappedMatch!.kind == 34
+            -> if {
+                -1 => finalFileMatchSubject!
+                false => finalFileMatchAmbiguous!
+                0 => finalFileMatchSearch!
+                finalFileMatchSearch! < (nodes -> len)
+                    -> while {
+                        nodes[finalFileMatchSearch!] => finalFileMatchCandidate
+                        false => finalFileMatchCandidateOwnsMatch!
+                        finalFileMatchCandidate.nextOperand == finalWrappedMatchIndex!
+                            -> if { true => finalFileMatchCandidateOwnsMatch! }
+                        finalFileMatchCandidate.parent >= 0
+                            and finalFileMatchCandidate.parent < (nodes -> len)
+                            and nodes[finalFileMatchCandidate.parent].kind == 9
+                            and nodes[finalFileMatchCandidate.parent].opcode == -1
+                            and nodes[finalFileMatchCandidate.parent].nextOperand == finalWrappedMatchIndex!
+                            and finalWrappedValueByNode![finalFileMatchCandidate.parent] == finalFileMatchSearch!
+                            -> if { true => finalFileMatchCandidateOwnsMatch! }
+                        (finalFileMatchCandidate.kind == 6 or finalFileMatchCandidate.kind == 9)
+                            and finalFileMatchCandidate.opcode <= -216
+                            and finalFileMatchCandidate.opcode >= -221
+                            and finalFileMatchCandidate.typeKind == 7
+                            and finalFileMatchCandidateOwnsMatch!
+                            -> if {
+                                finalFileMatchSubject! >= 0
+                                    -> if { true => finalFileMatchAmbiguous! } else {
+                                        finalFileMatchSearch! => finalFileMatchSubject!
+                                    }
+                            }
+                        finalFileMatchSearch! + 1 => finalFileMatchSearch!
+                    }
+                finalFileMatchSubject! >= 0 and not finalFileMatchAmbiguous!
+                    -> if {
+                        nodes[finalFileMatchSubject!] => finalFileMatchSubjectNode!
+                        finalWrappedMatchIndex! => finalFileMatchSubjectNode!.nextOperand
+                        finalFileMatchSubjectNode! => nodes[finalFileMatchSubject!]
+                        finalFileMatchSubject! => finalWrappedMatch!.operand0
+                        finalWrappedMatch! => nodes[finalWrappedMatchIndex!]
+                    }
+            }
+        finalWrappedMatchIndex! + 1 => finalWrappedMatchIndex!
+    }
+    # Final wrapper repair can replace a subject-when producer after its arm
+    # comparisons were first linked. Refresh every structural subject arm from
+    # the now-canonical control subject so no transparent wrapper reaches the
+    # binary-operand invariant or LLVM comparison emission.
+    0 => finalSubjectConditionIndex!
+    finalSubjectConditionIndex! < (nodes -> len)
+        -> while {
+            nodes[finalSubjectConditionIndex!] => finalSubjectCondition!
+            finalSubjectCondition!.kind == 8
+                and finalSubjectCondition!.parent >= 0
+                and finalSubjectCondition!.parent < (nodes -> len)
+                and nodes[finalSubjectCondition!.parent].kind == 19
+                and nodes[finalSubjectCondition!.parent].parent >= 0
+                and nodes[finalSubjectCondition!.parent].parent < (nodes -> len)
+                and nodes[nodes[finalSubjectCondition!.parent].parent].kind == 34
+                -> if {
+                    nodes[finalSubjectCondition!.parent].parent => finalSubjectControlIndex
+                    nodes[finalSubjectControlIndex] => finalSubjectControl!
+                    finalSubjectControl!.operand0 >= 0
+                        and nodes[finalSubjectControl!.operand0].kind == 9
+                        and nodes[finalSubjectControl!.operand0].opcode == -1
+                        and finalWrappedValueByNode![finalSubjectControl!.operand0] >= 0
+                        -> if {
+                            finalSubjectControl!.operand0 => finalSubjectWrapperIndex
+                            finalWrappedValueByNode![finalSubjectWrapperIndex] => finalSubjectConcreteIndex!
+                            finalSubjectConcreteIndex! == finalSubjectControlIndex
+                                -> if {
+                                    -1 => finalSubjectConcreteIndex!
+                                    0 => finalSubjectConcreteSearch!
+                                    finalSubjectConcreteSearch! < finalSubjectControlIndex
+                                        -> while {
+                                            nodes[finalSubjectConcreteSearch!] => finalSubjectConcreteCandidate
+                                            finalSubjectConcreteCandidate.parent == finalSubjectWrapperIndex
+                                                and finalSubjectConcreteCandidate.kind != 9
+                                                and finalSubjectConcreteCandidate.kind != 18
+                                                and finalSubjectConcreteCandidate.kind != 19
+                                                and finalSubjectConcreteCandidate.kind != 20
+                                                and finalSubjectConcreteCandidate.kind != 27
+                                                and finalSubjectConcreteCandidate.kind != 33
+                                                and finalSubjectConcreteCandidate.kind != 34
+                                                and finalSubjectConcreteCandidate.typeOrigin == 1
+                                                and finalSubjectConcreteCandidate.typeSymbol >= 2
+                                                and finalSubjectConcreteCandidate.typeSymbol <= 23
+                                                -> if { finalSubjectConcreteSearch! => finalSubjectConcreteIndex! }
+                                            finalSubjectConcreteSearch! + 1 => finalSubjectConcreteSearch!
+                                        }
+                                }
+                            finalSubjectConcreteIndex! >= 0 and finalSubjectConcreteIndex! != finalSubjectControlIndex
+                                -> if {
+                                    finalSubjectConcreteIndex! => finalSubjectControl!.operand0
+                                    finalSubjectControl! => nodes[finalSubjectControlIndex]
+                                }
+                        }
+                    finalSubjectControl!.operand0 => finalSubjectCondition!.operand0
+                    finalSubjectCondition! => nodes[finalSubjectConditionIndex!]
+                }
+            finalSubjectConditionIndex! + 1 => finalSubjectConditionIndex!
+        }
+    nodes -> len => finalControlTypeIndex!
+    finalControlTypeIndex! > 0 -> while {
+        finalControlTypeIndex! - 1 => finalControlTypeIndex!
+        nodes[finalControlTypeIndex!] => finalControlType!
+        finalControlType!.kind == 19
+            and finalControlType!.operand1 >= 0
+            and finalControlType!.operand1 < (nodes -> len)
+            -> if {
+                nodes[finalControlType!.operand1] => finalRegionValue
+                not (finalRegionValue.typeOrigin == 1 and finalRegionValue.typeSymbol == 0)
+                    -> if {
+                        finalRegionValue.typeOrigin => finalControlType!.typeOrigin
+                        finalRegionValue.typeModule => finalControlType!.typeModule
+                        finalRegionValue.typeSymbol => finalControlType!.typeSymbol
+                        finalRegionValue.typeId => finalControlType!.typeId
+                        finalRegionValue.typeKind => finalControlType!.typeKind
+                        finalRegionValue.typeFlags => finalControlType!.typeFlags
+                        finalControlType! => nodes[finalControlTypeIndex!]
+                    }
+            }
+        finalControlType!.kind == 18
+            and finalControlType!.operand1 >= 0
+            and finalControlType!.operand1 < (nodes -> len)
+            and finalControlType!.nextOperand >= 0
+            and finalControlType!.nextOperand < (nodes -> len)
+            -> if {
+                nodes[finalControlType!.operand1] => finalThenRegion!
+                nodes[finalControlType!.nextOperand] => finalElseRegion!
+                finalThenRegion!.kind == 19
+                    and finalThenRegion!.operand1 >= 0
+                    and finalThenRegion!.operand1 < (nodes -> len)
+                    and finalElseRegion!.kind == 19
+                    and finalElseRegion!.operand1 >= 0
+                    and finalElseRegion!.operand1 < (nodes -> len)
+                    -> if {
+                        finalThenRegion!.operand1 => finalThenValueIndex!
+                        finalElseRegion!.operand1 => finalElseValueIndex!
+                        true => finalThenResolving!
+                        finalThenResolving! -> while {
+                            false => finalThenResolving!
+                            nodes[finalThenValueIndex!].kind == 17 and nodes[finalThenValueIndex!].operand0 >= 0
+                                -> if {
+                                    nodes[finalThenValueIndex!].operand0 => finalThenValueIndex!
+                                    true => finalThenResolving!
+                                }
+                            nodes[finalThenValueIndex!].kind == 9 and nodes[finalThenValueIndex!].opcode == -1
+                                -> if {
+                                    finalWrappedValueByNode![finalThenValueIndex!] >= 0
+                                        -> if {
+                                            finalWrappedValueByNode![finalThenValueIndex!] => finalThenValueIndex!
+                                            true => finalThenResolving!
+                                        }
+                                }
+                        }
+                        true => finalElseResolving!
+                        finalElseResolving! -> while {
+                            false => finalElseResolving!
+                            nodes[finalElseValueIndex!].kind == 17 and nodes[finalElseValueIndex!].operand0 >= 0
+                                -> if {
+                                    nodes[finalElseValueIndex!].operand0 => finalElseValueIndex!
+                                    true => finalElseResolving!
+                                }
+                            nodes[finalElseValueIndex!].kind == 9 and nodes[finalElseValueIndex!].opcode == -1
+                                -> if {
+                                    finalWrappedValueByNode![finalElseValueIndex!] >= 0
+                                        -> if {
+                                            finalWrappedValueByNode![finalElseValueIndex!] => finalElseValueIndex!
+                                            true => finalElseResolving!
+                                        }
+                                }
+                        }
+                        nodes[finalThenValueIndex!] => finalThenValue!
+                        nodes[finalElseValueIndex!] => finalElseValue!
+                        false => finalThenInteger!
+                        false => finalElseInteger!
+                        finalThenValue!.typeId >= 0 -> if {
+                            frozenRecursiveSemanticTypes[finalThenValue!.typeId] => finalThenSemanticType
+                            finalThenSemanticType.kind == 1 and finalThenSemanticType.origin == 1 and finalThenSemanticType.symbol >= 2 and finalThenSemanticType.symbol <= 14
+                                -> if { true => finalThenInteger! }
+                        }
+                        finalElseValue!.typeId >= 0 -> if {
+                            frozenRecursiveSemanticTypes[finalElseValue!.typeId] => finalElseSemanticType
+                            finalElseSemanticType.kind == 1 and finalElseSemanticType.origin == 1 and finalElseSemanticType.symbol >= 2 and finalElseSemanticType.symbol <= 14
+                                -> if { true => finalElseInteger! }
+                        }
+                        finalThenValue!.kind == 3 and finalElseInteger!
+                            -> if {
+                                finalElseValue!.typeOrigin => finalThenValue!.typeOrigin
+                                finalElseValue!.typeModule => finalThenValue!.typeModule
+                                finalElseValue!.typeSymbol => finalThenValue!.typeSymbol
+                                finalElseValue!.typeId => finalThenValue!.typeId
+                                finalElseValue!.typeKind => finalThenValue!.typeKind
+                                finalElseValue!.typeFlags => finalThenValue!.typeFlags
+                                finalThenValue! => nodes[finalThenValueIndex!]
+                            }
+                        finalElseValue!.kind == 3 and finalThenInteger!
+                            -> if {
+                                finalThenValue!.typeOrigin => finalElseValue!.typeOrigin
+                                finalThenValue!.typeModule => finalElseValue!.typeModule
+                                finalThenValue!.typeSymbol => finalElseValue!.typeSymbol
+                                finalThenValue!.typeId => finalElseValue!.typeId
+                                finalThenValue!.typeKind => finalElseValue!.typeKind
+                                finalThenValue!.typeFlags => finalElseValue!.typeFlags
+                                finalElseValue! => nodes[finalElseValueIndex!]
+                            }
+                        finalThenValue!.typeOrigin == finalElseValue!.typeOrigin
+                            and finalThenValue!.typeModule == finalElseValue!.typeModule
+                            and finalThenValue!.typeSymbol == finalElseValue!.typeSymbol
+                            -> if {
+                                finalThenValue!.typeOrigin => finalThenRegion!.typeOrigin
+                                finalThenValue!.typeModule => finalThenRegion!.typeModule
+                                finalThenValue!.typeSymbol => finalThenRegion!.typeSymbol
+                                finalThenValue!.typeId => finalThenRegion!.typeId
+                                finalThenValue!.typeKind => finalThenRegion!.typeKind
+                                finalThenValue!.typeFlags => finalThenRegion!.typeFlags
+                                finalElseValue!.typeOrigin => finalElseRegion!.typeOrigin
+                                finalElseValue!.typeModule => finalElseRegion!.typeModule
+                                finalElseValue!.typeSymbol => finalElseRegion!.typeSymbol
+                                finalElseValue!.typeId => finalElseRegion!.typeId
+                                finalElseValue!.typeKind => finalElseRegion!.typeKind
+                                finalElseValue!.typeFlags => finalElseRegion!.typeFlags
+                                finalThenValue!.typeOrigin => finalControlType!.typeOrigin
+                                finalThenValue!.typeModule => finalControlType!.typeModule
+                                finalThenValue!.typeSymbol => finalControlType!.typeSymbol
+                                finalThenValue!.typeId => finalControlType!.typeId
+                                finalThenValue!.typeKind => finalControlType!.typeKind
+                                finalThenValue!.typeFlags => finalControlType!.typeFlags
+                                finalThenRegion! => nodes[finalControlType!.operand1]
+                                finalElseRegion! => nodes[finalControlType!.nextOperand]
+                                finalControlType! => nodes[finalControlTypeIndex!]
+                            } else {
+                                1 => finalControlType!.typeOrigin
+                                -1 => finalControlType!.typeModule
+                                0 => finalControlType!.typeSymbol
+                                -1 => finalControlType!.typeId
+                                1 => finalControlType!.typeKind
+                                0 => finalControlType!.typeFlags
+                                finalControlType! => nodes[finalControlTypeIndex!]
+                            }
+                    }
+            }
+    }
+    0 => finalCallTypeIndex!
+    finalCallTypeIndex! < (nodes -> len) -> while {
+        nodes[finalCallTypeIndex!] => finalCallType!
+        finalCallType!.kind == 6
+            and finalCallType!.targetModule >= 0
+            and finalCallType!.symbol >= 0 -> if {
+                finalCallType!.targetModule -> functionResultTypeId(finalCallType!.symbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => finalCallResultTypeId
+                finalCallResultTypeId >= 0 -> if {
+                    frozenRecursiveSemanticTypes[finalCallResultTypeId] => finalCallResultType
+                    not finalCallResultType.containsParameter -> if {
+                        finalCallResultType.origin => finalCallType!.typeOrigin
+                        finalCallResultType.module => finalCallType!.typeModule
+                        finalCallResultType.symbol => finalCallType!.typeSymbol
+                        finalCallResultTypeId => finalCallType!.typeId
+                        finalCallResultType.kind => finalCallType!.typeKind
+                        recursiveTypeFlags[finalCallResultTypeId] => finalCallType!.typeFlags
+                        finalCallType! => nodes[finalCallTypeIndex!]
+                    }
+                }
+            }
+        finalCallTypeIndex! + 1 => finalCallTypeIndex!
+    }
+    # Same-module helper calls can receive their canonical result type only in
+    # the final call pass above. Refresh enclosing value regions and enum
+    # matches in reverse IR order so each already-settled producer reaches its
+    # parent before S022 validates the complete control result.
+    nodes -> len => lateCallControlTypeIndex!
+    lateCallControlTypeIndex! > 0 -> while {
+        lateCallControlTypeIndex! - 1 => lateCallControlTypeIndex!
+        nodes[lateCallControlTypeIndex!] => lateCallControlType!
+        lateCallControlType!.kind == 19
+            and lateCallControlType!.operand1 >= 0
+            and lateCallControlType!.operand1 < (nodes -> len)
+            -> if {
+                nodes[lateCallControlType!.operand1] => lateCallRegionValue
+                not (lateCallRegionValue.typeOrigin == 1 and lateCallRegionValue.typeSymbol == 0)
+                    -> if {
+                        lateCallRegionValue.typeOrigin => lateCallControlType!.typeOrigin
+                        lateCallRegionValue.typeModule => lateCallControlType!.typeModule
+                        lateCallRegionValue.typeSymbol => lateCallControlType!.typeSymbol
+                        lateCallRegionValue.typeId => lateCallControlType!.typeId
+                        lateCallRegionValue.typeKind => lateCallControlType!.typeKind
+                        lateCallRegionValue.typeFlags => lateCallControlType!.typeFlags
+                        lateCallControlType! => nodes[lateCallControlTypeIndex!]
+                    }
+            }
+    }
+    # A match whose continuing arm has no canonical value is a Unit control,
+    # even when an earlier sibling arm returns a Result from the function. A
+    # return terminates its path and cannot make a later Continue arm produce
+    # that Result. Normalize this join only after every late call and nested
+    # region type has settled.
+    nodes -> len => lateNonValueMatchIndex!
+    lateNonValueMatchIndex! > 0 -> while {
+        lateNonValueMatchIndex! - 1 => lateNonValueMatchIndex!
+        nodes[lateNonValueMatchIndex!] => lateNonValueMatch!
+        lateNonValueMatch!.kind == 27 and lateNonValueMatch!.operand1 >= 0
+            -> if {
+                false => lateNonValueContinuingArm!
+                lateNonValueMatch!.operand1 => lateNonValueArmIndex!
+                lateNonValueArmIndex! >= 0
+                    and lateNonValueArmIndex! < (nodes -> len)
+                    and nodes[lateNonValueArmIndex!].parent == lateNonValueMatchIndex!
+                    and not lateNonValueContinuingArm!
+                    -> while {
+                        nodes[lateNonValueArmIndex!] => lateNonValueArm
+                        lateNonValueArmIndex! => lateNonValueRegionIndex!
+                        lateNonValueArm.operand1 >= 0
+                            and lateNonValueArm.operand1 < (nodes -> len)
+                            and nodes[lateNonValueArm.operand1].kind == 19
+                            -> if { lateNonValueArm.operand1 => lateNonValueRegionIndex! }
+                        nodes[lateNonValueRegionIndex!].operand1 => lateNonValueTerminalIndex
+                        lateNonValueTerminalIndex >= 0
+                            and lateNonValueTerminalIndex < (nodes -> len)
+                            and nodes[lateNonValueTerminalIndex].kind != 23
+                            -> if {
+                                nodes[lateNonValueTerminalIndex] => lateNonValueTerminal
+                                lateNonValueTerminal.typeId < 0
+                                    or (lateNonValueTerminal.typeOrigin == 1 and lateNonValueTerminal.typeSymbol == 0)
+                                    -> if { true => lateNonValueContinuingArm! }
+                            }
+                        lateNonValueArm.nextOperand => lateNonValueArmIndex!
+                    }
+                lateNonValueContinuingArm! -> if {
+                    1 => lateNonValueMatch!.typeOrigin
+                    -1 => lateNonValueMatch!.typeModule
+                    0 => lateNonValueMatch!.typeSymbol
+                    -1 => lateNonValueMatch!.typeId
+                    1 => lateNonValueMatch!.typeKind
+                    0 => lateNonValueMatch!.typeFlags
+                    lateNonValueMatch! => nodes[lateNonValueMatchIndex!]
+                    lateNonValueMatch!.parent >= 0
+                        and lateNonValueMatch!.parent < (nodes -> len)
+                        and nodes[lateNonValueMatch!.parent].kind == 19
+                        and nodes[lateNonValueMatch!.parent].operand1 == lateNonValueMatchIndex!
+                        -> if {
+                            nodes[lateNonValueMatch!.parent] => lateNonValueParent!
+                            1 => lateNonValueParent!.typeOrigin
+                            -1 => lateNonValueParent!.typeModule
+                            0 => lateNonValueParent!.typeSymbol
+                            -1 => lateNonValueParent!.typeId
+                            1 => lateNonValueParent!.typeKind
+                            0 => lateNonValueParent!.typeFlags
+                            lateNonValueParent! => nodes[lateNonValueMatch!.parent]
+                        }
+                }
+            }
+    }
+    # A logical sys.file module may span several source fragments. Canonicalize
+    # compiler-provided file intrinsics from each call's resolved fragment and
+    # symbol name after target identity is final.
+    0 => finalFileIntrinsicIndex!
+    finalFileIntrinsicIndex! < (nodes -> len)
+        -> while {
+            nodes[finalFileIntrinsicIndex!] => finalFileIntrinsic!
+            (finalFileIntrinsic!.kind == 6 or finalFileIntrinsic!.kind == 9)
+                and finalFileIntrinsic!.targetModule >= 0
+                and finalFileIntrinsic!.symbol >= 0 -> if {
+                    false => finalFileIntrinsicModule!
+                    0 => finalFileIntrinsicModuleSearch!
+                    finalFileIntrinsicModuleSearch! < (prepared.modules -> len)
+                        -> while {
+                            prepared.modules[finalFileIntrinsicModuleSearch!] => finalFileIntrinsicIdentity
+                            finalFileIntrinsicIdentity.sourceIndex == finalFileIntrinsic!.targetModule
+                                and finalFileIntrinsicIdentity.pathHash == 1560534979202565016
+                                -> if {
+                                    true => finalFileIntrinsicModule!
+                                }
+                            finalFileIntrinsicModuleSearch! + 1 => finalFileIntrinsicModuleSearch!
+                        }
+                    finalFileIntrinsicModule! -> if {
+                        prepared.package.ranges[finalFileIntrinsic!.targetModule] => finalFileIntrinsicRange
+                        prepared.package.symbols[finalFileIntrinsicRange.symbolStart + finalFileIntrinsic!.symbol] => finalFileIntrinsicSymbol
+                        prepared.package.sources[finalFileIntrinsic!.targetModule] -> len => finalFileIntrinsicSourceLength
+                        prepared.package.sources[finalFileIntrinsic!.targetModule] -> slice(UIntSize(0), finalFileIntrinsicSourceLength) => finalFileIntrinsicSource
+                        IntrinsicNameRequest {
+                            source: finalFileIntrinsicSource
+                            token: prepared.package.tokens[finalFileIntrinsicRange.tokenStart + finalFileIntrinsicSymbol.nameToken]
+                        } -> intrinsicOpcode => finalFileIntrinsicOpcode!
+                        prepared.package.tokens[finalFileIntrinsicRange.tokenStart + finalFileIntrinsicSymbol.nameToken] => finalFileIntrinsicNameToken
+                        finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "openRead")
+                            -> if { -216 => finalFileIntrinsicOpcode! }
+                        finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "openWrite")
+                            -> if { -217 => finalFileIntrinsicOpcode! }
+                        finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "sync")
+                            -> if { -218 => finalFileIntrinsicOpcode! }
+                        finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "atomicReplace")
+                            -> if { -219 => finalFileIntrinsicOpcode! }
+                        (finalFileIntrinsicOpcode! <= -216 and finalFileIntrinsicOpcode! >= -221)
+                            or finalFileIntrinsicOpcode! == -231
+                            or finalFileIntrinsicOpcode! == -232
+                            or finalFileIntrinsicOpcode! == -234
+                            -> if {
+                                finalFileIntrinsicOpcode! => finalFileIntrinsic!.opcode
+                                finalFileIntrinsic! => nodes[finalFileIntrinsicIndex!]
+                            }
+                    }
+                }
+            finalFileIntrinsicIndex! + 1 => finalFileIntrinsicIndex!
+        }
+    # Re-apply DNS identity after control-region and value-wrapper repair.
+    0 => finalDnsIntrinsicIndex!
+    finalDnsIntrinsicIndex! < (nodes -> len) -> while {
+        nodes[finalDnsIntrinsicIndex!] => finalDnsIntrinsic!
+        runtimeSymbols.dnsModuleSource >= 0
+            and runtimeSymbols.dnsLookupSymbol >= 0
+            and (finalDnsIntrinsic!.kind == 6 or finalDnsIntrinsic!.kind == 9)
+            and finalDnsIntrinsic!.targetModule == runtimeSymbols.dnsModuleSource
+            and finalDnsIntrinsic!.symbol == runtimeSymbols.dnsLookupSymbol
+            -> if {
+                -269 => finalDnsIntrinsic!.opcode
+                finalDnsIntrinsic! => nodes[finalDnsIntrinsicIndex!]
+            }
+        runtimeSymbols.dnsModuleSource >= 0
+            and runtimeSymbols.dnsLookupSymbol >= 0
+            and finalDnsIntrinsic!.kind == 9
+            and finalDnsIntrinsic!.opcode == -269
+            and finalWrappedValueByNode![finalDnsIntrinsicIndex!] >= 0
+            -> if {
+                finalWrappedValueByNode![finalDnsIntrinsicIndex!] => finalDnsConcreteIndex
+                nodes[finalDnsConcreteIndex] => finalDnsConcrete!
+                finalDnsConcrete!.kind == 6 and finalDnsConcrete!.opcode == -1
+                    -> if {
+                        -269 => finalDnsConcrete!.opcode
+                        finalDnsConcrete! => nodes[finalDnsConcreteIndex]
+                    }
+            }
+        finalDnsIntrinsicIndex! + 1 => finalDnsIntrinsicIndex!
+    }
+    0 => finalControlBindingIndex!
+    finalControlBindingIndex! < (nodes -> len)
+        -> while {
+            nodes[finalControlBindingIndex!] => finalControlBinding!
+            finalControlBinding!.kind == 17
+                and finalControlBinding!.operand0 >= 0
+                and finalControlBinding!.operand0 < (nodes -> len)
+                -> if {
+                    nodes[finalControlBinding!.operand0] => finalControlBindingValue
+                    finalControlBindingValue.typeId => finalControlBindingTypeId!
+                    finalControlBindingValue.typeId >= 0
+                        and frozenRecursiveSemanticTypes[finalControlBindingValue.typeId].kind == 7
+                        and frozenRecursiveSemanticTypes[finalControlBindingValue.typeId].origin == 4
+                        and frozenRecursiveSemanticTypes[finalControlBindingValue.typeId].symbol == 1
+                        -> if {
+                            false => finalControlBindingUnwraps!
+                            finalControlBinding!.typeId == frozenRecursiveSemanticTypes[finalControlBindingValue.typeId].first
+                                -> if {
+                                    true => finalControlBindingUnwraps!
+                                }
+                            prepared.package.ranges[finalControlBinding!.sourceModule] => finalControlBindingRange
+                            prepared.package.nodes[finalControlBindingRange.astStart + finalControlBinding!.astNode] => finalControlBindingAst
+                            -1 => finalControlBindingLastFlow!
+                            finalControlBindingAst.firstToken => finalControlBindingTokenIndex!
+                            finalControlBindingTokenIndex! < finalControlBindingAst.firstToken + finalControlBindingAst.tokenCount
+                                -> while {
+                                    prepared.package.tokens[finalControlBindingRange.tokenStart + finalControlBindingTokenIndex!] => finalControlBindingToken
+                                    finalControlBindingToken.kind == grammar.tokenIdQuestion() or finalControlBindingToken.kind == grammar.tokenIdArrow()
+                                        -> if {
+                                            finalControlBindingToken.kind => finalControlBindingLastFlow!
+                                        }
+                                    finalControlBindingToken.kind == grammar.tokenIdFatArrow()
+                                        -> if {
+                                            finalControlBindingAst.firstToken + finalControlBindingAst.tokenCount => finalControlBindingTokenIndex!
+                                        } else {
+                                            finalControlBindingTokenIndex! + 1 => finalControlBindingTokenIndex!
+                                        }
+                                }
+                            finalControlBindingLastFlow! == grammar.tokenIdQuestion()
+                                -> if { true => finalControlBindingUnwraps! }
+                            finalControlBindingUnwraps! -> if {
+                                frozenRecursiveSemanticTypes[finalControlBindingValue.typeId].first => finalControlBindingTypeId!
+                            }
+                        }
+                    finalControlBindingTypeId! >= 0 -> if {
+                        frozenRecursiveSemanticTypes[finalControlBindingTypeId!] => finalControlBindingType
+                        finalControlBindingType.origin => finalControlBinding!.typeOrigin
+                        finalControlBindingType.module => finalControlBinding!.typeModule
+                        finalControlBindingType.symbol => finalControlBinding!.typeSymbol
+                        finalControlBindingTypeId! => finalControlBinding!.typeId
+                        finalControlBindingType.kind => finalControlBinding!.typeKind
+                        recursiveTypeFlags[finalControlBindingTypeId!] => finalControlBinding!.typeFlags
+                    }
+                    finalControlBinding! => nodes[finalControlBindingIndex!]
+                }
+            finalControlBindingIndex! + 1 => finalControlBindingIndex!
+        }
+    0 => finalControlReadIndex!
+    finalControlReadIndex! < (nodes -> len) -> while {
+        nodes[finalControlReadIndex!] => finalControlRead!
+        finalControlRead!.kind == 5
+            and finalControlRead!.operand0 >= 0
+            and finalControlRead!.operand0 < (nodes -> len)
+            and nodes[finalControlRead!.operand0].kind == 17
+            -> if {
+                nodes[finalControlRead!.operand0] => finalControlReadBinding
+                finalControlReadBinding.typeOrigin => finalControlRead!.typeOrigin
+                finalControlReadBinding.typeModule => finalControlRead!.typeModule
+                finalControlReadBinding.typeSymbol => finalControlRead!.typeSymbol
+                finalControlReadBinding.typeId => finalControlRead!.typeId
+                finalControlReadBinding.typeKind => finalControlRead!.typeKind
+                finalControlReadBinding.typeFlags => finalControlRead!.typeFlags
+                finalControlRead! => nodes[finalControlReadIndex!]
+            }
+        finalControlReadIndex! + 1 => finalControlReadIndex!
+    }
+    # Final control-binding synchronization can make a previously unresolved
+    # member base nominal. Field ordinals already resolved by the member pass
+    # are sufficient to restore the exact field type without re-parsing names.
+    0 => finalNominalMemberIndex!
+    finalNominalMemberIndex! < (nodes -> len)
+        -> while {
+            nodes[finalNominalMemberIndex!] => finalNominalMember!
+            finalNominalMember!.kind == 13
+                and finalNominalMember!.operand0 >= 0
+                and nodes[finalNominalMember!.operand0].typeId >= 0
+                -> if {
+                    nodes[finalNominalMember!.operand0].typeId => finalNominalOwnerType!
+                    frozenRecursiveSemanticTypes[finalNominalOwnerType!].kind == 8
+                        -> if { frozenRecursiveSemanticTypes[finalNominalOwnerType!].first => finalNominalOwnerType! }
+                    -1 => finalNominalMemberNameToken!
+                    prepared.package.ranges[finalNominalMember!.sourceModule] => finalNominalMemberRange
+                    prepared.package.nodes[finalNominalMemberRange.astStart + finalNominalMember!.astNode] => finalNominalMemberAst
+                    finalNominalMemberAst.firstToken => finalNominalMemberTokenSearch!
+                    finalNominalMemberTokenSearch! < finalNominalMemberAst.firstToken + finalNominalMemberAst.tokenCount
+                        -> while {
+                            prepared.package.tokens[finalNominalMemberRange.tokenStart + finalNominalMemberTokenSearch!].kind == grammar.tokenIdIdentifier()
+                                -> if { finalNominalMemberTokenSearch! => finalNominalMemberNameToken! }
+                            finalNominalMemberTokenSearch! + 1 => finalNominalMemberTokenSearch!
+                        }
+                    0 => finalNominalFieldSearch!
+                    false => finalNominalMemberResolved!
+                    finalNominalFieldSearch! < (recursiveTypes.fields -> len) and not finalNominalMemberResolved!
+                        -> while {
+                            recursiveTypes.fields[finalNominalFieldSearch!] => finalNominalField
+                            false => finalNominalFieldMatches!
+                            finalNominalField.status == 0 and finalNominalField.ownerType == finalNominalOwnerType!
+                                -> if {
+                                    finalNominalMemberNameToken! < 0 and finalNominalMember!.symbol >= 0
+                                        and finalNominalField.ordinal == finalNominalMember!.symbol
+                                        -> if { true => finalNominalFieldMatches! }
+                                    finalNominalMemberNameToken! >= 0 -> if {
+                                        prepared.package.ranges[finalNominalField.sourceModule] => finalNominalFieldRange
+                                        finalNominalField.labelToken => finalNominalFieldNameToken!
+                                        finalNominalFieldNameToken! < 0 and finalNominalField.fieldSymbol >= 0
+                                            -> if {
+                                                prepared.package.symbols[finalNominalFieldRange.symbolStart + finalNominalField.fieldSymbol].nameToken => finalNominalFieldNameToken!
+                                            }
+                                        finalNominalFieldNameToken! >= 0 -> if {
+                                            prepared.package.tokens[finalNominalMemberRange.tokenStart + finalNominalMemberNameToken!] => finalNominalMemberName
+                                            prepared.package.tokens[finalNominalFieldRange.tokenStart + finalNominalFieldNameToken!] => finalNominalFieldName
+                                            finalNominalMemberName.span.length == finalNominalFieldName.span.length => finalNominalFieldMatches!
+                                            UIntSize(0) => finalNominalFieldNameByte!
+                                            finalNominalFieldMatches! and finalNominalFieldNameByte! < finalNominalMemberName.span.length
+                                                -> while {
+                                                    (prepared.package.sources[finalNominalMember!.sourceModule] -> byte(finalNominalMemberName.span.start + finalNominalFieldNameByte!)) != (prepared.package.sources[finalNominalField.sourceModule] -> byte(finalNominalFieldName.span.start + finalNominalFieldNameByte!))
+                                                        -> if { false => finalNominalFieldMatches! }
+                                                    finalNominalFieldNameByte! + 1 => finalNominalFieldNameByte!
+                                                }
+                                        }
+                                    }
+                                }
+                            finalNominalFieldMatches! -> if {
+                                finalNominalField.ordinal => finalNominalMember!.symbol
+                                finalNominalField.sourceModule => finalNominalMember!.targetModule
+                                finalNominalField.fieldType => finalNominalMember!.typeId
+                                frozenRecursiveSemanticTypes[finalNominalField.fieldType] => finalNominalMemberType
+                                finalNominalMemberType.kind => finalNominalMember!.typeKind
+                                finalNominalMemberType.origin => finalNominalMember!.typeOrigin
+                                finalNominalMemberType.module => finalNominalMember!.typeModule
+                                finalNominalMemberType.symbol => finalNominalMember!.typeSymbol
+                                recursiveTypeFlags[finalNominalField.fieldType] => finalNominalMember!.typeFlags
+                                finalNominalMember! => nodes[finalNominalMemberIndex!]
+                                true => finalNominalMemberResolved!
+                            }
+                            finalNominalFieldSearch! + 1 => finalNominalFieldSearch!
+                        }
+                }
+            finalNominalMemberIndex! + 1 => finalNominalMemberIndex!
+        }
+    # Nominal member recovery above can establish an owned array container only
+    # after the first global index pass. Re-seal index element identities before
+    # projected method lookup so `record.tables[index] -> method` resolves from
+    # the exact element nominal type rather than surviving as a V006 sentinel.
+    nodes -> sealFinalIndexTypes(frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    # Preserve unresolved flow-call syntax until projected receiver types are
+    # final. Pattern payload members are typed only after their enclosing enum
+    # arm is repaired; dropping the call earlier makes a logical expression
+    # branch on the receiver struct. Resolve the retained call by the nominal
+    # receiver owner and method declaration, never by name alone.
+    nodes -> resolveFinalProjectedMethods(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    # A control-producing flow wrapper and its shorter method-call prefix share
+    # a source start, but only the prefix owns the invocation. After projected
+    # methods are final, bind each enum match to that concrete call and seal its
+    # payloads before later wrapper and return convergence.
+    nodes -> sealFinalProjectedMatchSubjectsAndPayloads(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    # Function result edges are initially selected while each expression is
+    # still being lowered. A value-producing control node can be appended after
+    # that local boundary, so settle wrapper and condition edges once the full
+    # IR graph and control result types are complete.
+    0 => finalReturnFunctionIndex!
+    finalReturnFunctionIndex! < (nodes -> len)
+        -> while {
+            nodes[finalReturnFunctionIndex!] => finalReturnFunction
+            finalReturnFunction.kind == 0 or finalReturnFunction.kind == 11
+                -> if {
+                    finalReturnFunctionIndex! + 1 => finalReturnFunctionEnd!
+                    finalReturnFunctionEnd! < (nodes -> len)
+                        and nodes[finalReturnFunctionEnd!].kind != 0
+                        and nodes[finalReturnFunctionEnd!].kind != 11
+                        -> while {
+                            finalReturnFunctionEnd! + 1 => finalReturnFunctionEnd!
+                        }
+                    finalReturnFunction.kind == 0
+                        and finalReturnFunction.operand0 >= 0
+                        and finalReturnFunction.operand0 < (nodes -> len)
+                        and nodes[finalReturnFunction.operand0].kind == 1
+                        -> if {
+                            nodes[finalReturnFunction.operand0] => finalReturnNode!
+                            finalReturnNode!.operand0 => finalReturnValue!
+                            finalReturnValue! >= 0
+                                and finalReturnValue! < (nodes -> len)
+                                and nodes[finalReturnValue!].kind == 9
+                                and nodes[finalReturnValue!].opcode == -1
+                                and finalWrappedValueByNode![finalReturnValue!] >= 0
+                                -> if {
+                                    finalWrappedValueByNode![finalReturnValue!] => finalReturnValue!
+                                }
+                            false => finalReturnValueStartFound!
+                            UIntSize(0) => finalReturnValueStart!
+                            UIntSize(0) => finalReturnValueEnd!
+                            finalReturnValue! >= 0
+                                and finalReturnValue! < (nodes -> len)
+                                and nodes[finalReturnValue!].sourceModule >= 0
+                                and nodes[finalReturnValue!].sourceModule < (prepared.package.ranges -> len)
+                                and nodes[finalReturnValue!].astNode >= 0
+                                -> if {
+                                    nodes[finalReturnValue!] => existingFinalReturnValue
+                                    prepared.package.ranges[existingFinalReturnValue.sourceModule] => existingFinalReturnRange
+                                    prepared.package.nodes[existingFinalReturnRange.astStart + existingFinalReturnValue.astNode] => existingFinalReturnAst
+                                    existingFinalReturnAst.start => finalReturnValueStart!
+                                    existingFinalReturnAst.start + existingFinalReturnAst.length => finalReturnValueEnd!
+                                    true => finalReturnValueStartFound!
+                                }
+                            false => finalReturnControlFound!
+                            UIntSize(0) => finalReturnControlStart!
+                            finalReturnValue! >= 0
+                                and finalReturnValue! < (nodes -> len)
+                                and nodes[finalReturnValue!].sourceModule >= 0
+                                and nodes[finalReturnValue!].sourceModule < (prepared.package.ranges -> len)
+                                and nodes[finalReturnValue!].astNode >= 0
+                                -> if {
+                                    nodes[finalReturnValue!] => finalReturnCurrentValue
+                                    prepared.package.ranges[finalReturnCurrentValue.sourceModule] => finalReturnCurrentRange
+                                    prepared.package.nodes[finalReturnCurrentRange.astStart + finalReturnCurrentValue.astNode].start => finalReturnControlStart!
+                                    true => finalReturnControlFound!
+                                }
+                            finalReturnFunctionIndex! + 1 => finalReturnControlSearch!
+                            finalReturnControlSearch! < finalReturnFunctionEnd!
+                                -> while {
+                                    nodes[finalReturnControlSearch!] => finalReturnControl
+                                    (finalReturnControl.kind == 18
+                                        or finalReturnControl.kind == 27
+                                        or finalReturnControl.kind == 33
+                                        or finalReturnControl.kind == 34)
+                                        and finalReturnControl.typeOrigin == finalReturnFunction.typeOrigin
+                                        and finalReturnControl.typeModule == finalReturnFunction.typeModule
+                                        and finalReturnControl.typeSymbol == finalReturnFunction.typeSymbol
+                                        -> if {
+                                            true => finalReturnControlTopLevel!
+                                            finalReturnControl.parent => finalReturnControlAncestor!
+                                            finalReturnControlAncestor! >= finalReturnFunctionIndex!
+                                                and finalReturnControlAncestor! < finalReturnFunctionEnd!
+                                                and finalReturnControlAncestor! != finalReturnFunction.operand0
+                                                and finalReturnControlTopLevel! -> while {
+                                                    nodes[finalReturnControlAncestor!] => finalReturnControlAncestorNode
+                                                    finalReturnControlAncestorNode.kind == 18
+                                                        or finalReturnControlAncestorNode.kind == 19
+                                                        or finalReturnControlAncestorNode.kind == 20
+                                                        or finalReturnControlAncestorNode.kind == 27
+                                                        or finalReturnControlAncestorNode.kind == 33
+                                                        or finalReturnControlAncestorNode.kind == 34
+                                                        -> if {
+                                                            false => finalReturnControlTopLevel!
+                                                        } else {
+                                                            finalReturnControlAncestorNode.parent => finalReturnControlAncestor!
+                                                        }
+                                                }
+                                            finalReturnControlTopLevel!
+                                                and finalReturnControl.sourceModule >= 0
+                                                and finalReturnControl.sourceModule < (prepared.package.ranges -> len)
+                                                and finalReturnControl.astNode >= 0 -> if {
+                                                    prepared.package.ranges[finalReturnControl.sourceModule] => finalReturnControlRange
+                                                    prepared.package.nodes[finalReturnControlRange.astStart + finalReturnControl.astNode] => finalReturnCandidateAst
+                                                    finalReturnCandidateAst.start => finalReturnCandidateStart
+                                                    (not finalReturnValueStartFound! or finalReturnCandidateStart > finalReturnValueStart!)
+                                                        and (not finalReturnControlFound! or finalReturnCandidateStart > finalReturnControlStart!)
+                                                        -> if {
+                                                            true => finalReturnControlFound!
+                                                            finalReturnCandidateStart => finalReturnControlStart!
+                                                            finalReturnControlSearch! => finalReturnValue!
+                                                        }
+                                                }
+                                        }
+                                    finalReturnControlSearch! + 1 => finalReturnControlSearch!
+                                }
+                            finalReturnValue! => finalReturnNode!.operand0
+                            finalReturnValue! >= 0 and finalReturnValue! < (nodes -> len)
+                                -> if {
+                                    nodes[finalReturnValue!] => finalReturnRoot!
+                                    finalReturnRoot!.kind == 12
+                                        or finalReturnRoot!.kind == 14
+                                        or finalReturnRoot!.kind == 16
+                                        or finalReturnRoot!.kind == 26
+                                        or finalReturnRoot!.kind == 35 -> if {
+                                            false => finalReturnRootInsideControl!
+                                            finalReturnRoot!.parent => finalReturnRootAncestor!
+                                            finalReturnRootAncestor! >= finalReturnFunctionIndex!
+                                                and finalReturnRootAncestor! < finalReturnFunctionEnd!
+                                                and finalReturnRootAncestor! != finalReturnFunction.operand0
+                                                and not finalReturnRootInsideControl!
+                                                -> while {
+                                                    nodes[finalReturnRootAncestor!] => finalReturnRootAncestorNode
+                                                    finalReturnRootAncestorNode.kind == 18
+                                                        or finalReturnRootAncestorNode.kind == 19
+                                                        or finalReturnRootAncestorNode.kind == 20
+                                                        or finalReturnRootAncestorNode.kind == 27
+                                                        or finalReturnRootAncestorNode.kind == 33
+                                                        or finalReturnRootAncestorNode.kind == 34
+                                                        -> if { true => finalReturnRootInsideControl! } else {
+                                                            finalReturnRootAncestorNode.parent => finalReturnRootAncestor!
+                                                        }
+                                                }
+                                            not finalReturnRootInsideControl! -> if {
+                                                finalReturnFunction.operand0 => finalReturnRoot!.parent
+                                                finalReturnRoot! => nodes[finalReturnValue!]
+                                                finalReturnRoot!.operand0 >= 0 -> if {
+                                                    nodes[finalReturnRoot!.operand0] => finalReturnPayloadRoot!
+                                                    finalReturnValue! => finalReturnPayloadRoot!.parent
+                                                    finalReturnPayloadRoot! => nodes[finalReturnRoot!.operand0]
+                                                }
+                                            }
+                                        }
+                                }
+                            finalReturnNode! => nodes[finalReturnFunction.operand0]
+                        }
+                    finalReturnFunctionEnd! => finalReturnFunctionIndex!
+                } else {
+                    finalReturnFunctionIndex! + 1 => finalReturnFunctionIndex!
+                }
+        }
+    # A control-flow or flow-expression shell can be provisionally classified
+    # as a Result constructor before its value-producing control is appended.
+    # At this final boundary, normalize only one exact direct child control
+    # whose condition and canonical result identity match the shell. Real enum
+    # constructors retain value-flow syntax and their declared payload edge.
+    [Int; ~] => finalControlByParent!
+    0 => finalControlParentSeed!
+    finalControlParentSeed! < (nodes -> len) -> while {
+        finalControlByParent! -> push(-1)
+        finalControlParentSeed! + 1 => finalControlParentSeed!
+    }
+    0 => finalControlChildIndex!
+    finalControlChildIndex! < (nodes -> len) -> while {
+        nodes[finalControlChildIndex!] => finalControlChild
+        (finalControlChild.kind == 18
+            or finalControlChild.kind == 27
+            or finalControlChild.kind == 33
+            or finalControlChild.kind == 34)
+            and finalControlChild.parent >= 0
+            and finalControlChild.parent < (nodes -> len)
+            and nodes[finalControlChild.parent].kind == 26
+            -> if {
+                finalControlByParent![finalControlChild.parent] == -1
+                    -> if {
+                        finalControlChildIndex! => finalControlByParent![finalControlChild.parent]
+                    } else {
+                        -2 => finalControlByParent![finalControlChild.parent]
+                    }
+            }
+        finalControlChildIndex! + 1 => finalControlChildIndex!
+    }
+    0 => finalControlWrapperIndex!
+    finalControlWrapperIndex! < (nodes -> len) -> while {
+        nodes[finalControlWrapperIndex!] => finalControlWrapper!
+        finalControlWrapper!.kind == 26
+            and finalControlWrapper!.sourceModule >= 0
+            and finalControlWrapper!.astNode >= 0
+            and finalControlByParent![finalControlWrapperIndex!] >= 0
+            -> if {
+                finalControlByParent![finalControlWrapperIndex!] => finalControlValueIndex
+                nodes[finalControlValueIndex] => finalControlValue
+                prepared.package.ranges[finalControlWrapper!.sourceModule] => finalControlWrapperRange
+                prepared.package.nodes[finalControlWrapperRange.astStart + finalControlWrapper!.astNode].cstRuleId
+                    => finalControlWrapperRule
+                (finalControlWrapperRule == grammar.ruleIdControlFlowExpression()
+                    or finalControlWrapperRule == grammar.ruleIdFlowExpression())
+                    and finalControlValue.operand0 == finalControlWrapper!.operand0
+                    and finalControlValue.typeId == finalControlWrapper!.typeId
+                    -> if {
+                        9 => finalControlWrapper!.kind
+                        -1 => finalControlWrapper!.opcode
+                        finalControlValueIndex => finalControlWrapper!.operand1
+                        finalControlWrapper! => nodes[finalControlWrapperIndex!]
+                        finalControlValueIndex => finalWrappedValueByNode![finalControlWrapperIndex!]
+                    }
+            }
+        finalControlWrapperIndex! + 1 => finalControlWrapperIndex!
+    }
+
+    # The preceding late normalization can expose a control producer after the
+    # general match-subject pass has already run. Repair only the exact linked
+    # wrapper -> control -> following match relation validated above; the
+    # transparent wrapper itself never defines a runtime SSA value.
+    0 => finalControlMatchIndex!
+    finalControlMatchIndex! < (nodes -> len) -> while {
+        nodes[finalControlMatchIndex!] => finalControlMatch!
+        (finalControlMatch!.kind == 27 or finalControlMatch!.kind == 34)
+            and finalControlMatch!.operand0 >= 0
+            and finalControlMatch!.operand0 < (nodes -> len)
+            -> if {
+                finalControlMatch!.operand0 => wrapperIndex
+                finalControlByParent![wrapperIndex] => controlIndex
+                controlIndex >= 0
+                    and finalWrappedValueByNode![wrapperIndex] == controlIndex
+                    and nodes[wrapperIndex].nextOperand == finalControlMatchIndex!
+                    -> if {
+                        controlIndex => finalControlMatch!.operand0
+                        finalControlMatch! => nodes[finalControlMatchIndex!]
+                    }
+            }
+        finalControlMatchIndex! + 1 => finalControlMatchIndex!
+    }
+
+    # Binding normalization can select the merged control before the control's
+    # canonical subject is sealed. Rebuild an empty transparent producer only
+    # at this final boundary, using the exact binding -> wrapper -> control
+    # ownership chain and the now-stable control subject.
+    0 => finalProducerWrapperIndex!
+    finalProducerWrapperIndex! < (nodes -> len) -> while {
+        nodes[finalProducerWrapperIndex!] => finalProducerWrapper!
+        finalProducerWrapper!.kind == 9
+            and finalProducerWrapper!.opcode == -1
+            and finalProducerWrapper!.operand0 < 0
+            and finalProducerWrapper!.parent >= 0
+            and finalProducerWrapper!.parent < (nodes -> len)
+            and nodes[finalProducerWrapper!.parent].kind == 17
+            and nodes[finalProducerWrapper!.parent].operand0 >= 0
+            and nodes[finalProducerWrapper!.parent].operand0 < (nodes -> len)
+            -> if {
+                nodes[finalProducerWrapper!.parent].operand0 => finalProducerControlIndex
+                nodes[finalProducerControlIndex] => finalProducerControl
+                (finalProducerControl.kind == 27 or finalProducerControl.kind == 34)
+                    and finalProducerControl.parent == finalProducerWrapperIndex!
+                    and finalProducerControl.operand0 >= 0
+                    -> if {
+                        finalProducerControlIndex => finalProducerWrapper!.operand1
+                        finalProducerWrapper! => nodes[finalProducerWrapperIndex!]
+                        nodes[finalProducerWrapperIndex!] => finalProducerSubjectWrapper!
+                        finalProducerControl.operand0 => finalProducerSubjectWrapper!.operand0
+                        finalProducerSubjectWrapper! => nodes[finalProducerWrapperIndex!]
+                    }
+            }
+        finalProducerWrapperIndex! + 1 => finalProducerWrapperIndex!
+    }
+    finalWrappedValueByNode!
+}

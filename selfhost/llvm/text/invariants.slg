@@ -1,0 +1,1958 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.invariant_rules as invariantRules
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.environment_runtime as environmentRuntime
+import sollang.compiler.llvm.emitter.socket_runtime as socketRuntime
+import sollang.compiler.llvm.emitter.dns_runtime as dnsRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sollang.compiler.source_style as sourceStyle
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+import sys.runtime as runtime
+
+
+binaryOpcodeValid opcode: Int -> Bool {
+    ((opcode >= grammar.tokenIdPlus() and opcode <= grammar.tokenIdPercent())
+        or opcode == grammar.tokenIdEqualEqual()
+        or opcode == grammar.tokenIdBangEqual()
+        or (opcode >= grammar.tokenIdLessEqual() and opcode <= grammar.tokenIdGreater())
+        or opcode == -24
+        or opcode == -25)
+}
+
+irScalarIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
+    -1 => symbol!
+    node.typeId >= 0 -> if {
+        context.types[node.typeId] => scalarType
+        scalarType.kind == 1 and scalarType.origin == 1
+            -> if { scalarType.symbol => symbol! }
+    } else {
+        node.typeKind == 1 and node.typeOrigin == 1
+            -> if { node.typeSymbol => symbol! }
+    }
+    0 => width!
+    symbol! == 3 or symbol! == 8 -> if { 8 => width! }
+    symbol! == 4 or symbol! == 9 -> if { 16 => width! }
+    symbol! == 2 or symbol! == 5 or symbol! == 10 or symbol! == 14
+        -> if { 32 => width! }
+    symbol! == 6 or symbol! == 7 or symbol! == 11
+        -> if { 64 => width! }
+    symbol! == 12 or symbol! == 13 -> if { context.pointerBitWidth => width! }
+    width!
+}
+
+# Concrete arithmetic uses the same canonical callback role type as emission.
+# Classes are 0 deferred, 1 numeric scalar, and 2 concrete non-numeric storage.
+irNumericStorageClass node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
+    node.typeId => typeId!
+    node.kind == 5 and node.symbol >= 0 and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[node.sourceModule] => range
+            node.symbol < range.symbolCount
+                and context.symbols[range.symbolStart + node.symbol].kind == 35
+                -> if {
+                    0 => pipelineIndex!
+                    false => resolved!
+                    pipelineIndex! < (context.streamPlan.pipelines -> len) and not resolved!
+                        -> while {
+                            context -> emitterContext.streamCallbackInput(pipelineIndex!, node.sourceModule, node.symbol) => input
+                            input.typeId >= 0 -> if {
+                                input.typeId => typeId!
+                                true => resolved!
+                            }
+                            pipelineIndex! + 1 => pipelineIndex!
+                        }
+                }
+        }
+    typeId! >= 0 and typeId! < (context.types -> len)
+        -> if {
+            context.types -> typeIds.materializedReadTypeId(typeId!) => typeId!
+            typeId! >= 0 and typeId! < (context.types -> len)
+                -> if {
+                    context.types[typeId!] => valueType
+                    not valueType.containsParameter -> if {
+                        valueType.kind == 1 and valueType.origin == 1
+                            and ((valueType.symbol >= 2 and valueType.symbol <= 14)
+                            or (valueType.symbol >= 19 and valueType.symbol <= 22)) => numeric
+                        numeric -> if { 1 -> return }
+                        2 -> return
+                    }
+                }
+        }
+    0
+}
+
+irNodeHasSetType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    (node.typeKind == 7
+        and node.typeOrigin == 4
+        and node.typeSymbol == 5) => isSet!
+    node.typeId => typeId!
+    not isSet!
+        and typeId! >= 0
+        and typeId! < (context.types -> len)
+        and context.types[typeId!].kind == 8
+        -> if { context.types[typeId!].first => typeId! }
+    not isSet! and typeId! >= 0 and typeId! < (context.types -> len)
+        -> if {
+            context.types[typeId!] => canonicalType
+            canonicalType.kind == 7
+                and canonicalType.origin == 4
+                and canonicalType.symbol == 5
+                -> if { true => isSet! }
+        }
+    isSet!
+}
+
+irAggregateStorageClass node: typedIr.TypedIrNode -> Int {
+    0 => storageClass!
+    node -> isDynamicArrayType -> if { 1 => storageClass! }
+    node -> isTextType -> if { 2 => storageClass! }
+    node -> isSliceArrayType -> if { 3 => storageClass! }
+    node -> isFixedArrayType -> if { 4 => storageClass! }
+    node -> isDictionaryType -> if { 5 => storageClass! }
+    node -> isGenericEnumType -> if { 6 => storageClass! }
+    storageClass!
+}
+
+astNodeHasDirectChildKind context: ref emitterContext.EmitContext, sourceModule: Int, astNode: Int, childKind: Int -> Bool {
+    false => found!
+    sourceModule >= 0 and sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[sourceModule] => sourceRange
+            0 => candidateIndex!
+            not found! and candidateIndex! < sourceRange.astCount
+                -> while {
+                    context.nodes[sourceRange.astStart + candidateIndex!] => candidate
+                    candidate.kind == childKind and candidate.parent == astNode
+                        -> if { true => found! }
+                    candidateIndex! + 1 => candidateIndex!
+                }
+        }
+    found!
+}
+
+concreteFunctionsBySymbol context: ref emitterContext.EmitContext -> [Int; ~] {
+    [Int; ~] => functions!
+    0 => symbolIndex!
+    symbolIndex! < (context.symbols -> len) -> while {
+        functions! -> push(-1)
+        symbolIndex! + 1 => symbolIndex!
+    }
+    0 => candidateIndex!
+    candidateIndex! < (context.ir -> len) -> while {
+        context.ir[candidateIndex!] => candidate
+        candidate.kind == 0
+            and not (context -> emitterContext.isGenericInstance(candidateIndex!))
+            and candidate.sourceModule >= 0
+            and candidate.sourceModule < (context.ranges -> len)
+            and candidate.symbol >= 0
+            -> if {
+                context.ranges[candidate.sourceModule].symbolStart + candidate.symbol
+                    => globalSymbol
+                globalSymbol >= 0 and globalSymbol < (functions! -> len)
+                    -> if { candidateIndex! => functions![globalSymbol] }
+            }
+        candidateIndex! + 1 => candidateIndex!
+    }
+    functions!
+}
+
+# Typed IR functions and the synthetic entry are contiguous. Materialize their
+# owner once so invariant checks and emitter indexes share the same O(n)
+# function-boundary contract instead of rediscovering ranges per node.
+irFunctionOwners context: ref emitterContext.EmitContext -> [Int; ~] {
+    [Int; ~] => owners!
+    -1 => owner!
+    0 => index!
+    index! < (context.ir -> len) -> while {
+        context.ir[index!].kind == 0 or context.ir[index!].kind == 11
+            -> if { index! => owner! }
+        owners! -> push(owner!)
+        index! + 1 => index!
+    }
+    owners!
+}
+
+concreteCallFunctionIndex context: ref emitterContext.EmitContext, callIndex: Int, functions: ref [Int; ~] -> Int {
+    context -> emitterContext.genericFunctionForCall(callIndex) => genericFunction
+    genericFunction >= 0 -> if { genericFunction -> return }
+    context.ir[callIndex] => call
+    -1 => resolved!
+    call.targetModule >= 0
+        and call.targetModule < (context.ranges -> len)
+        and call.symbol >= 0
+        -> if {
+            context.ranges[call.targetModule].symbolStart + call.symbol => globalSymbol
+            globalSymbol >= 0 and globalSymbol < (functions -> len)
+                -> if { functions[globalSymbol] => resolved! }
+        }
+    resolved!
+}
+
+# A value-producing enum or numeric-subject match cannot retain provisional
+# Unit when every continuing arm has the same canonical non-Unit terminal.
+# Empty or differently typed arms keep the match in statement position.
+matchHasCompleteCanonicalNonUnitTerminals context: ref emitterContext.EmitContext, matchIndex: Int -> Bool {
+    false => foundValue!
+    true => complete!
+    -1 => resultTypeId!
+    context.ir[matchIndex].operand1 => armIndex!
+    armIndex! >= 0 and armIndex! < (context.ir -> len) and complete!
+        -> while {
+            context.ir[armIndex!] => arm
+            arm.kind != 19 or arm.parent != matchIndex -> if {
+                false => complete!
+            } else {
+                armIndex! -> typedIr.matchArmTerminalValueIndex(context.ir) => terminalIndex
+                terminalIndex < 0 -> if {
+                    false => complete!
+                } else {
+                    context.ir[terminalIndex] => terminal
+                    terminal.kind != 23
+                        and not (terminalIndex -> typedIr.terminalValueReturnsFromArm(armIndex!, context.ir))
+                        -> if {
+                            terminal.typeId >= 0
+                                and not (terminal.typeOrigin == 1 and terminal.typeSymbol == 0)
+                                -> if {
+                                    resultTypeId! < 0 -> if { terminal.typeId => resultTypeId! } else {
+                                        terminal.typeId != resultTypeId! -> if { false => complete! }
+                                    }
+                                    true => foundValue!
+                                } else {
+                                    false => complete!
+                                }
+                        }
+                }
+            }
+            arm.nextOperand => armIndex!
+        }
+    complete! and foundValue!
+}
+
+runtimeParameterCount context: ref emitterContext.EmitContext, functionIndex: Int -> Int {
+    0 => count!
+    functionIndex >= 0 -> if {
+        context.ir[functionIndex].operand1 => parameterIndex!
+        0 => parameterOrdinal!
+        parameterIndex! >= 0 -> while {
+            context.ir[parameterIndex!] => parameter
+            false => compileTimeValueParameter!
+            parameter.sourceModule >= 0
+                and parameter.sourceModule < (context.ranges -> len)
+                and parameter.symbol >= 0
+                and parameter.symbol < context.ranges[parameter.sourceModule].symbolCount
+                -> if {
+                    context.symbols[context.ranges[parameter.sourceModule].symbolStart + parameter.symbol].kind == 32
+                        -> if { true => compileTimeValueParameter! }
+                }
+            not compileTimeValueParameter! -> if { count! + 1 => count! }
+            parameterOrdinal! == 0 -> if {
+                context.ir[functionIndex].nextOperand => parameterIndex!
+            } else {
+                parameter.nextOperand => parameterIndex!
+            }
+            parameterOrdinal! + 1 => parameterOrdinal!
+        }
+    }
+    count!
+}
+
+linkedCallArgumentCount context: ref emitterContext.EmitContext, callIndex: Int, maximum: Int -> Int {
+    0 => count!
+    context.ir[callIndex].operand0 => argumentIndex!
+    false => targetHasBlockRole!
+    context.ir[callIndex] => call
+    call.targetModule >= 0
+        and call.targetModule < (context.ranges -> len)
+        and call.symbol >= 0
+        and call.symbol < context.ranges[call.targetModule].symbolCount
+        -> if {
+            context.ranges[call.targetModule].symbolStart + call.symbol => targetGlobalSymbol
+            targetGlobalSymbol >= 0
+                and targetGlobalSymbol < (context.symbols -> len)
+                and context.symbols[targetGlobalSymbol].blockTypeNode >= 0
+                -> if { true => targetHasBlockRole! }
+        }
+    # Count one slot beyond the concrete ABI so an extra linked argument
+    # cannot be hidden by the expected-count bound. A block function is the
+    # exception: its callback root intentionally follows the last runtime
+    # argument in the same chain, so stop at the concrete ABI boundary.
+    argumentIndex! >= 0
+        and argumentIndex! < (context.ir -> len)
+        and count! <= maximum
+        and (not targetHasBlockRole! or count! < maximum)
+        -> while {
+            count! + 1 => count!
+            context.ir[argumentIndex!].nextOperand => argumentIndex!
+        }
+    count!
+}
+
+implicitFlowArgumentCount context: ref emitterContext.EmitContext, callIndex: Int, linkedCount: Int, expectedCount: Int -> Int {
+    0 => count!
+    callIndex => ownerChildIndex!
+    context.ir[callIndex].parent => ownerIndex!
+    true => ownerOpen!
+    ownerIndex! >= 0 and ownerIndex! < (context.ir -> len) and ownerOpen!
+        -> while {
+            context.ir[ownerIndex!] => owner
+            owner.kind == 6
+                and (owner.opcode == -207
+                or owner.opcode == -208
+                or owner.opcode == -209)
+                -> if {
+                    invariantRules.implicitFlowArgumentCount(true, ownerChildIndex! == owner.operand0, linkedCount, expectedCount) => count!
+                    false => ownerOpen!
+                } else {
+                    owner.kind == 39
+                        and owner.parent >= 0
+                        and owner.parent < (context.ir -> len)
+                        and (context.ir[owner.parent].kind == 37 or context.ir[owner.parent].kind == 38)
+                        -> if {
+                            invariantRules.implicitFlowArgumentCount(true, false, linkedCount, expectedCount) => count!
+                            false => ownerOpen!
+                        } else {
+                            ownerIndex! => ownerChildIndex!
+                            owner.parent => ownerIndex!
+                        }
+                }
+        }
+    count!
+}
+
+enumTypeDeclaresPattern context: ref emitterContext.EmitContext, subjectTypeId: Int, useSourceModule: Int, patternTokenIndex: Int -> Bool {
+    false => declared!
+    subjectTypeId >= 0
+        and subjectTypeId < (context.types -> len)
+        and useSourceModule >= 0
+        and useSourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[useSourceModule] => useRange
+            patternTokenIndex >= 0 and patternTokenIndex < useRange.tokenCount
+                -> if {
+                    context.tokens[useRange.tokenStart + patternTokenIndex] => patternToken
+                    context.types[subjectTypeId] => subjectType
+                    subjectType.kind == 7
+                        and subjectType.origin == 4
+                        and (subjectType.symbol == 0 or subjectType.symbol == 1)
+                        -> if {
+                            subjectType.symbol == 0 -> if {
+                                patternToken.span.length == 4 -> if {
+                                    context.sources[useSourceModule] -> byte(patternToken.span.start) => byte0
+                                    context.sources[useSourceModule] -> byte(patternToken.span.start + 1) => byte1
+                                    context.sources[useSourceModule] -> byte(patternToken.span.start + 2) => byte2
+                                    context.sources[useSourceModule] -> byte(patternToken.span.start + 3) => byte3
+                                    (byte0 == 78 and byte1 == 111 and byte2 == 110 and byte3 == 101)
+                                        or (byte0 == 83 and byte1 == 111 and byte2 == 109 and byte3 == 101)
+                                        -> if { true => declared! }
+                                }
+                            } else {
+                                patternToken.span.length == 2 -> if {
+                                    (context.sources[useSourceModule] -> byte(patternToken.span.start)) == 79
+                                        and (context.sources[useSourceModule] -> byte(patternToken.span.start + 1)) == 107
+                                        -> if { true => declared! }
+                                }
+                                patternToken.span.length == 3 -> if {
+                                    (context.sources[useSourceModule] -> byte(patternToken.span.start)) == 69
+                                        and (context.sources[useSourceModule] -> byte(patternToken.span.start + 1)) == 114
+                                        and (context.sources[useSourceModule] -> byte(patternToken.span.start + 2)) == 114
+                                        -> if { true => declared! }
+                                }
+                            }
+                        }
+                    subjectType.kind == 1 -> if {
+                        subjectType.module => ownerSourceModule!
+                        subjectType.origin == 2 -> if {
+                            subjectType.module >= 0 and subjectType.module < (context.modules -> len)
+                                -> if {
+                                    context.modules[subjectType.module].sourceIndex => ownerSourceModule!
+                                } else { -1 => ownerSourceModule! }
+                        }
+                        ownerSourceModule! >= 0 and ownerSourceModule! < (context.ranges -> len)
+                            -> if {
+                                context.ranges[ownerSourceModule!] => ownerRange
+                                -1 => ownerDeclarationAst!
+                                subjectType.symbol >= 0 and subjectType.symbol < ownerRange.symbolCount
+                                    -> if {
+                                        context.symbols[ownerRange.symbolStart + subjectType.symbol].astNode => ownerDeclarationAst!
+                                    }
+                                0 => declarationSearch!
+                                ownerDeclarationAst! >= 0 and declarationSearch! < ownerRange.astCount and not declared!
+                                    -> while {
+                                        context.nodes[ownerRange.astStart + declarationSearch!] => declaration
+                                        declaration.kind == 27
+                                            and declaration.parent == ownerDeclarationAst!
+                                            and declaration.payloadToken >= 0
+                                            -> if {
+                                                context.tokens[ownerRange.tokenStart + declaration.payloadToken] => declarationToken
+                                                declarationToken.span.length == patternToken.span.length => sameName!
+                                                UIntSize(0) => nameByte!
+                                                sameName! and nameByte! < patternToken.span.length
+                                                    -> while {
+                                                        context.sources[ownerSourceModule!] -> byte(declarationToken.span.start + nameByte!) => declarationByte
+                                                        context.sources[useSourceModule] -> byte(patternToken.span.start + nameByte!) => patternByte
+                                                        declarationByte != patternByte -> if { false => sameName! }
+                                                        nameByte! + 1 => nameByte!
+                                                    }
+                                                sameName! -> if { true => declared! }
+                                            }
+                                        declarationSearch! + 1 => declarationSearch!
+                                    }
+                            }
+                    }
+                }
+        }
+    declared!
+}
+
+typedControlTerminates controlIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    controlIndex >= 0 and controlIndex < (context.ir -> len)
+        -> unless { false -> return }
+    context.ir[controlIndex] => control
+    control.kind == 23 -> if { true -> return }
+    control.kind == 19 -> if {
+        control.operand1 -> typedControlTerminates(context) => regionTerminates
+        regionTerminates -> return
+    }
+    control.kind == 18 -> if {
+        (control.operand1 -> typedControlTerminates(context))
+            and (control.nextOperand -> typedControlTerminates(context))
+            -> if { true -> return }
+    }
+    control.kind == 27 -> if {
+        false => hasArm!
+        true => allArmsTerminate!
+        control.operand1 => armIndex!
+        armIndex! >= 0 and armIndex! < (context.ir -> len)
+            -> while {
+                true => hasArm!
+                context.ir[armIndex!] => arm
+                armIndex! => armRegion!
+                arm.operand1 >= 0
+                    and arm.operand1 < (context.ir -> len)
+                    and context.ir[arm.operand1].kind == 19
+                    -> if { arm.operand1 => armRegion! }
+                armRegion! -> typedControlTerminates(context) => armTerminates
+                armTerminates -> unless { false => allArmsTerminate! }
+                arm.nextOperand => armIndex!
+            }
+        hasArm! and allArmsTerminate! -> if { true -> return }
+    }
+    control.kind == 34 -> if {
+        false => hasArm!
+        false => hasElse!
+        true => allArmsTerminate!
+        control.operand1 => armIndex!
+        true => armOpen!
+        armIndex! >= 0 and armIndex! < (context.ir -> len) and armOpen!
+            -> while {
+                context.ir[armIndex!] => arm
+                arm.parent != controlIndex -> if {
+                    false => armOpen!
+                } else {
+                    true => hasArm!
+                    armIndex! => armRegion!
+                    arm.kind == 19 and arm.operand1 >= 0
+                        -> if { arm.operand1 => armRegion! } else { true => hasElse! }
+                    armRegion! -> typedControlTerminates(context) => armTerminates
+                    armTerminates -> unless { false => allArmsTerminate! }
+                    arm.nextOperand => armIndex!
+                }
+            }
+        hasArm! and hasElse! and allArmsTerminate! -> if { true -> return }
+    }
+    false
+}
+
+# Typed IR must be structurally valid before any LLVM text is emitted. These
+# codes identify the producer invariant, not an LLVM parser failure.
+# Slice descriptors do not encode element width. Validate semantic element
+# identity before an ABI-compatible header can hide an invalid typed conversion.
+arrayCallElementMismatch context: ref emitterContext.EmitContext, callIndex: Int, functionIndex: Int -> Int {
+    context.ir[functionIndex].operand1 => parameterIndex!
+    context.ir[callIndex].operand0 => argumentIndex!
+    context -> runtimeParameterCount(functionIndex) => expectedCount
+    context -> linkedCallArgumentCount(callIndex, expectedCount) => linkedCount
+    context -> implicitFlowArgumentCount(callIndex, linkedCount, expectedCount) => implicitCount
+    0 => parameterOrdinal!
+    0 => runtimeOrdinal!
+    0 => mismatch!
+    parameterIndex! >= 0 and argumentIndex! >= 0 and mismatch! == 0
+        -> while {
+            context.ir[parameterIndex!] => parameter
+            false => compileTimeParameter!
+            parameter.sourceModule >= 0 and parameter.symbol >= 0
+                -> if {
+                    context.ranges[parameter.sourceModule] => parameterRange
+                    context.symbols[parameterRange.symbolStart + parameter.symbol].kind == 32
+                        -> if { true => compileTimeParameter! }
+                }
+            not compileTimeParameter! -> if {
+                # A worker supplies the implicit role slot. Explicit captures
+                # still align with their own subsequent runtime parameter.
+                runtimeOrdinal! >= implicitCount -> if {
+                    context.types -> typeIds.materializedReadTypeId(parameter.typeId) => expectedType
+                    context.types -> typeIds.materializedReadTypeId(context.ir[argumentIndex!].typeId) => actualType
+                    expectedType >= 0 and actualType >= 0
+                        and expectedType < (context.types -> len)
+                        and actualType < (context.types -> len)
+                        -> if {
+                            context.types[expectedType] => expected
+                            context.types[actualType] => actual
+                            (expected.kind == 2 or expected.kind == 3 or expected.kind == 4 or expected.kind == 12)
+                                and (actual.kind == 2 or actual.kind == 3 or actual.kind == 4 or actual.kind == 12)
+                                and expected.first >= 0 and actual.first >= 0
+                                and not context.types[expected.first].containsParameter
+                                and not context.types[actual.first].containsParameter
+                                and expected.first != actual.first
+                                -> if { runtimeOrdinal! + 1 => mismatch! }
+                        }
+                    context.ir[argumentIndex!].nextOperand => argumentIndex!
+                }
+                runtimeOrdinal! + 1 => runtimeOrdinal!
+            }
+            parameterOrdinal! == 0 -> if {
+                context.ir[functionIndex].nextOperand => parameterIndex!
+            } else {
+                parameter.nextOperand => parameterIndex!
+            }
+            parameterOrdinal! + 1 => parameterOrdinal!
+        }
+    mismatch!
+}
+
+# A parameter-dependent call belongs to the unspecialized template until its
+# concrete body supplies the receiver owner. Concrete instances never qualify:
+# every unresolved instance still receives the ordinary call-identity error.
+isDeferredTemplateReceiverCall context: ref emitterContext.EmitContext, irIndex: Int -> Bool {
+    context.ir[irIndex] => call
+    false => deferred!
+    call.operand0 >= 0 and call.operand0 < (context.ir -> len)
+        -> if {
+            context.ir[call.operand0].typeId => receiverType
+            receiverType >= 0 and receiverType < (context.types -> len)
+                and context.types[receiverType].containsParameter
+                -> if {
+                    call.parent => owner!
+                    owner! >= 0 and owner! < (context.ir -> len)
+                        and context.ir[owner!].kind != 0
+                        and context.ir[owner!].kind != 11
+                        -> while { context.ir[owner!].parent => owner! }
+                    owner! >= 0 and owner! < (context.ir -> len)
+                        and context.ir[owner!].kind == 0
+                        and not (context -> emitterContext.isGenericInstance(owner!))
+                        -> if {
+                            context.ir[owner!].operand1 => parameter!
+                            true => firstParameter!
+                            parameter! >= 0 and parameter! < (context.ir -> len)
+                                and not deferred!
+                                -> while {
+                                    context.ir[parameter!].typeId => parameterType
+                                    parameterType >= 0 and parameterType < (context.types -> len)
+                                        and context.types[parameterType].containsParameter
+                                        -> if { true => deferred! }
+                                    firstParameter! -> if {
+                                        context.ir[owner!].nextOperand => parameter!
+                                        false => firstParameter!
+                                    } else {
+                                        context.ir[parameter!].nextOperand => parameter!
+                                    }
+                                }
+                        }
+                }
+        }
+    deferred!
+}
+struct StreamJoinInputContract {
+    code: Int
+    fieldOrdinal: Int
+}
+streamJoinInputContract context: ref emitterContext.EmitContext, join: typedIr.TypedIrNode -> StreamJoinInputContract {
+    join.operand0 < 0 or join.operand0 >= (context.ir -> len)
+        -> if { StreamJoinInputContract { code: 1, fieldOrdinal: -1 } -> return }
+    context.types -> typeIds.materializedReadTypeId(context.ir[join.operand0].typeId) => productType
+    productType < 0 or productType >= (context.types -> len)
+        -> if { StreamJoinInputContract { code: 1, fieldOrdinal: -1 } -> return }
+    context.types[productType].kind != 10 or context.types[productType].length < 2
+        -> if { StreamJoinInputContract { code: 1, fieldOrdinal: -1 } -> return }
+    -1 => firstStreamType!
+    0 => fieldIndex!
+    fieldIndex! < (context.fields -> len) -> while {
+        context.fields[fieldIndex!] => field
+        field.ownerType == productType and field.status == 0
+            -> if {
+                context.types -> typeIds.materializedReadTypeId(field.fieldType) => fieldType
+                fieldType < 0 or fieldType >= (context.types -> len)
+                    -> if { StreamJoinInputContract { code: 2, fieldOrdinal: field.ordinal } -> return }
+                context.types[fieldType] => streamType
+                streamType.kind != 7 or streamType.origin != 4 or (streamType.symbol != 3 and streamType.symbol != 4)
+                    -> if { StreamJoinInputContract { code: 2, fieldOrdinal: field.ordinal } -> return }
+                firstStreamType! < 0 -> if { fieldType => firstStreamType! } else {
+                    (join.opcode == 1 or join.opcode == 2) and fieldType != firstStreamType!
+                        -> if { StreamJoinInputContract { code: 3, fieldOrdinal: field.ordinal } -> return }
+                }
+            }
+        fieldIndex! + 1 => fieldIndex!
+    }
+    StreamJoinInputContract { code: 0, fieldOrdinal: -1 }
+}
+public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, functions: ref [Int; ~] -> Int {
+    context.ir[irIndex] => node
+    node.kind == 43 -> if {
+        context -> streamJoinInputContract(node) => joinContract
+        joinContract.code != 0 -> if { 57 -> return }
+    }
+    node.kind == 17 and node.operand0 >= 0 and node.operand0 < (context.ir -> len)
+        and context.ir[node.operand0].kind == 43 -> if {
+            context -> streamJoinInputContract(context.ir[node.operand0]) => joinContract
+            joinContract.code != 0 -> if { 0 -> return }
+        }
+    context.ir -> len => irCount
+    0 => code!
+    node.kind == 7 -> if {
+        node.operand0 < 0 or node.operand0 >= irCount
+            -> if {
+                1 => code!
+            } else {
+                context.ir[node.operand0] => operand
+                operand.kind == 9 and operand.opcode == -1 -> if { 2 => code! }
+            }
+    }
+    node.kind == 8 -> if {
+        false => enumPatternMarker!
+        false => subjectConditionMarker!
+        node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len)
+            -> if {
+                context.ranges[node.sourceModule] => binaryRange
+                node.astNode >= 0 and node.astNode < binaryRange.astCount
+                    -> if {
+                        context.nodes[binaryRange.astStart + node.astNode] => binaryAst
+                        # An enum pattern is represented by the parser's kind-70
+                        # wrapper and a direct kind-59 child. Ordinary
+                        # subject-when comparisons share the same AST wrapper but
+                        # retain both binary operands, so they are not pattern nodes.
+                        node.operand1 < 0
+                            and binaryAst.kind == 70
+                            and binaryAst.parent >= 0
+                            and context.nodes[binaryRange.astStart + binaryAst.parent].kind == 58
+                            and (context -> astNodeHasDirectChildKind(node.sourceModule, node.astNode, 59))
+                            -> if {
+                                true => enumPatternMarker!
+                            }
+                        binaryAst.kind == 70
+                            and binaryAst.parent >= 0
+                            and context.nodes[binaryRange.astStart + binaryAst.parent].kind == 58
+                            and not (context -> astNodeHasDirectChildKind(node.sourceModule, node.astNode, 59))
+                            -> if {
+                                true => subjectConditionMarker!
+                            }
+                    }
+            }
+        node.operand0 < 0 or node.operand0 >= irCount
+            -> if { 3 => code! }
+        subjectConditionMarker! and code! == 0 and (node.operand1 < 0 or node.operand1 >= irCount)
+            -> if { 19 => code! }
+        subjectConditionMarker!
+            and code! == 0
+            and node.parent >= 0
+            and node.parent < irCount
+            and context.ir[node.parent].kind == 19
+            and context.ir[node.parent].parent >= 0
+            and context.ir[node.parent].parent < irCount
+            and context.ir[context.ir[node.parent].parent].kind == 34
+            and node.operand0 != context.ir[context.ir[node.parent].parent].operand0
+            -> if { 19 => code! }
+        not enumPatternMarker! and not subjectConditionMarker! and code! == 0 and (node.operand1 < 0 or node.operand1 >= irCount)
+            -> if { 4 => code! }
+        not enumPatternMarker! and code! == 0 and not (node.opcode -> binaryOpcodeValid)
+            -> if { 5 => code! }
+        not enumPatternMarker! and code! == 0 -> if {
+            context.ir[node.operand0] => left
+            context.ir[node.operand1] => right
+            left.kind == 9 and left.opcode == -1 -> if { 6 => code! }
+            code! == 0 and right.kind == 9 and right.opcode == -1
+                -> if { 7 => code! }
+        }
+        enumPatternMarker! and code! == 0 and context.ir[node.operand0].kind != 29
+            -> if { 11 => code! }
+    }
+    node.kind == 13 -> if {
+        node.operand0 < 0 or node.operand0 >= irCount
+            -> if { 8 => code! }
+        code! == 0 and node.operand0 >= 0 and node.operand0 < irCount
+            -> if {
+                context.ir[node.operand0].typeId => memberOwnerTypeId!
+                memberOwnerTypeId! < 0 -> if { 20 => code! }
+                memberOwnerTypeId! >= (context.types -> len)
+                    -> if { 20 => code! }
+                code! == 0 and memberOwnerTypeId! >= 0 and (context.types[memberOwnerTypeId!].kind == 8 or context.types[memberOwnerTypeId!].kind == 6)
+                    -> if {
+                        context.types[memberOwnerTypeId!].first => memberOwnerTypeId!
+                    }
+                memberOwnerTypeId! >= (context.types -> len)
+                    -> if { 20 => code! }
+                # Structural products (kind 10) own fields in the recursive type
+                # arena rather than in a source module's nominal symbol table.
+                # They are canonical member owners and lower through extractvalue.
+                code! == 0
+                    and memberOwnerTypeId! >= 0
+                    and context.types[memberOwnerTypeId!].kind != 1
+                    and context.types[memberOwnerTypeId!].kind != 10
+                    -> if { 20 => code! }
+                # Sealed product fields carry an ordinal and exact canonical type.
+                # Unknown labels remain unresolved after method/call lowering and
+                # must be rejected before any LLVM field extraction is emitted.
+                code! == 0 and memberOwnerTypeId! >= 0 and context.types[memberOwnerTypeId!].kind == 10
+                    -> if {
+                        false => productMemberValid!
+                        0 => productMemberFieldIndex!
+                        productMemberFieldIndex! < (context.fields -> len) and not productMemberValid!
+                            -> while {
+                                context.fields[productMemberFieldIndex!] => productMemberField
+                                productMemberField.status == 0
+                                    and productMemberField.ownerType == memberOwnerTypeId!
+                                    and productMemberField.ordinal == node.symbol
+                                    and productMemberField.fieldType == node.typeId
+                                    -> if { true => productMemberValid! }
+                                productMemberFieldIndex! + 1 => productMemberFieldIndex!
+                            }
+                        not productMemberValid! -> if { 20 => code! }
+                    }
+                code! == 0 and memberOwnerTypeId! >= 0 and context.types[memberOwnerTypeId!].kind == 1
+                    -> if {
+                        context.types[memberOwnerTypeId!] => memberOwnerType
+                        memberOwnerType.module => memberOwnerSourceModule!
+                        memberOwnerType.origin == 2 -> if {
+                            memberOwnerType.module < 0 or memberOwnerType.module >= (context.modules -> len)
+                                -> if {
+                                    -1 => memberOwnerSourceModule!
+                                } else {
+                                    context.modules[memberOwnerType.module].sourceIndex => memberOwnerSourceModule!
+                                }
+                        }
+                        memberOwnerSourceModule! < 0 or memberOwnerSourceModule! >= (context.ranges -> len)
+                            -> if { 20 => code! }
+                    }
+            }
+    }
+    node.kind == 17 -> if {
+        node.operand0 < 0 or node.operand0 >= irCount
+            -> if { 9 => code! }
+    }
+    node.kind == 18 -> if {
+        node.operand0 < 0 or node.operand0 >= irCount
+            -> if { 10 => code! }
+        code! == 0
+            and node.sourceModule >= 0
+            and node.sourceModule < (context.ranges -> len)
+            -> if {
+                context.ranges[node.sourceModule] => inverseRange
+                node.astNode >= 0 and node.astNode < inverseRange.astCount
+                    -> if {
+                        context.nodes[inverseRange.astStart + node.astNode] => inverseAst
+                        inverseAst.operatorKind == -28 => astInverse
+                        node.opcode == -28 => irInverse
+                        (astInverse and not irInverse) or (not astInverse and irInverse)
+                            -> if { 17 => code! }
+                    }
+            }
+    }
+    code! == 0 and node.kind == 34 and node.operand0 == irIndex
+        -> if { 36 => code! }
+    node.kind == 26 -> if {
+        (node -> enumVariantTag(context)) < 0 -> if { 12 => code! }
+    }
+    # LLVM enum lowering extracts a tag and payload from operand0. A missing,
+    # container, struct, or otherwise non-enum canonical subject can still
+    # look executable in shallow tests but will eventually corrupt ABI and
+    # ownership behavior.
+    code! == 0 and node.kind == 27 -> if {
+        false => enumMatchSubjectValid!
+        node.operand0 >= 0 and node.operand0 < irCount
+            -> if {
+                context.ir[node.operand0].typeId => enumMatchSubjectTypeId
+                enumMatchSubjectTypeId >= 0 and enumMatchSubjectTypeId < (context.types -> len)
+                    -> if {
+                        context.types[enumMatchSubjectTypeId] => enumMatchSubjectType
+                        enumMatchSubjectType.kind == 7
+                            and enumMatchSubjectType.origin == 4
+                            and (enumMatchSubjectType.symbol == 0 or enumMatchSubjectType.symbol == 1)
+                            -> if { true => enumMatchSubjectValid! }
+                        enumMatchSubjectType.kind == 1 -> if {
+                            enumMatchSubjectType.module => enumMatchOwnerSource!
+                            enumMatchSubjectType.origin == 2 -> if {
+                                enumMatchSubjectType.module >= 0 and enumMatchSubjectType.module < (context.modules -> len)
+                                    -> if {
+                                        context.modules[enumMatchSubjectType.module].sourceIndex => enumMatchOwnerSource!
+                                    } else { -1 => enumMatchOwnerSource! }
+                            }
+                            enumMatchOwnerSource! >= 0 and enumMatchOwnerSource! < (context.ranges -> len)
+                                -> if {
+                                    context.ranges[enumMatchOwnerSource!] => enumMatchOwnerRange
+                                    enumMatchSubjectType.symbol >= 0 and enumMatchSubjectType.symbol < enumMatchOwnerRange.symbolCount
+                                        -> if {
+                                            context.symbols[enumMatchOwnerRange.symbolStart + enumMatchSubjectType.symbol] => enumMatchDeclaration
+                                            enumMatchDeclaration.astNode >= 0 and context.nodes[enumMatchOwnerRange.astStart + enumMatchDeclaration.astNode].kind == 4
+                                                -> if { true => enumMatchSubjectValid! }
+                                        }
+                                }
+                        }
+                    }
+            }
+        not enumMatchSubjectValid! -> if { 21 => code! }
+    }
+    # A nominal enum alone is insufficient: every written arm variant must
+    # belong to the selected subject type. Otherwise payload extraction can use
+    # the wrong ABI even though both values happen to be enums.
+    code! == 0
+        and node.kind == 27
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[node.sourceModule] => enumVariantUseRange
+            context.ir[node.operand0].typeId => enumVariantCheckedSubjectType
+            0 => enumVariantPatternSearch!
+            enumVariantPatternSearch! < enumVariantUseRange.astCount
+                -> while {
+                    context.nodes[enumVariantUseRange.astStart + enumVariantPatternSearch!] => enumVariantPatternCandidate
+                    enumVariantPatternCandidate.parent => enumVariantPatternOwner!
+                    enumVariantPatternOwner! >= 0
+                        and context.nodes[enumVariantUseRange.astStart + enumVariantPatternOwner!].kind == 70
+                        -> if {
+                            context.nodes[enumVariantUseRange.astStart + enumVariantPatternOwner!].parent => enumVariantPatternOwner!
+                        }
+                    enumVariantPatternCandidate.kind == 59
+                        and enumVariantPatternCandidate.payloadToken >= 0
+                        and enumVariantPatternOwner! >= 0
+                        and context.nodes[enumVariantUseRange.astStart + enumVariantPatternOwner!].kind == 58
+                        and context.nodes[enumVariantUseRange.astStart + enumVariantPatternOwner!].parent == node.astNode
+                        -> if {
+                            context -> enumTypeDeclaresPattern(enumVariantCheckedSubjectType, node.sourceModule, enumVariantPatternCandidate.payloadToken) => enumVariantPatternDeclared
+                            not enumVariantPatternDeclared -> if { 46 => code! }
+                        }
+                    enumVariantPatternSearch! + 1 => enumVariantPatternSearch!
+                }
+        }
+    # A canonical enum type is not enough: a name subject must resolve to a
+    # parameter ABI value or retain its concrete producer link. Otherwise LLVM
+    # references an SSA name that is never defined.
+    code! == 0 and node.kind == 27 and node.operand0 >= 0 and node.operand0 < irCount
+        -> if {
+            context.ir[node.operand0] => enumValueSubject
+            enumValueSubject.kind == 0
+                or enumValueSubject.kind == 1
+                or enumValueSubject.kind == 10
+                or enumValueSubject.kind == 11
+                or enumValueSubject.kind == 17
+                or (enumValueSubject.kind >= 19 and enumValueSubject.kind <= 25)
+                -> if { 24 => code! }
+        }
+    # Control-transfer, declaration, and region nodes do not materialize LLVM
+    # values even when stale contextual typing gives them an enum type.
+    code! == 0 and node.kind == 27 and node.operand0 >= 0 and node.operand0 < irCount
+        -> if {
+            context.ir[node.operand0] => enumValueSubject
+            enumValueSubject.kind == 5 and enumValueSubject.operand0 < 0
+                -> if {
+                    node.parent => enumValueOwner!
+                    enumValueOwner! >= 0 and context.ir[enumValueOwner!].kind != 0 and context.ir[enumValueOwner!].kind != 11
+                        -> while {
+                            context.ir[enumValueOwner!].parent => enumValueOwner!
+                        }
+                    enumValueOwner! < 0
+                        or enumValueSubject.sourceModule != context.ir[enumValueOwner!].sourceModule
+                        or (context -> parameterIndexForFunction(enumValueOwner!, enumValueSubject.symbol)) < 0
+                        -> if { 23 => code! }
+                }
+        }
+    # A value-producing `if` needs concrete then/else region results before
+    # result-slot emission. Missing region values otherwise reach
+    # regionResultValueIndex as an out-of-bounds lookup and crash the compiler.
+    code! == 0
+        and node.kind == 18
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+        and node.nextOperand >= 0 -> if {
+            true => valueIfBranchesValid!
+            node.operand1 < 0
+                or node.operand1 >= irCount
+                or context.ir[node.operand1].kind != 19
+                or context.ir[node.operand1].operand1 < 0
+                or context.ir[node.operand1].operand1 >= irCount
+                -> if { false => valueIfBranchesValid! }
+            node.nextOperand < 0
+                or node.nextOperand >= irCount
+                or context.ir[node.nextOperand].kind != 19
+                or context.ir[node.nextOperand].operand1 < 0
+                or context.ir[node.nextOperand].operand1 >= irCount
+                -> if { false => valueIfBranchesValid! }
+            not valueIfBranchesValid! -> if { 27 => code! }
+        }
+    # A value-producing `if` also needs one canonical type for its result slot
+    # and both materialized branch values. Integer branches may still carry a
+    # contextual literal identity because the slot width performs that
+    # conversion explicitly; aggregate identities must agree exactly.
+    code! == 0
+        and node.kind == 18
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+        and node.operand1 >= 0
+        and node.operand1 < irCount
+        and node.nextOperand >= 0
+        and node.nextOperand < irCount
+        and context.ir[node.operand1].kind == 19
+        and context.ir[node.nextOperand].kind == 19
+        and context.ir[node.operand1].operand1 >= 0
+        and context.ir[node.operand1].operand1 < irCount
+        and context.ir[node.nextOperand].operand1 >= 0
+        and context.ir[node.nextOperand].operand1 < irCount
+        -> if {
+            context.ir[node.operand1].operand1 => typedIfThenValueIndex
+            context.ir[node.nextOperand].operand1 => typedIfElseValueIndex
+            typedIfThenValueIndex -> typedControlTerminates(context) => typedIfThenTerminates
+            typedIfElseValueIndex -> typedControlTerminates(context) => typedIfElseTerminates
+            false => typedIfMismatch!
+            node -> irAggregateStorageClass => typedIfStorageClass
+            context.ir[typedIfThenValueIndex] -> irAggregateStorageClass => typedIfThenStorageClass
+            context.ir[typedIfElseValueIndex] -> irAggregateStorageClass => typedIfElseStorageClass
+            not typedIfThenTerminates
+                and (typedIfStorageClass > 0 or typedIfThenStorageClass > 0)
+                and typedIfStorageClass != typedIfThenStorageClass
+                -> if { true => typedIfMismatch! }
+            not typedIfElseTerminates
+                and (typedIfStorageClass > 0 or typedIfElseStorageClass > 0)
+                and typedIfStorageClass != typedIfElseStorageClass
+                -> if { true => typedIfMismatch! }
+            not typedIfMismatch!
+                and not typedIfThenTerminates
+                and node.typeId >= 0
+                and context.ir[typedIfThenValueIndex].typeId >= 0
+                and context.ir[typedIfThenValueIndex].typeId != node.typeId
+                -> if {
+                    (node -> irScalarIntegerWidth(context)) == 0
+                        or (context.ir[typedIfThenValueIndex] -> irScalarIntegerWidth(context)) == 0
+                        -> if {
+                            true => typedIfMismatch!
+                        }
+                }
+            not typedIfMismatch!
+                and not typedIfElseTerminates
+                and node.typeId >= 0
+                and context.ir[typedIfElseValueIndex].typeId >= 0
+                and context.ir[typedIfElseValueIndex].typeId != node.typeId
+                -> if {
+                    (node -> irScalarIntegerWidth(context)) == 0
+                        or (context.ir[typedIfElseValueIndex] -> irScalarIntegerWidth(context)) == 0
+                        -> if {
+                            true => typedIfMismatch!
+                        }
+                }
+            typedIfMismatch! -> if { 37 => code! }
+        }
+    # A non-negative payload binding type can still be stale. Intrinsic
+    # Option/Result arms must use the exact canonical payload type carried by
+    # the matched enum or fixed-array values can be lowered as slice headers.
+    code! == 0
+        and node.kind == 29
+        and node.parent >= 0
+        and node.parent < irCount
+        and context.ir[node.parent].kind == 19
+        and context.ir[node.parent].parent >= 0
+        and context.ir[node.parent].parent < irCount
+        and context.ir[context.ir[node.parent].parent].kind == 27
+        -> if {
+            context.ir[node.parent] => payloadArm
+            context.ir[payloadArm.parent] => payloadMatch
+            payloadMatch.operand0 >= 0
+                and payloadMatch.operand0 < irCount
+                and context.ir[payloadMatch.operand0].typeId >= 0
+                and context.ir[payloadMatch.operand0].typeId < (context.types -> len)
+                -> if {
+                    context.types[context.ir[payloadMatch.operand0].typeId] => payloadSubjectType
+                    -1 => expectedPayloadType!
+                    payloadSubjectType.kind == 7 and payloadSubjectType.origin == 4 and payloadSubjectType.symbol == 0
+                        -> if {
+                            payloadSubjectType.first => expectedPayloadType!
+                        }
+                    payloadSubjectType.kind == 7 and payloadSubjectType.origin == 4 and payloadSubjectType.symbol == 1
+                        -> if {
+                            payloadArm.opcode == 0 -> if { payloadSubjectType.first => expectedPayloadType! } else { payloadSubjectType.second => expectedPayloadType! }
+                        }
+                    expectedPayloadType! >= 0 and node.typeId != expectedPayloadType!
+                        -> if { 28 => code! }
+                }
+        }
+    # Fixed and bounded array return contracts are contextual types, not
+    # suggestions. A direct literal must use the function's exact canonical
+    # array identity before ABI selection.
+    code! == 0
+        and node.kind == 0
+        and node.typeId >= 0
+        and node.typeId < (context.types -> len)
+        and (context.types[node.typeId].kind == 4 or context.types[node.typeId].kind == 12)
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind == 1
+        and context.ir[node.operand0].operand0 >= 0
+        and context.ir[node.operand0].operand0 < irCount
+        and context.ir[context.ir[node.operand0].operand0].kind == 14
+        and context.ir[context.ir[node.operand0].operand0].typeId != node.typeId
+        -> if { 29 => code! }
+    # Array-valued nominal fields likewise require the declaration's exact
+    # shape. A dynamic or slice carrier cannot initialize fixed inline storage.
+    code! == 0 and node.kind == 12 and node.typeId >= 0
+        -> if {
+            node.operand0 => structArrayValueIndex!
+            0 => structArrayFieldOrdinal!
+            structArrayValueIndex! >= 0 and structArrayValueIndex! < irCount and code! == 0
+                -> while {
+                    -1 => structArrayFieldTypeId!
+                    0 => structArrayFieldSearch!
+                    structArrayFieldSearch! < (context.fields -> len) and structArrayFieldTypeId! < 0
+                        -> while {
+                            context.fields[structArrayFieldSearch!] => structArrayField
+                            structArrayField.ownerType == node.typeId and structArrayField.ordinal == structArrayFieldOrdinal!
+                                -> if {
+                                    structArrayField.fieldType => structArrayFieldTypeId!
+                                }
+                            structArrayFieldSearch! + 1 => structArrayFieldSearch!
+                        }
+                    structArrayFieldTypeId! >= 0
+                        and structArrayFieldTypeId! < (context.types -> len)
+                        and (context.types[structArrayFieldTypeId!].kind == 3 or context.types[structArrayFieldTypeId!].kind == 4 or context.types[structArrayFieldTypeId!].kind == 12)
+                        and context.ir[structArrayValueIndex!].typeId != structArrayFieldTypeId!
+                        -> if { 30 => code! }
+                    context.ir[structArrayValueIndex!].nextOperand => structArrayValueIndex!
+                    structArrayFieldOrdinal! + 1 => structArrayFieldOrdinal!
+                }
+        }
+    # A value-producing enum match must provide a canonical value on every
+    # non-returning arm. Otherwise value-use propagation can request the match
+    # SSA while the emitter has no arm value to store.
+    code! == 0
+        and node.kind == 27
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+        -> if {
+            false => valueMatchResultDemanded!
+            node.parent >= 0 and node.parent < irCount and context.ir[node.parent].kind == 19
+                -> if {
+                    context.ir[node.parent] => valueMatchParentRegion
+                    valueMatchParentRegion.operand1 == irIndex
+                        and valueMatchParentRegion.sourceModule >= 0
+                        and valueMatchParentRegion.sourceModule < (context.ranges -> len)
+                        -> if {
+                            context.ranges[valueMatchParentRegion.sourceModule] => valueMatchParentRange
+                            valueMatchParentRegion.astNode >= 0 and valueMatchParentRegion.astNode < valueMatchParentRange.astCount
+                                -> if {
+                                    context.nodes[valueMatchParentRange.astStart + valueMatchParentRegion.astNode] => valueMatchParentAst
+                                    valueMatchParentAst.kind == 58 or valueMatchParentAst.kind == 70
+                                        -> if { true => valueMatchResultDemanded! }
+                                }
+                        }
+                }
+            false => nestedValueMatch!
+            node.parent => nestedValueMatchAncestor!
+            nestedValueMatchAncestor! >= 0 and not nestedValueMatch!
+                -> while {
+                    context.ir[nestedValueMatchAncestor!] => nestedValueMatchAncestorNode
+                    nestedValueMatchAncestorNode.kind == 27 and nestedValueMatchAncestor! != irIndex
+                        -> if { true => nestedValueMatch! } else { nestedValueMatchAncestorNode.parent => nestedValueMatchAncestor! }
+                }
+            valueMatchResultDemanded! and not nestedValueMatch!
+                -> if {
+                    node.operand1 => valueMatchArmIndex!
+                    true => valueMatchArmsValid!
+                    valueMatchArmIndex! >= 0 and valueMatchArmIndex! < irCount and valueMatchArmsValid!
+                        -> while {
+                            context.ir[valueMatchArmIndex!] => valueMatchArm
+                            valueMatchArm.kind != 19 or valueMatchArm.parent != irIndex
+                                -> if {
+                                    false => valueMatchArmsValid!
+                                } else {
+                                    false => valueMatchArmHasValue!
+                                    valueMatchArm.operand1 >= 0 and valueMatchArm.operand1 < irCount
+                                        -> if {
+                                            context.ir[valueMatchArm.operand1] => valueMatchDirectArmValue
+                                            false => valueMatchDirectArmTypeMatches!
+                                            node.typeId >= 0 and valueMatchDirectArmValue.typeId == node.typeId
+                                                -> if { true => valueMatchDirectArmTypeMatches! }
+                                            node.typeId < 0
+                                                and valueMatchDirectArmValue.typeId < 0
+                                                and valueMatchDirectArmValue.typeKind == node.typeKind
+                                                and valueMatchDirectArmValue.typeOrigin == node.typeOrigin
+                                                and valueMatchDirectArmValue.typeModule == node.typeModule
+                                                and valueMatchDirectArmValue.typeSymbol == node.typeSymbol
+                                                -> if { true => valueMatchDirectArmTypeMatches! }
+                                            valueMatchDirectArmTypeMatches! -> if { true => valueMatchArmHasValue! }
+                                        }
+                                    valueMatchArm.operand1 >= 0
+                                        and valueMatchArm.operand1 < irCount
+                                        and context.ir[valueMatchArm.operand1].kind == 19
+                                        and context.ir[valueMatchArm.operand1].operand1 >= 0
+                                        -> if { true => valueMatchArmHasValue! }
+                                    not valueMatchArmHasValue! -> if {
+                                        valueMatchArmIndex! + 1 => valueMatchChildIndex!
+                                        valueMatchChildIndex! < irCount and not valueMatchArmHasValue!
+                                            -> while {
+                                                context.ir[valueMatchChildIndex!] => valueMatchChild
+                                                false => valueMatchChildTypeMatches!
+                                                node.typeId >= 0 and valueMatchChild.typeId == node.typeId
+                                                    -> if { true => valueMatchChildTypeMatches! }
+                                                node.typeId < 0
+                                                    and valueMatchChild.typeId < 0
+                                                    and valueMatchChild.typeKind == node.typeKind
+                                                    and valueMatchChild.typeOrigin == node.typeOrigin
+                                                    and valueMatchChild.typeModule == node.typeModule
+                                                    and valueMatchChild.typeSymbol == node.typeSymbol
+                                                    -> if { true => valueMatchChildTypeMatches! }
+                                                true => valueMatchChildForwarded!
+                                                valueMatchChildIndex! => valueMatchForwardedIndex!
+                                                valueMatchChild.parent => valueMatchChildAncestor!
+                                                valueMatchChildAncestor! >= 0
+                                                    and valueMatchChildAncestor! != valueMatchArmIndex!
+                                                    and valueMatchChildForwarded!
+                                                    -> while {
+                                                        context.ir[valueMatchChildAncestor!] => valueMatchChildAncestorNode
+                                                        valueMatchChildAncestorNode.kind == 19
+                                                            and valueMatchChildAncestorNode.operand1 == valueMatchForwardedIndex!
+                                                            -> if {
+                                                                valueMatchChildAncestor! => valueMatchForwardedIndex!
+                                                                valueMatchChildAncestorNode.parent => valueMatchChildAncestor!
+                                                            } else {
+                                                                false => valueMatchChildForwarded!
+                                                            }
+                                                    }
+                                                valueMatchChildForwarded!
+                                                    and valueMatchChildAncestor! == valueMatchArmIndex!
+                                                    and valueMatchChildIndex! != valueMatchArm.operand0
+                                                    and valueMatchChildIndex! != valueMatchArm.operand1
+                                                    and valueMatchChildTypeMatches!
+                                                    -> if { true => valueMatchArmHasValue! }
+                                                valueMatchChildIndex! + 1 => valueMatchChildIndex!
+                                            }
+                                    }
+                                    not valueMatchArmHasValue! -> if { false => valueMatchArmsValid! }
+                                    valueMatchArm.nextOperand => valueMatchArmIndex!
+                                }
+                        }
+                    not valueMatchArmsValid! -> if { 22 => code! }
+                }
+        }
+    # Every materialized arm of a value-producing enum match must agree with
+    # the match result slot's canonical type. A first-arm payload must never
+    # become the slot type when later arms yield the enclosing Result/Option.
+    code! == 0
+        and node.kind == 27
+        and node.typeId >= 0
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+        -> if {
+            false => typedMatchResultDemanded!
+            node.parent >= 0 and node.parent < irCount -> if {
+                context.ir[node.parent] => typedMatchParent
+                (typedMatchParent.kind == 1 and typedMatchParent.operand0 == irIndex)
+                    or (typedMatchParent.kind == 19 and typedMatchParent.operand1 == irIndex)
+                    -> if { true => typedMatchResultDemanded! }
+            }
+            typedMatchResultDemanded! -> if {
+                node.operand1 => typedMatchArmIndex!
+                typedMatchArmIndex! >= 0 and typedMatchArmIndex! < irCount and code! == 0
+                    -> while {
+                        context.ir[typedMatchArmIndex!] => typedMatchArm
+                        typedMatchArmIndex! => typedMatchRegionIndex!
+                        typedMatchArm.operand1 >= 0
+                            and typedMatchArm.operand1 < irCount
+                            and context.ir[typedMatchArm.operand1].kind == 19
+                            -> if { typedMatchArm.operand1 => typedMatchRegionIndex! }
+                        context.ir[typedMatchRegionIndex!].operand1 => typedMatchValueIndex
+                        typedMatchValueIndex >= 0
+                            and typedMatchValueIndex < irCount
+                            and context.ir[typedMatchValueIndex].kind != 23
+                            -> if {
+                                context.ir[typedMatchValueIndex].typeId != node.typeId
+                                    -> if { 25 => code! }
+                            }
+                        typedMatchArm.nextOperand => typedMatchArmIndex!
+                    }
+            }
+        }
+    # A transparent parser wrapper has no standalone SSA definition. Even if
+    # it carries the correct contextual type, a value-producing match arm must
+    # store the concrete producer beneath that wrapper.
+    code! == 0 and node.kind == 27 -> if {
+        false => concreteMatchResultDemanded!
+        node.parent >= 0 and node.parent < irCount -> if {
+            context.ir[node.parent] => concreteMatchParent
+            (concreteMatchParent.kind == 1 and concreteMatchParent.operand0 == irIndex)
+                or (concreteMatchParent.kind == 19 and concreteMatchParent.operand1 == irIndex)
+                -> if {
+                    true => concreteMatchResultDemanded!
+                }
+        }
+        concreteMatchResultDemanded! -> if {
+            node.operand1 => concreteMatchArmIndex!
+            concreteMatchArmIndex! >= 0 and concreteMatchArmIndex! < irCount and code! == 0
+                -> while {
+                    context.ir[concreteMatchArmIndex!] => concreteMatchArm
+                    concreteMatchArmIndex! => concreteMatchRegionIndex!
+                    concreteMatchArm.operand1 >= 0
+                        and concreteMatchArm.operand1 < irCount
+                        and context.ir[concreteMatchArm.operand1].kind == 19
+                        -> if {
+                            concreteMatchArm.operand1 => concreteMatchRegionIndex!
+                        }
+                    context.ir[concreteMatchRegionIndex!].operand1 => concreteMatchValueIndex
+                    concreteMatchValueIndex >= 0
+                        and concreteMatchValueIndex < irCount
+                        and context.ir[concreteMatchValueIndex].kind == 9
+                        and context.ir[concreteMatchValueIndex].opcode == -1
+                        -> if { 26 => code! }
+                    concreteMatchArm.nextOperand => concreteMatchArmIndex!
+                }
+        }
+    }
+    # Subject `when` controls must retain the value that every relational arm
+    # compares. Losing it can leave individually plausible one-sided binary
+    # nodes that only fail after nested enum payload lowering.
+    code! == 0 and node.kind == 34 and (node.operand0 < 0 or node.operand0 >= irCount)
+        -> if {
+            18 => code!
+        }
+    # Every non-empty array literal must carry its canonical dynamic, bounded,
+    # or fixed-array identity before LLVM storage is selected. Missing this
+    # contract would otherwise surface later as an invalid `alloca void`.
+    code! == 0 and node.kind == 14 and node.operand0 >= 0 and node.typeId < 0
+        -> if {
+            13 => code!
+        }
+    # An empty array expression has no element operand from which LLVM can
+    # recover its ABI. Its contextual or typed-empty array identity must be
+    # canonical before emission; otherwise later intrinsic calls can name an
+    # SSA value that was never materialized.
+    code! == 0 and node.kind == 14 and node.operand0 < 0 and node.typeId < 0
+        -> if {
+            45 => code!
+        }
+    # A stale array identity can remain non-negative while naming the wrong
+    # element type. Header-only layouts may let that survive LLVM validation,
+    # but ownership, drop, ABI, and indexed access will eventually diverge.
+    # Numeric and Bool literals are exempt because contextual typing may
+    # intentionally narrow their default literal type.
+    code! == 0
+        and node.kind == 14
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and node.typeId >= 0
+        and node.typeId < (context.types -> len) -> if {
+            context.types[node.typeId] => arrayType
+            context.ir[node.operand0] => firstArrayOperand
+            (arrayType.kind == 3 or arrayType.kind == 4 or arrayType.kind == 12)
+                and arrayType.first >= 0
+                and firstArrayOperand.typeId >= 0
+                and firstArrayOperand.kind != 3
+                and firstArrayOperand.kind != 4
+                and arrayType.first != (context.types -> typeIds.materializedReadTypeId(firstArrayOperand.typeId))
+                -> if {
+                    14 => code!
+                }
+        }
+    # A repeat literal has one lowered element operand but its static length is
+    # the source repeat count. Treating operand count as array length silently
+    # changes indexing, ABI, and struct layout even when code generation runs.
+    code! == 0
+        and node.kind == 14
+        and node.typeId >= 0
+        and node.typeId < (context.types -> len)
+        and context.types[node.typeId].kind == 4
+        and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[node.sourceModule] => repeatInvariantRange
+            context.nodes[repeatInvariantRange.astStart + node.astNode] => repeatInvariantAst
+            0 => repeatInvariantDepth!
+            false => repeatInvariantAfterSemicolon!
+            -1 => repeatInvariantLength!
+            repeatInvariantAst.firstToken => repeatInvariantTokenIndex!
+            repeatInvariantTokenIndex! < repeatInvariantAst.firstToken + repeatInvariantAst.tokenCount
+                -> while {
+                    context.tokens[repeatInvariantRange.tokenStart + repeatInvariantTokenIndex!] => repeatInvariantToken
+                    repeatInvariantToken.kind == grammar.tokenIdLeftBracket()
+                        or repeatInvariantToken.kind == grammar.tokenIdLeftBrace()
+                        or repeatInvariantToken.kind == grammar.tokenIdLeftParen()
+                        -> if { repeatInvariantDepth! + 1 => repeatInvariantDepth! }
+                    repeatInvariantToken.kind == grammar.tokenIdRightBracket()
+                        or repeatInvariantToken.kind == grammar.tokenIdRightBrace()
+                        or repeatInvariantToken.kind == grammar.tokenIdRightParen()
+                        -> if { repeatInvariantDepth! - 1 => repeatInvariantDepth! }
+                    # Only the current literal's separator introduces its count.
+                    repeatInvariantDepth! == 1 and repeatInvariantToken.kind == grammar.tokenIdSemicolon()
+                        -> if { true => repeatInvariantAfterSemicolon! } else {
+                            repeatInvariantDepth! == 1 and repeatInvariantAfterSemicolon! and repeatInvariantLength! < 0 and repeatInvariantToken.kind == grammar.tokenIdNumber()
+                                -> if {
+                                    0 => repeatInvariantLength!
+                                    UIntSize(0) => repeatInvariantByte!
+                                    repeatInvariantByte! < repeatInvariantToken.span.length
+                                        -> while {
+                                            context.sources[node.sourceModule] -> byte(repeatInvariantToken.span.start + repeatInvariantByte!) => repeatInvariantDigit
+                                            repeatInvariantDigit != 95 -> if { repeatInvariantLength! * 10 + Int(repeatInvariantDigit - 48) => repeatInvariantLength! }
+                                            repeatInvariantByte! + 1 => repeatInvariantByte!
+                                        }
+                                }
+                        }
+                    repeatInvariantTokenIndex! + 1 => repeatInvariantTokenIndex!
+                }
+            repeatInvariantLength! >= 0 and context.types[node.typeId].length != repeatInvariantLength!
+                -> if { 31 => code! }
+        }
+    # A binding whose final source operator is `?` stores the success payload,
+    # never the enclosing Result. Final synchronization passes must preserve
+    # that distinction instead of copying the call's pre-unwrap type back.
+    code! == 0
+        and node.kind == 17
+        and node.typeId >= 0
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].typeId == node.typeId
+        and context.types[node.typeId].kind == 7
+        and context.types[node.typeId].origin == 4
+        and context.types[node.typeId].symbol == 1
+        and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[node.sourceModule] => tryBindingInvariantRange
+            context.nodes[tryBindingInvariantRange.astStart + node.astNode] => tryBindingInvariantAst
+            -1 => tryBindingInvariantLastFlow!
+            tryBindingInvariantAst.firstToken => tryBindingInvariantTokenIndex!
+            tryBindingInvariantTokenIndex! < tryBindingInvariantAst.firstToken + tryBindingInvariantAst.tokenCount
+                -> while {
+                    context.tokens[tryBindingInvariantRange.tokenStart + tryBindingInvariantTokenIndex!] => tryBindingInvariantToken
+                    tryBindingInvariantToken.kind == grammar.tokenIdQuestion() or tryBindingInvariantToken.kind == grammar.tokenIdArrow()
+                        -> if {
+                            tryBindingInvariantToken.kind => tryBindingInvariantLastFlow!
+                        }
+                    tryBindingInvariantToken.kind == grammar.tokenIdFatArrow()
+                        -> if { tryBindingInvariantAst.firstToken + tryBindingInvariantAst.tokenCount => tryBindingInvariantTokenIndex! } else {
+                            tryBindingInvariantTokenIndex! + 1 => tryBindingInvariantTokenIndex!
+                        }
+                }
+            tryBindingInvariantLastFlow! == grammar.tokenIdQuestion()
+                -> if { 32 => code! }
+        }
+    # A binding and every direct read of it share one canonical value type.
+    # A Result binding followed by `?` is the sole intentional initializer
+    # mismatch: the binding stores the success payload rather than the Result.
+    # Any other stale type would make LLVM print one type for an SSA producer
+    # and another type for the value that consumes it.
+    code! == 0
+        and node.kind == 17
+        and node.typeId >= 0
+        and node.typeId < (context.types -> len)
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].typeId >= 0
+        and context.ir[node.operand0].typeId < (context.types -> len)
+        and node.typeId != context.ir[node.operand0].typeId
+        -> if {
+            context.ir[node.operand0].typeId => bindingInitializerTypeId
+            false => bindingPayloadUnwrap!
+            (node -> irScalarIntegerWidth(context)) > 0
+                and (context.ir[node.operand0] -> irScalarIntegerWidth(context)) > 0
+                -> if {
+                    true => bindingPayloadUnwrap!
+                }
+            context.types[node.typeId] => bindingCanonicalType
+            context.types[bindingInitializerTypeId] => bindingInitializerType
+            bindingCanonicalType.kind == bindingInitializerType.kind
+                and bindingCanonicalType.origin == bindingInitializerType.origin
+                and bindingCanonicalType.module == bindingInitializerType.module
+                and bindingCanonicalType.symbol == bindingInitializerType.symbol
+                and bindingCanonicalType.first == bindingInitializerType.first
+                and bindingCanonicalType.second == bindingInitializerType.second
+                and bindingCanonicalType.length == bindingInitializerType.length
+                -> if {
+                    true => bindingPayloadUnwrap!
+                }
+            bindingCanonicalType.origin == 3
+                and bindingInitializerType.origin == 3
+                and bindingCanonicalType.module == bindingInitializerType.module
+                -> if {
+                    true => bindingPayloadUnwrap!
+                }
+            context.types[bindingInitializerTypeId].kind == 7
+                and context.types[bindingInitializerTypeId].origin == 4
+                and context.types[bindingInitializerTypeId].symbol == 1
+                and context.types[bindingInitializerTypeId].first == node.typeId
+                -> if {
+                    true => bindingPayloadUnwrap!
+                }
+            not bindingPayloadUnwrap! -> if { 37 => code! }
+        }
+    code! == 0
+        and node.kind == 5
+        and node.typeId >= 0
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind == 17
+        and context.ir[node.operand0].operand0 >= 0
+        and context.ir[node.operand0].operand0 < irCount
+        and context.ir[context.ir[node.operand0].operand0].typeId >= 0
+        and node.typeId != context.ir[context.ir[node.operand0].operand0].typeId
+        -> if {
+            context.ir[node.operand0].operand0 => bindingReadInitializerIndex
+            false => bindingReadCompatible!
+            (node -> irScalarIntegerWidth(context)) > 0
+                and (context.ir[bindingReadInitializerIndex] -> irScalarIntegerWidth(context)) > 0
+                -> if {
+                    true => bindingReadCompatible!
+                }
+            context.ir[bindingReadInitializerIndex].typeId => bindingReadInitializerTypeId
+            bindingReadInitializerTypeId >= 0
+                and bindingReadInitializerTypeId < (context.types -> len)
+                and node.typeId < (context.types -> len) -> if {
+                    context.types[node.typeId] => bindingReadCanonicalType
+                    context.types[bindingReadInitializerTypeId] => bindingReadInitializerType
+                    bindingReadCanonicalType.kind == bindingReadInitializerType.kind
+                        and bindingReadCanonicalType.origin == bindingReadInitializerType.origin
+                        and bindingReadCanonicalType.module == bindingReadInitializerType.module
+                        and bindingReadCanonicalType.symbol == bindingReadInitializerType.symbol
+                        and bindingReadCanonicalType.first == bindingReadInitializerType.first
+                        and bindingReadCanonicalType.second == bindingReadInitializerType.second
+                        and bindingReadCanonicalType.length == bindingReadInitializerType.length
+                        -> if {
+                            true => bindingReadCompatible!
+                        }
+                    bindingReadCanonicalType.origin == 3
+                        and bindingReadInitializerType.origin == 3
+                        and bindingReadCanonicalType.module == bindingReadInitializerType.module
+                        -> if {
+                            true => bindingReadCompatible!
+                        }
+                }
+            bindingReadInitializerTypeId >= 0
+                and bindingReadInitializerTypeId < (context.types -> len)
+                and context.types[bindingReadInitializerTypeId].kind == 7
+                and context.types[bindingReadInitializerTypeId].origin == 4
+                and context.types[bindingReadInitializerTypeId].symbol == 1
+                and context.types[bindingReadInitializerTypeId].first == node.typeId
+                -> if {
+                    true => bindingReadCompatible!
+                }
+            not bindingReadCompatible! -> if { 37 => code! }
+        }
+    # A partition result is a structural product whose route fields preserve
+    # the canonical Stream/EventStream wrapper of its source. Committing a
+    # product from an earlier Range or other fixed-point candidate would make
+    # direct dispatch consume a non-stream ABI and eventually reference an
+    # intentionally unmaterialized product value.
+    code! == 0 and node.kind == 40 -> if {
+        true => partitionTypeInvariantValid!
+        node.typeId < 0 or node.typeId >= (context.types -> len)
+            -> if { false => partitionTypeInvariantValid! }
+        node.operand0 < 0 or node.operand0 >= irCount
+            -> if { false => partitionTypeInvariantValid! }
+        -1 => partitionTypeInvariantSourceType!
+        partitionTypeInvariantValid! -> if {
+            context.ir[node.operand0].typeId => partitionTypeInvariantSourceType!
+            partitionTypeInvariantSourceType! < 0 or partitionTypeInvariantSourceType! >= (context.types -> len)
+                -> if {
+                    false => partitionTypeInvariantValid!
+                } else {
+                    context.types[partitionTypeInvariantSourceType!] => partitionTypeInvariantSource
+                    partitionTypeInvariantSource.kind != 7
+                        or partitionTypeInvariantSource.origin != 4
+                        or (partitionTypeInvariantSource.symbol != 3 and partitionTypeInvariantSource.symbol != 4)
+                        -> if {
+                            false => partitionTypeInvariantValid!
+                        }
+                }
+        }
+        0 => partitionTypeInvariantFieldCount!
+        partitionTypeInvariantValid! -> if {
+            context.types[node.typeId] => partitionTypeInvariantProduct
+            partitionTypeInvariantProduct.kind != 10 -> if { false => partitionTypeInvariantValid! }
+            0 => partitionTypeInvariantFieldSearch!
+            partitionTypeInvariantFieldSearch! < (context.fields -> len)
+                -> while {
+                    context.fields[partitionTypeInvariantFieldSearch!] => partitionTypeInvariantField
+                    partitionTypeInvariantField.status == 0 and partitionTypeInvariantField.ownerType == node.typeId
+                        -> if {
+                            partitionTypeInvariantFieldCount! + 1 => partitionTypeInvariantFieldCount!
+                            partitionTypeInvariantField.fieldType != partitionTypeInvariantSourceType!
+                                -> if { false => partitionTypeInvariantValid! }
+                        }
+                    partitionTypeInvariantFieldSearch! + 1 => partitionTypeInvariantFieldSearch!
+                }
+            partitionTypeInvariantFieldCount! != partitionTypeInvariantProduct.length
+                -> if { false => partitionTypeInvariantValid! }
+        }
+        not partitionTypeInvariantValid! -> if { 41 => code! }
+    }
+    # `len` is an aggregate projection. A scalar receiver proves that operand
+    # recovery crossed expression or region boundaries; emitting extractvalue
+    # would otherwise defer the failure to LLVM assembly.
+    code! == 0
+        and (node.kind == 6 or node.kind == 9)
+        and node.opcode == -201
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and ((context.ir[node.operand0] -> irScalarIntegerWidth(context)) > 0
+        or (context.ir[node.operand0].kind == 8
+        and context.ir[node.operand0].opcode >= grammar.tokenIdPlus()
+        and context.ir[node.operand0].opcode <= grammar.tokenIdPercent()))
+        -> if {
+            38 => code!
+        }
+    # `capacity` has the same aggregate receiver contract as `len`. In
+    # particular, a local binding named `capacity` is not an intrinsic stage
+    # unless it occurs after a top-level flow arrow.
+    node.operand0 => capacityInvariantReceiver!
+    capacityInvariantReceiver! >= 0
+        and capacityInvariantReceiver! < irCount
+        and context.ir[capacityInvariantReceiver!].kind == 9
+        and context.ir[capacityInvariantReceiver!].opcode == -236
+        and context.ir[capacityInvariantReceiver!].operand0 >= 0
+        and context.ir[capacityInvariantReceiver!].operand0 != capacityInvariantReceiver!
+        -> while {
+            context.ir[capacityInvariantReceiver!].operand0 => capacityInvariantReceiver!
+        }
+    code! == 0
+        and (node.kind == 6 or node.kind == 9)
+        and node.opcode == -236
+        and capacityInvariantReceiver! >= 0
+        and capacityInvariantReceiver! < irCount
+        and ((context.ir[capacityInvariantReceiver!] -> irScalarIntegerWidth(context)) > 0
+        or (context.ir[capacityInvariantReceiver!].kind == 8
+        and context.ir[capacityInvariantReceiver!].opcode >= grammar.tokenIdPlus()
+        and context.ir[capacityInvariantReceiver!].opcode <= grammar.tokenIdPercent()))
+        -> if {
+            40 => code!
+        }
+    # A dotted member base must be a proper structural prefix of the member
+    # expression. A base outside that span proves that flattened IR parent
+    # recovery crossed into another expression or control region.
+    code! == 0
+        and node.kind == 13
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind != 29
+        and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)
+        and context.ir[node.operand0].sourceModule == node.sourceModule
+        -> if {
+            context.ranges[node.sourceModule] => memberBaseInvariantRange
+            context.nodes[memberBaseInvariantRange.astStart + node.astNode] => memberBaseInvariantAst
+            context.nodes[memberBaseInvariantRange.astStart + context.ir[node.operand0].astNode] => memberBaseInvariantOperandAst
+            memberBaseInvariantOperandAst.start != memberBaseInvariantAst.start
+                or memberBaseInvariantOperandAst.length >= memberBaseInvariantAst.length
+                or memberBaseInvariantOperandAst.start + memberBaseInvariantOperandAst.length > memberBaseInvariantAst.start + memberBaseInvariantAst.length
+                -> if {
+                    39 => code!
+                }
+        }
+    # Once a nominal base is canonical, a dotted member of a field-bearing
+    # type must also carry a canonical field type before ABI lowering.
+    code! == 0
+        and node.kind == 13
+        and node.opcode == grammar.tokenIdDot()
+        and node.typeId < 0
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].typeId >= 0
+        and context.types[context.ir[node.operand0].typeId].kind == 1
+        -> if {
+            false => unresolvedNominalMemberHasFields!
+            0 => unresolvedNominalMemberFieldSearch!
+            unresolvedNominalMemberFieldSearch! < (context.fields -> len) and not unresolvedNominalMemberHasFields!
+                -> while {
+                    context.fields[unresolvedNominalMemberFieldSearch!].ownerType == context.ir[node.operand0].typeId
+                        -> if { true => unresolvedNominalMemberHasFields! }
+                    unresolvedNominalMemberFieldSearch! + 1 => unresolvedNominalMemberFieldSearch!
+                }
+            unresolvedNominalMemberHasFields! -> if { 33 => code! }
+        }
+    # A nominal struct literal must name the identity that owns its field table.
+    # Coordinate-equivalent duplicates cannot safely drive field ABI selection.
+    code! == 0
+        and node.kind == 12
+        and node.typeId >= 0
+        and context.types[node.typeId].kind == 1 -> if {
+            false => structOwnerInvariantHasFields!
+            false => structOwnerInvariantEquivalentHasFields!
+            context.types[node.typeId] => structOwnerInvariantType
+            0 => structOwnerInvariantFieldSearch!
+            structOwnerInvariantFieldSearch! < (context.fields -> len)
+                -> while {
+                    context.fields[structOwnerInvariantFieldSearch!] => structOwnerInvariantField
+                    structOwnerInvariantField.status == 0 and structOwnerInvariantField.ownerType == node.typeId
+                        -> if { true => structOwnerInvariantHasFields! }
+                    context.types[structOwnerInvariantField.ownerType] => structOwnerInvariantCandidateType
+                    structOwnerInvariantCandidateType.kind == 1
+                        and structOwnerInvariantCandidateType.origin == structOwnerInvariantType.origin
+                        and structOwnerInvariantCandidateType.module == structOwnerInvariantType.module
+                        and structOwnerInvariantCandidateType.symbol == structOwnerInvariantType.symbol
+                        -> if {
+                            structOwnerInvariantField.status == 0 -> if { true => structOwnerInvariantEquivalentHasFields! }
+                        }
+                    structOwnerInvariantFieldSearch! + 1 => structOwnerInvariantFieldSearch!
+                }
+            not structOwnerInvariantHasFields! and structOwnerInvariantEquivalentHasFields!
+                -> if { 35 => code! }
+        }
+    # Arithmetic is emitted at the widest operand width. Its semantic result
+    # must name that same width; otherwise LLVM text can declare an i16 call
+    # argument while referencing an i32 SSA producer.
+    code! == 0
+        and node.kind == 8
+        and node.opcode >= grammar.tokenIdPlus()
+        and node.opcode <= grammar.tokenIdPercent()
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and node.operand1 >= 0
+        and node.operand1 < irCount -> if {
+            node -> irScalarIntegerWidth(context) => arithmeticResultWidth
+            context.ir[node.operand0] -> irScalarIntegerWidth(context) => arithmeticLeftWidth
+            context.ir[node.operand1] -> irScalarIntegerWidth(context) => arithmeticRightWidth
+            arithmeticLeftWidth > arithmeticRightWidth -> if { arithmeticLeftWidth } else { arithmeticRightWidth } => arithmeticStorageWidth
+            node -> irNumericStorageClass(context) => resultStorage
+            context.ir[node.operand0] -> irNumericStorageClass(context) => leftStorage
+            context.ir[node.operand1] -> irNumericStorageClass(context) => rightStorage
+            (resultStorage == 1 or leftStorage == 1 or rightStorage == 1)
+                and (leftStorage == 2 or rightStorage == 2)
+                -> if { 15 => code! }
+            code! == 0 and (node -> irAggregateStorageClass) > 0 and arithmeticStorageWidth > 0
+                -> if { 37 => code! }
+            code! == 0
+                and arithmeticResultWidth > 0
+                and arithmeticStorageWidth > 0
+                and arithmeticResultWidth != arithmeticStorageWidth
+                -> if { 15 => code! }
+        }
+    # A scalar local alias may start from a parameter name, whose ABI value is
+    # written directly as %arg/%argN and therefore has no standalone SSA node.
+    # Any other unresolved scalar name used as a binding initializer would
+    # become an undefined %v reference in LLVM.
+    code! == 0
+        and node.kind == 17
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind == 5
+        and context.ir[node.operand0].operand0 < 0
+        and (context.ir[node.operand0] -> irScalarIntegerWidth(context)) > 0
+        -> if {
+            node.parent => aliasOwner!
+            aliasOwner! >= 0 and context.ir[aliasOwner!].kind != 0 and context.ir[aliasOwner!].kind != 11
+                -> while {
+                    context.ir[aliasOwner!].parent => aliasOwner!
+                }
+            aliasOwner! >= 0
+                and context.ir[aliasOwner!].kind == 0
+                and (context -> parameterIndexForFunction(aliasOwner!, context.ir[node.operand0].symbol)) < 0
+                -> if {
+                    16 => code!
+                }
+        }
+    # A direct pattern read is an SSA alias of its canonical enum payload
+    # binding.  Any type difference here would make the textual emitter name
+    # one LLVM type for a value produced with another (for example
+    # `freeze void %payload`).  Reject that Typed IR before emission.
+    code! == 0
+        and node.kind == 5
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind == 29
+        and node.typeId != context.ir[node.operand0].typeId
+        -> if {
+            43 => code!
+        }
+    # A control expression owns its subject internally. If the following call
+    # also links that subject as a peer argument, a backend can select the
+    # producer instead of the completed control value and cross an invalid ABI.
+    code! == 0
+        and (node.kind == 6 or node.kind == 9)
+        and not (node -> typedIr.isTransparentControlProducerWrapper)
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and node.operand1 >= 0
+        and node.operand1 < irCount
+        and (context.ir[node.operand1].kind == 18
+        or context.ir[node.operand1].kind == 27
+        or context.ir[node.operand1].kind == 33
+        or context.ir[node.operand1].kind == 34)
+        and context.ir[node.operand1].operand0 == node.operand0
+        -> if { 44 => code! }
+    # Every collection mutation must resolve to exactly one writable owner
+    # before emission. Otherwise an intrinsic can fabricate a local slot or
+    # update a copied collection header and surface later as heap corruption.
+    code! == 0
+        and (node.kind == 6 or node.kind == 9)
+        and (node.opcode == -204
+        or node.opcode == -213
+        or (node.opcode == -223 or node.opcode == -303)
+        or node.opcode == -241
+        or node.opcode == -242
+        or node.opcode == -246
+        or node.opcode == -247
+        or node.opcode == -250
+        or node.opcode == -251
+        or node.opcode == -252
+        or node.opcode == -254
+        or node.opcode == -255
+        or node.opcode == -257
+        or node.opcode == -271)
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        -> if {
+            irIndex => collectionMutationOwner!
+            collectionMutationOwner! >= 0
+                and context.ir[collectionMutationOwner!].kind != 0
+                and context.ir[collectionMutationOwner!].kind != 11
+                -> while {
+                    context.ir[collectionMutationOwner!].parent => collectionMutationOwner!
+                }
+            node.operand0 -> referencePlaceRootBindingForOwner(collectionMutationOwner!, context) => collectionMutationRoot
+            false => collectionMutationWritable!
+            collectionMutationRoot >= 0 -> if {
+                context.ir[collectionMutationRoot] => collectionMutationRootNode
+                collectionMutationRootNode.kind == 17 and collectionMutationRootNode.flags == 1
+                    -> if { true => collectionMutationWritable! }
+                collectionMutationRootNode.kind == 10 and collectionMutationRootNode.flags / 2 % 2 == 1
+                    -> if { true => collectionMutationWritable! }
+            }
+            not collectionMutationWritable! -> if { 47 => code! }
+            # Projected array push/take already emit through the complete
+            # writable member place. Other projected collection intrinsics are
+            # blocked as compiler-integrity failures until their emitter uses
+            # that same place contract; valid source must never reach a fake
+            # `%slotN` merely because a backend path is unfinished.
+            code! == 0
+                and context.ir[node.operand0].kind == 13
+                and node.opcode != -204
+                and (node.opcode != -213 or (context.ir[node.operand0] -> isDictionaryType))
+                -> if { 48 => code! }
+        }
+    # Builtin output is an ordered runtime effect. If Typed IR changes its
+    # representation without extending the canonical predicate, stop before an
+    # emitter can silently discard the effect in one of its scope-specific paths.
+    code! == 0
+        and (node.symbol == -101 or node.symbol == -102 or node.symbol == -116)
+        and not (node -> typedIr.isConsoleRuntimeCall)
+        -> if { 49 => code! }
+    # A source method that declares `self` must retain that receiver as the
+    # first concrete Typed IR parameter. Losing it changes both method ABI and
+    # member mutation ownership, and can otherwise emit a receiverless function
+    # that silently writes nowhere.
+    code! == 0
+        and node.kind == 0
+        and node.sourceModule >= 0
+        and node.sourceModule < (context.ranges -> len)
+        and node.symbol >= 0
+        and node.symbol < context.ranges[node.sourceModule].symbolCount
+        and node.astNode >= 0
+        and node.astNode < context.ranges[node.sourceModule].astCount
+        -> if {
+            context.ranges[node.sourceModule] => receiverInvariantRange
+            context.symbols[receiverInvariantRange.symbolStart + node.symbol]
+                => receiverInvariantFunction
+            context.nodes[receiverInvariantRange.astStart + node.astNode]
+                => receiverInvariantAst
+            receiverInvariantFunction.kind == 31
+                and receiverInvariantAst.secondaryToken >= 0
+                -> if {
+                    -1 => receiverInvariantParameterKind!
+                    -1 => receiverInvariantParameterSourceModule!
+                    -1 => receiverInvariantSymbolKind!
+                    -1 => receiverInvariantSymbolParent!
+                    -1 => receiverInvariantSymbolNameToken!
+                    node.operand1 >= 0 and node.operand1 < irCount
+                        -> if {
+                            context.ir[node.operand1] => receiverInvariantParameter
+                            receiverInvariantParameter.kind => receiverInvariantParameterKind!
+                            receiverInvariantParameter.sourceModule => receiverInvariantParameterSourceModule!
+                            receiverInvariantParameter.kind == 10
+                                and receiverInvariantParameter.sourceModule == node.sourceModule
+                                and receiverInvariantParameter.symbol >= 0
+                                and receiverInvariantParameter.symbol < receiverInvariantRange.symbolCount
+                                -> if {
+                                    context.symbols[receiverInvariantRange.symbolStart + receiverInvariantParameter.symbol]
+                                        => receiverInvariantSymbol
+                                    receiverInvariantSymbol.kind => receiverInvariantSymbolKind!
+                                    receiverInvariantSymbol.parent => receiverInvariantSymbolParent!
+                                    receiverInvariantSymbol.nameToken => receiverInvariantSymbolNameToken!
+                                }
+                        }
+                    invariantRules.methodReceiverInvariantCode(
+                    receiverInvariantFunction.kind,
+                    receiverInvariantAst.secondaryToken,
+                    node.sourceModule,
+                    node.symbol,
+                    receiverInvariantParameterKind!,
+                    receiverInvariantParameterSourceModule!,
+                    receiverInvariantSymbolKind!,
+                    receiverInvariantSymbolParent!,
+                    receiverInvariantSymbolNameToken!) => receiverInvariantCode
+                    receiverInvariantCode != 0 -> if { receiverInvariantCode => code! }
+                }
+        }
+    # No unresolved call sentinel may cross the typed-IR boundary. A backend
+    # must never turn the internal -1/-1 identity into an LLVM symbol.
+    code! == 0
+        and (node.kind == 6
+        or (node.kind == 9
+        and node.operand0 >= 0
+        and node.operand0 < (context.ir -> len)
+        and ((context.ir[node.operand0] -> irNodeHasSetType(context))
+        or (node.operand1 >= 0 and node.operand1 < (context.ir -> len))
+        or (context.ir[node.operand0].nextOperand >= 0
+        and context.ir[node.operand0].nextOperand < (context.ir -> len)))))
+        and node.symbol == -1
+        and node.targetModule == -1
+        and (node.opcode == -1 or node.opcode == -215 or node.opcode == -230)
+        and not (node -> typedIr.isTransparentControlProducerWrapper)
+        and not (node -> typedIr.isBuiltinTargetlessCall)
+        and not (context -> isDeferredTemplateReceiverCall(irIndex))
+        -> if { 50 => code! }
+    # Resolved direct and flow calls have one explicit linked argument slot for
+    # every runtime parameter. Compile-time value parameters are supplied from
+    # generic syntax and are intentionally excluded. This gate turns a broken
+    # call chain into a producer diagnostic before malformed LLVM can execute.
+    code! == 0
+        and (node.kind == 6 or node.kind == 9)
+        and node.targetModule >= 0
+        and node.symbol >= 0
+        -> if {
+            context -> concreteCallFunctionIndex(irIndex, functions) => callInvariantFunction
+            callInvariantFunction >= 0 -> if {
+                context -> runtimeParameterCount(callInvariantFunction) => callInvariantExpected
+                context -> linkedCallArgumentCount(irIndex, callInvariantExpected) => callInvariantActual
+                context -> implicitFlowArgumentCount(irIndex, callInvariantActual, callInvariantExpected) => callInvariantImplicit
+                callInvariantActual + callInvariantImplicit != callInvariantExpected
+                    -> if { 42 => code! }
+                code! == 0
+                    and (context -> arrayCallElementMismatch(irIndex, callInvariantFunction)) > 0
+                    -> if { 55 => code! }
+            }
+        }
+    # A direct immutable binding read is emitted as a freeze of its canonical
+    # initializer. The read and binding must therefore agree after late type
+    # sealing; otherwise valid source can escape as `freeze void %value`.
+    code! == 0
+        and node.kind == 5
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].kind == 17
+        and node.typeId != context.ir[node.operand0].typeId
+        -> if { 52 => code! }
+    # A canonical non-Unit arm terminal makes its value-producing match
+    # non-Unit. Retaining the provisional Unit identity would otherwise reach
+    # LLVM as `freeze void` even when binding and read agree with each other.
+    code! == 0
+        and (node.kind == 27 or node.kind == 34)
+        and (node.typeId < 0
+        or (node.typeOrigin == 1 and node.typeSymbol == 0))
+        and (context -> matchHasCompleteCanonicalNonUnitTerminals(irIndex))
+        -> if { 53 => code! }
+    # Binding is a value operation. A Unit initializer has no value to retain;
+    # reject it here before the LLVM writer can fabricate `freeze void`.
+    code! == 0
+        and node.kind == 17
+        and node.operand0 >= 0
+        and node.operand0 < irCount
+        and context.ir[node.operand0].typeOrigin == 1
+        and context.ir[node.operand0].typeSymbol == 0
+        -> if { 54 => code! }
+    code!
+}
+
+
+unresolvedGenericAbiNode context: ref emitterContext.EmitContext -> Int {
+    context -> diagnostics.reachableFunctions => reachable
+    -1 => invalid!
+    0 => index!
+    false => emittedFunction!
+    index! < (context.ir -> len) and invalid! < 0
+        -> while {
+            context.ir[index!] => node
+            node.kind == 0 or node.kind == 11 -> if {
+                false => emittedFunction!
+                node.kind == 0 and reachable[index!] and not (node -> isIntrinsicDeclaration)
+                    -> if {
+                        context.ranges[node.sourceModule] => sourceRange
+                        context.symbols[sourceRange.symbolStart + node.symbol] => function
+                        # Stream/block templates have a dedicated lowering path.
+                        function.flags / 64 % 2 == 0 -> if { true => emittedFunction! }
+                    }
+            }
+            emittedFunction! and (node.kind == 0 or node.kind == 10)
+                and node.typeId >= 0 and node.typeId < (context.types -> len)
+                -> if {
+                    context.types[node.typeId] => canonical
+                    canonical.kind == 1 and canonical.origin == 3
+                        -> if { index! => invalid! }
+                }
+            index! + 1 => index!
+        }
+    invalid!
+}
+
+invalidValueLayoutType context: ref emitterContext.EmitContext -> Int {
+    -1 => invalid!
+    0 => index!
+    index! < (context.typeLayoutStatuses -> len) and invalid! < 0
+        -> while {
+            context.types[index!] => candidate
+            context.typeLayoutStatuses[index!] == 3 and candidate.kind == 1
+                and (candidate.origin == 0 or candidate.origin == 2)
+                -> if { index! => invalid! }
+            index! + 1 => index!
+        }
+    invalid!
+}
+
+irInvariantDiagnosticCount context: ref emitterContext.EmitContext -> Int {
+    (context -> invalidValueLayoutType) >= 0 -> if { 1 -> return }
+    context -> concreteFunctionsBySymbol => functions
+    0 => count!
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        context -> irInvariantCode(irIndex!, functions) => invariantCode
+        invariantCode != 0
+            -> if { count! + 1 => count! }
+        irIndex! + 1 => irIndex!
+    }
+    (context -> invalidInterpolationCapacityNode) >= 0
+        -> if { count! + 1 => count! }
+    count! + (context -> runtimeAbiDiagnosticCount) => count!
+    (context -> unresolvedGenericAbiNode) >= 0 -> if { count! + 1 => count! }
+    count!
+}

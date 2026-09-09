@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Detached self-host verification completion record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "verification",
+    "executionMode",
+    "supervisorPid",
+    "startedAtUtc",
+    "completedAtUtc",
+    "durationMilliseconds",
+    "exitCode",
+    "status",
+    "failureIds",
+    "logPath",
+    "standardErrorPath",
+    "cancellationRequestPath",
+    "targetProcessId",
+    "orphanProcessIds"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "verification": { "enum": ["Stage2", "Stage3", "Probe"] },
+    "executionMode": { "const": "detached-supervisor" },
+    "supervisorPid": { "type": "integer", "minimum": 1 },
+    "startedAtUtc": { "type": "string", "format": "date-time" },
+    "completedAtUtc": { "type": "string", "format": "date-time" },
+    "durationMilliseconds": { "type": "integer", "minimum": 0 },
+    "exitCode": { "type": "integer" },
+    "status": { "enum": ["passed", "failed", "cancelled"] },
+    "failureIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "logPath": { "type": "string", "minLength": 1 },
+    "standardErrorPath": { "type": "string", "minLength": 1 },
+    "cancellationRequestPath": { "type": "string", "minLength": 1 },
+    "targetProcessId": { "type": ["integer", "null"], "minimum": 1 },
+    "orphanProcessIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } } },
+      "then": {
+        "properties": {
+          "exitCode": { "const": 0 },
+          "failureIds": { "maxItems": 0 },
+          "orphanProcessIds": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "failed" } } },
+      "then": { "properties": { "exitCode": { "not": { "const": 0 } } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "cancelled" } } },
+      "then": {
+        "properties": {
+          "exitCode": { "not": { "const": 0 } },
+          "failureIds": { "const": ["CANCELLATION_REQUESTED"] },
+          "orphanProcessIds": { "maxItems": 0 }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,1858 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.expression_types as expressionTypes
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as semanticTypes
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+# Lower one source through explicitly borrowed compiler tables.
+lowerFunctionRequest functionRequest: FunctionLowerRequest, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> SourceTypedIr {
+    prepared.package.symbols[prepared.package.ranges[functionRequest.sourceIndex].symbolStart + functionRequest.symbolIndex] => requestedFunction
+    requestedFunction.kind == 36 -> if {
+        prepared -> lowerComGeneratedFunction(frozenRecursiveSemanticTypes, recursiveTypeFlags, functionRequest)
+    } else {
+        functionRequest -> lowerOrdinaryFunction(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst)
+    }
+}
+lowerFunctionRequests functionRequests: [FunctionLowerRequest; ~], useParallel: Bool, profileFunctionLimit: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> [SourceTypedIr; ~] {
+    useParallel -> if {
+        functionRequests -> parallel functionRequest { functionRequest -> lowerFunctionRequest(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst) } => parallelFunctionResults
+        parallelFunctionResults -> return
+    }
+    [SourceTypedIr; ~] => sequentialFunctionResults!
+    0 => requestIndex!
+    requestIndex! < (functionRequests -> len) and (profileFunctionLimit < 0 or requestIndex! < profileFunctionLimit)
+        -> while {
+            functionRequests[requestIndex!] -> lowerFunctionRequest(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst) => functionResult
+            sequentialFunctionResults! -> push(functionResult)
+            requestIndex! + 1 => requestIndex!
+        }
+    sequentialFunctionResults!
+}
+lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionLimit: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> SourceTypedIr {
+    [TypedIrNode; ~] => results!
+    requestedSourceIndex => sourceIndex
+    prepared.package.sources[sourceIndex] -> len => sourceLength
+    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    prepared.package.ranges[sourceIndex] => sourceRange
+    [resolution.ResolvedName; ~] => resolvedNames!
+    [Int; ~] => entryResolvedSymbolByAst!
+    0 => entryResolvedSymbolSeed!
+    entryResolvedSymbolSeed! < sourceRange.astCount
+        -> while {
+            entryResolvedSymbolByAst! -> push(-1)
+            entryResolvedSymbolSeed! + 1 => entryResolvedSymbolSeed!
+        }
+    0 => sourceNameOffset!
+    sourceNameOffset! < sourceRange.nameCount -> while {
+        prepared.package.names[sourceRange.nameStart + sourceNameOffset!] => sourceResolvedName
+        resolvedNames! -> push(sourceResolvedName)
+        sourceResolvedName.astNode >= 0 and sourceResolvedName.astNode < sourceRange.astCount
+            -> if { sourceResolvedName.symbol => entryResolvedSymbolByAst![sourceResolvedName.astNode] }
+        sourceNameOffset! + 1 => sourceNameOffset!
+    }
+    prepared -> localMemberRoots(resolvedNames!, sourceIndex) => entryLocalMemberByAst
+    [FunctionLowerRequest; ~] => sourceFunctionRequests!
+    0 => sourceFunctionSymbolIndex!
+    sourceFunctionSymbolIndex! < sourceRange.symbolCount
+        -> while {
+            prepared.package.symbols[sourceRange.symbolStart + sourceFunctionSymbolIndex!] => sourceFunctionSymbol
+            sourceFunctionSymbol.kind == 7 or sourceFunctionSymbol.kind == 31 or sourceFunctionSymbol.kind == 36
+                -> if { sourceFunctionRequests! -> push(FunctionLowerRequest { sourceIndex: sourceIndex, symbolIndex: sourceFunctionSymbolIndex! }) }
+            sourceFunctionSymbolIndex! + 1 => sourceFunctionSymbolIndex!
+        }
+    sourceFunctionRequests! -> lowerFunctionRequests(parallelFunctions, profileFunctionLimit, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst) => sourceFunctionResults!
+    results! -> appendAndReleaseFunctionResults(sourceFunctionResults!)
+    false => explicitEntryPresent!
+    false => implicitEntryPresent!
+    0 => entryShapeSearch!
+    entryShapeSearch! < sourceRange.astCount -> while {
+        prepared.package.nodes[sourceRange.astStart + entryShapeSearch!] => entryShapeNode
+        entryShapeNode.kind == 8 -> if { true => explicitEntryPresent! }
+        entryShapeNode.parent == 0
+            and entryShapeNode.kind != 1
+            and entryShapeNode.kind != 2
+            and entryShapeNode.kind != 3
+            and entryShapeNode.kind != 4
+            and entryShapeNode.kind != 5
+            and entryShapeNode.kind != 6
+            and entryShapeNode.kind != 7
+            and entryShapeNode.kind != 8
+            and entryShapeNode.kind != 50
+            and entryShapeNode.kind != 65
+            and entryShapeNode.kind != 66
+            and entryShapeNode.kind != 67
+            and entryShapeNode.kind != 68
+            and entryShapeNode.kind != 69 -> if {
+                true => implicitEntryPresent!
+            }
+        entryShapeSearch! + 1 => entryShapeSearch!
+    }
+    0 => entryAstIndex!
+    entryAstIndex! < sourceRange.astCount -> while {
+        prepared.package.nodes[sourceRange.astStart + entryAstIndex!] => entryAst
+        (entryAst.kind == 8 or (entryAst.kind == 0 and not explicitEntryPresent! and implicitEntryPresent!))
+            and (prepared.package.entrySourceModule < 0 or prepared.package.entrySourceModule == sourceIndex)
+            -> if {
+                -1 => entryResultTypeIndex!
+                1000000 => entryResultDistance!
+                0 => entryTypeSearch!
+                entryTypeSearch! < (inferred -> len) -> while {
+                    inferred[entryTypeSearch!] => entryCandidateType
+                    entryCandidateType.sourceModule == sourceIndex
+                        -> if {
+                            prepared.package.nodes[sourceRange.astStart + entryCandidateType.astNode].parent => entryAncestor!
+                            1 => entryDistance!
+                            false => belongsToEntry!
+                            false => entryBlockedByNestedFunction!
+                            entryAncestor! >= 0 and not belongsToEntry! and not entryBlockedByNestedFunction!
+                                -> while {
+                                    entryAncestor! == entryAstIndex! -> if { true => belongsToEntry! } else {
+                                        prepared.package.nodes[sourceRange.astStart + entryAncestor!].kind == 7 or prepared.package.nodes[sourceRange.astStart + entryAncestor!].kind == 29 or prepared.package.nodes[sourceRange.astStart + entryAncestor!].kind == 31
+                                            -> if { true => entryBlockedByNestedFunction! } else {
+                                                prepared.package.nodes[sourceRange.astStart + entryAncestor!].parent => entryAncestor!
+                                                entryDistance! + 1 => entryDistance!
+                                            }
+                                    }
+                                }
+                            belongsToEntry! and (entryDistance! < entryResultDistance! or (entryDistance! == entryResultDistance! and (entryResultTypeIndex! < 0 or prepared.package.nodes[sourceRange.astStart + entryCandidateType.astNode].start > prepared.package.nodes[sourceRange.astStart + inferred[entryResultTypeIndex!].astNode].start)))
+                                -> if {
+                                    entryTypeSearch! => entryResultTypeIndex!
+                                    entryDistance! => entryResultDistance!
+                                }
+                        }
+                    entryTypeSearch! + 1 => entryTypeSearch!
+                }
+                results! -> len => entryIr
+                results! -> push(TypedIrNode {
+                    kind: 11
+                    parent: -1
+                    sourceModule: sourceIndex
+                    astNode: entryAstIndex!
+                    symbol: -1
+                    targetModule: sourceIndex
+                    typeOrigin: 1
+                    typeModule: -1
+                    typeSymbol: 2
+                    typeId: -1
+                    typeKind: -1
+                    typeFlags: 0
+                    payloadToken: -1
+                    opcode: -1
+                    operand0: -1
+                    operand1: -1
+                    nextOperand: -1
+                    flags: 0
+                })
+                false => entryHasResolvedCall!
+                0 => entryResolvedCallSearch!
+                entryResolvedCallSearch! < (prepared.calls -> len)
+                    -> while {
+                        prepared.calls[entryResolvedCallSearch!] => entryResolvedCallCandidate
+                        entryResolvedCallCandidate.sourceModule == sourceIndex and entryResolvedCallCandidate.status == 0
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + entryResolvedCallCandidate.callAst].parent => entryResolvedCallAncestor!
+                                entryResolvedCallAncestor! >= 0 and not entryHasResolvedCall!
+                                    -> while {
+                                        entryResolvedCallAncestor! == entryAstIndex!
+                                            -> if {
+                                                true => entryHasResolvedCall!
+                                            } else {
+                                                prepared.package.nodes[sourceRange.astStart + entryResolvedCallAncestor!].kind == 7
+                                                    or prepared.package.nodes[sourceRange.astStart + entryResolvedCallAncestor!].kind == 29
+                                                    or prepared.package.nodes[sourceRange.astStart + entryResolvedCallAncestor!].kind == 31
+                                                    -> if {
+                                                        -1 => entryResolvedCallAncestor!
+                                                    } else {
+                                                        prepared.package.nodes[sourceRange.astStart + entryResolvedCallAncestor!].parent => entryResolvedCallAncestor!
+                                                    }
+                                            }
+                                    }
+                            }
+                        entryResolvedCallSearch! + 1 => entryResolvedCallSearch!
+                    }
+                entryResultTypeIndex! >= 0 or entryHasResolvedCall!
+                    -> if {
+                        [Int; ~] => entryAstToIr!
+                        0 => entryMapIndex!
+                        entryMapIndex! < sourceRange.astCount -> while {
+                            entryAstToIr! -> push(-1)
+                            entryMapIndex! + 1 => entryMapIndex!
+                        }
+                        results! -> len => entryExpressionStart
+                        0 => entryBindingAstIndex!
+                        entryBindingAstIndex! < sourceRange.astCount
+                            -> while {
+                                prepared.package.nodes[sourceRange.astStart + entryBindingAstIndex!] => entryBindingAst
+                                entryBindingAst.kind == 9 or entryBindingAst.kind == 61 or (entryBindingAst.kind == 48 and entryBindingAst.secondaryToken >= 0)
+                                    -> if {
+                                        entryBindingAst.parent => entryBindingAncestor!
+                                        false => entryBindingBelongs!
+                                        false => entryBindingBlockedByNestedFunction!
+                                        entryBindingAncestor! >= 0 and not entryBindingBelongs! and not entryBindingBlockedByNestedFunction!
+                                            -> while {
+                                                entryBindingAncestor! == entryAstIndex! -> if { true => entryBindingBelongs! } else {
+                                                    prepared.package.nodes[sourceRange.astStart + entryBindingAncestor!].kind == 7 or prepared.package.nodes[sourceRange.astStart + entryBindingAncestor!].kind == 29 or prepared.package.nodes[sourceRange.astStart + entryBindingAncestor!].kind == 31
+                                                        -> if { true => entryBindingBlockedByNestedFunction! } else { prepared.package.nodes[sourceRange.astStart + entryBindingAncestor!].parent => entryBindingAncestor! }
+                                                }
+                                            }
+                                        entryBindingBelongs! -> if {
+                                            -1 => entryBindingTypeIndex!
+                                            frozenNearestLegacyIndexByAst[sourceRange.astStart + entryBindingAstIndex!] => entryBindingTypeIndex!
+                                            frozenNearestCanonicalTypeByAst[sourceRange.astStart + entryBindingAstIndex!] => entryBindingCanonicalTypeId!
+                                            entryBindingCanonicalTypeId! < 0 -> if {
+                                                0 => entryBindingValueTypeSearch!
+                                                entryBindingValueTypeSearch! < sourceRange.astCount and entryBindingCanonicalTypeId! < 0
+                                                    -> while {
+                                                        prepared.package.nodes[sourceRange.astStart + entryBindingValueTypeSearch!] => entryBindingValueTypeAst
+                                                        entryBindingValueTypeAst.parent == entryBindingAstIndex!
+                                                            and entryBindingValueTypeAst.start == entryBindingAst.start
+                                                            -> if {
+                                                                frozenRecursiveTypeByAst[sourceRange.astStart + entryBindingValueTypeSearch!] => entryBindingValueTypeId
+                                                                entryBindingValueTypeId >= 0 -> if { entryBindingValueTypeId => entryBindingCanonicalTypeId! }
+                                                            }
+                                                        entryBindingValueTypeSearch! + 1 => entryBindingValueTypeSearch!
+                                                    }
+                                            }
+                                            -1 => entryBindingSymbol!
+                                            0 => entryBindingSymbolSearch!
+                                            entryBindingSymbolSearch! < sourceRange.symbolCount
+                                                -> while {
+                                                    (prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].kind == 9 or prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].kind == 61) and prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].astNode == entryBindingAstIndex!
+                                                        -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
+                                                    entryBindingSymbolSearch! + 1 => entryBindingSymbolSearch!
+                                                }
+                                            entryBindingAst.flags == 1 and entryBindingAst.payloadToken >= 0
+                                                -> if {
+                                                    prepared.package.tokens[sourceRange.tokenStart + entryBindingAst.payloadToken] => entryMutableBindingName
+                                                    results! -> len => entryPreviousBindingSearch!
+                                                    entryPreviousBindingSearch! > entryExpressionStart
+                                                        -> while {
+                                                            entryPreviousBindingSearch! - 1 => entryPreviousBindingSearch!
+                                                            results![entryPreviousBindingSearch!] => entryPreviousBinding
+                                                            entryPreviousBinding.kind == 17 and entryPreviousBinding.flags == 1 and entryPreviousBinding.sourceModule == sourceIndex and entryPreviousBinding.payloadToken >= 0
+                                                                -> if {
+                                                                    prepared.package.tokens[sourceRange.tokenStart + entryPreviousBinding.payloadToken] => entryPreviousBindingName
+                                                                    entryMutableBindingName.span.length == entryPreviousBindingName.span.length => entryPreviousBindingEqual!
+                                                                    UIntSize(0) => entryPreviousBindingByte!
+                                                                    entryPreviousBindingEqual! and entryPreviousBindingByte! < entryMutableBindingName.span.length
+                                                                        -> while {
+                                                                            (source -> byte(entryMutableBindingName.span.start + entryPreviousBindingByte!)) != (source -> byte(entryPreviousBindingName.span.start + entryPreviousBindingByte!))
+                                                                                -> if { false => entryPreviousBindingEqual! }
+                                                                            entryPreviousBindingByte! + 1 => entryPreviousBindingByte!
+                                                                        }
+                                                                    entryPreviousBindingEqual! -> if {
+                                                                        entryPreviousBinding.symbol => entryBindingSymbol!
+                                                                        entryPreviousBinding.typeId => entryBindingCanonicalTypeId!
+                                                                        0 => entryPreviousBindingSearch!
+                                                                    }
+                                                                }
+                                                        }
+                                                }
+                                            entryBindingSymbol! >= 0 -> if {
+                                                prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbol!] => declaredEntryBindingSymbol
+                                                -1 => entryBindingDeclaredReferenceIndex!
+                                                declaredEntryBindingSymbol.typeNode >= 0 and declaredEntryBindingSymbol.typeNode < sourceRange.astCount
+                                                    -> if { recursiveTypes.referenceIndexByTypeAst[sourceRange.astStart + declaredEntryBindingSymbol.typeNode] => entryBindingDeclaredReferenceIndex! }
+                                                entryBindingDeclaredReferenceIndex! >= 0
+                                                    -> if { recursiveTypes.references[entryBindingDeclaredReferenceIndex!].typeId => entryBindingCanonicalTypeId! }
+                                            }
+                                            entryBindingSymbol! >= 0 -> if {
+                                                -1 => entryBindingOrigin!
+                                                -1 => entryBindingModule!
+                                                -1 => entryBindingSymbolType!
+                                                -1 => entryBindingTypeKind!
+                                                0 => entryBindingTypeFlags!
+                                                entryBindingTypeIndex! >= 0 -> if {
+                                                    inferred[entryBindingTypeIndex!] => entryBindingType
+                                                    entryBindingType.origin => entryBindingOrigin!
+                                                    entryBindingType.targetModule => entryBindingModule!
+                                                    entryBindingType.targetSymbol => entryBindingSymbolType!
+                                                }
+                                                entryBindingCanonicalTypeId! >= 0 -> if {
+                                                    frozenRecursiveSemanticTypes[entryBindingCanonicalTypeId!] => entryBindingCanonicalType
+                                                    entryBindingCanonicalType.origin => entryBindingOrigin!
+                                                    entryBindingCanonicalType.module => entryBindingModule!
+                                                    entryBindingCanonicalType.symbol => entryBindingSymbolType!
+                                                    entryBindingCanonicalType.kind => entryBindingTypeKind!
+                                                    recursiveTypeFlags[entryBindingCanonicalTypeId!] => entryBindingTypeFlags!
+                                                    (entryBindingCanonicalType.kind >= 2 and entryBindingCanonicalType.kind <= 6) or entryBindingCanonicalType.kind == 8
+                                                        -> if { 10 + entryBindingCanonicalType.kind => entryBindingOrigin! }
+                                                    entryBindingCanonicalType.kind == 2 or entryBindingCanonicalType.kind == 3 or entryBindingCanonicalType.kind == 4 or entryBindingCanonicalType.kind == 6 or entryBindingCanonicalType.kind == 8
+                                                        -> if {
+                                                            entryBindingCanonicalType.first >= 0 -> if {
+                                                                frozenRecursiveSemanticTypes[entryBindingCanonicalType.first].module => entryBindingModule!
+                                                                frozenRecursiveSemanticTypes[entryBindingCanonicalType.first].symbol => entryBindingSymbolType!
+                                                            }
+                                                        }
+                                                    entryBindingCanonicalType.kind == 5 -> if {
+                                                        entryBindingCanonicalType.first >= 0 -> if { frozenRecursiveSemanticTypes[entryBindingCanonicalType.first].symbol => entryBindingModule! }
+                                                        entryBindingCanonicalType.second >= 0 -> if { frozenRecursiveSemanticTypes[entryBindingCanonicalType.second].symbol => entryBindingSymbolType! }
+                                                    }
+                                                }
+                                                entryBindingOrigin! == 13 and entryBindingSymbol! >= 0
+                                                    -> if {
+                                                        prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbol!] => declaredEntryBinding
+                                                        0 => declaredEntryBindingTypeSearch!
+                                                        declaredEntryBindingTypeSearch! < (prepared.nominal -> len)
+                                                            -> while {
+                                                                prepared.nominal[declaredEntryBindingTypeSearch!] => declaredEntryBindingType
+                                                                declaredEntryBindingType.sourceModule == sourceIndex and declaredEntryBindingType.typeAst == declaredEntryBinding.typeNode and declaredEntryBindingType.status == 0
+                                                                    -> if {
+                                                                        declaredEntryBindingType.targetModule => entryBindingModule!
+                                                                        declaredEntryBindingType.targetSymbol => entryBindingSymbolType!
+                                                                    }
+                                                                declaredEntryBindingTypeSearch! + 1 => declaredEntryBindingTypeSearch!
+                                                            }
+                                                    }
+                                                results! -> len => entryBindingIr
+                                                entryBindingIr => entryAstToIr![entryBindingAstIndex!]
+                                                entryBindingAst.payloadToken => entryBindingPayloadToken!
+                                                entryBindingAst.kind == 48 -> if { entryBindingAst.secondaryToken => entryBindingPayloadToken! }
+                                                results! -> push(TypedIrNode {
+                                                    kind: 17
+                                                    parent: entryIr
+                                                    sourceModule: sourceIndex
+                                                    astNode: entryBindingAstIndex!
+                                                    symbol: entryBindingSymbol!
+                                                    targetModule: sourceIndex
+                                                    typeOrigin: entryBindingOrigin!
+                                                    typeModule: entryBindingModule!
+                                                    typeSymbol: entryBindingSymbolType!
+                                                    typeId: entryBindingCanonicalTypeId!
+                                                    typeKind: entryBindingTypeKind!
+                                                    typeFlags: entryBindingTypeFlags!
+                                                    payloadToken: entryBindingPayloadToken!
+                                                    opcode: -1
+                                                    operand0: -1
+                                                    operand1: -1
+                                                    nextOperand: -1
+                                                    flags: entryBindingAst.flags
+                                                })
+                                            }
+                                        }
+                                    }
+                                entryBindingAstIndex! + 1 => entryBindingAstIndex!
+                            }
+                        0 => entryExpressionAst!
+                        entryExpressionAst! < sourceRange.astCount -> while {
+                            prepared.package.nodes[sourceRange.astStart + entryExpressionAst!] => entryExpression
+                            entryExpression.parent => entryExpressionAncestor!
+                            false => entryExpressionBelongs!
+                            false => entryExpressionBlockedByNestedFunction!
+                            entryExpressionAncestor! >= 0 and not entryExpressionBelongs! and not entryExpressionBlockedByNestedFunction!
+                                -> while {
+                                    entryExpressionAncestor! == entryAstIndex! -> if { true => entryExpressionBelongs! } else {
+                                        prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].kind == 7 or prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].kind == 29 or prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].kind == 31
+                                            -> if { true => entryExpressionBlockedByNestedFunction! } else { prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].parent => entryExpressionAncestor! }
+                                    }
+                                }
+                            frozenInferredIndexByAst[sourceRange.astStart + entryExpressionAst!] => entryExpressionTypeIndex
+                            frozenRecursiveTypeByAst[sourceRange.astStart + entryExpressionAst!] => recursiveEntryExpressionTypeId!
+                            1 => entryExpressionTypeOrigin!
+                            -1 => entryExpressionTypeModule!
+                            0 => entryExpressionTypeSymbol!
+                            entryExpressionTypeIndex >= 0 -> if {
+                                inferred[entryExpressionTypeIndex] => legacyEntryExpressionType
+                                legacyEntryExpressionType.origin => entryExpressionTypeOrigin!
+                                legacyEntryExpressionType.targetModule => entryExpressionTypeModule!
+                                legacyEntryExpressionType.targetSymbol => entryExpressionTypeSymbol!
+                            }
+                            recursiveEntryExpressionTypeId! >= 0 -> if {
+                                frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => recursiveEntryExpressionType
+                                recursiveEntryExpressionType.origin => entryExpressionTypeOrigin!
+                                recursiveEntryExpressionType.module => entryExpressionTypeModule!
+                                recursiveEntryExpressionType.symbol => entryExpressionTypeSymbol!
+                                (recursiveEntryExpressionType.kind >= 2 and recursiveEntryExpressionType.kind <= 6) or recursiveEntryExpressionType.kind == 8
+                                    -> if {
+                                        10 + recursiveEntryExpressionType.kind => entryExpressionTypeOrigin!
+                                    }
+                                recursiveEntryExpressionType.kind == 2 or recursiveEntryExpressionType.kind == 3 or recursiveEntryExpressionType.kind == 4 or recursiveEntryExpressionType.kind == 6 or recursiveEntryExpressionType.kind == 8
+                                    -> if {
+                                        recursiveEntryExpressionType.first >= 0 -> if {
+                                            frozenRecursiveSemanticTypes[recursiveEntryExpressionType.first].module => entryExpressionTypeModule!
+                                            frozenRecursiveSemanticTypes[recursiveEntryExpressionType.first].symbol => entryExpressionTypeSymbol!
+                                        }
+                                    }
+                                recursiveEntryExpressionType.kind == 5 -> if {
+                                    recursiveEntryExpressionType.first >= 0 -> if { frozenRecursiveSemanticTypes[recursiveEntryExpressionType.first].symbol => entryExpressionTypeModule! }
+                                    recursiveEntryExpressionType.second >= 0 -> if { frozenRecursiveSemanticTypes[recursiveEntryExpressionType.second].symbol => entryExpressionTypeSymbol! }
+                                }
+                            }
+                            false => knownEntryLocalBindingReference!
+                            entryExpression.kind == 15 -> if {
+                                entryResolvedSymbolByAst![entryExpressionAst!] => entryResolvedSymbol
+                                entryResolvedSymbol >= 0 and entryResolvedSymbol < sourceRange.symbolCount
+                                    -> if {
+                                        prepared.package.symbols[sourceRange.symbolStart + entryResolvedSymbol].kind => entryResolvedSymbolKind
+                                        entryResolvedSymbolKind == 9
+                                            or entryResolvedSymbolKind == 61
+                                            or entryResolvedSymbolKind == 35
+                                            -> if {
+                                                true => knownEntryLocalBindingReference!
+                                                0 => entryBindingReadSearch!
+                                                entryBindingReadSearch! < (results! -> len) -> while {
+                                                    results![entryBindingReadSearch!] => entryBindingRead
+                                                    entryBindingRead.kind == 17
+                                                        and entryBindingRead.sourceModule == sourceIndex
+                                                        and entryBindingRead.symbol == entryResolvedSymbol
+                                                        -> if {
+                                                            entryBindingRead.typeOrigin => entryExpressionTypeOrigin!
+                                                            entryBindingRead.typeModule => entryExpressionTypeModule!
+                                                            entryBindingRead.typeSymbol => entryExpressionTypeSymbol!
+                                                            entryBindingRead.typeId => recursiveEntryExpressionTypeId!
+                                                        }
+                                                    entryBindingReadSearch! + 1 => entryBindingReadSearch!
+                                                }
+                                            }
+                                    }
+                            }
+                            false => knownEntryPatternReference!
+                            -1 => entryPatternTypeAst!
+                            entryExpression.kind == 59 -> if { entryExpressionAst! => entryPatternTypeAst! }
+                            entryExpression.kind == 15 -> if {
+                                0 => entryPatternNameResolutionSearch!
+                                entryPatternNameResolutionSearch! < (resolvedNames! -> len)
+                                    -> while {
+                                        resolvedNames![entryPatternNameResolutionSearch!] => entryPatternResolvedName
+                                        entryPatternResolvedName.astNode == entryExpressionAst!
+                                            -> if {
+                                                prepared.package.symbols[sourceRange.symbolStart + entryPatternResolvedName.symbol] => entryPatternResolvedSymbol
+                                                prepared.package.nodes[sourceRange.astStart + entryPatternResolvedSymbol.astNode].kind == 59
+                                                    -> if { entryPatternResolvedSymbol.astNode => entryPatternTypeAst! }
+                                            }
+                                        entryPatternNameResolutionSearch! + 1 => entryPatternNameResolutionSearch!
+                                    }
+                            }
+                            entryExpression.kind == 15 and entryPatternTypeAst! >= 0
+                                -> if { true => knownEntryPatternReference! }
+                            entryPatternTypeAst! >= 0 -> if {
+                                prepared.package.nodes[sourceRange.astStart + entryPatternTypeAst!] => entryPatternTypeNode
+                                entryPatternTypeNode.parent => entryPatternArmAst!
+                                entryPatternArmAst! >= 0 and prepared.package.nodes[sourceRange.astStart + entryPatternArmAst!].kind == 70
+                                    -> if {
+                                        prepared.package.nodes[sourceRange.astStart + entryPatternArmAst!].parent => entryPatternArmAst!
+                                    }
+                                prepared.package.nodes[sourceRange.astStart + entryPatternArmAst!].parent => entryPatternMatchAst
+                                prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].parent => entryPatternFlowAst
+                                entryPatternFlowAst => entryPatternSubjectFlowAst
+                                -1 => entryPatternSubjectTypeId!
+                                UIntSize(0) => entryPatternSubjectStart!
+                                0 => entryPatternSubjectSearch!
+                                entryPatternSubjectSearch! < sourceRange.astCount
+                                    -> while {
+                                        prepared.package.nodes[sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectAst
+                                        frozenRecursiveTypeByAst[sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectCandidateType!
+                                        entryPatternSubjectCandidateType! < 0 -> if {
+                                            0 => generatedEntryPatternCallSearch!
+                                            generatedEntryPatternCallSearch! < (prepared.calls -> len)
+                                                -> while {
+                                                    prepared.calls[generatedEntryPatternCallSearch!] => generatedEntryPatternCall
+                                                    false => generatedEntryPatternCallBelongs!
+                                                    generatedEntryPatternCall.sourceModule == sourceIndex and generatedEntryPatternCall.callAst >= 0 and generatedEntryPatternCall.callAst < sourceRange.astCount
+                                                        -> if {
+                                                            generatedEntryPatternCall.callAst => generatedEntryPatternCallAncestor!
+                                                            generatedEntryPatternCallAncestor! >= 0 and not generatedEntryPatternCallBelongs!
+                                                                -> while {
+                                                                    generatedEntryPatternCallAncestor! == entryPatternSubjectSearch!
+                                                                        -> if {
+                                                                            true => generatedEntryPatternCallBelongs!
+                                                                        } else {
+                                                                            prepared.package.nodes[sourceRange.astStart + generatedEntryPatternCallAncestor!].parent => generatedEntryPatternCallAncestor!
+                                                                        }
+                                                                }
+                                                        }
+                                                    generatedEntryPatternCall.status == 0
+                                                        and generatedEntryPatternCall.sourceModule == sourceIndex
+                                                        and generatedEntryPatternCallBelongs!
+                                                        and generatedEntryPatternCall.targetSourceModule >= 0
+                                                        and generatedEntryPatternCall.functionSymbol >= 0
+                                                        -> if {
+                                                            generatedEntryPatternCall.targetSourceModule -> functionResultTypeId(generatedEntryPatternCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => entryPatternSubjectCandidateType!
+                                                        }
+                                                    generatedEntryPatternCallSearch! + 1 => generatedEntryPatternCallSearch!
+                                                }
+                                            0 => localEntryPatternFunctionSearch!
+                                            localEntryPatternFunctionSearch! < (resolvedNames! -> len)
+                                                -> while {
+                                                    resolvedNames![localEntryPatternFunctionSearch!] => localEntryPatternFunctionName
+                                                    localEntryPatternFunctionName.astNode => localEntryPatternFunctionAncestor!
+                                                    false => localEntryPatternFunctionBelongs!
+                                                    localEntryPatternFunctionAncestor! >= 0 and not localEntryPatternFunctionBelongs!
+                                                        -> while {
+                                                            localEntryPatternFunctionAncestor! == entryPatternSubjectSearch!
+                                                                -> if {
+                                                                    true => localEntryPatternFunctionBelongs!
+                                                                } else {
+                                                                    prepared.package.nodes[sourceRange.astStart + localEntryPatternFunctionAncestor!].parent => localEntryPatternFunctionAncestor!
+                                                                }
+                                                        }
+                                                    localEntryPatternFunctionBelongs! -> if {
+                                                        prepared.package.symbols[sourceRange.symbolStart + localEntryPatternFunctionName.symbol] => localEntryPatternFunction
+                                                        localEntryPatternFunction.kind == 7 or localEntryPatternFunction.kind == 31
+                                                            -> if {
+                                                                sourceIndex -> functionResultTypeId(localEntryPatternFunctionName.symbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => entryPatternSubjectCandidateType!
+                                                            }
+                                                    }
+                                                    localEntryPatternFunctionSearch! + 1 => localEntryPatternFunctionSearch!
+                                                }
+                                        }
+                                        entryPatternSubjectAst.parent == entryPatternSubjectFlowAst and entryPatternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start and entryPatternSubjectCandidateType! >= 0 and (frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType!].kind == 7 or frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType!].kind == 1)
+                                            -> if {
+                                                entryPatternSubjectTypeId! < 0 or entryPatternSubjectAst.start > entryPatternSubjectStart!
+                                                    -> if {
+                                                        entryPatternSubjectCandidateType! => entryPatternSubjectTypeId!
+                                                        entryPatternSubjectAst.start => entryPatternSubjectStart!
+                                                    }
+                                            }
+                                        entryPatternSubjectSearch! + 1 => entryPatternSubjectSearch!
+                                    }
+                                # Entry lowering uses the same normalized-call subject
+                                # contract as ordinary function lowering.
+                                entryPatternSubjectTypeId! < 0 -> if {
+                                    prepared.callIndexByAst[sourceRange.astStart + entryPatternSubjectFlowAst] => entryPatternFlowCallIndex
+                                    entryPatternFlowCallIndex >= 0 -> if {
+                                        prepared.calls[entryPatternFlowCallIndex] => entryPatternFlowCall
+                                        entryPatternFlowCall.status == 0
+                                            and entryPatternFlowCall.sourceModule == sourceIndex
+                                            and entryPatternFlowCall.callAst == entryPatternSubjectFlowAst
+                                            and entryPatternFlowCall.targetSourceModule >= 0
+                                            and entryPatternFlowCall.functionSymbol >= 0
+                                            -> if {
+                                                entryPatternFlowCall.targetSourceModule -> functionResultTypeId(entryPatternFlowCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => entryPatternSubjectTypeId!
+                                            }
+                                    }
+                                }
+                                # Legacy expression inference can know the result of
+                                # an indexed dictionary access before the recursive
+                                # expression map is materialized. Reconstruct the
+                                # nominal enum subject from that shallow identity so
+                                # its payload binding is still emitted.
+                                entryPatternSubjectTypeId! < 0 -> if {
+                                    -1 => entryPatternLegacySubjectOrigin
+                                    -1 => entryPatternLegacySubjectModule!
+                                    -1 => entryPatternLegacySubjectSymbol!
+                                    0 => entryPatternLegacySubjectSearch!
+                                    entryPatternLegacySubjectSearch! < (inferred -> len)
+                                        -> while {
+                                            inferred[entryPatternLegacySubjectSearch!] => entryPatternLegacySubject
+                                            entryPatternLegacySubject.sourceModule == sourceIndex and entryPatternLegacySubject.origin == 0
+                                                -> if {
+                                                    prepared.package.nodes[sourceRange.astStart + entryPatternLegacySubject.astNode].parent => entryPatternLegacyAncestor!
+                                                    false => entryPatternLegacyBelongs!
+                                                    entryPatternLegacyAncestor! >= 0 and not entryPatternLegacyBelongs!
+                                                        -> while {
+                                                            entryPatternLegacyAncestor! == entryPatternSubjectFlowAst
+                                                                -> if { true => entryPatternLegacyBelongs! } else {
+                                                                    prepared.package.nodes[sourceRange.astStart + entryPatternLegacyAncestor!].parent => entryPatternLegacyAncestor!
+                                                                }
+                                                        }
+                                                    entryPatternLegacySubject.targetModule >= 0 and entryPatternLegacySubject.targetSymbol >= 0 and prepared.package.nodes[sourceRange.astStart + entryPatternLegacySubject.astNode].start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start
+                                                        -> if {
+                                                            entryPatternLegacySubject.targetModule => entryPatternLegacySubjectModule!
+                                                            entryPatternLegacySubject.targetSymbol => entryPatternLegacySubjectSymbol!
+                                                        }
+                                                }
+                                            entryPatternLegacySubjectSearch! + 1 => entryPatternLegacySubjectSearch!
+                                        }
+                                    entryPatternLegacySubjectModule! >= 0 and entryPatternLegacySubjectSymbol! >= 0
+                                        -> if {
+                                            0 => entryPatternLegacyTypeSearch!
+                                            entryPatternLegacyTypeSearch! < (frozenRecursiveSemanticTypes -> len) and entryPatternSubjectTypeId! < 0
+                                                -> while {
+                                                    frozenRecursiveSemanticTypes[entryPatternLegacyTypeSearch!] => entryPatternLegacyType
+                                                    entryPatternLegacyType.kind == 1 and entryPatternLegacyType.module == entryPatternLegacySubjectModule! and entryPatternLegacyType.symbol == entryPatternLegacySubjectSymbol!
+                                                        -> if {
+                                                            entryPatternLegacyTypeSearch! => entryPatternSubjectTypeId!
+                                                        }
+                                                    entryPatternLegacyTypeSearch! + 1 => entryPatternLegacyTypeSearch!
+                                                }
+                                        }
+                                }
+                                entryPatternSubjectTypeId! >= 0 -> if {
+                                    frozenRecursiveSemanticTypes[entryPatternSubjectTypeId!] => entryPatternSubjectType
+                                    prepared.package.tokens[sourceRange.tokenStart + entryPatternTypeNode.payloadToken] => entryPatternVariantToken
+                                    entryPatternSubjectType.kind == 7 -> if {
+                                        entryPatternSubjectType.first => recursiveEntryExpressionTypeId!
+                                        (source -> byte(entryPatternVariantToken.span.start)) == 69
+                                            -> if { entryPatternSubjectType.second => recursiveEntryExpressionTypeId! }
+                                    } else {
+                                        sourceIndex -> nominalVariantPayloadTypeId(entryPatternSubjectType, entryPatternVariantToken, prepared, recursiveTypes) => recursiveEntryExpressionTypeId!
+                                    }
+                                    recursiveEntryExpressionTypeId! >= 0 -> if {
+                                        frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => entryPatternPayloadType
+                                        entryPatternPayloadType.origin => entryExpressionTypeOrigin!
+                                        entryPatternPayloadType.module => entryExpressionTypeModule!
+                                        entryPatternPayloadType.symbol => entryExpressionTypeSymbol!
+                                        true => knownEntryPatternReference!
+                                    }
+                                }
+                            }
+                            false => knownEntryCallExpression!
+                            false => unresolvedEntryCallExpression!
+                            prepared.callIndexByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryCallIndex
+                            knownEntryCallIndex >= 0 -> if {
+                                prepared.calls[knownEntryCallIndex] => knownEntryCall
+                                knownEntryCall.sourceModule == sourceIndex and knownEntryCall.callAst == entryExpressionAst! and knownEntryCall.status == 2
+                                    -> if { true => unresolvedEntryCallExpression! }
+                                knownEntryCall.sourceModule == sourceIndex and knownEntryCall.callAst == entryExpressionAst! and knownEntryCall.status == 0
+                                    -> if {
+                                        true => knownEntryCallExpression!
+                                        knownEntryCall.targetSourceModule >= 0 and knownEntryCall.functionSymbol >= 0
+                                            -> if {
+                                                prepared.package.ranges[knownEntryCall.targetSourceModule] => knownEntryCallTargetRange
+                                                prepared.package.symbols[knownEntryCallTargetRange.symbolStart + knownEntryCall.functionSymbol] => knownEntryCallFunction
+                                                knownEntryCall.targetSourceModule -> functionResultTypeId(knownEntryCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => recursiveEntryExpressionTypeId!
+                                                recursiveEntryExpressionTypeId! >= 0 -> if {
+                                                    frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => knownEntryCallType
+                                                    knownEntryCallType.origin => entryExpressionTypeOrigin!
+                                                    knownEntryCallType.module => entryExpressionTypeModule!
+                                                    knownEntryCallType.symbol => entryExpressionTypeSymbol!
+                                                    knownEntryCallType.kind == 7 -> if {
+                                                        17 => entryExpressionTypeOrigin!
+                                                        knownEntryCallType.first >= 0 -> if {
+                                                            frozenRecursiveSemanticTypes[knownEntryCallType.first].module => entryExpressionTypeModule!
+                                                            frozenRecursiveSemanticTypes[knownEntryCallType.first].symbol => entryExpressionTypeSymbol!
+                                                        }
+                                                    }
+                                                } else {
+                                                    knownEntryCallFunction.typeNode => knownEntryCallResultAst!
+                                                    knownEntryCallFunction.secondaryTypeNode >= 0
+                                                        -> if { knownEntryCallFunction.secondaryTypeNode => knownEntryCallResultAst! }
+                                                    0 => knownEntryCallTypeSearch!
+                                                    knownEntryCallTypeSearch! < (prepared.nominal -> len)
+                                                        -> while {
+                                                            prepared.nominal[knownEntryCallTypeSearch!] => knownEntryCallType
+                                                            knownEntryCallType.sourceModule == knownEntryCall.targetSourceModule and knownEntryCallType.typeAst == knownEntryCallResultAst! and knownEntryCallType.status == 0
+                                                                -> if {
+                                                                    knownEntryCallType.origin => entryExpressionTypeOrigin!
+                                                                    knownEntryCallType.targetModule => entryExpressionTypeModule!
+                                                                    knownEntryCallType.targetSymbol => entryExpressionTypeSymbol!
+                                                                }
+                                                            knownEntryCallTypeSearch! + 1 => knownEntryCallTypeSearch!
+                                                        }
+                                                }
+                                            } else {
+                                                knownEntryCall.functionSymbol == -103
+                                                    or knownEntryCall.functionSymbol == -105
+                                                    or knownEntryCall.functionSymbol == -110
+                                                    or knownEntryCall.functionSymbol == -115 -> if {
+                                                        1 => entryExpressionTypeOrigin!
+                                                        -1 => entryExpressionTypeModule!
+                                                        2 => entryExpressionTypeSymbol!
+                                                    }
+                                                knownEntryCall.functionSymbol == -112 -> if {
+                                                    1 => entryExpressionTypeOrigin!
+                                                    -1 => entryExpressionTypeModule!
+                                                    9 => entryExpressionTypeSymbol!
+                                                }
+                                            }
+                                    }
+                            }
+                            entryExpression.kind == 48 -> if {
+                                true => knownEntryCallExpression!
+                                1 => entryExpressionTypeOrigin!
+                                -1 => entryExpressionTypeModule!
+                                0 => entryExpressionTypeSymbol!
+                            }
+                            false => knownEntryNumericExpression!
+                            entryExpression.kind == 20 or entryExpression.kind == 21
+                                -> if {
+                                    frozenNearestLegacyIndexByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryNumericIndex
+                                    knownEntryNumericIndex >= 0 -> if {
+                                        inferred[knownEntryNumericIndex] => knownEntryNumericCandidate
+                                        true => knownEntryNumericExpression!
+                                        knownEntryNumericCandidate.origin => entryExpressionTypeOrigin!
+                                        knownEntryNumericCandidate.targetModule => entryExpressionTypeModule!
+                                        knownEntryNumericCandidate.targetSymbol => entryExpressionTypeSymbol!
+                                    }
+                                }
+                            entryExpression.kind == 22 -> if {
+                                0 => entryUnaryChildSearch!
+                                entryUnaryChildSearch! < sourceRange.astCount and not knownEntryNumericExpression!
+                                    -> while {
+                                        prepared.package.nodes[sourceRange.astStart + entryUnaryChildSearch!] => entryUnaryChild
+                                        entryUnaryChild.parent == entryExpressionAst!
+                                            -> if {
+                                                frozenRecursiveTypeByAst[sourceRange.astStart + entryUnaryChildSearch!] => entryUnaryChildTypeId
+                                                entryUnaryChildTypeId >= 0 -> if {
+                                                    entryUnaryChildTypeId => recursiveEntryExpressionTypeId!
+                                                    frozenRecursiveSemanticTypes[entryUnaryChildTypeId] => entryUnaryChildType
+                                                    entryUnaryChildType.origin => entryExpressionTypeOrigin!
+                                                    entryUnaryChildType.module => entryExpressionTypeModule!
+                                                    entryUnaryChildType.symbol => entryExpressionTypeSymbol!
+                                                    true => knownEntryNumericExpression!
+                                                }
+                                            }
+                                        entryUnaryChildSearch! + 1 => entryUnaryChildSearch!
+                                    }
+                            }
+                            (entryExpression.kind == 18 or entryExpression.kind == 19 or entryExpression.kind == 24 or entryExpression.kind == 25 or entryExpression.kind == 70 or (entryExpression.kind == 22 and entryExpression.operatorKind == -26)) => knownEntryBooleanExpression
+                            knownEntryBooleanExpression -> if {
+                                1 => entryExpressionTypeOrigin!
+                                -1 => entryExpressionTypeModule!
+                                23 => entryExpressionTypeSymbol!
+                                -1 => recursiveEntryExpressionTypeId!
+                            }
+                            false => knownEntryPushExpression!
+                            false => knownEntryTakeExpression!
+                            -1 => entryTakeElementTypeId!
+                            false => knownEntryPutExpression!
+                            -223 => entryPutOpcode!
+                            false => knownEntryCapacityExpression!
+                            false => knownEntryReserveExpression!
+                            false => knownEntryBitSetExpression!
+                            -1 => entryBitSetOpcode!
+                            false => knownEntryDequeExpression!
+                            -1 => entryDequeOpcode!
+                            -1 => entryDequeElementTypeId!
+                            false => knownEntryHeapExpression!
+                            -1 => entryHeapOpcode!
+                            -1 => entryHeapElementTypeId!
+                            false => knownEntrySetExpression!
+                            false => entryInsertIntrinsicSpelling!
+                            -1 => entrySetOpcode!
+                            false => knownEntryMapTextExpression!
+                            false => knownEntryMapPathExpression!
+                            false => knownEntryBorrowTextExpression!
+                            false => knownEntryMaterializeExpression!
+                            false => knownEntryDynExpression!
+                            false => knownEntryDynDispatchExpression!
+                            false => knownEntryStreamFlowExpression!
+                            entryExpression.kind == 53 => knownEntryIndexAssignment
+                            entryExpression.kind == 54 => knownEntryMemberAssignment
+                            entryExpression.kind == 10 or entryExpression.kind == 11
+                                -> if {
+                                    source -> flowIntrinsicOpcode(prepared.package.tokens, sourceRange.tokenStart, entryExpression) => entryFlowOpcode
+                                    entryFlowOpcode == -255 -> if { true => entryInsertIntrinsicSpelling! }
+                                    entryFlowOpcode == -204 -> if { true => knownEntryPushExpression! }
+                                    entryFlowOpcode == -213 -> if {
+                                        0 => entryTakeReceiverSearch!
+                                        entryTakeReceiverSearch! < sourceRange.astCount
+                                            -> while {
+                                                prepared.package.nodes[sourceRange.astStart + entryTakeReceiverSearch!] => entryTakeReceiverCandidate
+                                                frozenRecursiveTypeByAst[sourceRange.astStart + entryTakeReceiverSearch!] => entryTakeReceiverTypeId!
+                                                entryTakeReceiverCandidate.parent == entryExpressionAst! and entryTakeReceiverTypeId! >= 0
+                                                    -> if {
+                                                        frozenRecursiveSemanticTypes[entryTakeReceiverTypeId!] => entryTakeReceiverType!
+                                                        entryTakeReceiverType!.kind == 8 -> if {
+                                                            entryTakeReceiverType!.first => entryTakeReceiverTypeId!
+                                                            frozenRecursiveSemanticTypes[entryTakeReceiverTypeId!] => entryTakeReceiverType!
+                                                        }
+                                                        entryTakeReceiverType!.kind == 3 or entryTakeReceiverType!.kind == 4 or entryTakeReceiverType!.kind == 12
+                                                            -> if {
+                                                                entryTakeReceiverType!.first => entryTakeElementTypeId!
+                                                                true => knownEntryTakeExpression!
+                                                            }
+                                                        entryTakeReceiverType!.kind == 5 -> if {
+                                                            entryTakeReceiverType!.second => entryTakeElementTypeId!
+                                                            true => knownEntryTakeExpression!
+                                                        }
+                                                    }
+                                                entryTakeReceiverSearch! + 1 => entryTakeReceiverSearch!
+                                            }
+                                    }
+                                    entryFlowOpcode == -223 or entryFlowOpcode == -303
+                                        -> if {
+                                            true => knownEntryPutExpression!
+                                            entryFlowOpcode => entryPutOpcode!
+                                            entryFlowOpcode == -303 -> if {
+                                                1 => entryExpressionTypeOrigin!
+                                                -1 => entryExpressionTypeModule!
+                                                23 => entryExpressionTypeSymbol!
+                                                -1 => recursiveEntryExpressionTypeId!
+                                            }
+                                        }
+                                    entryFlowOpcode == -236 -> if { true => knownEntryCapacityExpression! }
+                                    entryFlowOpcode == -271 -> if {
+                                        -1 => entryReserveReceiverTypeId!
+                                        UIntSize(0) => entryReserveReceiverStart!
+                                        false => entryReserveReceiverFound!
+                                        0 => entryReserveReceiverSearch!
+                                        entryReserveReceiverSearch! < sourceRange.astCount
+                                            -> while {
+                                                prepared.package.nodes[sourceRange.astStart + entryReserveReceiverSearch!] => entryReserveReceiverCandidate
+                                                frozenRecursiveTypeByAst[sourceRange.astStart + entryReserveReceiverSearch!] => entryReserveReceiverCandidateType
+                                                entryReserveReceiverCandidate.parent == entryExpressionAst!
+                                                    and entryReserveReceiverCandidateType >= 0
+                                                    and (not entryReserveReceiverFound!
+                                                    or entryReserveReceiverCandidate.start < entryReserveReceiverStart!)
+                                                    -> if {
+                                                        entryReserveReceiverCandidateType => entryReserveReceiverTypeId!
+                                                        entryReserveReceiverCandidate.start => entryReserveReceiverStart!
+                                                        true => entryReserveReceiverFound!
+                                                    }
+                                                entryReserveReceiverSearch! + 1 => entryReserveReceiverSearch!
+                                            }
+                                        entryReserveReceiverTypeId! >= 0
+                                            and frozenRecursiveSemanticTypes[entryReserveReceiverTypeId!].kind == 8
+                                            -> if {
+                                                frozenRecursiveSemanticTypes[entryReserveReceiverTypeId!].first => entryReserveReceiverTypeId!
+                                            }
+                                        entryReserveReceiverTypeId! >= 0
+                                            and frozenRecursiveSemanticTypes[entryReserveReceiverTypeId!].kind == 3
+                                            -> if { true => knownEntryReserveExpression! }
+                                    }
+                                    entryFlowOpcode == -201 or (entryFlowOpcode <= -241 and entryFlowOpcode >= -244)
+                                        -> if {
+                                            -1 => entryBitSetReceiverTypeId!
+                                            UIntSize(0) => entryBitSetReceiverStart!
+                                            false => entryBitSetReceiverFound!
+                                            0 => entryBitSetReceiverSearch!
+                                            entryBitSetReceiverSearch! < sourceRange.astCount
+                                                -> while {
+                                                    prepared.package.nodes[sourceRange.astStart + entryBitSetReceiverSearch!] => entryBitSetReceiverCandidate
+                                                    frozenRecursiveTypeByAst[sourceRange.astStart + entryBitSetReceiverSearch!] => entryBitSetReceiverCandidateType
+                                                    entryBitSetReceiverCandidate.parent == entryExpressionAst! and entryBitSetReceiverCandidateType >= 0 and (not entryBitSetReceiverFound! or entryBitSetReceiverCandidate.start < entryBitSetReceiverStart!)
+                                                        -> if {
+                                                            entryBitSetReceiverCandidateType => entryBitSetReceiverTypeId!
+                                                            entryBitSetReceiverCandidate.start => entryBitSetReceiverStart!
+                                                            true => entryBitSetReceiverFound!
+                                                        }
+                                                    entryBitSetReceiverSearch! + 1 => entryBitSetReceiverSearch!
+                                                }
+                                            entryBitSetReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[entryBitSetReceiverTypeId!].kind == 8
+                                                -> if {
+                                                    frozenRecursiveSemanticTypes[entryBitSetReceiverTypeId!].first => entryBitSetReceiverTypeId!
+                                                }
+                                            entryBitSetReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[entryBitSetReceiverTypeId!].kind == 14
+                                                -> if {
+                                                    true => knownEntryBitSetExpression!
+                                                    entryFlowOpcode == -201 -> if { -245 => entryBitSetOpcode! } else { entryFlowOpcode => entryBitSetOpcode! }
+                                                }
+                                        }
+                                    entryFlowOpcode <= -246 and entryFlowOpcode >= -251
+                                        -> if {
+                                            -1 => entryDequeReceiverTypeId!
+                                            UIntSize(0) => entryDequeReceiverStart!
+                                            false => entryDequeReceiverFound!
+                                            0 => entryDequeReceiverSearch!
+                                            entryDequeReceiverSearch! < sourceRange.astCount
+                                                -> while {
+                                                    prepared.package.nodes[sourceRange.astStart + entryDequeReceiverSearch!] => entryDequeReceiverCandidate
+                                                    frozenRecursiveTypeByAst[sourceRange.astStart + entryDequeReceiverSearch!] => entryDequeReceiverCandidateType
+                                                    entryDequeReceiverCandidate.parent == entryExpressionAst! and entryDequeReceiverCandidateType >= 0 and (not entryDequeReceiverFound! or entryDequeReceiverCandidate.start < entryDequeReceiverStart!)
+                                                        -> if {
+                                                            entryDequeReceiverCandidateType => entryDequeReceiverTypeId!
+                                                            entryDequeReceiverCandidate.start => entryDequeReceiverStart!
+                                                            true => entryDequeReceiverFound!
+                                                        }
+                                                    entryDequeReceiverSearch! + 1 => entryDequeReceiverSearch!
+                                                }
+                                            entryDequeReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[entryDequeReceiverTypeId!].kind == 8
+                                                -> if { frozenRecursiveSemanticTypes[entryDequeReceiverTypeId!].first => entryDequeReceiverTypeId! }
+                                            entryDequeReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[entryDequeReceiverTypeId!].kind == 7 and frozenRecursiveSemanticTypes[entryDequeReceiverTypeId!].origin == 4 and frozenRecursiveSemanticTypes[entryDequeReceiverTypeId!].symbol == 6
+                                                -> if {
+                                                    true => knownEntryDequeExpression!
+                                                    entryFlowOpcode => entryDequeOpcode!
+                                                    frozenRecursiveSemanticTypes[entryDequeReceiverTypeId!].first => entryDequeElementTypeId!
+                                                }
+                                        }
+                                    entryFlowOpcode == -204 or entryFlowOpcode == -253 or entryFlowOpcode == -254 or entryFlowOpcode == -255 or entryFlowOpcode == -243 or entryFlowOpcode == -257
+                                        -> if {
+                                            -1 => entryCollectionReceiverTypeId!
+                                            UIntSize(0) => entryCollectionReceiverStart!
+                                            false => entryCollectionReceiverFound!
+                                            0 => entryCollectionReceiverSearch!
+                                            entryCollectionReceiverSearch! < sourceRange.astCount
+                                                -> while {
+                                                    prepared.package.nodes[sourceRange.astStart + entryCollectionReceiverSearch!] => entryCollectionReceiverCandidate
+                                                    frozenRecursiveTypeByAst[sourceRange.astStart + entryCollectionReceiverSearch!] => entryCollectionReceiverCandidateType
+                                                    entryCollectionReceiverCandidate.parent == entryExpressionAst! and entryCollectionReceiverCandidateType >= 0 and (not entryCollectionReceiverFound! or entryCollectionReceiverCandidate.start < entryCollectionReceiverStart!)
+                                                        -> if {
+                                                            entryCollectionReceiverCandidateType => entryCollectionReceiverTypeId!
+                                                            entryCollectionReceiverCandidate.start => entryCollectionReceiverStart!
+                                                            true => entryCollectionReceiverFound!
+                                                        }
+                                                    entryCollectionReceiverSearch! + 1 => entryCollectionReceiverSearch!
+                                                }
+                                            entryCollectionReceiverTypeId! >= 0 and frozenRecursiveSemanticTypes[entryCollectionReceiverTypeId!].kind == 8
+                                                -> if { frozenRecursiveSemanticTypes[entryCollectionReceiverTypeId!].first => entryCollectionReceiverTypeId! }
+                                            entryCollectionReceiverTypeId! >= 0 -> if {
+                                                frozenRecursiveSemanticTypes[entryCollectionReceiverTypeId!] => entryCollectionReceiverType
+                                                entryCollectionReceiverType.kind == 7 and entryCollectionReceiverType.origin == 4 and entryCollectionReceiverType.symbol == 7 and (entryFlowOpcode == -204 or entryFlowOpcode == -253 or entryFlowOpcode == -254)
+                                                    -> if {
+                                                        true => knownEntryHeapExpression!
+                                                        entryFlowOpcode == -204 -> if { -252 => entryHeapOpcode! } else { entryFlowOpcode => entryHeapOpcode! }
+                                                        entryCollectionReceiverType.first => entryHeapElementTypeId!
+                                                        false => knownEntryPushExpression!
+                                                    }
+                                                entryCollectionReceiverType.kind == 7 and entryCollectionReceiverType.origin == 4 and entryCollectionReceiverType.symbol == 5 and (entryFlowOpcode == -255 or entryFlowOpcode == -243 or entryFlowOpcode == -257)
+                                                    -> if {
+                                                        true => knownEntrySetExpression!
+                                                        entryFlowOpcode == -243 -> if { -256 => entrySetOpcode! } else { entryFlowOpcode => entrySetOpcode! }
+                                                    }
+                                            }
+                                        }
+                                    entryFlowOpcode == -205 -> if { true => knownEntryMapTextExpression! }
+                                    entryFlowOpcode == -214 -> if { true => knownEntryMapPathExpression! }
+                                    entryFlowOpcode == -206 -> if { true => knownEntryBorrowTextExpression! }
+                                    entryFlowOpcode == -229 -> if { true => knownEntryMaterializeExpression! }
+                                    entryFlowOpcode == -224 -> if { true => knownEntryDynExpression! }
+                                    entryFlowOpcode == -227 or entryFlowOpcode == -228
+                                        -> if { true => knownEntryStreamFlowExpression! }
+                                    entryExpression.firstToken => knownEntryDynTokenSearch!
+                                    knownEntryDynTokenSearch! < entryExpression.firstToken + entryExpression.tokenCount
+                                        -> while {
+                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryDynTokenSearch!] => knownEntryDynToken
+                                            knownEntryDynToken.kind == grammar.tokenIdIdentifier() and knownEntryDynToken.span.length == 3 and (source -> byte(knownEntryDynToken.span.start)) == 100 and (source -> byte(knownEntryDynToken.span.start + 1)) == 121 and (source -> byte(knownEntryDynToken.span.start + 2)) == 110
+                                                -> if { true => knownEntryDynExpression! }
+                                            knownEntryDynTokenSearch! + 1 => knownEntryDynTokenSearch!
+                                        }
+                                    false => knownEntryDynDispatchPath!
+                                    -1 => knownEntryDynDispatchTraitToken!
+                                    -1 => knownEntryDynDispatchMethodToken!
+                                    0 => knownEntryDynDispatchPathSearch!
+                                    knownEntryDynDispatchPathSearch! < sourceRange.astCount
+                                        -> while {
+                                            prepared.package.nodes[sourceRange.astStart + knownEntryDynDispatchPathSearch!] => knownEntryDynDispatchPath
+                                            knownEntryDynDispatchPath.kind == 16 and knownEntryDynDispatchPath.parent == entryExpressionAst!
+                                                -> if {
+                                                    knownEntryDynDispatchPath.firstToken => knownEntryDynDispatchTokenSearch!
+                                                    knownEntryDynDispatchTokenSearch! < knownEntryDynDispatchPath.firstToken + knownEntryDynDispatchPath.tokenCount
+                                                        -> while {
+                                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryDynDispatchTokenSearch!] => knownEntryDynDispatchToken
+                                                            knownEntryDynDispatchToken.kind == grammar.tokenIdIdentifier()
+                                                                -> if {
+                                                                    knownEntryDynDispatchMethodToken! >= 0 -> if { knownEntryDynDispatchMethodToken! => knownEntryDynDispatchTraitToken! }
+                                                                    knownEntryDynDispatchTokenSearch! => knownEntryDynDispatchMethodToken!
+                                                                }
+                                                            knownEntryDynDispatchTokenSearch! + 1 => knownEntryDynDispatchTokenSearch!
+                                                        }
+                                                    0 => knownEntryDynDispatchTraitModuleSearch!
+                                                    knownEntryDynDispatchTraitModuleSearch! < (prepared.package.sources -> len)
+                                                        -> while {
+                                                            prepared.package.ranges[knownEntryDynDispatchTraitModuleSearch!] => knownEntryDynDispatchTraitRange
+                                                            prepared.package.sources[knownEntryDynDispatchTraitModuleSearch!] -> len => knownEntryDynDispatchTraitSourceLength
+                                                            prepared.package.sources[knownEntryDynDispatchTraitModuleSearch!] -> slice(UIntSize(0), knownEntryDynDispatchTraitSourceLength) => knownEntryDynDispatchTraitSource
+                                                            0 => knownEntryDynDispatchTraitSearch!
+                                                            knownEntryDynDispatchTraitSearch! < knownEntryDynDispatchTraitRange.symbolCount
+                                                                -> while {
+                                                                    prepared.package.symbols[knownEntryDynDispatchTraitRange.symbolStart + knownEntryDynDispatchTraitSearch!] => knownEntryDynDispatchTrait
+                                                                    knownEntryDynDispatchTrait.kind == 5 and knownEntryDynDispatchTraitToken! >= 0 and knownEntryDynDispatchMethodToken! >= 0
+                                                                        -> if {
+                                                                            prepared.package.tokens[knownEntryDynDispatchTraitRange.tokenStart + knownEntryDynDispatchTrait.nameToken] => knownEntryDynDispatchDeclaredName
+                                                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryDynDispatchTraitToken!] => knownEntryDynDispatchRequestedName
+                                                                            knownEntryDynDispatchDeclaredName.span.length == knownEntryDynDispatchRequestedName.span.length => knownEntryDynDispatchNameEqual!
+                                                                            UIntSize(0) => knownEntryDynDispatchNameByte!
+                                                                            knownEntryDynDispatchNameEqual! and knownEntryDynDispatchNameByte! < knownEntryDynDispatchDeclaredName.span.length
+                                                                                -> while {
+                                                                                    (knownEntryDynDispatchTraitSource -> byte(knownEntryDynDispatchDeclaredName.span.start + knownEntryDynDispatchNameByte!)) != (source -> byte(knownEntryDynDispatchRequestedName.span.start + knownEntryDynDispatchNameByte!))
+                                                                                        -> if { false => knownEntryDynDispatchNameEqual! }
+                                                                                    knownEntryDynDispatchNameByte! + 1 => knownEntryDynDispatchNameByte!
+                                                                                }
+                                                                            knownEntryDynDispatchNameEqual! -> if { true => knownEntryDynDispatchPath! }
+                                                                        }
+                                                                    knownEntryDynDispatchTraitSearch! + 1 => knownEntryDynDispatchTraitSearch!
+                                                                }
+                                                            knownEntryDynDispatchTraitModuleSearch! + 1 => knownEntryDynDispatchTraitModuleSearch!
+                                                        }
+                                                }
+                                            knownEntryDynDispatchPathSearch! + 1 => knownEntryDynDispatchPathSearch!
+                                        }
+                                    -1 => knownEntryDynDispatchSourceSymbol!
+                                    0 => knownEntryDynDispatchSourceSearch!
+                                    knownEntryDynDispatchSourceSearch! < sourceRange.astCount
+                                        -> while {
+                                            prepared.package.nodes[sourceRange.astStart + knownEntryDynDispatchSourceSearch!] => knownEntryDynDispatchSource
+                                            knownEntryDynDispatchSource.kind == 15 and knownEntryDynDispatchSource.parent == entryExpressionAst!
+                                                -> if {
+                                                    0 => knownEntryDynDispatchNameResolutionSearch!
+                                                    knownEntryDynDispatchNameResolutionSearch! < (resolvedNames! -> len)
+                                                        -> while {
+                                                            resolvedNames![knownEntryDynDispatchNameResolutionSearch!].astNode == knownEntryDynDispatchSourceSearch!
+                                                                -> if { resolvedNames![knownEntryDynDispatchNameResolutionSearch!].symbol => knownEntryDynDispatchSourceSymbol! }
+                                                            knownEntryDynDispatchNameResolutionSearch! + 1 => knownEntryDynDispatchNameResolutionSearch!
+                                                        }
+                                                }
+                                            knownEntryDynDispatchSourceSearch! + 1 => knownEntryDynDispatchSourceSearch!
+                                        }
+                                    false => knownEntryDynDispatchSource!
+                                    knownEntryDynDispatchSourceSymbol! >= 0 -> if {
+                                        prepared.package.symbols[sourceRange.symbolStart + knownEntryDynDispatchSourceSymbol!] => knownEntryDynDispatchSourceBinding
+                                        prepared.package.nodes[sourceRange.astStart + knownEntryDynDispatchSourceBinding.astNode] => knownEntryDynDispatchSourceDeclaration
+                                        knownEntryDynDispatchSourceDeclaration.firstToken => knownEntryDynDispatchSourceTokenSearch!
+                                        knownEntryDynDispatchSourceTokenSearch! < knownEntryDynDispatchSourceDeclaration.firstToken + knownEntryDynDispatchSourceDeclaration.tokenCount
+                                            -> while {
+                                                prepared.package.tokens[sourceRange.tokenStart + knownEntryDynDispatchSourceTokenSearch!] => knownEntryDynDispatchSourceToken
+                                                knownEntryDynDispatchSourceToken.kind == grammar.tokenIdIdentifier() and knownEntryDynDispatchSourceToken.span.length == 3 and (source -> byte(knownEntryDynDispatchSourceToken.span.start)) == 100 and (source -> byte(knownEntryDynDispatchSourceToken.span.start + 1)) == 121 and (source -> byte(knownEntryDynDispatchSourceToken.span.start + 2)) == 110
+                                                    -> if { true => knownEntryDynDispatchSource! }
+                                                knownEntryDynDispatchSourceTokenSearch! + 1 => knownEntryDynDispatchSourceTokenSearch!
+                                            }
+                                    }
+                                    knownEntryDynDispatchPath! and knownEntryDynDispatchSource!
+                                        -> if {
+                                            true => knownEntryDynDispatchExpression!
+                                            1 => entryExpressionTypeOrigin!
+                                            -1 => entryExpressionTypeModule!
+                                            2 => entryExpressionTypeSymbol!
+                                            0 => knownEntryDynDispatchIntTypeSearch!
+                                            knownEntryDynDispatchIntTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                                                -> while {
+                                                    frozenRecursiveSemanticTypes[knownEntryDynDispatchIntTypeSearch!] => knownEntryDynDispatchIntType
+                                                    knownEntryDynDispatchIntType.status == 0 and knownEntryDynDispatchIntType.kind == 1 and knownEntryDynDispatchIntType.origin == 1 and knownEntryDynDispatchIntType.symbol == 2
+                                                        -> if { knownEntryDynDispatchIntTypeSearch! => recursiveEntryExpressionTypeId! }
+                                                    knownEntryDynDispatchIntTypeSearch! + 1 => knownEntryDynDispatchIntTypeSearch!
+                                                }
+                                        }
+                                    knownEntryDynDispatchPath! and not knownEntryDynDispatchSource!
+                                        -> if {
+                                            true => knownEntryDynDispatchExpression!
+                                            -1 => knownEntryStaticMethodSymbol!
+                                            0 => knownEntryStaticSymbolSearch!
+                                            knownEntryStaticSymbolSearch! < sourceRange.symbolCount
+                                                -> while {
+                                                    prepared.package.symbols[sourceRange.symbolStart + knownEntryStaticSymbolSearch!] => knownEntryStaticMethod
+                                                    knownEntryStaticMethod.kind == 31 and knownEntryStaticMethod.parent >= 0 and knownEntryDynDispatchTraitToken! >= 0 and knownEntryDynDispatchMethodToken! >= 0
+                                                        -> if {
+                                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryStaticMethod.nameToken] => knownEntryStaticDeclaredMethod
+                                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryDynDispatchMethodToken!] => knownEntryStaticRequestedMethod
+                                                            knownEntryStaticDeclaredMethod.span.length == knownEntryStaticRequestedMethod.span.length => knownEntryStaticMethodEqual!
+                                                            UIntSize(0) => knownEntryStaticMethodByte!
+                                                            knownEntryStaticMethodEqual! and knownEntryStaticMethodByte! < knownEntryStaticDeclaredMethod.span.length
+                                                                -> while {
+                                                                    (source -> byte(knownEntryStaticDeclaredMethod.span.start + knownEntryStaticMethodByte!)) != (source -> byte(knownEntryStaticRequestedMethod.span.start + knownEntryStaticMethodByte!))
+                                                                        -> if { false => knownEntryStaticMethodEqual! }
+                                                                    knownEntryStaticMethodByte! + 1 => knownEntryStaticMethodByte!
+                                                                }
+                                                            prepared.package.symbols[sourceRange.symbolStart + knownEntryStaticMethod.parent] => knownEntryStaticImpl
+                                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryDynDispatchTraitToken!] => knownEntryStaticRequestedTrait
+                                                            false => knownEntryStaticTraitEqual!
+                                                            prepared.package.nodes[sourceRange.astStart + knownEntryStaticImpl.astNode] => knownEntryStaticImplAst
+                                                            knownEntryStaticImplAst.firstToken => knownEntryStaticImplTokenSearch!
+                                                            knownEntryStaticImplTokenSearch! < knownEntryStaticImplAst.firstToken + knownEntryStaticImplAst.tokenCount
+                                                                -> while {
+                                                                    prepared.package.tokens[sourceRange.tokenStart + knownEntryStaticImplTokenSearch!] => knownEntryStaticTraitToken
+                                                                    knownEntryStaticTraitToken.kind == grammar.tokenIdIdentifier()
+                                                                        -> if {
+                                                                            knownEntryStaticTraitToken.span.length == knownEntryStaticRequestedTrait.span.length => knownEntryStaticHeaderEqual!
+                                                                            UIntSize(0) => knownEntryStaticHeaderByte!
+                                                                            knownEntryStaticHeaderEqual! and knownEntryStaticHeaderByte! < knownEntryStaticTraitToken.span.length
+                                                                                -> while {
+                                                                                    (source -> byte(knownEntryStaticTraitToken.span.start + knownEntryStaticHeaderByte!)) != (source -> byte(knownEntryStaticRequestedTrait.span.start + knownEntryStaticHeaderByte!))
+                                                                                        -> if { false => knownEntryStaticHeaderEqual! }
+                                                                                    knownEntryStaticHeaderByte! + 1 => knownEntryStaticHeaderByte!
+                                                                                }
+                                                                            knownEntryStaticHeaderEqual! -> if { true => knownEntryStaticTraitEqual! }
+                                                                        }
+                                                                    knownEntryStaticImplTokenSearch! + 1 => knownEntryStaticImplTokenSearch!
+                                                                }
+                                                            knownEntryStaticMethodEqual! and knownEntryStaticTraitEqual!
+                                                                -> if { knownEntryStaticSymbolSearch! => knownEntryStaticMethodSymbol! }
+                                                        }
+                                                    knownEntryStaticSymbolSearch! + 1 => knownEntryStaticSymbolSearch!
+                                                }
+                                            0 => knownEntryStaticFunctionSearch!
+                                            knownEntryStaticFunctionSearch! < (results! -> len)
+                                                -> while {
+                                                    results![knownEntryStaticFunctionSearch!] => knownEntryStaticFunction
+                                                    knownEntryStaticFunction.kind == 0 and knownEntryStaticFunction.sourceModule == sourceIndex and knownEntryStaticFunction.symbol == knownEntryStaticMethodSymbol!
+                                                        -> if {
+                                                            knownEntryStaticFunction.typeOrigin => entryExpressionTypeOrigin!
+                                                            knownEntryStaticFunction.typeModule => entryExpressionTypeModule!
+                                                            knownEntryStaticFunction.typeSymbol => entryExpressionTypeSymbol!
+                                                            knownEntryStaticFunction.typeId => recursiveEntryExpressionTypeId!
+                                                        }
+                                                    knownEntryStaticFunctionSearch! + 1 => knownEntryStaticFunctionSearch!
+                                                }
+                                        }
+                                }
+                            knownEntryPushExpression! -> if {
+                                1 => entryExpressionTypeOrigin!
+                                -1 => entryExpressionTypeModule!
+                                0 => entryExpressionTypeSymbol!
+                            }
+                            knownEntryTakeExpression! -> if {
+                                entryTakeElementTypeId! => recursiveEntryExpressionTypeId!
+                                frozenRecursiveSemanticTypes[entryTakeElementTypeId!] => entryTakeElementType
+                                entryTakeElementType.origin => entryExpressionTypeOrigin!
+                                entryTakeElementType.module => entryExpressionTypeModule!
+                                entryTakeElementType.symbol => entryExpressionTypeSymbol!
+                            }
+                            knownEntryMapTextExpression! or knownEntryMapPathExpression!
+                                -> if {
+                                    1 => entryExpressionTypeOrigin!
+                                    -1 => entryExpressionTypeModule!
+                                    24 => entryExpressionTypeSymbol!
+                                }
+                            knownEntryBorrowTextExpression! -> if {
+                                1 => entryExpressionTypeOrigin!
+                                -1 => entryExpressionTypeModule!
+                                24 => entryExpressionTypeSymbol!
+                            }
+                            knownEntryMaterializeExpression! -> if {
+                                1 => entryExpressionTypeOrigin!
+                                -1 => entryExpressionTypeModule!
+                                1 => entryExpressionTypeSymbol!
+                            }
+                            knownEntryBitSetExpression! -> if {
+                                entryBitSetOpcode! == -243 -> if {
+                                    1 => entryExpressionTypeOrigin!
+                                    -1 => entryExpressionTypeModule!
+                                    23 => entryExpressionTypeSymbol!
+                                    23 => recursiveEntryExpressionTypeId!
+                                } else {
+                                    entryBitSetOpcode! == -244 or entryBitSetOpcode! == -245
+                                        -> if {
+                                            1 => entryExpressionTypeOrigin!
+                                            -1 => entryExpressionTypeModule!
+                                            2 => entryExpressionTypeSymbol!
+                                            2 => recursiveEntryExpressionTypeId!
+                                        } else {
+                                            1 => entryExpressionTypeOrigin!
+                                            -1 => entryExpressionTypeModule!
+                                            0 => entryExpressionTypeSymbol!
+                                            0 => recursiveEntryExpressionTypeId!
+                                        }
+                                }
+                            }
+                            knownEntryDequeExpression! -> if {
+                                entryDequeOpcode! == -246 or entryDequeOpcode! == -247
+                                    -> if {
+                                        1 => entryExpressionTypeOrigin!
+                                        -1 => entryExpressionTypeModule!
+                                        0 => entryExpressionTypeSymbol!
+                                        0 => recursiveEntryExpressionTypeId!
+                                    } else {
+                                        entryDequeElementTypeId! => recursiveEntryExpressionTypeId!
+                                        frozenRecursiveSemanticTypes[entryDequeElementTypeId!] => entryDequeElementType
+                                        entryDequeElementType.origin => entryExpressionTypeOrigin!
+                                        entryDequeElementType.module => entryExpressionTypeModule!
+                                        entryDequeElementType.symbol => entryExpressionTypeSymbol!
+                                    }
+                            }
+                            knownEntryHeapExpression! -> if {
+                                entryHeapOpcode! == -252 -> if {
+                                    1 => entryExpressionTypeOrigin!
+                                    -1 => entryExpressionTypeModule!
+                                    0 => entryExpressionTypeSymbol!
+                                    0 => recursiveEntryExpressionTypeId!
+                                } else {
+                                    entryHeapElementTypeId! => recursiveEntryExpressionTypeId!
+                                    frozenRecursiveSemanticTypes[entryHeapElementTypeId!] => entryHeapElementType
+                                    entryHeapElementType.origin => entryExpressionTypeOrigin!
+                                    entryHeapElementType.module => entryExpressionTypeModule!
+                                    entryHeapElementType.symbol => entryExpressionTypeSymbol!
+                                }
+                            }
+                            knownEntrySetExpression! -> if {
+                                1 => entryExpressionTypeOrigin!
+                                -1 => entryExpressionTypeModule!
+                                23 => entryExpressionTypeSymbol!
+                                23 => recursiveEntryExpressionTypeId!
+                            }
+                            entryExpressionBelongs! -> if {
+                                entryExpression.kind == 42 or entryExpression.kind == 43 or entryExpression.kind == 44 or entryExpression.kind == 45 or entryExpression.kind == 46 or entryExpression.kind == 47 or entryExpression.kind == 58 or entryExpression.kind == 62 or entryExpression.kind == 82
+                                    -> if {
+                                        results! -> len => entryControlIr
+                                        entryControlIr => entryAstToIr![entryExpressionAst!]
+                                        18 => entryControlKind!
+                                        entryExpression.kind == 43 -> if { 19 => entryControlKind! }
+                                        entryExpression.kind == 44 -> if { 20 => entryControlKind! }
+                                        entryExpression.kind == 45 -> if { 21 => entryControlKind! }
+                                        entryExpression.kind == 46 -> if { 22 => entryControlKind! }
+                                        entryExpression.kind == 47 -> if { 23 => entryControlKind! }
+                                        entryExpression.kind == 58 -> if { 19 => entryControlKind! }
+                                        entryExpression.kind == 62 or entryExpression.kind == 82
+                                            -> if { 30 => entryControlKind! }
+                                        -1 => entryControlOpcode!
+                                        entryExpression.kind == 42 -> if { entryExpression.operatorKind => entryControlOpcode! }
+                                        entryExpression.kind == 45 -> if {
+                                            0 => entryControlOpcode!
+                                            (source -> byte(entryExpression.start)) == 99
+                                                -> if { 1 => entryControlOpcode! }
+                                        }
+                                        entryExpression.kind == 46 -> if { entryExpression.operatorKind => entryControlOpcode! }
+                                        entryExpression.kind == 58 -> if {
+                                            0 => entryPatternSearch!
+                                            entryPatternSearch! < sourceRange.astCount -> while {
+                                                prepared.package.nodes[sourceRange.astStart + entryPatternSearch!] => entryPatternCandidate
+                                                entryPatternCandidate.kind == 59 and entryPatternCandidate.parent == entryExpressionAst!
+                                                    -> if {
+                                                        prepared.package.tokens[sourceRange.tokenStart + entryPatternCandidate.payloadToken] => entryPatternVariant
+                                                        source -> byte(entryPatternVariant.span.start) => entryPatternVariantInitial
+                                                        entryPatternVariantInitial == 69 or entryPatternVariantInitial == 83
+                                                            -> if { 1 => entryControlOpcode! } else { 0 => entryControlOpcode! }
+                                                        sourceIndex -> nominalVariantTag(entryPatternVariant, prepared) => entryNominalTag
+                                                        entryNominalTag >= 0 -> if { entryNominalTag => entryControlOpcode! }
+                                                    }
+                                                entryPatternSearch! + 1 => entryPatternSearch!
+                                            }
+                                        }
+                                        1 => entryControlTypeOrigin!
+                                        -1 => entryControlTypeModule!
+                                        0 => entryControlTypeSymbol!
+                                        entryExpressionTypeIndex >= 0 -> if {
+                                            inferred[entryExpressionTypeIndex] => inferredEntryControlType
+                                            inferredEntryControlType.origin => entryControlTypeOrigin!
+                                            inferredEntryControlType.targetModule => entryControlTypeModule!
+                                            inferredEntryControlType.targetSymbol => entryControlTypeSymbol!
+                                        }
+                                        results! -> push(TypedIrNode {
+                                            kind: entryControlKind!
+                                            parent: entryIr
+                                            sourceModule: sourceIndex
+                                            astNode: entryExpressionAst!
+                                            symbol: -1
+                                            targetModule: sourceIndex
+                                            typeOrigin: entryControlTypeOrigin!
+                                            typeModule: entryControlTypeModule!
+                                            typeSymbol: entryControlTypeSymbol!
+                                            typeId: -1
+                                            typeKind: -1
+                                            typeFlags: 0
+                                            payloadToken: entryExpression.payloadToken
+                                            opcode: entryControlOpcode!
+                                            operand0: -1
+                                            operand1: -1
+                                            nextOperand: -1
+                                            flags: entryExpression.flags
+                                        })
+                                    } else {
+                                        false => unresolvedEntryLibraryInvocation!
+                                        false => resolvedEntryQualifiedLeaf!
+                                        false => contextualEntryNullaryOption!
+                                        entryExpression.payloadToken => contextualEntryOptionVariantToken!
+                                        entryExpression.kind == 11 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 36 and not knownEntryCallExpression!
+                                            -> if {
+                                                true => unresolvedEntryLibraryInvocation!
+                                                0 => entryLibraryPathSearch!
+                                                entryLibraryPathSearch! < (prepared.qualified -> len)
+                                                    -> while {
+                                                        prepared.qualified[entryLibraryPathSearch!] => entryLibraryPath
+                                                        entryLibraryPath.sourceModule == sourceIndex
+                                                            -> if {
+                                                                prepared.package.nodes[sourceRange.astStart + entryLibraryPath.pathAst] => entryLibraryPathAst
+                                                                (entryLibraryPath.pathAst == entryExpression.parent
+                                                                    or entryLibraryPathAst.parent == entryExpressionAst!
+                                                                    or entryLibraryPathAst.parent == entryExpression.parent)
+                                                                    and entryLibraryPath.status == 0 -> if {
+                                                                        false => unresolvedEntryLibraryInvocation!
+                                                                        true => resolvedEntryQualifiedLeaf!
+                                                                    }
+                                                            }
+                                                        entryLibraryPathSearch! + 1 => entryLibraryPathSearch!
+                                                    }
+                                                prepared.package.nodes[sourceRange.astStart + entryExpression.parent] => contextualEntryOptionPath
+                                                contextualEntryOptionPath.firstToken => contextualEntryOptionTokenSearch!
+                                                contextualEntryOptionTokenSearch! < contextualEntryOptionPath.firstToken + contextualEntryOptionPath.tokenCount
+                                                    -> while {
+                                                        prepared.package.tokens[sourceRange.tokenStart + contextualEntryOptionTokenSearch!].kind == grammar.tokenIdIdentifier()
+                                                            -> if {
+                                                                contextualEntryOptionTokenSearch! => contextualEntryOptionVariantToken!
+                                                            }
+                                                        contextualEntryOptionTokenSearch! + 1 => contextualEntryOptionTokenSearch!
+                                                    }
+                                                contextualEntryOptionVariantToken! >= 0 -> if {
+                                                    prepared.package.tokens[sourceRange.tokenStart + contextualEntryOptionVariantToken!] => contextualEntryOptionVariant
+                                                    contextualEntryOptionVariant.span.length == 4
+                                                        -> if {
+                                                            (source -> byte(contextualEntryOptionVariant.span.start)) == 78
+                                                                and (source -> byte(contextualEntryOptionVariant.span.start + 1)) == 111
+                                                                and (source -> byte(contextualEntryOptionVariant.span.start + 2)) == 110
+                                                                and (source -> byte(contextualEntryOptionVariant.span.start + 3)) == 101
+                                                                -> if {
+                                                                    true => contextualEntryNullaryOption!
+                                                                    false => unresolvedEntryLibraryInvocation!
+                                                                    entryExpression.parent => contextualEntryOptionOwnerAst!
+                                                                    -1 => contextualEntryOptionOwnerIr!
+                                                                    contextualEntryOptionOwnerAst! >= 0 and contextualEntryOptionOwnerIr! < 0
+                                                                        -> while {
+                                                                            entryAstToIr![contextualEntryOptionOwnerAst!] >= 0
+                                                                                -> if {
+                                                                                    entryAstToIr![contextualEntryOptionOwnerAst!] => contextualEntryOptionCandidateIr
+                                                                                    results![contextualEntryOptionCandidateIr].typeId >= 0
+                                                                                        -> if {
+                                                                                            contextualEntryOptionCandidateIr => contextualEntryOptionOwnerIr!
+                                                                                        }
+                                                                                }
+                                                                            contextualEntryOptionOwnerIr! < 0 -> if {
+                                                                                prepared.package.nodes[sourceRange.astStart + contextualEntryOptionOwnerAst!].parent => contextualEntryOptionOwnerAst!
+                                                                            }
+                                                                        }
+                                                                    contextualEntryOptionOwnerIr! >= 0 -> if {
+                                                                        results![contextualEntryOptionOwnerIr!] => contextualEntryOptionOwner
+                                                                        contextualEntryOptionOwner.typeOrigin => entryExpressionTypeOrigin!
+                                                                        contextualEntryOptionOwner.typeModule => entryExpressionTypeModule!
+                                                                        contextualEntryOptionOwner.typeSymbol => entryExpressionTypeSymbol!
+                                                                        contextualEntryOptionOwner.typeId => recursiveEntryExpressionTypeId!
+                                                                    }
+                                                                }
+                                                        }
+                                                }
+                                            }
+                                        # Keep qualified library flow invocations in Typed IR until
+                                        # the package library catalog supplies their canonical ABI.
+                                        -1 => unresolvedEntryFlowOpcode!
+                                        entryExpression.kind == 10 -> if {
+                                            source -> flowIntrinsicOpcode(
+                                            prepared.package.tokens,
+                                            sourceRange.tokenStart,
+                                            entryExpression
+                                            ) => unresolvedEntryFlowOpcode!
+                                        }
+                                        entryExpression.kind == 10
+                                            and not knownEntryCallExpression!
+                                            and unresolvedEntryFlowOpcode! == -1
+                                            and unresolvedEntryCallExpression!
+                                            -> if {
+                                                true => unresolvedEntryLibraryInvocation!
+                                            }
+                                        false => knownEntryLocalMemberExpression!
+                                        false => knownEntryIndexedMemberExpression!
+                                        false => knownEntryCallResultMemberExpression!
+                                        entryExpression.kind == 36 -> if {
+                                            false => entryMemberPathIsResolvedCallee!
+                                            entryExpression.parent >= 0
+                                                and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 11
+                                                -> if {
+                                                    prepared.callIndexByAst[sourceRange.astStart + entryExpression.parent] => entryMemberParentCallIndex
+                                                    entryMemberParentCallIndex >= 0 -> if {
+                                                        prepared.calls[entryMemberParentCallIndex] => entryMemberParentCall
+                                                        entryMemberParentCall.status == 0
+                                                            and entryMemberParentCall.sourceModule == sourceIndex
+                                                            and entryMemberParentCall.callAst == entryExpression.parent
+                                                            -> if { true => entryMemberPathIsResolvedCallee! }
+                                                    }
+                                                }
+                                            0 => entryIndexedMemberBaseSearch!
+                                            entryIndexedMemberBaseSearch! < sourceRange.astCount
+                                                -> while {
+                                                    prepared.package.nodes[sourceRange.astStart + entryIndexedMemberBaseSearch!] => entryIndexedMemberBase
+                                                    entryIndexedMemberBase.parent == entryExpressionAst! and entryIndexedMemberBase.kind == 41
+                                                        -> if {
+                                                            true => knownEntryIndexedMemberExpression!
+                                                        }
+                                                    entryIndexedMemberBaseSearch! + 1 => entryIndexedMemberBaseSearch!
+                                                }
+                                            prepared.callResultMemberByAst[sourceRange.astStart + entryExpressionAst!]
+                                                and not entryMemberPathIsResolvedCallee!
+                                                -> if { true => knownEntryCallResultMemberExpression! }
+                                            entryLocalMemberByAst[entryExpressionAst!] => knownEntryLocalMemberExpression!
+                                        }
+                                        false => knownEntryPartitionItem!
+                                        entryExpression.kind == 15 and entryExpressionTypeIndex >= 0
+                                            -> if {
+                                                entryExpression.parent => entryPartitionItemAncestor!
+                                                entryPartitionItemAncestor! >= 0 and not knownEntryPartitionItem!
+                                                    -> while {
+                                                        prepared.package.nodes[sourceRange.astStart + entryPartitionItemAncestor!].kind == 78
+                                                            -> if { true => knownEntryPartitionItem! } else { prepared.package.nodes[sourceRange.astStart + entryPartitionItemAncestor!].parent => entryPartitionItemAncestor! }
+                                                    }
+                                            }
+                                        -1 => entryFlowEmissionOpcode!
+                                        entryExpression.kind == 10 or entryExpression.kind == 11
+                                            -> if {
+                                                source -> flowIntrinsicOpcode(prepared.package.tokens, sourceRange.tokenStart, entryExpression) => entryFlowEmissionOpcode!
+                                            }
+                                        # Keep entry-point lowering identical to function
+                                        # lowering: an exact receiver method suppresses the
+                                        # contextual intrinsic with the same spelling.
+                                        knownEntryCallExpression! -> if { -1 => entryFlowEmissionOpcode! }
+                                        prepared.controlProducerWrapperByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryControlProducerWrapperExpression
+                                        (not resolvedEntryQualifiedLeaf! or knownEntryCallResultMemberExpression! or knownEntryPartitionItem! or entryFlowEmissionOpcode! == -213 or knownEntryControlProducerWrapperExpression) and (contextualEntryNullaryOption! or entryExpressionTypeIndex >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryLocalBindingReference! or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling! or entryFlowEmissionOpcode! == -213 or knownEntryControlProducerWrapperExpression or entryExpression.kind == 22 or knownEntryLocalMemberExpression! or knownEntryIndexedMemberExpression! or knownEntryCallResultMemberExpression! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or entryExpression.kind == 59 or entryExpression.kind == 71 or entryExpression.kind == 73 or entryExpression.kind == 74 or entryExpression.kind == 75 or entryExpression.kind == 76 or entryExpression.kind == 78 or entryExpression.kind == 79 or entryExpression.kind == 80 or entryExpression.kind == 81 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryTakeExpression! or knownEntryPutExpression! or knownEntryCapacityExpression! or knownEntryReserveExpression! or knownEntryBitSetExpression! or knownEntryDequeExpression! or knownEntryHeapExpression! or knownEntrySetExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryMaterializeExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment or knownEntryMemberAssignment)
+                                            -> if {
+                                                9 => entryExpressionKind!
+                                                entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
+                                                entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
+                                                entryExpression.kind == 15 -> if {
+                                                    5 => entryExpressionKind!
+                                                    entryExpressionTypeOrigin! == 1 and entryExpressionTypeSymbol! == 23
+                                                        -> if {
+                                                            true => entryExpressionIsBoolLiteral!
+                                                            0 => entryBoolNameSearch!
+                                                            entryBoolNameSearch! < (resolvedNames! -> len)
+                                                                -> while {
+                                                                    resolvedNames![entryBoolNameSearch!].astNode == entryExpressionAst!
+                                                                        -> if { false => entryExpressionIsBoolLiteral! }
+                                                                    entryBoolNameSearch! + 1 => entryBoolNameSearch!
+                                                                }
+                                                            entryExpressionIsBoolLiteral! -> if { 4 => entryExpressionKind! }
+                                                        }
+                                                }
+                                                entryExpression.kind == 11 or entryExpression.kind == 48 or (entryExpression.kind == 10 and (unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling!))
+                                                    -> if { 6 => entryExpressionKind! }
+                                                contextualEntryNullaryOption! -> if { 26 => entryExpressionKind! }
+                                                entryExpression.kind == 22 -> if { 7 => entryExpressionKind! }
+                                                entryExpression.kind >= 18 and entryExpression.kind <= 21
+                                                    -> if { 8 => entryExpressionKind! }
+                                                entryExpression.kind == 24 or entryExpression.kind == 25
+                                                    -> if { 8 => entryExpressionKind! }
+                                                entryExpression.kind == 70 -> if { 8 => entryExpressionKind! }
+                                                entryExpression.kind == 39 -> if { 12 => entryExpressionKind! }
+                                                entryExpression.kind == 36 -> if { 13 => entryExpressionKind! }
+                                                entryExpression.kind == 37 -> if { 14 => entryExpressionKind! }
+                                                entryExpression.kind == 38 -> if { 16 => entryExpressionKind! }
+                                                entryExpression.kind == 41 -> if { 15 => entryExpressionKind! }
+                                                entryExpression.kind == 53 -> if { 24 => entryExpressionKind! }
+                                                entryExpression.kind == 54 -> if { 25 => entryExpressionKind! }
+                                                entryExpression.kind == 55 -> if { 26 => entryExpressionKind! }
+                                                entryExpression.kind == 56 -> if { 27 => entryExpressionKind! }
+                                                entryExpression.kind == 59 -> if { 29 => entryExpressionKind! }
+                                                entryExpression.kind == 63 -> if { 31 => entryExpressionKind! }
+                                                entryExpression.kind == 64 -> if { 32 => entryExpressionKind! }
+                                                entryExpression.kind == 57 -> if { 33 => entryExpressionKind! }
+                                                entryExpression.kind == 71 -> if { 35 => entryExpressionKind! }
+                                                entryExpression.kind == 73 -> if { 37 => entryExpressionKind! }
+                                                entryExpression.kind == 74 -> if { 38 => entryExpressionKind! }
+                                                entryExpression.kind == 75 -> if { 39 => entryExpressionKind! }
+                                                entryExpression.kind == 76 -> if { 36 => entryExpressionKind! }
+                                                entryExpression.kind == 78 -> if { 40 => entryExpressionKind! }
+                                                entryExpression.kind == 79 -> if { 41 => entryExpressionKind! }
+                                                entryExpression.kind == 80 -> if { 42 => entryExpressionKind! }
+                                                entryExpression.kind == 81 -> if { 43 => entryExpressionKind! }
+                                                prepared.callIndexByAst[sourceRange.astStart + entryExpressionAst!] => entryPropertyCallIndex
+                                                entryPropertyCallIndex >= 0 -> if {
+                                                    prepared.calls[entryPropertyCallIndex] => entryPropertyCall
+                                                    entryPropertyCall.sourceModule == sourceIndex and entryPropertyCall.callAst == entryExpressionAst! and entryPropertyCall.status == 0
+                                                        -> if { 6 => entryExpressionKind! }
+                                                }
+                                                false => transparentEntryExpression!
+                                                entryExpression.kind >= 18 and entryExpression.kind <= 21
+                                                    -> if {
+                                                        0 => transparentEntryChildSearch!
+                                                        transparentEntryChildSearch! < sourceRange.astCount
+                                                            -> while {
+                                                                prepared.package.nodes[sourceRange.astStart + transparentEntryChildSearch!] => transparentEntryChild
+                                                                transparentEntryChild.parent == entryExpressionAst! and transparentEntryChild.start == entryExpression.start and transparentEntryChild.length == entryExpression.length
+                                                                    -> if { true => transparentEntryExpression! }
+                                                                transparentEntryChildSearch! + 1 => transparentEntryChildSearch!
+                                                            }
+                                                    }
+                                                entryExpression.kind == 36 -> if {
+                                                    prepared.qualifiedFunctionByParentAst[sourceRange.astStart + entryExpressionAst!] >= 0
+                                                        => qualifiedEntryFunctionPath!
+                                                    0 => qualifiedEntryFunctionPathSearch!
+                                                    qualifiedEntryFunctionPathSearch! < (prepared.qualified -> len)
+                                                        -> while {
+                                                            prepared.qualified[qualifiedEntryFunctionPathSearch!] => qualifiedEntryFunctionResolution
+                                                            qualifiedEntryFunctionResolution.sourceModule == sourceIndex
+                                                                and qualifiedEntryFunctionResolution.pathAst == entryExpressionAst!
+                                                                and qualifiedEntryFunctionResolution.status == 0
+                                                                -> if {
+                                                                    prepared.modules[qualifiedEntryFunctionResolution.targetModule].sourceIndex => qualifiedEntryFunctionTargetSource
+                                                                    prepared.package.ranges[qualifiedEntryFunctionTargetSource] => qualifiedEntryFunctionTargetRange
+                                                                    prepared.package.symbols[qualifiedEntryFunctionTargetRange.symbolStart + qualifiedEntryFunctionResolution.targetSymbol].kind == 7
+                                                                        -> if {
+                                                                            true => qualifiedEntryFunctionPath!
+                                                                        }
+                                                                }
+                                                            qualifiedEntryFunctionPathSearch! + 1 => qualifiedEntryFunctionPathSearch!
+                                                        }
+                                                    qualifiedEntryFunctionPath! and not knownEntryCallResultMemberExpression!
+                                                        -> if {
+                                                            prepared.callIndexByAst[sourceRange.astStart + entryExpression.parent] => qualifiedEntryFunctionParentCallIndex
+                                                            qualifiedEntryFunctionParentCallIndex >= 0 -> if {
+                                                                prepared.calls[qualifiedEntryFunctionParentCallIndex] => qualifiedEntryFunctionParentCall
+                                                                qualifiedEntryFunctionParentCall.status == 0
+                                                                    and qualifiedEntryFunctionParentCall.sourceModule == sourceIndex
+                                                                    and qualifiedEntryFunctionParentCall.callAst == entryExpression.parent
+                                                                    -> if {
+                                                                        true => transparentEntryExpression!
+                                                                    }
+                                                            }
+                                                            0 => qualifiedEntryFunctionCallChildSearch!
+                                                            qualifiedEntryFunctionCallChildSearch! < sourceRange.astCount
+                                                                -> while {
+                                                                    prepared.package.nodes[sourceRange.astStart + qualifiedEntryFunctionCallChildSearch!] => qualifiedEntryFunctionCallChild
+                                                                    qualifiedEntryFunctionCallChild.kind == 11
+                                                                        and qualifiedEntryFunctionCallChild.cstRuleId == grammar.ruleIdCallExpression()
+                                                                        and qualifiedEntryFunctionCallChild.start == entryExpression.start
+                                                                        and qualifiedEntryFunctionCallChild.length == entryExpression.length
+                                                                        -> if {
+                                                                            true => transparentEntryExpression!
+                                                                        }
+                                                                    qualifiedEntryFunctionCallChildSearch! + 1 => qualifiedEntryFunctionCallChildSearch!
+                                                                }
+                                                        }
+                                                }
+                                                not transparentEntryExpression! -> if {
+                                                    results! -> len => entryExpressionIr
+                                                    entryExpressionIr => entryAstToIr![entryExpressionAst!]
+                                                    -1 => entryExpressionSymbol!
+                                                    -1 => entryExpressionTargetModule!
+                                                    entryExpression.flags => entryExpressionFlags!
+                                                    entryExpression.operatorKind => entryExpressionOpcode!
+                                                    entryExpressionKind! == 16 -> if {
+                                                        source -> dictionaryCapacityHint(entryExpression) => entryExpressionOpcode!
+                                                    }
+                                                    entryExpressionKind! == 14 -> if {
+                                                        source -> arrayCapacityHint(entryExpression) => entryArrayCapacityOpcode
+                                                        entryArrayCapacityOpcode >= 0 -> if { entryArrayCapacityOpcode => entryExpressionOpcode! }
+                                                    }
+                                                    entryExpressionKind! == 13 -> if {
+                                                        0 => entryValuePathSearch!
+                                                        entryValuePathSearch! < (prepared.qualified -> len)
+                                                            -> while {
+                                                                prepared.qualified[entryValuePathSearch!] => entryValuePath
+                                                                entryValuePath.sourceModule == sourceIndex and entryValuePath.pathAst == entryExpressionAst! and entryValuePath.status == 0
+                                                                    -> if {
+                                                                        prepared.modules[entryValuePath.targetModule].sourceIndex => entryValueTargetSource
+                                                                        prepared.package.ranges[entryValueTargetSource] => entryValueTargetRange
+                                                                        prepared.package.symbols[entryValueTargetRange.symbolStart + entryValuePath.targetSymbol] => entryValueTarget
+                                                                        entryValueTarget.kind == 27 -> if {
+                                                                            26 => entryExpressionKind!
+                                                                            entryValuePath.targetSymbol => entryExpressionSymbol!
+                                                                            entryValueTargetSource => entryExpressionTargetModule!
+                                                                        }
+                                                                    }
+                                                                entryValuePathSearch! + 1 => entryValuePathSearch!
+                                                            }
+                                                    }
+                                                    entryExpression.kind == 10 or entryExpression.kind == 11
+                                                        -> if {
+                                                            knownEntryDynExpression! -> if { -224 => entryExpressionOpcode! }
+                                                            entryExpression.kind == 10 or entryExpression.kind == 11
+                                                                -> if {
+                                                                    entryFlowEmissionOpcode! == -213 -> if { entryFlowEmissionOpcode! => entryExpressionOpcode! }
+                                                                }
+                                                            0 => entryIntrinsicChildSearch!
+                                                            entryIntrinsicChildSearch! < sourceRange.astCount
+                                                                -> while {
+                                                                    prepared.package.nodes[sourceRange.astStart + entryIntrinsicChildSearch!] => entryIntrinsicChild
+                                                                    entryIntrinsicChild.parent == entryExpressionAst! and entryIntrinsicChild.kind == 16
+                                                                        -> if {
+                                                                            IntrinsicNameRequest { source: source, token: prepared.package.tokens[sourceRange.tokenStart + entryIntrinsicChild.payloadToken] } -> intrinsicOpcode => entryExpressionIntrinsicOpcode
+                                                                            entryExpressionIntrinsicOpcode <= -201
+                                                                                and entryExpressionIntrinsicOpcode >= -240
+                                                                                and entryExpressionIntrinsicOpcode == entryFlowEmissionOpcode!
+                                                                                -> if { entryExpressionIntrinsicOpcode => entryExpressionOpcode! }
+                                                                        }
+                                                                    entryIntrinsicChildSearch! + 1 => entryIntrinsicChildSearch!
+                                                                }
+                                                            entryExpressionOpcode! == -224 -> if {
+                                                                -1 => entryDynTraitToken!
+                                                                false => entryAfterDyn!
+                                                                entryExpression.firstToken => entryDynTokenSearch!
+                                                                entryDynTokenSearch! < entryExpression.firstToken + entryExpression.tokenCount
+                                                                    -> while {
+                                                                        prepared.package.tokens[sourceRange.tokenStart + entryDynTokenSearch!] => entryDynToken
+                                                                        entryAfterDyn! and entryDynTraitToken! < 0 and entryDynToken.kind == grammar.tokenIdIdentifier()
+                                                                            -> if { entryDynTokenSearch! => entryDynTraitToken! }
+                                                                        entryDynToken.kind == grammar.tokenIdIdentifier() and entryDynToken.span.length == 3 and (source -> byte(entryDynToken.span.start)) == 100 and (source -> byte(entryDynToken.span.start + 1)) == 121 and (source -> byte(entryDynToken.span.start + 2)) == 110
+                                                                            -> if { true => entryAfterDyn! }
+                                                                        entryDynTokenSearch! + 1 => entryDynTokenSearch!
+                                                                    }
+                                                                -1 => entryDynTraitSymbol!
+                                                                0 => entryDynTraitSearch!
+                                                                entryDynTraitSearch! < sourceRange.symbolCount
+                                                                    -> while {
+                                                                        prepared.package.symbols[sourceRange.symbolStart + entryDynTraitSearch!] => entryDynTraitCandidate
+                                                                        entryDynTraitCandidate.kind == 5 and entryDynTraitToken! >= 0
+                                                                            -> if {
+                                                                                prepared.package.tokens[sourceRange.tokenStart + entryDynTraitCandidate.nameToken] => entryDynDeclared
+                                                                                prepared.package.tokens[sourceRange.tokenStart + entryDynTraitToken!] => entryDynRequested
+                                                                                entryDynDeclared.span.length == entryDynRequested.span.length => entryDynEqual!
+                                                                                UIntSize(0) => entryDynByte!
+                                                                                entryDynEqual! and entryDynByte! < entryDynDeclared.span.length
+                                                                                    -> while {
+                                                                                        (source -> byte(entryDynDeclared.span.start + entryDynByte!)) != (source -> byte(entryDynRequested.span.start + entryDynByte!))
+                                                                                            -> if { false => entryDynEqual! }
+                                                                                        entryDynByte! + 1 => entryDynByte!
+                                                                                    }
+                                                                                entryDynEqual! -> if { entryDynTraitSearch! => entryDynTraitSymbol! }
+                                                                            }
+                                                                        entryDynTraitSearch! + 1 => entryDynTraitSearch!
+                                                                    }
+                                                                entryDynTraitSymbol! >= 0 -> if {
+                                                                    9 => entryExpressionKind!
+                                                                    16 => entryExpressionTypeOrigin!
+                                                                    sourceIndex => entryExpressionTypeModule!
+                                                                    entryDynTraitSymbol! => entryExpressionTypeSymbol!
+                                                                    -1 => recursiveEntryExpressionTypeId!
+                                                                }
+                                                            } else {
+                                                                entryExpressionOpcode! == -1 -> if {
+                                                                    -1 => entryDispatchTraitToken!
+                                                                    -1 => entryDispatchMethodToken!
+                                                                    prepared.directFlowTargetPathByAst[sourceRange.astStart + entryExpressionAst!] => entryDispatchPathAst
+                                                                    0 => entryDispatchTokenEnd!
+                                                                    0 => entryDispatchTokenSearch!
+                                                                    entryDispatchPathAst >= 0 -> if {
+                                                                        prepared.package.nodes[sourceRange.astStart + entryDispatchPathAst] => entryDispatchPath
+                                                                        entryDispatchPath.firstToken => entryDispatchTokenSearch!
+                                                                        entryDispatchPath.firstToken + entryDispatchPath.tokenCount => entryDispatchTokenEnd!
+                                                                    }
+                                                                    entryDispatchTokenSearch! < entryDispatchTokenEnd!
+                                                                        -> while {
+                                                                            prepared.package.tokens[sourceRange.tokenStart + entryDispatchTokenSearch!] => entryDispatchToken
+                                                                            entryDispatchToken.kind == grammar.tokenIdIdentifier() and entryDispatchToken.span.start >= entryExpression.start and entryDispatchToken.span.start < entryExpression.start + entryExpression.length
+                                                                                -> if {
+                                                                                    entryDispatchMethodToken! >= 0 -> if { entryDispatchMethodToken! => entryDispatchTraitToken! }
+                                                                                    entryDispatchTokenSearch! => entryDispatchMethodToken!
+                                                                                }
+                                                                            entryDispatchTokenSearch! + 1 => entryDispatchTokenSearch!
+                                                                        }
+                                                                    false => entryDispatchTraitFound!
+                                                                    -1 => entryDispatchTraitSource!
+                                                                    0 => entryDispatchModuleSearch!
+                                                                    entryDispatchModuleSearch! < (prepared.package.sources -> len)
+                                                                        -> while {
+                                                                            prepared.package.ranges[entryDispatchModuleSearch!] => entryDispatchCandidateRange
+                                                                            prepared.package.sources[entryDispatchModuleSearch!] -> len => entryDispatchCandidateLength
+                                                                            prepared.package.sources[entryDispatchModuleSearch!] -> slice(UIntSize(0), entryDispatchCandidateLength) => entryDispatchCandidateSource
+                                                                            0 => entryDispatchTraitSearch!
+                                                                            entryDispatchTraitSearch! < entryDispatchCandidateRange.symbolCount
+                                                                                -> while {
+                                                                                    prepared.package.symbols[entryDispatchCandidateRange.symbolStart + entryDispatchTraitSearch!] => entryDispatchTraitCandidate
+                                                                                    entryDispatchTraitCandidate.kind == 5 and entryDispatchTraitToken! >= 0
+                                                                                        -> if {
+                                                                                            prepared.package.tokens[entryDispatchCandidateRange.tokenStart + entryDispatchTraitCandidate.nameToken] => entryDispatchDeclared
+                                                                                            prepared.package.tokens[sourceRange.tokenStart + entryDispatchTraitToken!] => entryDispatchRequested
+                                                                                            entryDispatchDeclared.span.length == entryDispatchRequested.span.length => entryDispatchEqual!
+                                                                                            UIntSize(0) => entryDispatchByte!
+                                                                                            entryDispatchEqual! and entryDispatchByte! < entryDispatchDeclared.span.length
+                                                                                                -> while {
+                                                                                                    (entryDispatchCandidateSource -> byte(entryDispatchDeclared.span.start + entryDispatchByte!)) != (source -> byte(entryDispatchRequested.span.start + entryDispatchByte!))
+                                                                                                        -> if { false => entryDispatchEqual! }
+                                                                                                    entryDispatchByte! + 1 => entryDispatchByte!
+                                                                                                }
+                                                                                            entryDispatchEqual! -> if {
+                                                                                                true => entryDispatchTraitFound!
+                                                                                                entryDispatchModuleSearch! => entryDispatchTraitSource!
+                                                                                            }
+                                                                                        }
+                                                                                    entryDispatchTraitSearch! + 1 => entryDispatchTraitSearch!
+                                                                                }
+                                                                            entryDispatchModuleSearch! + 1 => entryDispatchModuleSearch!
+                                                                        }
+                                                                    entryDispatchTraitFound! and entryDispatchMethodToken! >= 0
+                                                                        -> if {
+                                                                            9 => entryExpressionKind!
+                                                                            entryDispatchTraitSource! == sourceIndex -> if {
+                                                                                -225 => entryExpressionOpcode!
+                                                                                1 => entryExpressionTypeOrigin!
+                                                                                -1 => entryExpressionTypeModule!
+                                                                                2 => entryExpressionTypeSymbol!
+                                                                                -1 => recursiveEntryExpressionTypeId!
+                                                                                0 => entryDispatchIntSearch!
+                                                                                entryDispatchIntSearch! < (frozenRecursiveSemanticTypes -> len)
+                                                                                    -> while {
+                                                                                        frozenRecursiveSemanticTypes[entryDispatchIntSearch!] => entryDispatchIntType
+                                                                                        entryDispatchIntType.status == 0 and entryDispatchIntType.kind == 1 and entryDispatchIntType.origin == 1 and entryDispatchIntType.symbol == 2
+                                                                                            -> if { entryDispatchIntSearch! => recursiveEntryExpressionTypeId! }
+                                                                                        entryDispatchIntSearch! + 1 => entryDispatchIntSearch!
+                                                                                    }
+                                                                            } else {
+                                                                                -226 => entryExpressionOpcode!
+                                                                            }
+                                                                        }
+                                                                }
+                                                            }
+                                                            knownEntryPushExpression! -> if { -204 => entryExpressionOpcode! }
+                                                            knownEntryPutExpression! -> if { entryPutOpcode! => entryExpressionOpcode! }
+                                                            knownEntryCapacityExpression! and entryExpressionKind! == 9
+                                                                -> if { -236 => entryExpressionOpcode! }
+                                                            knownEntryReserveExpression! -> if { -271 => entryExpressionOpcode! }
+                                                            knownEntryBitSetExpression! -> if { entryBitSetOpcode! => entryExpressionOpcode! }
+                                                            knownEntryDequeExpression! -> if { entryDequeOpcode! => entryExpressionOpcode! }
+                                                            knownEntryHeapExpression! -> if { entryHeapOpcode! => entryExpressionOpcode! }
+                                                            knownEntrySetExpression! -> if { entrySetOpcode! => entryExpressionOpcode! }
+                                                            entryInsertIntrinsicSpelling! and not knownEntrySetExpression!
+                                                                -> if { -1 => entryExpressionOpcode! }
+                                                            knownEntryMapTextExpression! -> if { -205 => entryExpressionOpcode! }
+                                                            knownEntryMapPathExpression! -> if { -214 => entryExpressionOpcode! }
+                                                            knownEntryBorrowTextExpression! -> if { -206 => entryExpressionOpcode! }
+                                                            knownEntryMaterializeExpression! -> if { -229 => entryExpressionOpcode! }
+                                                        }
+                                                    entryExpression.kind == 48 -> if {
+                                                        entryExpression.payloadToken >= 0 -> if {
+                                                            prepared.package.tokens[sourceRange.tokenStart + entryExpression.payloadToken] => entryStreamSliceToken
+                                                            IntrinsicNameRequest { source: source, token: entryStreamSliceToken } -> streamSliceOpcode => entryStreamSliceOpcode
+                                                            entryStreamSliceOpcode != -1
+                                                                -> if { entryStreamSliceOpcode => entryExpressionOpcode! }
+                                                        }
+                                                        entryExpression.firstToken => entryRoleTokenIndex!
+                                                        entryRoleTokenIndex! < entryExpression.firstToken + entryExpression.tokenCount
+                                                            -> while {
+                                                                prepared.package.tokens[sourceRange.tokenStart + entryRoleTokenIndex!] => entryRoleToken
+                                                                entryRoleToken.kind == grammar.tokenIdIdentifier()
+                                                                    -> if {
+                                                                        IntrinsicNameRequest { source: source, token: entryRoleToken } -> intrinsicOpcode => entryRoleOpcode
+                                                                        entryRoleOpcode == -207 or entryRoleOpcode == -208 or entryRoleOpcode == -209
+                                                                            -> if { entryRoleOpcode => entryExpressionOpcode! }
+                                                                    }
+                                                                entryRoleTokenIndex! + 1 => entryRoleTokenIndex!
+                                                            }
+                                                    }
+                                                    entryExpressionKind! == 5 -> if {
+                                                        0 => entryNameSearch!
+                                                        entryNameSearch! < (resolvedNames! -> len) -> while {
+                                                            resolvedNames![entryNameSearch!] => entryResolvedName
+                                                            entryResolvedName.astNode == entryExpressionAst!
+                                                                -> if { entryResolvedName.symbol => entryExpressionSymbol! }
+                                                            entryNameSearch! + 1 => entryNameSearch!
+                                                        }
+                                                    }
+                                                    entryExpressionKind! == 29 -> if {
+                                                        0 => entryPatternBindingSymbolSearch!
+                                                        entryPatternBindingSymbolSearch! < sourceRange.symbolCount
+                                                            -> while {
+                                                                prepared.package.symbols[sourceRange.symbolStart + entryPatternBindingSymbolSearch!] => entryPatternBindingSymbol
+                                                                entryPatternBindingSymbol.kind == 35 and entryPatternBindingSymbol.astNode == entryExpressionAst!
+                                                                    -> if { entryPatternBindingSymbolSearch! => entryExpressionSymbol! }
+                                                                entryPatternBindingSymbolSearch! + 1 => entryPatternBindingSymbolSearch!
+                                                            }
+                                                    }
+                                                    false => targetlessEntryBuiltinTypeApplication!
+                                                    -1 => builtinEntryTypeApplicationSymbol!
+                                                    entryExpression.payloadToken >= 0 -> if {
+                                                        prepared.package.tokens[sourceRange.tokenStart + entryExpression.payloadToken] => builtinEntryTypeApplicationName
+                                                        source -> expressionTypes.builtinTypeApplicationSymbol(builtinEntryTypeApplicationName) => builtinEntryTypeApplicationSymbol!
+                                                    }
+                                                    entryExpressionTypeIndex >= 0 -> if {
+                                                        inferred[entryExpressionTypeIndex] -> isTargetlessBuiltinTypeApplication(builtinEntryTypeApplicationSymbol!) => targetlessEntryBuiltinTypeApplication!
+                                                    }
+                                                    prepared.callIndexByAst[sourceRange.astStart + entryExpressionAst!] => entryResolvedCallIndex
+                                                    entryResolvedCallIndex >= 0 and entryExpression.kind == 10
+                                                        -> if {
+                                                            prepared.calls[entryResolvedCallIndex] => directResolvedEntryFlowCall
+                                                            directResolvedEntryFlowCall.sourceModule == sourceIndex
+                                                                and directResolvedEntryFlowCall.callAst == entryExpressionAst!
+                                                                and directResolvedEntryFlowCall.status == 0
+                                                                -> if { false => targetlessEntryBuiltinTypeApplication! }
+                                                        }
+                                                    prepared.qualifiedFunctionByParentAst[sourceRange.astStart + entryExpressionAst!] => directQualifiedEntryCallIndex
+                                                    directQualifiedEntryCallIndex >= 0
+                                                        and entryExpression.kind == 10
+                                                        -> if { false => targetlessEntryBuiltinTypeApplication! }
+                                                    entryExpressionKind! == 6 and not targetlessEntryBuiltinTypeApplication!
+                                                        -> if {
+                                                            entryResolvedCallIndex >= 0 -> if {
+                                                                prepared.calls[entryResolvedCallIndex] => entryResolvedCall
+                                                                entryResolvedCall.sourceModule == sourceIndex and entryResolvedCall.callAst == entryExpressionAst! and entryResolvedCall.status == 0
+                                                                    -> if {
+                                                                        entryResolvedCall.functionSymbol => entryExpressionSymbol!
+                                                                        entryResolvedCall.targetSourceModule => entryExpressionTargetModule!
+                                                                        entryResolvedCall.functionSymbol >= 0 and entryResolvedCall.targetSourceModule >= 0
+                                                                            -> if {
+                                                                                prepared.package.ranges[entryResolvedCall.targetSourceModule] => entryExpressionTargetRange
+                                                                                prepared.package.symbols[entryExpressionTargetRange.symbolStart + entryResolvedCall.functionSymbol] => entryExpressionTargetFunction
+                                                                                (entryExpressionTargetFunction.flags / 8) % 2 == 1 and (entryExpressionFlags! / 8) % 2 == 0
+                                                                                    -> if {
+                                                                                        entryExpressionFlags! + 8 => entryExpressionFlags!
+                                                                                    }
+                                                                            } else {
+                                                                                entryResolvedCall.functionSymbol == -115 -> if {
+                                                                                    1 => entryExpressionTypeOrigin!
+                                                                                    -1 => entryExpressionTypeModule!
+                                                                                    2 => entryExpressionTypeSymbol!
+                                                                                }
+                                                                            }
+                                                                    }
+                                                            }
+                                                            directQualifiedEntryCallIndex >= 0
+                                                                and entryExpressionSymbol! == -1
+                                                                and (entryExpression.kind == 10 or entryExpression.kind == 11)
+                                                                -> if {
+                                                                    prepared.qualified[directQualifiedEntryCallIndex] => directQualifiedEntryCall
+                                                                    prepared.modules[directQualifiedEntryCall.targetModule].sourceIndex => directQualifiedEntryCallSource
+                                                                    prepared.package.ranges[directQualifiedEntryCallSource] => directQualifiedEntryCallRange
+                                                                    prepared.package.symbols[directQualifiedEntryCallRange.symbolStart + directQualifiedEntryCall.targetSymbol] => directQualifiedEntryCallSymbol
+                                                                    directQualifiedEntryCallSymbol.kind == 7 -> if {
+                                                                        directQualifiedEntryCall.targetSymbol => entryExpressionSymbol!
+                                                                        directQualifiedEntryCallSource => entryExpressionTargetModule!
+                                                                        directQualifiedEntryCallSource -> functionResultTypeId(directQualifiedEntryCall.targetSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => directQualifiedEntryCallResultTypeId
+                                                                        directQualifiedEntryCallResultTypeId >= 0 -> if {
+                                                                            frozenRecursiveSemanticTypes[directQualifiedEntryCallResultTypeId] => directQualifiedEntryCallResultType
+                                                                            directQualifiedEntryCallResultTypeId => recursiveEntryExpressionTypeId!
+                                                                            directQualifiedEntryCallResultType.origin => entryExpressionTypeOrigin!
+                                                                            directQualifiedEntryCallResultType.module => entryExpressionTypeModule!
+                                                                            directQualifiedEntryCallResultType.symbol => entryExpressionTypeSymbol!
+                                                                        }
+                                                                    }
+                                                                }
+                                                        }
+                                                    -1 => standardEntryFlowVariantToken!
+                                                    entryExpression.kind == 10 and recursiveEntryExpressionTypeId! >= 0
+                                                        and not (entryExpressionKind! == 6
+                                                        and entryExpressionTargetModule! >= 0
+                                                        and entryExpressionSymbol! >= 0)
+                                                        -> if {
+                                                            frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => standardEntryFlowEnumType
+                                                            standardEntryFlowEnumType.kind == 7
+                                                                and standardEntryFlowEnumType.origin == 4
+                                                                and (standardEntryFlowEnumType.symbol == 0 or standardEntryFlowEnumType.symbol == 1)
+                                                                -> if {
+                                                                    source -> standardGenericEnumFlowVariantToken(prepared.package.tokens, sourceRange.tokenStart, entryExpression) => standardEntryFlowVariantToken!
+                                                                }
+                                                        }
+                                                    standardEntryFlowVariantToken! >= 0 -> if {
+                                                        prepared.package.tokens[sourceRange.tokenStart + standardEntryFlowVariantToken!] => standardEntryFlowVariant
+                                                        frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => standardEntryFlowEnumType
+                                                        sourceIndex -> nominalVariantTagForType(standardEntryFlowEnumType, standardEntryFlowVariant, prepared) => standardEntryFlowVariantTag
+                                                        standardEntryFlowVariantTag >= 0 -> if {
+                                                            26 => entryExpressionKind!
+                                                            standardEntryFlowVariantTag => entryExpressionOpcode!
+                                                        }
+                                                    }
+                                                    -1 => entryExpressionTypeKind!
+                                                    0 => entryExpressionTypeFlags!
+                                                    recursiveEntryExpressionTypeId! >= 0 -> if {
+                                                        frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!].kind => entryExpressionTypeKind!
+                                                        recursiveTypeFlags[recursiveEntryExpressionTypeId!] => entryExpressionTypeFlags!
+                                                    }
+                                                    entryExpressionKind! == 14 and entryExpressionTypeKind! == 12
+                                                        -> if {
+                                                            frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!].length => entryExpressionOpcode!
+                                                        }
+                                                    entryExpressionKind! == 16 and entryExpressionTypeKind! == 13
+                                                        -> if {
+                                                            frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!].length => entryExpressionOpcode!
+                                                        }
+                                                    entryExpressionOpcode! == -224 -> if { 1 => entryExpressionTypeFlags! }
+                                                    entryExpression.payloadToken => entryExpressionPayloadToken!
+                                                    standardEntryFlowVariantToken! >= 0 -> if { standardEntryFlowVariantToken! => entryExpressionPayloadToken! }
+                                                    contextualEntryNullaryOption! -> if {
+                                                        contextualEntryOptionVariantToken! => entryExpressionPayloadToken!
+                                                    }
+                                                    results! -> push(TypedIrNode {
+                                                        kind: entryExpressionKind!
+                                                        parent: entryIr
+                                                        sourceModule: sourceIndex
+                                                        astNode: entryExpressionAst!
+                                                        symbol: entryExpressionSymbol!
+                                                        targetModule: entryExpressionTargetModule!
+                                                        typeOrigin: entryExpressionTypeOrigin!
+                                                        typeModule: entryExpressionTypeModule!
+                                                        typeSymbol: entryExpressionTypeSymbol!
+                                                        typeId: recursiveEntryExpressionTypeId!
+                                                        typeKind: entryExpressionTypeKind!
+                                                        typeFlags: entryExpressionTypeFlags!
+                                                        payloadToken: entryExpressionPayloadToken!
+                                                        opcode: entryExpressionOpcode!
+                                                        operand0: -1
+                                                        operand1: -1
+                                                        nextOperand: -1
+                                                        flags: entryExpressionFlags!
+                                                    })
+                                                }
+                                            }
+                                    }
+                            }
+                            entryExpressionAst! + 1 => entryExpressionAst!
+                        }
+                        results! -> finalizeSourceEntry(entryAstToIr!, resolvedNames!, prepared, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, entryAstIndex!, entryIr, entryExpressionStart, entryHasResolvedCall!, entryResultTypeIndex!)
+                    }
+            }
+        entryAstIndex! + 1 => entryAstIndex!
+    }
+    SourceTypedIr { nodes: results! } => sourceResult
+    sourceResult
+}

@@ -1,0 +1,338 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+
+# Classify only the declared outer array shape. The prepared semantic snapshot
+# is borrowed across this fragment boundary; the query allocates no wrapper or
+# aggregate state and remains a static same-namespace call.
+declaredArrayShapeKind prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int, typeAst: Int -> Int {
+    -1 => kind!
+    sourceIndex >= 0
+        and sourceIndex < (prepared.package.ranges -> len)
+        and typeAst >= 0
+        and typeAst < prepared.package.ranges[sourceIndex].astCount
+        -> if {
+            prepared.package.ranges[sourceIndex] => shapeRange
+            prepared.package.nodes[shapeRange.astStart + typeAst] => shapeNode
+            shapeNode.firstToken => shapeTokenIndex!
+            shapeTokenIndex! < shapeNode.firstToken + shapeNode.tokenCount
+                and (prepared.package.tokens[shapeRange.tokenStart + shapeTokenIndex!].kind == grammar.triviaIdWhitespace()
+                or prepared.package.tokens[shapeRange.tokenStart + shapeTokenIndex!].kind == grammar.triviaIdComment())
+                -> while {
+                    shapeTokenIndex! + 1 => shapeTokenIndex!
+                }
+            shapeTokenIndex! < shapeNode.firstToken + shapeNode.tokenCount
+                and prepared.package.tokens[shapeRange.tokenStart + shapeTokenIndex!].kind == grammar.tokenIdLeftBracket()
+                -> if {
+                    2 => kind!
+                    0 => shapeDepth!
+                    false => shapeSemicolon!
+                    false => shapeTilde!
+                    false => shapeBounded!
+                    shapeTokenIndex! => shapeSearch!
+                    shapeSearch! < shapeNode.firstToken + shapeNode.tokenCount
+                        -> while {
+                            prepared.package.tokens[shapeRange.tokenStart + shapeSearch!] => shapeToken
+                            shapeToken.kind == grammar.tokenIdLeftBracket()
+                                -> if { shapeDepth! + 1 => shapeDepth! }
+                            shapeDepth! == 1 and shapeToken.kind == grammar.tokenIdSemicolon()
+                                -> if { true => shapeSemicolon! }
+                            shapeDepth! == 1 and shapeToken.kind == grammar.tokenIdTilde()
+                                -> if { true => shapeTilde! }
+                            shapeDepth! == 1 and shapeToken.kind == grammar.tokenIdLessEqual()
+                                -> if { true => shapeBounded! }
+                            shapeToken.kind == grammar.tokenIdRightBracket()
+                                -> if { shapeDepth! - 1 => shapeDepth! }
+                            shapeSearch! + 1 => shapeSearch!
+                        }
+                    shapeSemicolon! -> if {
+                        shapeBounded! -> if { 12 => kind! } else {
+                            shapeTilde! -> if { 3 => kind! } else { 4 => kind! }
+                        }
+                    }
+                }
+        }
+    kind!
+}
+
+# Generated COM result lookup borrows the canonical semantic-type table. It
+# resolves either the interface value or the Result-wrapped activation shape
+# without rebuilding or copying the table at the call site.
+comGeneratedResultTypeId recursiveTypes: ref [typeIds.SemanticType; ~], sourceIndex: Int, interfaceSymbol: Int, flags: Int -> Int {
+    -1 => interfaceTypeId!
+    0 => interfaceTypeSearch!
+    interfaceTypeSearch! < (recursiveTypes -> len)
+        -> while {
+            recursiveTypes[interfaceTypeSearch!] => candidate
+            candidate.kind == 9
+                and candidate.origin == 0
+                and candidate.module == sourceIndex
+                and candidate.symbol == interfaceSymbol -> if {
+                    interfaceTypeSearch! => interfaceTypeId!
+                }
+            interfaceTypeSearch! + 1 => interfaceTypeSearch!
+        }
+    interfaceTypeId! => resultTypeId!
+    flags / 4096 % 2 == 1 or flags / 131072 % 2 == 1
+        -> if {
+            0 => activationResultSearch!
+            activationResultSearch! < (recursiveTypes -> len)
+                -> while {
+                    recursiveTypes[activationResultSearch!] => candidate
+                    candidate.kind == 7
+                        and candidate.origin == 4
+                        and candidate.symbol == 1
+                        and candidate.first == interfaceTypeId!
+                        and candidate.second == 5 -> if {
+                            activationResultSearch! => resultTypeId!
+                        }
+                    activationResultSearch! + 1 => activationResultSearch!
+                }
+        }
+    resultTypeId!
+}
+
+nominalVariantTag sourceIndex: Int, variantToken: syntax.SyntaxToken, prepared: ref semanticContext.SemanticSnapshot -> Int {
+    prepared.package.ranges[sourceIndex] => variantRange
+    prepared.package.sources[sourceIndex] -> len => variantSourceLength
+    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), variantSourceLength) => variantSource
+    -1 => tag!
+    0 => candidateIndex!
+    candidateIndex! < variantRange.astCount -> while {
+        prepared.package.nodes[variantRange.astStart + candidateIndex!] => candidate
+        candidate.kind == 27 and candidate.parent >= 0 and prepared.package.nodes[variantRange.astStart + candidate.parent].kind == 4 and candidate.payloadToken >= 0
+            -> if {
+                prepared.package.tokens[variantRange.tokenStart + candidate.payloadToken] => candidateToken
+                candidateToken.span.length == variantToken.span.length
+                    -> if {
+                        true => sameName!
+                        UIntSize(0) => byteIndex!
+                        sameName! and byteIndex! < variantToken.span.length
+                            -> while {
+                                (variantSource -> byte(candidateToken.span.start + byteIndex!)) != (variantSource -> byte(variantToken.span.start + byteIndex!))
+                                    -> if { false => sameName! }
+                                byteIndex! + 1 => byteIndex!
+                            }
+                        sameName! -> if {
+                            0 => ordinal!
+                            0 => ordinalSearch!
+                            ordinalSearch! < variantRange.astCount -> while {
+                                prepared.package.nodes[variantRange.astStart + ordinalSearch!] => sibling
+                                sibling.kind == 27 and sibling.parent == candidate.parent and sibling.start < candidate.start
+                                    -> if { ordinal! + 1 => ordinal! }
+                                ordinalSearch! + 1 => ordinalSearch!
+                            }
+                            ordinal! => tag!
+                        }
+                    }
+            }
+        candidateIndex! + 1 => candidateIndex!
+    }
+    tag! < 0 -> if {
+        false => ambiguousImportedTag!
+        0 => importedSourceIndex!
+        importedSourceIndex! < (prepared.package.ranges -> len) and not ambiguousImportedTag!
+            -> while {
+                prepared.package.ranges[importedSourceIndex!] => importedRange
+                0 => importedCandidateIndex!
+                importedCandidateIndex! < importedRange.astCount
+                    -> while {
+                        prepared.package.nodes[importedRange.astStart + importedCandidateIndex!] => importedCandidate
+                        importedCandidate.kind == 27 and importedCandidate.parent >= 0 and prepared.package.nodes[importedRange.astStart + importedCandidate.parent].kind == 4 and importedCandidate.payloadToken >= 0
+                            -> if {
+                                prepared.package.tokens[importedRange.tokenStart + importedCandidate.payloadToken] => importedCandidateToken
+                                importedCandidateToken.span.length == variantToken.span.length => importedSameName!
+                                UIntSize(0) => importedByteIndex!
+                                importedSameName! and importedByteIndex! < variantToken.span.length
+                                    -> while {
+                                        (prepared.package.sources[importedSourceIndex!] -> byte(importedCandidateToken.span.start + importedByteIndex!)) != (variantSource -> byte(variantToken.span.start + importedByteIndex!))
+                                            -> if { false => importedSameName! }
+                                        importedByteIndex! + 1 => importedByteIndex!
+                                    }
+                                importedSameName! -> if {
+                                    0 => importedOrdinal!
+                                    0 => importedOrdinalSearch!
+                                    importedOrdinalSearch! < importedRange.astCount
+                                        -> while {
+                                            prepared.package.nodes[importedRange.astStart + importedOrdinalSearch!] => importedSibling
+                                            importedSibling.kind == 27 and importedSibling.parent == importedCandidate.parent and importedSibling.start < importedCandidate.start
+                                                -> if { importedOrdinal! + 1 => importedOrdinal! }
+                                            importedOrdinalSearch! + 1 => importedOrdinalSearch!
+                                        }
+                                    tag! < 0 -> if { importedOrdinal! => tag! } else {
+                                        tag! != importedOrdinal! -> if { true => ambiguousImportedTag! }
+                                    }
+                                }
+                            }
+                        importedCandidateIndex! + 1 => importedCandidateIndex!
+                    }
+                importedSourceIndex! + 1 => importedSourceIndex!
+            }
+        ambiguousImportedTag! -> if { -1 => tag! }
+    }
+    tag!
+}
+nominalVariantTagForType variantSourceModule: Int, subjectType: typeIds.SemanticType, variantToken: syntax.SyntaxToken, prepared: ref semanticContext.SemanticSnapshot -> Int {
+    subjectType.module => ownerSourceModule!
+    subjectType.origin == 2 -> if {
+        subjectType.module >= 0 and subjectType.module < (prepared.modules -> len)
+            -> if {
+                prepared.modules[subjectType.module].sourceIndex => ownerSourceModule!
+            }
+    }
+    -1 => ownerDeclarationAst!
+    -1 => tag!
+    subjectType.kind == 7 and subjectType.origin == 4 and (subjectType.symbol == 0 or subjectType.symbol == 1)
+        -> if {
+            prepared.package.sources[variantSourceModule] -> len => variantSourceLength
+            prepared.package.sources[variantSourceModule] -> slice(UIntSize(0), variantSourceLength) => variantSource
+            subjectType.symbol == 0 -> if {
+                variantToken.span.length == 4 -> if {
+                    (variantSource -> byte(variantToken.span.start)) == 78
+                        and (variantSource -> byte(variantToken.span.start + 1)) == 111
+                        and (variantSource -> byte(variantToken.span.start + 2)) == 110
+                        and (variantSource -> byte(variantToken.span.start + 3)) == 101
+                        -> if { 0 => tag! }
+                    (variantSource -> byte(variantToken.span.start)) == 83
+                        and (variantSource -> byte(variantToken.span.start + 1)) == 111
+                        and (variantSource -> byte(variantToken.span.start + 2)) == 109
+                        and (variantSource -> byte(variantToken.span.start + 3)) == 101
+                        -> if { 1 => tag! }
+                }
+            } else {
+                variantToken.span.length == 2 -> if {
+                    (variantSource -> byte(variantToken.span.start)) == 79
+                        and (variantSource -> byte(variantToken.span.start + 1)) == 107
+                        -> if { 0 => tag! }
+                }
+                variantToken.span.length == 3 -> if {
+                    (variantSource -> byte(variantToken.span.start)) == 69
+                        and (variantSource -> byte(variantToken.span.start + 1)) == 114
+                        and (variantSource -> byte(variantToken.span.start + 2)) == 114
+                        -> if { 1 => tag! }
+                }
+            }
+        }
+    tag! < 0 and ownerSourceModule! >= 0 and ownerSourceModule! < (prepared.package.ranges -> len)
+        -> if {
+            prepared.package.ranges[ownerSourceModule!] => ownerRange
+            subjectType.symbol >= 0 and subjectType.symbol < ownerRange.symbolCount
+                -> if {
+                    prepared.package.symbols[ownerRange.symbolStart + subjectType.symbol] => ownerSymbol
+                    ownerSymbol.astNode >= 0 -> if { ownerSymbol.astNode => ownerDeclarationAst! }
+                }
+            0 => candidateIndex!
+            ownerDeclarationAst! >= 0 and candidateIndex! < ownerRange.astCount and tag! < 0
+                -> while {
+                    prepared.package.nodes[ownerRange.astStart + candidateIndex!] => candidate
+                    candidate.kind == 27 and candidate.parent == ownerDeclarationAst! and candidate.payloadToken >= 0
+                        -> if {
+                            prepared.package.tokens[ownerRange.tokenStart + candidate.payloadToken] => candidateToken
+                            candidateToken.span.length == variantToken.span.length => sameName!
+                            UIntSize(0) => byteIndex!
+                            sameName! and byteIndex! < variantToken.span.length
+                                -> while {
+                                    (prepared.package.sources[ownerSourceModule!] -> byte(candidateToken.span.start + byteIndex!)) != (prepared.package.sources[variantSourceModule] -> byte(variantToken.span.start + byteIndex!))
+                                        -> if { false => sameName! }
+                                    byteIndex! + 1 => byteIndex!
+                                }
+                            sameName! -> if {
+                                0 => ordinal!
+                                0 => ordinalSearch!
+                                ordinalSearch! < ownerRange.astCount -> while {
+                                    prepared.package.nodes[ownerRange.astStart + ordinalSearch!] => sibling
+                                    sibling.kind == 27 and sibling.parent == ownerDeclarationAst! and sibling.start < candidate.start
+                                        -> if { ordinal! + 1 => ordinal! }
+                                    ordinalSearch! + 1 => ordinalSearch!
+                                }
+                                ordinal! => tag!
+                            }
+                        }
+                    candidateIndex! + 1 => candidateIndex!
+                }
+        }
+    tag!
+}
+nominalVariantPayloadTypeId variantSourceModule: Int, subjectType: typeIds.SemanticType, variantToken: syntax.SyntaxToken, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet -> Int {
+    -1 => payloadTypeId!
+    subjectType.module => ownerSourceModule!
+    subjectType.origin == 2 -> if {
+        subjectType.module >= 0 and subjectType.module < (prepared.modules -> len)
+            -> if {
+                prepared.modules[subjectType.module].sourceIndex => ownerSourceModule!
+            }
+    }
+    -1 => ownerDeclarationAst!
+    ownerSourceModule! >= 0 and ownerSourceModule! < (prepared.package.ranges -> len)
+        -> if {
+            prepared.package.ranges[ownerSourceModule!] => ownerRange
+            subjectType.symbol >= 0 and subjectType.symbol < ownerRange.symbolCount
+                -> if {
+                    prepared.package.symbols[ownerRange.symbolStart + subjectType.symbol] => ownerSymbol
+                    ownerSymbol.astNode >= 0 -> if { ownerSymbol.astNode => ownerDeclarationAst! }
+                }
+            -1 => variantAst!
+            0 => variantSearch!
+            ownerDeclarationAst! >= 0 and variantSearch! < ownerRange.astCount and variantAst! < 0
+                -> while {
+                    prepared.package.nodes[ownerRange.astStart + variantSearch!] => candidateVariant
+                    candidateVariant.kind == 27 and candidateVariant.parent == ownerDeclarationAst! and candidateVariant.payloadToken >= 0
+                        -> if {
+                            prepared.package.tokens[ownerRange.tokenStart + candidateVariant.payloadToken] => candidateToken
+                            candidateToken.span.length == variantToken.span.length => sameVariant!
+                            UIntSize(0) => variantByte!
+                            sameVariant! and variantByte! < candidateToken.span.length
+                                -> while {
+                                    (prepared.package.sources[ownerSourceModule!] -> byte(candidateToken.span.start + variantByte!)) != (prepared.package.sources[variantSourceModule] -> byte(variantToken.span.start + variantByte!))
+                                        -> if { false => sameVariant! }
+                                    variantByte! + 1 => variantByte!
+                                }
+                            sameVariant! -> if { variantSearch! => variantAst! }
+                        }
+                    variantSearch! + 1 => variantSearch!
+                }
+            0 => payloadReferenceSearch!
+            variantAst! >= 0 and payloadReferenceSearch! < (recursiveTypes.references -> len) and payloadTypeId! < 0
+                -> while {
+                    recursiveTypes.references[payloadReferenceSearch!] => payloadReference
+                    payloadReference.status == 0 and payloadReference.sourceModule == ownerSourceModule! and payloadReference.typeAst >= 0 and (ownerSourceModule! -> astBelongsTo(payloadReference.typeAst, variantAst!, prepared))
+                        -> if {
+                            payloadReference.typeId => payloadTypeId!
+                        }
+                    payloadReferenceSearch! + 1 => payloadReferenceSearch!
+                }
+            # Nominal declarations already publish their canonical identity in
+            # the nominal table.  Imported enum payloads can reach this pass
+            # before the recursive reference table retains the transparent
+            # outer type AST, so use the same exact variant-owned AST contract
+            # here instead of leaving the payload binding untyped.
+            0 => payloadNominalSearch!
+            variantAst! >= 0 and payloadNominalSearch! < (prepared.nominal -> len) and payloadTypeId! < 0
+                -> while {
+                    prepared.nominal[payloadNominalSearch!] => payloadNominal
+                    payloadNominal.status == 0 and payloadNominal.sourceModule == ownerSourceModule! and payloadNominal.typeAst >= 0
+                        -> if {
+                            payloadNominal.typeAst => payloadNominalAncestor!
+                            false => payloadNominalBelongs!
+                            payloadNominalAncestor! >= 0 and not payloadNominalBelongs!
+                                -> while {
+                                    payloadNominalAncestor! == variantAst! -> if {
+                                        true => payloadNominalBelongs!
+                                    } else {
+                                        prepared.package.nodes[ownerRange.astStart + payloadNominalAncestor!].parent => payloadNominalAncestor!
+                                    }
+                                }
+                            payloadNominalBelongs! -> if { payloadNominal.canonical => payloadTypeId! }
+                        }
+                    payloadNominalSearch! + 1 => payloadNominalSearch!
+                }
+        }
+    payloadTypeId!
+}
+functionResultTypeId sourceIndex: Int, functionSymbol: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~] -> Int {
+    sourceIndex -> resolvedFunctionResultTypeId(functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes)
+}

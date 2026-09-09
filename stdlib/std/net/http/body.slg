@@ -1,0 +1,673 @@
+namespace std.net.http.body
+
+import std.net.http.error as errors
+import std.net.http as http
+import std.net.http.body as model
+import sys.file as file
+
+# RFC 9112 body framing is selected from an already parsed head. It does not
+# open sockets, resolve DNS, decode content codings, or infer retry policy.
+public struct BodyLimits {
+    public maxEncodedBytes: Int
+    public maxDecodedBytes: Int
+    public maxChunkLineBytes: Int
+    public maxTrailerBytes: Int
+    public maxTrailerFields: Int
+}
+
+public struct BodyPolicy {
+    public limits: BodyLimits
+}
+
+public struct ResponseBodyContext {
+    public policy: BodyPolicy
+    public verb: Text
+}
+
+public enum BodyFraming {
+    None
+    ContentLength(UIntSize)
+    Chunked
+    UntilClose
+    Tunnel
+}
+
+public struct BodyPlan {
+    public framing: BodyFraming
+    public limits: BodyLimits
+}
+
+public struct BodyProgress {
+    public consumed: UIntSize
+    public produced: UIntSize
+    public complete: Bool
+}
+
+enum BodyMode {
+    None
+    ContentLength
+    Chunked
+    UntilClose
+}
+
+enum BodyPhase {
+    Data
+    SizeLine
+    DataCarriageReturn
+    DataLineFeed
+    TrailerLine
+    Complete
+}
+
+isContentLengthMode mode: BodyMode -> Bool => mode -> when {
+    ContentLength { true }
+    else { false }
+}
+
+isUntilCloseMode mode: BodyMode -> Bool => mode -> when {
+    UntilClose { true }
+    else { false }
+}
+
+isCompletePhase phase: BodyPhase -> Bool => phase -> when {
+    Complete { true }
+    else { false }
+}
+
+public struct BodyDecoder {
+    public limits: BodyLimits
+    public mode: BodyMode
+    public phase: BodyPhase
+    public expectedBytes: UIntSize
+    public encodedBytes: UIntSize
+    public decodedBytes: UIntSize
+    public chunkRemaining: UIntSize
+    public line: [UInt8; ~]
+    public lineSawCarriageReturn: Bool
+    public trailerBytes: UIntSize
+    public trailerFields: Int
+}
+
+struct HeaderFraming {
+    hasContentLength: Bool
+    contentLength: UIntSize
+    hasTransferEncoding: Bool
+    finalTransferCodingChunked: Bool
+}
+
+bodyError kind: errors.Kind, offset: UIntSize -> http.Error => http.Error {
+    kind: kind
+    offset: offset
+}
+
+planError kind: errors.Kind, offset: UIntSize -> Result<BodyPlan, http.Error> {
+    Result<BodyPlan, http.Error>.Err(bodyError(kind, offset))
+}
+
+policyError kind: errors.Kind -> Result<BodyPolicy, http.Error> {
+    Result<BodyPolicy, http.Error>.Err(bodyError(kind, 0))
+}
+
+decoderError kind: errors.Kind, offset: UIntSize -> Result<BodyDecoder, http.Error> {
+    Result<BodyDecoder, http.Error>.Err(bodyError(kind, offset))
+}
+
+progressError kind: errors.Kind, offset: UIntSize -> Result<BodyProgress, http.Error> {
+    Result<BodyProgress, http.Error>.Err(bodyError(kind, offset))
+}
+
+finishError kind: errors.Kind, offset: UIntSize -> Result<Unit, http.Error> {
+    Result<Unit, http.Error>.Err(bodyError(kind, offset))
+}
+
+asciiTextEqualIgnoreCase value: Text, expected: Text -> Bool {
+    (value -> len) == (expected -> len) -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => left!
+        expected -> byte(index!) => right!
+        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
+        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! == right! -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+spanEqualIgnoreCase source: ref file.SourceText, start: UIntSize, length: UIntSize, expected: Text -> Bool {
+    length == (expected -> len) -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < length -> while {
+        source -> byte(start + index!) => left!
+        expected -> byte(index!) => right!
+        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
+        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! == right! -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+isTokenByte byte: UInt8 -> Bool {
+    (byte >= 48 and byte <= 57)
+        or (byte >= 65 and byte <= 90)
+        or (byte >= 97 and byte <= 122)
+        or byte == 33
+        or byte == 35
+        or byte == 36
+        or byte == 37
+        or byte == 38
+        or byte == 39
+        or byte == 42
+        or byte == 43
+        or byte == 45
+        or byte == 46
+        or byte == 94
+        or byte == 95
+        or byte == 96
+        or byte == 124
+        or byte == 126
+}
+
+isTrailerValueByte byte: UInt8 -> Bool {
+    byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+}
+
+parseContentLength source: ref file.SourceText, value: http.Span, maximum: UIntSize -> Result<UIntSize, http.Error> {
+    value.length > 0 -> unless {
+        Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidContentLength, value.start)) -> return
+    }
+    UIntSize(0) => parsed!
+    UIntSize(0) => index!
+    index! < value.length -> while {
+        source -> byte(value.start + index!) => byte
+        byte >= 48 and byte <= 57 -> unless {
+            Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidContentLength, value.start + index!)) -> return
+        }
+        UIntSize(byte - 48) => digit
+        digit <= maximum and parsed! <= (maximum - digit) / 10
+            -> unless {
+                Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.BodyLimitExceeded, value.start + index!)) -> return
+            }
+        parsed! * 10 + digit => parsed!
+        index! + 1 => index!
+    }
+    Result<UIntSize, http.Error>.Ok(parsed!)
+}
+
+parseTransferEncoding source: ref file.SourceText, value: http.Span -> Result<Bool, http.Error> {
+    value.length > 0 -> unless {
+        Result<Bool, http.Error>.Err(bodyError(errors.Kind.InvalidTransferEncoding, value.start)) -> return
+    }
+    UIntSize(0) => index!
+    false => found!
+    false => finalChunked!
+    index! < value.length -> while {
+        index! < value.length
+            and ((source -> byte(value.start + index!)) == 32 or (source -> byte(value.start + index!)) == 9)
+            -> while { index! + 1 => index! }
+        index! < value.length -> unless {
+            Result<Bool, http.Error>.Err(bodyError(errors.Kind.InvalidTransferEncoding, value.start + index!)) -> return
+        }
+        index! => tokenStart
+        index! < value.length and ((source -> byte(value.start + index!)) -> isTokenByte)
+            -> while {
+                index! + 1 => index!
+            }
+        index! > tokenStart -> unless {
+            Result<Bool, http.Error>.Err(bodyError(errors.Kind.InvalidTransferEncoding, value.start + index!)) -> return
+        }
+        index! => tokenEnd
+        index! < value.length
+            and ((source -> byte(value.start + index!)) == 32 or (source -> byte(value.start + index!)) == 9)
+            -> while { index! + 1 => index! }
+        index! < value.length and (source -> byte(value.start + index!)) != 44
+            -> if {
+                Result<Bool, http.Error>.Err(bodyError(errors.Kind.InvalidTransferEncoding, value.start + index!)) -> return
+            }
+        source -> spanEqualIgnoreCase(value.start + tokenStart, tokenEnd - tokenStart, "chunked") => finalChunked!
+        true => found!
+        index! < value.length -> if {
+            index! + 1 => index!
+            index! < value.length -> unless {
+                Result<Bool, http.Error>.Err(bodyError(errors.Kind.InvalidTransferEncoding, value.start + index!)) -> return
+            }
+        }
+    }
+    found! -> unless {
+        Result<Bool, http.Error>.Err(bodyError(errors.Kind.InvalidTransferEncoding, value.start)) -> return
+    }
+    Result<Bool, http.Error>.Ok(finalChunked!)
+}
+
+headerFraming source: ref file.SourceText, fields: ref [http.Field; ~], limits: BodyLimits -> Result<HeaderFraming, http.Error> {
+    false => hasContentLength!
+    UIntSize(0) => contentLength!
+    false => hasTransferEncoding!
+    false => finalChunked!
+    0 => index!
+    index! < (fields -> len) -> while {
+        fields[index!] => field
+        source -> spanEqualIgnoreCase(field.name.start, field.name.length, "Content-Length")
+            -> if {
+                hasContentLength! -> if {
+                    Result<HeaderFraming, http.Error>.Err(bodyError(errors.Kind.DuplicateContentLength, field.name.start)) -> return
+                }
+                source -> parseContentLength(field.value, UIntSize(limits.maxDecodedBytes))? => parsedLength
+                true => hasContentLength!
+                parsedLength => contentLength!
+            }
+        source -> spanEqualIgnoreCase(field.name.start, field.name.length, "Transfer-Encoding")
+            -> if {
+                source -> parseTransferEncoding(field.value)? => parsedFinalChunked
+                true => hasTransferEncoding!
+                parsedFinalChunked => finalChunked!
+            }
+        index! + 1 => index!
+    }
+    Result<HeaderFraming, http.Error>.Ok(HeaderFraming {
+        hasContentLength: hasContentLength!
+        contentLength: contentLength!
+        hasTransferEncoding: hasTransferEncoding!
+        finalTransferCodingChunked: finalChunked!
+    })
+}
+
+plan framing: BodyFraming, limits: BodyLimits -> BodyPlan => BodyPlan {
+    framing: framing
+    limits: limits
+}
+
+hexValue byte: UInt8 -> Int {
+    byte >= 48 and byte <= 57 -> if { Int(byte - 48) -> return }
+    byte >= 65 and byte <= 70 -> if { Int(byte - 65) + 10 -> return }
+    byte >= 97 and byte <= 102 -> if { Int(byte - 97) + 10 -> return }
+    -1
+}
+
+parseChunkSize decoder: ref BodyDecoder -> Result<UIntSize, http.Error> {
+    (decoder.line -> len) > 0 -> unless {
+        Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidChunkSize, decoder.encodedBytes)) -> return
+    }
+    0 => index!
+    UIntSize(0) => parsed!
+    false => hasDigit!
+    index! < (decoder.line -> len) -> while {
+        decoder.line[index!] -> hexValue => digit
+        digit < 0 -> if { break }
+        true => hasDigit!
+        UIntSize(digit) => unsignedDigit
+        UIntSize(decoder.limits.maxDecodedBytes) => maximum
+        unsignedDigit <= maximum and parsed! <= (maximum - unsignedDigit) / 16
+            -> unless {
+                Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.BodyLimitExceeded, decoder.encodedBytes)) -> return
+            }
+        parsed! * 16 + unsignedDigit => parsed!
+        index! + 1 => index!
+    }
+    hasDigit! -> unless {
+        Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidChunkSize, decoder.encodedBytes)) -> return
+    }
+    index! < (decoder.line -> len) -> if {
+        decoder.line[index!] == 59 -> unless {
+            Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidChunkSize, decoder.encodedBytes)) -> return
+        }
+        index! + 1 => index!
+        index! < (decoder.line -> len) -> while {
+            decoder.line[index!] >= 32 and decoder.line[index!] != 127
+                -> unless {
+                    Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidChunkSize, decoder.encodedBytes)) -> return
+                }
+            index! + 1 => index!
+        }
+    }
+    parsed! <= UIntSize(decoder.limits.maxDecodedBytes) - decoder.decodedBytes
+        -> unless {
+            Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.BodyLimitExceeded, decoder.encodedBytes)) -> return
+        }
+    Result<UIntSize, http.Error>.Ok(parsed!)
+}
+
+lineNameIs line: ref [UInt8; ~], length: Int, expected: Text -> Bool {
+    length == Int(expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < length -> while {
+        line[index!] => left!
+        expected -> byte(UIntSize(index!)) => right!
+        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
+        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! == right! -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+validateTrailer decoder: ref BodyDecoder -> Result<Unit, http.Error> {
+    (decoder.line -> len) > 0 -> unless {
+        Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
+    }
+    decoder.line[0] != 32 and decoder.line[0] != 9
+        -> unless {
+            Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
+        }
+    0 => colon!
+    colon! < (decoder.line -> len) and decoder.line[colon!] != 58
+        -> while {
+            decoder.line[colon!] -> isTokenByte -> unless {
+                Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
+            }
+            colon! + 1 => colon!
+        }
+    colon! > 0 and colon! < (decoder.line -> len)
+        -> unless {
+            Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
+        }
+    (decoder.line -> lineNameIs(colon!, "Content-Length"))
+        or (decoder.line -> lineNameIs(colon!, "Transfer-Encoding"))
+        -> if {
+            Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
+        }
+    colon! + 1 => valueIndex!
+    valueIndex! < (decoder.line -> len) -> while {
+        decoder.line[valueIndex!] -> isTrailerValueByte
+            -> unless {
+                Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
+            }
+        valueIndex! + 1 => valueIndex!
+    }
+    Result<Unit, http.Error>.Ok
+}
+
+appendBodyByte decoder: mut BodyDecoder, byte: UInt8, output: mut [UInt8; ~] -> Result<Unit, http.Error> {
+    decoder.decodedBytes < UIntSize(decoder.limits.maxDecodedBytes)
+        -> unless {
+            Result<Unit, http.Error>.Err(bodyError(errors.Kind.BodyLimitExceeded, decoder.encodedBytes)) -> return
+        }
+    output -> push(byte)
+    decoder.decodedBytes + 1 => decoder.decodedBytes
+    Result<Unit, http.Error>.Ok
+}
+
+impl BodyLimits {
+    public policy: self -> Result<BodyPolicy, http.Error> {
+        self.maxEncodedBytes > 0
+            and self.maxDecodedBytes >= 0
+            and self.maxChunkLineBytes > 0
+            and self.maxTrailerBytes >= 2
+            and self.maxTrailerFields >= 0
+            -> unless { policyError(errors.Kind.InvalidBodyLimit) -> return }
+        Result<BodyPolicy, http.Error>.Ok(BodyPolicy { limits: self })
+    }
+}
+
+impl BodyPolicy {
+    public responseContext: self, verb: Text -> ResponseBodyContext => ResponseBodyContext {
+        policy: self
+        verb: verb
+    }
+}
+
+selectIncomingBody policy: BodyPolicy, head: ref http.RequestHead -> Result<BodyPlan, http.Error> {
+    policy.limits => selectedLimits
+    head.source -> headerFraming(head.fields, selectedLimits) => framingResult
+    framingResult? => framing
+    framing.hasTransferEncoding and framing.hasContentLength
+        -> if {
+            planError(errors.Kind.ConflictingBodyFraming, head.bodyStart) -> return
+        }
+    framing.hasTransferEncoding -> if {
+        framing.finalTransferCodingChunked -> if {
+            Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.Chunked, selectedLimits)) -> return
+        }
+        planError(errors.Kind.IndeterminateRequestBody, head.bodyStart) -> return
+    }
+    framing.hasContentLength -> if {
+        Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.ContentLength(framing.contentLength), selectedLimits)) -> return
+    }
+    Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.None, selectedLimits))
+}
+
+selectReplyBody context: ResponseBodyContext, head: ref http.ResponseHead -> Result<BodyPlan, http.Error> {
+    context.policy => selectedPolicy
+    selectedPolicy.limits => selectedLimits
+    context.verb => verb
+    head.status => status
+    (verb -> asciiTextEqualIgnoreCase("HEAD"))
+        or (status >= 100 and status < 200)
+        or status == 204
+        or status == 304
+        -> if {
+            Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.None, selectedLimits)) -> return
+        }
+    (verb -> asciiTextEqualIgnoreCase("CONNECT")) and status >= 200 and status < 300
+        -> if {
+            Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.Tunnel, selectedLimits)) -> return
+        }
+    head.source -> headerFraming(head.fields, selectedLimits) => framingResult
+    framingResult? => framing
+    framing.hasTransferEncoding and framing.hasContentLength
+        -> if {
+            planError(errors.Kind.ConflictingBodyFraming, head.bodyStart) -> return
+        }
+    framing.hasTransferEncoding -> if {
+        framing.finalTransferCodingChunked -> if {
+            Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.Chunked, selectedLimits)) -> return
+        }
+        Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.UntilClose, selectedLimits)) -> return
+    }
+    framing.hasContentLength -> if {
+        Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.ContentLength(framing.contentLength), selectedLimits)) -> return
+    }
+    Result<BodyPlan, http.Error>.Ok(plan(model.BodyFraming.UntilClose, selectedLimits))
+}
+
+impl BodyPolicy {
+    public request: self, head: ref http.RequestHead -> Result<BodyPlan, http.Error> => selectIncomingBody(self, head)
+}
+
+impl ResponseBodyContext {
+    public plan: self, head: ref http.ResponseHead -> Result<BodyPlan, http.Error> => selectReplyBody(self, head)
+}
+
+decoderResult limits: BodyLimits, mode: BodyMode, phase: BodyPhase, expectedBytes: UIntSize -> Result<BodyDecoder, http.Error> {
+    Result<BodyDecoder, http.Error>.Ok(BodyDecoder {
+        limits: limits
+        mode: mode
+        phase: phase
+        expectedBytes: expectedBytes
+        encodedBytes: 0
+        decodedBytes: 0
+        chunkRemaining: 0
+        line: [UInt8; ~]
+        lineSawCarriageReturn: false
+        trailerBytes: 0
+        trailerFields: 0
+    })
+}
+
+impl BodyPlan {
+    public decoder: self -> Result<BodyDecoder, http.Error> {
+        self.framing -> when {
+            None {
+                decoderResult(self.limits, model.BodyMode.None, model.BodyPhase.Complete, 0) -> return
+            }
+            ContentLength(length) => length > 0 -> if {
+                decoderResult(self.limits, model.BodyMode.ContentLength, model.BodyPhase.Data, length) -> return
+            } else {
+                decoderResult(self.limits, model.BodyMode.ContentLength, model.BodyPhase.Complete, 0) -> return
+            }
+            Chunked {
+                decoderResult(self.limits, model.BodyMode.Chunked, model.BodyPhase.SizeLine, 0) -> return
+            }
+            UntilClose {
+                decoderResult(self.limits, model.BodyMode.UntilClose, model.BodyPhase.Data, 0) -> return
+            }
+            Tunnel {}
+        }
+        decoderError(errors.Kind.TunnelBodyUnavailable, 0)
+    }
+}
+
+impl BodyDecoder {
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<BodyProgress, http.Error> {
+        self -> writeRangeCore(input, 0, UIntSize(input -> len), output)
+    }
+
+    # Decodes one exact range from caller-owned storage. Validation precedes
+    # decoder or output mutation, and BodyProgress.consumed is relative to the
+    # requested range so the caller can retain pipelined bytes after it.
+    public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize, output: mut [UInt8; ~] -> Result<BodyProgress, http.Error> {
+        UIntSize(input -> len) => available
+        offset <= available
+            -> unless { progressError(errors.Kind.InvalidBodyRange, offset) -> return }
+        length <= available - offset
+            -> unless { progressError(errors.Kind.InvalidBodyRange, offset) -> return }
+        self -> writeRangeCore(input, offset, length, output)
+    }
+
+    writeRangeCore: mut self, input: [UInt8], offset: UIntSize, inputLength: UIntSize, output: mut [UInt8; ~] -> Result<BodyProgress, http.Error> {
+        UIntSize(0) => consumed!
+        UIntSize(0) => produced!
+        self.phase -> isCompletePhase -> if {
+            Result<BodyProgress, http.Error>.Ok(BodyProgress { consumed: 0, produced: 0, complete: true }) -> return
+        }
+        self.mode -> isContentLengthMode -> if {
+            self.expectedBytes - self.decodedBytes => remaining
+            inputLength => available
+            remaining < available -> if { remaining } else { available } => take
+            self.encodedBytes + take <= UIntSize(self.limits.maxEncodedBytes)
+                -> unless {
+                    progressError(errors.Kind.BodyLimitExceeded, self.encodedBytes) -> return
+                }
+            UIntSize(0) => index!
+            index! < take -> while {
+                self -> appendBodyByte(input[Int(offset + index!)], output)?
+                index! + 1 => index!
+            }
+            self.encodedBytes + take => self.encodedBytes
+            take => consumed!
+            take => produced!
+            self.decodedBytes == self.expectedBytes -> if { model.BodyPhase.Complete => self.phase }
+            self.phase -> isCompletePhase => complete
+            Result<BodyProgress, http.Error>.Ok(BodyProgress { consumed: consumed!, produced: produced!, complete: complete }) -> return
+        }
+        self.mode -> isUntilCloseMode -> if {
+            self.encodedBytes + inputLength <= UIntSize(self.limits.maxEncodedBytes)
+                -> unless {
+                    progressError(errors.Kind.BodyLimitExceeded, self.encodedBytes) -> return
+                }
+            UIntSize(0) => index!
+            index! < inputLength -> while {
+                self -> appendBodyByte(input[Int(offset + index!)], output)?
+                index! + 1 => index!
+            }
+            self.encodedBytes + inputLength => self.encodedBytes
+            Result<BodyProgress, http.Error>.Ok(BodyProgress { consumed: inputLength, produced: inputLength, complete: false }) -> return
+        }
+        consumed! < inputLength and not (self.phase -> isCompletePhase)
+            -> while {
+                self.encodedBytes < UIntSize(self.limits.maxEncodedBytes)
+                    -> unless {
+                        progressError(errors.Kind.BodyLimitExceeded, self.encodedBytes) -> return
+                    }
+                input[Int(offset + consumed!)] => byte
+                self.phase -> when {
+                    SizeLine {
+                        self.lineSawCarriageReturn -> if {
+                            byte == 10 -> unless {
+                                progressError(errors.Kind.InvalidChunkSize, self.encodedBytes) -> return
+                            }
+                            self -> parseChunkSize? => size
+                            size => self.chunkRemaining
+                            [UInt8; ~] => self.line
+                            false => self.lineSawCarriageReturn
+                            size == 0 -> if { model.BodyPhase.TrailerLine } else { model.BodyPhase.Data } => self.phase
+                        } else {
+                            byte == 13 -> if {
+                                true => self.lineSawCarriageReturn
+                            } else {
+                                byte == 10 -> if {
+                                    progressError(errors.Kind.InvalidChunkSize, self.encodedBytes) -> return
+                                }
+                                (self.line -> len) < self.limits.maxChunkLineBytes
+                                    -> unless {
+                                        progressError(errors.Kind.ChunkLineLimitExceeded, self.encodedBytes) -> return
+                                    }
+                                self.line -> push(byte)
+                            }
+                        }
+                    }
+                    Data {
+                        self -> appendBodyByte(byte, output)?
+                        produced! + 1 => produced!
+                        self.chunkRemaining - 1 => self.chunkRemaining
+                        self.chunkRemaining == 0 -> if { model.BodyPhase.DataCarriageReturn => self.phase }
+                    }
+                    DataCarriageReturn {
+                        byte == 13 -> unless {
+                            progressError(errors.Kind.MissingChunkDataTerminator, self.encodedBytes) -> return
+                        }
+                        model.BodyPhase.DataLineFeed => self.phase
+                    }
+                    DataLineFeed {
+                        byte == 10 -> unless {
+                            progressError(errors.Kind.MissingChunkDataTerminator, self.encodedBytes) -> return
+                        }
+                        model.BodyPhase.SizeLine => self.phase
+                    }
+                    TrailerLine {
+                        self.trailerBytes < UIntSize(self.limits.maxTrailerBytes)
+                            -> unless {
+                                progressError(errors.Kind.TrailerLimitExceeded, self.encodedBytes) -> return
+                            }
+                        self.trailerBytes + 1 => self.trailerBytes
+                        self.lineSawCarriageReturn -> if {
+                            byte == 10 -> unless {
+                                progressError(errors.Kind.InvalidTrailer, self.encodedBytes) -> return
+                            }
+                            (self.line -> len) == 0 -> if {
+                                model.BodyPhase.Complete => self.phase
+                            } else {
+                                self.trailerFields < self.limits.maxTrailerFields
+                                    -> unless {
+                                        progressError(errors.Kind.TrailerLimitExceeded, self.encodedBytes) -> return
+                                    }
+                                self -> validateTrailer?
+                                self.trailerFields + 1 => self.trailerFields
+                            }
+                            [UInt8; ~] => self.line
+                            false => self.lineSawCarriageReturn
+                        } else {
+                            byte == 13 -> if {
+                                true => self.lineSawCarriageReturn
+                            } else {
+                                byte == 10 -> if {
+                                    progressError(errors.Kind.InvalidTrailer, self.encodedBytes) -> return
+                                }
+                                self.line -> push(byte)
+                            }
+                        }
+                    }
+                    Complete {}
+                }
+                self.encodedBytes + 1 => self.encodedBytes
+                consumed! + 1 => consumed!
+            }
+        Result<BodyProgress, http.Error>.Ok(BodyProgress {
+            consumed: consumed!
+            produced: produced!
+            complete: self.phase -> isCompletePhase
+        })
+    }
+
+    # Checks terminal framing without consuming the decoder. Orchestrators that
+    # own adjacent transport/buffer fields use this before a single aggregate
+    # typestate move; standalone callers normally prefer consuming finish.
+    public completion: self -> Result<Unit, http.Error> {
+        self.mode -> isUntilCloseMode -> if { Result<Unit, http.Error>.Ok -> return }
+        self.phase -> isCompletePhase -> if { Result<Unit, http.Error>.Ok -> return }
+        finishError(errors.Kind.IncompleteBody, self.encodedBytes)
+    }
+
+    public finish: move self -> Result<Unit, http.Error> => self -> completion
+}

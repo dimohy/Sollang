@@ -1,0 +1,73 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# Consecutive statement-valued matches must each retain their trailing console
+# consumer instead of leaving only an unused control result in Typed IR.
+main {
+    """"
+        namespace sample
+
+        enum Outcome {
+            Ok(Int)
+            Err(Int)
+        }
+
+        reject code: Int -> Outcome => Outcome.Err(code)
+
+        main {
+            reject(1) -> when {
+                Ok(value) { "first-ok" }
+                Err(error) { "first-error" }
+            } -> println
+            reject(2) -> when {
+                Ok(value) { "second-ok" }
+                Err(error) { "second-error" }
+            } -> println
+            reject(3) -> when {
+                Ok(value) { "third-ok" }
+                Err(error) { "third-error" }
+            } -> println
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    0 => controls!
+    0 => consoles!
+    0 => linkedControls!
+    0 => parentControls!
+    -1 => firstParentKind!
+    -1 => firstConsoleKind!
+    -999 => firstConsoleOpcode!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.kind == 27 -> if { controls! + 1 => controls! }
+        (node.kind == 6 or node.kind == 9)
+            and (node.symbol == -101 or node.symbol == -102)
+            -> if {
+                consoles! + 1 => consoles!
+                firstConsoleKind! < 0 -> if {
+                    node.kind => firstConsoleKind!
+                    node.opcode => firstConsoleOpcode!
+                }
+                firstParentKind! < 0 and node.parent >= 0
+                    -> if { ir[node.parent].kind => firstParentKind! }
+                node.operand0 >= 0 and ir[node.operand0].kind == 27
+                    -> if { linkedControls! + 1 => linkedControls! }
+                node.operand1 >= 0 and ir[node.operand1].kind == 27
+                    -> if { linkedControls! + 1 => linkedControls! }
+                node.parent >= 0 and ir[node.parent].kind == 27
+                    -> if { parentControls! + 1 => parentControls! }
+            }
+        index! + 1 => index!
+    }
+    controls! => controlCount
+    consoles! => consoleCount
+    linkedControls! => linkedControlCount
+    parentControls! => parentControlCount
+    firstParentKind! => consoleParentKind
+    firstConsoleKind! => consoleKind
+    firstConsoleOpcode! => consoleOpcode
+    "control=$controlCount,console=$consoleCount,linked=$linkedControlCount,parent=$parentControlCount,parent-kind=$consoleParentKind,console-kind=$consoleKind,opcode=$consoleOpcode" -> println
+}

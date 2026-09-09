@@ -1,0 +1,141 @@
+import std.compress.gzip as gzip
+
+appendBytes source: [UInt8], target: mut [UInt8; ~] -> Unit {
+    0 => index!
+    index! < (source -> len) -> while {
+        target -> push(source[index!])
+        index! + 1 => index!
+    }
+}
+
+copyBytes source: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => copied!
+    source -> appendBytes(copied!)
+    copied!
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+rejectsMemberLimit codec: gzip.Codec, combined: [UInt8] -> Result<Bool, gzip.Error> {
+    codec -> decoder(gzip.DecoderLimits {
+        maxInputBytes: combined -> len
+        maxMembers: 1
+    })? => decoder!
+    decoder! -> write(combined)? => accepted
+    [UInt8(250); ~] => output!
+    decoder! -> finish(output!) -> when {
+        Ok(_) { Result<Bool, gzip.Error>.Ok(false) }
+        Err(_) { Result<Bool, gzip.Error>.Ok((output! -> len) == 1) }
+    }
+}
+
+rejectsChecksum codec: gzip.Codec, combined: [UInt8] -> Result<Bool, gzip.Error> {
+    combined -> copyBytes => damaged!
+    (damaged! -> len) - 8 => checksumOffset
+    damaged![checksumOffset] + 1 => damaged![checksumOffset]
+    codec -> decoder(gzip.DecoderLimits {
+        maxInputBytes: damaged! -> len
+        maxMembers: 2
+    })? => decoder!
+    decoder! -> write(damaged!)? => accepted
+    [UInt8(250); ~] => output!
+    decoder! -> finish(output!) -> when {
+        Ok(_) { Result<Bool, gzip.Error>.Ok(false) }
+        Err(_) { Result<Bool, gzip.Error>.Ok((output! -> len) == 1) }
+    }
+}
+
+rejectsTruncated codec: gzip.Codec, member: [UInt8] -> Result<Bool, gzip.Error> {
+    [UInt8; ~] => truncated!
+    0 => index!
+    index! + 1 < (member -> len) -> while {
+        truncated! -> push(member[index!])
+        index! + 1 => index!
+    }
+    codec -> decoder(gzip.DecoderLimits {
+        maxInputBytes: truncated! -> len
+        maxMembers: 1
+    })? => decoder!
+    decoder! -> write(truncated!)? => accepted
+    [UInt8(250); ~] => output!
+    decoder! -> finish(output!) -> when {
+        Ok(_) { Result<Bool, gzip.Error>.Ok(false) }
+        Err(_) { Result<Bool, gzip.Error>.Ok((output! -> len) == 1) }
+    }
+}
+
+retainsAcceptedInput codec: gzip.Codec, first: [UInt8], second: [UInt8] -> Result<Bool, gzip.Error> {
+    codec -> decoder(gzip.DecoderLimits {
+        maxInputBytes: (first -> len) + (second -> len) - 1
+        maxMembers: 2
+    })? => decoder!
+    decoder! -> write(first)? => firstWritten
+    decoder! -> write(second) -> when {
+        Ok(_) { Result<Bool, gzip.Error>.Ok(false) -> return }
+        Err(_) { }
+    }
+    [UInt8; ~] => output!
+    decoder! -> finish(output!)? => finished
+    [UInt8(65), 66] => expected
+    Result<Bool, gzip.Error>.Ok(
+    firstWritten == (first -> len)
+        and finished == 2
+        and (output! -> matches(expected)))
+}
+
+verify: -> Result<Bool, gzip.Error> {
+    gzip.Limits { maxOutputBytes: 64, maxExpansionRatio: 100 } -> codec()? => codec
+    [UInt8(65), 66] => firstInput
+    [UInt8(67), 68, 69] => secondInput
+    codec -> compress(firstInput)? => first
+    codec -> compressFixed(secondInput)? => second
+    [UInt8; ~] => combined!
+    first -> appendBytes(combined!)
+    second -> appendBytes(combined!)
+
+    codec -> decoder(gzip.DecoderLimits {
+        maxInputBytes: combined! -> len
+        maxMembers: 2
+    })? => decoder!
+    decoder! -> write(first)? => firstWritten
+    decoder! -> write(second)? => secondWritten
+    [UInt8(250); ~] => output!
+    decoder! -> finish(output!)? => finished
+    [UInt8(250), 65, 66, 67, 68, 69] => expected
+    codec -> decompressMembers(combined!, 2)? => oneShot
+    [UInt8(65), 66, 67, 68, 69] => oneShotExpected
+
+    codec -> rejectsMemberLimit(combined!)? => memberLimit
+    codec -> rejectsChecksum(combined!)? => checksum
+    codec -> rejectsTruncated(first)? => truncated
+    codec -> retainsAcceptedInput(first, second)? => inputLimit
+    Result<Bool, gzip.Error>.Ok(
+    firstWritten == (first -> len)
+        and secondWritten == (second -> len)
+        and finished == 5
+        and (output! -> matches(expected))
+        and (oneShot -> matches(oneShotExpected))
+        and memberLimit
+        and checksum
+        and truncated
+        and inputLimit)
+}
+
+main {
+    verify() -> when {
+        Err(_) { "gzip-decoder=false" -> println }
+        Ok(valid) => valid -> if {
+            "gzip-decoder=true" -> println
+        } else {
+            "gzip-decoder=false" -> println
+        }
+    }
+}

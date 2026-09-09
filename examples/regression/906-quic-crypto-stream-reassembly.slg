@@ -1,19 +1,19 @@
-import sys.quic.crypto_stream as crypto
-import sys.quic.error as errors
+import std.net.quic.crypto_stream as crypto
+import std.net.quic.error as errors
 
 verify: -> Result<Bool, errors.Error> uses Console {
-    [crypto.ByteCell; ~] => cells!
-    cells! -> crypto.insert(2, [30, 40], 8)? => insertedTail
-    cells! -> crypto.insert(0, [10, 20, 30], 8)? => insertedHead
-    cells! -> crypto.readContiguous(0, 3) => first
-    cells! -> crypto.readContiguous(first.nextOffset, 3) => second
+    crypto.receiveBuffer(8) => receive!
+    receive! -> insert(2, [30, 40])? => insertedTail
+    receive! -> insert(0, [10, 20, 30])? => insertedHead
+    receive! -> readContiguous(0, 3) => first
+    receive! -> readContiguous(first.nextOffset, 3) => second
 
-    [UInt8; ~] => sendBuffer!
-    sendBuffer! -> crypto.append([1, 2, 3]) => firstOffset
-    sendBuffer! -> crypto.append([4, 5, 6]) => secondOffset
-    crypto.chunk(sendBuffer!, 2, 3)? => sent
+    crypto.sendBuffer(8) => send!
+    send! -> append([1, 2, 3])? => firstOffset
+    send! -> append([4, 5, 6])? => secondOffset
+    send! -> chunk(2, 3)? => sent
 
-    "$insertedTail,$insertedHead,$(first.nextOffset),$(second.nextOffset),$(cells! -> len)" -> println
+    "$insertedTail,$insertedHead,$(first.nextOffset),$(second.nextOffset),$(receive! -> byteCount)" -> println
     "$(first.bytes[0]),$(first.bytes[2]),$(second.bytes[0])" -> println
     "$firstOffset,$secondOffset,$(sent.offset),$(sent.bytes[0]),$(sent.bytes[2])" -> println
     Result<Bool, errors.Error>.Ok(true)
@@ -25,19 +25,25 @@ main {
         Err(error) { "error=$(error.code)" -> println }
     }
 
-    [crypto.ByteCell; ~] => conflict!
-    conflict! -> crypto.insert(0, [1], 1) -> when {
+    crypto.receiveBuffer(1) => conflict!
+    conflict! -> insert(0, [1]) -> when {
         Ok(inserted) {}
         Err(error) { "unexpected=$(error.code)" -> println }
     }
-    conflict! -> crypto.insert(0, [2], 1) -> when {
+    conflict! -> insert(0, [2]) -> when {
         Ok(inserted) { "conflict-missed" -> println }
         Err(error) { "conflict=$(error.code)" -> println }
     }
 
-    [crypto.ByteCell; ~] => limited!
-    limited! -> crypto.insert(0, [1, 2], 1) -> when {
+    crypto.receiveBuffer(1) => limited!
+    limited! -> insert(0, [1, 2]) -> when {
         Ok(inserted) { "limit-missed" -> println }
         Err(error) { "limit=$(error.code)" -> println }
+    }
+
+    crypto.sendBuffer(1) => sendLimited!
+    sendLimited! -> append([1, 2]) -> when {
+        Ok(offset) { "send-limit-missed" -> println }
+        Err(error) { "send-limit=$(error.code)" -> println }
     }
 }

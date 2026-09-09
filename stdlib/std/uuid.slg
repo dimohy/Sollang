@@ -1,0 +1,367 @@
+namespace std.uuid
+
+import std.uuid.error as errors
+import std.uuid as model
+import std.time as time
+import std.crypto.random as random
+
+# RFC 9562 UUID values are always sixteen network-order octets. Codec is an
+# immutable parsing/factory policy value; Uuid owns all value inspection and
+# canonical formatting operations as instance methods.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public enum Variant {
+    Ncs
+    Rfc9562
+    Microsoft
+    Future
+}
+
+public struct Uuid {
+    public bytes: [UInt8; 16]
+}
+
+public struct Codec {
+    public marker: UInt8
+}
+
+# Generator explicitly owns its ambient capability sources. Both current
+# system implementations are marker values and compile to direct static calls.
+public struct Generator {
+    public clock: time.WallClock
+    public entropy: random.SecureRandom
+}
+
+errorUuid kind: errors.Kind, offset: UIntSize -> Result<Uuid, Error> {
+    Result<Uuid, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+hexValue value: UInt8 -> Int {
+    value >= 48 and value <= 57 -> if { Int(value - 48) -> return }
+    value >= 65 and value <= 70 -> if { Int(value - 65) + 10 -> return }
+    value >= 97 and value <= 102 -> if { Int(value - 97) + 10 -> return }
+    -1
+}
+
+hexDigit value: Int -> Text => value -> when {
+    == 0 { "0" }
+    == 1 { "1" }
+    == 2 { "2" }
+    == 3 { "3" }
+    == 4 { "4" }
+    == 5 { "5" }
+    == 6 { "6" }
+    == 7 { "7" }
+    == 8 { "8" }
+    == 9 { "9" }
+    == 10 { "a" }
+    == 11 { "b" }
+    == 12 { "c" }
+    == 13 { "d" }
+    == 14 { "e" }
+    else { "f" }
+}
+
+separatorAt offset: UIntSize -> Bool => offset == 8
+    or offset == 13
+    or offset == 18
+    or offset == 23
+
+asciiLower value: UInt8 -> UInt8 => value >= 65 and value <= 90
+    -> if { value + 32 } else { value }
+
+urnPrefixValid text: Text -> Bool {
+    ((text -> byte(0)) -> asciiLower) == 117
+        and ((text -> byte(1)) -> asciiLower) == 114
+        and ((text -> byte(2)) -> asciiLower) == 110
+        and (text -> byte(3)) == 58
+        and ((text -> byte(4)) -> asciiLower) == 117
+        and ((text -> byte(5)) -> asciiLower) == 117
+        and ((text -> byte(6)) -> asciiLower) == 105
+        and ((text -> byte(7)) -> asciiLower) == 100
+        and (text -> byte(8)) == 58
+}
+
+public codec: -> Codec => Codec { marker: 0 }
+
+public generator clock: time.WallClock, entropy: random.SecureRandom -> Generator => Generator {
+    clock: clock
+    entropy: entropy
+}
+
+impl Error {
+    public errorKind: self -> errors.Kind => self.kind
+
+    public errorOffset: self -> UIntSize => self.offset
+}
+
+impl Codec {
+    public nil: self -> Uuid => Uuid { bytes: [0; 16] }
+
+    public max: self -> Uuid => Uuid { bytes: [255; 16] }
+
+    public fromBytes: self, bytes: move [UInt8; 16] -> Uuid => Uuid { bytes: bytes }
+
+    # Deterministic construction keeps test/simulation entropy caller-owned.
+    # It performs no random or clock access and validates lengths before index.
+    public v4: self, entropy: [UInt8] -> Result<Uuid, Error> {
+        (entropy -> len) == 16 -> unless {
+            errorUuid(errors.Kind.InvalidEntropyLength, UIntSize(entropy -> len)) -> return
+        }
+        Result<Uuid, Error>.Ok(Uuid {
+            bytes: [
+            entropy[0],
+            entropy[1],
+            entropy[2],
+            entropy[3],
+            entropy[4],
+            entropy[5],
+            UInt8(Int(entropy[6]) % 16 + 64),
+            entropy[7],
+            UInt8(Int(entropy[8]) % 64 + 128),
+            entropy[9],
+            entropy[10],
+            entropy[11],
+            entropy[12],
+            entropy[13],
+            entropy[14],
+            entropy[15]
+            ]
+        })
+    }
+
+    public v7: self, instant: time.UtcInstant, entropy: [UInt8] -> Result<Uuid, Error> {
+        instant -> asUnixMilliseconds => timestamp
+        timestamp < 0 -> if {
+            errorUuid(errors.Kind.ClockBeforeUnixEpoch, 0) -> return
+        }
+        timestamp > 281_474_976_710_655 -> if {
+            errorUuid(errors.Kind.TimestampOverflow, 0) -> return
+        }
+        (entropy -> len) == 10 -> unless {
+            errorUuid(errors.Kind.InvalidEntropyLength, UIntSize(entropy -> len)) -> return
+        }
+        Result<Uuid, Error>.Ok(Uuid {
+            bytes: [
+            UInt8(timestamp / 1_099_511_627_776),
+            UInt8(timestamp / 4_294_967_296 % 256),
+            UInt8(timestamp / 16_777_216 % 256),
+            UInt8(timestamp / 65_536 % 256),
+            UInt8(timestamp / 256 % 256),
+            UInt8(timestamp % 256),
+            UInt8(Int(entropy[0]) % 16 + 112),
+            entropy[1],
+            UInt8(Int(entropy[2]) % 64 + 128),
+            entropy[3],
+            entropy[4],
+            entropy[5],
+            entropy[6],
+            entropy[7],
+            entropy[8],
+            entropy[9]
+            ]
+        })
+    }
+
+    public parse: self, text: Text -> Result<Uuid, Error> {
+        (text -> len) == 36 -> unless {
+            errorUuid(errors.Kind.InvalidLength, text -> len) -> return
+        }
+        Uuid { bytes: [0; 16] }.bytes => bytes!
+        UIntSize(0) => textOffset!
+        0 => byteOffset!
+        textOffset! < 36 -> while {
+            textOffset! -> separatorAt -> if {
+                (text -> byte(textOffset!)) == 45 -> unless {
+                    errorUuid(errors.Kind.InvalidSeparator, textOffset!) -> return
+                }
+                textOffset! + 1 => textOffset!
+            } else {
+                text -> byte(textOffset!) -> hexValue => high
+                text -> byte(textOffset! + 1) -> hexValue => low
+                high >= 0 -> unless {
+                    errorUuid(errors.Kind.InvalidHexDigit, textOffset!) -> return
+                }
+                low >= 0 -> unless {
+                    errorUuid(errors.Kind.InvalidHexDigit, textOffset! + 1) -> return
+                }
+                UInt8(high * 16 + low) => bytes![byteOffset!]
+                byteOffset! + 1 => byteOffset!
+                textOffset! + 2 => textOffset!
+            }
+        }
+        Result<Uuid, Error>.Ok(Uuid { bytes: bytes! })
+    }
+
+    # Alternate RFC 9562 presentations are explicit opt-in methods. The core
+    # parse method remains strict 8-4-4-4-12 text and never guesses wrappers.
+    public parseBraced: self, text: Text -> Result<Uuid, Error> {
+        (text -> len) == 38 -> unless {
+            errorUuid(errors.Kind.InvalidLength, text -> len) -> return
+        }
+        (text -> byte(0)) == 123 -> unless {
+            errorUuid(errors.Kind.InvalidSeparator, 0) -> return
+        }
+        (text -> byte(37)) == 125 -> unless {
+            errorUuid(errors.Kind.InvalidSeparator, 37) -> return
+        }
+        text -> slice(UIntSize(1), UIntSize(36)) => canonical
+        self -> parse(canonical) -> when {
+            Ok(value) { Result<Uuid, Error>.Ok(value) }
+            Err(failure) {
+                Result<Uuid, Error>.Err(Error {
+                    kind: failure.kind
+                    offset: failure.offset + 1
+                })
+            }
+        }
+    }
+
+    public parseUrn: self, text: Text -> Result<Uuid, Error> {
+        (text -> len) == 45 -> unless {
+            errorUuid(errors.Kind.InvalidLength, text -> len) -> return
+        }
+        text -> urnPrefixValid -> unless {
+            errorUuid(errors.Kind.InvalidPrefix, 0) -> return
+        }
+        text -> slice(UIntSize(9), UIntSize(36)) => canonical
+        self -> parse(canonical) -> when {
+            Ok(value) { Result<Uuid, Error>.Ok(value) }
+            Err(failure) {
+                Result<Uuid, Error>.Err(Error {
+                    kind: failure.kind
+                    offset: failure.offset + 9
+                })
+            }
+        }
+    }
+}
+
+impl Generator {
+    public v4: self -> Result<Uuid, Error> uses Random {
+        self.entropy -> bytes(16) -> when {
+            Ok(entropy) {
+                Uuid {
+                    bytes: [
+                    entropy[0],
+                    entropy[1],
+                    entropy[2],
+                    entropy[3],
+                    entropy[4],
+                    entropy[5],
+                    UInt8(Int(entropy[6]) % 16 + 64),
+                    entropy[7],
+                    UInt8(Int(entropy[8]) % 64 + 128),
+                    entropy[9],
+                    entropy[10],
+                    entropy[11],
+                    entropy[12],
+                    entropy[13],
+                    entropy[14],
+                    entropy[15]
+                    ]
+                } -> Result<Uuid, Error>.Ok
+            }
+            Err(_) { errorUuid(errors.Kind.RandomUnavailable, 0) }
+        }
+    }
+
+    public v7: self -> Result<Uuid, Error> uses Clock, Random {
+        self.clock -> now -> asUnixMilliseconds => timestamp
+        timestamp < 0 -> if {
+            errorUuid(errors.Kind.ClockBeforeUnixEpoch, 0) -> return
+        }
+        timestamp > 281_474_976_710_655 -> if {
+            errorUuid(errors.Kind.TimestampOverflow, 0) -> return
+        }
+        self.entropy -> bytes(10) -> when {
+            Ok(entropy) {
+                Uuid {
+                    bytes: [
+                    UInt8(timestamp / 1_099_511_627_776),
+                    UInt8(timestamp / 4_294_967_296 % 256),
+                    UInt8(timestamp / 16_777_216 % 256),
+                    UInt8(timestamp / 65_536 % 256),
+                    UInt8(timestamp / 256 % 256),
+                    UInt8(timestamp % 256),
+                    UInt8(Int(entropy[0]) % 16 + 112),
+                    entropy[1],
+                    UInt8(Int(entropy[2]) % 64 + 128),
+                    entropy[3],
+                    entropy[4],
+                    entropy[5],
+                    entropy[6],
+                    entropy[7],
+                    entropy[8],
+                    entropy[9]
+                    ]
+                } -> Result<Uuid, Error>.Ok
+            }
+            Err(_) { errorUuid(errors.Kind.RandomUnavailable, 0) }
+        }
+    }
+}
+
+impl Uuid {
+    public byte: self, index: UIntSize -> Option<UInt8> => index < 16
+        -> if {
+            Option<UInt8>.Some(self.bytes[Int(index)])
+        } else {
+            Option<UInt8>.None
+        }
+
+    public version: self -> UInt8 => self.bytes[6] / 16
+
+    public unixTimestampMilliseconds: self -> Option<Long> {
+        (self -> version) == 7 -> unless { Option<Long>.None -> return }
+        Long(self.bytes[0]) * 1_099_511_627_776 => byte0
+        Long(self.bytes[1]) * 4_294_967_296 => byte1
+        Long(self.bytes[2]) * 16_777_216 => byte2
+        Long(self.bytes[3]) * 65_536 => byte3
+        Long(self.bytes[4]) * 256 => byte4
+        Option<Long>.Some(byte0 + byte1 + byte2 + byte3 + byte4 + Long(self.bytes[5]))
+    }
+
+    public variant: self -> Variant => self.bytes[8] < 128
+        -> if {
+            model.Variant.Ncs
+        } else {
+            self.bytes[8] < 192 -> if {
+                model.Variant.Rfc9562
+            } else {
+                self.bytes[8] < 224 -> if {
+                    model.Variant.Microsoft
+                } else {
+                    model.Variant.Future
+                }
+            }
+        }
+
+    public isNil: self -> Bool {
+        true => result!
+        0 => index!
+        result! and index! < 16 -> while {
+            self.bytes[index!] != 0 -> if { false => result! }
+            index! + 1 => index!
+        }
+        result!
+    }
+
+    public isMax: self -> Bool {
+        true => result!
+        0 => index!
+        result! and index! < 16 -> while {
+            self.bytes[index!] != 255 -> if { false => result! }
+            index! + 1 => index!
+        }
+        result!
+    }
+
+    public text: self, storage: mut Arena -> Text {
+        "$((Int(self.bytes[0]) / 16) -> hexDigit)$((Int(self.bytes[0]) % 16) -> hexDigit)$((Int(self.bytes[1]) / 16) -> hexDigit)$((Int(self.bytes[1]) % 16) -> hexDigit)$((Int(self.bytes[2]) / 16) -> hexDigit)$((Int(self.bytes[2]) % 16) -> hexDigit)$((Int(self.bytes[3]) / 16) -> hexDigit)$((Int(self.bytes[3]) % 16) -> hexDigit)-$((Int(self.bytes[4]) / 16) -> hexDigit)$((Int(self.bytes[4]) % 16) -> hexDigit)$((Int(self.bytes[5]) / 16) -> hexDigit)$((Int(self.bytes[5]) % 16) -> hexDigit)-$((Int(self.bytes[6]) / 16) -> hexDigit)$((Int(self.bytes[6]) % 16) -> hexDigit)$((Int(self.bytes[7]) / 16) -> hexDigit)$((Int(self.bytes[7]) % 16) -> hexDigit)-$((Int(self.bytes[8]) / 16) -> hexDigit)$((Int(self.bytes[8]) % 16) -> hexDigit)$((Int(self.bytes[9]) / 16) -> hexDigit)$((Int(self.bytes[9]) % 16) -> hexDigit)-$((Int(self.bytes[10]) / 16) -> hexDigit)$((Int(self.bytes[10]) % 16) -> hexDigit)$((Int(self.bytes[11]) / 16) -> hexDigit)$((Int(self.bytes[11]) % 16) -> hexDigit)$((Int(self.bytes[12]) / 16) -> hexDigit)$((Int(self.bytes[12]) % 16) -> hexDigit)$((Int(self.bytes[13]) / 16) -> hexDigit)$((Int(self.bytes[13]) % 16) -> hexDigit)$((Int(self.bytes[14]) / 16) -> hexDigit)$((Int(self.bytes[14]) % 16) -> hexDigit)$((Int(self.bytes[15]) / 16) -> hexDigit)$((Int(self.bytes[15]) % 16) -> hexDigit)"
+            -> materialize(storage)
+    }
+}

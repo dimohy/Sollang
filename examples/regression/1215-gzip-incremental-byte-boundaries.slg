@@ -1,0 +1,113 @@
+import std.compress.gzip as gzip
+import std.compress.gzip.error as gzip_errors
+
+kindCode kind: gzip_errors.Kind -> Int {
+    kind -> when {
+        InvalidLimit { 0 }
+        InputLimitExceeded { 1 }
+        OutputLimitExceeded { 2 }
+        ExpansionRatioExceeded { 3 }
+        MemberLimitExceeded { 4 }
+        TruncatedInput { 5 }
+        InvalidHeader { 6 }
+        InvalidHeaderChecksum { 7 }
+        UnsupportedCompressionMethod { 8 }
+        UnsupportedDeflateBlock { 9 }
+        InvalidHuffmanTree { 10 }
+        InvalidDeflateCode { 11 }
+        InvalidDistance { 12 }
+        InvalidStoredLength { 13 }
+        ChecksumMismatch { 14 }
+        SizeMismatch { 15 }
+        TrailingData { 16 }
+    }
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+decodeBytewise codec: gzip.Codec, encoded: [UInt8], expected: [UInt8], maxMembers: Int -> Result<Bool, gzip.Error> {
+    codec -> decoder(gzip.DecoderLimits {
+        maxInputBytes: encoded -> len
+        maxMembers: maxMembers
+    })? => decoder!
+    0 => index!
+    index! < (encoded -> len) -> while {
+        [encoded[index!]] => chunk
+        decoder! -> write(chunk)? => accepted
+        accepted == 1 -> unless { Result<Bool, gzip.Error>.Ok(false) -> return }
+        index! + 1 => index!
+    }
+    [UInt8; ~] => output!
+    decoder! -> finish(output!)? => written
+    Result<Bool, gzip.Error>.Ok(
+    written == (expected -> len) and (output! -> matches(expected)))
+}
+
+printResult label: Text, result: Result<Bool, gzip.Error> -> Unit uses Console {
+    label -> print
+    "=" -> print
+    result -> when {
+        Err(error) { "error$(error.kind -> kindCode)@$(error.offset)" -> println }
+        Ok(valid) => valid -> if {
+            "true" -> println
+        } else {
+            "false" -> println
+        }
+    }
+}
+
+dynamicSource: -> [UInt8] => [
+    4, 29, 2, 17, 1, 5, 31, 4, 15, 10, 10, 11, 3, 22, 1, 4, 0, 5, 8, 25,
+    8, 2, 5, 31, 1, 14, 8, 15, 7, 16, 11, 15, 25, 13, 2, 1, 27, 10, 3, 27,
+    13, 18, 24, 5, 7, 24, 2, 19, 1, 16, 17, 28, 22, 11, 4, 3, 12, 11, 1, 25,
+    11, 17, 4, 5, 0, 7, 5, 9, 8, 22, 24, 3, 8, 3, 15, 29, 4, 19, 6, 0,
+    19, 7, 3, 9, 4, 8, 9, 9, 13, 6, 1, 1, 2, 11, 7, 21, 11, 17, 30, 1]
+
+dynamicGzip: -> [UInt8] => [
+    31, 139, 8, 0, 0, 0, 0, 0, 0, 10, 5, 193, 9, 14, 128, 32, 12, 0,
+    48, 118, 185, 193, 68, 68, 34, 129, 120, 253, 255, 151, 182, 252, 96, 5,
+    249, 184, 164, 228, 212, 129, 131, 216, 52, 148, 15, 54, 43, 186, 123, 153,
+    25, 225, 74, 116, 229, 99, 136, 14, 108, 176, 215, 187, 59, 211, 234, 48,
+    189, 178, 4, 149, 104, 125, 144, 81, 121, 184, 45, 161, 41, 69, 182, 24,
+    243, 2, 128, 174, 167, 215, 23, 126, 119, 247, 214, 182, 100, 0, 0, 0]
+
+run: -> Result<Unit, gzip.Error> uses Console {
+    gzip.Limits { maxOutputBytes: 512, maxExpansionRatio: 100 } -> codec()? => codec
+    [UInt8(65), 66] => storedInput
+    [UInt8(67), 68, 69, 67, 68, 69, 67, 68, 69] => fixedInput
+    codec -> compress(storedInput)? => stored
+    codec -> compressFixed(fixedInput)? => fixed
+    [UInt8; ~] => combined!
+    0 => index!
+    index! < (stored -> len) -> while {
+        combined! -> push(stored[index!])
+        index! + 1 => index!
+    }
+    0 => fixedIndex!
+    fixedIndex! < (fixed -> len) -> while {
+        combined! -> push(fixed[fixedIndex!])
+        fixedIndex! + 1 => fixedIndex!
+    }
+    [UInt8(65), 66, 67, 68, 69, 67, 68, 69, 67, 68, 69] => combinedExpected
+
+    printResult("stored", decodeBytewise(codec, stored, storedInput, 1))
+    printResult("fixed", decodeBytewise(codec, fixed, fixedInput, 1))
+    printResult("dynamic", decodeBytewise(codec, dynamicGzip(), dynamicSource(), 1))
+    printResult("combined", decodeBytewise(codec, combined!, combinedExpected, 2))
+    Result<Unit, gzip.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Err(_) { "run=error" -> println }
+        Ok(_) { }
+    }
+}

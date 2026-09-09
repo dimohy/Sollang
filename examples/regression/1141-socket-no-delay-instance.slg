@@ -1,0 +1,35 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+# A live loopback stream must expose TCP_NODELAY through non-consuming instance methods.
+boolText value: Bool -> Text => value -> if { "true" } else { "false" }
+
+observe: -> Result<Bool, socket.SocketError> uses Network, Console {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localEndpoint? => endpoint
+    endpoint -> connect? => client
+    listener -> accept? => server
+
+    client -> setNoDelay(true)?
+    client -> noDelay? => enabled
+    client -> setNoDelay(false)?
+    client -> noDelay? => disabled
+
+    client -> close
+    server -> close
+    listener -> close
+    "$(enabled -> boolText),$(disabled -> boolText)" -> println
+    Result<Bool, socket.SocketError>.Ok(enabled and not disabled)
+}
+
+main {
+    observe() -> when {
+        Ok(valid) { valid -> if { "socket-no-delay=ok" } else { "socket-no-delay=failed" } -> println }
+        Err(error) { "socket-no-delay-error=$(error.code)" -> println }
+    }
+}

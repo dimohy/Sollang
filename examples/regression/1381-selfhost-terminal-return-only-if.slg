@@ -1,0 +1,62 @@
+import std.net.quic.error as errors
+import std.net.quic.frame as frames
+import std.net.quic.transport_parameters as transport
+
+# Each invalid-frame match has a returning success arm and a conditional-return
+# error arm. The error arm's trailing if has no value on its continuing path.
+verify: -> Result<Bool, errors.Error> {
+    frames.Value.MaxStreams(frames.MaxStreams {
+        bidirectional: false
+        maximum: 1_152_921_504_606_846_976
+    }) -> frames.encodeValue? => encoded
+    frames.decode(encoded, 0)? => decoded
+    decoded.frame -> when {
+        MaxStreams(limit) {
+            not limit.bidirectional
+                and limit.maximum == 1_152_921_504_606_846_976
+                -> unless { Result<Bool, errors.Error>.Ok(false) -> return }
+        }
+        else { Result<Bool, errors.Error>.Ok(false) -> return }
+    }
+    frames.Value.MaxStreams(frames.MaxStreams {
+        bidirectional: true
+        maximum: 1_152_921_504_606_846_977
+    }) -> frames.encodeValue -> when {
+        Ok(unexpected) { Result<Bool, errors.Error>.Ok(false) -> return }
+        Err(error) {
+            error.code == errors.frameEncodingError()
+                -> unless { Result<Bool, errors.Error>.Ok(false) -> return }
+        }
+    }
+    frames.decode([18, 208, 0, 0, 0, 0, 0, 0, 1], 0) -> when {
+        Ok(unexpected) { Result<Bool, errors.Error>.Ok(false) -> return }
+        Err(error) {
+            error.code == errors.frameEncodingError()
+                -> unless { Result<Bool, errors.Error>.Ok(false) -> return }
+        }
+    }
+    frames.decode([22, 208, 0, 0, 0, 0, 0, 0, 1], 0) -> when {
+        Ok(unexpected) { Result<Bool, errors.Error>.Ok(false) -> return }
+        Err(error) {
+            error.code == errors.frameEncodingError()
+                -> unless { Result<Bool, errors.Error>.Ok(false) -> return }
+        }
+    }
+    1_152_921_504_606_846_976 -> transport.streamCount? => finalValid
+    finalValid -> value => finalValue
+    1_152_921_504_606_846_977 -> transport.streamCount -> when {
+        Ok(unexpected) { Result<Bool, errors.Error>.Ok(false) -> return }
+        Err(error) {
+            finalValue == 1_152_921_504_606_846_976 => countValid
+            error.code == errors.transportParameterError() => errorValid
+            Result<Bool, errors.Error>.Ok(countValid and errorValid)
+        }
+    }
+}
+
+main {
+    verify() -> when {
+        Ok(value) { "terminal-return-only-if=$value" -> println }
+        Err(error) { "terminal-return-only-if-error=$(error.code)" -> println }
+    }
+}

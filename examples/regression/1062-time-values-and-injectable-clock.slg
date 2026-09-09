@@ -1,0 +1,39 @@
+import std.time as time
+
+verify: -> Result<Unit, time.Error> uses Console, Clock {
+    time.seconds(2)? => twoSeconds
+    time.milliseconds(500)? => halfSecond
+    twoSeconds -> checkedAdd(halfSecond)? => combined
+
+    # Manual and monotonic clocks deliberately share the instance name `now`.
+    time.manualClock(1000)? => manual!
+    manual! -> now => before
+    manual! -> advance(combined)?
+    manual! -> now => after
+    after -> durationSince(before)? => elapsed
+
+    time.monotonicClock() => system
+    system -> now => first
+    system -> now => second
+    second -> durationSince(first) -> when {
+        Ok(value) { "monotonic=true" }
+        Err(error) { "monotonic=false" }
+    } -> println
+
+    elapsed -> isZero -> if { "true" } else { "false" } => zeroText
+    "millis=$(elapsed -> asMilliseconds),seconds=$(elapsed -> asSecondsFloor),zero=$zeroText" -> println
+
+    time.milliseconds(-1) -> when {
+        Ok(value) { "negative=false" }
+        Err(error) { "negative=true" }
+    } -> println
+
+    Result<Unit, time.Error>.Ok
+}
+
+main {
+    verify() -> when {
+        Ok(_) => "time=ok" -> println
+        Err(error) => "time=error" -> println
+    }
+}

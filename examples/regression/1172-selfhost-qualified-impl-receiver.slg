@@ -1,0 +1,25 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.ir.typed as typedIr
+
+# A method that extends an imported nominal type retains its synthetic receiver.
+main {
+    [
+    "examples/regression/fixtures/1172-qualified-impl-type.slg",
+    "examples/regression/fixtures/1172-qualified-impl-runtime.slg"; ~
+    ] => paths
+    paths -> semanticContext.prepareFiles => prepared
+    prepared -> typedIr.lowerContext => ir
+
+    0 => methodCount!
+    0 => receiverCount!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        node.kind == 0 and node.sourceModule == 1 -> if {
+            methodCount! + 1 => methodCount!
+            node.operand1 >= 0 -> if { receiverCount! + 1 => receiverCount! }
+        }
+        irIndex! + 1 => irIndex!
+    }
+    "qualified-impl=$(methodCount!),$(receiverCount!)" -> println
+}

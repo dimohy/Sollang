@@ -1,0 +1,61 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    """"
+        namespace sample
+
+        struct Buffer { count: Int }
+
+        impl Buffer {
+            insert: mut self, offset: Int, bytes: [UInt8] -> Result<Int, Text> {
+                offset + (bytes -> len) -> Result<Int, Text>.Ok
+            }
+        }
+
+        verify: -> Result<Int, Text> {
+            Buffer { count: 1 } => buffer!
+            buffer! -> insert(2, [30, 40])? => inserted
+            inserted -> Result<Int, Text>.Ok
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    false => propagationValid!
+    false => contextualArrayValid!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        (node.kind == 30
+            and node.operand0 >= 0
+            and ir[node.operand0].kind == 6
+            and ir[node.operand0].parent == index!
+            and ir[node.operand0].typeId >= 0
+            and context.semantic.types[ir[node.operand0].typeId].kind == 7
+            and context.semantic.types[ir[node.operand0].typeId].first == node.typeId
+            and node.parent >= 0
+            and ir[node.parent].kind == 17
+            and ir[node.parent].operand0 == index!
+            and ir[node.parent].typeId == node.typeId)
+            -> if {
+                true => propagationValid!
+            }
+        node.kind == 14 -> if {
+            node.typeKind == 4 => contextualArrayValid!
+            node.operand0 => element!
+            (element! >= 0 and element! < (ir -> len)) -> while {
+                (ir[element!].typeOrigin != 1
+                    or ir[element!].typeSymbol != 8)
+                    -> if { false => contextualArrayValid! }
+                ir[element!].nextOperand => element!
+            }
+        }
+        index! + 1 => index!
+    }
+    propagationValid! and contextualArrayValid! -> if {
+        "inherent Result propagation and contextual array = valid" -> println
+    } else {
+        "inherent Result propagation and contextual array = invalid" -> println
+    }
+}

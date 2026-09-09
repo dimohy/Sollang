@@ -1,0 +1,148 @@
+import std.compress.brotli as brotli
+import std.compress.brotli.error as brotli_errors
+
+kindCode kind: brotli_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    InputLimitExceeded { 1 }
+    OutputLimitExceeded { 2 }
+    WindowLimitExceeded { 3 }
+    MetaBlockLimitExceeded { 4 }
+    MetadataLimitExceeded { 5 }
+    TruncatedInput { 6 }
+    InvalidHeader { 7 }
+    InvalidPadding { 8 }
+    SizeMismatch { 9 }
+    TrailingData { 10 }
+    UnsupportedDictionary { 11 }
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+failsIntWith result: Result<Int, brotli.Error>, expectedKind: Int -> Bool {
+    result -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == expectedKind }
+    }
+}
+
+printCheck label: Text, value: Bool -> Unit uses Console {
+    "$(label)=$(value)" -> println
+}
+
+decodeBytewise codec: brotli.Codec, input: [UInt8], expected: [UInt8] -> Result<Bool, brotli.Error> {
+    codec -> decoder? => decoder!
+    0 => index!
+    index! < (input -> len) -> while {
+        decoder! -> write([input[index!]])? => accepted
+        accepted == 1 -> unless { Result<Bool, brotli.Error>.Ok(false) -> return }
+        index! + 1 => index!
+    }
+    [UInt8; ~] => output!
+    decoder! -> finish(output!)? => written
+    Result<Bool, brotli.Error>.Ok(
+    written == (expected -> len) and (output! -> matches(expected)))
+}
+
+run: -> Result<Unit, brotli.Error> uses Console {
+    brotli.Limits {
+        maxEncodedBytes: 1_024
+        maxDecodedBytes: 1_024
+        maxWindowBytes: 65_520
+        maxMetaBlocks: 8
+        maxMetadataBytes: 32
+    } -> codec? => codec
+
+    [UInt8(97), 98, 99] => source
+    codec -> compress(source)? => encoded
+    [UInt8(32), 0, 16, 97, 98, 99, 3] => expectedEncoding
+    printCheck("encoded", encoded -> matches(expectedEncoding))
+    codec -> decompress(encoded)? => decoded
+    printCheck("roundtrip", decoded -> matches(source))
+    codec -> decodeBytewise(encoded, source)? => bytewise
+    printCheck("bytewise", bytewise)
+    # RFC 7932 metadata block (one 0xaa byte), followed by the same raw block.
+    [UInt8(44), 0, 170, 16, 0, 8, 97, 98, 99, 3] => metadataThenRaw
+    codec -> decompress(metadataThenRaw)? => metadataBulk
+    codec -> decodeBytewise(metadataThenRaw, source)? => metadataBytewise
+    printCheck(
+    "metadata",
+    metadataBytewise and (metadataBulk -> matches(source)))
+
+    codec -> encoder(3)? => encoder!
+    [UInt8; ~] => streamed!
+    encoder! -> write([97], streamed!)? => firstWritten
+    encoder! -> write([98, 99], streamed!)? => secondWritten
+    encoder! -> finish(streamed!)? => finalWritten
+    codec -> decompress(streamed!)? => streamedDecoded
+    printCheck(
+    "streaming",
+    firstWritten == 4 and secondWritten == 5 and finalWritten == 1
+        and (streamedDecoded -> matches(source)))
+
+    brotli.Limits {
+        maxEncodedBytes: 64
+        maxDecodedBytes: 2
+        maxWindowBytes: 65_520
+        maxMetaBlocks: 1
+        maxMetadataBytes: 0
+    } -> codec? => limitedCodec
+    limitedCodec -> encoder(2)? => limitedEncoder!
+    [UInt8; ~] => limitedOutput!
+    limitedEncoder! -> write([97], limitedOutput!)? => limitedFirst
+    limitedEncoder! -> write([98], limitedOutput!) => limitedSecond
+    printCheck(
+    "meta-block-limit",
+    limitedFirst == 4
+        and (limitedSecond -> failsIntWith(4))
+        and (limitedOutput! -> len) == 4)
+
+    codec -> decoder? => truncatedDecoder!
+    truncatedDecoder! -> write([32, 0, 16, 97, 98, 99])? => truncatedAccepted
+    [UInt8; ~] => truncatedOutput!
+    truncatedOutput! -> push(7)
+    truncatedDecoder! -> finish(truncatedOutput!) => truncatedFinish
+    printCheck(
+    "truncated-transactional",
+    truncatedAccepted == 6
+        and (truncatedFinish -> failsIntWith(6))
+        and (truncatedOutput! -> len) == 1 and truncatedOutput![0] == 7)
+
+    codec -> decoder? => paddingDecoder!
+    paddingDecoder! -> write([14]) => paddingWrite
+    [UInt8; ~] => paddingOutput!
+    paddingOutput! -> push(9)
+    paddingDecoder! -> finish(paddingOutput!) => paddingFinish
+    printCheck(
+    "padding-transactional",
+    (paddingWrite -> failsIntWith(8))
+        and (paddingFinish -> failsIntWith(8))
+        and (paddingOutput! -> len) == 1 and paddingOutput![0] == 9)
+
+    codec -> decoder? => trailingDecoder!
+    trailingDecoder! -> write([6, 0]) => trailingWrite
+    [UInt8; ~] => trailingOutput!
+    trailingOutput! -> push(11)
+    trailingDecoder! -> finish(trailingOutput!) => trailingFinish
+    printCheck(
+    "trailing-transactional",
+    (trailingWrite -> failsIntWith(10))
+        and (trailingFinish -> failsIntWith(10))
+        and (trailingOutput! -> len) == 1 and trailingOutput![0] == 11)
+
+    Result<Unit, brotli.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) { }
+        Err(error) { "unexpected-error=$(error.kind -> kindCode)" -> println }
+    }
+}

@@ -1,0 +1,32 @@
+# A readonly reference to a field of a dynamically indexed array element must
+# use the loop's current SSA index through every projected-place layer.
+struct Item {
+    value: Int
+    other: Int
+}
+
+less current: ref Int, previous: ref Int -> Bool => current < previous
+
+countDrops items: [Item; ~] -> Int {
+    1 => index!
+    0 => drops!
+    index! < (items -> len) -> while {
+        items[index!].value -> less(items[index! - 1].value)
+            -> if {
+            drops! + 1 => drops!
+        }
+        index! + 1 => index!
+    }
+    drops!
+}
+
+main {
+    [
+        Item { value: 4, other: 40 },
+        Item { value: 2, other: 20 },
+        Item { value: 3, other: 30 };
+        ~
+    ] => items
+    items -> countDrops => drops
+    "drops=$drops" -> println
+}

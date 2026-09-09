@@ -1,0 +1,86 @@
+import std.net.http as http
+
+rejectsUnsafeHeads headParser: http.Parser -> Bool {
+    headParser -> parseRequest("GET / HTTP/1.1\n\n") -> when {
+        Err(error) => error.kind -> when {
+            BareLineFeed { true }
+            else { false }
+        }
+        Ok(_) { false }
+    } => bareLf
+    headParser -> parseRequest("GET / HTTP/1.1\r\n folded: value\r\n\r\n") -> when {
+        Err(error) => error.kind -> when {
+            ObsoleteLineFolding { true }
+            else { false }
+        }
+        Ok(_) { false }
+    } => folded
+    headParser -> parseRequest("GET / HTTP/1.1\r\nHost : value\r\n\r\n") -> when {
+        Err(error) => error.kind -> when {
+            InvalidFieldName { true }
+            else { false }
+        }
+        Ok(_) { false }
+    } => spacedName
+    headParser -> parseResponse("HTTP/1.1 20 Bad\r\n\r\n") -> when {
+        Err(error) => error.kind -> when {
+            InvalidStatus { true }
+            else { false }
+        }
+        Ok(_) { false }
+    } => shortStatus
+    bareLf and folded and spacedName and shortStatus
+}
+
+rejectsHeadLimit: -> Bool {
+    http.limits(24, 16, 4, 16, 16) -> when {
+        Ok(limits) => http.parser(limits) -> when {
+            Ok(headParser) => headParser -> parseRequest("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n") -> when {
+                Err(error) => error.kind -> when {
+                    HeadLimitExceeded { true }
+                    else { false }
+                }
+                Ok(_) { false }
+            }
+            Err(error) { false }
+        }
+        Err(error) { false }
+    }
+}
+
+checkRequest headParser: http.Parser -> Result<Unit, http.Error> uses Console {
+    "GET /items?q=sol HTTP/1.1\r\nHost: example.test\r\nX-Trace: one\r\nx-trace:\ttwo \t\r\n\r\nbody" => message
+    headParser -> parseRequest(message)? => request
+    "X-TRACE" => traceName
+    request -> fieldNameIs(2, traceName) => traceMatches
+    traceMatches -> if { "true" } else { "false" } => traceText
+    "$(request -> methodText) $(request -> targetText) $(request -> fieldCount) $traceText $(request -> fieldValue(2)) $(request.bodyStart)" -> println
+    Result<Unit, http.Error>.Ok
+}
+
+checkResponse headParser: http.Parser -> Result<Unit, http.Error> uses Console {
+    "HTTP/1.1 204 No Content\r\nServer: sollang\r\n\r\n" => message
+    headParser -> parseResponse(message)? => response
+    "$(response.status) $(response -> reasonText) $(response -> fieldName(0)) $(response -> fieldValue(0))" -> println
+    Result<Unit, http.Error>.Ok
+}
+
+runChecks: -> Result<Bool, http.Error> uses Console {
+    http.limits(8_192, 4_096, 32, 128, 4_096)? => limits
+    http.parser(limits)? => headParser
+    headParser -> checkRequest?
+    headParser -> checkResponse?
+    (headParser -> rejectsUnsafeHeads) and rejectsHeadLimit() => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+main {
+    runChecks() -> when {
+        Ok(valid) => valid -> if {
+            "http head ok" -> println
+        } else {
+            "http rejection failed" -> println
+        }
+        Err(error) { "http error @$(error.offset)" -> println }
+    }
+}

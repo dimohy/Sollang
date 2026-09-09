@@ -1,0 +1,25 @@
+# XXH64 preserves canonical vectors and split-write equivalence.
+import std.hash.xxhash64 as xxhash64
+
+main {
+    xxhash64.Seed { value: 0 } => seed
+    seed -> checksum([]) => empty
+    seed -> checksum([97, 98, 99]) => abc
+
+    seed -> hasher => split!
+    split! -> write([97])
+    split! -> write([98, 99])
+    split! -> checksum => splitAbc
+
+    [UInt8(
+    0), 1, 2, 3, 4, 5, 6, 7, 8, 9,
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+    30, 31, 32, 33, 34, 35, 36, 37, 38, 39
+    ] => stripe
+    seed -> checksum(stripe) => stripeHash
+    stripeHash % 4_294_967_296 => stripeLow
+    empty / 4_294_967_296 => emptyHigh
+
+    "xxhash64=$empty,$abc,$(abc == splitAbc),$stripeLow,$emptyHigh,$(empty > abc),$(empty < abc),$(empty >= empty),$(empty <= abc)" -> println
+}

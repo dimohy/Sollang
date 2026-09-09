@@ -1,0 +1,103 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A trailing flow consumer owns the completed control expression, not an
+# internal producer that supplied the control subject.
+main {
+    """"
+        namespace sample
+
+        enum Outcome {
+            Ok(Text)
+            Err(Text)
+        }
+
+        outcome: -> Outcome => Outcome.Ok("ready")
+
+        main {
+            outcome() -> when {
+                Ok(value) { value }
+                Err(error) { error }
+            } -> println
+        }
+    """" => sampleSource
+
+    [sampleSource,; ~] -> semanticContext.prepare => context
+    context.calls -> len => semanticCallCount
+    0 => resolvedSemanticCalls!
+    0 => semanticCallIndex!
+    semanticCallIndex! < (context.calls -> len) -> while {
+        context.calls[semanticCallIndex!].status == 0
+            -> if { resolvedSemanticCalls! + 1 => resolvedSemanticCalls! }
+        semanticCallIndex! + 1 => semanticCallIndex!
+    }
+    resolvedSemanticCalls! => resolvedSemanticCallCount
+    context -> typedIr.lowerContext => ir
+    ir -> len => irLength
+    0 => consoleCalls!
+    0 => controlOperands!
+    0 => subjectOperands!
+    -1 => consoleOperand0Kind!
+    -1 => consoleOperand1Kind!
+    0 => materializeCandidates!
+    -999 => materializeSymbol!
+    -1 => materializeOperand0Kind!
+    -1 => materializeOperand1Kind!
+    0 => callNodes!
+    0 => unresolvedCalls!
+    0 => materializeOpcodeCalls!
+    0 => materializeNodes!
+    0 => controlNodes!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.kind == 9 -> if { materializeNodes! + 1 => materializeNodes! }
+        node.kind == 27 -> if { controlNodes! + 1 => controlNodes! }
+        node.kind == 6 -> if {
+            callNodes! + 1 => callNodes!
+            node.symbol < 0 and node.symbol != -101 and node.symbol != -102
+                -> if { unresolvedCalls! + 1 => unresolvedCalls! }
+            node.opcode == -229 -> if {
+                materializeOpcodeCalls! + 1 => materializeOpcodeCalls!
+            }
+        }
+        (node.kind == 9 and node.opcode == -229)
+            -> if {
+            materializeCandidates! + 1 => materializeCandidates!
+            node.symbol => materializeSymbol!
+            node.operand0 >= 0 -> if { ir[node.operand0].kind => materializeOperand0Kind! }
+            node.operand1 >= 0 -> if { ir[node.operand1].kind => materializeOperand1Kind! }
+        }
+        ((node.kind == 6 or node.kind == 9)
+            and (node.symbol == -101 or node.symbol == -102))
+            -> if {
+            consoleCalls! + 1 => consoleCalls!
+            node.operand0 >= 0 -> if { ir[node.operand0].kind => consoleOperand0Kind! }
+            node.operand1 >= 0 -> if { ir[node.operand1].kind => consoleOperand1Kind! }
+            (node.operand0 >= 0 and ir[node.operand0].kind == 27)
+                -> if { controlOperands! + 1 => controlOperands! }
+            (node.operand1 >= 0 and ir[node.operand1].kind == 27)
+                -> if { controlOperands! + 1 => controlOperands! }
+            (node.operand0 >= 0 and ir[node.operand0].kind == 6)
+                -> if { subjectOperands! + 1 => subjectOperands! }
+            (node.operand1 >= 0 and ir[node.operand1].kind == 6)
+                -> if { subjectOperands! + 1 => subjectOperands! }
+        }
+        index! + 1 => index!
+    }
+    consoleCalls! => consoleCallCount
+    controlOperands! => controlOperandCount
+    subjectOperands! => subjectOperandCount
+    consoleOperand0Kind! => operand0Kind
+    consoleOperand1Kind! => operand1Kind
+    materializeCandidates! => materializeCount
+    materializeSymbol! => finalMaterializeSymbol
+    materializeOperand0Kind! => finalMaterializeOperand0Kind
+    materializeOperand1Kind! => finalMaterializeOperand1Kind
+    callNodes! => callCount
+    unresolvedCalls! => unresolvedCallCount
+    materializeOpcodeCalls! => materializeOpcodeCallCount
+    materializeNodes! => materializeNodeCount
+    controlNodes! => controlNodeCount
+    "semantic-calls=$semanticCallCount:$resolvedSemanticCallCount,ir=$irLength:$callCount:$materializeNodeCount:$controlNodeCount,console=$consoleCallCount:$controlOperandCount:$subjectOperandCount:$operand0Kind/$operand1Kind,materialize=$materializeCount:$finalMaterializeSymbol:$finalMaterializeOperand0Kind/$finalMaterializeOperand1Kind,calls=$callCount:$unresolvedCallCount:$materializeOpcodeCallCount" -> println
+}

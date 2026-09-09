@@ -1,0 +1,55 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        namespace test.binary_topology
+
+        public value byte: Int -> Int => byte -> when {
+            <= 191 { byte % 2 }
+            else { 2 + byte % 2 }
+        }
+
+        public struct Prelude {
+            public literalBlockTypes: Int
+            public commandBlockTypes: Int
+        }
+
+        public enum ReadResult {
+            Ready(Prelude)
+            NeedMore
+        }
+
+        public ready result: ReadResult -> Bool => result -> when {
+            Ready(prelude) {
+                prelude.literalBlockTypes == 1
+                    and prelude.commandBlockTypes == 1
+            }
+            else { false }
+        }
+        """; ~
+    ] => sources
+    sources -> typedIr.lower => ir
+    false => found!
+    ir -> each node {
+        node.kind == 8
+            and node.opcode == 14
+            and node.operand0 >= 0
+            and node.operand1 >= 0
+            and ir[node.operand1].kind == 8
+            and ir[node.operand1].opcode == 18
+            -> if {
+                ir[node.operand1] => right
+                "outer=$(ir[node.operand0].kind),$(ir[node.operand1].kind);inner=$(ir[right.operand0].kind),$(ir[right.operand1].kind)"
+                    -> println
+                true => found!
+            }
+    }
+    "found=$(found!)" -> println
+    0 => unresolvedMembers!
+    ir -> each node {
+        node.kind == 13 and node.typeId < 0
+            -> if { unresolvedMembers! + 1 => unresolvedMembers! }
+    }
+    "unresolved-members=$(unresolvedMembers!)" -> println
+}

@@ -1,0 +1,92 @@
+import std.compress.gzip as gzip
+
+struct StreamingResult {
+    valid: Bool
+    encodedLength: Int
+    emptyLength: Int
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+verifyTransactionalLimit: -> Result<Bool, gzip.Error> {
+    gzip.Limits { maxOutputBytes: 30, maxExpansionRatio: 100 } -> codec()? => codec
+    codec -> encoder()? => encoder!
+    [UInt8(65); 10] => tooLarge
+    [UInt8; ~] => output!
+    encoder! -> write(tooLarge, output!) -> when {
+        Ok(_) { Result<Bool, gzip.Error>.Ok(false) -> return }
+        Err(_) { }
+    }
+    (output! -> len) == 0 -> unless {
+        Result<Bool, gzip.Error>.Ok(false) -> return
+    }
+    [UInt8(79), 75] => accepted
+    encoder! -> write(accepted, output!)? => written
+    encoder! -> finish(output!)? => finished
+    codec -> decompress(output!)? => restored
+    Result<Bool, gzip.Error>.Ok(
+        written == 17 and finished == 13 and (restored -> matches(accepted)))
+}
+
+verify codec: gzip.Codec -> Result<StreamingResult, gzip.Error> {
+    codec -> encoder()? => encoder!
+    [UInt8; ~] => encoded!
+    [UInt8(104), 101, 108, 108, 111] => first
+    [UInt8(32), 119, 111, 114, 108, 100] => second
+    encoder! -> write(first, encoded!)? => firstWritten
+    [UInt8; ~] => noInput
+    encoder! -> write(noInput, encoded!)? => emptyWritten
+    encoder! -> write(second, encoded!)? => secondWritten
+    encoder! -> finish(encoded!)? => finished
+    codec -> decompress(encoded!)? => restored
+    [UInt8(104), 101, 108, 108, 111, 32, 119, 111, 114, 108, 100] => expected
+    [UInt8(31), 139, 8, 0, 0, 0, 0, 0, 0, 255,
+        0, 5, 0, 250, 255, 104, 101, 108, 108, 111,
+        0, 6, 0, 249, 255, 32, 119, 111, 114, 108, 100,
+        1, 0, 0, 255, 255, 133, 17, 74, 13, 11, 0, 0, 0] => interoperable
+
+    codec -> encoder()? => emptyEncoder
+    [UInt8; ~] => emptyEncoded!
+    emptyEncoder -> finish(emptyEncoded!)? => emptyFinished
+    codec -> decompress(emptyEncoded!)? => emptyRestored
+    verifyTransactionalLimit()? => transactional
+
+    restored -> matches(expected) => valid!
+    encoded! -> matches(interoperable) -> unless { false => valid! }
+    (emptyRestored -> len) == 0 -> unless { false => valid! }
+    firstWritten == 20 -> unless { false => valid! }
+    emptyWritten == 0 -> unless { false => valid! }
+    secondWritten == 11 -> unless { false => valid! }
+    finished == 13 -> unless { false => valid! }
+    emptyFinished == 23 -> unless { false => valid! }
+    transactional -> unless { false => valid! }
+    Result<StreamingResult, gzip.Error>.Ok(StreamingResult {
+        valid: valid!
+        encodedLength: encoded! -> len
+        emptyLength: emptyEncoded! -> len
+    })
+}
+
+main {
+    gzip.Limits { maxOutputBytes: 256, maxExpansionRatio: 100 } -> codec() -> when {
+        Err(_) { "streaming=false" -> println }
+        Ok(codec) => codec -> verify -> when {
+            Err(_) { "streaming=false" -> println }
+            Ok(result) {
+                result.valid -> if {
+                    "streaming=true,$(result.encodedLength),$(result.emptyLength)" -> println
+                } else {
+                    "streaming=false" -> println
+                }
+            }
+        }
+    }
+}

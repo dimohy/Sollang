@@ -1,0 +1,30 @@
+# A by-value growable-array parameter must project checked element addresses
+# inside a loop without treating the array aggregate as a pointer.
+struct Entry {
+    rank: Int
+}
+
+less left: ref Entry, right: ref Entry -> Bool => left.rank < right.rank
+
+countRewinds entries: [Entry; ~] -> Int {
+    [Int; ~] => order!
+    0 => index!
+    0 => rewinds!
+    index! < (entries -> len) -> while {
+        order! -> push(index!)
+        (order! -> len) - 1 => position!
+        position! > 0 and (entries[order![position!]] -> less(entries[order![position! - 1]]))
+            -> while {
+                position! - 1 => position!
+                rewinds! + 1 => rewinds!
+        }
+        index! + 1 => index!
+    }
+    rewinds!
+}
+
+main {
+    [Entry { rank: 1 }, Entry { rank: 3 }, Entry { rank: 2 }, Entry { rank: 4 }; ~] => entries
+    entries -> countRewinds => rewinds
+    "rewinds=$rewinds" -> println
+}

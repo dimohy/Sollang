@@ -1,0 +1,30 @@
+# Moving a field into a local transfers its storage before the field is repaired.
+struct Table {
+    data: [Int; ~]
+}
+
+enum Slot {
+    Empty
+    Built(Table)
+}
+
+struct Reader {
+    table: Slot
+}
+
+take reader: mut Reader -> Table {
+    reader.table => stored
+    Slot.Empty => reader.table
+    stored -> when {
+        Empty { Table { data: [] } }
+        Built(value) { value }
+    }
+}
+
+main {
+    Reader {
+        table: Slot.Built(Table { data: [42] })
+    } => reader!
+    reader! -> take => selected
+    selected.data[0] -> println
+}

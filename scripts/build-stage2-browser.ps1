@@ -6,26 +6,85 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "verification-process.ps1")
+. (Join-Path $PSScriptRoot "stage2-artifact-receipt.ps1")
+. (Join-Path $PSScriptRoot "browser-stage2-input-fingerprint.ps1")
 $stage2Path = (Resolve-Path (Join-Path $repoRoot $Stage2Compiler)).Path
 $manifestPath = Join-Path $repoRoot "selfhost\browser_driver.sources.txt"
 $llvmRoot = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAs = Join-Path $llvmRoot "bin\llvm-as.exe"
 $clang = Join-Path $llvmRoot "bin\clang.exe"
 $wasmLd = Join-Path $llvmRoot "bin\wasm-ld.exe"
+$nodePath = (Get-Command node -ErrorAction Stop).Source
 $compilerLlvm = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.ll"
 $compilerError = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.err"
 $compilerBitcode = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.bc"
 $compilerObject = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.o"
 $compilerArtifact = Join-Path $repoRoot "artifacts\sollangc-browser.wasm"
+$compilerFingerprint = Join-Path $repoRoot "artifacts\sollangc-browser.inputs.sha256"
+$compilerReceipt = Join-Path $repoRoot "artifacts\sollangc-browser.outputs.sha256"
 $publicCompiler = Join-Path $repoRoot "public\sollangc-stage2-0.4.260817.wasm"
+
+function Invoke-BrowserTool {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Description
+    )
+
+    $result = Invoke-VerificationProcess `
+        -FilePath $FilePath `
+        -ArgumentList $Arguments `
+        -Description $Description
+    if (-not [string]::IsNullOrWhiteSpace($result.Stdout)) {
+        Write-Host -NoNewline $result.Stdout
+    }
+    if (-not [string]::IsNullOrWhiteSpace($result.Stderr)) {
+        Write-Host -NoNewline $result.Stderr
+    }
+}
 
 $browserSources = Get-Content -LiteralPath $manifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
 
+$candidateInputFingerprint = Get-BrowserStage2InputFingerprint `
+    -RepositoryRoot $repoRoot `
+    -Stage2Path $stage2Path `
+    -ManifestPath $manifestPath `
+    -BuildScriptPath $PSCommandPath `
+    -LlvmAsPath $llvmAs `
+    -ClangPath $clang `
+    -WasmLdPath $wasmLd
+
+& (Join-Path $PSScriptRoot "verify-source-manifest-closure.ps1") `
+    -Manifest $manifestPath `
+    -RepositoryRoot $repoRoot
+Invoke-BrowserTool $stage2Path (@("format", "--check") + $browserSources) "browser compiler source format"
+$stage2FileName = [System.IO.Path]::GetFileNameWithoutExtension($stage2Path)
+if (-not $stage2FileName.Contains("stage2", [System.StringComparison]::Ordinal)) {
+    throw "browser compiler input must be a receipt-bound Stage2 artifact with a Stage3 sibling: $stage2Path"
+}
+$stage3FileName = $stage2FileName.Replace("stage2", "stage3", [System.StringComparison]::Ordinal)
+$stage3Path = Join-Path `
+    ([System.IO.Path]::GetDirectoryName($stage2Path)) `
+    ($stage3FileName + [System.IO.Path]::GetExtension($stage2Path))
+& (Join-Path $PSScriptRoot "verify-selfhost-stage3-artifacts.ps1") `
+    -Platform windows `
+    -Stage3Path $stage3Path `
+    -RepositoryRoot $repoRoot
+
 if ($ReuseCompilerArtifact) {
-    if (-not (Test-Path -LiteralPath $compilerArtifact)) {
-        throw "verified browser compiler artifact is missing: $compilerArtifact"
+    $receiptCurrent = Test-Stage2ArtifactReceipt `
+        -LlvmPath $compilerLlvm `
+        -BitcodePath $compilerBitcode `
+        -ExecutablePath $compilerArtifact `
+        -ReceiptPath $compilerReceipt `
+        -AdditionalArtifacts @{ object = $compilerObject }
+    $fingerprintCurrent = (Test-Path -LiteralPath $compilerFingerprint) -and
+        [System.IO.File]::ReadAllText($compilerFingerprint).Trim() -ceq $candidateInputFingerprint
+    if (-not $receiptCurrent -or -not $fingerprintCurrent) {
+        throw "browser compiler artifact is missing, mutated, or stale; rerun without -ReuseCompilerArtifact"
     }
     Write-Host "[browser 1/4] Reuse the explicitly selected browser compiler artifact."
     Write-Host "[browser 2/4] Reused artifact: $compilerArtifact"
@@ -37,33 +96,43 @@ if ($ReuseCompilerArtifact) {
         -RedirectStandardOutput $compilerLlvm `
         -RedirectStandardError $compilerError `
         -PassThru `
-        -WindowStyle Hidden `
-        -Wait
+        -WindowStyle Hidden
+    Wait-VerificationProcess $process "browser Stage2 compiler emission"
+    $compilerDiagnostics = [System.IO.File]::ReadAllText($compilerError)
     if ($process.ExitCode -ne 0) {
-        throw "Stage2 browser emission failed.`n$([System.IO.File]::ReadAllText($compilerError))"
+        throw "Stage2 browser emission failed.`n$compilerDiagnostics"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($compilerDiagnostics)) {
+        throw "Stage2 browser emission produced warnings or notes; compiler builds require empty stderr.`n$compilerDiagnostics"
+    }
+    $compilerLlvmText = [System.IO.File]::ReadAllText($compilerLlvm)
+    $sourceTextPushPattern = '(?s)%push(?<sourceTextPush>\d+)_append_bytes = mul i64 %push\k<sourceTextPush>_append_capacity, 32.*?%push\k<sourceTextPush>_slot = getelementptr %sollang\.source_text'
+    if (-not [System.Text.RegularExpressions.Regex]::IsMatch($compilerLlvmText, $sourceTextPushPattern)) {
+        throw "Stage2 browser compiler did not allocate 32 bytes per SourceText array element"
     }
 
     Write-Host "[browser 2/4] Verify and link the Stage2-emitted LLVM."
-    & $llvmAs $compilerLlvm -o $compilerBitcode
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $clang `
-        -target wasm32-unknown-unknown-wasm `
-        -O2 `
-        -g `
-        -fno-addrsig `
-        -c $compilerLlvm `
-        -o $compilerObject
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $wasmLd `
-        --no-entry `
-        --export=sollang_start `
-        --export=sollang_alloc `
-        --export-memory `
-        --allow-undefined `
-        --gc-sections `
-        $compilerObject `
-        -o $compilerArtifact
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure.ps1") -LlvmPath $compilerLlvm
+    Invoke-BrowserTool $llvmAs @($compilerLlvm, "-o", $compilerBitcode) "browser compiler llvm-as"
+    Invoke-BrowserTool $clang @(
+        "-target", "wasm32-unknown-unknown-wasm",
+        "-O2",
+        "-g",
+        "-fno-addrsig",
+        "-c", $compilerLlvm,
+        "-o", $compilerObject
+    ) "browser compiler clang"
+    Invoke-BrowserTool $wasmLd @(
+        "--no-entry",
+        "--export=sollang_start",
+        "--export=sollang_alloc",
+        "--export-memory",
+        "--allow-undefined",
+        "--gc-sections",
+        $compilerObject,
+        "-o", $compilerArtifact
+    ) "browser compiler wasm-ld"
+
 }
 
 Write-Host "[browser 3/4] Execute browser compiler regressions."
@@ -75,6 +144,11 @@ foreach ($case in @(
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-raw-strings.slg", "browser-stage2-raw-strings.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-raw-strings.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-containers.slg", "browser-stage2-containers.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-containers.stdout.txt"),
     @("examples\regression\854-set-key-only.slg", "browser-stage2-set.ll", "examples\regression\expected\854-set-key-only.stdout.txt"),
+    @("examples\regression\1134-wasm-struct-array-i64-fragment-identity.slg", "browser-stage2-fragment-identity.ll", "examples\regression\expected\1134-wasm-struct-array-i64-fragment-identity.stdout.txt"),
+    @("examples\regression\1135-wasm-uintsize-interpolation-width.slg", "browser-stage2-uintsize-interpolation.ll", "examples\regression\expected\1135-wasm-uintsize-interpolation-width.stdout.txt"),
+    @("examples\regression\1136-wasm-trailing-value-if-effect.slg", "browser-stage2-trailing-value-if.ll", "examples\regression\expected\1136-wasm-trailing-value-if-effect.stdout.txt"),
+    @("examples\regression\1137-browser-open-import-second-fragment.slg", "browser-stage2-open-import-second-fragment.ll", "examples\regression\expected\1137-browser-open-import-second-fragment.stdout.txt", "", "examples\regression\expected\1137-browser-open-import-second-fragment.sources.txt"),
+    @("examples\regression\1017-quic-friendly-ipv4-endpoints.slg", "browser-stage2-quic-endpoint-values.ll", "examples\regression\expected\1017-quic-friendly-ipv4-endpoints.stdout.txt"),
     @("examples\regression\576-linq-multiplication-table.slg", "browser-stage2-table.ll", "examples\regression\expected\576-linq-multiplication-table.stdout.txt"),
     @("examples\regression\580-deferred-text-evaluation.slg", "browser-stage2-deferred-text.ll", "examples\regression\expected\580-deferred-text-evaluation.stdout.txt"),
     @("examples\regression\582-billion-sensor-alerts.slg", "browser-stage2-sensor.ll", "examples\regression\expected\582-billion-sensor-alerts.stdout.txt"),
@@ -90,6 +164,9 @@ foreach ($case in @(
     @("examples\regression\800-merge-cold-stream-availability.slg", "browser-stage2-flow-merge.ll", "examples\regression\expected\800-merge-cold-stream-availability.stdout.txt"),
     @("examples\regression\801-concat-and-latest-policies.slg", "browser-stage2-flow-latest.ll", "examples\regression\expected\801-concat-and-latest-policies.stdout.txt"),
     @("examples\regression\845-browser-unit-block-yield.slg", "browser-stage2-unit-block-yield.ll", "examples\regression\expected\845-browser-unit-block-yield.stdout.txt"),
+    @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-result-propagation-control.slg", "browser-stage2-result-propagation-control.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-result-propagation-control.stdout.txt"),
+    @("examples\regression\1390-browser-time-domain-separation.slg", "browser-stage2-time-domain-separation.ll", "examples\regression\expected\1390-browser-time-domain-separation.stdout.txt"),
+    @("examples\regression\1391-opaque-struct-instance-boundary.slg", "browser-stage2-opaque-struct-instance-boundary.ll", "examples\regression\expected\1391-opaque-struct-instance-boundary.stdout.txt", "", "examples\regression\expected\1391-opaque-struct-instance-boundary.sources.txt"),
     @("examples\regression\575-multiplication-table.slg", "browser-stage2-println-call-order.ll", "examples\regression\expected\575-multiplication-table.stdout.txt"),
     @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.slg",
@@ -102,77 +179,156 @@ foreach ($case in @(
     $programBitcode = [System.IO.Path]::ChangeExtension($programLlvm, ".bc")
     $programObject = [System.IO.Path]::ChangeExtension($programLlvm, ".o")
     $programWasm = [System.IO.Path]::ChangeExtension($programLlvm, ".wasm")
-    & node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
-        $compilerArtifact `
-        (Join-Path $repoRoot $case[0]) `
+    $compilerArguments = @(
+        (Join-Path $PSScriptRoot "verify-browser-stage2.mjs"),
+        $compilerArtifact,
+        (Join-Path $repoRoot $case[0]),
         $programLlvm
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $llvmAs $programLlvm -o $programBitcode
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $clang -target wasm32-unknown-unknown-wasm -O2 -fno-addrsig -c $programLlvm -o $programObject
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $wasmLd `
-        --no-entry `
-        --export=sollang_start `
-        --export-memory `
-        --allow-undefined `
-        --gc-sections `
-        $programObject `
-        -o $programWasm
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    )
+    if ($case.Count -gt 4) {
+        $compilerArguments += "--source-manifest"
+        $compilerArguments += (Join-Path $repoRoot $case[4])
+    }
+    Invoke-BrowserTool $nodePath $compilerArguments "browser compiler regression $($case[0])"
+    & (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure.ps1") -LlvmPath $programLlvm
+    Invoke-BrowserTool $llvmAs @($programLlvm, "-o", $programBitcode) "browser program llvm-as $($case[0])"
+    Invoke-BrowserTool $clang @(
+        "-target", "wasm32-unknown-unknown-wasm",
+        "-O2",
+        "-fno-addrsig",
+        "-c", $programLlvm,
+        "-o", $programObject
+    ) "browser program clang $($case[0])"
+    Invoke-BrowserTool $wasmLd @(
+        "--no-entry",
+        "--export=sollang_start",
+        "--export-memory",
+        "--allow-undefined",
+        "--gc-sections",
+        $programObject,
+        "-o", $programWasm
+    ) "browser program wasm-ld $($case[0])"
     $verifyArguments = @(
         (Join-Path $PSScriptRoot "verify-browser-program.mjs"),
         $programWasm,
         (Join-Path $repoRoot $case[2])
     )
-    if ($case.Count -gt 3) {
+    if ($case.Count -gt 3 -and -not [string]::IsNullOrWhiteSpace($case[3])) {
         $verifyArguments += (Join-Path $repoRoot $case[3])
     }
-    & node $verifyArguments
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Invoke-BrowserTool $nodePath $verifyArguments "browser program execution $($case[0])"
 }
 
-& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
-    $compilerArtifact `
-    (Join-Path $repoRoot "examples\regression\diagnostics\browser-interpolation-boundary.slg") `
-    (Join-Path $repoRoot "artifacts\browser-stage2-interpolation-diagnostic.txt") `
-    "unknown interpolation binding 'dimohy는'"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+foreach ($diagnosticCase in @(
+    @(
+        "examples\regression\diagnostics\browser-interpolation-boundary.slg",
+        "artifacts\browser-stage2-interpolation-diagnostic.txt",
+        "unknown interpolation binding 'dimohy는'"
+    ),
+    @(
+        "tests\Sollang.ExampleTests\Fixtures\browser-stage2-unknown-flow-target.slg",
+        "artifacts\browser-stage2-unknown-flow-target-diagnostic.txt",
+        "unresolved call target 'println2'"
+    ),
+    @(
+        "examples\regression\diagnostics\848-bare-println-expression.slg",
+        "artifacts\browser-stage2-bare-println-diagnostic.txt",
+        "function 'println' expects an argument and must use call or flow syntax"
+    ),
+    @(
+        "examples\regression\diagnostics\849-unterminated-flow-println.slg",
+        "artifacts\browser-stage2-unterminated-string-diagnostic.txt",
+        "unterminated string literal"
+    ),
+    @(
+        "examples\regression\diagnostics\return-outside-function.slg",
+        "artifacts\browser-stage2-return-outside-function-diagnostic.txt",
+        "'return' is only valid inside a value or Unit function"
+    ),
+    @(
+        "examples\regression\588-mouse-event-stream.slg",
+        "artifacts\browser-stage2-mouse-event-diagnostic.txt",
+        "mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering"
+    ),
+    @(
+        "examples\regression\802-readonly-parallel-branch.slg",
+        "artifacts\browser-stage2-parallel-branch-diagnostic.txt",
+        "parallel execution is unavailable on wasm32-browser because the target does not provide a compute worker pool"
+    ),
+    @(
+        "examples\regression\1024-socket-ipv6-udp-roundtrip.slg",
+        "artifacts\browser-stage2-network-capability-diagnostic.txt",
+        "network sockets are unavailable on wasm32-browser; use a host-provided networking adapter"
+    ),
+    @(
+        "examples\regression\diagnostics\opaque-struct-construction.slg",
+        "artifacts\browser-stage2-opaque-struct-construction-diagnostic.txt",
+        "cannot construct struct 'sample.opaque_value.Token' outside module 'sample.opaque_value' because field 'raw' is private; use its public factory or public instance methods",
+        "examples\regression\diagnostics\opaque-struct-construction.sources.txt"
+    ),
+    @(
+        "examples\regression\diagnostics\opaque-struct-field-read.slg",
+        "artifacts\browser-stage2-opaque-struct-field-read-diagnostic.txt",
+        "cannot read private field 'raw' of struct 'sample.opaque_value.Token' outside module 'sample.opaque_value'; use its public factory or public instance methods",
+        "examples\regression\diagnostics\opaque-struct-field-read.sources.txt"
+    ),
+    @(
+        "examples\regression\diagnostics\opaque-struct-field-write.slg",
+        "artifacts\browser-stage2-opaque-struct-field-write-diagnostic.txt",
+        "cannot write private field 'raw' of struct 'sample.opaque_value.Token' outside module 'sample.opaque_value'; use its public factory or public instance methods",
+        "examples\regression\diagnostics\opaque-struct-field-write.sources.txt"
+    ),
+    @(
+        "examples\regression\diagnostics\opaque-struct-modifier-rejected.slg",
+        "artifacts\browser-stage2-obsolete-opaque-modifier-diagnostic.txt",
+        "parse error at 1:8: expected end of statement"
+    ),
+    @(
+        "examples\regression\diagnostics\private-inferred-field-chain.slg",
+        "artifacts\browser-stage2-private-inferred-field-chain-diagnostic.txt",
+        "cannot read private field 'secret' of struct 'sample.opaque_value.Inner' outside module 'sample.opaque_value'; use its public factory or public instance methods",
+        "examples\regression\diagnostics\private-inferred-field-chain.sources.txt"
+    )
+)) {
+    $expectedDiagnosticBase64 = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($diagnosticCase[2]))
+    $diagnosticArguments = @(
+        (Join-Path $PSScriptRoot "verify-browser-stage2.mjs"),
+        $compilerArtifact,
+        (Join-Path $repoRoot $diagnosticCase[0]),
+        (Join-Path $repoRoot $diagnosticCase[1]),
+        "--expect-diagnostic-base64",
+        $expectedDiagnosticBase64
+    )
+    if ($diagnosticCase.Count -gt 3) {
+        $diagnosticArguments += "--source-manifest"
+        $diagnosticArguments += (Join-Path $repoRoot $diagnosticCase[3])
+    }
+    Invoke-BrowserTool $nodePath $diagnosticArguments "browser diagnostic $($diagnosticCase[0])"
+}
 
-& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
-    $compilerArtifact `
-    (Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\browser-stage2-unknown-flow-target.slg") `
-    (Join-Path $repoRoot "artifacts\browser-stage2-unknown-flow-target-diagnostic.txt") `
-    "unresolved call target 'println2'"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
-    $compilerArtifact `
-    (Join-Path $repoRoot "examples\regression\diagnostics\848-bare-println-expression.slg") `
-    (Join-Path $repoRoot "artifacts\browser-stage2-bare-println-diagnostic.txt") `
-    "function 'println' expects an argument and must use call or flow syntax"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
-    $compilerArtifact `
-    (Join-Path $repoRoot "examples\regression\diagnostics\849-unterminated-flow-println.slg") `
-    (Join-Path $repoRoot "artifacts\browser-stage2-unterminated-string-diagnostic.txt") `
-    "unterminated string literal"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
-    $compilerArtifact `
-    (Join-Path $repoRoot "examples\regression\588-mouse-event-stream.slg") `
-    (Join-Path $repoRoot "artifacts\browser-stage2-mouse-event-diagnostic.txt") `
-    "mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
-    $compilerArtifact `
-    (Join-Path $repoRoot "examples\regression\802-readonly-parallel-branch.slg") `
-    (Join-Path $repoRoot "artifacts\browser-stage2-parallel-branch-diagnostic.txt") `
-    "parallel execution is unavailable on wasm32-browser because the target does not provide a compute worker pool"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (-not $ReuseCompilerArtifact) {
+    $currentInputFingerprint = Get-BrowserStage2InputFingerprint `
+        -RepositoryRoot $repoRoot `
+        -Stage2Path $stage2Path `
+        -ManifestPath $manifestPath `
+        -BuildScriptPath $PSCommandPath `
+        -LlvmAsPath $llvmAs `
+        -ClangPath $clang `
+        -WasmLdPath $wasmLd
+    if ($currentInputFingerprint -cne $candidateInputFingerprint) {
+        throw "browser compiler inputs changed during generation or regression verification; rerun the build"
+    }
+    Write-Stage2ArtifactReceipt `
+        -LlvmPath $compilerLlvm `
+        -BitcodePath $compilerBitcode `
+        -ExecutablePath $compilerArtifact `
+        -ReceiptPath $compilerReceipt `
+        -AdditionalArtifacts @{ object = $compilerObject }
+    $candidateFingerprintPath = Get-CandidateArtifactPath $compilerFingerprint
+    [System.IO.File]::WriteAllText($candidateFingerprintPath, $candidateInputFingerprint)
+    Move-Item -LiteralPath $candidateFingerprintPath -Destination $compilerFingerprint -Force
+}
 
 Write-Host "[browser 4/4] Publish only the verified compiler artifact."
 Copy-Item -LiteralPath $compilerArtifact -Destination $publicCompiler -Force

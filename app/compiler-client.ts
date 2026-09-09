@@ -97,6 +97,7 @@ async function compileWithStage2(source: string, locale: Locale): Promise<string
   const sourceBuffers = [source, ...library.map(entry => entry.source)]
     .map(value => encoder.encode(value));
   const outputChunks: Uint8Array[] = [];
+  const diagnosticChunks: Uint8Array[] = [];
   let memory: WebAssembly.Memory;
   let heapCursor = 0;
   const sourcePointers: number[] = [];
@@ -142,12 +143,17 @@ async function compileWithStage2(source: string, locale: Locale): Promise<string
       sollang_browser_alloc: allocate,
       sollang_browser_realloc: reallocate,
       sollang_browser_now_millis: () => BigInt(Math.trunc(performance.now())),
+      sollang_browser_utc_now_millis: () => BigInt(Date.now()),
       sollang_browser_source_count: () => sourceBuffers.length,
       sollang_browser_source_pointer: (index: number) => sourcePointers[index],
       sollang_browser_source_length: (index: number) => sourceBuffers[index].byteLength,
       sollang_browser_read: () => 0,
       sollang_browser_write: (pointer: number, length: number) => {
         outputChunks.push(new Uint8Array(memory.buffer.slice(pointer, pointer + length)));
+        return 1;
+      },
+      sollang_browser_eprint: (pointer: number, length: number) => {
+        diagnosticChunks.push(new Uint8Array(memory.buffer.slice(pointer, pointer + length)));
         return 1;
       },
       sollang_browser_panic: (pointer: number, length: number) => {
@@ -171,9 +177,17 @@ async function compileWithStage2(source: string, locale: Locale): Promise<string
   const exitCode = (instance.exports.sollang_start as () => number)();
   const llvm = outputChunks.map(chunk => decoder.decode(chunk, { stream: true })).join("")
     + decoder.decode();
+  const diagnosticDecoder = new TextDecoder();
+  const diagnostics = diagnosticChunks
+    .map(chunk => diagnosticDecoder.decode(chunk, { stream: true })).join("")
+    + diagnosticDecoder.decode();
 
   if (exitCode !== 0 || !llvm.includes('target triple = "wasm32-unknown-unknown-wasm"')) {
-    throw new Error(formatCompilerDiagnostic(source, llvm.trim() || `Stage2 compiler exited ${exitCode}`, locale));
+    throw new Error(formatCompilerDiagnostic(
+      source,
+      diagnostics.trim() || llvm.trim() || `Stage2 compiler exited ${exitCode}`,
+      locale
+    ));
   }
   return llvm;
 }
@@ -334,6 +348,7 @@ async function executeWasm(wasm: Uint8Array, input: string): Promise<string> {
   };
   const write = (pointer: number, length: number) => {
     chunks.push(new Uint8Array(memory.buffer.slice(pointer, pointer + length)));
+    return 1;
   };
   const wasmBuffer = new Uint8Array(wasm.byteLength);
   wasmBuffer.set(wasm);
@@ -342,6 +357,7 @@ async function executeWasm(wasm: Uint8Array, input: string): Promise<string> {
     env: {
       sollang_write: write,
       sollang_browser_write: write,
+      sollang_browser_eprint: write,
       sollang_browser_alloc: allocate,
       sollang_browser_realloc: reallocate,
       sollang_browser_free() {},
@@ -363,6 +379,9 @@ async function executeWasm(wasm: Uint8Array, input: string): Promise<string> {
       },
       sollang_browser_now_millis() {
         return BigInt(Math.trunc(performance.now()));
+      },
+      sollang_browser_utc_now_millis() {
+        return BigInt(Date.now());
       }
     }
   });

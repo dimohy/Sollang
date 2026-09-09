@@ -7,7 +7,7 @@ main {
         namespace sys.file
 
         public struct FileWriter {
-            token: UInt64
+            public token: UInt64
         }
 
         public openWrite path: Text -> Result<FileWriter, Text> uses File = intrinsic
@@ -17,7 +17,10 @@ main {
 
         import sys.file as file
 
+        mix hash: UInt64, value: UInt64 -> UInt64 => hash + value
+
         main {
+            UInt64(3) -> mix(UInt64(4)) => mixed
             "probe.tmp" -> file.openWrite -> when {
                 Ok(writer) {
                     writer -> writeAt<UInt8>(UInt8(1), UInt64(0)) -> when {
@@ -32,20 +35,25 @@ main {
     [fileSource, sampleSource; ~] -> typedIr.lower => ir
     0 => writeMatches!
     0 => linkedSubjects!
+    0 => resolvedLocalFlows!
+    -1 => writeProducerIndex!
+    -1 => writeMatchIndex!
+    0 => nodeIndex!
     ir -> each node {
-        node.kind == 27 -> if {
-            node.operand0 >= 0 -> if {
-                ir[node.operand0] => subject
-                subject.opcode == -221 -> if {
-                    writeMatches! + 1 => writeMatches!
-                    subject.nextOperand >= 0 -> if {
-                        ir[subject.nextOperand].kind == 27 -> if {
-                            linkedSubjects! + 1 => linkedSubjects!
-                        }
-                    }
-                }
+        node.kind == 6 and node.targetModule == 1 and node.symbol >= 0
+            -> if { resolvedLocalFlows! + 1 => resolvedLocalFlows! }
+        node.opcode == -221 -> if {
+            nodeIndex! => writeProducerIndex!
+            node.nextOperand => writeMatchIndex!
+        }
+        node.kind == 27 and node.operand0 == writeProducerIndex!
+            -> if {
+            writeMatches! + 1 => writeMatches!
+            writeMatchIndex! == nodeIndex! -> if {
+                linkedSubjects! + 1 => linkedSubjects!
             }
         }
+        nodeIndex! + 1 => nodeIndex!
     }
-    "file write matches=$(writeMatches!), linked subjects=$(linkedSubjects!)" -> println
+    "file write matches=$(writeMatches!), linked subjects=$(linkedSubjects!), local flows=$(resolvedLocalFlows!)" -> println
 }

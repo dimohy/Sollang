@@ -1,0 +1,446 @@
+namespace std.uri
+
+import std.net as net
+import std.uri.error as errors
+import std.uri as model
+import sys.file as file
+
+# RFC 3986 URI references are parsed as pure structured text. Registered names
+# remain names: parsing never performs DNS, IDNA conversion, file access, or
+# scheme-specific network activity.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public enum Host {
+    Registered(Span)
+    Ipv4(net.Ipv4Address)
+    Ipv6(net.Ipv6Address)
+}
+
+public struct Span {
+    public start: UIntSize
+    public length: UIntSize
+    public present: Bool
+}
+
+public enum PortComponent {
+    Absent
+    Present(UInt16)
+}
+
+public struct Authority {
+    public userInfo: Span
+    public host: Host
+    public port: PortComponent
+}
+
+public enum AuthorityComponent {
+    Absent
+    Present(Authority)
+}
+
+public struct Reference {
+    public source: file.SourceText
+    public scheme: Span
+    public authority: AuthorityComponent
+    public path: Span
+    public query: Span
+    public fragment: Span
+}
+
+errorReference kind: errors.Kind, offset: UIntSize -> Result<Reference, Error> {
+    Result<Reference, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorAuthority kind: errors.Kind, offset: UIntSize -> Result<Authority, Error> {
+    Result<Authority, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorUnit kind: errors.Kind, offset: UIntSize -> Result<Unit, Error> {
+    Result<Unit, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+absentSpan: -> Span => Span { start: 0, length: 0, present: false }
+presentSpan start: UIntSize, length: UIntSize -> Span => Span {
+    start: start
+    length: length
+    present: true
+}
+absentPort: -> PortComponent => model.PortComponent.Absent
+registeredHost value: Span -> Host => model.Host.Registered(value)
+ipv4Host value: net.Ipv4Address -> Host => model.Host.Ipv4(value)
+absentAuthority: -> AuthorityComponent => model.AuthorityComponent.Absent
+presentAuthority value: Authority -> AuthorityComponent => model.AuthorityComponent.Present(value)
+
+isAlpha byte: UInt8 -> Bool {
+    (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122)
+}
+
+isAlphaNumeric byte: UInt8 -> Bool {
+    (byte -> isAlpha) or (byte >= 48 and byte <= 57)
+}
+
+isUnreserved byte: UInt8 -> Bool {
+    ((byte -> isAlphaNumeric)
+        or byte == 45
+        or byte == 46
+        or byte == 95
+        or byte == 126)
+}
+
+isSubDelimiter byte: UInt8 -> Bool {
+    byte == 33
+        or byte == 36
+        or byte == 38
+        or byte == 39
+        or byte == 40
+        or byte == 41
+        or byte == 42
+        or byte == 43
+        or byte == 44
+        or byte == 59
+        or byte == 61
+}
+
+isHex byte: UInt8 -> Bool {
+    (byte >= 48 and byte <= 57)
+        or (byte >= 65 and byte <= 70)
+        or (byte >= 97 and byte <= 102)
+}
+
+validateComponent text: Text, start: UIntSize, end: UIntSize, component: Int -> Result<Unit, Error> {
+    start => index!
+    index! < end -> while {
+        text -> byte(index!) => byte
+        byte == 37 -> if {
+            index! + 2 < end -> unless {
+                errorUnit(errors.Kind.InvalidPercentEncoding, index!) -> return
+            }
+            ((text -> byte(index! + 1)) -> isHex)
+                and ((text -> byte(index! + 2)) -> isHex)
+                -> unless {
+                    errorUnit(errors.Kind.InvalidPercentEncoding, index!) -> return
+                }
+            index! + 3 => index!
+        } else {
+            (byte -> isUnreserved) or (byte -> isSubDelimiter) => allowed!
+            component == 0 and byte == 58 -> if { true => allowed! }
+            component == 2 and (byte == 58 or byte == 64 or byte == 47)
+                -> if { true => allowed! }
+            (component == 3 or component == 4)
+                and (byte == 58 or byte == 64 or byte == 47 or byte == 63)
+                -> if { true => allowed! }
+            allowed! -> unless {
+                errorUnit(errors.Kind.InvalidCharacter, index!) -> return
+            }
+            index! + 1 => index!
+        }
+    }
+    Result<Unit, Error>.Ok
+}
+
+validateScheme text: Text, start: UIntSize, end: UIntSize -> Result<Unit, Error> {
+    end > start -> unless {
+        errorUnit(errors.Kind.InvalidScheme, start) -> return
+    }
+    (text -> byte(start)) -> isAlpha -> unless {
+        errorUnit(errors.Kind.InvalidScheme, start) -> return
+    }
+    start + 1 => index!
+    index! < end -> while {
+        text -> byte(index!) => byte
+        (byte -> isAlphaNumeric) or byte == 43 or byte == 45 or byte == 46
+            -> unless {
+                errorUnit(errors.Kind.InvalidScheme, index!) -> return
+            }
+        index! + 1 => index!
+    }
+    Result<Unit, Error>.Ok
+}
+
+looksNumericIpv4 text: Text, start: UIntSize, end: UIntSize -> Bool {
+    false => hasDot!
+    start => index!
+    index! < end -> while {
+        text -> byte(index!) => byte
+        byte == 46 -> if { true => hasDot! } else {
+            byte >= 48 and byte <= 57 -> unless { false -> return }
+        }
+        index! + 1 => index!
+    }
+    hasDot!
+}
+
+parsePort text: Text, start: UIntSize, end: UIntSize -> Result<PortComponent, Error> {
+    start < end -> unless {
+        Result<PortComponent, Error>.Err(Error {
+            kind: errors.Kind.InvalidPort
+            offset: start
+        }) -> return
+    }
+    0 => value!
+    start => index!
+    index! < end -> while {
+        text -> byte(index!) => byte
+        byte >= 48 and byte <= 57 -> unless {
+            Result<PortComponent, Error>.Err(Error {
+                kind: errors.Kind.InvalidPort
+                offset: index!
+            }) -> return
+        }
+        value! <= (65_535 - Int(byte - 48)) / 10 -> unless {
+            Result<PortComponent, Error>.Err(Error {
+                kind: errors.Kind.InvalidPort
+                offset: start
+            }) -> return
+        }
+        value! * 10 + Int(byte - 48) => value!
+        index! + 1 => index!
+    }
+    Result<PortComponent, Error>.Ok(model.PortComponent.Present(UInt16(value!)))
+}
+
+parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, Error> {
+    absentSpan() => userInfo!
+    start => hostStart!
+    start => scan!
+    false => foundAt!
+    scan! < end -> while {
+        (text -> byte(scan!)) == 64 -> if {
+            foundAt! -> if {
+                errorAuthority(errors.Kind.InvalidAuthority, scan!) -> return
+            }
+            presentSpan(start, scan! - start) => userInfo!
+            text -> validateComponent(start, scan!, 0)?
+            scan! + 1 => hostStart!
+            true => foundAt!
+        }
+        scan! + 1 => scan!
+    }
+
+    hostStart! < end
+        and (text -> byte(hostStart!)) == 91
+        -> if {
+            hostStart! + 1 => close!
+            close! < end and (text -> byte(close!)) != 93
+                -> while {
+                    close! + 1 => close!
+                }
+            close! < end -> unless {
+                errorAuthority(errors.Kind.InvalidHost, hostStart!) -> return
+            }
+            close! > hostStart! + 1 -> unless {
+                errorAuthority(errors.Kind.InvalidHost, hostStart! + 1) -> return
+            }
+            text -> slice(hostStart! + 1, close! - hostStart! - 1) => hostText
+            net.parseIpv6(hostText) -> when {
+                Ok(address) {
+                    close! + 1 == end -> if {
+                        Result<Authority, Error>.Ok(Authority {
+                            userInfo: userInfo!
+                            host: model.Host.Ipv6(address)
+                            port: model.PortComponent.Absent
+                        }) -> return
+                    }
+                    (text -> byte(close! + 1)) == 58 -> unless {
+                        errorAuthority(errors.Kind.InvalidAuthority, close! + 1) -> return
+                    }
+                    parsePort(text, close! + 2, end)? => port
+                    Result<Authority, Error>.Ok(Authority {
+                        userInfo: userInfo!
+                        host: model.Host.Ipv6(address)
+                        port: port
+                    }) -> return
+                }
+                Err(error) {
+                    errorAuthority(errors.Kind.InvalidHost, hostStart! + 1 + error.offset) -> return
+                }
+            }
+        }
+
+    end => hostEnd!
+    UIntSize(0) => portStart!
+    false => hasPort!
+    hostStart! => colonScan!
+    colonScan! < end -> while {
+        (text -> byte(colonScan!)) == 58 -> if {
+            hasPort! -> if {
+                errorAuthority(errors.Kind.InvalidHost, colonScan!) -> return
+            }
+            colonScan! => hostEnd!
+            colonScan! + 1 => portStart!
+            true => hasPort!
+        }
+        colonScan! + 1 => colonScan!
+    }
+    text -> slice(hostStart!, hostEnd! - hostStart!) => hostText
+    text -> validateComponent(hostStart!, hostEnd!, 1)?
+    text
+        -> looksNumericIpv4(hostStart!, hostEnd!)
+        -> if {
+            net.parseIpv4(hostText) -> when {
+                Ok(address) { ipv4Host(address) }
+                Err(error) {
+                    errorAuthority(errors.Kind.InvalidHost, hostStart! + error.offset) -> return
+                }
+            }
+        } else {
+            registeredHost(presentSpan(hostStart!, hostEnd! - hostStart!))
+        } => host
+    hasPort! -> if {
+        parsePort(text, portStart!, end)?
+    } else { absentPort() } => port
+    Result<Authority, Error>.Ok(Authority {
+        userInfo: userInfo!
+        host: host
+        port: port
+    })
+}
+
+# Parses an RFC 3986 URI-reference. maxInputBytes is checked before any nested
+# parse or slice construction. Components remain in raw percent-encoded form.
+public parse text: Text, maxInputBytes: Int -> Result<Reference, Error> {
+    maxInputBytes >= 0 -> unless {
+        errorReference(errors.Kind.InvalidLimit, 0) -> return
+    }
+    text -> len => length
+    Int(length) <= maxInputBytes -> unless {
+        errorReference(errors.Kind.InvalidLimit, length) -> return
+    }
+
+    length => fragmentStart!
+    UIntSize(0) => scan!
+    scan! < length -> while {
+        (text -> byte(scan!)) == 35 -> if {
+            scan! => fragmentStart!
+            length => scan!
+        } else { scan! + 1 => scan! }
+    }
+    fragmentStart! < length -> if {
+        text -> validateComponent(fragmentStart! + 1, length, 4)?
+        presentSpan(fragmentStart! + 1, length - fragmentStart! - 1)
+    } else { absentSpan() } => fragment
+
+    fragmentStart! => queryStart!
+    UIntSize(0) => queryScan!
+    queryScan! < fragmentStart! -> while {
+        (text -> byte(queryScan!)) == 63 -> if {
+            queryScan! => queryStart!
+            fragmentStart! => queryScan!
+        } else { queryScan! + 1 => queryScan! }
+    }
+    queryStart! < fragmentStart! -> if {
+        text -> validateComponent(queryStart! + 1, fragmentStart!, 3)?
+        presentSpan(queryStart! + 1, fragmentStart! - queryStart! - 1)
+    } else { absentSpan() } => query
+
+    absentSpan() => scheme!
+    UIntSize(0) => hierarchicalStart!
+    UIntSize(0) => schemeScan!
+    false => schemeDone!
+    schemeScan! < queryStart!
+        and not schemeDone!
+        -> while {
+            text -> byte(schemeScan!) => byte
+            byte == 58 -> if {
+                text -> validateScheme(0, schemeScan!)?
+                presentSpan(0, schemeScan!) => scheme!
+                schemeScan! + 1 => hierarchicalStart!
+                true => schemeDone!
+            }
+            byte == 47 -> if { true => schemeDone! }
+            schemeScan! + 1 => schemeScan!
+        }
+
+    hierarchicalStart! + 1 < queryStart!
+        and (text -> byte(hierarchicalStart!)) == 47
+        and (text -> byte(hierarchicalStart! + 1)) == 47
+        => hasAuthorityPrefix
+    hasAuthorityPrefix -> if {
+        hierarchicalStart! + 2 => authorityStart
+        authorityStart => authorityEnd!
+        authorityEnd! < queryStart! and (text -> byte(authorityEnd!)) != 47
+            -> while { authorityEnd! + 1 => authorityEnd! }
+        text -> parseAuthority(authorityStart, authorityEnd!)? => parsedAuthority
+        authorityEnd! => hierarchicalStart!
+        presentAuthority(parsedAuthority)
+    } else { absentAuthority() } => authority
+
+    text -> validateComponent(hierarchicalStart!, queryStart!, 2)?
+    scheme!.present -> unless {
+        authority -> when {
+            Present(value) { }
+            Absent {
+                hierarchicalStart! => firstSegment!
+                firstSegment! < queryStart!
+                    and (text -> byte(firstSegment!)) != 47
+                    -> while {
+                        (text -> byte(firstSegment!)) == 58 -> if {
+                            errorReference(errors.Kind.RelativeFirstSegmentColon, firstSegment!) -> return
+                        }
+                        firstSegment! + 1 => firstSegment!
+                    }
+            }
+        }
+    }
+    text -> file.borrowText => source
+    Result<Reference, Error>.Ok(Reference {
+        source: source
+        scheme: scheme!
+        authority: authority
+        path: presentSpan(hierarchicalStart!, queryStart! - hierarchicalStart!)
+        query: query
+        fragment: fragment
+    })
+}
+
+impl Reference {
+    public isAbsolute: self -> Bool => self.scheme.present
+
+    public hasAuthority: self -> Bool => self.authority -> when {
+        Present(value) { true }
+        Absent { false }
+    }
+
+    public schemeText: self -> Text => self.source -> slice(self.scheme.start, self.scheme.length)
+    public pathText: self -> Text => self.source -> slice(self.path.start, self.path.length)
+    public queryText: self -> Text => self.source -> slice(self.query.start, self.query.length)
+    public fragmentText: self -> Text => self.source -> slice(self.fragment.start, self.fragment.length)
+
+    public authorityUserInfoText: self -> Text => self.authority -> when {
+        Present(authority) { self.source -> slice(authority.userInfo.start, authority.userInfo.length) }
+        Absent { "" }
+    }
+
+    public registeredName: self -> Text => self.authority -> when {
+        Present(authority) => authority.host -> when {
+            Registered(span) { self.source -> slice(span.start, span.length) }
+            Ipv4(value) { "" }
+            Ipv6(value) { "" }
+        }
+        Absent { "" }
+    }
+}
+
+impl Authority {
+    public hasPort: self -> Bool => self.port -> when {
+        Present(value) { true }
+        Absent { false }
+    }
+
+    public portOr: self, fallback: UInt16 -> UInt16 => self.port -> when {
+        Present(value) { value }
+        Absent { fallback }
+    }
+
+}
+
+impl Host {
+    public isNumeric: self -> Bool => self -> when {
+        Registered(value) { false }
+        Ipv4(value) { true }
+        Ipv6(value) { true }
+    }
+}

@@ -1,0 +1,806 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+
+# Returned inline storage must outlive the callee. Existing promoted result
+# owners transfer directly; literals and parameter views require promotion.
+emitFixedArrayReturnPromotion valueIndex: Int, ownerIndex: Int, typeId: Int, nameRoot: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
+    valueIndex -> ownedValueSourceIndex(context, state) => sourceIndex
+    sourceIndex -> promotedFixedArrayCall(context, state) => backingCall
+    backingCall >= 0 -> if { false -> return }
+    "  %return_fixed$(nameRoot)_source = extractvalue { ptr, i64 } " -> print
+    valueIndex -> writeValue(ownerIndex, context, state)
+    ", 0" -> println
+    "  %return_fixed$(nameRoot)_data = call ptr @malloc(i64 $(context.typeSizes[typeId]))" -> println
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %return_fixed$(nameRoot)_data, ptr %return_fixed$(nameRoot)_source, i64 $(context.typeSizes[typeId]), i1 false)" -> println
+    "  %return_fixed$(nameRoot)_0 = insertvalue { ptr, i64 } poison, ptr %return_fixed$(nameRoot)_data, 0" -> println
+    "  %return_fixed$(nameRoot) = insertvalue { ptr, i64 } %return_fixed$(nameRoot)_0, i64 $(context.types[typeId].length), 1" -> println
+    true
+}
+
+# Responsibility fragment extracted from emitCore. State is passed by readonly
+# reference, preserving the original direct-call and allocation behavior.
+
+emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, expressionOrder: ref [Int; ~], expressionEmitted: ref [Bool; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => function
+    function.operand0 -> regionReturns(context, state) => functionBodyReturns
+    not functionBodyReturns -> if {
+        function.operand0 => returnValueIndex!
+        context.ir[function.operand0] => returnNode
+        returnNode.kind == 1 and returnNode.operand0 >= 0
+            -> if {
+                returnNode.operand0 => returnValueIndex!
+            }
+        returnNode.kind == 1
+            and (returnNode.operand0 < 0
+            or (returnNode.operand0 >= expressionStart
+            and returnNode.operand0 < functionEnd
+            and context.ir[returnNode.operand0].kind == 17
+            and context.ir[returnNode.operand0].flags == 1))
+            -> if {
+                function.operand0 + 1 => returnChildSearch!
+                returnChildSearch! < functionEnd -> while {
+                    context.ir[returnChildSearch!].parent == function.operand0
+                        -> if {
+                            returnChildSearch! => returnValueIndex!
+                        }
+                    returnChildSearch! + 1 => returnChildSearch!
+                }
+            }
+        returnNode.kind == 1 and returnNode.operand0 < 0
+            -> if {
+                false => scheduledReturnFound!
+                Int(expressionOrder -> len) - 1 => scheduledReturnOrder!
+                scheduledReturnOrder! >= 0 and not scheduledReturnFound!
+                    -> while {
+                        expressionOrder[scheduledReturnOrder!] => scheduledReturnIndex
+                        context.ir[scheduledReturnIndex] => scheduledReturnCandidate
+                        false => scheduledReturnTypeMatches!
+                        scheduledReturnIndex == returnNode.operand0 -> if {
+                            true => scheduledReturnTypeMatches!
+                        }
+                        function.typeId >= 0 and scheduledReturnCandidate.typeId == function.typeId
+                            -> if {
+                                true => scheduledReturnTypeMatches!
+                            }
+                        scheduledReturnCandidate.typeOrigin == function.typeOrigin
+                            and scheduledReturnCandidate.typeModule == function.typeModule
+                            and scheduledReturnCandidate.typeSymbol == function.typeSymbol
+                            -> if {
+                                true => scheduledReturnTypeMatches!
+                            }
+                        scheduledReturnCandidate.kind != 17
+                            and scheduledReturnCandidate.kind != 19
+                            and scheduledReturnTypeMatches! -> if {
+                                scheduledReturnIndex => returnValueIndex!
+                                true => scheduledReturnFound!
+                            }
+                        scheduledReturnOrder! - 1 => scheduledReturnOrder!
+                    }
+            }
+        returnNode.kind == 17 and returnNode.operand0 >= 0
+            -> if {
+                returnNode.operand0 => returnValueIndex!
+            }
+        returnNode.kind == 17 -> if {
+            function.operand0 -> mutableBindingRoot(context, state) => returnMutableRoot
+            false => mutableReturnFound!
+            Int(expressionOrder -> len) - 1 => mutableReturnOrder!
+            mutableReturnOrder! >= 0 and not mutableReturnFound!
+                -> while {
+                    expressionOrder[mutableReturnOrder!] => mutableReturnIndex
+                    context.ir[mutableReturnIndex] => mutableReturnCandidate
+                    mutableReturnCandidate.kind == 5
+                        and mutableReturnCandidate.operand0 >= expressionStart
+                        and mutableReturnCandidate.operand0 < functionEnd
+                        -> if {
+                            mutableReturnCandidate.operand0 -> mutableBindingRoot(context, state) => candidateMutableRoot
+                            candidateMutableRoot == returnMutableRoot -> if {
+                                mutableReturnIndex => returnValueIndex!
+                                true => mutableReturnFound!
+                            }
+                        }
+                    mutableReturnOrder! - 1 => mutableReturnOrder!
+                }
+        }
+        # An exact top-level source-final value that already has SSA is
+        # authoritative even when earlier bookkeeping was scheduled later. An
+        # unmaterialized value or a nested same-type call argument may fall back
+        # to the scheduler's last exact-type straight-line producer.
+        context.ir[returnValueIndex!] => preScheduledReturnCandidate
+        false => preScheduledReturnEmitted!
+        returnValueIndex! >= expressionStart and returnValueIndex! < functionEnd
+            -> if { expressionEmitted[returnValueIndex! - expressionStart] => preScheduledReturnEmitted! }
+        (not preScheduledReturnEmitted! or preScheduledReturnCandidate.parent != function.operand0)
+            and preScheduledReturnCandidate.kind != 3
+            and preScheduledReturnCandidate.kind != 4
+            and not (preScheduledReturnCandidate.kind == 18
+            or preScheduledReturnCandidate.kind == 27
+            or preScheduledReturnCandidate.kind == 33
+            or preScheduledReturnCandidate.kind == 34)
+            -> if {
+                false => scheduledTopLevelReturnFound!
+                Int(expressionOrder -> len) - 1 => scheduledTopLevelReturnOrder!
+                scheduledTopLevelReturnOrder! >= 0 and not scheduledTopLevelReturnFound!
+                    -> while {
+                        expressionOrder[scheduledTopLevelReturnOrder!] => scheduledTopLevelReturnIndex
+                        context.ir[scheduledTopLevelReturnIndex] => scheduledTopLevelReturnCandidate
+                        false => scheduledTopLevelReturnTypeMatches!
+                        function.typeId >= 0 and scheduledTopLevelReturnCandidate.typeId == function.typeId
+                            -> if { true => scheduledTopLevelReturnTypeMatches! }
+                        function.typeId < 0
+                            and scheduledTopLevelReturnCandidate.typeId < 0
+                            and scheduledTopLevelReturnCandidate.typeOrigin == function.typeOrigin
+                            and scheduledTopLevelReturnCandidate.typeModule == function.typeModule
+                            and scheduledTopLevelReturnCandidate.typeSymbol == function.typeSymbol
+                            -> if { true => scheduledTopLevelReturnTypeMatches! }
+                        scheduledTopLevelReturnCandidate.kind != 17
+                            and scheduledTopLevelReturnCandidate.kind != 19
+                            and scheduledTopLevelReturnCandidate.kind != 26
+                            and scheduledTopLevelReturnTypeMatches!
+                            -> if {
+                                scheduledTopLevelReturnIndex => returnValueIndex!
+                                true => scheduledTopLevelReturnFound!
+                            }
+                        scheduledTopLevelReturnOrder! - 1 => scheduledTopLevelReturnOrder!
+                    }
+            }
+        returnValueIndex! -> aggregateValueIndex(context, state) => returnValueIndex!
+        context.ir[returnValueIndex!] => selectedReturnCandidate
+        selectedReturnCandidate.kind == 8 and (selectedReturnCandidate.opcode == -24 or selectedReturnCandidate.opcode == -25)
+            -> if {
+                returnValueIndex! + 1 => controlReturnSearch!
+                false => controlReturnFound!
+                controlReturnSearch! < functionEnd and not controlReturnFound!
+                    -> while {
+                        context.ir[controlReturnSearch!] => controlReturnCandidate
+                        controlReturnCandidate.kind == 18
+                        # Only a control that consumes this logical value can
+                        # replace it as the function result; nested operands cannot.
+                            and controlReturnCandidate.operand0 == returnValueIndex!
+                            and controlReturnCandidate.nextOperand >= 0
+                            and controlReturnCandidate.typeOrigin == function.typeOrigin
+                            and controlReturnCandidate.typeModule == function.typeModule
+                            and controlReturnCandidate.typeSymbol == function.typeSymbol
+                            -> if {
+                                controlReturnSearch! => returnValueIndex!
+                                true => controlReturnFound!
+                            }
+                        controlReturnSearch! + 1 => controlReturnSearch!
+                    }
+            }
+        returnValueIndex! => returnValueIndex
+        context.ir[returnValueIndex] => returnOperand
+        # Returning an owning binding through aggregate wrappers transfers its
+        # storage into the result. Use the same resolver as explicit returns.
+        returnValueIndex -> returnedOwnedBindingIndex(context, state) => returnedOwnedBindingRoot
+        returnValueIndex -> returnedValueTransferredBindingRoots(context, state) => returnedOwnedRoots
+        expressionStart => dropIndex!
+        dropIndex! < functionEnd -> while {
+            context.ir[dropIndex!] => dropCandidate
+            dropCandidate.operand0 => dropCandidateValueIndex!
+            dropCandidate.kind == 17 and dropCandidate.operand0 >= 0
+                -> if {
+                    dropCandidate.operand0 -> callResultPropagationBindingIndex(context, state) => dropCandidatePropagationBinding
+                    dropCandidatePropagationBinding == dropIndex!
+                        -> if { dropIndex! => dropCandidateValueIndex! }
+                }
+            false => dropCandidateTransferredToAggregate!
+            (dropCandidate.kind == 17 or dropCandidate.kind == 12 or dropCandidate.kind == 14 or dropCandidate.kind == 16 or dropCandidate.kind == 26 or dropCandidate.kind == 35) and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state))
+                -> if {
+                    dropIndex! => dropTransferValueIndex!
+                    dropCandidate.kind == 17 -> if { dropCandidateValueIndex! => dropTransferValueIndex! }
+                    dropTransferValueIndex! -> ownedValueSourceIndex(context, state) => dropTransferSource
+                    expressionStart => dropOwnerSearch!
+                    dropOwnerSearch! < functionEnd and not dropCandidateTransferredToAggregate!
+                        -> while {
+                            context.ir[dropOwnerSearch!] => dropOwnerCandidate
+                            dropOwnerSearch! != dropIndex! and dropOwnerCandidate.kind == 43 and dropOwnerCandidate.operand0 >= 0
+                                -> if {
+                                    dropOwnerCandidate.operand0 -> ownedValueSourceIndex(context, state) => dropOwnerCarrier
+                                    dropOwnerCarrier == dropTransferSource -> if { true => dropCandidateTransferredToAggregate! }
+                                }
+                            dropOwnerSearch! != dropIndex! and dropOwnerCandidate.kind == 26 and dropOwnerCandidate.operand0 >= 0
+                                -> if {
+                                    dropOwnerCandidate.operand0 -> ownedValueSourceIndex(context, state) => dropEnumPayloadCarrier
+                                    dropEnumPayloadCarrier == dropTransferSource
+                                        -> if { true => dropCandidateTransferredToAggregate! }
+                                }
+                            dropOwnerSearch! != dropIndex! and (dropOwnerCandidate.kind == 12 or dropOwnerCandidate.kind == 14 or dropOwnerCandidate.kind == 16 or dropOwnerCandidate.kind == 35) and dropOwnerCandidate.operand0 >= 0
+                                -> if {
+                                    dropOwnerCandidate.operand0 => dropOwnerOperand!
+                                    dropOwnerOperand! >= 0 and not dropCandidateTransferredToAggregate!
+                                        -> while {
+                                            dropOwnerOperand! -> ownedValueSourceIndex(context, state) => dropOwnerOperandCarrier
+                                            dropOwnerOperandCarrier == dropTransferSource
+                                                -> if { true => dropCandidateTransferredToAggregate! }
+                                            context.ir[dropOwnerOperand!].nextOperand => dropOwnerOperand!
+                                        }
+                                }
+                            dropOwnerSearch! + 1 => dropOwnerSearch!
+                        }
+                }
+            false => dropCandidateMoved!
+            dropCandidateTransferredToAggregate! -> if { true => dropCandidateMoved! }
+            state.frozenEnumMatchConsumed -> ownershipEmitter.enumMatchConsumes(dropIndex!, dropCandidate.kind, dropCandidate.operand0)
+                -> if { true => dropCandidateMoved! }
+            false => dropCandidateHasPartialMoves!
+            true => dropCandidateIsRoot!
+            dropIndex! => dropCandidateRoot!
+            dropCandidate.kind == 17 and dropCandidate.parent == function.operand0 and ((dropCandidate -> ownsType) or (dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state))))
+                -> if {
+                    dropIndex! -> mutableBindingRoot(context, state) => dropCandidateRoot!
+                    dropCandidateRoot! != dropIndex! -> if { false => dropCandidateIsRoot! }
+                }
+            false => dropCandidateReturned!
+            dropCandidate.kind == 17 and dropCandidateIsRoot! and returnedOwnedBindingRoot >= 0 and returnedOwnedBindingRoot == dropCandidateRoot!
+                -> if {
+                    true => dropCandidateReturned!
+                }
+            dropCandidate.kind == 17 and dropCandidateIsRoot! and returnOperand.kind == 5 and returnOperand.operand0 >= 0
+                -> if {
+                    context.ir[returnOperand.operand0] => returnedBindingCandidate
+                    returnedBindingCandidate.kind == 17 -> if {
+                        returnOperand.operand0 -> mutableBindingRoot(context, state) => returnedBindingRoot
+                        returnedBindingRoot == dropCandidateRoot! -> if { true => dropCandidateReturned! }
+                    }
+                }
+            dropCandidate.kind == 17 and ((dropCandidate -> ownsType) or (dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state))))
+                -> if {
+                    0 => dropMoveIndex!
+                    dropMoveIndex! < (context.moves -> len) and not dropCandidateMoved!
+                        -> while {
+                            context.moves[dropMoveIndex!] => dropMove
+                            dropMove.memberIr >= 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol and (dropMoveIndex! -> partialMoveActiveBefore(function.operand0, -1, context, state))
+                                -> if { true => dropCandidateHasPartialMoves! }
+                            dropMove.memberIr < 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol and dropMove.regionIr == function.operand0
+                                -> if {
+                                    context.ir[dropMove.siteIr] => dropMoveCall
+                                    (dropMoveCall -> sourceStart(context, state)) > (dropCandidate -> sourceStart(context, state))
+                                        -> if { true => dropCandidateMoved! }
+                                }
+                            dropMoveIndex! + 1 => dropMoveIndex!
+                        }
+                    not dropCandidateMoved! -> if {
+                        function.operand0 -> regionFullyMovesBinding(dropCandidate.sourceModule, dropCandidate.symbol, dropCandidate -> sourceStart(context, state), context, state)
+                            -> if {
+                                true => dropCandidateMoved!
+                            }
+                    }
+                    # Dictionary put transfers its value argument into the
+                    # resident table. Detect that call locally for final
+                    # cleanup so adding the container contract does not
+                    # retroactively change ownership while compiling the
+                    # self-host compiler itself.
+                    expressionStart => putMoveIndex!
+                    putMoveIndex! < functionEnd and not dropCandidateMoved!
+                        -> while {
+                            context.ir[putMoveIndex!] => putMove
+                            putMove.kind == 9 and (putMove.opcode == -223 or putMove.opcode == -303) and putMove.operand1 >= 0 and putMove.operand1 < (context.ir -> len)
+                                -> if {
+                                    context.ir[putMove.operand1] => putMoveKey
+                                    putMoveKey.kind == 5 and putMoveKey.operand0 >= 0 and putMoveKey.operand0 < (context.ir -> len)
+                                        -> if {
+                                            putMoveKey.operand0 -> mutableBindingRoot(context, state) => putMoveKeyRoot
+                                            putMoveKeyRoot == dropCandidateRoot! and (putMove -> sourceStart(context, state)) > (dropCandidate -> sourceStart(context, state))
+                                                -> if {
+                                                    true => dropCandidateMoved!
+                                                }
+                                        }
+                                    putMoveKey.nextOperand => putMoveValueIndex
+                                    putMoveValueIndex >= 0 and putMoveValueIndex < (context.ir -> len)
+                                        -> if {
+                                            context.ir[putMoveValueIndex] => putMoveValue
+                                            putMoveValue.kind == 5 and putMoveValue.operand0 >= 0 and putMoveValue.operand0 < (context.ir -> len)
+                                                -> if {
+                                                    putMoveValue.operand0 -> mutableBindingRoot(context, state) => putMoveRoot
+                                                    putMoveRoot == dropCandidateRoot! and (putMove -> sourceStart(context, state)) > (dropCandidate -> sourceStart(context, state))
+                                                        -> if {
+                                                            true => dropCandidateMoved!
+                                                        }
+                                                }
+                                        }
+                                }
+                            putMoveIndex! + 1 => putMoveIndex!
+                        }
+                }
+            (dropCandidate.kind == 12 or dropCandidate.kind == 14 or dropCandidate.kind == 16 or dropCandidate.kind == 26 or dropCandidate.kind == 35) and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state)) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not dropCandidateMoved!
+                -> if {
+                    false => dropCandidateNeedsInlineArrayReload!
+                    false => dropCandidateHasInlineArrayAbi!
+                    context.types[dropCandidate.typeId].kind == 4
+                        -> if { true => dropCandidateHasInlineArrayAbi! }
+                    dropCandidate.kind == 14 and dropCandidateHasInlineArrayAbi!
+                        -> if {
+                            true => dropCandidateNeedsInlineArrayReload!
+                            "  %dropfixedreturn$(dropIndex!)_data = extractvalue { ptr, i64 } %v$(dropIndex!), 0" -> println
+                            "  %dropfixedreturn$(dropIndex!) = load " -> print
+                            dropCandidate.typeId -> writeSemanticTypeId(context, state)
+                            ", ptr %dropfixedreturn$(dropIndex!)_data, align " -> print
+                            context.typeAligns[dropCandidate.typeId] -> writeDecimalLine
+                        }
+                    "  call void @sollang_drop_t$(dropCandidate.typeId)(" -> print
+                    dropCandidate.typeId -> writeSemanticTypeId(context, state)
+                    " " -> print
+                    dropCandidateNeedsInlineArrayReload! -> if {
+                        "%dropfixedreturn$(dropIndex!)" -> print
+                    } else {
+                        "%v$(dropIndex!)" -> print
+                    }
+                    ")" -> println
+                }
+            dropCandidate.typeId < 0 and dropCandidate.kind == 14 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex
+                -> if {
+                    "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %v$(dropIndex!), 0" -> println
+                    "  call void @free(ptr %drop$(dropIndex!))" -> println
+                }
+            dropCandidate.typeId < 0 and dropCandidate.kind == 16 and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex
+                -> if {
+                    "  %drop$(dropIndex!)_keys = extractvalue %sollang.dict %v$(dropIndex!), 0" -> println
+                    "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
+                    "  %drop$(dropIndex!)_values = extractvalue %sollang.dict %v$(dropIndex!), 1" -> println
+                    "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
+                }
+            dropCandidate.typeId < 0 and dropCandidate.kind == 12 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex
+                -> if {
+                    DropGlueRequest {
+                        typeId: dropCandidate.typeId
+                        typeOrigin: dropCandidate.typeOrigin
+                        typeModule: dropCandidate.typeModule
+                        typeSymbol: dropCandidate.typeSymbol
+                        valueKind: 0
+                        valueIndex: dropIndex!
+                        nameRoot: dropIndex!
+                        pathCode: 0
+                        bindingIndex: -1
+                        regionIndex: function.operand0
+                        beforeAst: -1
+                        parentTask: -1
+                        fieldOrdinal: -1
+                        hasPartialMoves: false
+                    } -> emitDropGlue(-1, context, state)
+                }
+            false => dropCandidateInitialized!
+            dropCandidate.kind == 17 and expressionEmitted[dropIndex! - expressionStart]
+                -> if {
+                    true => dropCandidateInitialized!
+                    dropCandidate.flags != 1 and dropCandidate.operand0 >= expressionStart and dropCandidate.operand0 < functionEnd and not expressionEmitted[dropCandidate.operand0 - expressionStart]
+                        -> if {
+                            false => dropCandidateInitialized!
+                        }
+                }
+            dropCandidate.operand0 => dropCandidateDropValueIndex
+            -1 => dropCandidateParameterIndex!
+            dropCandidate.kind == 17 and dropCandidate.flags != 1
+                -> if {
+                    dropIndex! -> owningBindingSourceParameterSymbol(functionIndex, context, state)
+                        => dropCandidateParameterSymbol
+                    dropCandidateParameterSymbol >= 0 -> if {
+                        context -> parameterIndexForFunction(functionIndex, dropCandidateParameterSymbol)
+                            => dropCandidateParameterIndex!
+                    }
+                }
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state)) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not dropCandidateHasPartialMoves!
+                -> if {
+                    false => dropBindingNeedsInlineArrayReload!
+                    false => dropBindingHasInlineArrayAbi!
+                    context.types[dropCandidate.typeId].kind == 4
+                        -> if { true => dropBindingHasInlineArrayAbi! }
+                    (dropCandidate.flags != 1 or (dropCandidateDropValueIndex -> promotedFixedArrayCall(context, state)) >= 0)
+                        and dropBindingHasInlineArrayAbi!
+                        and dropCandidateDropValueIndex >= 0
+                        and dropCandidateDropValueIndex < (context.ir -> len)
+                        and (context.ir[dropCandidateDropValueIndex].kind == 14 or (dropCandidateDropValueIndex -> promotedFixedArrayCall(context, state)) >= 0)
+                        -> if {
+                            true => dropBindingNeedsInlineArrayReload!
+                            "  %dropfixedbinding$(dropIndex!)_data = extractvalue { ptr, i64 } %v$(dropCandidateDropValueIndex), 0" -> println
+                            "  %dropfixedbinding$(dropIndex!) = load " -> print
+                            dropCandidate.typeId -> writeSemanticTypeId(context, state)
+                            ", ptr %dropfixedbinding$(dropIndex!)_data, align " -> print
+                            context.typeAligns[dropCandidate.typeId] -> writeDecimalLine
+                        }
+                    dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
+                        -> if {
+                            "  %drop$(dropIndex!)_current = load " -> print
+                            dropCandidate.typeId -> writeSemanticTypeId(context, state)
+                            ", ptr %slot$(dropCandidateRoot!), align " -> print
+                            dropCandidate -> storageAlign(context, state) -> writeDecimalLine
+                        }
+                    "  call void @sollang_drop_t$(dropCandidate.typeId)(" -> print
+                    dropCandidate.typeId -> writeSemanticTypeId(context, state)
+                    " " -> print
+                    dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
+                        -> if { "%drop$(dropIndex!)_current" -> print } else {
+                            dropBindingNeedsInlineArrayReload! -> if {
+                                "%dropfixedbinding$(dropIndex!)" -> print
+                            } else {
+                                dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                            }
+                        }
+                    ")" -> println
+                }
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
+                -> if {
+                    dropCandidate.flags == 1 -> if {
+                        "  %drop$(dropIndex!)_current = load %sollang.array.i32, ptr %slot$(dropCandidateRoot!), align " -> print
+                        dropCandidate -> storageAlign(context, state) -> writeDecimalLine
+                        "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %drop$(dropIndex!)_current, 0" -> println
+                    } else {
+                        "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 " -> print
+                        dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                        ", 0" -> println
+                    }
+                    "  call void @free(ptr %drop$(dropIndex!))" -> println
+                }
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
+                -> if {
+                    dropCandidate.flags == 1 -> if {
+                        "  %drop$(dropIndex!)_current = load %sollang.dict, ptr %slot$(dropCandidateRoot!), align " -> print
+                        dropCandidate -> storageAlign(context, state) -> writeDecimalLine
+                        "  %drop$(dropIndex!)_keys = extractvalue %sollang.dict %drop$(dropIndex!)_current, 0" -> println
+                    } else {
+                        "  %drop$(dropIndex!)_keys = extractvalue %sollang.dict " -> print
+                        dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                        ", 0" -> println
+                    }
+                    "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
+                    dropCandidate.flags == 1 -> if {
+                        "  %drop$(dropIndex!)_values = extractvalue %sollang.dict %drop$(dropIndex!)_current, 1" -> println
+                    } else {
+                        "  %drop$(dropIndex!)_values = extractvalue %sollang.dict " -> print
+                        dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                        ", 1" -> println
+                    }
+                    "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
+                }
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves!) and (dropCandidate -> isGenericEnumType) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
+                -> if {
+                    0 => dropEnumValueKind!
+                    dropCandidateParameterIndex! >= 0 -> if { 3 => dropEnumValueKind! }
+                    dropCandidate.flags == 1 -> if { 2 => dropEnumValueKind! }
+                    EnumDropRequest {
+                        typeId: dropCandidate.typeId
+                        valueKind: dropEnumValueKind!
+                        valueIndex: dropCandidate.flags == 1 -> if { dropCandidateRoot! } else {
+                            dropCandidateParameterIndex! >= 0 -> if { dropCandidateParameterIndex! } else { dropCandidateDropValueIndex }
+                        }
+                        nameRoot: dropIndex! * 1000 + 7
+                        bindingIndex: dropIndex!
+                        regionIndex: function.operand0
+                    } -> emitEnumDrop(context, state)
+                }
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves!) and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
+                -> if {
+                    dropCandidate.flags == 1 -> if {
+                        "  %dropg$(dropIndex!)_p0 = load %sollang.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot!), align " -> print
+                        dropCandidate -> storageAlign(context, state) -> writeDecimalLine
+                    }
+                    0 => dropCandidateValueKind!
+                    dropIndex! => dropCandidateBindingIndex
+                    dropCandidateParameterIndex! >= 0 -> if { 3 => dropCandidateValueKind! }
+                    dropCandidate.flags == 1 -> if { 2 => dropCandidateValueKind! }
+                    DropGlueRequest {
+                        typeId: dropCandidate.typeId
+                        typeOrigin: dropCandidate.typeOrigin
+                        typeModule: dropCandidate.typeModule
+                        typeSymbol: dropCandidate.typeSymbol
+                        valueKind: dropCandidateValueKind!
+                        valueIndex: dropCandidateParameterIndex! >= 0
+                            -> if { dropCandidateParameterIndex! } else { dropCandidateDropValueIndex }
+                        nameRoot: dropIndex!
+                        pathCode: 0
+                        bindingIndex: dropCandidateBindingIndex
+                        regionIndex: function.operand0
+                        beforeAst: -1
+                        parentTask: -1
+                        fieldOrdinal: -1
+                        hasPartialMoves: dropCandidateHasPartialMoves!
+                    } -> emitDropGlue(-1, context, state)
+                }
+            dropIndex! -> bindingPromotedFixedArrayCall(context, state) => dropBackingCall
+            returnValueIndex -> ownedValueSourceIndex(context, state) => returnedBackingSource
+            dropBackingCall >= 0 and dropCandidateInitialized! and dropCandidate.parent == function.operand0
+                and dropBackingCall != returnedBackingSource
+                -> if { dropBackingCall -> emitPromotedFixedBackingDrop(functionIndex) }
+            dropIndex! + 1 => dropIndex!
+        }
+        # Call targets can become exact only during final Typed IR convergence.
+        # Build one function-local symbol index from the final argument chain and
+        # concrete move-parameter flags so cleanup never relies only on an older
+        # semantic move snapshot.
+        # Only direct body transfers are unconditional. Nested-region transfers
+        # retain their existing runtime ownership flag at the return edge.
+        context.ranges[function.sourceModule] => functionSourceRange
+        [Bool; ~] => lateMoveConsumedSymbols!
+        0 => lateMoveSymbolIndex!
+        lateMoveSymbolIndex! < functionSourceRange.symbolCount
+            -> while {
+                lateMoveConsumedSymbols! -> push(false)
+                lateMoveSymbolIndex! + 1 => lateMoveSymbolIndex!
+            }
+        expressionStart => lateMoveCallIndex!
+        lateMoveCallIndex! < functionEnd -> while {
+            context.ir[lateMoveCallIndex!] => lateMoveCall
+            lateMoveCallIndex! -> owningBindingSourceParameterSymbol(functionIndex, context, state)
+                => lateMoveBindingParameterSymbol
+            lateMoveBindingParameterSymbol >= 0
+                and lateMoveBindingParameterSymbol < functionSourceRange.symbolCount
+                and lateMoveCall.parent == function.operand0
+                -> if { true => lateMoveConsumedSymbols![lateMoveBindingParameterSymbol] }
+            lateMoveCall.kind == 6 and lateMoveCall.targetModule >= 0 and lateMoveCall.symbol >= 0
+                and lateMoveCall.parent == function.operand0
+                -> if {
+                    lateMoveCall.operand0 => lateMoveArgumentIndex!
+                    0 => lateMoveArgumentOrdinal!
+                    0 => lateMoveArgumentSteps!
+                    lateMoveArgumentIndex! >= 0
+                        and lateMoveArgumentIndex! < (context.ir -> len)
+                        and lateMoveArgumentSteps! < (context.ir -> len)
+                        -> while {
+                            lateMoveCallIndex! -> callTargetParameter(lateMoveArgumentOrdinal!, context, state)
+                                => lateMoveParameterIndex
+                            lateMoveParameterIndex >= 0
+                                and context.ir[lateMoveParameterIndex].flags % 2 == 1
+                                -> if {
+                                    lateMoveArgumentIndex! -> ownedValueSourceIndex(context, state)
+                                        => lateMoveSourceIndex
+                                    context.ir[lateMoveSourceIndex] => lateMoveSource
+                                    lateMoveSource.kind == 5
+                                        and lateMoveSource.sourceModule == function.sourceModule
+                                        and lateMoveSource.symbol >= 0
+                                        and lateMoveSource.symbol < functionSourceRange.symbolCount
+                                        -> if { true => lateMoveConsumedSymbols![lateMoveSource.symbol] }
+                                }
+                            context.ir[lateMoveArgumentIndex!].nextOperand => lateMoveArgumentIndex!
+                            lateMoveArgumentOrdinal! + 1 => lateMoveArgumentOrdinal!
+                            lateMoveArgumentSteps! + 1 => lateMoveArgumentSteps!
+                        }
+                }
+            lateMoveCallIndex! + 1 => lateMoveCallIndex!
+        }
+        function.operand1 => ownedParameterIndex!
+        0 => ownedParameterOrdinal!
+        ownedParameterIndex! >= 0 -> while {
+            context.ir[ownedParameterIndex!] => ownedParameter
+            false => ownedParameterHasPartialMoves!
+            false => ownedParameterMoved!
+            ownedParameterIndex! -> moveParameterNeedsPathOwnershipFlag(functionIndex, context, state)
+                => ownedParameterPathTracked
+            ownedParameter.sourceModule == function.sourceModule
+                and ownedParameter.symbol >= 0
+                and ownedParameter.symbol < functionSourceRange.symbolCount
+                and lateMoveConsumedSymbols![ownedParameter.symbol]
+                -> if { true => ownedParameterMoved! }
+            0 => returnedOwnedRootIndex!
+            returnedOwnedRootIndex! < (returnedOwnedRoots -> len) and not ownedParameterMoved!
+                -> while {
+                    returnedOwnedRoots[returnedOwnedRootIndex!] -> ownedValueSourceIndex(context, state) => returnedOwnedSourceIndex
+                    context.ir[returnedOwnedSourceIndex] => returnedOwnedSource
+                    returnedOwnedSource.kind == 5
+                        and returnedOwnedSource.sourceModule == ownedParameter.sourceModule
+                        and returnedOwnedSource.symbol == ownedParameter.symbol
+                        -> if { true => ownedParameterMoved! }
+                    returnedOwnedRootIndex! + 1 => returnedOwnedRootIndex!
+                }
+            state.frozenEnumMatchConsumed -> ownershipEmitter.enumMatchConsumes(ownedParameterIndex!, ownedParameter.kind, ownedParameter.operand0)
+                -> if {
+                    true => ownedParameterMoved!
+                }
+            expressionStart => ownedParameterMatchIndex!
+            ownedParameterMatchIndex! < functionEnd and not ownedParameterMoved!
+                -> while {
+                    context.ir[ownedParameterMatchIndex!] => ownedParameterMatch
+                    ownedParameterMatch.kind == 27 and ownedParameterMatch.operand0 >= 0
+                        -> if {
+                            context.ir[ownedParameterMatch.operand0] => ownedParameterMatchSubject
+                            (ownedParameterMatchSubject.kind == 5 or ownedParameterMatchSubject.kind == 17)
+                                and ownedParameterMatchSubject.sourceModule == ownedParameter.sourceModule
+                                and ownedParameterMatchSubject.symbol == ownedParameter.symbol
+                                -> if {
+                                    true => ownedParameterMoved!
+                                }
+                        }
+                    ownedParameterMatchIndex! + 1 => ownedParameterMatchIndex!
+                }
+            0 => ownedParameterMoveIndex!
+            ownedParameterMoveIndex! < (context.moves -> len)
+                -> while {
+                    context.moves[ownedParameterMoveIndex!] => ownedParameterMove
+                    ownedParameterMove.memberIr >= 0
+                        and ownedParameterMove.sourceModule == ownedParameter.sourceModule
+                        and ownedParameterMove.symbol == ownedParameter.symbol
+                        -> if { true => ownedParameterHasPartialMoves! }
+                    ownedParameterMove.memberIr < 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol and ownedParameterMove.regionIr == function.operand0
+                        -> if { true => ownedParameterMoved! }
+                    ownedParameterMoveIndex! + 1 => ownedParameterMoveIndex!
+                }
+            not ownedParameterMoved! -> if {
+                function.operand0 -> regionFullyMovesBinding(ownedParameter.sourceModule, ownedParameter.symbol, ownedParameter -> sourceStart(context, state), context, state)
+                    -> if {
+                        true => ownedParameterMoved!
+                    }
+            }
+            ownedParameter.typeId >= 0 and (ownedParameter.typeId -> semanticTypeOwns(context, state)) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved! and not ownedParameterHasPartialMoves!
+                -> if {
+                    not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol)
+                        -> if {
+                            ownedParameterPathTracked -> if {
+                                "  %drop_arg$(ownedParameterOrdinal!)_still_owned = load i1, ptr %arg$(ownedParameterIndex!)_owned, align 1" -> println
+                                "  br i1 %drop_arg$(ownedParameterOrdinal!)_still_owned, label %drop_arg$(ownedParameterOrdinal!)_path, label %drop_arg$(ownedParameterOrdinal!)_done" -> println
+                                "drop_arg$(ownedParameterOrdinal!)_path:" -> println
+                            }
+                            ownedParameterIndex! -> emitWholeParameterDrop(functionIndex, functionIndex, context, state)
+                            ownedParameterPathTracked -> if {
+                                "  br label %drop_arg$(ownedParameterOrdinal!)_done" -> println
+                                "drop_arg$(ownedParameterOrdinal!)_done:" -> println
+                            }
+                        }
+                }
+            ownedParameter.typeId < 0 and (ownedParameter.typeOrigin == 13 or ownedParameter.typeOrigin == 14) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!
+                -> if {
+                    not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol)
+                        -> if {
+                            "  %drop_arg$(ownedParameterOrdinal!) = extractvalue %sollang.array.i32 " -> print
+                            context -> writeParameterReference(functionIndex, ownedParameter.symbol) => ownedArrayParameterWritten
+                            ", 0" -> println
+                            "  call void @free(ptr %drop_arg$(ownedParameterOrdinal!))" -> println
+                        }
+                }
+            ownedParameter.typeId < 0 and ownedParameter.typeOrigin == 15 and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!
+                -> if {
+                    not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol)
+                        -> if {
+                            "  %drop_arg$(ownedParameterOrdinal!)_keys = extractvalue %sollang.dict " -> print
+                            context -> writeParameterReference(functionIndex, ownedParameter.symbol) => ownedDictionaryKeyParameterWritten
+                            ", 0" -> println
+                            "  call void @free(ptr %drop_arg$(ownedParameterOrdinal!)_keys)" -> println
+                            "  %drop_arg$(ownedParameterOrdinal!)_values = extractvalue %sollang.dict " -> print
+                            context -> writeParameterReference(functionIndex, ownedParameter.symbol) => ownedDictionaryValueParameterWritten
+                            ", 1" -> println
+                            "  call void @free(ptr %drop_arg$(ownedParameterOrdinal!)_values)" -> println
+                        }
+                }
+            (ownedParameter.typeId < 0 or ownedParameterHasPartialMoves!) and (ownedParameter -> isGenericEnumType) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!
+                -> if {
+                    not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol)
+                        -> if {
+                            EnumDropRequest {
+                                typeId: ownedParameter.typeId
+                                valueKind: 1
+                                valueIndex: -1
+                                nameRoot: functionIndex * 1000 + 701 + ownedParameterOrdinal!
+                                bindingIndex: ownedParameterIndex!
+                                regionIndex: function.operand0
+                            } -> emitEnumDrop(context, state)
+                        }
+                }
+            (ownedParameter.typeId < 0 or ownedParameterHasPartialMoves!) and (ownedParameter.typeOrigin == 0 or ownedParameter.typeOrigin == 2) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!
+                -> if {
+                    not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol)
+                        -> if {
+                            ownedParameterPathTracked -> if {
+                                "  %drop_partial_arg$(ownedParameterOrdinal!)_still_owned = load i1, ptr %arg$(ownedParameterIndex!)_owned, align 1" -> println
+                                "  br i1 %drop_partial_arg$(ownedParameterOrdinal!)_still_owned, label %drop_partial_arg$(ownedParameterOrdinal!)_path, label %drop_partial_arg$(ownedParameterOrdinal!)_done" -> println
+                                "drop_partial_arg$(ownedParameterOrdinal!)_path:" -> println
+                            }
+                            DropGlueRequest {
+                                typeId: ownedParameter.typeId
+                                typeOrigin: ownedParameter.typeOrigin
+                                typeModule: ownedParameter.typeModule
+                                typeSymbol: ownedParameter.typeSymbol
+                                valueKind: 1
+                                valueIndex: -1
+                                nameRoot: functionIndex
+                                pathCode: 0
+                                bindingIndex: ownedParameterIndex!
+                                regionIndex: function.operand0
+                                beforeAst: -1
+                                parentTask: -1
+                                fieldOrdinal: -1
+                                hasPartialMoves: ownedParameterHasPartialMoves!
+                            } -> emitDropGlue(-1, context, state)
+                            ownedParameterPathTracked -> if {
+                                "  br label %drop_partial_arg$(ownedParameterOrdinal!)_done" -> println
+                                "drop_partial_arg$(ownedParameterOrdinal!)_done:" -> println
+                            }
+                        }
+                }
+            ownedParameterOrdinal! == 0 -> if {
+                function.nextOperand => ownedParameterIndex!
+            } else {
+                ownedParameter.nextOperand => ownedParameterIndex!
+            }
+            ownedParameterOrdinal! + 1 => ownedParameterOrdinal!
+        }
+        false => transparentReferenceReturn!
+        -1 => transparentReferenceTarget!
+        returnOperand.typeId >= 0 and context.types[returnOperand.typeId].kind == 8 and not (function.typeId >= 0 and context.types[function.typeId].kind == 8)
+            -> if {
+                true => transparentReferenceReturn!
+                context.types[returnOperand.typeId].first => transparentReferenceTarget!
+                "  %return_ref_value = load " -> print
+                transparentReferenceTarget! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol
+                    -> if { "%arg" -> print } else { "%v$(returnValueIndex)" -> print }
+                ", align " -> print
+                context.typeAligns[transparentReferenceTarget!] -> writeDecimalLine
+            }
+        function.typeOrigin == 1 and function.typeSymbol == 0
+            -> if { "  ret void" -> println } else {
+                function -> integerNodeWidth(context, state) => returnTargetWidth
+                returnOperand -> integerNodeWidth(context, state) => returnSourceWidth
+                (function.typeOrigin == 4 and function.typeSymbol == 4 and returnOperand.typeOrigin == 4 and returnOperand.typeSymbol == 3) => convertsStreamToEvent
+                convertsStreamToEvent -> if {
+                    "  %return_stream_context = extractvalue %sollang.stream %v$(returnValueIndex), 0" -> println
+                    "  %return_stream_next = extractvalue %sollang.stream %v$(returnValueIndex), 1" -> println
+                    "  %return_stream_drop = extractvalue %sollang.stream %v$(returnValueIndex), 2" -> println
+                    "  %return_event0 = insertvalue %sollang.event_stream poison, ptr %return_stream_context, 0" -> println
+                    "  %return_event1 = insertvalue %sollang.event_stream %return_event0, ptr %return_stream_next, 1" -> println
+                    "  %return_event = insertvalue %sollang.event_stream %return_event1, ptr %return_stream_drop, 2" -> println
+                }
+                false => convertedIntegerReturn!
+                returnOperand.kind != 3
+                    and returnOperand.kind != 4
+                    and returnTargetWidth > 0
+                    and returnSourceWidth > 0
+                    and returnTargetWidth != returnSourceWidth -> if {
+                        "  %return_integer = " -> print
+                        returnTargetWidth < returnSourceWidth -> if { "trunc " -> print } else {
+                            returnOperand -> integerNodeSigned(context, state)
+                                -> if { "sext " -> print } else { "zext " -> print }
+                        }
+                        returnOperand -> writeIrType(context, state)
+                        " " -> print
+                        returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol
+                            -> if { "%arg" -> print } else { "%v$(returnValueIndex)" -> print }
+                        " to i$(returnTargetWidth)" -> println
+                        true => convertedIntegerReturn!
+                    }
+                false => promotedFixedArrayReturn!
+                function.typeId >= 0 and context.types[function.typeId].kind == 4
+                    -> if {
+                        returnValueIndex -> emitFixedArrayReturnPromotion(functionIndex, function.typeId, functionIndex, context, state)
+                            => promotedFixedArrayReturn!
+                    }
+                "  ret " -> print
+                function -> writeIrType(context, state)
+                " " -> print
+                promotedFixedArrayReturn! -> if { "%return_fixed$(functionIndex)" -> println } else {
+                    convertedIntegerReturn! -> if { "%return_integer" -> println } else {
+                        convertsStreamToEvent -> if { "%return_event" -> println } else {
+                            transparentReferenceReturn! -> if { "%return_ref_value" -> println } else {
+                                function.typeId >= 0 and context.types[function.typeId].kind == 8
+                                    -> if {
+                                        functionIndex -> writeReferencePlaceValue(returnValueIndex, context, state)
+                                        "" -> println
+                                    } else {
+                                        returnOperand.kind == 3 or returnOperand.kind == 4
+                                            -> if {
+                                                returnOperand -> sourceToken(context, state) => returnToken
+                                                returnOperand.kind == 3 -> if {
+                                                    returnOperand -> writeIntegerLiteral(context, state)
+                                                    "" -> println
+                                                } else {
+                                                    (context.sources[returnOperand.sourceModule] -> byte(returnToken.span.start)) == 116
+                                                        -> if { "1" -> println } else { "0" -> println }
+                                                }
+                                            } else {
+                                                returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol
+                                                    -> if { "%arg" -> println } else {
+                                                        "%v" -> print
+                                                        returnValueIndex -> writeDecimalLine
+                                                    }
+                                            }
+                                    }
+                            }
+                        }
+                    }
+                }
+            }
+    }
+}

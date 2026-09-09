@@ -16,6 +16,7 @@ const inputLines = inputPath
 let inputLine = 0;
 let memory;
 let heapCursor = 0;
+const allocationSizes = new Map();
 
 function allocate(rawLength) {
   const length = Math.max(Number(rawLength), 1);
@@ -25,13 +26,28 @@ function allocate(rawLength) {
     memory.grow(Math.ceil((end - memory.buffer.byteLength) / 65536));
   }
   heapCursor = end;
+  allocationSizes.set(pointer, length);
   return pointer;
+}
+
+function reallocate(rawPointer, rawLength) {
+  const pointer = Number(rawPointer) >>> 0;
+  const length = Math.max(Number(rawLength), 1);
+  const previousLength = allocationSizes.get(pointer) ?? 0;
+  if (pointer !== 0 && previousLength >= length) return pointer;
+  const replacement = allocate(length);
+  const copyLength = Math.min(previousLength, length);
+  if (pointer !== 0 && copyLength > 0) {
+    new Uint8Array(memory.buffer, replacement, copyLength)
+      .set(new Uint8Array(memory.buffer, pointer, copyLength));
+  }
+  return replacement;
 }
 
 const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath), {
   env: {
     sollang_browser_alloc: allocate,
-    sollang_browser_realloc: (_pointer, length) => allocate(length),
+    sollang_browser_realloc: reallocate,
     memset(pointer, value, length) {
       new Uint8Array(memory.buffer, pointer, length).fill(value & 0xff);
       return pointer;
@@ -41,7 +57,8 @@ const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath), {
         .set(new Uint8Array(memory.buffer, source, length));
       return destination;
     },
-    sollang_browser_now_millis: () => BigInt(Date.now()),
+    sollang_browser_now_millis: () => BigInt(Math.trunc(performance.now())),
+    sollang_browser_utc_now_millis: () => BigInt(Date.now()),
     sollang_browser_source_count: () => 0,
     sollang_browser_source_pointer: () => 0,
     sollang_browser_source_length: () => 0,
@@ -54,6 +71,10 @@ const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath), {
     },
     sollang_browser_write(pointer, length) {
       chunks.push(new Uint8Array(memory.buffer.slice(pointer, pointer + length)));
+      return 1;
+    },
+    sollang_browser_eprint(pointer, length) {
+      process.stderr.write(decoder.decode(new Uint8Array(memory.buffer, pointer, length)));
       return 1;
     }
   }

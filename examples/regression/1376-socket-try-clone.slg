@@ -1,0 +1,56 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+observe: -> Result<Bool, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> tryClone? => listenerClone
+    listener -> close
+
+    listenerClone -> localEndpoint? => endpoint
+    endpoint -> connect? => client
+    listenerClone -> accept? => server
+
+    client -> tryClone? => clientClone
+    clientClone -> setNoDelay(true)?
+    client -> noDelay? => sharedNoDelay
+    client -> close
+
+    [UInt8(31), 32, 33; ~] => payload
+    clientClone -> send(payload)? => sent
+    server -> receive(8)? => received
+
+    socket.DatagramBindOptions {
+        endpoint: net.loopback(0) -> unified
+        reuseAddress: true
+    } -> bind? => datagram
+    datagram -> localPort? => originalPort
+    datagram -> tryClone? => datagramClone
+    datagram -> close
+    datagramClone -> localPort? => clonedPort
+
+    datagramClone -> close
+    clientClone -> close
+    server -> close
+    listenerClone -> close
+
+    Result<Bool, socket.SocketError>.Ok(
+        sharedNoDelay
+            and sent == 3
+            and (received -> len) == 3
+            and received[0] == 31
+            and received[1] == 32
+            and received[2] == 33
+            and originalPort == clonedPort)
+}
+
+main {
+    observe() -> when {
+        Ok(valid) { "socket-clone=$valid" -> println }
+        Err(error) { "socket-clone-error=$(error.code)" -> println }
+    }
+}

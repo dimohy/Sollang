@@ -1,0 +1,39 @@
+struct Owner {
+    bytes: [UInt8; ~]
+    cursor: UIntSize
+}
+
+enum Outcome {
+    Reusable(Owner)
+}
+
+consumeEmpty owner: move Owner -> Result<Outcome, Int> {
+    Result<Outcome, Int>.Ok(Outcome.Reusable(owner))
+}
+
+consumeBuffered owner: move Owner -> Result<Outcome, Int> {
+    Result<Outcome, Int>.Ok(Outcome.Reusable(owner))
+}
+
+impl Owner {
+    forward: move self -> Result<Outcome, Int> {
+        self.cursor <= UIntSize(self.bytes -> len) -> unless {
+            Result<Outcome, Int>.Err(1) -> return
+        }
+        UIntSize(self.bytes -> len) - self.cursor => available
+        available -> when {
+            == 0 { self -> consumeEmpty -> return }
+            else { self -> consumeBuffered -> return }
+        }
+        Result<Outcome, Int>.Err(2)
+    }
+}
+
+main {
+    Owner { bytes: [1, 2, 3; ~], cursor: 0 } -> forward -> when {
+        Err(_) { "read-before-direct-self-consume=false" -> println }
+        Ok(outcome) => outcome -> when {
+            Reusable(_) { "read-before-direct-self-consume=true" -> println }
+        }
+    }
+}

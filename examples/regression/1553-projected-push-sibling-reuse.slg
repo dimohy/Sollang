@@ -1,0 +1,23 @@
+# Moving a field through a collection preserves its sibling value.
+import std.net.quic.frame as frames
+
+main {
+    frames.Decoded {
+        frame: frames.Value.Datagram(frames.Datagram { data: [1; ~] })
+        nextOffset: 1
+    } => decoded
+    [frames.Value; ~] => values!
+    values! -> push(decoded.frame)
+    values! -> take(0) => received
+    received -> when {
+        Datagram(datagram) {
+            datagram.data[0] == 1 -> if {
+                decoded.nextOffset -> println
+            } else { "invalid payload" -> println }
+        }
+        else { "invalid frame" -> println }
+    }
+}
+
+
+

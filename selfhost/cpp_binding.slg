@@ -59,58 +59,58 @@ struct RawStatus {
 }
 
 public struct CppType {
-    sollangName: Text
-    cppName: Text
+    public sollangName: Text
+    public cppName: Text
 }
 
 public struct Parameter {
-    name: Text
-    type: CppType
+    public name: Text
+    public type: CppType
 }
 
 public struct Function {
-    memberName: Text
-    qualifiedName: Text
-    symbol: Text
-    signature: Text
-    result: CppType
-    parameters: [Parameter; ~]
-    isNoexcept: Bool
+    public memberName: Text
+    public qualifiedName: Text
+    public symbol: Text
+    public signature: Text
+    public result: CppType
+    public parameters: [Parameter; ~]
+    public isNoexcept: Bool
 }
 
 public struct Constructor {
-    parameters: [Parameter; ~]
-    symbol: Text
+    public parameters: [Parameter; ~]
+    public symbol: Text
 }
 
 public struct Method {
-    name: Text
-    cppName: Text
-    symbol: Text
-    result: CppType
-    parameters: [Parameter; ~]
-    isConst: Bool
-    isNoexcept: Bool
+    public name: Text
+    public cppName: Text
+    public symbol: Text
+    public result: CppType
+    public parameters: [Parameter; ~]
+    public isConst: Bool
+    public isNoexcept: Bool
 }
 
 public struct Class {
-    name: Text
-    qualifiedName: Text
-    dropSymbol: Text
-    constructors: [Constructor; ~]
-    methods: [Method; ~]
+    public name: Text
+    public qualifiedName: Text
+    public dropSymbol: Text
+    public constructors: [Constructor; ~]
+    public methods: [Method; ~]
 }
 
 public struct Discovery {
-    status: Int
-    message: Text
-    functions: [Function; ~]
-    classes: [Class; ~]
+    public status: Int
+    public message: Text
+    public functions: [Function; ~]
+    public classes: [Class; ~]
 }
 
 public struct Status {
-    code: Int
-    message: Text
+    public code: Int
+    public message: Text
 }
 
 storeText output: mut [UInt8; ~], value: Text -> StringRef {
@@ -154,7 +154,7 @@ owned value: Text, storage: mut Arena -> Text {
 public textEquals left: Text, right: Text -> Bool {
     (left -> len) == (right -> len) => matches!
     UIntSize(0) => index!
-    (matches! and index! < (left -> len)) -> while {
+    matches! and index! < (left -> len) -> while {
         (left -> byte(index!)) != (right -> byte(index!))
             -> if { false => matches! }
         index! + 1 => index!
@@ -163,13 +163,13 @@ public textEquals left: Text, right: Text -> Bool {
 }
 
 asciiLower value: UInt8 -> UInt8 {
-    (value >= 65 and value <= 90) -> if { value + 32 } else { value }
+    value >= 65 and value <= 90 -> if { value + 32 } else { value }
 }
 
 public textEqualsPath left: Text, right: Text, caseInsensitive: Bool -> Bool {
     (left -> len) == (right -> len) => matches!
     UIntSize(0) => index!
-    (matches! and index! < (left -> len)) -> while {
+    matches! and index! < (left -> len) -> while {
         left -> byte(index!) => leftByte!
         right -> byte(index!) => rightByte!
         caseInsensitive -> if {
@@ -185,7 +185,7 @@ public textEqualsPath left: Text, right: Text, caseInsensitive: Bool -> Bool {
 public textStartsWith value: Text, prefix: Text -> Bool {
     (prefix -> len) <= (value -> len) => matches!
     UIntSize(0) => index!
-    (matches! and index! < (prefix -> len)) -> while {
+    matches! and index! < (prefix -> len) -> while {
         (value -> byte(index!)) != (prefix -> byte(index!))
             -> if { false => matches! }
         index! + 1 => index!
@@ -197,18 +197,18 @@ public textContains value: Text, needle: Text -> Bool {
     (needle -> len) == 0 -> if { true -> return }
     false => found!
     UIntSize(0) => start!
-    (not found! and start! + (needle -> len) <= (value -> len))
+    not found! and start! + (needle -> len) <= (value -> len)
         -> while {
-        true => matches!
-        UIntSize(0) => index!
-        (matches! and index! < (needle -> len)) -> while {
-            (value -> byte(start! + index!)) != (needle -> byte(index!))
-                -> if { false => matches! }
-            index! + 1 => index!
+            true => matches!
+            UIntSize(0) => index!
+            matches! and index! < (needle -> len) -> while {
+                (value -> byte(start! + index!)) != (needle -> byte(index!))
+                    -> if { false => matches! }
+                index! + 1 => index!
+            }
+            matches! -> if { true => found! }
+            start! + 1 => start!
         }
-        matches! -> if { true => found! }
-        start! + 1 => start!
-    }
     found!
 }
 
@@ -216,7 +216,7 @@ textCompare left: Text, right: Text -> Int {
     (left -> len) < (right -> len) -> if { left -> len } else { right -> len } => length
     0 => result!
     UIntSize(0) => index!
-    (result! == 0 and index! < length) -> while {
+    result! == 0 and index! < length -> while {
         left -> byte(index!) => leftByte
         right -> byte(index!) => rightByte
         leftByte < rightByte -> if { -1 => result! }
@@ -273,7 +273,7 @@ appendSpan output: mut [UInt8; ~], source: ref [UInt8; ~], value: StringRef -> U
 spanEqualsText source: ref [UInt8; ~], value: StringRef, expected: Text -> Bool {
     value.length == Int(expected -> len) => matches!
     0 => index!
-    (matches! and index! < value.length) -> while {
+    matches! and index! < value.length -> while {
         source[value.start + index!] != (expected -> byte(UIntSize(index!)))
             -> if { false => matches! }
         index! + 1 => index!
@@ -285,17 +285,17 @@ spanContainsText source: ref [UInt8; ~], value: StringRef, needle: Text -> Bool 
     (needle -> len) == 0 -> if { true -> return }
     false => found!
     0 => start!
-    (not found! and start! + Int(needle -> len) <= value.length)
+    not found! and start! + Int(needle -> len) <= value.length
         -> while {
-        true => matches!
-        0 => index!
-        (matches! and index! < Int(needle -> len)) -> while {
-            source[value.start + start! + index!] != (needle -> byte(UIntSize(index!)))
-                -> if { false => matches! }
-            index! + 1 => index!
+            true => matches!
+            0 => index!
+            matches! and index! < Int(needle -> len) -> while {
+                source[value.start + start! + index!] != (needle -> byte(UIntSize(index!)))
+                    -> if { false => matches! }
+                index! + 1 => index!
+            }
+            matches! -> if { true => found! } else { start! + 1 => start! }
         }
-        matches! -> if { true => found! } else { start! + 1 => start! }
-    }
     found!
 }
 
@@ -303,12 +303,12 @@ spanCompare source: ref [UInt8; ~], left: StringRef, right: StringRef -> Int {
     left.length < right.length -> if { left.length } else { right.length } => count
     0 => index!
     0 => result!
-    (result! == 0 and index! < count) -> while {
+    result! == 0 and index! < count -> while {
         source[left.start + index!] < source[right.start + index!]
             -> if { -1 => result! } else {
-            source[left.start + index!] > source[right.start + index!]
-                -> if { 1 => result! }
-        }
+                source[left.start + index!] > source[right.start + index!]
+                    -> if { 1 => result! }
+            }
         index! + 1 => index!
     }
     result! == 0 -> if {
@@ -323,19 +323,19 @@ sanitizeBytes value: Text, emptyDefault: Text -> [UInt8; ~] {
     UIntSize(0) => index!
     index! < (value -> len) -> while {
         value -> byte(index!) => current
-        ((current >= 48 and current <= 57)
+        (current >= 48 and current <= 57)
             or (current >= 65 and current <= 90)
             or (current >= 97 and current <= 122)
-            or current == 95) -> if {
-            bytes! -> push(current)
-        } else { bytes! -> push(95) }
+            or current == 95 -> if {
+                bytes! -> push(current)
+            } else { bytes! -> push(95) }
         index! + 1 => index!
     }
     (bytes! -> len) == 0 -> if {
         emptyDefault -> copyText => defaultBytes
         defaultBytes -> return
     }
-    (bytes![0] >= 48 and bytes![0] <= 57) -> if {
+    bytes![0] >= 48 and bytes![0] <= 57 -> if {
         [UInt8; ~] => prefixed!
         prefixed! -> push(95)
         0 => copyIndex!
@@ -358,19 +358,19 @@ sanitizeSpanBytes source: ref [UInt8; ~], value: StringRef, emptyDefault: Text -
     0 => index!
     index! < value.length -> while {
         source[value.start + index!] => current
-        ((current >= 48 and current <= 57)
+        (current >= 48 and current <= 57)
             or (current >= 65 and current <= 90)
             or (current >= 97 and current <= 122)
-            or current == 95) -> if {
-            bytes! -> push(current)
-        } else { bytes! -> push(95) }
+            or current == 95 -> if {
+                bytes! -> push(current)
+            } else { bytes! -> push(95) }
         index! + 1 => index!
     }
     (bytes! -> len) == 0 -> if {
         emptyDefault -> copyText => defaultBytes
         defaultBytes -> return
     }
-    (bytes![0] >= 48 and bytes![0] <= 57) -> if {
+    bytes![0] >= 48 and bytes![0] <= 57 -> if {
         [UInt8; ~] => prefixed!
         prefixed! -> push(95)
         0 => copyIndex!
@@ -516,7 +516,7 @@ memberRef source: ref file.SourceText, object: json.Value, name: Text, pool: mut
 memberBool source: ref file.SourceText, object: json.Value, name: Text -> Bool {
     source -> json.findMember(object, name) => member
     false => value!
-    (member.found and member.value.kind == 1) -> if {
+    member.found and member.value.kind == 1 -> if {
         source -> slice(member.value.contentStart, member.value.contentEnd - member.value.contentStart) => text
         text -> textEquals("true") => value!
     }
@@ -538,7 +538,7 @@ nodeTypeRef source: ref file.SourceText, node: json.Value, pool: mut [UInt8; ~] 
 spanStartsWithText source: ref [UInt8; ~], value: StringRef, prefix: Text -> Bool {
     value.length >= Int(prefix -> len) => matches!
     0 => index!
-    (matches! and index! < Int(prefix -> len)) -> while {
+    matches! and index! < Int(prefix -> len) -> while {
         source[value.start + index!] != (prefix -> byte(UIntSize(index!)))
             -> if { false => matches! }
         index! + 1 => index!
@@ -549,13 +549,13 @@ spanStartsWithText source: ref [UInt8; ~], value: StringRef, prefix: Text -> Boo
 stripTypeQualifiers source: ref [UInt8; ~], value: StringRef -> StringRef {
     source -> spanStartsWithText(value, "const ")
         -> if {
-        source -> stripTypeQualifiers(StringRef { start: value.start + 6, length: value.length - 6 })
-    } else {
-        source -> spanStartsWithText(value, "volatile ")
-            -> if {
-            source -> stripTypeQualifiers(StringRef { start: value.start + 9, length: value.length - 9 })
-        } else { value }
-    }
+            source -> stripTypeQualifiers(StringRef { start: value.start + 6, length: value.length - 6 })
+        } else {
+            source -> spanStartsWithText(value, "volatile ")
+                -> if {
+                    source -> stripTypeQualifiers(StringRef { start: value.start + 9, length: value.length - 9 })
+                } else { value }
+        }
 }
 
 rawType pool: mut [UInt8; ~], sollangName: Text, cppName: Text -> RawCppType {
@@ -569,29 +569,29 @@ mapType pool: mut [UInt8; ~], spelling: StringRef, windowsTarget: Bool -> RawCpp
     StringRef { start: 0, length: 0 } => empty
     RawCppType { sollangName: empty, cppName: empty } => result!
     pool -> spanEqualsText(value, "void") -> if { pool -> rawType("Unit", "void") => result! }
-    ((pool -> spanEqualsText(value, "unsigned char")) or (pool -> spanEqualsText(value, "char unsigned")))
+    (pool -> spanEqualsText(value, "unsigned char")) or (pool -> spanEqualsText(value, "char unsigned"))
         -> if { pool -> rawType("UInt8", "unsigned char") => result! }
-    ((pool -> spanEqualsText(value, "signed char")) or (pool -> spanEqualsText(value, "char signed")))
+    (pool -> spanEqualsText(value, "signed char")) or (pool -> spanEqualsText(value, "char signed"))
         -> if { pool -> rawType("Int8", "signed char") => result! }
     pool -> spanEqualsText(value, "unsigned short")
         -> if { pool -> rawType("UInt16", "unsigned short") => result! }
-    ((pool -> spanEqualsText(value, "unsigned int")) or (pool -> spanEqualsText(value, "unsigned")))
+    (pool -> spanEqualsText(value, "unsigned int")) or (pool -> spanEqualsText(value, "unsigned"))
         -> if { pool -> rawType("UInt32", "unsigned int") => result! }
     pool -> spanEqualsText(value, "unsigned long")
         -> if {
-        windowsTarget -> if { pool -> rawType("UInt32", "unsigned long") } else { pool -> rawType("UInt64", "unsigned long") } => result!
-    }
+            windowsTarget -> if { pool -> rawType("UInt32", "unsigned long") } else { pool -> rawType("UInt64", "unsigned long") } => result!
+        }
     pool -> spanEqualsText(value, "unsigned long long")
         -> if { pool -> rawType("UInt64", "unsigned long long") => result! }
-    ((pool -> spanEqualsText(value, "short")) or (pool -> spanEqualsText(value, "short int")) or (pool -> spanEqualsText(value, "signed short")))
+    (pool -> spanEqualsText(value, "short")) or (pool -> spanEqualsText(value, "short int")) or (pool -> spanEqualsText(value, "signed short"))
         -> if { pool -> rawType("Int16", "short") => result! }
-    ((pool -> spanEqualsText(value, "int")) or (pool -> spanEqualsText(value, "signed int")) or (pool -> spanEqualsText(value, "signed")))
+    (pool -> spanEqualsText(value, "int")) or (pool -> spanEqualsText(value, "signed int")) or (pool -> spanEqualsText(value, "signed"))
         -> if { pool -> rawType("Int32", "int") => result! }
-    ((pool -> spanEqualsText(value, "long")) or (pool -> spanEqualsText(value, "long int")) or (pool -> spanEqualsText(value, "signed long")))
+    (pool -> spanEqualsText(value, "long")) or (pool -> spanEqualsText(value, "long int")) or (pool -> spanEqualsText(value, "signed long"))
         -> if {
-        windowsTarget -> if { pool -> rawType("Int32", "long") } else { pool -> rawType("Int64", "long") } => result!
-    }
-    ((pool -> spanEqualsText(value, "long long")) or (pool -> spanEqualsText(value, "long long int")) or (pool -> spanEqualsText(value, "signed long long")))
+            windowsTarget -> if { pool -> rawType("Int32", "long") } else { pool -> rawType("Int64", "long") } => result!
+        }
+    (pool -> spanEqualsText(value, "long long")) or (pool -> spanEqualsText(value, "long long int")) or (pool -> spanEqualsText(value, "signed long long"))
         -> if { pool -> rawType("Int64", "long long") => result! }
     pool -> spanEqualsText(value, "float") -> if { pool -> rawType("Float32", "float") => result! }
     pool -> spanEqualsText(value, "double") -> if { pool -> rawType("Float64", "double") => result! }
@@ -601,13 +601,13 @@ mapType pool: mut [UInt8; ~], spelling: StringRef, windowsTarget: Bool -> RawCpp
 resultTypeRef source: ref [UInt8; ~], functionType: StringRef -> StringRef {
     0 => index!
     false => found!
-    (not found! and index! + 1 < functionType.length)
+    not found! and index! + 1 < functionType.length
         -> while {
-        (source[functionType.start + index!] == 32 and source[functionType.start + index! + 1] == 40)
-            -> if {
-            true => found!
-        } else { index! + 1 => index! }
-    }
+            source[functionType.start + index!] == 32 and source[functionType.start + index! + 1] == 40
+                -> if {
+                    true => found!
+                } else { index! + 1 => index! }
+        }
     found! -> if { StringRef { start: functionType.start, length: index! } } else { StringRef { start: 0, length: 0 } }
 }
 
@@ -760,56 +760,56 @@ readClass source: ref file.SourceText, node: json.Value, namespaces: ref [String
             source -> memberRef(cursor!.value, "kind", pool) => kind
             pool -> spanEqualsText(kind, "AccessSpecDecl")
                 -> if {
-                source -> memberRef(cursor!.value, "access", pool) => access
-                pool -> spanEqualsText(access, "public") => publicAccess!
-            } else {
-                (publicAccess! and (pool -> spanEqualsText(kind, "CXXConstructorDecl")))
-                    -> if {
-                    source -> readParameters(cursor!.value, windowsTarget, qualifiedName, pool, status) => parameters
-                    pool -> memberSignatureBytes("owner", parameters) => signatureBytes
-                    pool -> storeBytes(signatureBytes) => signature
-                    pool -> storeText("create") => createOperation
-                    pool -> symbolForMemberBytes(qualifiedName, createOperation, signature) => symbolBytes
-                    pool -> storeBytes(symbolBytes) => symbol
-                    RawConstructor { parameters: parameters, symbol: symbol } => constructor
-                    constructors! -> push(constructor)
-                }
-                (publicAccess! and (pool -> spanEqualsText(kind, "CXXMethodDecl")))
-                    -> if {
-                    source -> memberRef(cursor!.value, "storageClass", pool) => storageClass
-                    not (pool -> spanEqualsText(storageClass, "static"))
+                    source -> memberRef(cursor!.value, "access", pool) => access
+                    pool -> spanEqualsText(access, "public") => publicAccess!
+                } else {
+                    publicAccess! and (pool -> spanEqualsText(kind, "CXXConstructorDecl"))
                         -> if {
-                        source -> memberRef(cursor!.value, "name", pool) => cppName
-                        pool -> qualifiedMethodBytes(qualifiedName, cppName) => methodQualifiedNameBytes
-                        pool -> storeBytes(methodQualifiedNameBytes) => methodQualifiedName
-                        source -> nodeTypeRef(cursor!.value, pool) => fullType
-                        pool -> resultTypeRef(fullType) => resultSpelling
-                        pool -> mapType(resultSpelling, windowsTarget) => result
-                        result.sollangName.length == 0 -> if {
-                            1 => status.code
-                            pool -> resultErrorBytes(methodQualifiedName, resultSpelling, true) => messageBytes
-                            pool -> storeBytes(messageBytes) => status.message
+                            source -> readParameters(cursor!.value, windowsTarget, qualifiedName, pool, status) => parameters
+                            pool -> memberSignatureBytes("owner", parameters) => signatureBytes
+                            pool -> storeBytes(signatureBytes) => signature
+                            pool -> storeText("create") => createOperation
+                            pool -> symbolForMemberBytes(qualifiedName, createOperation, signature) => symbolBytes
+                            pool -> storeBytes(symbolBytes) => symbol
+                            RawConstructor { parameters: parameters, symbol: symbol } => constructor
+                            constructors! -> push(constructor)
                         }
-                        source -> readParameters(cursor!.value, windowsTarget, methodQualifiedName, pool, status) => parameters
-                        pool -> functionSignatureBytes(result, parameters) => signatureBytes
-                        pool -> storeBytes(signatureBytes) => signature
-                        pool -> symbolForMemberBytes(qualifiedName, cppName, signature) => symbolBytes
-                        pool -> storeBytes(symbolBytes) => symbol
-                        pool -> sanitizeSpanBytes(cppName, "value") => methodNameBytes
-                        pool -> storeBytes(methodNameBytes) => methodName
-                        RawMethod {
-                            name: methodName
-                            cppName: cppName
-                            symbol: symbol
-                            result: result
-                            parameters: parameters
-                            isConst: pool -> spanContainsText(fullType, ") const")
-                            isNoexcept: pool -> spanContainsText(fullType, " noexcept")
-                        } => method
-                        methods! -> push(method)
-                    }
+                    publicAccess! and (pool -> spanEqualsText(kind, "CXXMethodDecl"))
+                        -> if {
+                            source -> memberRef(cursor!.value, "storageClass", pool) => storageClass
+                            not (pool -> spanEqualsText(storageClass, "static"))
+                                -> if {
+                                    source -> memberRef(cursor!.value, "name", pool) => cppName
+                                    pool -> qualifiedMethodBytes(qualifiedName, cppName) => methodQualifiedNameBytes
+                                    pool -> storeBytes(methodQualifiedNameBytes) => methodQualifiedName
+                                    source -> nodeTypeRef(cursor!.value, pool) => fullType
+                                    pool -> resultTypeRef(fullType) => resultSpelling
+                                    pool -> mapType(resultSpelling, windowsTarget) => result
+                                    result.sollangName.length == 0 -> if {
+                                        1 => status.code
+                                        pool -> resultErrorBytes(methodQualifiedName, resultSpelling, true) => messageBytes
+                                        pool -> storeBytes(messageBytes) => status.message
+                                    }
+                                    source -> readParameters(cursor!.value, windowsTarget, methodQualifiedName, pool, status) => parameters
+                                    pool -> functionSignatureBytes(result, parameters) => signatureBytes
+                                    pool -> storeBytes(signatureBytes) => signature
+                                    pool -> symbolForMemberBytes(qualifiedName, cppName, signature) => symbolBytes
+                                    pool -> storeBytes(symbolBytes) => symbol
+                                    pool -> sanitizeSpanBytes(cppName, "value") => methodNameBytes
+                                    pool -> storeBytes(methodNameBytes) => methodName
+                                    RawMethod {
+                                        name: methodName
+                                        cppName: cppName
+                                        symbol: symbol
+                                        result: result
+                                        parameters: parameters
+                                        isConst: pool -> spanContainsText(fullType, ") const")
+                                        isNoexcept: pool -> spanContainsText(fullType, " noexcept")
+                                    } => method
+                                    methods! -> push(method)
+                                }
+                        }
                 }
-            }
             source -> json.nextArrayValue(inner.value, cursor!.next) => cursor!
         }
     }
@@ -863,22 +863,22 @@ spanEqualsPath source: ref [UInt8; ~], value: StringRef, path: Text, caseInsensi
         and ((path -> byte(UIntSize(3))) -> asciiLower) == 116
         and (path -> byte(UIntSize(4))) == 47
         and (path -> byte(UIntSize(6))) == 47) => pathMount
-    (valueDrive and pathMount) -> if {
+    valueDrive and pathMount -> if {
         (value.length - 3 == pathLength - 7
             and ((source[value.start] -> asciiLower) == ((path -> byte(UIntSize(5))) -> asciiLower))) => matches!
         0 => index!
-        (matches! and index! < value.length - 3) -> while {
+        matches! and index! < value.length - 3 -> while {
             source[value.start + 3 + index!] -> pathByteEquals(path -> byte(UIntSize(7 + index!)), true)
                 -> unless { false => matches! }
             index! + 1 => index!
         }
         matches! -> return
     }
-    (valueMount and pathDrive) -> if {
+    valueMount and pathDrive -> if {
         (value.length - 7 == pathLength - 3
             and ((source[value.start + 5] -> asciiLower) == ((path -> byte(UIntSize(0))) -> asciiLower))) => matches!
         0 => index!
-        (matches! and index! < value.length - 7) -> while {
+        matches! and index! < value.length - 7 -> while {
             source[value.start + 7 + index!] -> pathByteEquals(path -> byte(UIntSize(3 + index!)), true)
                 -> unless { false => matches! }
             index! + 1 => index!
@@ -887,7 +887,7 @@ spanEqualsPath source: ref [UInt8; ~], value: StringRef, path: Text, caseInsensi
     }
     value.length == pathLength => matches!
     0 => index!
-    (matches! and index! < value.length) -> while {
+    matches! and index! < value.length -> while {
         source[value.start + index!] => left
         path -> byte(UIntSize(index!)) => right
         left -> pathByteEquals(right, caseInsensitive)
@@ -913,25 +913,25 @@ collect source: ref file.SourceText, node: json.Value, headerPath: Text, namespa
     status.code != 0 -> if { return }
     source -> memberRef(node, "kind", pool) => kind
     source -> nodeFromMainFile(node, headerPath, inheritedMain, windowsTarget, pool) => fromMain
-    (fromMain and (pool -> spanEqualsText(kind, "FunctionDecl")))
+    fromMain and (pool -> spanEqualsText(kind, "FunctionDecl"))
         -> if {
-        source -> readFunction(node, namespaces, windowsTarget, pool, status) => function
-        functions -> push(function)
-        return
-    }
-    (fromMain and (pool -> spanEqualsText(kind, "CXXRecordDecl")) and (source -> memberBool(node, "completeDefinition")) and not (source -> memberBool(node, "isImplicit")))
+            source -> readFunction(node, namespaces, windowsTarget, pool, status) => function
+            functions -> push(function)
+            return
+        }
+    fromMain and (pool -> spanEqualsText(kind, "CXXRecordDecl")) and (source -> memberBool(node, "completeDefinition")) and not (source -> memberBool(node, "isImplicit"))
         -> if {
-        source -> readClass(node, namespaces, windowsTarget, pool, status) => classInfo
-        classes -> push(classInfo)
-        return
-    }
+            source -> readClass(node, namespaces, windowsTarget, pool, status) => classInfo
+            classes -> push(classInfo)
+            return
+        }
     false => pushedNamespace!
-    (fromMain and (pool -> spanEqualsText(kind, "NamespaceDecl")))
+    fromMain and (pool -> spanEqualsText(kind, "NamespaceDecl"))
         -> if {
-        source -> memberRef(node, "name", pool) => namespaceName
-        namespaces -> push(namespaceName)
-        true => pushedNamespace!
-    }
+            source -> memberRef(node, "name", pool) => namespaceName
+            namespaces -> push(namespaceName)
+            true => pushedNamespace!
+        }
     source -> json.findMember(node, "inner") => inner
     inner.found -> if {
         source -> json.firstArrayValue(inner.value) => cursor!
@@ -956,14 +956,14 @@ orderedFunctionIndexes pool: ref [UInt8; ~], functions: ref [RawFunction; ~] -> 
     functionIndex! < (functions -> len) -> while {
         order! -> push(functionIndex!)
         (order! -> len) - 1 => position!
-        (position! > 0 and (pool -> functionLess(functions[order![position!]], functions[order![position! - 1]])))
+        position! > 0 and (pool -> functionLess(functions[order![position!]], functions[order![position! - 1]]))
             -> while {
-            order![position! - 1] => previous
-            order![position!] => current
-            current => order![position! - 1]
-            previous => order![position!]
-            position! - 1 => position!
-        }
+                order![position! - 1] => previous
+                order![position!] => current
+                current => order![position! - 1]
+                previous => order![position!]
+                position! - 1 => position!
+            }
         functionIndex! + 1 => functionIndex!
     }
     order!
@@ -975,14 +975,14 @@ orderedClassIndexes pool: ref [UInt8; ~], classes: ref [RawClass; ~] -> [Int; ~]
     classIndex! < (classes -> len) -> while {
         order! -> push(classIndex!)
         (order! -> len) - 1 => position!
-        (position! > 0 and (pool -> spanCompare(classes[order![position!]].qualifiedName, classes[order![position! - 1]].qualifiedName)) < 0)
+        position! > 0 and (pool -> spanCompare(classes[order![position!]].qualifiedName, classes[order![position! - 1]].qualifiedName)) < 0
             -> while {
-            order![position! - 1] => previous
-            order![position!] => current
-            current => order![position! - 1]
-            previous => order![position!]
-            position! - 1 => position!
-        }
+                order![position! - 1] => previous
+                order![position!] => current
+                current => order![position! - 1]
+                previous => order![position!]
+                position! - 1 => position!
+            }
         classIndex! + 1 => classIndex!
     }
     order!
@@ -1005,9 +1005,9 @@ resolveOverloads pool: mut [UInt8; ~], functions: ref [RawFunction; ~], status: 
             0 => parameterIndex!
             parameterIndex! < (functions[index!].parameters -> len)
                 -> while {
-                bytes! -> appendSpan(pool, functions[index!].parameters[parameterIndex!].type.sollangName)
-                parameterIndex! + 1 => parameterIndex!
-            }
+                    bytes! -> appendSpan(pool, functions[index!].parameters[parameterIndex!].type.sollangName)
+                    parameterIndex! + 1 => parameterIndex!
+                }
             pool -> storeBytes(bytes!) => resolvedName
             resolvedNames! -> push(resolvedName)
         } else {
@@ -1021,9 +1021,9 @@ resolveOverloads pool: mut [UInt8; ~], functions: ref [RawFunction; ~], status: 
         right! < (resolvedNames! -> len) -> while {
             (pool -> spanCompare(resolvedNames![left!], resolvedNames![right!])) == 0
                 -> if {
-                1 => status.code
-                pool -> storeText("overloaded C++ functions still collide after type-based Sollang naming") => status.message
-            }
+                    1 => status.code
+                    pool -> storeText("overloaded C++ functions still collide after type-based Sollang naming") => status.message
+                }
             right! + 1 => right!
         }
         left! + 1 => left!
@@ -1086,11 +1086,11 @@ freezeClass pool: ref [UInt8; ~], raw: ref RawClass -> Class uses File {
     0 => constructorIndex!
     constructorIndex! < (raw.constructors -> len)
         -> while {
-        pool -> freezeParameters(raw.constructors[constructorIndex!].parameters) => parameters
-        Constructor { parameters: parameters, symbol: pool -> spanText(raw.constructors[constructorIndex!].symbol) } => constructor
-        constructors! -> push(constructor)
-        constructorIndex! + 1 => constructorIndex!
-    }
+            pool -> freezeParameters(raw.constructors[constructorIndex!].parameters) => parameters
+            Constructor { parameters: parameters, symbol: pool -> spanText(raw.constructors[constructorIndex!].symbol) } => constructor
+            constructors! -> push(constructor)
+            constructorIndex! + 1 => constructorIndex!
+        }
     [Method; ~] => methods!
     0 => methodIndex!
     methodIndex! < (raw.methods -> len) -> while {
@@ -1128,11 +1128,11 @@ public discover astPath: Text, headerPath: Text, windowsTarget: Bool, pool: mut 
         source -> collect(root, headerPath, namespaces!, false, windowsTarget, pool, rawFunctions!, rawClasses!, status!)
     }
     pool -> resolveOverloads(rawFunctions!, status!) => resolvedFunctionNames
-    (status!.code == 0 and (rawFunctions! -> len) == 0 and (rawClasses! -> len) == 0)
+    status!.code == 0 and (rawFunctions! -> len) == 0 and (rawClasses! -> len) == 0
         -> if {
-        1 => status!.code
-        pool -> storeText("the C++ header contains no supported public noexcept scalar functions or classes") => status!.message
-    }
+            1 => status!.code
+            pool -> storeText("the C++ header contains no supported public noexcept scalar functions or classes") => status!.message
+        }
     [Function; ~] => functions!
     pool -> orderedFunctionIndexes(rawFunctions!) => functionOrder
     0 => functionIndex!

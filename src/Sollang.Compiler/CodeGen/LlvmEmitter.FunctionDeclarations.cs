@@ -64,6 +64,10 @@ internal sealed partial class LlvmEmitter
             _currentFunction = function;
             _tempId = 0;
             _labelId = 0;
+            if (TryEmitCpuSpecializedFunction(function))
+            {
+                continue;
+            }
             if (function.IsAsync)
             {
                 EmitAsyncFunction(function);
@@ -86,6 +90,9 @@ internal sealed partial class LlvmEmitter
             }
             switch (function.ReturnType)
             {
+                case BoundType.Arguments:
+                    EmitStructFunction(function);
+                    break;
                 case BoundType.Unit:
                     EmitUnitFunction(function);
                     break;
@@ -157,12 +164,8 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private void EmitStructFunction(BoundFunction function)
+    private void EmitStructFunction(BoundFunction function, string? symbolOverride = null)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
 
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
@@ -171,7 +174,8 @@ internal sealed partial class LlvmEmitter
         try
         {
             var llvmType = LlvmType(function.ReturnType);
-            EmitFunctionLine($"define internal {llvmType} {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            var symbol = symbolOverride ?? SymbolForFunction(function);
+            EmitFunctionLine($"define internal {llvmType} {symbol}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -181,7 +185,12 @@ internal sealed partial class LlvmEmitter
 
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitFunctionArgumentExpression(function.Body, function.ReturnType);
+            value = PrepareBorrowedFixedStorageReturn(function.Body, value);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             var transferredOwnerName = IsOwnedContainerRuntimeValue(value)
                 ? GetFunctionResultTransferredOwnerName(function, function.Body)
@@ -200,10 +209,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitSliceFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
 
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
@@ -219,8 +224,13 @@ internal sealed partial class LlvmEmitter
             BindAllFunctionParameters(function);
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
 
             var slice = function.Body is ArrayLiteralExpression literal
+                && IsReadonlyStaticNumericArrayLiteral(literal)
                 ? EmitReadonlyStaticArrayLiteral(literal, function.ReturnType)
                 : EmitExpression(function.Body);
             EnsureRuntimeType(slice, function.ReturnType, function.Name);
@@ -268,12 +278,14 @@ internal sealed partial class LlvmEmitter
             : new RuntimeInlineSlice(sliceType, elementType, name, length);
     }
 
+    private static bool IsReadonlyStaticNumericArrayLiteral(ArrayLiteralExpression literal)
+    {
+        return literal.Elements.All(static element => element is NumberExpression
+            or NegateExpression { Value: NumberExpression });
+    }
+
     private void EmitReferenceFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
 
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
@@ -289,6 +301,10 @@ internal sealed partial class LlvmEmitter
             BindAllFunctionParameters(function);
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var reference = EmitReferencePlace(function.Body, function.ReturnType);
             EmitRet("ptr", reference.PointerName);
             EmitFunctionLine("}");
@@ -337,10 +353,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitTextFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
 
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
@@ -358,6 +370,10 @@ internal sealed partial class LlvmEmitter
 
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, BoundType.Text, function.Name);
             DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
@@ -378,10 +394,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitIntFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
 
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
@@ -399,6 +411,10 @@ internal sealed partial class LlvmEmitter
 
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitIntExpression(function.Body);
             DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
             EmitRet("i64", value.ValueName);
@@ -413,10 +429,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitBoolFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
 
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
@@ -434,6 +446,10 @@ internal sealed partial class LlvmEmitter
 
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitBoolExpression(function.Body);
             DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
             EmitRet("i1", value.ValueName);
@@ -448,10 +464,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitNumericFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
         ClearLocalState();
@@ -468,6 +480,10 @@ internal sealed partial class LlvmEmitter
             BindAllFunctionParameters(function);
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitFunctionArgumentExpression(function.Body, function.ReturnType);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
@@ -489,10 +505,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitDynamicIntArrayFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
 
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
@@ -510,6 +522,10 @@ internal sealed partial class LlvmEmitter
 
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, BoundType.DynamicIntArray, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
@@ -533,10 +549,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitDynamicInlineArrayFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
         ClearLocalState();
@@ -552,6 +564,10 @@ internal sealed partial class LlvmEmitter
             BindAllFunctionParameters(function);
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitFunctionArgumentExpression(function.Body, function.ReturnType);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
@@ -570,10 +586,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitIntDictionaryFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
 
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
@@ -591,6 +603,10 @@ internal sealed partial class LlvmEmitter
 
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, BoundType.IntDictionary, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
@@ -614,10 +630,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitInlineDictionaryFunction(BoundFunction function)
     {
-        if (function.Body is null)
-        {
-            throw new SollangException($"function '{function.Name}' has no body");
-        }
         var previousFunctions = _currentFunctions;
         _currentFunctions = FunctionScope(function);
         ClearLocalState();
@@ -633,6 +645,10 @@ internal sealed partial class LlvmEmitter
             BindAllFunctionParameters(function);
             EmitStatements(function.BlockBody);
             if (FinishTerminatedFunction()) return;
+            if (function.Body is null)
+            {
+                throw new SollangException($"function '{function.Name}' has no body");
+            }
             var value = EmitExpression(function.Body);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
@@ -790,6 +806,7 @@ internal sealed partial class LlvmEmitter
 
         return function.InputType switch
         {
+            BoundType.Arguments => "i64 %it",
             null => "",
             BoundType.Int => "i64 %it",
             BoundType.Bool => "i1 %it",
@@ -846,6 +863,12 @@ internal sealed partial class LlvmEmitter
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
         {
             BindMutableBorrowFunctionParameter(function);
+            return;
+        }
+
+        if (function.InputType == BoundType.Arguments)
+        {
+            _locals.Add(function.InputName ?? "it", new RuntimeArguments("%it"));
             return;
         }
 

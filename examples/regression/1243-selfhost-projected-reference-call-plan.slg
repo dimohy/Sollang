@@ -1,0 +1,68 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    """"
+        namespace sample
+
+        struct Inner { value: Int }
+        struct Outer {
+            source: Inner
+            fields: [Inner; ~]
+        }
+
+        compare source: ref Inner, value: Inner, expected: Int -> Bool {
+            source.value == value.value and value.value == expected
+        }
+
+        impl Outer {
+            test: self, index: Int, expected: Int -> Bool {
+                self.source -> compare(self.fields[index], expected)
+            }
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> expressionTypeIds.resolveContext => types
+    context -> typedIr.lowerResolvedContext(types) => ir
+
+    0 => callCount!
+    0 => argumentCount!
+    0 => baseDuplicates!
+    false => projectedHead!
+    false => orderedArguments!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        node.sourceModule == 0 and node.kind == 6 -> if {
+            callCount! + 1 => callCount!
+            node.operand0 => firstArgument
+            firstArgument >= 0
+                and ir[firstArgument].kind == 13
+                and ir[firstArgument].operand0 >= 0
+                and ir[ir[firstArgument].operand0].kind == 5
+                -> if { true => projectedHead! }
+            -1 => secondArgument!
+            -1 => thirdArgument!
+            firstArgument >= 0 -> if { ir[firstArgument].nextOperand => secondArgument! }
+            secondArgument! >= 0 -> if { ir[secondArgument!].nextOperand => thirdArgument! }
+            secondArgument! >= 0
+                and thirdArgument! >= 0
+                and ir[secondArgument!].kind == 15
+                and ir[thirdArgument!].kind == 5
+                and ir[thirdArgument!].nextOperand < 0
+                -> if { true => orderedArguments! }
+            node.operand0 => argumentIndex!
+            argumentIndex! >= 0 -> while {
+                ir[argumentIndex!] => argument
+                argumentCount! + 1 => argumentCount!
+                projectedHead! and argumentIndex! == ir[firstArgument].operand0
+                    -> if { baseDuplicates! + 1 => baseDuplicates! }
+                argument.nextOperand => argumentIndex!
+            }
+        }
+        irIndex! + 1 => irIndex!
+    }
+    "calls=$(callCount!),arguments=$(argumentCount!),projected-head=$(projectedHead!),ordered=$(orderedArguments!),base-duplicates=$(baseDuplicates!)" -> println
+}

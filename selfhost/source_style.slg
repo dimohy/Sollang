@@ -1,0 +1,251 @@
+namespace sollang.compiler.source_style
+
+import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+public struct StyleNote {
+    public code: Int
+    public line: Int
+    public column: Int
+    public conditionLength: Int
+    public role: Int
+}
+
+struct SourceLocation {
+    line: Int
+    column: Int
+}
+
+public inlineControlLimit: -> UIntSize => 45
+
+trivia kind: Int -> Bool {
+    kind == grammar.triviaIdWhitespace() or kind == grammar.triviaIdComment()
+}
+
+identifierEquals source: file.SourceText, token: syntax.SyntaxToken, expected: Text -> Bool {
+    token.kind == grammar.tokenIdIdentifier() and token.span.length == (expected -> len) => matches!
+    UIntSize(0) => index!
+    matches! and index! < token.span.length -> while {
+        (source -> byte(token.span.start + index!)) != (expected -> byte(index!))
+            -> if { false => matches! }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+roleAt source: file.SourceText, token: syntax.SyntaxToken -> Int {
+    source -> identifierEquals(token, "if") -> if { 0 -> return }
+    source -> identifierEquals(token, "unless") -> if { 1 -> return }
+    source -> identifierEquals(token, "while") -> if { 2 -> return }
+    -1
+}
+
+nextOnLine tokens: ref [syntax.SyntaxToken; ~], start: Int -> Int {
+    start => index!
+    index! < (tokens -> len) -> while {
+        tokens[index!] => token
+        token.kind == grammar.tokenIdNewLine() -> if { -1 -> return }
+        not (token.kind -> trivia) -> if { index! -> return }
+        index! + 1 => index!
+    }
+    -1
+}
+
+previousOnLine tokens: ref [syntax.SyntaxToken; ~], start: Int -> Int {
+    start => index!
+    index! >= 0 -> while {
+        tokens[index!] => token
+        token.kind == grammar.tokenIdNewLine() -> if { -1 -> return }
+        not (token.kind -> trivia) -> if { index! -> return }
+        index! - 1 => index!
+    }
+    -1
+}
+
+previousSignificant tokens: ref [syntax.SyntaxToken; ~], start: Int -> Int {
+    start => index!
+    index! >= 0 -> while {
+        not (tokens[index!].kind -> trivia) -> if { index! -> return }
+        index! - 1 => index!
+    }
+    -1
+}
+
+previousControlConditionToken tokens: ref [syntax.SyntaxToken; ~], start: Int -> Int {
+    start => index!
+    index! >= 0 -> while {
+        tokens[index!].kind => kind
+        not (kind -> trivia) and kind != grammar.tokenIdNewLine()
+            -> if { index! -> return }
+        index! - 1 => index!
+    }
+    -1
+}
+
+matchingOpening tokens: ref [syntax.SyntaxToken; ~], closing: Int -> Int {
+    0 => depth!
+    closing => index!
+    index! >= 0 -> while {
+        tokens[index!].kind == grammar.tokenIdRightParen()
+            -> if { depth! + 1 => depth! }
+        tokens[index!].kind == grammar.tokenIdLeftParen()
+            -> if {
+                depth! - 1 => depth!
+                depth! == 0 -> if { index! -> return }
+            }
+        index! - 1 => index!
+    }
+    -1
+}
+
+beginsExpression tokens: ref [syntax.SyntaxToken; ~], opening: Int -> Bool {
+    tokens -> previousSignificant(opening - 1) => previous
+    previous < 0 -> if { true -> return }
+    tokens[previous].kind => kind
+    kind == grammar.tokenIdNewLine()
+        or kind == grammar.tokenIdLeftBrace()
+        or kind == grammar.tokenIdLeftBracket()
+        or kind == grammar.tokenIdLeftParen()
+        or kind == grammar.tokenIdComma()
+        or kind == grammar.tokenIdColon()
+        or kind == grammar.tokenIdFatArrow()
+}
+
+collectLineStarts source: file.SourceText -> [UIntSize; ~] {
+    [UIntSize; ~] => starts!
+    starts! -> push(0)
+    UIntSize(0) => index!
+    index! < (source -> len) -> while {
+        (source -> byte(index!)) == 10 -> if {
+            starts! -> push(index! + 1)
+        }
+        index! + 1 => index!
+    }
+    starts!
+}
+
+location lineStarts: ref [UIntSize; ~], offset: UIntSize -> SourceLocation {
+    0 => low!
+    lineStarts -> len => high!
+    low! + 1 < high! -> while {
+        (low! + high!) / 2 => middle
+        lineStarts[middle] <= offset -> if {
+            middle => low!
+        } else {
+            middle => high!
+        }
+    }
+    SourceLocation {
+        line: low! + 1
+        column: Int(offset - lineStarts[low!]) + 1
+    }
+}
+
+public analyze sourceText: Text -> [StyleNote; ~] {
+    sourceText -> file.borrowText => source
+    source -> lexer.lexSource => tokens
+    source -> collectLineStarts => lineStarts
+    [StyleNote; ~] => notes!
+    0 => arrowIndex!
+    arrowIndex! < (tokens -> len) -> while {
+        tokens[arrowIndex!].kind == grammar.tokenIdArrow()
+            -> if {
+                tokens -> nextOnLine(arrowIndex! + 1) => targetIndex
+                targetIndex >= 0 -> if {
+                    source -> roleAt(tokens[targetIndex]) => role
+                    role >= 0 -> if {
+                        tokens -> previousOnLine(arrowIndex! - 1) => endIndex
+                        endIndex >= 0 -> if {
+                            endIndex => startIndex!
+                            tokens -> previousOnLine(startIndex! - 1) => previous!
+                            previous! >= 0
+                                and tokens[previous!].kind != grammar.tokenIdLeftBrace()
+                                and tokens[previous!].kind != grammar.tokenIdFatArrow()
+                                -> while {
+                                    previous! => startIndex!
+                                    tokens -> previousOnLine(startIndex! - 1) => previous!
+                                }
+                            tokens[startIndex!].span.start => conditionStart
+                            tokens[endIndex].span -> end => conditionEnd
+                            conditionEnd - conditionStart => conditionLength
+                            lineStarts -> location(conditionStart) => conditionLocation
+                            conditionLength >= inlineControlLimit() -> if {
+                                notes! -> push(StyleNote {
+                                    code: 1
+                                    line: conditionLocation.line
+                                    column: conditionLocation.column
+                                    conditionLength: Int(conditionLength)
+                                    role: role
+                                })
+                            }
+
+                        }
+                        tokens -> previousControlConditionToken(arrowIndex! - 1) => closingIndex
+                        closingIndex >= 0 and tokens[closingIndex].kind == grammar.tokenIdRightParen()
+                            -> if {
+                                tokens -> matchingOpening(closingIndex) => openingIndex
+                                openingIndex >= 0 and (tokens -> beginsExpression(openingIndex))
+                                    -> if {
+                                        lineStarts -> location(tokens[openingIndex].span.start) => openingLocation
+                                        notes! -> push(StyleNote {
+                                            code: 2
+                                            line: openingLocation.line
+                                            column: openingLocation.column
+                                            conditionLength: 0
+                                            role: role
+                                        })
+                                    }
+                            }
+                    }
+                }
+            }
+        arrowIndex! + 1 => arrowIndex!
+    }
+    notes!
+}
+
+public moduleName source: Text -> Text {
+    UIntSize(0) => lineStart!
+    source -> len => length
+    lineStart! < length -> while {
+        lineStart! => start!
+        start! < length and ((source -> byte(start!)) == 32 or (source -> byte(start!)) == 9)
+            -> while { start! + 1 => start! }
+        "namespace" => keyword
+        start! + (keyword -> len) < length -> if {
+            true => matches!
+            UIntSize(0) => keywordIndex!
+            matches! and keywordIndex! < (keyword -> len)
+                -> while {
+                    (source -> byte(start! + keywordIndex!)) != (keyword -> byte(keywordIndex!))
+                        -> if { false => matches! }
+                    keywordIndex! + 1 => keywordIndex!
+                }
+            matches!
+                and ((source -> byte(start! + (keyword -> len))) == 32
+                or (source -> byte(start! + (keyword -> len))) == 9)
+                -> if {
+                    start! + (keyword -> len) => nameStart!
+                    nameStart! < length and ((source -> byte(nameStart!)) == 32 or (source -> byte(nameStart!)) == 9)
+                        -> while { nameStart! + 1 => nameStart! }
+                    nameStart! => nameEnd!
+                    nameEnd! < length
+                        and (source -> byte(nameEnd!)) != 10
+                        and (source -> byte(nameEnd!)) != 13
+                        and (source -> byte(nameEnd!)) != 32
+                        and (source -> byte(nameEnd!)) != 9
+                        -> while { nameEnd! + 1 => nameEnd! }
+                    nameEnd! > nameStart! -> if {
+                        source -> slice(nameStart!, nameEnd! - nameStart!) => name
+                        name -> return
+                    }
+                }
+        }
+        lineStart! < length and (source -> byte(lineStart!)) != 10
+            -> while { lineStart! + 1 => lineStart! }
+        lineStart! < length -> if { lineStart! + 1 => lineStart! }
+    }
+    source -> slice(UIntSize(0), UIntSize(0))
+}

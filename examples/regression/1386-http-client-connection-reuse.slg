@@ -1,0 +1,210 @@
+import std.net as net
+import std.net.http as http
+import std.net.http.body as body
+import std.net.http.client as client
+import std.net.http.request as request
+import std.net.socket as socket
+
+struct ReadResult {
+    status: Int
+    bytes: [UInt8; ~]
+    outcome: client.ResponseOutcome
+}
+
+impl ReadResult {
+    takeOutcome: mut self -> client.ResponseOutcome {
+        self.outcome => outcome
+        client.ResponseOutcome.Closed => self.outcome
+        outcome
+    }
+}
+
+responseParser: -> Result<http.Parser, client.Error> {
+    http.limits(512, 128, 16, 64, 256) -> when {
+        Err(error) { Result<http.Parser, client.Error>.Err(client.Error.Http(error)) }
+        Ok(limits) => limits -> http.parser -> when {
+            Err(error) { Result<http.Parser, client.Error>.Err(client.Error.Http(error)) }
+            Ok(parser) { Result<http.Parser, client.Error>.Ok(parser) }
+        }
+    }
+}
+
+bodyPolicy: -> Result<body.BodyPolicy, client.Error> {
+    body.BodyLimits {
+        maxEncodedBytes: 512
+        maxDecodedBytes: 512
+        maxChunkLineBytes: 64
+        maxTrailerBytes: 128
+        maxTrailerFields: 4
+    } -> policy -> when {
+        Err(error) { Result<body.BodyPolicy, client.Error>.Err(client.Error.Http(error)) }
+        Ok(policy) { Result<body.BodyPolicy, client.Error>.Ok(policy) }
+    }
+}
+
+requestPolicy: -> Result<request.RequestPolicy, client.Error> {
+    request.RequestLimits {
+        maxHeadBytes: 512
+        maxFieldCount: 8
+        maxFieldNameBytes: 64
+        maxFieldValueBytes: 256
+    } -> policy -> when {
+        Err(error) { Result<request.RequestPolicy, client.Error>.Err(client.Error.Http(error)) }
+        Ok(policy) { Result<request.RequestPolicy, client.Error>.Ok(policy) }
+    }
+}
+
+requestHead policy: request.RequestPolicy, target: Text, connection: request.ConnectionMode -> Result<request.RequestHead, client.Error> {
+    policy -> request(
+    "GET",
+    request.RequestTarget.Origin(target),
+    http.Version.Http11,
+    "loopback",
+    0,
+    connection
+    ) -> when {
+        Err(error) { Result<request.RequestHead, client.Error>.Err(client.Error.Http(error)) }
+        Ok(writer) => writer -> finish -> when {
+            Err(error) { Result<request.RequestHead, client.Error>.Err(client.Error.Http(error)) }
+            Ok(head) { Result<request.RequestHead, client.Error>.Ok(head) }
+        }
+    }
+}
+
+openListener: -> Result<socket.TcpListener, client.Error> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 2
+        reuseAddress: true
+    } -> listen -> when {
+        Err(error) { Result<socket.TcpListener, client.Error>.Err(client.Error.Socket(error)) }
+        Ok(listener) { Result<socket.TcpListener, client.Error>.Ok(listener) }
+    }
+}
+
+listenerEndpoint listener: ref socket.TcpListener -> Result<net.Endpoint, client.Error> uses Network {
+    listener -> localEndpoint -> when {
+        Err(error) { Result<net.Endpoint, client.Error>.Err(client.Error.Socket(error)) }
+        Ok(endpoint) { Result<net.Endpoint, client.Error>.Ok(endpoint) }
+    }
+}
+
+accept listener: ref socket.TcpListener -> Result<socket.TcpStream, client.Error> uses Network {
+    listener -> accept -> when {
+        Err(error) { Result<socket.TcpStream, client.Error>.Err(client.Error.Socket(error)) }
+        Ok(transport) { Result<socket.TcpStream, client.Error>.Ok(transport) }
+    }
+}
+
+receive transport: ref socket.TcpStream -> Result<[UInt8; ~], client.Error> uses Network {
+    transport -> receive(512) -> when {
+        Err(error) { Result<[UInt8; ~], client.Error>.Err(client.Error.Socket(error)) }
+        Ok(bytes) { Result<[UInt8; ~], client.Error>.Ok(bytes) }
+    }
+}
+
+sendText transport: ref socket.TcpStream, text: Text -> Result<UIntSize, client.Error> uses Network {
+    transport -> sendText(text) -> when {
+        Err(error) { Result<UIntSize, client.Error>.Err(client.Error.Socket(error)) }
+        Ok(sent) { Result<UIntSize, client.Error>.Ok(sent) }
+    }
+}
+
+readResponse response: move client.Response -> Result<ReadResult, client.Error> uses Network {
+    response -> status => status
+    response -> openBody? => reader!
+    [UInt8; ~] => output!
+    false => complete!
+    not complete! -> while {
+        reader! -> readInto(output!)? => progress
+        progress.complete => complete!
+    }
+    reader! -> finish? => outcome
+    Result<ReadResult, client.Error>.Ok(ReadResult {
+        status: status
+        bytes: output!
+        outcome: outcome
+    })
+}
+
+reusableClient outcome: move client.ResponseOutcome -> Result<client.Client, client.Error> uses Network {
+    outcome -> when {
+        Closed { Result<client.Client, client.Error>.Err(client.Error.UnexpectedResponseBytes) }
+        Reusable(value) { Result<client.Client, client.Error>.Ok(value) }
+    }
+}
+
+closedOutcome outcome: move client.ResponseOutcome -> Bool uses Network {
+    outcome -> when {
+        Closed { true }
+        Reusable(unexpected) {
+            unexpected -> close
+            false
+        }
+    }
+}
+
+bytesEqualText bytes: ref [UInt8; ~], expected: Text -> Bool {
+    UIntSize(bytes -> len) == (expected -> len)
+        -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < (expected -> len) -> while {
+        bytes[Int(index!)] == (expected -> byte(index!))
+            -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+verify: -> Result<Bool, client.Error> uses Network {
+    responseParser()? => parser
+    bodyPolicy()? => bodies
+    requestPolicy()? => requests
+    openListener()? => listener
+    listener -> listenerEndpoint? => endpoint
+    client.ClientOptions {
+        endpoint: endpoint
+        parser: parser
+        bodyPolicy: bodies
+        maxHeadBytes: 512
+        bodyBufferBytes: 64
+    } -> connect? => httpClient
+    requests -> requestHead("/one", request.ConnectionMode.Persistent)? => firstHead
+    [UInt8; ~] => emptyBody
+    httpClient -> send(firstHead, emptyBody)? => firstExchange
+    accept(listener)? => serverStream
+    receive(serverStream)? => firstRequest
+    (firstRequest -> len) > 0 -> unless {
+        Result<Bool, client.Error>.Ok(false) -> return
+    }
+    sendText(serverStream, "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none")? => firstSent
+    firstSent == 41 -> unless { Result<Bool, client.Error>.Ok(false) -> return }
+    firstExchange -> receive? => firstResponse
+    firstResponse -> readResponse? => first!
+    first!.status == 200 and first!.bytes -> bytesEqualText("one") => firstValid
+    first! -> takeOutcome -> reusableClient? => reusedClient
+
+    requests -> requestHead("/two", request.ConnectionMode.Close)? => secondHead
+    reusedClient -> send(secondHead, emptyBody)? => secondExchange
+    receive(serverStream)? => secondRequest
+    (secondRequest -> len) > 0 -> unless {
+        Result<Bool, client.Error>.Ok(false) -> return
+    }
+    sendText(serverStream, "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\ntwo")? => secondSent
+    secondSent == 60 -> unless { Result<Bool, client.Error>.Ok(false) -> return }
+    serverStream -> close
+    secondExchange -> receive? => secondResponse
+    secondResponse -> readResponse? => second!
+    second!.status == 200 and second!.bytes -> bytesEqualText("two") => secondValid
+    second! -> takeOutcome -> closedOutcome => closed
+    listener -> close
+    Result<Bool, client.Error>.Ok(firstValid and secondValid and closed)
+}
+
+main {
+    verify() -> when {
+        Err(_) { "http-client-reuse=failed" }
+        Ok(valid) => valid
+            -> if { "http-client-reuse=ok" } else { "http-client-reuse=failed" }
+    } -> println
+}

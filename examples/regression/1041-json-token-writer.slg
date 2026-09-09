@@ -1,0 +1,84 @@
+import std.text.json as json
+import sys.file as file
+
+printBytes bytes: [UInt8; ~] -> Unit uses Console {
+    bytes -> file.borrowBytes => source
+    source -> slice(0, source -> len) -> println
+}
+
+run: -> Result<Unit, json.Error> uses Console {
+    json.writer(256, 8)? => output!
+    output! -> beginObject?
+    output! -> name("text")?
+    """"
+    Sol"\
+    길
+    """" => escapedText
+    output! -> string(escapedText)?
+    output! -> name("values")?
+    output! -> beginArray?
+    output! -> nullValue?
+    output! -> boolean(true)?
+    output! -> number("-12.5e+2")?
+    output! -> endArray?
+    output! -> name("same")?
+    output! -> number("1")?
+    output! -> name("same")?
+    output! -> number("2")?
+    output! -> endObject?
+    "bytes=$(output! -> byteCount),depth=$(output! -> depth)" -> println
+    output! -> intoBytes? => bytes
+    bytes -> printBytes
+
+    json.writer(16, 2)? => invalidNumber!
+    invalidNumber! -> number("01") -> when {
+        Ok(done) { "unexpected-number" -> println }
+        Err(error) { "number-error=$(error.offset)" -> println }
+    }
+    invalidNumber! -> boolean(false)?
+    invalidNumber! -> intoBytes? => falseBytes
+    falseBytes -> printBytes
+
+    json.writer(16, 2)? => invalidState!
+    invalidState! -> name("outside") -> when {
+        Ok(done) { "unexpected-state" -> println }
+        Err(error) { "state-error=$(error.offset)" -> println }
+    }
+    invalidState! -> nullValue?
+    invalidState! -> intoBytes? => nullBytes
+    nullBytes -> printBytes
+
+    json.writer(3, 2)? => limited!
+    limited! -> string("ab") -> when {
+        Ok(done) { "unexpected-limit" -> println }
+        Err(error) { "limit-error=$(error.offset)" -> println }
+    }
+    limited! -> number("1")?
+    limited! -> intoBytes? => limitedBytes
+    limitedBytes -> printBytes
+
+    json.writer(16, 1)? => shallow!
+    shallow! -> beginArray?
+    shallow! -> beginObject -> when {
+        Ok(done) { "unexpected-depth" -> println }
+        Err(error) { "depth-error=$(error.offset)" -> println }
+    }
+    shallow! -> endArray?
+    shallow! -> intoBytes? => shallowBytes
+    shallowBytes -> printBytes
+
+    json.writer(16, 2)? => incomplete!
+    incomplete! -> beginArray?
+    incomplete! -> intoBytes -> when {
+        Ok(unexpected) { "unexpected-finish" -> println }
+        Err(error) { "finish-error=$(error.offset)" -> println }
+    }
+    Result<Unit, json.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected-error=$(error.offset)" -> println }
+    }
+}

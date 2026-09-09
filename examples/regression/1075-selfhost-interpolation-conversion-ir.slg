@@ -1,0 +1,20 @@
+import sollang.compiler.ir.interpolation as interpolation
+
+# Interpolation IR preserves builtin conversion ownership around a binary value.
+main {
+    """
+    struct Packet {
+        bytes: [UInt8; 4]
+    }
+
+    main {
+        Packet { bytes: [200, 200, 200, 200] } => packet
+        "half=$(Int(packet.bytes[2]) / 2)" -> println
+    }
+    """ => source
+    source -> interpolation.lower => nodes
+    nodes -> each node {
+        source -> slice(node.payloadStart, node.payloadLength) => payload
+        "ir=$(node.kind),$(node.parent),$(node.opcode),$payload,$(node.operand0),$(node.operand1),$(node.typeSymbol)" -> println
+    }
+}

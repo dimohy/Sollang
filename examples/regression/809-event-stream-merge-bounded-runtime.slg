@@ -1,16 +1,26 @@
 # EventStream merge uses one bounded slot per input and cancels every worker on early stop.
-import sys.event
+import sys.input.mouse
 
-mergeEvents left: move EventStream<MouseEvent>, right: move EventStream<MouseEvent> -> EventStream<MouseEvent> {
+mergeEvents left: move EventStream<mouse.Event>, right: move EventStream<mouse.Event> -> EventStream<mouse.Event> {
     (left, right) -> merge
 }
 
-main {
-    2 -> event.mouseEvents(event.EventOverflowPolicy.DropOldest) => left
-    2 -> event.mouseEvents(event.EventOverflowPolicy.DropOldest) => right
+run: -> Result<Unit, mouse.Error> uses Console {
+    2 -> mouse.source(mouse.OverflowPolicy.DropOldest)? => leftSource
+    leftSource -> events => left
+    2 -> mouse.source(mouse.OverflowPolicy.DropOldest)? => rightSource
+    rightSource -> events => right
     left -> mergeEvents(right) => merged
     merged -> each event {
         "mouse $(event.x),$(event.y)" -> println
         stop
+    }
+    Result<Unit, mouse.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(unit) { }
+        Err(error) { "mouse source capacity=$(error.invalidCapacity)" -> println }
     }
 }

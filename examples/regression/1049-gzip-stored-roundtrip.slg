@@ -1,0 +1,73 @@
+import std.compress.gzip as gzip
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    true => same!
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false => same! }
+        index! + 1 => index!
+    }
+    same!
+}
+
+sourceBytes: -> [UInt8] => [97, 98, 99, 97, 98, 99]
+externalBytes: -> [UInt8] => [
+    31, 139, 8, 0, 0, 0, 0, 0, 0, 255,
+    1, 3, 0, 252, 255, 97, 98, 99,
+    194, 65, 36, 53, 3, 0, 0, 0]
+huffmanBytes: -> [UInt8] => [
+    31, 139, 8, 0, 0, 0, 0, 0, 0, 255,
+    3, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0]
+
+run: -> Result<Unit, gzip.Error> uses Console {
+    gzip.Limits {
+        maxOutputBytes: 1_024
+        maxExpansionRatio: 64
+    } -> codec()? => codec
+    sourceBytes() => source
+    codec -> compress(source)? => compressed
+    codec -> decompress(compressed)? => restored
+
+    # Deterministic RFC 1952 level-0 stream produced by another implementation.
+    externalBytes() => external
+    codec -> decompress(external)? => externalRestored
+
+    codec -> compress(source)? => damaged!
+    (damaged! -> len) - 8 => checksumIndex
+    0 => damaged![checksumIndex]
+    codec -> decompress(damaged!) -> when {
+        Ok(_) { "checksum=unexpected" -> println }
+        Err(error) { "checksum=$(error.offset)" -> println }
+    }
+
+    gzip.Limits {
+        maxOutputBytes: 2
+        maxExpansionRatio: 64
+    } -> codec()? => tiny
+    tiny -> decompress(external) -> when {
+        Ok(_) { "limit=unexpected" -> println }
+        Err(error) { "limit=$(error.offset)" -> println }
+    }
+
+    huffmanBytes() => huffman
+    codec -> decompress(huffman) -> when {
+        Ok(_) { "block=unexpected" -> println }
+        Err(error) { "block=$(error.offset)" -> println }
+    }
+
+    source -> matches(restored) => roundtrip
+    externalRestored -> matches([97, 98, 99]) => interoperable
+    roundtrip -> if { "true" } else { "false" } => roundtripText
+    interoperable -> if { "true" } else { "false" } => interoperableText
+    "gzip=$roundtripText,$interoperableText,$(compressed -> len),$(restored -> len)" -> println
+    Result<Unit, gzip.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected=$(error.offset)" -> println }
+    }
+}

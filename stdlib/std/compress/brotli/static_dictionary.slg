@@ -1,0 +1,385 @@
+namespace std.compress.brotli.static_dictionary
+
+import std.compress.brotli.static_dictionary as model
+import std.compress.brotli.static_dictionary_data as data
+import std.compress.brotli.static_dictionary.error as errors
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxOutputBytes: Int
+}
+
+public struct Resolver {
+    public maxOutputBytes: Int
+}
+
+enum Operation {
+    Identity
+    FermentFirst
+    FermentAll
+    OmitFirst1
+    OmitFirst2
+    OmitFirst3
+    OmitFirst4
+    OmitFirst5
+    OmitFirst6
+    OmitFirst7
+    OmitFirst8
+    OmitFirst9
+    OmitLast1
+    OmitLast2
+    OmitLast3
+    OmitLast4
+    OmitLast5
+    OmitLast6
+    OmitLast7
+    OmitLast8
+    OmitLast9
+}
+
+struct Descriptor {
+    prefixIndex: Int
+    operation: Operation
+    suffixIndex: Int
+}
+
+errorResolver kind: errors.Kind, offset: UIntSize -> Result<Resolver, Error> {
+    Result<Resolver, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDescriptor kind: errors.Kind, offset: UIntSize -> Result<Descriptor, Error> {
+    Result<Descriptor, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+powerOfTwo exponent: Int -> Int {
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+byteDivisor index: Int -> UInt64 => index -> when {
+    == 0 { 1 }
+    == 1 { 256 }
+    == 2 { 65_536 }
+    == 3 { 16_777_216 }
+    == 4 { 4_294_967_296 }
+    == 5 { 1_099_511_627_776 }
+    == 6 { 281_474_976_710_656 }
+    else { 72_057_594_037_927_936 }
+}
+
+dataByte words: [UInt64], offset: Int -> UInt8 {
+    words[offset / 8] => packed
+    UInt8((packed / (offset % 8 -> byteDivisor)) % 256)
+}
+
+offsetForLength length: Int -> Int => length -> when {
+    == 4 { 0 }
+    == 5 { 4_096 }
+    == 6 { 9_216 }
+    == 7 { 21_504 }
+    == 8 { 35_840 }
+    == 9 { 44_032 }
+    == 10 { 53_248 }
+    == 11 { 63_488 }
+    == 12 { 74_752 }
+    == 13 { 87_040 }
+    == 14 { 93_696 }
+    == 15 { 100_864 }
+    == 16 { 104_704 }
+    == 17 { 106_752 }
+    == 18 { 108_928 }
+    == 19 { 113_536 }
+    == 20 { 115_968 }
+    == 21 { 118_528 }
+    == 22 { 119_872 }
+    == 23 { 121_280 }
+    else { 122_016 }
+}
+
+sizeBitsForLength length: Int -> Int => length -> when {
+    <= 5 { 10 }
+    <= 7 { 11 }
+    <= 12 { 10 }
+    <= 14 { 9 }
+    == 15 { 8 }
+    <= 17 { 7 }
+    == 18 { 8 }
+    <= 20 { 7 }
+    <= 22 { 6 }
+    else { 5 }
+}
+
+prefixIndexes: -> [Int] => [
+49, 49, 0, 49, 49, 49, 0, 4, 49, 49, 49, 49, 49, 1, 49, 0,
+49, 49, 48, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 0, 49,
+5, 0, 49, 49, 49, 49, 49, 49, 49, 47, 49, 49, 49, 49, 49, 49,
+49, 49, 49, 49, 0, 49, 49, 49, 49, 49, 49, 49, 49, 49, 47, 49,
+49, 0, 49, 5, 49, 49, 49, 0, 35, 47, 49, 49, 49, 5, 49, 49,
+49, 0, 49, 0, 49, 0, 49, 49, 49, 0, 49, 0, 49, 49, 49, 49,
+0, 49, 0, 49, 49, 49, 45, 0, 49, 49, 49, 49, 49, 0, 0, 0,
+49, 49, 49, 0, 49, 0, 0, 0, 0
+]
+
+operationCodes: -> [Int] => [
+0, 0, 0, 3, 1, 0, 0, 0, 0, 1, 0, 4, 12, 0, 0, 1,
+0, 0, 0, 0, 0, 0, 0, 14, 0, 0, 5, 13, 0, 0, 1, 0,
+0, 0, 6, 0, 0, 0, 0, 7, 8, 0, 15, 0, 2, 0, 0, 0,
+18, 12, 0, 0, 0, 0, 11, 9, 17, 0, 1, 19, 0, 0, 0, 16,
+20, 1, 1, 0, 2, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1,
+0, 0, 0, 2, 0, 2, 0, 2, 1, 0, 0, 1, 0, 0, 2, 0,
+1, 2, 0, 1, 0, 2, 0, 0, 1, 2, 0, 2, 1, 1, 2, 2,
+2, 2, 2, 2, 2, 2, 1, 2, 1
+]
+
+suffixIndexes: -> [Int] => [
+49, 0, 0, 49, 0, 47, 49, 0, 3, 49, 6, 49, 49, 0, 1, 0,
+7, 9, 0, 8, 5, 10, 11, 49, 13, 14, 49, 49, 15, 16, 49, 12,
+49, 1, 49, 18, 17, 19, 20, 49, 49, 49, 49, 22, 49, 23, 24, 25,
+49, 26, 27, 28, 12, 29, 49, 49, 49, 21, 1, 49, 31, 32, 3, 49,
+49, 1, 8, 21, 0, 10, 30, 5, 49, 2, 17, 36, 33, 0, 21, 5,
+37, 30, 38, 0, 39, 49, 34, 8, 12, 21, 40, 12, 41, 42, 17, 43,
+5, 10, 34, 33, 44, 5, 49, 33, 30, 30, 46, 1, 34, 33, 30, 1,
+33, 21, 12, 5, 34, 12, 30, 34, 34
+]
+
+operation code: Int -> Operation => code -> when {
+    == 0 { model.Operation.Identity }
+    == 1 { model.Operation.FermentFirst }
+    == 2 { model.Operation.FermentAll }
+    == 3 { model.Operation.OmitFirst1 }
+    == 4 { model.Operation.OmitFirst2 }
+    == 5 { model.Operation.OmitFirst3 }
+    == 6 { model.Operation.OmitFirst4 }
+    == 7 { model.Operation.OmitFirst5 }
+    == 8 { model.Operation.OmitFirst6 }
+    == 9 { model.Operation.OmitFirst7 }
+    == 10 { model.Operation.OmitFirst8 }
+    == 11 { model.Operation.OmitFirst9 }
+    == 12 { model.Operation.OmitLast1 }
+    == 13 { model.Operation.OmitLast2 }
+    == 14 { model.Operation.OmitLast3 }
+    == 15 { model.Operation.OmitLast4 }
+    == 16 { model.Operation.OmitLast5 }
+    == 17 { model.Operation.OmitLast6 }
+    == 18 { model.Operation.OmitLast7 }
+    == 19 { model.Operation.OmitLast8 }
+    == 20 { model.Operation.OmitLast9 }
+    else { model.Operation.Identity }
+}
+
+descriptor transformId: Int -> Result<Descriptor, Error> {
+    transformId >= 0 and transformId < 121
+        -> unless { errorDescriptor(errors.Kind.InvalidTransform, UIntSize(transformId)) -> return }
+    prefixIndexes() => prefixes
+    operationCodes() => operations
+    suffixIndexes() => suffixes
+    Result<Descriptor, Error>.Ok(Descriptor {
+        prefixIndex: prefixes[transformId]
+        operation: operations[transformId] -> operation
+        suffixIndex: suffixes[transformId]
+    })
+}
+
+affixData: -> [UInt8] => [
+1, 32, 2, 44, 32, 8, 32, 111, 102, 32, 116, 104, 101, 32, 4, 32,
+111, 102, 32, 2, 115, 32, 1, 46, 5, 32, 97, 110, 100, 32, 4, 32,
+105, 110, 32, 1, 34, 4, 32, 116, 111, 32, 2, 34, 62, 1, 10, 2,
+46, 32, 1, 93, 5, 32, 102, 111, 114, 32, 3, 32, 97, 32, 6, 32,
+116, 104, 97, 116, 32, 1, 39, 6, 32, 119, 105, 116, 104, 32, 6, 32,
+102, 114, 111, 109, 32, 4, 32, 98, 121, 32, 1, 40, 6, 46, 32, 84,
+104, 101, 32, 4, 32, 111, 110, 32, 4, 32, 97, 115, 32, 4, 32, 105,
+115, 32, 4, 105, 110, 103, 32, 2, 10, 9, 1, 58, 3, 101, 100, 32,
+2, 61, 34, 4, 32, 97, 116, 32, 3, 108, 121, 32, 1, 44, 2, 61,
+39, 5, 46, 99, 111, 109, 47, 7, 46, 32, 84, 104, 105, 115, 32, 5,
+32, 110, 111, 116, 32, 3, 101, 114, 32, 3, 97, 108, 32, 4, 102, 117,
+108, 32, 4, 105, 118, 101, 32, 5, 108, 101, 115, 115, 32, 4, 101, 115,
+116, 32, 4, 105, 122, 101, 32, 2, 194, 160, 4, 111, 117, 115, 32, 5,
+32, 116, 104, 101, 32, 2, 101, 32, 0
+]
+
+affixOffsets: -> [Int] => [
+0, 2, 5, 14, 19, 22, 24, 30, 35, 37, 42, 45, 47, 50, 52, 58,
+62, 69, 71, 78, 85, 90, 92, 99, 104, 109, 114, 119, 122, 124, 128, 131,
+136, 140, 142, 145, 151, 159, 165, 169, 173, 178, 183, 189, 194, 199, 202, 207,
+213, 216
+]
+
+affixLength values: [UInt8], offsets: [Int], index: Int -> Int {
+    Int(values[offsets[index]])
+}
+
+appendAffix values: [UInt8], offsets: [Int], index: Int, output: mut [UInt8; ~] -> Unit {
+    offsets[index] => offset
+    Int(values[offset]) => length
+    0 => current!
+    current! < length -> while {
+        output -> push(values[offset + current! + 1])
+        current! + 1 => current!
+    }
+}
+
+omitFirst operation: Operation -> Int => operation -> when {
+    OmitFirst1 { 1 }
+    OmitFirst2 { 2 }
+    OmitFirst3 { 3 }
+    OmitFirst4 { 4 }
+    OmitFirst5 { 5 }
+    OmitFirst6 { 6 }
+    OmitFirst7 { 7 }
+    OmitFirst8 { 8 }
+    OmitFirst9 { 9 }
+    else { 0 }
+}
+
+omitLast operation: Operation -> Int => operation -> when {
+    OmitLast1 { 1 }
+    OmitLast2 { 2 }
+    OmitLast3 { 3 }
+    OmitLast4 { 4 }
+    OmitLast5 { 5 }
+    OmitLast6 { 6 }
+    OmitLast7 { 7 }
+    OmitLast8 { 8 }
+    OmitLast9 { 9 }
+    else { 0 }
+}
+
+toggleBit value: UInt8, mask: Int -> UInt8 {
+    (Int(value) / mask) % 2 == 0 -> if {
+        UInt8(Int(value) + mask)
+    } else {
+        UInt8(Int(value) - mask)
+    }
+}
+
+appendPlain words: [UInt64], offset: Int, start: Int, end: Int, output: mut [UInt8; ~] -> Unit {
+    start => index!
+    index! < end -> while {
+        output -> push(words -> dataByte(offset + index!))
+        index! + 1 => index!
+    }
+}
+
+appendFermentFirst words: [UInt64], offset: Int, length: Int, output: mut [UInt8; ~] -> Unit {
+    words -> dataByte(offset) => first
+    -1 => target!
+    first < 192 -> if {
+        Int(first) >= 97 and Int(first) <= 122 -> if { 0 => target! }
+    } else {
+        first < 224 -> if {
+            length > 1 -> if { 1 => target! }
+        } else {
+            length > 2 -> if { 2 => target! }
+        }
+    }
+    0 => index!
+    index! < length -> while {
+        words -> dataByte(offset + index!) => value!
+        index! == target! -> if {
+            target! == 0 -> if {
+                UInt8(Int(value!) - 32) => value!
+            } else {
+                target! == 1 -> if {
+                    value! -> toggleBit(32) => value!
+                } else {
+                    value! -> toggleBit(4) -> toggleBit(1) => value!
+                }
+            }
+        }
+        output -> push(value!)
+        index! + 1 => index!
+    }
+}
+
+appendFermentAll words: [UInt64], offset: Int, length: Int, output: mut [UInt8; ~] -> Unit {
+    0 => index!
+    index! < length -> while {
+        words -> dataByte(offset + index!) => first!
+        first! < 192 -> if {
+            Int(first!) >= 97 and Int(first!) <= 122 -> if { UInt8(Int(first!) - 32) => first! }
+            output -> push(first!)
+            index! + 1 => index!
+        } else {
+            first! < 224 -> if {
+                output -> push(first!)
+                index! + 1 < length -> if {
+                    words -> dataByte(offset + index! + 1) -> toggleBit(32) => second
+                    output -> push(second)
+                }
+                index! + 2 => index!
+            } else {
+                output -> push(first!)
+                index! + 1 < length -> if {
+                    output -> push(words -> dataByte(offset + index! + 1))
+                }
+                index! + 2 < length -> if {
+                    words -> dataByte(offset + index! + 2) -> toggleBit(4) -> toggleBit(1) => third
+                    output -> push(third)
+                }
+                index! + 3 => index!
+            }
+        }
+    }
+}
+
+impl Limits {
+    public resolver: self -> Result<Resolver, Error> {
+        self.maxOutputBytes >= 0
+            -> unless { errorResolver(errors.Kind.InvalidLimit, UIntSize(self.maxOutputBytes)) -> return }
+        Result<Resolver, Error>.Ok(Resolver { maxOutputBytes: self.maxOutputBytes })
+    }
+}
+
+impl Resolver {
+    public append: self, wordLength: Int, distance: Int, maximumBackwardDistance: Int, output: mut [UInt8; ~] -> Result<Int, Error> {
+        wordLength >= 4 and wordLength <= 24
+            -> unless { errorInt(errors.Kind.InvalidWordLength, UIntSize(wordLength)) -> return }
+        maximumBackwardDistance >= 0 and distance > maximumBackwardDistance
+            -> unless { errorInt(errors.Kind.InvalidDistance, UIntSize(distance)) -> return }
+        distance - maximumBackwardDistance - 1 => wordId
+        wordLength -> sizeBitsForLength => sizeBits
+        sizeBits -> powerOfTwo => wordCount
+        wordId % wordCount => wordIndex
+        wordId / wordCount => transformId
+        transformId -> descriptor? => transform
+        (wordLength -> offsetForLength) + wordIndex * wordLength => offset
+        data.dataWords() => words
+        (words -> len) == 15_348 and offset >= 0 and offset + wordLength <= 122_784
+            -> unless { errorInt(errors.Kind.CorruptData, UIntSize(offset)) -> return }
+
+        affixData() => affixes
+        affixOffsets() => affixStarts
+        affixes -> affixLength(affixStarts, transform.prefixIndex) => prefixLength
+        affixes -> affixLength(affixStarts, transform.suffixIndex) => suffixLength
+        transform.operation -> omitFirst => firstOmitted
+        transform.operation -> omitLast => lastOmitted
+        firstOmitted < wordLength -> if { firstOmitted } else { wordLength } => start
+        wordLength - lastOmitted > start -> if { wordLength - lastOmitted } else { start } => end
+        prefixLength + end - start + suffixLength => appended
+        (output -> len) <= self.maxOutputBytes
+            and appended <= self.maxOutputBytes - (output -> len)
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize((output -> len) + appended)) -> return }
+
+        affixes -> appendAffix(affixStarts, transform.prefixIndex, output)
+        transform.operation -> when {
+            FermentFirst { words -> appendFermentFirst(offset, wordLength, output) }
+            FermentAll { words -> appendFermentAll(offset, wordLength, output) }
+            else { words -> appendPlain(offset, start, end, output) }
+        }
+        affixes -> appendAffix(affixStarts, transform.suffixIndex, output)
+        Result<Int, Error>.Ok(appended)
+    }
+}

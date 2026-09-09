@@ -1,0 +1,52 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+observe: -> Result<Bool, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localEndpoint? => endpoint
+
+    endpoint -> connect? => firstClient
+    listener -> accept? => firstServer
+    endpoint -> connect? => secondClient
+    listener -> accept? => secondServer
+
+    [UInt8(71); ~] => firstPayload
+    [UInt8(72); ~] => secondPayload
+    firstClient -> send(firstPayload)? => firstSent
+    secondClient -> send(secondPayload)? => secondSent
+
+    [socket.ReadyEvent; 2~] => events!
+    socket.Reactor { maximumEvents: 2, interests: [socket.Interest; ~] } => reactor!
+    reactor! -> registerStream(firstServer, 101, socket.InterestMode.Read)?
+    reactor! -> registerStream(secondServer, 202, socket.InterestMode.Read)?
+    reactor! -> waitInto(events!, Option<std.time.Duration>.None)? => ready
+    reactor! -> clear
+
+    firstClient -> close
+    firstServer -> close
+    secondClient -> close
+    secondServer -> close
+    listener -> close
+
+    Result<Bool, socket.SocketError>.Ok(
+        firstSent == 1
+            and secondSent == 1
+            and ready == 2
+            and (events![0] -> canRead)
+            and (events![1] -> canRead)
+            and ((events![0] -> registrationKey) == 101 or (events![0] -> registrationKey) == 202)
+            and ((events![1] -> registrationKey) == 101 or (events![1] -> registrationKey) == 202)
+            and (events![0] -> registrationKey) != (events![1] -> registrationKey))
+}
+
+main {
+    observe() -> when {
+        Ok(valid) { "socket-reactor=$valid" -> println }
+        Err(error) { "socket-reactor-error=$(error.code)" -> println }
+    }
+}

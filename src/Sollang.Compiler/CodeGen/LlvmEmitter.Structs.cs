@@ -73,7 +73,8 @@ internal sealed partial class LlvmEmitter
             or TypeId.DirectoryEntry
             or TypeId.DynamicDirectoryEntryArray
             or TypeId.DirectoryRawResult
-            or TypeId.DirectoryReadResult);
+            or TypeId.DirectoryReadResult)
+        || IsDropTypeReachable(type);
 
     private static string LlvmBoundedArrayType(TypeId type) => $"%sollang.bounded_array.t{(int)type}";
 
@@ -89,12 +90,18 @@ internal sealed partial class LlvmEmitter
         }
 
         var definition = _program.Types.GetStruct(type);
-        var initializers = expression.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
-        var projectedTransfers = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var fieldsByName = definition.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
+        var projectedTransfers = new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal);
         var aggregate = "poison";
-        foreach (var field in definition.Fields)
+        foreach (var initializer in expression.Fields)
         {
-            var value = EmitFunctionArgumentExpression(initializers[field.Name].Value, field.Type);
+            var field = fieldsByName[initializer.Name];
+            var value = EmitFunctionArgumentExpression(initializer.Value, field.Type);
+            var copiesFixedValue = CopiesFixedStorageField(initializer.Value, field.Type);
+            if (copiesFixedValue)
+            {
+                value = CopyFixedStorageValue(value);
+            }
             EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
             var materialized = MaterializeAggregateValue(value);
             var next = NextTemp("struct_init");
@@ -102,18 +109,21 @@ internal sealed partial class LlvmEmitter
                 next,
                 $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
             aggregate = next;
-            if (!RegisterOwnedFieldProjectionTransfer(
-                    initializers[field.Name].Value,
+            if (!copiesFixedValue && !RegisterOwnedFieldProjectionTransfer(
+                    initializer.Value,
                     field.Type,
                     projectedTransfers))
             {
-                RemoveOwnedLiteralSources(initializers[field.Name].Value, field.Type);
+                RemoveOwnedLiteralSources(initializer.Value, field.Type);
             }
         }
-        foreach (var (ownerName, transferredFields) in projectedTransfers)
+        foreach (var (ownerName, transferredPaths) in projectedTransfers)
         {
             var owner = (RuntimeStruct)_locals[ownerName];
-            DropOwnedStructFieldsExcept(owner, transferredFields.ToArray());
+            DropOwnedStructFieldsExceptMovedAndTransferred(
+                ownerName,
+                owner,
+                transferredPaths);
             RemoveLocal(ownerName);
         }
 
@@ -123,32 +133,74 @@ internal sealed partial class LlvmEmitter
     private bool RegisterOwnedFieldProjectionTransfer(
         Expression expression,
         BoundType expectedType,
-        IDictionary<string, HashSet<string>> projectedTransfers)
+        IDictionary<string, List<IReadOnlyList<string>>> projectedTransfers)
     {
         if (!_program.Types.ContainsOwnedStorage(expectedType)
-            || expression is not FieldAccessExpression
-            {
-                Source: NameExpression ownerName,
-                FieldName: var fieldName
-            }
-            || _mutableLocals.Contains(ownerName.Name)
-            || !_locals.TryGetValue(ownerName.Name, out var ownerValue)
+            || !TryGetOwnedFieldProjection(expression, out var ownerName, out var fieldPath)
+            || !_locals.TryGetValue(ownerName, out var ownerValue)
             || ownerValue is not RuntimeStruct owner
             || !_program.Types.IsStruct(owner.Type)
-            || _program.Types.GetStruct(owner.Type).Fields.FirstOrDefault(field =>
-                string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is not { } sourceField
-            || sourceField.Type != expectedType)
+            || !OwnedFieldProjectionTypeMatches(owner.Type, fieldPath, expectedType))
         {
             return false;
         }
 
-        if (!projectedTransfers.TryGetValue(ownerName.Name, out var fields))
+        if (IsMovedOwnedStructField(ownerName, fieldPath[0]))
         {
-            fields = new HashSet<string>(StringComparer.Ordinal);
-            projectedTransfers.Add(ownerName.Name, fields);
+            throw new SollangException($"owned field '{ownerName}.{fieldPath[0]}' has already moved");
         }
-        fields.Add(fieldName);
+
+        if (!projectedTransfers.TryGetValue(ownerName, out var paths))
+        {
+            paths = [];
+            projectedTransfers.Add(ownerName, paths);
+        }
+        paths.Add(fieldPath);
         return true;
+    }
+
+    private static bool TryGetOwnedFieldProjection(
+        Expression expression,
+        out string ownerName,
+        out IReadOnlyList<string> fieldPath)
+    {
+        var fields = new Stack<string>();
+        var current = expression;
+        while (current is FieldAccessExpression field)
+        {
+            fields.Push(field.FieldName);
+            current = field.Source;
+        }
+
+        if (current is not NameExpression owner || fields.Count == 0)
+        {
+            ownerName = string.Empty;
+            fieldPath = [];
+            return false;
+        }
+
+        ownerName = owner.Name;
+        fieldPath = fields.ToArray();
+        return true;
+    }
+
+    private bool OwnedFieldProjectionTypeMatches(
+        BoundType ownerType,
+        IReadOnlyList<string> fieldPath,
+        BoundType expectedType)
+    {
+        var currentType = ownerType;
+        foreach (var fieldName in fieldPath)
+        {
+            if (!_program.Types.IsStruct(currentType)
+                || _program.Types.GetStruct(currentType).Fields.FirstOrDefault(field =>
+                    string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is not { } field)
+            {
+                return false;
+            }
+            currentType = field.Type;
+        }
+        return currentType == expectedType;
     }
 
     private RuntimeStruct EmitProductExpression(ProductExpression expression)
@@ -168,6 +220,11 @@ internal sealed partial class LlvmEmitter
         {
             var field = definition.Fields[index];
             var value = values[index];
+            var copiesFixedValue = CopiesFixedStorageField(expression.Elements[index].Value, field.Type);
+            if (copiesFixedValue)
+            {
+                value = CopyFixedStorageValue(value);
+            }
             EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
             var materialized = MaterializeAggregateValue(value);
             var next = NextTemp("product_init");
@@ -175,7 +232,10 @@ internal sealed partial class LlvmEmitter
                 next,
                 $"insertvalue {LlvmStructType(definition.Id)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {index.ToString(CultureInfo.InvariantCulture)}");
             aggregate = next;
-            RemoveOwnedLiteralSources(expression.Elements[index].Value, field.Type);
+            if (!copiesFixedValue)
+            {
+                RemoveOwnedLiteralSources(expression.Elements[index].Value, field.Type);
+            }
         }
 
         return new RuntimeStruct(definition.Id, aggregate);
@@ -186,23 +246,67 @@ internal sealed partial class LlvmEmitter
         BoundType type)
     {
         var definition = _program.Types.GetStruct(type);
-        var initializers = expression.Entries.ToDictionary(
-            entry => ((NameExpression)entry.Key).Name,
-            StringComparer.Ordinal);
+        var fieldsByName = definition.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
         var aggregate = "poison";
-        foreach (var field in definition.Fields)
+        foreach (var entry in expression.Entries)
         {
-            var initializer = initializers[field.Name].Value;
+            var field = fieldsByName[((NameExpression)entry.Key).Name];
+            var initializer = entry.Value;
             var value = EmitFunctionArgumentExpression(initializer, field.Type);
+            var copiesFixedValue = CopiesFixedStorageField(initializer, field.Type);
+            if (copiesFixedValue)
+            {
+                value = CopyFixedStorageValue(value);
+            }
             EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
             var materialized = MaterializeAggregateValue(value);
             var next = NextTemp("contextual_struct_init");
             EmitAssign(next,
                 $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
             aggregate = next;
-            RemoveOwnedLiteralSources(initializer, field.Type);
+            if (!copiesFixedValue)
+            {
+                RemoveOwnedLiteralSources(initializer, field.Type);
+            }
         }
         return new RuntimeStruct(type, aggregate);
+    }
+
+    private bool CopiesFixedStorageField(Expression expression, BoundType type) =>
+        _program.Types.RequiresFixedStorageCopy(type)
+        && (expression is NameExpression
+            || RegisterOwnedFieldProjectionTransfer(expression, type,
+                new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal)));
+
+    private RuntimeValue CopyFixedStorageValue(RuntimeValue value)
+    {
+        if (_program.Types.IsCopyableFixedArray(value.Type))
+            return PrepareStaticArrayBlockResult(value, copyExistingValue: true);
+        if (value is not RuntimeStruct structure
+            || !_program.Types.RequiresFixedStorageCopy(value.Type))
+            throw new SollangException($"value {value.Type} has no supported fixed-storage copy contract");
+        var aggregate = structure.ValueName;
+        foreach (var field in _program.Types.GetStruct(value.Type).Fields)
+        {
+            if (!_program.Types.RequiresFixedStorageCopy(field.Type)) continue;
+            var extracted = NextTemp("copy_field");
+            EmitAssign(extracted, $"extractvalue {LlvmStructType(value.Type)} {aggregate}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            var copy = CopyFixedStorageValue(DematerializeAggregateValue(field.Type, extracted));
+            var materialized = MaterializeAggregateValue(copy);
+            var next = NextTemp("copy_struct");
+            EmitAssign(next, $"insertvalue {LlvmStructType(value.Type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+        return new RuntimeStruct(value.Type, aggregate);
+    }
+
+    private RuntimeValue PrepareBorrowedFixedStorageReturn(Expression expression, RuntimeValue value)
+    {
+        if (!_program.Types.RequiresFixedStorageCopy(value.Type)) return value;
+        var owner = expression is NameExpression name ? name.Name
+            : TryGetOwnedFieldProjection(expression, out var fieldOwner, out _) ? fieldOwner : null;
+        return owner is not null && _borrowedOwnedLocals.Contains(owner)
+            ? CopyFixedStorageValue(value) : value;
     }
 
     private void RemoveOwnedLiteralSources(Expression expression, BoundType expectedType)
@@ -283,7 +387,8 @@ internal sealed partial class LlvmEmitter
 
         foreach (var field in definition.Fields)
         {
-            if (initializers.TryGetValue(field.Name, out var value))
+            if (initializers.TryGetValue(field.Name, out var value)
+                && !CopiesFixedStorageField(value, field.Type))
             {
                 RemoveOwnedLiteralSources(value, field.Type);
             }
@@ -292,16 +397,25 @@ internal sealed partial class LlvmEmitter
 
     private bool ConsumeOwnedFieldProjection(Expression expression, BoundType expectedType)
     {
-        var projectedTransfers = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var projectedTransfers = new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal);
         if (!RegisterOwnedFieldProjectionTransfer(expression, expectedType, projectedTransfers))
         {
             return false;
         }
 
-        foreach (var (ownerName, transferredFields) in projectedTransfers)
+        foreach (var (ownerName, transferredPaths) in projectedTransfers)
         {
             var owner = (RuntimeStruct)_locals[ownerName];
-            DropOwnedStructFieldsExcept(owner, transferredFields.ToArray());
+            if (transferredPaths.All(static path => path.Count == 1))
+            {
+                foreach (var path in transferredPaths)
+                    MarkMovedOwnedStructField(ownerName, path[0]);
+                continue;
+            }
+            DropOwnedStructFieldsExceptMovedAndTransferred(
+                ownerName,
+                owner,
+                transferredPaths);
             RemoveLocal(ownerName);
         }
         return true;
@@ -330,7 +444,11 @@ internal sealed partial class LlvmEmitter
             return EmitFunctionCall(associated, argument: null);
         }
 
-        var source = EmitExpression(expression.Source);
+        if (expression.Source is NameExpression movedOwner && IsMovedOwnedStructField(movedOwner.Name, expression.FieldName))
+            throw new SollangException($"owned field '{movedOwner.Name}.{expression.FieldName}' has already moved");
+        var source = expression.Source is NameExpression ownerPlace
+            ? EmitNameExpression(ownerPlace, allowPartialOwner: true)
+            : EmitExpression(expression.Source);
         if (source is RuntimeReference reference)
         {
             source = LoadReference(reference);
@@ -586,6 +704,7 @@ internal sealed partial class LlvmEmitter
     {
         return value switch
         {
+            RuntimeArguments arguments => ("i64", arguments.LengthName),
             RuntimeInt integer => (LlvmType(integer.Type), integer.ValueName),
             RuntimeFloat floating => (LlvmType(floating.Type), floating.ValueName),
             RuntimeBool boolean => ("i1", boolean.ValueName),
@@ -601,6 +720,9 @@ internal sealed partial class LlvmEmitter
             RuntimeBox box => ("ptr", box.PointerName),
             RuntimeReference reference => ("ptr", reference.PointerName),
             RuntimeDynTrait dyn => ("%sollang.dyn", BuildDynTraitAggregate(dyn)),
+            RuntimeArena arena => (
+                "%sollang.dynamic_int_array",
+                BuildDynamicArrayAggregate(arena.PointerName, arena.UsedName, arena.CapacityName)),
             RuntimeDynamicIntArray array => (
                 "%sollang.dynamic_int_array",
                 BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
@@ -667,6 +789,10 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue DematerializeAggregateValue(BoundType type, string valueName)
     {
+        if (type == BoundType.Arguments)
+        {
+            return new RuntimeArguments(valueName);
+        }
         if (type == BoundType.Unit)
         {
             return RuntimeUnit.Instance;
@@ -988,6 +1114,11 @@ internal sealed partial class LlvmEmitter
 
     private string LlvmType(BoundType type)
     {
+        // Arguments copies only its count; element storage belongs to the process runtime.
+        if (type == BoundType.Arguments)
+        {
+            return "i64";
+        }
         if (_program.Types.IsBitSet(type))
         {
             return LlvmBitSetType(type);

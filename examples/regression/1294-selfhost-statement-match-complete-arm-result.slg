@@ -1,0 +1,28 @@
+enum Item {
+    Data(UInt64)
+    Padding(UInt64)
+    Ack(Bool)
+    Stop(UInt64)
+}
+
+consume items: mut [Item; ~] -> UInt64 {
+    UInt64(0) => total!
+    (items -> len) > 0 -> while {
+        items -> take(0) -> when {
+            Data(value) { total! + value => total! }
+            Padding(count) {}
+            Ack(received) {}
+            Stop(code) { code -> return }
+        }
+    }
+    total!
+}
+
+main {
+    [Item; ~] => items!
+    items! -> push(Item.Data(2))
+    items! -> push(Item.Padding(1))
+    items! -> push(Item.Ack(true))
+    items! -> consume => total
+    "statement-match-total=$total" -> println
+}

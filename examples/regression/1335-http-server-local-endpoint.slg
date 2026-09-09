@@ -1,0 +1,39 @@
+import std.net as net
+import std.net.http as http
+import std.net.http.server as server
+import std.net.socket as socket
+
+# Binding port 0 delegates port selection to the operating system. The HTTP
+# Server observes that endpoint through its owned listener without moving it.
+main {
+    http.limits(1_024, 256, 16, 64, 512) -> when {
+        Err(_) { "http-server-local-endpoint=failed" -> println }
+        Ok(requestLimits) {
+            server.ServerOptions {
+                listener: socket.ListenOptions {
+                    endpoint: net.loopback(0) -> unified
+                    backlog: 8
+                    reuseAddress: true
+                }
+                requestLimits: requestLimits
+            } -> listen -> when {
+                Err(_) { "http-server-local-endpoint=failed" -> println }
+                Ok(service) {
+                    service -> localEndpoint -> when {
+                        Err(_) {
+                            service -> close
+                            "http-server-local-endpoint=failed" -> println
+                        }
+                        Ok(bound) {
+                            bound -> port => assignedPort
+                            service -> close
+                            assignedPort != 0
+                                -> if { "http-server-local-endpoint=ok" } else { "http-server-local-endpoint=failed" }
+                                -> println
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

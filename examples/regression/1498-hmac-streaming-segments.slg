@@ -1,0 +1,65 @@
+import std.crypto.hmac_sha256 as hmac
+
+same left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] != right[index!] -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+check key: [UInt8], message: [UInt8], expected: [UInt8] -> Unit uses Console {
+    key -> hmac.create => whole!
+    whole! -> update(message)
+    whole! -> finish => wholeMac
+    wholeMac -> len -> println
+    same(wholeMac, expected) -> println
+
+    key -> hmac.create => bytewise!
+    0 => index!
+    index! < (message -> len) -> while {
+        bytewise! -> update([message[index!]])
+        index! + 1 => index!
+    }
+    bytewise! -> finish => bytewiseMac
+    bytewiseMac -> len -> println
+    same(bytewiseMac, expected) -> println
+    same(bytewiseMac, wholeMac) -> println
+
+    key -> hmac.create => interleaved!
+    interleaved! -> update([])
+    0 => emptyIndex!
+    emptyIndex! < (message -> len) -> while {
+        interleaved! -> update([message[emptyIndex!]])
+        interleaved! -> update([])
+        emptyIndex! + 1 => emptyIndex!
+    }
+    interleaved! -> update([])
+    interleaved! -> finish => interleavedMac
+    interleavedMac -> len -> println
+    same(interleavedMac, expected) -> println
+    same(interleavedMac, wholeMac) -> println
+}
+
+checkEmpty key: [UInt8], expected: [UInt8] -> Unit uses Console {
+    key -> hmac.create => untouched
+    untouched -> finish => first
+    first -> len -> println
+    same(first, expected) -> println
+    key -> hmac.create => updated!
+    updated! -> update([])
+    updated! -> update([])
+    updated! -> finish => second
+    second -> len -> println
+    same(second, expected) -> println
+}
+
+main {
+    check([11; 20], [72, 105, 32, 84, 104, 101, 114, 101], [176, 52, 76, 97, 216, 219, 56, 83, 92, 168, 175, 206, 175, 11, 241, 43, 136, 29, 194, 0, 201, 131, 61, 167, 38, 233, 55, 108, 46, 50, 207, 247])
+    check([170; 131], [84, 101, 115, 116, 32, 85, 115, 105, 110, 103, 32, 76, 97, 114, 103, 101, 114, 32, 84, 104, 97, 110, 32, 66, 108, 111, 99, 107, 45, 83, 105, 122, 101, 32, 75, 101, 121, 32, 45, 32, 72, 97, 115, 104, 32, 75, 101, 121, 32, 70, 105, 114, 115, 116], [96, 228, 49, 89, 30, 224, 182, 127, 13, 138, 38, 170, 203, 245, 183, 127, 142, 11, 198, 33, 55, 40, 197, 20, 5, 70, 4, 15, 14, 227, 127, 84])
+    check([170; 64], [72, 105, 32, 84, 104, 101, 114, 101], [235, 239, 52, 225, 61, 10, 15, 224, 69, 147, 208, 67, 188, 122, 134, 81, 6, 219, 6, 4, 33, 29, 64, 76, 24, 32, 109, 134, 46, 93, 120, 82])
+    checkEmpty([], [182, 19, 103, 154, 8, 20, 217, 236, 119, 47, 149, 215, 120, 195, 95, 197, 255, 22, 151, 196, 147, 113, 86, 83, 198, 199, 18, 20, 66, 146, 197, 173])
+    checkEmpty([11; 20], [153, 154, 144, 18, 25, 240, 50, 205, 73, 124, 173, 181, 230, 5, 30, 151, 182, 162, 154, 178, 151, 189, 106, 231, 34, 189, 96, 98, 162, 245, 149, 66])
+}

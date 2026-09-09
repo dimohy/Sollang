@@ -1,0 +1,89 @@
+import std.compress.brotli.command as commands
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.prefix_table as prefix
+
+isNeedMore progress: commands.ReaderRead -> Bool => progress -> when {
+    NeedMore(bits) { bits > 0 }
+    else { false }
+}
+
+isReady progress: commands.ReaderRead -> Bool => progress -> when {
+    Ready { true }
+    else { false }
+}
+
+allByte values: [UInt8], expected: UInt8 -> Bool {
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] == expected -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+check reader: move commands.Reader, window: mut prefix.Window -> Result<Bool, commands.Error> {
+    reader => reader!
+    window -> fill([160], prefix.Position { byteIndex: 0, bitIndex: 5 }, 3) -> when {
+        Err(_) { Result<Bool, commands.Error>.Ok(false) -> return }
+        Ok(_) { }
+    }
+    reader! -> read(window)? => first
+    first -> isNeedMore -> unless { Result<Bool, commands.Error>.Ok(false) -> return }
+
+    (window -> available) + 8 => required
+    window -> fill([3], prefix.Position { byteIndex: 0, bitIndex: 0 }, required) -> when {
+        Err(_) { Result<Bool, commands.Error>.Ok(false) -> return }
+        Ok(_) { }
+    }
+    reader! -> read(window)? => completed
+    completed -> isReady -> unless { Result<Bool, commands.Error>.Ok(false) -> return }
+    reader! -> finish? => streamed
+    streamed -> intoOutput => output
+    Result<Bool, commands.Error>.Ok(
+    (output -> len) == 100 and (output -> allByte(97)) and (window -> available) == 6)
+}
+
+main {
+    [UInt8(27), 99, 0, 248, 37, 194, 2, 177, 64, 160, 3] => input
+    headers.Limits {
+        maxBlockTypes: 256
+        maxBlockLength: 16_793_840
+        maxContextEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Err(_) { "command-stream=false" -> println }
+        Ok(parser) {
+            parser -> parse(input, prefix.Position { byteIndex: 3, bitIndex: 0 }) -> when {
+                Err(_) { "command-stream=false" -> println }
+                Ok(header) {
+                    commands.Limits {
+                        maxOutputBytes: 1_024
+                        maxCommands: 64
+                        maxWindowBytes: 4_194_288
+                    } -> executor(header, 100) -> when {
+                        Err(_) { "command-stream=false" -> println }
+                        Ok(executor) {
+                            executor -> reader([UInt8; ~]) -> when {
+                                Err(_) { "command-stream=false" -> println }
+                                Ok(reader) {
+                                    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+                                        Err(_) { "command-stream=false" -> println }
+                                        Ok(window) {
+                                            window => window!
+                                            reader -> check(window!) -> when {
+                                                Err(_) { "command-stream=false" -> println }
+                                                Ok(checked) { "command-stream=$(checked)" -> println }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

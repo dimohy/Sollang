@@ -1,0 +1,1995 @@
+namespace std.compress.gzip
+
+import std.compress.gzip.error as errors
+import std.compress.gzip.decoder_phase as decoder_phases
+
+# RFC 1952 GZIP with bounded RFC 1951 stored, fixed-Huffman, and
+# dynamic-Huffman DEFLATE decoding. The deterministic writer currently emits
+# level-0 stored blocks. Validation runs before output allocation and enforces
+# output and expansion-ratio limits.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxOutputBytes: Int
+    public maxExpansionRatio: Int
+}
+
+public struct Codec {
+    public limits: Limits
+}
+
+public struct DecoderLimits {
+    public maxInputBytes: Int
+    public maxMembers: Int
+}
+
+public struct Encoder {
+    public maxOutputBytes: Int
+    public produced: Int
+    public checksum: UInt32
+    public inputSize: UInt32
+    public started: Bool
+}
+
+public struct Decoder {
+    public codec: Codec
+    public maxInputBytes: Int
+    public maxMembers: Int
+    public totalInputBytes: Int
+    public processedInputBytes: Int
+    public memberStartOffset: Int
+    public memberCount: Int
+    public phase: decoder_phases.Phase
+    public headerPosition: Int
+    public headerFlags: Int
+    public headerRemaining: Int
+    public headerValue: Int
+    public headerChecksum: UInt32
+    public bitBuffer: Int
+    public bitCount: Int
+    public finalBlock: Bool
+    public storedRemaining: Int
+    public dynamicPhase: Int
+    public literalCount: Int
+    public distanceCount: Int
+    public codeLengthCount: Int
+    public dynamicIndex: Int
+    public dynamicRepeatSymbol: Int
+    public codeLengthLengths: [Int; ~]
+    public dynamicLengths: [Int; ~]
+    public codeLengthTree: Huffman
+    public literalTree: Huffman
+    public distanceTree: Huffman
+    public symbolCode: Int
+    public symbolBits: Int
+    public compressedPhase: Int
+    public matchLength: Int
+    public matchDistance: Int
+    public checksum: UInt32
+    public memberSize: UInt32
+    public memberOutput: [UInt8; ~]
+    public verifiedOutput: [UInt8; ~]
+    public trailerChecksum: UInt32
+    public failed: Bool
+    public failure: Error
+}
+
+public struct EncodePlan {
+    public inputLength: Int
+    public outputLength: Int
+    public blockCount: Int
+}
+
+public struct DecodePlan {
+    public inputLength: Int
+    public outputLength: Int
+    public payloadOffset: Int
+    public trailerOffset: Int
+}
+
+struct BitCursor {
+    byteOffset: Int
+    bitOffset: Int
+}
+
+struct BitWriter {
+    currentByte: Int
+    bitCount: Int
+}
+
+struct DeflateCode {
+    value: Int
+    bits: Int
+}
+
+struct LengthCode {
+    symbol: Int
+    extraValue: Int
+    extraBits: Int
+}
+
+struct DistanceCode {
+    symbol: Int
+    extraValue: Int
+    extraBits: Int
+}
+
+struct Match {
+    length: Int
+    distance: Int
+}
+
+struct Huffman {
+    counts: [Int; ~]
+    firstCodes: [Int; ~]
+    firstSymbols: [Int; ~]
+    symbols: [Int; ~]
+    maxBits: Int
+}
+
+struct HuffmanPair {
+    literal: Huffman
+    distance: Huffman
+}
+
+struct InflateState {
+    cursor: BitCursor
+    outputLength: Int
+    output: [UInt8; ~]
+}
+
+struct MemberDecode {
+    nextOffset: Int
+    output: [UInt8; ~]
+}
+
+struct InflateCount {
+    value: Int
+}
+
+struct StreamCursor {
+    offset: Int
+}
+
+struct BitRead {
+    available: Bool
+    value: Int
+}
+
+struct UInt32Read {
+    available: Bool
+    value: UInt32
+}
+
+struct SymbolRead {
+    available: Bool
+    value: Int
+}
+
+errorCodec kind: errors.Kind, offset: UIntSize -> Result<Codec, Error> {
+    Result<Codec, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorEncoder kind: errors.Kind, offset: UIntSize -> Result<Encoder, Error> {
+    Result<Encoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorMember kind: errors.Kind, offset: UIntSize -> Result<MemberDecode, Error> {
+    Result<MemberDecode, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecoder kind: errors.Kind, offset: UIntSize -> Result<Decoder, Error> {
+    Result<Decoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorEncodePlan kind: errors.Kind, offset: UIntSize -> Result<EncodePlan, Error> {
+    Result<EncodePlan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecodePlan kind: errors.Kind, offset: UIntSize -> Result<DecodePlan, Error> {
+    Result<DecodePlan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBytes kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
+    Result<[UInt8; ~], Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorHuffman kind: errors.Kind, offset: UIntSize -> Result<Huffman, Error> {
+    Result<Huffman, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorHuffmanPair kind: errors.Kind, offset: UIntSize -> Result<HuffmanPair, Error> {
+    Result<HuffmanPair, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInflate kind: errors.Kind, offset: UIntSize -> Result<InflateState, Error> {
+    Result<InflateState, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorSymbolRead kind: errors.Kind, offset: UIntSize -> Result<SymbolRead, Error> {
+    Result<SymbolRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+xor32 left: UInt32, right: UInt32 -> UInt32 {
+    UInt32(0) => result!
+    UInt32(1) => place!
+    UInt32(0) => index!
+    index! < 32 -> while {
+        (left / place!) % 2 != (right / place!) % 2
+            -> if { result! + place! => result! }
+        index! + 1 => index!
+        index! < 32 -> if { place! * 2 => place! }
+    }
+    result!
+}
+
+crc32Range input: [UInt8], start: Int, length: Int -> UInt32 {
+    UInt32(4_294_967_295) => crc!
+    0 => inputIndex!
+    inputIndex! < length -> while {
+        crc! -> xor32(UInt32(input[start + inputIndex!])) => next!
+        0 => bitIndex!
+        bitIndex! < 8 -> while {
+            next! % 2 == 1 -> if {
+                (next! / 2) -> xor32(3_988_292_384) => next!
+            } else {
+                next! / 2 => next!
+            }
+            bitIndex! + 1 => bitIndex!
+        }
+        next! => crc!
+        inputIndex! + 1 => inputIndex!
+    }
+    crc! -> xor32(4_294_967_295)
+}
+
+crc32Update checksum: UInt32, input: [UInt8] -> UInt32 {
+    checksum => crc!
+    0 => inputIndex!
+    inputIndex! < (input -> len) -> while {
+        crc! -> xor32(UInt32(input[inputIndex!])) => next!
+        0 => bitIndex!
+        bitIndex! < 8 -> while {
+            next! % 2 == 1 -> if {
+                (next! / 2) -> xor32(3_988_292_384) => next!
+            } else {
+                next! / 2 => next!
+            }
+            bitIndex! + 1 => bitIndex!
+        }
+        next! => crc!
+        inputIndex! + 1 => inputIndex!
+    }
+    crc!
+}
+
+crc32 input: [UInt8] -> UInt32 {
+    input -> crc32Range(0, input -> len)
+}
+
+crc32Byte checksum: UInt32, byte: UInt8 -> UInt32 {
+    checksum -> xor32(UInt32(byte)) => next!
+    0 => bitIndex!
+    bitIndex! < 8 -> while {
+        next! % 2 == 1 -> if {
+            (next! / 2) -> xor32(3_988_292_384) => next!
+        } else {
+            next! / 2 => next!
+        }
+        bitIndex! + 1 => bitIndex!
+    }
+    next!
+}
+
+emptyHuffman: -> Huffman => Huffman {
+    counts: [Int; ~]
+    firstCodes: [Int; ~]
+    firstSymbols: [Int; ~]
+    symbols: [Int; ~]
+    maxBits: 0
+}
+
+streamReadBits decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor, count: Int -> BitRead {
+    decoder.bitCount < count and cursor.offset < (input -> len)
+        -> while {
+            decoder.bitBuffer + Int(input[cursor.offset]) * (decoder.bitCount -> powerOfTwo)
+                => decoder.bitBuffer
+            decoder.bitCount + 8 => decoder.bitCount
+            cursor.offset + 1 => cursor.offset
+            decoder.processedInputBytes + 1 => decoder.processedInputBytes
+        }
+    decoder.bitCount >= count -> unless {
+        BitRead { available: false, value: 0 } -> return
+    }
+    count == 0 -> if { BitRead { available: true, value: 0 } -> return }
+    count -> powerOfTwo => modulus
+    decoder.bitBuffer % modulus => value
+    decoder.bitBuffer / modulus => decoder.bitBuffer
+    decoder.bitCount - count => decoder.bitCount
+    BitRead { available: true, value: value }
+}
+
+streamAlignByte decoder: mut Decoder -> Unit {
+    0 => decoder.bitBuffer
+    0 => decoder.bitCount
+}
+
+streamTreeMaxBits decoder: ref Decoder, treeKind: Int -> Int {
+    treeKind == 0 -> if { decoder.literalTree.maxBits -> return }
+    treeKind == 1 -> if { decoder.distanceTree.maxBits -> return }
+    decoder.codeLengthTree.maxBits
+}
+
+streamTreeFirstCode decoder: ref Decoder, treeKind: Int, bits: Int -> Int {
+    treeKind == 0 -> if { decoder.literalTree.firstCodes[bits] -> return }
+    treeKind == 1 -> if { decoder.distanceTree.firstCodes[bits] -> return }
+    decoder.codeLengthTree.firstCodes[bits]
+}
+
+streamTreeCount decoder: ref Decoder, treeKind: Int, bits: Int -> Int {
+    treeKind == 0 -> if { decoder.literalTree.counts[bits] -> return }
+    treeKind == 1 -> if { decoder.distanceTree.counts[bits] -> return }
+    decoder.codeLengthTree.counts[bits]
+}
+
+streamTreeSymbol decoder: ref Decoder, treeKind: Int, bits: Int, symbolOffset: Int -> Int {
+    treeKind == 0 -> if {
+        decoder.literalTree.symbols[decoder.literalTree.firstSymbols[bits] + symbolOffset] -> return
+    }
+    treeKind == 1 -> if {
+        decoder.distanceTree.symbols[decoder.distanceTree.firstSymbols[bits] + symbolOffset] -> return
+    }
+    decoder.codeLengthTree.symbols[decoder.codeLengthTree.firstSymbols[bits] + symbolOffset]
+}
+
+streamDecodeSymbol decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor, treeKind: Int -> Result<SymbolRead, Error> {
+    decoder.symbolBits == 0 -> if {
+        0 => decoder.symbolCode
+        1 => decoder.symbolBits
+    }
+    decoder.symbolBits <= streamTreeMaxBits(decoder, treeKind)
+        -> while {
+            streamReadBits(decoder, input, cursor, 1) => read
+            read.available -> unless {
+                Result<SymbolRead, Error>.Ok(SymbolRead { available: false, value: 0 }) -> return
+            }
+            decoder.symbolCode * 2 + read.value => decoder.symbolCode
+            decoder.symbolCode - streamTreeFirstCode(decoder, treeKind, decoder.symbolBits)
+                => symbolOffset
+            symbolOffset >= 0 and symbolOffset < streamTreeCount(decoder, treeKind, decoder.symbolBits)
+                -> if {
+                    streamTreeSymbol(decoder, treeKind, decoder.symbolBits, symbolOffset) => symbol
+                    0 => decoder.symbolCode
+                    0 => decoder.symbolBits
+                    Result<SymbolRead, Error>.Ok(SymbolRead { available: true, value: symbol }) -> return
+                }
+            decoder.symbolBits + 1 => decoder.symbolBits
+        }
+    errorSymbolRead(errors.Kind.InvalidDeflateCode, UIntSize(decoder.processedInputBytes))
+}
+
+readLe16 input: [UInt8], offset: Int -> Int {
+    Int(input[offset]) + Int(input[offset + 1]) * 256
+}
+
+readLe32 input: [UInt8], offset: Int -> UInt32 {
+    UInt32(input[offset]) + UInt32(input[offset + 1]) * 256 + UInt32(input[offset + 2]) * 65_536 + UInt32(input[offset + 3]) * 16_777_216
+}
+
+appendLe16 value: Int, output: mut [UInt8; ~] -> Unit {
+    output -> push(UInt8(value % 256))
+    output -> push(UInt8(value / 256))
+}
+
+appendLe32 value: UInt32, output: mut [UInt8; ~] -> Unit {
+    output -> push(UInt8(value % 256))
+    output -> push(UInt8(value / 256 % 256))
+    output -> push(UInt8(value / 65_536 % 256))
+    output -> push(UInt8(value / 16_777_216 % 256))
+}
+
+appendStoredHeader output: mut [UInt8; ~] -> Unit {
+    output -> push(31)
+    output -> push(139)
+    output -> push(8)
+    output -> push(0)
+    output -> push(0)
+    output -> push(0)
+    output -> push(0)
+    output -> push(0)
+    output -> push(0)
+    output -> push(255)
+}
+
+appendStoredBlock input: [UInt8], start: Int, length: Int, final: Bool, output: mut [UInt8; ~] -> Unit {
+    final -> if { output -> push(1) } else { output -> push(0) }
+    length -> appendLe16(output)
+    (65_535 - length) -> appendLe16(output)
+    0 => byteIndex!
+    byteIndex! < length -> while {
+        output -> push(input[start + byteIndex!])
+        byteIndex! + 1 => byteIndex!
+    }
+}
+
+hasFlag flags: Int, place: Int -> Bool {
+    flags / place % 2 == 1
+}
+
+appendChecked output: mut [UInt8; ~], byte: UInt8, maximum: Int -> Result<Int, Error> {
+    (output -> len) < maximum -> unless {
+        errorInt(errors.Kind.OutputLimitExceeded, UIntSize(output -> len)) -> return
+    }
+    output -> push(byte)
+    Result<Int, Error>.Ok(1)
+}
+
+writeBit writer: mut BitWriter, output: mut [UInt8; ~], bit: Int, maximum: Int -> Result<Int, Error> {
+    writer.currentByte + bit * (writer.bitCount -> powerOfTwo) => writer.currentByte
+    writer.bitCount + 1 => writer.bitCount
+    writer.bitCount == 8 -> if {
+        appendChecked(output, UInt8(writer.currentByte), maximum)? => added
+        0 => writer.currentByte
+        0 => writer.bitCount
+    }
+    Result<Int, Error>.Ok(1)
+}
+
+writeBits writer: mut BitWriter, output: mut [UInt8; ~], value: Int, count: Int, maximum: Int -> Result<Int, Error> {
+    value => remaining!
+    0 => bitIndex!
+    bitIndex! < count -> while {
+        remaining! % 2 => bit
+        writeBit(writer, output, bit, maximum)? => written
+        remaining! / 2 => remaining!
+        bitIndex! + 1 => bitIndex!
+    }
+    Result<Int, Error>.Ok(count)
+}
+
+writeCode writer: mut BitWriter, output: mut [UInt8; ~], code: DeflateCode, maximum: Int -> Result<Int, Error> {
+    code.bits - 1 => bitIndex!
+    bitIndex! >= 0 -> while {
+        code.value / (bitIndex! -> powerOfTwo) % 2 => bit
+        writeBit(writer, output, bit, maximum)? => written
+        bitIndex! - 1 => bitIndex!
+    }
+    Result<Int, Error>.Ok(code.bits)
+}
+
+flushBits writer: mut BitWriter, output: mut [UInt8; ~], maximum: Int -> Result<Int, Error> {
+    writer.bitCount > 0 -> if {
+        appendChecked(output, UInt8(writer.currentByte), maximum)? => added
+        0 => writer.currentByte
+        0 => writer.bitCount
+    }
+    Result<Int, Error>.Ok(0)
+}
+
+fixedCode symbol: Int -> DeflateCode {
+    symbol <= 143 -> if { DeflateCode { value: 48 + symbol, bits: 8 } -> return }
+    symbol <= 255 -> if { DeflateCode { value: 400 + symbol - 144, bits: 9 } -> return }
+    symbol <= 279 -> if { DeflateCode { value: symbol - 256, bits: 7 } -> return }
+    DeflateCode { value: 192 + symbol - 280, bits: 8 }
+}
+
+powerOfTwo exponent: Int -> Int {
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+readBit input: [UInt8], end: Int, cursor: mut BitCursor -> Result<Int, Error> {
+    cursor.byteOffset < end -> unless {
+        errorInt(errors.Kind.TruncatedInput, UIntSize(cursor.byteOffset)) -> return
+    }
+    Int(input[cursor.byteOffset]) / (cursor.bitOffset -> powerOfTwo) % 2 => bit
+    cursor.bitOffset + 1 => cursor.bitOffset
+    cursor.bitOffset == 8 -> if {
+        0 => cursor.bitOffset
+        cursor.byteOffset + 1 => cursor.byteOffset
+    }
+    Result<Int, Error>.Ok(bit)
+}
+
+readBits input: [UInt8], end: Int, cursor: mut BitCursor, count: Int -> Result<Int, Error> {
+    0 => value!
+    1 => place!
+    0 => index!
+    index! < count -> while {
+        readBit(input, end, cursor)? => bit
+        value! + bit * place! => value!
+        place! * 2 => place!
+        index! + 1 => index!
+    }
+    Result<Int, Error>.Ok(value!)
+}
+
+alignByte cursor: mut BitCursor -> Unit {
+    cursor.bitOffset != 0 -> if {
+        0 => cursor.bitOffset
+        cursor.byteOffset + 1 => cursor.byteOffset
+    }
+}
+
+advanceBytes cursor: mut BitCursor, count: Int -> Unit {
+    cursor.byteOffset + count => cursor.byteOffset
+}
+
+buildHuffman sourceLengths: [Int], offset: Int -> Result<Huffman, Error> {
+    [Int; ~] => counts!
+    [Int; ~] => firstCodes!
+    [Int; ~] => firstSymbols!
+    [Int; ~] => symbols!
+    0 => tableIndex!
+    tableIndex! < 16 -> while {
+        counts! -> push(0)
+        firstCodes! -> push(0)
+        firstSymbols! -> push(0)
+        tableIndex! + 1 => tableIndex!
+    }
+    0 => maxBits!
+    0 => symbol!
+    symbol! < (sourceLengths -> len) -> while {
+        sourceLengths[symbol!] => length
+        length >= 0 and length <= 15 -> unless {
+            errorHuffman(errors.Kind.InvalidHuffmanTree, UIntSize(offset)) -> return
+        }
+        length > 0 -> if {
+            counts![length] + 1 => counts![length]
+            length > maxBits! -> if { length => maxBits! }
+        }
+        symbol! + 1 => symbol!
+    }
+    maxBits! > 0 -> unless {
+        errorHuffman(errors.Kind.InvalidHuffmanTree, UIntSize(offset)) -> return
+    }
+    1 => remaining!
+    1 => bits!
+    bits! <= 15 -> while {
+        remaining! * 2 - counts![bits!] => remaining!
+        remaining! >= 0 -> unless {
+            errorHuffman(errors.Kind.InvalidHuffmanTree, UIntSize(offset)) -> return
+        }
+        bits! + 1 => bits!
+    }
+    0 => code!
+    1 => codeBits!
+    codeBits! <= 15 -> while {
+        (code! + counts![codeBits! - 1]) * 2 => code!
+        code! => firstCodes![codeBits!]
+        codeBits! + 1 => codeBits!
+    }
+    0 => symbolOffset!
+    1 => symbolBits!
+    symbolBits! <= 15 -> while {
+        symbolOffset! => firstSymbols![symbolBits!]
+        symbolOffset! + counts![symbolBits!] => symbolOffset!
+        0 => codeSymbol!
+        codeSymbol! < (sourceLengths -> len) -> while {
+            sourceLengths[codeSymbol!] == symbolBits! -> if {
+                symbols! -> push(codeSymbol!)
+            }
+            codeSymbol! + 1 => codeSymbol!
+        }
+        symbolBits! + 1 => symbolBits!
+    }
+    Result<Huffman, Error>.Ok(Huffman {
+        counts: counts!
+        firstCodes: firstCodes!
+        firstSymbols: firstSymbols!
+        symbols: symbols!
+        maxBits: maxBits!
+    })
+}
+
+decodeSymbol input: [UInt8], end: Int, cursor: mut BitCursor, tree: ref Huffman -> Result<Int, Error> {
+    0 => code!
+    1 => bits!
+    bits! <= tree.maxBits -> while {
+        readBit(input, end, cursor)? => bit
+        code! * 2 + bit => code!
+        code! - tree.firstCodes[bits!] => symbolOffset
+        symbolOffset >= 0 and symbolOffset < tree.counts[bits!]
+            -> if {
+                tree.symbols[tree.firstSymbols[bits!] + symbolOffset] => symbol
+                Result<Int, Error>.Ok(symbol) -> return
+            }
+        bits! + 1 => bits!
+    }
+    errorInt(errors.Kind.InvalidDeflateCode, UIntSize(cursor.byteOffset))
+}
+
+fixedLiteralTree offset: Int -> Result<Huffman, Error> {
+    [Int; ~] => lengths!
+    0 => symbol!
+    symbol! < 288 -> while {
+        symbol! <= 143 -> if { 8 } else {
+            symbol! <= 255 -> if { 9 } else {
+                symbol! <= 279 -> if { 7 } else { 8 }
+            }
+        } => length
+        lengths! -> push(length)
+        symbol! + 1 => symbol!
+    }
+    lengths! -> buildHuffman(offset)
+}
+
+fixedDistanceTree offset: Int -> Result<Huffman, Error> {
+    [Int; ~] => lengths!
+    0 => symbol!
+    symbol! < 32 -> while {
+        lengths! -> push(5)
+        symbol! + 1 => symbol!
+    }
+    lengths! -> buildHuffman(offset)
+}
+
+lengthExtraBits code: Int -> Int {
+    code <= 264 -> if { 0 -> return }
+    code <= 268 -> if { 1 -> return }
+    code <= 272 -> if { 2 -> return }
+    code <= 276 -> if { 3 -> return }
+    code <= 280 -> if { 4 -> return }
+    code <= 284 -> if { 5 -> return }
+    0
+}
+
+lengthBase code: Int -> Int {
+    code <= 264 -> if { code - 254 -> return }
+    code <= 268 -> if { 11 + (code - 265) * 2 -> return }
+    code <= 272 -> if { 19 + (code - 269) * 4 -> return }
+    code <= 276 -> if { 35 + (code - 273) * 8 -> return }
+    code <= 280 -> if { 67 + (code - 277) * 16 -> return }
+    code <= 284 -> if { 131 + (code - 281) * 32 -> return }
+    258
+}
+
+distanceExtraBits code: Int -> Int {
+    code < 4 -> if { 0 } else { code / 2 - 1 }
+}
+
+distanceBase code: Int -> Int {
+    code < 4 -> if { code + 1 -> return }
+    code -> distanceExtraBits => extra
+    (extra + 1) -> powerOfTwo => groupBase
+    extra -> powerOfTwo => half
+    groupBase + 1 + (code % 2) * half
+}
+
+encodeLength length: Int -> LengthCode {
+    257 => symbol!
+    symbol! <= 285 -> while {
+        symbol! -> lengthExtraBits => extraBits
+        symbol! -> lengthBase => base
+        extraBits -> powerOfTwo => range!
+        symbol! == 285 -> if { 1 => range! }
+        length >= base and length < base + range! -> if {
+            LengthCode {
+                symbol: symbol!
+                extraValue: length - base
+                extraBits: extraBits
+            } -> return
+        }
+        symbol! + 1 => symbol!
+    }
+    LengthCode { symbol: 285, extraValue: 0, extraBits: 0 }
+}
+
+encodeDistance distance: Int -> DistanceCode {
+    0 => symbol!
+    symbol! <= 29 -> while {
+        symbol! -> distanceExtraBits => extraBits
+        symbol! -> distanceBase => base
+        extraBits -> powerOfTwo => range
+        distance >= base and distance < base + range
+            -> if {
+                DistanceCode {
+                    symbol: symbol!
+                    extraValue: distance - base
+                    extraBits: extraBits
+                } -> return
+            }
+        symbol! + 1 => symbol!
+    }
+    DistanceCode { symbol: 29, extraValue: 8_191, extraBits: 13 }
+}
+
+hashAt input: [UInt8], offset: Int -> Int {
+    (Int(input[offset]) * 251 + Int(input[offset + 1])) * 251 + Int(input[offset + 2]) => mixed
+    mixed % 4_096
+}
+
+findMatch input: [UInt8], position: Int, candidate: Int -> Match {
+    candidate >= 0 and position - candidate <= 32_768
+        -> unless { Match { length: 0, distance: 0 } -> return }
+    0 => length!
+    length! < 258
+        and position + length! < (input -> len)
+        and input[candidate + length!] == input[position + length!]
+        -> while {
+            length! + 1 => length!
+        }
+    length! >= 3 -> if {
+        Match { length: length!, distance: position - candidate }
+    } else {
+        Match { length: 0, distance: 0 }
+    }
+}
+
+appendInflated count: mut InflateCount, output: mut [UInt8; ~], byte: UInt8, emit: Bool, maxOutputBytes: Int, offset: Int -> Result<Int, Error> {
+    count.value < maxOutputBytes -> unless {
+        errorInt(errors.Kind.OutputLimitExceeded, UIntSize(offset)) -> return
+    }
+    emit -> if { output -> push(byte) }
+    count.value + 1 => count.value
+    Result<Int, Error>.Ok(1)
+}
+
+decodeCompressedBlock input: [UInt8], end: Int, cursor: mut BitCursor, count: mut InflateCount, output: mut [UInt8; ~], literalTree: ref Huffman, distanceTree: ref Huffman, emit: Bool, maxOutputBytes: Int -> Result<Int, Error> {
+    false => ended!
+    not ended! -> while {
+        decodeSymbol(input, end, cursor, literalTree)? => symbol
+        symbol < 256 -> if {
+            appendInflated(count, output, UInt8(symbol), emit, maxOutputBytes, cursor.byteOffset)? => added
+        } else {
+            symbol == 256 -> if {
+                true => ended!
+            } else {
+                symbol >= 257 and symbol <= 285 -> unless {
+                    errorInt(errors.Kind.InvalidDeflateCode, UIntSize(cursor.byteOffset)) -> return
+                }
+                symbol -> lengthExtraBits => extraLengthBits
+                readBits(input, end, cursor, extraLengthBits)? => extraLength
+                (symbol -> lengthBase) + extraLength => length
+                decodeSymbol(input, end, cursor, distanceTree)? => distanceCode
+                distanceCode <= 29 -> unless {
+                    errorInt(errors.Kind.InvalidDeflateCode, UIntSize(cursor.byteOffset)) -> return
+                }
+                distanceCode -> distanceExtraBits => extraDistanceBits
+                readBits(input, end, cursor, extraDistanceBits)? => extraDistance
+                (distanceCode -> distanceBase) + extraDistance => distance
+                distance > 0 and distance <= count.value -> unless {
+                    errorInt(errors.Kind.InvalidDistance, UIntSize(cursor.byteOffset)) -> return
+                }
+                length <= maxOutputBytes - count.value -> unless {
+                    errorInt(errors.Kind.OutputLimitExceeded, UIntSize(cursor.byteOffset)) -> return
+                }
+                0 => copyIndex!
+                copyIndex! < length -> while {
+                    emit -> if {
+                        output[(output -> len) - distance] => copied
+                        output -> push(copied)
+                    }
+                    count.value + 1 => count.value
+                    copyIndex! + 1 => copyIndex!
+                }
+            }
+        }
+    }
+    Result<Int, Error>.Ok(0)
+}
+
+dynamicTrees input: [UInt8], end: Int, cursor: mut BitCursor -> Result<HuffmanPair, Error> {
+    cursor => active!
+    readBits(input, end, active!, 5)? => literalBits
+    literalBits + 257 => literalCount
+    readBits(input, end, active!, 5)? => distanceBits
+    distanceBits + 1 => distanceCount
+    readBits(input, end, active!, 4)? => codeLengthBits
+    codeLengthBits + 4 => codeLengthCount
+    [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15] => order
+    [0; 19] => codeLengthLengths!
+    0 => codeLengthIndex!
+    codeLengthIndex! < codeLengthCount -> while {
+        readBits(input, end, active!, 3)? => length
+        length => codeLengthLengths![order[codeLengthIndex!]]
+        codeLengthIndex! + 1 => codeLengthIndex!
+    }
+    codeLengthLengths! -> buildHuffman(active!.byteOffset)? => codeLengthTree
+
+    literalCount + distanceCount => totalCount
+    [Int; ~] => lengths!
+    (lengths! -> len) < totalCount -> while {
+        decodeSymbol(input, end, active!, codeLengthTree)? => symbol
+        symbol <= 15 -> if {
+            lengths! -> push(symbol)
+        } else {
+            symbol == 16 -> if {
+                (lengths! -> len) > 0 -> unless {
+                    errorHuffmanPair(errors.Kind.InvalidHuffmanTree, UIntSize(active!.byteOffset)) -> return
+                }
+                readBits(input, end, active!, 2)? => repeatBits
+                repeatBits + 3 => repeatCount
+                lengths![(lengths! -> len) - 1] => repeatedLength
+                repeatCount <= totalCount - (lengths! -> len)
+                    -> unless {
+                        errorHuffmanPair(errors.Kind.InvalidHuffmanTree, UIntSize(active!.byteOffset)) -> return
+                    }
+                0 => repeatIndex!
+                repeatIndex! < repeatCount -> while {
+                    lengths! -> push(repeatedLength)
+                    repeatIndex! + 1 => repeatIndex!
+                }
+            } else {
+                symbol == 17 -> if {
+                    readBits(input, end, active!, 3)? => repeatBits
+                    repeatBits + 3 => repeatCount
+                    repeatCount <= totalCount - (lengths! -> len)
+                        -> unless {
+                            errorHuffmanPair(errors.Kind.InvalidHuffmanTree, UIntSize(active!.byteOffset)) -> return
+                        }
+                    0 => repeatIndex!
+                    repeatIndex! < repeatCount -> while {
+                        lengths! -> push(0)
+                        repeatIndex! + 1 => repeatIndex!
+                    }
+                } else {
+                    symbol == 18 -> unless {
+                        errorHuffmanPair(errors.Kind.InvalidDeflateCode, UIntSize(active!.byteOffset)) -> return
+                    }
+                    readBits(input, end, active!, 7)? => repeatBits
+                    repeatBits + 11 => repeatCount
+                    repeatCount <= totalCount - (lengths! -> len)
+                        -> unless {
+                            errorHuffmanPair(errors.Kind.InvalidHuffmanTree, UIntSize(active!.byteOffset)) -> return
+                        }
+                    0 => repeatIndex!
+                    repeatIndex! < repeatCount -> while {
+                        lengths! -> push(0)
+                        repeatIndex! + 1 => repeatIndex!
+                    }
+                }
+            }
+        }
+    }
+    lengths![256] > 0 -> unless {
+        errorHuffmanPair(errors.Kind.InvalidHuffmanTree, UIntSize(active!.byteOffset)) -> return
+    }
+    [Int; ~] => literalLengths!
+    [Int; ~] => distanceLengths!
+    0 => splitIndex!
+    splitIndex! < literalCount -> while {
+        literalLengths! -> push(lengths![splitIndex!])
+        splitIndex! + 1 => splitIndex!
+    }
+    splitIndex! < totalCount -> while {
+        distanceLengths! -> push(lengths![splitIndex!])
+        splitIndex! + 1 => splitIndex!
+    }
+    literalLengths! -> buildHuffman(active!.byteOffset)? => literalTree
+    distanceLengths! -> buildHuffman(active!.byteOffset)? => distanceTree
+    active!.byteOffset => cursor.byteOffset
+    active!.bitOffset => cursor.bitOffset
+    Result<HuffmanPair, Error>.Ok(HuffmanPair {
+        literal: literalTree
+        distance: distanceTree
+    })
+}
+
+inflatePayload input: [UInt8], start: Int, end: Int, maxOutputBytes: Int, emit: Bool -> Result<InflateState, Error> {
+    BitCursor { byteOffset: start, bitOffset: 0 } => cursor!
+    InflateCount { value: 0 } => count!
+    [UInt8; ~] => output!
+    false => finalBlock!
+    not finalBlock! -> while {
+        readBit(input, end, cursor!)? => finalBit
+        finalBit == 1 => finalBlock!
+        readBits(input, end, cursor!, 2)? => blockType
+        blockType == 0 -> if {
+            cursor! -> alignByte
+            cursor!.byteOffset + 4 <= end -> unless {
+                errorInflate(errors.Kind.TruncatedInput, UIntSize(cursor!.byteOffset)) -> return
+            }
+            input -> readLe16(cursor!.byteOffset) => blockLength
+            input -> readLe16(cursor!.byteOffset + 2) => inverseLength
+            blockLength + inverseLength == 65_535 -> unless {
+                errorInflate(errors.Kind.InvalidStoredLength, UIntSize(cursor!.byteOffset)) -> return
+            }
+            cursor! -> advanceBytes(4)
+            cursor!.byteOffset + blockLength <= end -> unless {
+                errorInflate(errors.Kind.TruncatedInput, UIntSize(cursor!.byteOffset)) -> return
+            }
+            blockLength <= maxOutputBytes - count!.value
+                -> unless {
+                    errorInflate(errors.Kind.OutputLimitExceeded, UIntSize(cursor!.byteOffset)) -> return
+                }
+            0 => byteIndex!
+            byteIndex! < blockLength -> while {
+                emit -> if { output! -> push(input[cursor!.byteOffset + byteIndex!]) }
+                byteIndex! + 1 => byteIndex!
+            }
+            count!.value + blockLength => count!.value
+            cursor! -> advanceBytes(blockLength)
+        } else {
+            blockType == 1 -> if {
+                fixedLiteralTree(cursor!.byteOffset)? => literalTree
+                fixedDistanceTree(cursor!.byteOffset)? => distanceTree
+                decodeCompressedBlock(input, end, cursor!, count!, output!, literalTree, distanceTree, emit, maxOutputBytes)? => decoded
+            } else {
+                blockType == 2 -> if {
+                    dynamicTrees(input, end, cursor!)? => trees
+                    decodeCompressedBlock(input, end, cursor!, count!, output!, trees.literal, trees.distance, emit, maxOutputBytes)? => decoded
+                } else {
+                    errorInflate(errors.Kind.UnsupportedDeflateBlock, UIntSize(cursor!.byteOffset)) -> return
+                }
+            }
+        }
+    }
+    cursor! -> alignByte
+    Result<InflateState, Error>.Ok(InflateState {
+        cursor: cursor!
+        outputLength: count!.value
+        output: output!
+    })
+}
+
+inflateRange input: [UInt8], start: Int, end: Int, maxOutputBytes: Int, emit: Bool -> Result<InflateState, Error> {
+    inflatePayload(input, start, end, maxOutputBytes, emit)? => inflated
+    inflated.cursor.byteOffset == end -> unless {
+        errorInflate(errors.Kind.TrailingData, UIntSize(inflated.cursor.byteOffset)) -> return
+    }
+    Result<InflateState, Error>.Ok(inflated)
+}
+
+skipZeroTerminated input: [UInt8], offset: Int, end: Int -> Result<Int, Error> {
+    offset => cursor!
+    cursor! < end -> while {
+        input[cursor!] == 0 -> if { Result<Int, Error>.Ok(cursor! + 1) -> return }
+        cursor! + 1 => cursor!
+    }
+    Result<Int, Error>.Err(Error {
+        kind: errors.Kind.TruncatedInput
+        offset: UIntSize(cursor!)
+    })
+}
+
+payloadOffsetAt input: [UInt8], start: Int, end: Int -> Result<Int, Error> {
+    start >= 0 and end >= start and end <= (input -> len)
+        -> unless {
+            errorInt(errors.Kind.InvalidLimit, UIntSize(start)) -> return
+        }
+    end - start >= 10 -> unless {
+        errorInt(errors.Kind.TruncatedInput, UIntSize(end)) -> return
+    }
+    input[start] == 31 and input[start + 1] == 139
+        -> unless {
+            errorInt(errors.Kind.InvalidHeader, UIntSize(start)) -> return
+        }
+    input[start + 2] == 8 -> unless {
+        errorInt(errors.Kind.UnsupportedCompressionMethod, UIntSize(start + 2)) -> return
+    }
+    Int(input[start + 3]) => flags
+    flags / 32 == 0 -> unless {
+        errorInt(errors.Kind.InvalidHeader, UIntSize(start + 3)) -> return
+    }
+    start + 10 => cursor!
+    flags -> hasFlag(4) -> if {
+        cursor! + 2 <= end -> unless {
+            errorInt(errors.Kind.TruncatedInput, UIntSize(cursor!)) -> return
+        }
+        input -> readLe16(cursor!) => extraLength
+        cursor! + 2 + extraLength => cursor!
+        cursor! <= end -> unless {
+            errorInt(errors.Kind.TruncatedInput, UIntSize(end)) -> return
+        }
+    }
+    flags -> hasFlag(8) -> if {
+        input -> skipZeroTerminated(cursor!, end)? => cursor!
+    }
+    flags -> hasFlag(16) -> if {
+        input -> skipZeroTerminated(cursor!, end)? => cursor!
+    }
+    flags -> hasFlag(2) -> if {
+        cursor! + 2 <= end -> unless {
+            errorInt(errors.Kind.TruncatedInput, UIntSize(cursor!)) -> return
+        }
+        input -> crc32Range(start, cursor! - start) => headerChecksum
+        (input -> readLe16(cursor!)) == Int(headerChecksum % 65_536)
+            -> unless {
+                errorInt(errors.Kind.InvalidHeaderChecksum, UIntSize(cursor!)) -> return
+            }
+        cursor! + 2 => cursor!
+    }
+    Result<Int, Error>.Ok(cursor!)
+}
+
+payloadOffset input: [UInt8] -> Result<Int, Error> {
+    (input -> len) >= 18 -> unless {
+        errorInt(errors.Kind.TruncatedInput, UIntSize(input -> len)) -> return
+    }
+    input -> payloadOffsetAt(0, (input -> len) - 8)
+}
+
+validateExpansion inputLength: Int, outputLength: Int, maximum: Int, offset: Int -> Result<Int, Error> {
+    inputLength > 0 and outputLength > 0 -> if {
+        (outputLength - 1) / inputLength + 1 <= maximum
+            -> unless {
+                errorInt(errors.Kind.ExpansionRatioExceeded, UIntSize(offset)) -> return
+            }
+    }
+    Result<Int, Error>.Ok(outputLength)
+}
+
+decodeMember codec: Codec, input: [UInt8], start: Int, end: Int, maxOutputBytes: Int -> Result<MemberDecode, Error> {
+    input -> payloadOffsetAt(start, end)? => payloadStart
+    inflatePayload(input, payloadStart, end, maxOutputBytes, true)? => inflated
+    inflated.cursor.byteOffset => trailerOffset
+    trailerOffset + 8 <= end -> unless {
+        errorMember(errors.Kind.TruncatedInput, UIntSize(trailerOffset)) -> return
+    }
+    inflated.output -> crc32 => actualChecksum
+    input -> readLe32(trailerOffset) => expectedChecksum
+    actualChecksum == expectedChecksum -> unless {
+        errorMember(errors.Kind.ChecksumMismatch, UIntSize(trailerOffset)) -> return
+    }
+    input -> readLe32(trailerOffset + 4) => expectedSize
+    UInt32(inflated.outputLength) == expectedSize
+        -> unless {
+            errorMember(errors.Kind.SizeMismatch, UIntSize(trailerOffset + 4)) -> return
+        }
+    trailerOffset + 8 => nextOffset
+    validateExpansion(
+    nextOffset - start,
+    inflated.outputLength,
+    codec.limits.maxExpansionRatio,
+    trailerOffset)? => outputLength
+    Result<MemberDecode, Error>.Ok(MemberDecode {
+        nextOffset: nextOffset
+        output: inflated.output
+    })
+}
+
+decodeMembers codec: Codec, input: [UInt8], maxMembers: Int -> Result<[UInt8; ~], Error> {
+    maxMembers > 0 -> unless {
+        errorBytes(errors.Kind.InvalidLimit, 0) -> return
+    }
+    (input -> len) > 0 -> unless {
+        errorBytes(errors.Kind.TruncatedInput, 0) -> return
+    }
+    [UInt8; ~] => output!
+    0 => offset!
+    0 => memberCount!
+    offset! < (input -> len) -> while {
+        memberCount! < maxMembers -> unless {
+            errorBytes(errors.Kind.MemberLimitExceeded, UIntSize(offset!)) -> return
+        }
+        codec.limits.maxOutputBytes - (output! -> len) => remainingOutput
+        decodeMember(codec, input, offset!, input -> len, remainingOutput)? => member
+        output! -> reserve((output! -> len) + (member.output -> len))
+        0 => byteIndex!
+        byteIndex! < (member.output -> len) -> while {
+            output! -> push(member.output[byteIndex!])
+            byteIndex! + 1 => byteIndex!
+        }
+        member.nextOffset => offset!
+        memberCount! + 1 => memberCount!
+    }
+    Result<[UInt8; ~], Error>.Ok(output!)
+}
+
+streamReadByte decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> BitRead {
+    cursor.offset < (input -> len) -> unless {
+        BitRead { available: false, value: 0 } -> return
+    }
+    Int(input[cursor.offset]) => value
+    cursor.offset + 1 => cursor.offset
+    decoder.processedInputBytes + 1 => decoder.processedInputBytes
+    BitRead { available: true, value: value }
+}
+
+streamHeaderAdvance decoder: mut Decoder, completedField: Int -> Unit {
+    completedField < 1 and (decoder.headerFlags -> hasFlag(4))
+        -> if {
+            decoder_phases.Phase.HeaderExtraLength => decoder.phase
+            0 => decoder.headerPosition
+            0 => decoder.headerValue
+            return
+        }
+    completedField < 2 and (decoder.headerFlags -> hasFlag(8))
+        -> if {
+            decoder_phases.Phase.HeaderName => decoder.phase
+            return
+        }
+    completedField < 3 and (decoder.headerFlags -> hasFlag(16))
+        -> if {
+            decoder_phases.Phase.HeaderComment => decoder.phase
+            return
+        }
+    completedField < 4 and (decoder.headerFlags -> hasFlag(2))
+        -> if {
+            decoder_phases.Phase.HeaderChecksum => decoder.phase
+            0 => decoder.headerPosition
+            0 => decoder.headerValue
+            return
+        }
+    decoder_phases.Phase.BlockHeader => decoder.phase
+    0 => decoder.headerPosition
+    0 => decoder.headerValue
+}
+
+streamHeaderFixed decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    decoder.headerPosition == 0 and decoder.memberCount >= decoder.maxMembers
+        and cursor.offset < (input -> len) -> if {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.MemberLimitExceeded
+                offset: UIntSize(decoder.processedInputBytes)
+            }) -> return
+        }
+    streamReadByte(decoder, input, cursor) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    decoder.headerChecksum -> crc32Byte(UInt8(read.value)) => decoder.headerChecksum
+    decoder.headerPosition == 0 and read.value != 31
+        -> if {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.InvalidHeader
+                offset: UIntSize(decoder.processedInputBytes - 1)
+            }) -> return
+        }
+    decoder.headerPosition == 1 and read.value != 139
+        -> if {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.InvalidHeader
+                offset: UIntSize(decoder.processedInputBytes - 1)
+            }) -> return
+        }
+    decoder.headerPosition == 2 and read.value != 8
+        -> if {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.UnsupportedCompressionMethod
+                offset: UIntSize(decoder.processedInputBytes - 1)
+            }) -> return
+        }
+    decoder.headerPosition == 3 -> if {
+        read.value / 32 == 0 -> unless {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.InvalidHeader
+                offset: UIntSize(decoder.processedInputBytes - 1)
+            }) -> return
+        }
+        read.value => decoder.headerFlags
+    }
+    decoder.headerPosition + 1 => decoder.headerPosition
+    decoder.headerPosition == 10 -> if { streamHeaderAdvance(decoder, 0) }
+    Result<Bool, Error>.Ok(true)
+}
+
+streamHeaderExtraLength decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    streamReadByte(decoder, input, cursor) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    decoder.headerChecksum -> crc32Byte(UInt8(read.value)) => decoder.headerChecksum
+    decoder.headerValue + read.value * (decoder.headerPosition * 8 -> powerOfTwo)
+        => decoder.headerValue
+    decoder.headerPosition + 1 => decoder.headerPosition
+    decoder.headerPosition == 2 -> if {
+        decoder.headerValue => decoder.headerRemaining
+        decoder.headerRemaining == 0 -> if {
+            streamHeaderAdvance(decoder, 1)
+        } else {
+            decoder_phases.Phase.HeaderExtra => decoder.phase
+        }
+    }
+    Result<Bool, Error>.Ok(true)
+}
+
+streamHeaderExtra decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    streamReadByte(decoder, input, cursor) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    decoder.headerChecksum -> crc32Byte(UInt8(read.value)) => decoder.headerChecksum
+    decoder.headerRemaining - 1 => decoder.headerRemaining
+    decoder.headerRemaining == 0 -> if { streamHeaderAdvance(decoder, 1) }
+    Result<Bool, Error>.Ok(true)
+}
+
+streamHeaderZeroTerminated decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor, completedField: Int -> Result<Bool, Error> {
+    streamReadByte(decoder, input, cursor) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    decoder.headerChecksum -> crc32Byte(UInt8(read.value)) => decoder.headerChecksum
+    read.value == 0 -> if { streamHeaderAdvance(decoder, completedField) }
+    Result<Bool, Error>.Ok(true)
+}
+
+streamHeaderChecksum decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    streamReadByte(decoder, input, cursor) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    decoder.headerValue + read.value * (decoder.headerPosition * 8 -> powerOfTwo)
+        => decoder.headerValue
+    decoder.headerPosition + 1 => decoder.headerPosition
+    decoder.headerPosition == 2 -> if {
+        decoder.headerChecksum -> xor32(4_294_967_295) => verified
+        decoder.headerValue == Int(verified % 65_536)
+            -> unless {
+                Result<Bool, Error>.Err(Error {
+                    kind: errors.Kind.InvalidHeaderChecksum
+                    offset: UIntSize(decoder.processedInputBytes - 2)
+                }) -> return
+            }
+        streamHeaderAdvance(decoder, 4)
+    }
+    Result<Bool, Error>.Ok(true)
+}
+
+streamAppendByte decoder: mut Decoder, byte: UInt8 -> Result<Int, Error> {
+    (decoder.verifiedOutput -> len) + (decoder.memberOutput -> len) < decoder.codec.limits.maxOutputBytes
+        -> unless {
+            errorInt(errors.Kind.OutputLimitExceeded, UIntSize(decoder.processedInputBytes)) -> return
+        }
+    decoder.memberOutput -> push(byte)
+    decoder.checksum -> crc32Byte(byte) => decoder.checksum
+    decoder.memberSize + 1 => decoder.memberSize
+    Result<Int, Error>.Ok(1)
+}
+
+streamFinishBlock decoder: mut Decoder -> Unit {
+    0 => decoder.symbolCode
+    0 => decoder.symbolBits
+    0 => decoder.compressedPhase
+    decoder.finalBlock -> if {
+        decoder -> streamAlignByte
+        decoder_phases.Phase.TrailerChecksum => decoder.phase
+    } else {
+        decoder_phases.Phase.BlockHeader => decoder.phase
+    }
+}
+
+streamBlockHeader decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    streamReadBits(decoder, input, cursor, 3) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    read.value % 2 == 1 => decoder.finalBlock
+    read.value / 2 => blockType
+    blockType == 0 -> if {
+        decoder -> streamAlignByte
+        decoder_phases.Phase.StoredHeader => decoder.phase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    blockType == 1 -> if {
+        fixedLiteralTree(decoder.processedInputBytes)? => decoder.literalTree
+        fixedDistanceTree(decoder.processedInputBytes)? => decoder.distanceTree
+        0 => decoder.compressedPhase
+        decoder_phases.Phase.Compressed => decoder.phase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    blockType == 2 -> if {
+        0 => decoder.dynamicPhase
+        0 => decoder.dynamicIndex
+        [Int; ~] => decoder.codeLengthLengths
+        [Int; ~] => decoder.dynamicLengths
+        decoder_phases.Phase.Dynamic => decoder.phase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    Result<Bool, Error>.Err(Error {
+        kind: errors.Kind.UnsupportedDeflateBlock
+        offset: UIntSize(decoder.processedInputBytes)
+    })
+}
+
+streamStoredHeader decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    streamReadBits(decoder, input, cursor, 16) => lengthRead
+    lengthRead.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    streamReadBits(decoder, input, cursor, 16) => inverseRead
+    inverseRead.available -> unless {
+        # Preserve the first half without reparsing it on the next write.
+        lengthRead.value => decoder.headerValue
+        decoder_phases.Phase.StoredData => decoder.phase
+        -1 => decoder.storedRemaining
+        Result<Bool, Error>.Ok(false) -> return
+    }
+    lengthRead.value + inverseRead.value == 65_535
+        -> unless {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.InvalidStoredLength
+                offset: UIntSize(decoder.processedInputBytes - 4)
+            }) -> return
+        }
+    lengthRead.value => decoder.storedRemaining
+    decoder_phases.Phase.StoredData => decoder.phase
+    Result<Bool, Error>.Ok(true)
+}
+
+streamStoredData decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    decoder.storedRemaining == -1 -> if {
+        streamReadBits(decoder, input, cursor, 16) => inverseRead
+        inverseRead.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        decoder.headerValue + inverseRead.value == 65_535
+            -> unless {
+                Result<Bool, Error>.Err(Error {
+                    kind: errors.Kind.InvalidStoredLength
+                    offset: UIntSize(decoder.processedInputBytes - 4)
+                }) -> return
+            }
+        decoder.headerValue => decoder.storedRemaining
+    }
+    decoder.storedRemaining == 0 -> if {
+        decoder -> streamFinishBlock
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    streamReadByte(decoder, input, cursor) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    streamAppendByte(decoder, UInt8(read.value))? => appended
+    decoder.storedRemaining - 1 => decoder.storedRemaining
+    Result<Bool, Error>.Ok(true)
+}
+
+streamDynamicBuildTrees decoder: mut Decoder -> Result<Bool, Error> {
+    decoder.dynamicLengths[256] > 0 -> unless {
+        Result<Bool, Error>.Err(Error {
+            kind: errors.Kind.InvalidHuffmanTree
+            offset: UIntSize(decoder.processedInputBytes)
+        }) -> return
+    }
+    [Int; ~] => literalLengths!
+    [Int; ~] => distanceLengths!
+    0 => index!
+    index! < decoder.literalCount -> while {
+        literalLengths! -> push(decoder.dynamicLengths[index!])
+        index! + 1 => index!
+    }
+    index! < decoder.literalCount + decoder.distanceCount
+        -> while {
+            distanceLengths! -> push(decoder.dynamicLengths[index!])
+            index! + 1 => index!
+        }
+    literalLengths! -> buildHuffman(decoder.processedInputBytes)? => decoder.literalTree
+    distanceLengths! -> buildHuffman(decoder.processedInputBytes)? => decoder.distanceTree
+    0 => decoder.symbolCode
+    0 => decoder.symbolBits
+    0 => decoder.compressedPhase
+    decoder_phases.Phase.Compressed => decoder.phase
+    Result<Bool, Error>.Ok(true)
+}
+
+streamDynamic decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    decoder.dynamicPhase == 0 -> if {
+        streamReadBits(decoder, input, cursor, 5) => read
+        read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        read.value + 257 => decoder.literalCount
+        1 => decoder.dynamicPhase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    decoder.dynamicPhase == 1 -> if {
+        streamReadBits(decoder, input, cursor, 5) => read
+        read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        read.value + 1 => decoder.distanceCount
+        2 => decoder.dynamicPhase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    decoder.dynamicPhase == 2 -> if {
+        streamReadBits(decoder, input, cursor, 4) => read
+        read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        read.value + 4 => decoder.codeLengthCount
+        0 => decoder.dynamicIndex
+        3 => decoder.dynamicPhase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    decoder.dynamicPhase == 3 -> if {
+        decoder.dynamicIndex < decoder.codeLengthCount
+            -> if {
+                streamReadBits(decoder, input, cursor, 3) => read
+                read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+                [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15] => order
+                decoder.codeLengthLengths -> push(read.value)
+                decoder.dynamicIndex + 1 => decoder.dynamicIndex
+                Result<Bool, Error>.Ok(true) -> return
+            }
+        [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15] => order
+        [0; 19] => orderedLengths!
+        0 => orderedIndex!
+        orderedIndex! < decoder.codeLengthCount -> while {
+            decoder.codeLengthLengths[orderedIndex!]
+                => orderedLengths![order[orderedIndex!]]
+            orderedIndex! + 1 => orderedIndex!
+        }
+        orderedLengths! -> buildHuffman(decoder.processedInputBytes)?
+            => decoder.codeLengthTree
+        0 => decoder.symbolCode
+        0 => decoder.symbolBits
+        4 => decoder.dynamicPhase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    decoder.dynamicPhase == 4 -> if {
+        (decoder.dynamicLengths -> len) >= decoder.literalCount + decoder.distanceCount
+            -> if {
+                streamDynamicBuildTrees(decoder) -> return
+            }
+        streamDecodeSymbol(decoder, input, cursor, 2)? => symbol
+        symbol.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        symbol.value <= 15 -> if {
+            decoder.dynamicLengths -> push(symbol.value)
+            Result<Bool, Error>.Ok(true) -> return
+        }
+        symbol.value >= 16 and symbol.value <= 18 -> unless {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.InvalidDeflateCode
+                offset: UIntSize(decoder.processedInputBytes)
+            }) -> return
+        }
+        symbol.value == 16 and (decoder.dynamicLengths -> len) == 0
+            -> if {
+                Result<Bool, Error>.Err(Error {
+                    kind: errors.Kind.InvalidHuffmanTree
+                    offset: UIntSize(decoder.processedInputBytes)
+                }) -> return
+            }
+        symbol.value => decoder.dynamicRepeatSymbol
+        5 => decoder.dynamicPhase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    decoder.dynamicRepeatSymbol == 16 -> if { 2 } else {
+        decoder.dynamicRepeatSymbol == 17 -> if { 3 } else { 7 }
+    } => extraBits
+    decoder.dynamicRepeatSymbol == 18 -> if { 11 } else { 3 } => repeatBase
+    streamReadBits(decoder, input, cursor, extraBits) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    repeatBase + read.value => repeatCount
+    repeatCount <= decoder.literalCount + decoder.distanceCount - (decoder.dynamicLengths -> len)
+        -> unless {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.InvalidHuffmanTree
+                offset: UIntSize(decoder.processedInputBytes)
+            }) -> return
+        }
+    decoder.dynamicRepeatSymbol == 16 -> if {
+        decoder.dynamicLengths[(decoder.dynamicLengths -> len) - 1]
+    } else { 0 } => repeatedLength
+    0 => repeatIndex!
+    repeatIndex! < repeatCount -> while {
+        decoder.dynamicLengths -> push(repeatedLength)
+        repeatIndex! + 1 => repeatIndex!
+    }
+    4 => decoder.dynamicPhase
+    Result<Bool, Error>.Ok(true)
+}
+
+streamCompressed decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    decoder.compressedPhase == 0 -> if {
+        streamDecodeSymbol(decoder, input, cursor, 0)? => symbol
+        symbol.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        symbol.value < 256 -> if {
+            streamAppendByte(decoder, UInt8(symbol.value))? => appended
+            Result<Bool, Error>.Ok(true) -> return
+        }
+        symbol.value == 256 -> if {
+            decoder -> streamFinishBlock
+            Result<Bool, Error>.Ok(true) -> return
+        }
+        symbol.value >= 257 and symbol.value <= 285 -> unless {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.InvalidDeflateCode
+                offset: UIntSize(decoder.processedInputBytes)
+            }) -> return
+        }
+        symbol.value => decoder.matchLength
+        1 => decoder.compressedPhase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    decoder.compressedPhase == 1 -> if {
+        decoder.matchLength -> lengthExtraBits => extraBits
+        streamReadBits(decoder, input, cursor, extraBits) => read
+        read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        (decoder.matchLength -> lengthBase) + read.value => decoder.matchLength
+        2 => decoder.compressedPhase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    decoder.compressedPhase == 2 -> if {
+        streamDecodeSymbol(decoder, input, cursor, 1)? => symbol
+        symbol.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        symbol.value <= 29 -> unless {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.InvalidDeflateCode
+                offset: UIntSize(decoder.processedInputBytes)
+            }) -> return
+        }
+        symbol.value => decoder.matchDistance
+        3 => decoder.compressedPhase
+        Result<Bool, Error>.Ok(true) -> return
+    }
+    decoder.compressedPhase == 3 -> if {
+        decoder.matchDistance -> distanceExtraBits => extraBits
+        streamReadBits(decoder, input, cursor, extraBits) => read
+        read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+        (decoder.matchDistance -> distanceBase) + read.value => decoder.matchDistance
+        decoder.matchDistance > 0 and decoder.matchDistance <= (decoder.memberOutput -> len)
+            -> unless {
+                Result<Bool, Error>.Err(Error {
+                    kind: errors.Kind.InvalidDistance
+                    offset: UIntSize(decoder.processedInputBytes)
+                }) -> return
+            }
+        decoder.codec.limits.maxOutputBytes - (decoder.verifiedOutput -> len) - (decoder.memberOutput -> len) => remainingOutput
+        decoder.matchLength <= remainingOutput -> unless {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.OutputLimitExceeded
+                offset: UIntSize(decoder.processedInputBytes)
+            }) -> return
+        }
+        4 => decoder.compressedPhase
+    }
+    0 => copyIndex!
+    copyIndex! < decoder.matchLength -> while {
+        decoder.memberOutput[(decoder.memberOutput -> len) - decoder.matchDistance] => copied
+        streamAppendByte(decoder, copied)? => appended
+        copyIndex! + 1 => copyIndex!
+    }
+    0 => decoder.compressedPhase
+    Result<Bool, Error>.Ok(true)
+}
+
+streamCommitMember decoder: mut Decoder, expectedSize: UInt32 -> Result<Bool, Error> {
+    decoder.checksum -> xor32(4_294_967_295) => actualChecksum
+    actualChecksum == decoder.trailerChecksum -> unless {
+        Result<Bool, Error>.Err(Error {
+            kind: errors.Kind.ChecksumMismatch
+            offset: UIntSize(decoder.processedInputBytes - 8)
+        }) -> return
+    }
+    decoder.memberSize == expectedSize -> unless {
+        Result<Bool, Error>.Err(Error {
+            kind: errors.Kind.SizeMismatch
+            offset: UIntSize(decoder.processedInputBytes - 4)
+        }) -> return
+    }
+    validateExpansion(
+    decoder.processedInputBytes - decoder.memberStartOffset,
+    decoder.memberOutput -> len,
+    decoder.codec.limits.maxExpansionRatio,
+    decoder.processedInputBytes - 8)? => outputLength
+    0 => outputIndex!
+    outputIndex! < (decoder.memberOutput -> len) -> while {
+        decoder.verifiedOutput -> push(decoder.memberOutput[outputIndex!])
+        outputIndex! + 1 => outputIndex!
+    }
+    decoder.memberCount + 1 => decoder.memberCount
+    decoder.processedInputBytes => decoder.memberStartOffset
+    decoder_phases.Phase.HeaderFixed => decoder.phase
+    0 => decoder.headerPosition
+    0 => decoder.headerFlags
+    0 => decoder.headerRemaining
+    0 => decoder.headerValue
+    4_294_967_295 => decoder.headerChecksum
+    false => decoder.finalBlock
+    0 => decoder.storedRemaining
+    0 => decoder.bitBuffer
+    0 => decoder.bitCount
+    0 => decoder.symbolCode
+    0 => decoder.symbolBits
+    0 => decoder.compressedPhase
+    4_294_967_295 => decoder.checksum
+    0 => decoder.memberSize
+    [UInt8; ~] => decoder.memberOutput
+    Result<Bool, Error>.Ok(true)
+}
+
+streamReadLe32 decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> UInt32Read {
+    decoder.headerPosition == 0 -> if {
+        streamReadBits(decoder, input, cursor, 16) => low
+        low.available -> unless {
+            UInt32Read { available: false, value: 0 } -> return
+        }
+        low.value => decoder.headerValue
+        1 => decoder.headerPosition
+    }
+    streamReadBits(decoder, input, cursor, 16) => high
+    high.available -> unless {
+        UInt32Read { available: false, value: 0 } -> return
+    }
+    UInt32(decoder.headerValue) + UInt32(high.value) * 65_536 => value
+    0 => decoder.headerValue
+    0 => decoder.headerPosition
+    UInt32Read { available: true, value: value }
+}
+
+streamTrailerChecksum decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    streamReadLe32(decoder, input, cursor) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    read.value => decoder.trailerChecksum
+    decoder_phases.Phase.TrailerSize => decoder.phase
+    Result<Bool, Error>.Ok(true)
+}
+
+streamTrailerSize decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    streamReadLe32(decoder, input, cursor) => read
+    read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
+    streamCommitMember(decoder, read.value)
+}
+
+streamStep decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {
+    decoder.phase -> when {
+        HeaderFixed { streamHeaderFixed(decoder, input, cursor) }
+        HeaderExtraLength { streamHeaderExtraLength(decoder, input, cursor) }
+        HeaderExtra { streamHeaderExtra(decoder, input, cursor) }
+        HeaderName { streamHeaderZeroTerminated(decoder, input, cursor, 2) }
+        HeaderComment { streamHeaderZeroTerminated(decoder, input, cursor, 3) }
+        HeaderChecksum { streamHeaderChecksum(decoder, input, cursor) }
+        BlockHeader { streamBlockHeader(decoder, input, cursor) }
+        StoredHeader { streamStoredHeader(decoder, input, cursor) }
+        StoredData { streamStoredData(decoder, input, cursor) }
+        Dynamic { streamDynamic(decoder, input, cursor) }
+        Compressed { streamCompressed(decoder, input, cursor) }
+        TrailerChecksum { streamTrailerChecksum(decoder, input, cursor) }
+        TrailerSize { streamTrailerSize(decoder, input, cursor) }
+    }
+}
+
+streamProcess decoder: mut Decoder, input: [UInt8] -> Result<Int, Error> {
+    StreamCursor { offset: 0 } => cursor!
+    true -> while {
+        streamStep(decoder, input, cursor!)? => progressed
+        progressed -> unless { break }
+    }
+    Result<Int, Error>.Ok(cursor!.offset)
+}
+
+impl Limits {
+    public codec: self -> Result<Codec, Error> {
+        self.maxOutputBytes >= 0 and self.maxExpansionRatio > 0
+            -> unless { errorCodec(errors.Kind.InvalidLimit, 0) -> return }
+        Result<Codec, Error>.Ok(Codec { limits: self })
+    }
+}
+
+impl Codec {
+    public encoder: self -> Result<Encoder, Error> {
+        self.limits.maxOutputBytes >= 23 -> unless {
+            errorEncoder(errors.Kind.OutputLimitExceeded, 0) -> return
+        }
+        Result<Encoder, Error>.Ok(Encoder {
+            maxOutputBytes: self.limits.maxOutputBytes
+            produced: 0
+            checksum: 4_294_967_295
+            inputSize: 0
+            started: false
+        })
+    }
+
+    public decoder: self, limits: DecoderLimits -> Result<Decoder, Error> {
+        limits.maxInputBytes >= 0 and limits.maxMembers > 0
+            -> unless {
+                errorDecoder(errors.Kind.InvalidLimit, 0) -> return
+            }
+        Result<Decoder, Error>.Ok(Decoder {
+            codec: self
+            maxInputBytes: limits.maxInputBytes
+            maxMembers: limits.maxMembers
+            totalInputBytes: 0
+            processedInputBytes: 0
+            memberStartOffset: 0
+            memberCount: 0
+            phase: decoder_phases.Phase.HeaderFixed
+            headerPosition: 0
+            headerFlags: 0
+            headerRemaining: 0
+            headerValue: 0
+            headerChecksum: 4_294_967_295
+            bitBuffer: 0
+            bitCount: 0
+            finalBlock: false
+            storedRemaining: 0
+            dynamicPhase: 0
+            literalCount: 0
+            distanceCount: 0
+            codeLengthCount: 0
+            dynamicIndex: 0
+            dynamicRepeatSymbol: 0
+            codeLengthLengths: [Int; ~]
+            dynamicLengths: [Int; ~]
+            codeLengthTree: emptyHuffman()
+            literalTree: emptyHuffman()
+            distanceTree: emptyHuffman()
+            symbolCode: 0
+            symbolBits: 0
+            compressedPhase: 0
+            matchLength: 0
+            matchDistance: 0
+            checksum: 4_294_967_295
+            memberSize: 0
+            memberOutput: [UInt8; ~]
+            verifiedOutput: [UInt8; ~]
+            trailerChecksum: 0
+            failed: false
+            failure: Error { kind: errors.Kind.TruncatedInput, offset: 0 }
+        })
+    }
+
+    public planCompress: self, inputLength: Int -> Result<EncodePlan, Error> {
+        inputLength >= 0 -> unless {
+            errorEncodePlan(errors.Kind.InvalidLimit, 0) -> return
+        }
+        inputLength == 0 -> if { 1 } else { (inputLength + 65_534) / 65_535 } => blocks
+        inputLength <= self.limits.maxOutputBytes - 18
+            -> unless {
+                errorEncodePlan(errors.Kind.OutputLimitExceeded, UIntSize(inputLength)) -> return
+            }
+        blocks <= (self.limits.maxOutputBytes - 18 - inputLength) / 5
+            -> unless {
+                errorEncodePlan(errors.Kind.OutputLimitExceeded, UIntSize(inputLength)) -> return
+            }
+        inputLength + blocks * 5 + 18 => outputLength
+        Result<EncodePlan, Error>.Ok(EncodePlan {
+            inputLength: inputLength
+            outputLength: outputLength
+            blockCount: blocks
+        })
+    }
+
+    public compress: self, input: [UInt8] -> Result<[UInt8; ~], Error> {
+        self -> planCompress(input -> len)? => plan
+        [UInt8; ~] => output!
+        # Deterministic header: no optional fields, mtime 0, level 0, OS unknown.
+        output! -> push(31)
+        output! -> push(139)
+        output! -> push(8)
+        output! -> push(0)
+        output! -> push(0)
+        output! -> push(0)
+        output! -> push(0)
+        output! -> push(0)
+        output! -> push(0)
+        output! -> push(255)
+
+        0 => inputOffset!
+        0 => blockIndex!
+        blockIndex! < plan.blockCount -> while {
+            plan.blockCount - 1 == blockIndex! -> if { 1 } else { 0 } => header
+            output! -> push(UInt8(header))
+            plan.inputLength - inputOffset! => remaining
+            remaining > 65_535 -> if { 65_535 } else { remaining } => blockLength
+            blockLength -> appendLe16(output!)
+            (65_535 - blockLength) -> appendLe16(output!)
+            0 => byteIndex!
+            byteIndex! < blockLength -> while {
+                output! -> push(input[inputOffset! + byteIndex!])
+                byteIndex! + 1 => byteIndex!
+            }
+            inputOffset! + blockLength => inputOffset!
+            blockIndex! + 1 => blockIndex!
+        }
+        input -> crc32 => checksum
+        checksum -> appendLe32(output!)
+        UInt32(plan.inputLength) -> appendLe32(output!)
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public planCompressFixed: self, inputLength: Int -> Result<EncodePlan, Error> {
+        inputLength >= 0 -> unless {
+            errorEncodePlan(errors.Kind.InvalidLimit, 0) -> return
+        }
+        self.limits.maxOutputBytes >= 20 -> unless {
+            errorEncodePlan(errors.Kind.OutputLimitExceeded, UIntSize(inputLength)) -> return
+        }
+        (self.limits.maxOutputBytes - 18) * 8 => availableBits
+        inputLength <= (availableBits - 10) / 9 -> unless {
+            errorEncodePlan(errors.Kind.OutputLimitExceeded, UIntSize(inputLength)) -> return
+        }
+        18 + (inputLength * 9 + 17) / 8 => maximumOutputLength
+        Result<EncodePlan, Error>.Ok(EncodePlan {
+            inputLength: inputLength
+            outputLength: maximumOutputLength
+            blockCount: 1
+        })
+    }
+
+    public compressFixed: self, input: [UInt8] -> Result<[UInt8; ~], Error> {
+        self -> planCompressFixed(input -> len)? => plan
+        self.limits.maxOutputBytes - 8 => payloadMaximum
+        [UInt8; ~] => output!
+        # Deterministic header: mtime 0, fastest-algorithm hint, OS unknown.
+        appendChecked(output!, 31, payloadMaximum)? => header0
+        appendChecked(output!, 139, payloadMaximum)? => header1
+        appendChecked(output!, 8, payloadMaximum)? => header2
+        appendChecked(output!, 0, payloadMaximum)? => header3
+        appendChecked(output!, 0, payloadMaximum)? => header4
+        appendChecked(output!, 0, payloadMaximum)? => header5
+        appendChecked(output!, 0, payloadMaximum)? => header6
+        appendChecked(output!, 0, payloadMaximum)? => header7
+        appendChecked(output!, 4, payloadMaximum)? => header8
+        appendChecked(output!, 255, payloadMaximum)? => header9
+
+        BitWriter { currentByte: 0, bitCount: 0 } => writer!
+        # BFINAL=1, BTYPE=01. Fixed-width fields are written least-significant
+        # bit first, so the packed three-bit value is 0b011.
+        writeBits(writer!, output!, 3, 3, payloadMaximum)? => blockHeader
+        [Int; ~] => heads!
+        0 => headIndex!
+        headIndex! < 4_096 -> while {
+            heads! -> push(-1)
+            headIndex! + 1 => headIndex!
+        }
+        0 => position!
+        position! < (input -> len) -> while {
+            Match { length: 0, distance: 0 } => matched!
+            position! + 2 < (input -> len) -> if {
+                input -> hashAt(position!) => hash
+                heads![hash] => candidate
+                position! => heads![hash]
+                input -> findMatch(position!, candidate) => matched!
+            }
+            matched!.length >= 3 -> if {
+                matched!.length -> encodeLength => lengthCode
+                lengthCode.symbol -> fixedCode => literalCode
+                writeCode(writer!, output!, literalCode, payloadMaximum)? => literalWritten
+                writeBits(writer!, output!, lengthCode.extraValue, lengthCode.extraBits, payloadMaximum)? => lengthExtraWritten
+                matched!.distance -> encodeDistance => distanceCode
+                DeflateCode { value: distanceCode.symbol, bits: 5 } => fixedDistanceCode
+                writeCode(writer!, output!, fixedDistanceCode, payloadMaximum)? => distanceWritten
+                writeBits(writer!, output!, distanceCode.extraValue, distanceCode.extraBits, payloadMaximum)? => distanceExtraWritten
+                1 => matchIndex!
+                matchIndex! < matched!.length -> while {
+                    position! + matchIndex! + 2 < (input -> len)
+                        -> if {
+                            input -> hashAt(position! + matchIndex!) => hash
+                            position! + matchIndex! => heads![hash]
+                        }
+                    matchIndex! + 1 => matchIndex!
+                }
+                position! + matched!.length => position!
+            } else {
+                Int(input[position!]) -> fixedCode => literalCode
+                writeCode(writer!, output!, literalCode, payloadMaximum)? => literalWritten
+                position! + 1 => position!
+            }
+        }
+        256 -> fixedCode => endCode
+        writeCode(writer!, output!, endCode, payloadMaximum)? => endWritten
+        flushBits(writer!, output!, payloadMaximum)? => flushed
+        input -> crc32 => checksum
+        checksum -> appendLe32(output!)
+        UInt32(input -> len) -> appendLe32(output!)
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public planDecompress: self, input: [UInt8] -> Result<DecodePlan, Error> {
+        input -> payloadOffset? => payloadStart
+        (input -> len) - 8 => payloadEnd
+        inflateRange(input, payloadStart, payloadEnd, self.limits.maxOutputBytes, false)? => inflated
+        validateExpansion(
+        input -> len,
+        inflated.outputLength,
+        self.limits.maxExpansionRatio,
+        payloadEnd)? => outputLength
+        Result<DecodePlan, Error>.Ok(DecodePlan {
+            inputLength: input -> len
+            outputLength: outputLength
+            payloadOffset: payloadStart
+            trailerOffset: payloadEnd
+        })
+    }
+
+    public decompress: self, input: [UInt8] -> Result<[UInt8; ~], Error> {
+        input -> payloadOffset? => payloadStart
+        (input -> len) - 8 => trailerOffset
+        inflateRange(input, payloadStart, trailerOffset, self.limits.maxOutputBytes, true)? => inflated
+        validateExpansion(
+        input -> len,
+        inflated.outputLength,
+        self.limits.maxExpansionRatio,
+        trailerOffset)? => outputLength
+        inflated.output -> crc32 => actualChecksum
+        input -> readLe32(trailerOffset) => expectedChecksum
+        actualChecksum == expectedChecksum -> unless {
+            errorBytes(errors.Kind.ChecksumMismatch, UIntSize(trailerOffset)) -> return
+        }
+        input -> readLe32(trailerOffset + 4) => expectedSize
+        UInt32(outputLength) == expectedSize -> unless {
+            errorBytes(errors.Kind.SizeMismatch, UIntSize(trailerOffset + 4)) -> return
+        }
+        Result<[UInt8; ~], Error>.Ok(inflated.output)
+    }
+
+    public decompressMembers: self, input: [UInt8], maxMembers: Int -> Result<[UInt8; ~], Error> {
+        decodeMembers(self, input, maxMembers)
+    }
+}
+
+impl Encoder {
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        (input -> len) == 0 -> if { 0 } else { ((input -> len) + 65_534) / 65_535 } => blocks
+        self.started -> if { 0 } else { 10 } => headerLength
+        headerLength + blocks * 5 + (input -> len) => added
+        added <= self.maxOutputBytes - self.produced - 13
+            -> unless {
+                errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.inputSize)) -> return
+            }
+        output -> reserve((output -> len) + added)
+        not self.started -> if {
+            output -> appendStoredHeader
+            true => self.started
+        }
+        0 => inputOffset!
+        inputOffset! < (input -> len) -> while {
+            (input -> len) - inputOffset! => remaining
+            remaining > 65_535 -> if { 65_535 } else { remaining } => blockLength
+            appendStoredBlock(input, inputOffset!, blockLength, false, output)
+            inputOffset! + blockLength => inputOffset!
+        }
+        self.checksum -> crc32Update(input) => checksum
+        self.inputSize + UInt32(input -> len) => inputSize
+        self.produced + added => produced
+        checksum => self.checksum
+        inputSize => self.inputSize
+        produced => self.produced
+        Result<Int, Error>.Ok(added)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.started -> if { 0 } else { 10 } => headerLength
+        headerLength + 13 => added
+        added <= self.maxOutputBytes - self.produced
+            -> unless {
+                errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.inputSize)) -> return
+            }
+        output -> reserve((output -> len) + added)
+        not self.started -> if { output -> appendStoredHeader }
+        [UInt8; ~] => empty
+        appendStoredBlock(empty, 0, 0, true, output)
+        self.checksum -> xor32(4_294_967_295) -> appendLe32(output)
+        self.inputSize -> appendLe32(output)
+        Result<Int, Error>.Ok(added)
+    }
+}
+
+impl Decoder {
+    public write: mut self, input: [UInt8] -> Result<Int, Error> {
+        (input -> len) <= self.maxInputBytes - self.totalInputBytes
+            -> unless {
+                errorInt(
+                errors.Kind.InputLimitExceeded,
+                UIntSize(self.totalInputBytes + (input -> len))) -> return
+            }
+        not self.failed -> if {
+            streamProcess(self, input) -> when {
+                Ok(_) { }
+                Err(failure) {
+                    true => self.failed
+                    failure => self.failure
+                }
+            }
+        }
+        self.totalInputBytes + (input -> len) => self.totalInputBytes
+        Result<Int, Error>.Ok(input -> len)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.failed -> if { Result<Int, Error>.Err(self.failure) -> return }
+        self.memberCount > 0 -> unless {
+            errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return
+        }
+        self.phase -> when {
+            HeaderFixed {
+                self.headerPosition == 0 and self.bitCount == 0
+                    -> unless {
+                        errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return
+                    }
+            }
+            HeaderExtraLength { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            HeaderExtra { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            HeaderName { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            HeaderComment { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            HeaderChecksum { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            BlockHeader { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            StoredHeader { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            StoredData { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            Dynamic { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            Compressed { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            TrailerChecksum { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+            TrailerSize { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+        }
+        output -> reserve((output -> len) + (self.verifiedOutput -> len))
+        0 => index!
+        index! < (self.verifiedOutput -> len) -> while {
+            output -> push(self.verifiedOutput[index!])
+            index! + 1 => index!
+        }
+        Result<Int, Error>.Ok(self.verifiedOutput -> len)
+    }
+}

@@ -1,0 +1,46 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# An indexed nominal receiver followed by a terminal instance call must retain
+# its call node through Typed IR. Dropping the call leaves only the index value
+# and lets the preliminary unresolved-call diagnostic survive incorrectly.
+main {
+    [
+    """
+    namespace sys.path
+
+    public struct Path {
+        public bytes: [UInt8; ~]
+        public style: Int
+    }
+
+    impl Path {
+        public pathText: self -> Text = intrinsic
+    }
+    """,
+    """
+    import sys.path as path
+
+    inspect paths: [path.Path; ~], index: Int -> Text {
+        paths[index] -> pathText
+    }
+
+    main { }
+    """; ~
+    ] => sources
+    sources -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    false => preliminaryUnresolved!
+    context.calls -> each call {
+        call.sourceModule == 1 and call.status == 2
+            -> if { true => preliminaryUnresolved! }
+    }
+    false => found!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.kind == 6 and node.opcode == -230 -> if { true => found! }
+        index! + 1 => index!
+    }
+    "preliminary=$(preliminaryUnresolved!),late-path=$(found!)" -> println
+}

@@ -1,0 +1,103 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    """"
+        namespace sample
+
+        public struct Connection { public token: UInt64 }
+        enum Error { Failed }
+
+        transmit value: UIntSize -> UIntSize => value + 1
+
+        run value: UIntSize -> UIntSize {
+            value -> transmit
+        }
+
+        write connection: Connection, bytes: ref [UInt8; ~] -> Result<Unit, Error> {
+            UIntSize(bytes -> len) => length
+            UIntSize(0) => offset!
+            offset! < length -> while {
+                connection -> transmit(bytes, offset!, length - offset!)? => sent
+                offset! + sent => offset!
+            }
+            Result<Unit, Error>.Ok
+        }
+    """" => source
+
+    """"
+        namespace sample
+
+        impl Connection {
+            public transmit: self, bytes: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<UIntSize, Error> {
+                Result<UIntSize, Error>.Ok(offset + length + UIntSize(bytes -> len) + UIntSize(self.token))
+            }
+        }
+    """" => runtimeSource
+
+    [source, runtimeSource; ~] -> semanticContext.prepare => context
+    context -> expressionTypeIds.resolveContext => types
+    context -> typedIr.lowerResolvedContext(types) => ir
+
+    context.package.ranges[1] => runtimeRange
+    0 => calls!
+    0 => complete!
+    0 => observedArguments!
+    0 => globalCalls!
+    0 => globalComplete!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        false => isTransmit!
+        node.kind == 6
+            and node.targetModule == 1
+            and node.symbol >= 0
+            -> if {
+            context.package.symbols[runtimeRange.symbolStart + node.symbol] => targetSymbol
+            targetSymbol.nameToken >= 0 -> if {
+                context.package.tokens[runtimeRange.tokenStart + targetSymbol.nameToken] => nameToken
+                nameToken.span.length == 8
+                    and (runtimeSource -> byte(nameToken.span.start)) == 116
+                    -> if { true => isTransmit! }
+            }
+        }
+        isTransmit! -> if {
+                calls! + 1 => calls!
+                0 => argumentCount!
+                node.operand0 => argumentIndex!
+                argumentIndex! >= 0 -> while {
+                    argumentCount! + 1 => argumentCount!
+                    ir[argumentIndex!].nextOperand => argumentIndex!
+                }
+                argumentCount! => observedArguments!
+                argumentCount! == 4 -> if { complete! + 1 => complete! }
+            }
+        false => isGlobalTransmit!
+        node.kind == 6
+            and node.targetModule == 0
+            and node.symbol >= 0
+            -> if {
+            context.package.ranges[0] => sourceRange
+            context.package.symbols[sourceRange.symbolStart + node.symbol] => targetSymbol
+            targetSymbol.nameToken >= 0 -> if {
+                context.package.tokens[sourceRange.tokenStart + targetSymbol.nameToken] => nameToken
+                nameToken.span.length == 8
+                    and (source -> byte(nameToken.span.start)) == 116
+                    -> if { true => isGlobalTransmit! }
+            }
+        }
+        isGlobalTransmit! -> if {
+            globalCalls! + 1 => globalCalls!
+            0 => argumentCount!
+            node.operand0 => argumentIndex!
+            argumentIndex! >= 0 -> while {
+                argumentCount! + 1 => argumentCount!
+                ir[argumentIndex!].nextOperand => argumentIndex!
+            }
+            argumentCount! == 1 -> if { globalComplete! + 1 => globalComplete! }
+        }
+        irIndex! + 1 => irIndex!
+    }
+    "four-argument-calls=$(calls!),complete=$(complete!),observed=$(observedArguments!),global=$(globalCalls!):$(globalComplete!)" -> println
+}

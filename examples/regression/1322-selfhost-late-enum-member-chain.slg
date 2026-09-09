@@ -1,0 +1,125 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+sameText source: Text, start: UIntSize, length: UIntSize, expected: Text -> Bool {
+    length == (expected -> len) -> unless { false -> return }
+    (source -> slice(start, length)) == expected
+}
+
+startsWithText source: Text, start: UIntSize, length: UIntSize, expected: Text -> Bool {
+    length >= (expected -> len) -> unless { false -> return }
+    (source -> slice(start, expected -> len)) == expected
+}
+
+main {
+    """"
+        namespace sample
+
+        enum Kind { Ready Other }
+
+        struct Head {
+            kind: Kind
+            text: Text
+        }
+
+        struct Request { head: Head }
+        struct Policy { enabled: Bool }
+        enum ServerError { Socket(Head) }
+
+        impl Head {
+            methodText: self -> Text => self.text
+        }
+
+        impl Policy {
+            response: self, method: Text, kind: Kind, status: Int, reason: Text, length: UIntSize, close: Bool -> Bool {
+                self.enabled and (method -> len) == 3 and kind == Kind.Ready and status == 200 and (reason -> len) == 2 and length == 4 and close
+            }
+        }
+
+        makeRequest ok: Bool -> Result<Request, ServerError> {
+            ok -> if {
+                Result<Request, ServerError>.Ok(Request { head: Head { kind: Kind.Ready, text: "GET" } })
+            } else {
+                Result<Request, ServerError>.Err(ServerError.Socket(Head { kind: Kind.Other, text: "ERR" }))
+            }
+        }
+
+        main {
+            true -> makeRequest -> when {
+                Err(error) => error -> when {
+                    Socket(socketError) => socketError.kind -> when {
+                        Ready { "unexpected" -> println }
+                        Other { "error" -> println }
+                    }
+                }
+                Ok(request) {
+                    request.head -> methodText => method
+                    Policy { enabled: true } => policy
+                    policy -> response(method, request.head.kind, 200, "OK", 4, true) -> if {
+                        "member-chain=ok" -> println
+                    }
+                }
+            }
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> expressionTypeIds.resolveContext => types
+    context -> typedIr.lowerResolvedContext(types) => ir
+    context.package.ranges[0] => sourceRange
+
+    false => prefixMemberAst!
+    false => completeMemberAst!
+    0 => astOffset!
+    astOffset! < sourceRange.astCount -> while {
+        context.package.nodes[sourceRange.astStart + astOffset!] => node
+        node.kind == 36 and source -> sameText(node.start, node.length, "request.head")
+            -> if { true => prefixMemberAst! }
+        node.kind == 36 and source -> sameText(node.start, node.length, "request.head.kind")
+            -> if { true => completeMemberAst! }
+        astOffset! + 1 => astOffset!
+    }
+
+    false => chainedMemberIr!
+    false => socketKindTyped!
+    false => methodResolved!
+    false => responseComplete!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        node.sourceModule == 0 and node.astNode >= 0 -> if {
+            context.package.nodes[sourceRange.astStart + node.astNode] => nodeAst
+            node.kind == 13
+                and node.operand0 >= 0
+                and ir[node.operand0].kind == 13
+                and node.typeId >= 0
+                and source -> sameText(nodeAst.start, nodeAst.length, "request.head.kind")
+                -> if { true => chainedMemberIr! }
+            node.kind == 13
+                and node.typeId >= 0
+                and source -> sameText(nodeAst.start, nodeAst.length, "socketError.kind")
+                -> if { true => socketKindTyped! }
+            node.kind == 6
+                and node.targetModule >= 0
+                and node.symbol >= 0
+                and source -> sameText(nodeAst.start, nodeAst.length, "request.head -> methodText")
+                -> if { true => methodResolved! }
+            node.kind == 6
+                and source -> startsWithText(nodeAst.start, nodeAst.length, "policy -> response")
+                -> if {
+                    0 => argumentCount!
+                    node.operand0 => argumentIndex!
+                    argumentIndex! >= 0 -> while {
+                        argumentCount! + 1 => argumentCount!
+                        ir[argumentIndex!].nextOperand => argumentIndex!
+                    }
+                    argumentCount! == 7 -> if { true => responseComplete! }
+                }
+        }
+        irIndex! + 1 => irIndex!
+    }
+
+    "ast=$(prefixMemberAst!):$(completeMemberAst!),ir=$(chainedMemberIr!):$(socketKindTyped!),calls=$(methodResolved!):$(responseComplete!)"
+        -> println
+}

@@ -1,0 +1,141 @@
+import std.net.quic as quic
+
+# ConnectionOptions are validated before network effects, and each local receive
+# budget fails before stream identity, flow, queue, or byte-accounting mutation.
+options pendingStreams: Int, pendingFrames: Int, pendingBytes: UInt64 -> quic.ConnectionOptions => quic.ConnectionOptions {
+    maxInboundBidirectionalStreams: 4
+    maxInboundUnidirectionalStreams: 4
+    pendingInboundBidirectionalStreams: pendingStreams
+    pendingInboundUnidirectionalStreams: pendingStreams
+    pendingApplicationFrames: pendingFrames
+    pendingApplicationBytes: pendingBytes
+    receiveWindows: quic.ReceiveWindowSizes {
+        connection: 4_096
+        locallyInitiatedBidirectionalStream: 4_096
+        remotelyInitiatedBidirectionalStream: 4_096
+        unidirectionalStream: 4_096
+    }
+}
+
+isQueueLimit error: quic.QuicError, expected: UInt64 -> Bool {
+    error.kind -> when {
+        QueueLimitExceeded { error.code == expected }
+        else { false }
+    }
+}
+
+identityLimitIsAtomic: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificate
+    quic.bind(quic.loopback(0))? => clientEndpoint!
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    serverEndpoint! -> listenWith(identity, options(1, 8, 4_096))? => listener!
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+    clientEndpoint! -> connectWith(serverAddress, certificate, options(4, 8, 4_096))? => clientConnection!
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> openBi(clientEndpoint!)? => clientFirst!
+    clientConnection! -> openBi(clientEndpoint!)? => clientSecond!
+    clientSecond! -> send(clientConnection!, clientEndpoint!, [66])? => sentSecond
+    serverConnection! -> acceptBi(serverEndpoint!) -> when {
+        Ok(unexpected) { false }
+        Err(error) { isQueueLimit(error, 1) }
+    } => rejected
+    clientFirst! -> send(clientConnection!, clientEndpoint!, [65])? => sentFirst
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverFirst
+    rejected and sentFirst == 1 and sentSecond == 1 and (serverFirst -> id) == 0 => atomic
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    serverConnection! -> close(serverEndpoint!, 0)?
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(atomic)
+}
+
+frameLimitIsAtomic: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificate
+    quic.bind(quic.loopback(0))? => clientEndpoint!
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    serverEndpoint! -> listenWith(identity, options(4, 1, 4_096))? => listener!
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+    clientEndpoint! -> connectWith(serverAddress, certificate, options(4, 8, 4_096))? => clientConnection!
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> openBi(clientEndpoint!)? => clientFirst!
+    clientConnection! -> openBi(clientEndpoint!)? => clientSecond!
+    clientFirst! -> send(clientConnection!, clientEndpoint!, [65])? => sentFirst
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverFirst!
+    clientSecond! -> send(clientConnection!, clientEndpoint!, [66])? => sentRejected
+    serverConnection! -> acceptBi(serverEndpoint!) -> when {
+        Ok(unexpected) { false }
+        Err(error) { isQueueLimit(error, 1) }
+    } => rejected
+    serverFirst! -> receive(serverConnection!, serverEndpoint!, 8)? => retained
+    clientSecond! -> send(clientConnection!, clientEndpoint!, [67])? => sentRetry
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverSecond
+    rejected
+        and sentFirst == 1
+        and sentRejected == 1
+        and sentRetry == 1
+        and retained[0] == 65
+        and (serverFirst! -> id) == 0
+        and (serverSecond -> id) == 4 => atomic
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    serverConnection! -> close(serverEndpoint!, 0)?
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(atomic)
+}
+
+byteLimitIsAtomic: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificate
+    quic.bind(quic.loopback(0))? => clientEndpoint!
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    serverEndpoint! -> listenWith(identity, options(4, 8, 1))? => listener!
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+    clientEndpoint! -> connectWith(serverAddress, certificate, options(4, 8, 4_096))? => clientConnection!
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> openBi(clientEndpoint!)? => clientStream!
+    clientStream! -> send(clientConnection!, clientEndpoint!, [65, 66])? => sentRejected
+    serverConnection! -> acceptBi(serverEndpoint!) -> when {
+        Ok(unexpected) { false }
+        Err(error) { isQueueLimit(error, 1) }
+    } => rejected
+    clientStream! -> send(clientConnection!, clientEndpoint!, [67])? => sentRetry
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverStream
+    rejected and sentRejected == 2 and sentRetry == 1 and (serverStream -> id) == 0 => atomic
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    serverConnection! -> close(serverEndpoint!, 0)?
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(atomic)
+}
+
+verify: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    options(1, 0, 1) -> validate -> when {
+        Ok(unexpected) { false }
+        Err(error) => error.kind -> when {
+            InvalidArgument { true }
+            else { false }
+        }
+    } => rejectedInvalid
+    identityLimitIsAtomic()? => identityAtomic
+    frameLimitIsAtomic()? => frameAtomic
+    byteLimitIsAtomic()? => byteAtomic
+    Result<Bool, quic.QuicError>.Ok(rejectedInvalid and identityAtomic and frameAtomic and byteAtomic)
+}
+
+main {
+    verify() -> when {
+        Ok(valid) { "quic-options=$valid" -> println }
+        Err(error) { "quic-options-error=$(error.code)" -> println }
+    }
+}

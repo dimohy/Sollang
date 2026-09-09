@@ -1,0 +1,860 @@
+namespace std.compress.brotli
+
+import std.compress.brotli.error as errors
+import std.compress.brotli.decoder_phase as phases
+import std.compress.brotli.command as commands
+import std.compress.brotli.command.error as command_errors
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.compressed_header.error as header_errors
+import std.compress.brotli.compressed_stream as streams
+import std.compress.brotli.prefix_table as prefix
+
+# RFC 7932 bounded foundation. The deterministic writer emits WBITS=16 and
+# byte-aligned uncompressed meta-blocks followed by an empty final meta-block.
+# The bulk decoder accepts bounded raw and entropy-compressed meta-blocks. The
+# byte-resumable Decoder keeps compressed blocks explicit until its prefix and
+# command state no longer needs a complete encoded slice.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxEncodedBytes: Int
+    public maxDecodedBytes: Int
+    public maxWindowBytes: Int
+    public maxMetaBlocks: Int
+    public maxMetadataBytes: Int
+}
+
+public struct Codec {
+    public limits: Limits
+}
+
+public struct Encoder {
+    public maxEncodedBytes: Int
+    public maxMetaBlocks: Int
+    public expectedInputBytes: Int
+    public acceptedInputBytes: Int
+    public producedBytes: Int
+    public metaBlocks: Int
+    public started: Bool
+}
+
+public struct Decoder {
+    public maxEncodedBytes: Int
+    public maxDecodedBytes: Int
+    public maxWindowBytes: Int
+    public maxMetaBlocks: Int
+    public maxMetadataBytes: Int
+    public totalInputBytes: Int
+    public phase: phases.Phase
+    public bitWindow: prefix.Window
+    public headerParser: headers.Parser
+    public compressed: streams.Reader
+    public windowBytes: Int
+    public lastMetaBlock: Bool
+    public lengthUnits: Int
+    public metaBlocks: Int
+    public blockRemaining: Int
+    public verifiedOutput: [UInt8; ~]
+    public failed: Bool
+    public failure: Error
+}
+
+struct BitWriter {
+    buffered: Int
+    bitCount: Int
+}
+
+struct BitReader {
+    byteIndex: Int
+    bitIndex: Int
+}
+
+struct StreamCursor {
+    offset: Int
+    bitOffset: Int
+}
+
+struct BitRead {
+    ready: Bool
+    value: UInt64
+}
+
+errorCodec kind: errors.Kind, offset: UIntSize -> Result<Codec, Error> {
+    Result<Codec, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorEncoder kind: errors.Kind, offset: UIntSize -> Result<Encoder, Error> {
+    Result<Encoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecoder kind: errors.Kind, offset: UIntSize -> Result<Decoder, Error> {
+    Result<Decoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBytes kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
+    Result<[UInt8; ~], Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorHeaderParser kind: errors.Kind, offset: UIntSize -> Result<headers.Parser, Error> {
+    Result<headers.Parser, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorExecutor kind: errors.Kind, offset: UIntSize -> Result<commands.Executor, Error> {
+    Result<commands.Executor, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorStreamReader kind: errors.Kind, offset: UIntSize -> Result<streams.Reader, Error> {
+    Result<streams.Reader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+mapHeaderError kind: header_errors.Kind -> errors.Kind => kind -> when {
+    TruncatedInput { errors.Kind.TruncatedInput }
+    else { errors.Kind.InvalidHeader }
+}
+
+mapCommandError kind: command_errors.Kind -> errors.Kind => kind -> when {
+    TruncatedInput { errors.Kind.TruncatedInput }
+    OutputLimitExceeded { errors.Kind.OutputLimitExceeded }
+    UnsupportedDictionary { errors.Kind.UnsupportedDictionary }
+    else { errors.Kind.InvalidHeader }
+}
+
+compressedParser limits: Limits -> Result<headers.Parser, Error> {
+    limits.maxDecodedBytes < 16_793_840
+        -> if { limits.maxDecodedBytes } else { 16_793_840 } => maxBlockLength!
+    maxBlockLength! > 0 -> unless { 1 => maxBlockLength! }
+    headers.Limits {
+        maxBlockTypes: 256
+        maxBlockLength: maxBlockLength!
+        maxContextEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Ok(parser) { Result<headers.Parser, Error>.Ok(parser) }
+        Err(error) { errorHeaderParser(error.kind -> mapHeaderError, error.offset) }
+    }
+}
+
+commandExecutor limits: Limits, header: move headers.Parsed, length: Int, windowBytes: Int -> Result<commands.Executor, Error> {
+    commands.Limits {
+        maxOutputBytes: limits.maxDecodedBytes
+        maxCommands: length
+        maxWindowBytes: windowBytes
+    } -> executor(header, length) -> when {
+        Ok(executor) { Result<commands.Executor, Error>.Ok(executor) }
+        Err(error) { errorExecutor(error.kind -> mapCommandError, error.offset) }
+    }
+}
+
+dormantCompressed limits: Limits, parser: headers.Parser -> Result<streams.Reader, Error> {
+    streams.Limits {
+        maxOutputBytes: limits.maxDecodedBytes
+        maxCommands: limits.maxDecodedBytes
+        maxWindowBytes: limits.maxWindowBytes
+    } -> dormantReader(parser) -> when {
+        Err(error) { errorStreamReader(error.kind, error.offset) }
+        Ok(reader) { Result<streams.Reader, Error>.Ok(reader) }
+    }
+}
+
+powerOfTwo exponent: Int -> UInt64 {
+    UInt64(1) => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+appendBits output: mut [UInt8; ~], writer: mut BitWriter, value: UInt64, width: Int -> Unit {
+    value => remaining!
+    0 => written!
+    written! < width -> while {
+        remaining! % 2 == 1 -> if {
+            writer.buffered + Int(writer.bitCount -> powerOfTwo) => writer.buffered
+        }
+        remaining! / 2 => remaining!
+        writer.bitCount + 1 => writer.bitCount
+        writer.bitCount == 8 -> if {
+            output -> push(UInt8(writer.buffered))
+            0 => writer.buffered
+            0 => writer.bitCount
+        }
+        written! + 1 => written!
+    }
+}
+
+alignWriter output: mut [UInt8; ~], writer: mut BitWriter -> Unit {
+    writer.bitCount > 0 -> if {
+        output -> push(UInt8(writer.buffered))
+        0 => writer.buffered
+        0 => writer.bitCount
+    }
+}
+
+appendUncompressedMetaBlock output: mut [UInt8; ~], input: [UInt8], start: Int, count: Int, includeStreamHeader: Bool -> Unit {
+    BitWriter { buffered: 0, bitCount: 0 } => writer!
+    includeStreamHeader -> if { output -> appendBits(writer!, 0, 1) }
+    output -> appendBits(writer!, 0, 1)
+    output -> appendBits(writer!, 0, 2)
+    output -> appendBits(writer!, UInt64(count - 1), 16)
+    output -> appendBits(writer!, 1, 1)
+    output -> alignWriter(writer!)
+    0 => index!
+    index! < count -> while {
+        output -> push(input[start + index!])
+        index! + 1 => index!
+    }
+}
+
+appendFinalEmpty output: mut [UInt8; ~], includeStreamHeader: Bool -> Unit {
+    BitWriter { buffered: 0, bitCount: 0 } => writer!
+    includeStreamHeader -> if { output -> appendBits(writer!, 0, 1) }
+    output -> appendBits(writer!, 1, 1)
+    output -> appendBits(writer!, 1, 1)
+    output -> alignWriter(writer!)
+}
+
+readBits input: [UInt8], reader: mut BitReader, width: Int -> Result<UInt64, Error> {
+    UInt64(0) => value!
+    UInt64(1) => multiplier!
+    0 => read!
+    read! < width -> while {
+        reader.byteIndex < (input -> len)
+            -> unless { Result<UInt64, Error>.Err(Error { kind: errors.Kind.TruncatedInput, offset: UIntSize(reader.byteIndex) }) -> return }
+        (Int(input[reader.byteIndex]) / Int(reader.bitIndex -> powerOfTwo)) % 2 => bit
+        bit == 1 -> if { value! + multiplier! => value! }
+        multiplier! * 2 => multiplier!
+        reader.bitIndex + 1 => reader.bitIndex
+        reader.bitIndex == 8 -> if {
+            reader.byteIndex + 1 => reader.byteIndex
+            0 => reader.bitIndex
+        }
+        read! + 1 => read!
+    }
+    Result<UInt64, Error>.Ok(value!)
+}
+
+alignReader input: [UInt8], reader: mut BitReader -> Result<Int, Error> {
+    reader.bitIndex > 0 -> if {
+        reader.bitIndex => paddingIndex!
+        paddingIndex! < 8 -> while {
+            (Int(input[reader.byteIndex]) / Int(paddingIndex! -> powerOfTwo)) % 2 == 0
+                -> unless { errorInt(errors.Kind.InvalidPadding, UIntSize(reader.byteIndex)) -> return }
+            paddingIndex! + 1 => paddingIndex!
+        }
+        reader.byteIndex + 1 => reader.byteIndex
+        0 => reader.bitIndex
+    }
+    Result<Int, Error>.Ok(0)
+}
+
+readWindowBits input: [UInt8], reader: mut BitReader -> Result<Int, Error> {
+    input -> readBits(reader, 1)? => first
+    first == 0 -> if { Result<Int, Error>.Ok(16) -> return }
+    input -> readBits(reader, 3)? => shortCode
+    shortCode > 0 -> if { Result<Int, Error>.Ok(17 + Int(shortCode)) -> return }
+    input -> readBits(reader, 3)? => longCode
+    longCode == 0 -> if { Result<Int, Error>.Ok(17) -> return }
+    longCode >= 2 -> if { Result<Int, Error>.Ok(8 + Int(longCode)) -> return }
+    Result<Int, Error>.Err(Error { kind: errors.Kind.InvalidHeader, offset: UIntSize(reader.byteIndex) })
+}
+
+metaNibbleCount code: UInt64 -> Int {
+    code == 0 -> if { 4 -> return }
+    code == 1 -> if { 5 -> return }
+    code == 2 -> if { 6 -> return }
+    0
+}
+
+streamFail decoder: mut Decoder, kind: errors.Kind, offset: Int -> Unit {
+    not decoder.failed -> if {
+        true => decoder.failed
+        Error { kind: kind, offset: UIntSize(offset) } => decoder.failure
+    }
+}
+
+streamReadBits decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor, width: Int -> BitRead {
+    decoder.bitWindow -> fill(input, prefix.Position {
+        byteIndex: cursor.offset
+        bitIndex: cursor.bitOffset
+    }, width) -> when {
+        Err(_) {
+            decoder -> streamFail(errors.Kind.InvalidHeader, decoder.totalInputBytes + cursor.offset)
+        }
+        Ok(position) {
+            position.byteIndex => cursor.offset
+            position.bitIndex => cursor.bitOffset
+            decoder.bitWindow -> read(width) -> when {
+                Err(_) {
+                    decoder -> streamFail(errors.Kind.InvalidHeader, decoder.totalInputBytes + cursor.offset)
+                }
+                Ok(read) {
+                    read -> when {
+                        Incomplete(_) { }
+                        Complete(value) { BitRead { ready: true, value: value } -> return }
+                    }
+                }
+            }
+        }
+    }
+    BitRead { ready: false, value: 0 }
+}
+
+streamPosition decoder: ref Decoder, cursor: ref StreamCursor -> prefix.Position {
+    (decoder.totalInputBytes + cursor.offset) * 8 + cursor.bitOffset - (decoder.bitWindow -> available) => absoluteBits
+    prefix.Position {
+        byteIndex: absoluteBits / 8
+        bitIndex: absoluteBits % 8
+    }
+}
+
+streamAlign decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Bool {
+    decoder -> streamPosition(cursor) => position
+    position.bitIndex == 0 -> if { true -> return }
+    streamReadBits(decoder, input, cursor, 8 - position.bitIndex) => padding
+    padding.ready -> unless { false -> return }
+    padding.value == 0 -> unless {
+        decoder -> streamFail(errors.Kind.InvalidPadding, position.byteIndex)
+        false -> return
+    }
+    true
+}
+
+startCompressed decoder: mut Decoder -> Result<streams.Reader, Error> {
+    decoder.verifiedOutput => history
+    [UInt8; ~] => decoder.verifiedOutput
+    streams.Limits {
+        maxOutputBytes: decoder.maxDecodedBytes
+        maxCommands: decoder.blockRemaining
+        maxWindowBytes: decoder.windowBytes
+    } -> reader(decoder.headerParser, decoder.blockRemaining, history) -> when {
+        Err(error) { Result<streams.Reader, Error>.Err(Error { kind: error.kind, offset: error.offset }) }
+        Ok(reader) { Result<streams.Reader, Error>.Ok(reader) }
+    }
+}
+
+driveCompressed decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Unit {
+    true -> while {
+        decoder -> streamPosition(cursor) => position
+        decoder.compressed -> read(decoder.bitWindow, position) -> when {
+            Err(error) {
+                decoder -> streamFail(error.kind, decoder.totalInputBytes + cursor.offset)
+                return
+            }
+            Ok(progress) {
+                progress -> when {
+                    NeedMore(bits) {
+                        cursor.offset => previousOffset
+                        cursor.bitOffset => previousBitOffset
+                        (decoder.bitWindow -> available) + bits => requiredBits
+                        decoder.bitWindow -> fill(input, prefix.Position {
+                            byteIndex: cursor.offset
+                            bitIndex: cursor.bitOffset
+                        }, requiredBits) -> when {
+                            Err(_) {
+                                decoder -> streamFail(errors.Kind.InvalidHeader, decoder.totalInputBytes + cursor.offset)
+                                return
+                            }
+                            Ok(next) {
+                                next.byteIndex => cursor.offset
+                                next.bitIndex => cursor.bitOffset
+                            }
+                        }
+                        cursor.offset == previousOffset and cursor.bitOffset == previousBitOffset
+                            -> if { return }
+                    }
+                    Ready {
+                        decoder.compressed -> takeOutput -> when {
+                            Err(error) {
+                                decoder -> streamFail(error.kind, decoder.totalInputBytes + cursor.offset)
+                            }
+                            Ok(output) {
+                                output => decoder.verifiedOutput
+                                decoder.lastMetaBlock -> if {
+                                    phases.Phase.FinalAlign => decoder.phase
+                                } else {
+                                    phases.Phase.IsLast => decoder.phase
+                                }
+                            }
+                        }
+                        return
+                    }
+                }
+            }
+        }
+    }
+}
+
+streamCompressed decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Unit {
+    decoder.compressed -> active -> unless {
+        decoder -> startCompressed -> when {
+            Err(error) {
+                decoder -> streamFail(error.kind, decoder.totalInputBytes + cursor.offset)
+                return
+            }
+            Ok(reader) { reader => decoder.compressed }
+        }
+    }
+    decoder -> driveCompressed(input, cursor)
+}
+
+acceptStreamWindow decoder: mut Decoder, windowBits: Int, offset: Int -> Unit {
+    Int((windowBits -> powerOfTwo) - 16) => windowBytes
+    windowBytes <= decoder.maxWindowBytes -> if {
+        windowBytes => decoder.windowBytes
+    } else {
+        decoder -> streamFail(errors.Kind.WindowLimitExceeded, offset)
+    }
+}
+
+streamStep decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Unit {
+    decoder.phase -> when {
+        WindowFirst {
+            streamReadBits(decoder, input, cursor, 1) => read
+            read.ready -> if {
+                read.value == 0 -> if {
+                    decoder -> acceptStreamWindow(16, decoder.totalInputBytes + cursor.offset)
+                    phases.Phase.IsLast => decoder.phase
+                } else {
+                    phases.Phase.WindowShort => decoder.phase
+                }
+            }
+        }
+        WindowShort {
+            streamReadBits(decoder, input, cursor, 3) => read
+            read.ready -> if {
+                read.value > 0 -> if {
+                    decoder -> acceptStreamWindow(17 + Int(read.value), decoder.totalInputBytes + cursor.offset)
+                    phases.Phase.IsLast => decoder.phase
+                } else {
+                    phases.Phase.WindowLong => decoder.phase
+                }
+            }
+        }
+        WindowLong {
+            streamReadBits(decoder, input, cursor, 3) => read
+            read.ready -> if {
+                read.value == 1 -> if {
+                    decoder -> streamFail(errors.Kind.InvalidHeader, decoder.totalInputBytes + cursor.offset)
+                } else {
+                    read.value == 0 -> if { 17 } else { 8 + Int(read.value) } => windowBits
+                    decoder -> acceptStreamWindow(windowBits, decoder.totalInputBytes + cursor.offset)
+                    phases.Phase.IsLast => decoder.phase
+                }
+            }
+        }
+        IsLast {
+            streamReadBits(decoder, input, cursor, 1) => read
+            read.ready -> if {
+                read.value == 1 => decoder.lastMetaBlock
+                decoder.lastMetaBlock -> if {
+                    phases.Phase.IsLastEmpty => decoder.phase
+                } else {
+                    phases.Phase.NibbleCode => decoder.phase
+                }
+            }
+        }
+        IsLastEmpty {
+            streamReadBits(decoder, input, cursor, 1) => read
+            read.ready -> if {
+                read.value == 1 -> if {
+                    phases.Phase.FinalAlign => decoder.phase
+                } else {
+                    phases.Phase.NibbleCode => decoder.phase
+                }
+            }
+        }
+        NibbleCode {
+            streamReadBits(decoder, input, cursor, 2) => read
+            read.ready -> if {
+                decoder.metaBlocks + 1 > decoder.maxMetaBlocks
+                    -> if {
+                        decoder -> streamFail(errors.Kind.MetaBlockLimitExceeded, decoder.totalInputBytes + cursor.offset)
+                    } else {
+                        decoder.metaBlocks + 1 => decoder.metaBlocks
+                        read.value == 3 -> if {
+                            phases.Phase.Reserved => decoder.phase
+                        } else {
+                            read.value -> metaNibbleCount => decoder.lengthUnits
+                            phases.Phase.MetaLength => decoder.phase
+                        }
+                    }
+            }
+        }
+        Reserved {
+            streamReadBits(decoder, input, cursor, 1) => read
+            read.ready -> if {
+                read.value == 0 -> if {
+                    phases.Phase.MetadataLengthBytes => decoder.phase
+                } else {
+                    decoder -> streamFail(errors.Kind.InvalidHeader, decoder.totalInputBytes + cursor.offset)
+                }
+            }
+        }
+        MetadataLengthBytes {
+            streamReadBits(decoder, input, cursor, 2) => read
+            read.ready -> if {
+                Int(read.value) => decoder.lengthUnits
+                decoder.lengthUnits == 0 -> if {
+                    0 => decoder.blockRemaining
+                    phases.Phase.AlignMetadata => decoder.phase
+                } else {
+                    phases.Phase.MetadataLength => decoder.phase
+                }
+            }
+        }
+        MetadataLength {
+            streamReadBits(decoder, input, cursor, decoder.lengthUnits * 8) => read
+            read.ready -> if {
+                (decoder.lengthUnits - 1) * 8 -> powerOfTwo => highDivisor
+                decoder.lengthUnits > 1 and read.value / highDivisor == 0
+                    -> if {
+                        decoder -> streamFail(errors.Kind.InvalidHeader, decoder.totalInputBytes + cursor.offset)
+                    } else {
+                        Int(read.value + 1) => decoder.blockRemaining
+                        decoder.blockRemaining <= decoder.maxMetadataBytes
+                            -> if {
+                                phases.Phase.AlignMetadata => decoder.phase
+                            } else {
+                                decoder -> streamFail(errors.Kind.MetadataLimitExceeded, decoder.totalInputBytes + cursor.offset)
+                            }
+                    }
+            }
+        }
+        MetaLength {
+            streamReadBits(decoder, input, cursor, decoder.lengthUnits * 4) => read
+            read.ready -> if {
+                (decoder.lengthUnits - 1) * 4 -> powerOfTwo => highDivisor
+                decoder.lengthUnits > 4 and read.value / highDivisor == 0
+                    -> if {
+                        decoder -> streamFail(errors.Kind.InvalidHeader, decoder.totalInputBytes + cursor.offset)
+                    } else {
+                        Int(read.value + 1) => decoder.blockRemaining
+                        decoder.blockRemaining <= decoder.maxDecodedBytes - (decoder.verifiedOutput -> len)
+                            -> unless {
+                                decoder -> streamFail(errors.Kind.OutputLimitExceeded, decoder.totalInputBytes + cursor.offset)
+                                return
+                            }
+                        decoder.lastMetaBlock -> if {
+                            phases.Phase.Compressed => decoder.phase
+                        } else {
+                            phases.Phase.IsUncompressed => decoder.phase
+                        }
+                    }
+            }
+        }
+        IsUncompressed {
+            streamReadBits(decoder, input, cursor, 1) => read
+            read.ready -> if {
+                read.value == 1 -> if {
+                    phases.Phase.AlignRaw => decoder.phase
+                } else {
+                    phases.Phase.Compressed => decoder.phase
+                }
+            }
+        }
+        Compressed { decoder -> streamCompressed(input, cursor) }
+        AlignMetadata {
+            streamAlign(decoder, input, cursor) => aligned
+            aligned -> if {
+                decoder.blockRemaining == 0 -> if {
+                    phases.Phase.IsLast => decoder.phase
+                } else {
+                    phases.Phase.Metadata => decoder.phase
+                }
+            }
+        }
+        Metadata {
+            (input -> len) - cursor.offset => available
+            decoder.blockRemaining < available -> if { decoder.blockRemaining } else { available } => consumed
+            cursor.offset + consumed => cursor.offset
+            decoder.blockRemaining - consumed => decoder.blockRemaining
+            decoder.blockRemaining == 0 -> if { phases.Phase.IsLast => decoder.phase }
+        }
+        AlignRaw {
+            streamAlign(decoder, input, cursor) => aligned
+            aligned -> if { phases.Phase.Raw => decoder.phase }
+        }
+        Raw {
+            (input -> len) - cursor.offset => available
+            decoder.blockRemaining < available -> if { decoder.blockRemaining } else { available } => consumed
+            0 => index!
+            index! < consumed -> while {
+                decoder.verifiedOutput -> push(input[cursor.offset + index!])
+                index! + 1 => index!
+            }
+            cursor.offset + consumed => cursor.offset
+            decoder.blockRemaining - consumed => decoder.blockRemaining
+            decoder.blockRemaining == 0 -> if { phases.Phase.IsLast => decoder.phase }
+        }
+        FinalAlign {
+            streamAlign(decoder, input, cursor) => aligned
+            aligned -> if { phases.Phase.Finished => decoder.phase }
+        }
+        Finished {
+            cursor.offset < (input -> len) -> if {
+                decoder -> streamFail(errors.Kind.TrailingData, decoder.totalInputBytes + cursor.offset)
+            }
+        }
+    }
+}
+
+streamFinished decoder: ref Decoder -> Bool => decoder.phase -> when {
+    Finished { true }
+    else { false }
+}
+
+impl Limits {
+    public codec: self -> Result<Codec, Error> {
+        self.maxEncodedBytes > 0
+            and self.maxDecodedBytes >= 0
+            and self.maxWindowBytes >= 1_008
+            and self.maxMetaBlocks > 0
+            and self.maxMetadataBytes >= 0
+            -> unless { errorCodec(errors.Kind.InvalidLimit, 0) -> return }
+        Result<Codec, Error>.Ok(Codec { limits: self })
+    }
+}
+
+impl Codec {
+    public encoder: self, expectedInputBytes: Int -> Result<Encoder, Error> {
+        expectedInputBytes >= 0 and expectedInputBytes <= self.limits.maxDecodedBytes
+            -> unless { errorEncoder(errors.Kind.InputLimitExceeded, 0) -> return }
+        self.limits.maxWindowBytes >= 65_520
+            -> unless { errorEncoder(errors.Kind.WindowLimitExceeded, 0) -> return }
+        expectedInputBytes == 0 -> if { 0 } else { (expectedInputBytes + 65_535) / 65_536 } => blockCount
+        blockCount <= self.limits.maxMetaBlocks
+            -> unless { errorEncoder(errors.Kind.MetaBlockLimitExceeded, UIntSize(blockCount)) -> return }
+        expectedInputBytes + blockCount * 3 + 1 <= self.limits.maxEncodedBytes
+            -> unless { errorEncoder(errors.Kind.OutputLimitExceeded, UIntSize(expectedInputBytes + blockCount * 3 + 1)) -> return }
+        Result<Encoder, Error>.Ok(Encoder {
+            maxEncodedBytes: self.limits.maxEncodedBytes
+            maxMetaBlocks: self.limits.maxMetaBlocks
+            expectedInputBytes: expectedInputBytes
+            acceptedInputBytes: 0
+            producedBytes: 0
+            metaBlocks: 0
+            started: false
+        })
+    }
+
+    public decoder: self -> Result<Decoder, Error> {
+        prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+            Err(error) { errorDecoder(errors.Kind.InvalidLimit, error.offset) -> return }
+            Ok(window) { window }
+        } => bitWindow
+        self.limits -> compressedParser -> when {
+            Err(error) { errorDecoder(error.kind, error.offset) -> return }
+            Ok(parser) { parser }
+        } => headerParser
+        self.limits -> dormantCompressed(headerParser)? => compressed
+        Result<Decoder, Error>.Ok(Decoder {
+            maxEncodedBytes: self.limits.maxEncodedBytes
+            maxDecodedBytes: self.limits.maxDecodedBytes
+            maxWindowBytes: self.limits.maxWindowBytes
+            maxMetaBlocks: self.limits.maxMetaBlocks
+            maxMetadataBytes: self.limits.maxMetadataBytes
+            totalInputBytes: 0
+            phase: phases.Phase.WindowFirst
+            bitWindow: bitWindow
+            headerParser: headerParser
+            compressed: compressed
+            windowBytes: 0
+            lastMetaBlock: false
+            lengthUnits: 0
+            metaBlocks: 0
+            blockRemaining: 0
+            verifiedOutput: [UInt8; ~]
+            failed: false
+            failure: Error { kind: errors.Kind.TruncatedInput, offset: 0 }
+        })
+    }
+
+    public compress: self, input: [UInt8] -> Result<[UInt8; ~], Error> {
+        self -> encoder(input -> len)? => encoder!
+        [UInt8; ~] => output!
+        encoder! -> write(input, output!)? => written
+        encoder! -> finish(output!)? => finished
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public decompress: self, input: [UInt8] -> Result<[UInt8; ~], Error> {
+        (input -> len) <= self.limits.maxEncodedBytes
+            -> unless { errorBytes(errors.Kind.InputLimitExceeded, UIntSize(input -> len)) -> return }
+        BitReader { byteIndex: 0, bitIndex: 0 } => reader!
+        input -> readWindowBits(reader!)? => windowBits
+        Int((windowBits -> powerOfTwo) - 16) => windowBytes
+        windowBytes <= self.limits.maxWindowBytes
+            -> unless { errorBytes(errors.Kind.WindowLimitExceeded, UIntSize(windowBytes)) -> return }
+        [UInt8; ~] => output!
+        0 => metaBlocks!
+        false => finished!
+        not finished! -> while {
+            input -> readBits(reader!, 1)? => isLast
+            isLast == 1 -> if {
+                input -> readBits(reader!, 1)? => isLastEmpty
+                isLastEmpty == 1 -> if {
+                    input -> alignReader(reader!)? => aligned
+                    reader!.byteIndex == (input -> len)
+                        -> unless { errorBytes(errors.Kind.TrailingData, UIntSize(reader!.byteIndex)) -> return }
+                    true => finished!
+                }
+            }
+            not finished! -> if {
+                metaBlocks! + 1 => metaBlocks!
+                metaBlocks! <= self.limits.maxMetaBlocks
+                    -> unless { errorBytes(errors.Kind.MetaBlockLimitExceeded, UIntSize(metaBlocks!)) -> return }
+                input -> readBits(reader!, 2)? => nibbleCode
+                nibbleCode == 3 -> if {
+                    input -> readBits(reader!, 1)? => reserved
+                    reserved == 0
+                        -> unless { errorBytes(errors.Kind.InvalidHeader, UIntSize(reader!.byteIndex)) -> return }
+                    input -> readBits(reader!, 2)? => metadataLengthBytes
+                    UInt64(0) => metadataLengthMinusOne!
+                    metadataLengthBytes > 0 -> if {
+                        input -> readBits(reader!, Int(metadataLengthBytes) * 8)? => metadataLengthMinusOne!
+                    }
+                    (Int(metadataLengthBytes) - 1) * 8 -> powerOfTwo => metadataHighDivisor
+                    metadataLengthBytes > 1
+                        and metadataLengthMinusOne! / metadataHighDivisor == 0
+                        -> if { errorBytes(errors.Kind.InvalidHeader, UIntSize(reader!.byteIndex)) -> return }
+                    metadataLengthBytes == 0 -> if { 0 } else { Int(metadataLengthMinusOne! + 1) } => metadataLength
+                    metadataLength <= self.limits.maxMetadataBytes
+                        -> unless { errorBytes(errors.Kind.MetadataLimitExceeded, UIntSize(metadataLength)) -> return }
+                    input -> alignReader(reader!)? => aligned
+                    metadataLength <= (input -> len) - reader!.byteIndex
+                        -> unless { errorBytes(errors.Kind.TruncatedInput, UIntSize(reader!.byteIndex)) -> return }
+                    reader!.byteIndex + metadataLength => reader!.byteIndex
+                } else {
+                    nibbleCode -> metaNibbleCount => nibbles
+                    input -> readBits(reader!, nibbles * 4)? => lengthMinusOne
+                    (nibbles - 1) * 4 -> powerOfTwo => lengthHighDivisor
+                    nibbles > 4 and lengthMinusOne / lengthHighDivisor == 0
+                        -> if { errorBytes(errors.Kind.InvalidHeader, UIntSize(reader!.byteIndex)) -> return }
+                    Int(lengthMinusOne + 1) => length
+                    length <= self.limits.maxDecodedBytes - (output! -> len)
+                        -> unless { errorBytes(errors.Kind.OutputLimitExceeded, UIntSize(output! -> len)) -> return }
+                    false => isUncompressed!
+                    isLast == 0 -> if {
+                        input -> readBits(reader!, 1)? => encodedUncompressed
+                        encodedUncompressed == 1 => isUncompressed!
+                    }
+                    isUncompressed! -> if {
+                        input -> alignReader(reader!)? => aligned
+                        length <= (input -> len) - reader!.byteIndex
+                            -> unless { errorBytes(errors.Kind.TruncatedInput, UIntSize(reader!.byteIndex)) -> return }
+                        output! -> reserve((output! -> len) + length)
+                        0 => copied!
+                        copied! < length -> while {
+                            output! -> push(input[reader!.byteIndex + copied!])
+                            copied! + 1 => copied!
+                        }
+                        reader!.byteIndex + length => reader!.byteIndex
+                    } else {
+                        self.limits -> compressedParser()? => parser
+                        parser -> parse(input, prefix.Position {
+                            byteIndex: reader!.byteIndex
+                            bitIndex: reader!.bitIndex
+                        }) -> when {
+                            Err(error) { errorBytes(error.kind -> mapHeaderError, error.offset) -> return }
+                            Ok(header) {
+                                self.limits -> commandExecutor(header, length, windowBytes)? => executor
+                                executor -> decodeInto(input, output!) -> when {
+                                    Err(error) { errorBytes(error.kind -> mapCommandError, error.offset) -> return }
+                                    Ok(position) {
+                                        position.byteIndex => reader!.byteIndex
+                                        position.bitIndex => reader!.bitIndex
+                                    }
+                                }
+                            }
+                        }
+                        isLast == 1 -> if {
+                            input -> alignReader(reader!)? => aligned
+                            reader!.byteIndex == (input -> len)
+                                -> unless { errorBytes(errors.Kind.TrailingData, UIntSize(reader!.byteIndex)) -> return }
+                            true => finished!
+                        }
+                    }
+                }
+            }
+        }
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+}
+
+impl Encoder {
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        (input -> len) <= self.expectedInputBytes - self.acceptedInputBytes
+            -> unless { errorInt(errors.Kind.InputLimitExceeded, UIntSize(self.acceptedInputBytes + (input -> len))) -> return }
+        (input -> len) == 0 -> if { Result<Int, Error>.Ok(0) -> return }
+        ((input -> len) + 65_535) / 65_536 => blocks
+        self.metaBlocks + blocks <= self.maxMetaBlocks
+            -> unless { errorInt(errors.Kind.MetaBlockLimitExceeded, UIntSize(self.metaBlocks + blocks)) -> return }
+        (input -> len) + blocks * 3 => added
+        added <= self.maxEncodedBytes - self.producedBytes - 1
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.producedBytes + added + 1)) -> return }
+        output -> reserve((output -> len) + added)
+        0 => offset!
+        offset! < (input -> len) -> while {
+            (input -> len) - offset! => remaining
+            remaining > 65_536 -> if { 65_536 } else { remaining } => count
+            output -> appendUncompressedMetaBlock(input, offset!, count, not self.started)
+            true => self.started
+            offset! + count => offset!
+        }
+        self.acceptedInputBytes + (input -> len) => self.acceptedInputBytes
+        self.producedBytes + added => self.producedBytes
+        self.metaBlocks + blocks => self.metaBlocks
+        Result<Int, Error>.Ok(added)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.acceptedInputBytes == self.expectedInputBytes
+            -> unless { errorInt(errors.Kind.SizeMismatch, UIntSize(self.acceptedInputBytes)) -> return }
+        1 <= self.maxEncodedBytes - self.producedBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.producedBytes + 1)) -> return }
+        output -> reserve((output -> len) + 1)
+        output -> appendFinalEmpty(not self.started)
+        Result<Int, Error>.Ok(1)
+    }
+}
+
+impl Decoder {
+    public write: mut self, input: [UInt8] -> Result<Int, Error> {
+        (input -> len) <= self.maxEncodedBytes - self.totalInputBytes
+            -> unless {
+                errorInt(errors.Kind.InputLimitExceeded, UIntSize(self.totalInputBytes + (input -> len))) -> return
+            }
+        StreamCursor { offset: 0, bitOffset: 0 } => cursor!
+        cursor!.offset < (input -> len) and not self.failed
+            -> while {
+                self -> streamStep(input, cursor!)
+            }
+        self.failed -> if { Result<Int, Error>.Err(self.failure) -> return }
+        self.totalInputBytes + (input -> len) => self.totalInputBytes
+        Result<Int, Error>.Ok(input -> len)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.failed -> if { Result<Int, Error>.Err(self.failure) -> return }
+        self -> streamFinished
+            -> unless { errorInt(errors.Kind.TruncatedInput, UIntSize(self.totalInputBytes)) -> return }
+        output -> reserve((output -> len) + (self.verifiedOutput -> len))
+        0 => index!
+        index! < (self.verifiedOutput -> len) -> while {
+            output -> push(self.verifiedOutput[index!])
+            index! + 1 => index!
+        }
+        Result<Int, Error>.Ok(self.verifiedOutput -> len)
+    }
+}

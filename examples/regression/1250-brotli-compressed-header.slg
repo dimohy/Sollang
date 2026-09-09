@@ -1,0 +1,55 @@
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.compressed_header.error as header_errors
+import std.compress.brotli.prefix_table as prefix
+
+kindCode kind: header_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    TruncatedInput { 1 }
+    InvalidPrefixCode { 2 }
+    BlockTypeLimitExceeded { 3 }
+    BlockLengthLimitExceeded { 4 }
+    InvalidContextMap { 5 }
+    InvalidTreeGroup { 6 }
+    InvalidBlockSwitch { 7 }
+}
+
+failsWith result: Result<headers.Parsed, headers.Error>, expectedKind: Int -> Bool {
+    result -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == expectedKind }
+    }
+}
+
+printCheck label: Text, value: Bool -> Unit uses Console {
+    "$(label)=$(value)" -> println
+}
+
+main {
+    headers.Limits {
+        maxBlockTypes: 256
+        maxBlockLength: 16_793_840
+        maxContextEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Err(_) { "parser=false" -> println }
+        Ok(parser) {
+            [UInt8(27), 99, 0, 248, 37, 194, 2, 177, 64, 160, 3] => input
+            parser -> parse(input, prefix.Position { byteIndex: 3, bitIndex: 0 }) -> when {
+                Err(error) { "header-error=$(error.kind -> kindCode):$(error.offset)" -> println }
+                Ok(parsed) {
+                    "blocks=$(parsed.blockStreams[0].typeCount),$(parsed.blockStreams[1].typeCount),$(parsed.blockStreams[2].typeCount)" -> println
+                    "lengths=$(parsed.blockStreams[0].initialLength),$(parsed.blockStreams[1].initialLength),$(parsed.blockStreams[2].initialLength)" -> println
+                    "distance=$(parsed.distancePostfixBits),$(parsed.directDistanceCodes),$(parsed.distanceCodeCount)" -> println
+                    "sizes=$(parsed.contextModes -> len),$(parsed.literalContextMap -> len),$(parsed.distanceContextMap -> len)" -> println
+                    "trees=$(parsed.literalTrees -> len),$(parsed.commandTrees -> len),$(parsed.distanceTrees -> len)" -> println
+                    "position=$(parsed.position.byteIndex):$(parsed.position.bitIndex)" -> println
+                }
+            }
+            printCheck(
+            "truncated",
+            parser -> parse([], prefix.Position { byteIndex: 0, bitIndex: 0 }) -> failsWith(1))
+        }
+    }
+}

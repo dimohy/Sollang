@@ -1,0 +1,67 @@
+import std.net as net
+import std.net.quic as quic
+
+ipv6Roundtrip: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificate
+
+    net.loopbackIpv6(0) -> unified => clientAddress
+    net.loopbackIpv6(0) -> unified => serverAddress
+    quic.bind(clientAddress)? => clientEndpoint!
+    quic.bind(serverAddress)? => serverEndpoint!
+    serverEndpoint! -> listen(identity)? => listener!
+    serverEndpoint! -> localEndpoint => listeningAddress
+
+    clientEndpoint! -> connect(listeningAddress, certificate)? => clientConnection!
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> localEndpoint => clientLocal
+    clientConnection! -> remoteEndpoint => clientRemote
+    serverConnection! -> localEndpoint => serverLocal
+    serverConnection! -> remoteEndpoint => serverRemote
+
+    clientConnection! -> openBi(clientEndpoint!)? => clientStream!
+    clientStream! -> send(clientConnection!, clientEndpoint!, [54])? => sent
+    clientStream! -> finish(clientConnection!, clientEndpoint!)?
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverStream!
+    serverStream! -> receive(serverConnection!, serverEndpoint!, 8)? => received
+    serverStream! -> receive(serverConnection!, serverEndpoint!, 8)? => endOfStream
+
+    clientConnection! -> sendDatagram(clientEndpoint!, [6])?
+    serverConnection! -> receiveDatagram(serverEndpoint!)? => datagram
+
+    listeningAddress -> isIpv6 => listeningIpv6
+    clientLocal -> isIpv6 => clientLocalIpv6
+    clientRemote -> isIpv6 => clientRemoteIpv6
+    serverLocal -> isIpv6 => serverLocalIpv6
+    serverRemote -> isIpv6 => serverRemoteIpv6
+    listeningAddress -> port => listeningPort
+    clientRemote -> port => clientRemotePort
+    listeningIpv6
+        and clientLocalIpv6
+        and clientRemoteIpv6
+        and serverLocalIpv6
+        and serverRemoteIpv6
+        and listeningPort > 0
+        and clientRemotePort == listeningPort
+        and sent == 1
+        and (received -> len) == 1
+        and received[0] == 54
+        and (endOfStream -> len) == 0
+        and (datagram -> len) == 1
+        and datagram[0] == 6 => correct
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    serverConnection! -> close(serverEndpoint!, 0)?
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(correct)
+}
+
+main {
+    ipv6Roundtrip() -> when {
+        Ok(correct) { "quic-ipv6-endpoint=$correct" -> println }
+        Err(error) { "quic-ipv6-endpoint-error=$(error.code)" -> println }
+    }
+}

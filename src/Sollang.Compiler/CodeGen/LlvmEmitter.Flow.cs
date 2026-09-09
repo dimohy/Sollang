@@ -20,7 +20,10 @@ internal sealed partial class LlvmEmitter
         if (!_platform.SupportsChildProcesses
             && expression.Targets.Any(target => TryResolveFunction(target.Path, out var function)
                 && function.Kind is BoundFunctionKind.RuntimeRunProcess
-                    or BoundFunctionKind.RuntimeRunProcessToFile))
+                    or BoundFunctionKind.RuntimeRunProcessToFile
+                    or BoundFunctionKind.RuntimeCollectProcess
+                    or BoundFunctionKind.RuntimeSpawnProcess
+                    or BoundFunctionKind.RuntimeWaitProcess))
         {
             throw new SollangException("child processes are unavailable on the current target");
         }
@@ -53,6 +56,8 @@ internal sealed partial class LlvmEmitter
                 or DictionaryLiteralExpression)
                 ? EmitFunctionArgumentExpression(expression.Source, contextualFirstInput)
                 : EmitFlowSource(expression.Source);
+        // Function results own their temporary storage independently of the original flow place.
+        var ownsFlowTemporary = false;
         for (var i = 0; i < expression.Targets.Count; i++)
         {
             var target = expression.Targets[i];
@@ -123,20 +128,55 @@ internal sealed partial class LlvmEmitter
                 return new RuntimeFlowResult(Value: null, Binding: null, Ok: ok);
             }
 
-            if (TryResolveInstanceMethod(current.Type, path, out var function)
-                || _program.ResolvedGenericCalls.TryGetValue(target, out function)
+            if (_program.ResolvedGenericCalls.TryGetValue(target, out var function)
+                || TryResolveInstanceMethod(current.Type, path, out function)
                 || TryResolveFunction(target.Path, out function))
             {
-                if (function.Kind is not (
+                var flowKind = TryGetRuntimePrinterKind(function, out var printerKind)
+                    ? printerKind
+                    : function.Kind;
+                if (flowKind is not (
                         BoundFunctionKind.User
                         or BoundFunctionKind.Native
                         or BoundFunctionKind.RuntimeMouseEvents
                         or BoundFunctionKind.RuntimeSocketReceive
+                        or BoundFunctionKind.RuntimeSocketReceiveAppend
+                        or BoundFunctionKind.RuntimeSocketReceiveVectored
+                        or BoundFunctionKind.RuntimeSocketPeek
                         or BoundFunctionKind.RuntimeSocketSend
+                        or BoundFunctionKind.RuntimeSocketSendRange
+                        or BoundFunctionKind.RuntimeSocketSendVectored
+                        or BoundFunctionKind.RuntimeSocketTryClone
                         or BoundFunctionKind.RuntimeSocketSendText
-                        or BoundFunctionKind.RuntimeSocketLocalPort
+                        or BoundFunctionKind.RuntimeSocketShutdown
+                         or BoundFunctionKind.RuntimeSocketLocalPort
+                         or BoundFunctionKind.RuntimeSocketLocalEndpoint
+                         or BoundFunctionKind.RuntimeSocketRemoteEndpoint
+                        or BoundFunctionKind.RuntimeSocketSetNoDelay
+                        or BoundFunctionKind.RuntimeSocketNoDelay
+                        or BoundFunctionKind.RuntimeSocketSetKeepAlive
+                        or BoundFunctionKind.RuntimeSocketKeepAlive
+                        or BoundFunctionKind.RuntimeSocketSetLinger
+                        or BoundFunctionKind.RuntimeSocketLinger
+                        or BoundFunctionKind.RuntimeSocketSetReadTimeout
+                        or BoundFunctionKind.RuntimeSocketReadTimeout
+                        or BoundFunctionKind.RuntimeSocketSetWriteTimeout
+                        or BoundFunctionKind.RuntimeSocketWriteTimeout
                         or BoundFunctionKind.RuntimeSocketSendTo
-                        or BoundFunctionKind.RuntimeSocketReceiveFrom)
+                        or BoundFunctionKind.RuntimeSocketReceiveFrom
+                        or BoundFunctionKind.RuntimeSocketPeekFrom
+                        or BoundFunctionKind.RuntimeSocketClose
+                        or BoundFunctionKind.RuntimeSocketSetNonblocking
+                        or BoundFunctionKind.RuntimeSocketPoll
+                        or BoundFunctionKind.RuntimeSocketReactorWait
+                        or BoundFunctionKind.RuntimeDnsLookup
+                        or BoundFunctionKind.RuntimeRunProcess
+                        or BoundFunctionKind.RuntimeRunProcessToFile
+                        or BoundFunctionKind.RuntimeCollectProcess
+                        or BoundFunctionKind.RuntimeSpawnProcess
+                        or BoundFunctionKind.RuntimeWaitProcess
+                        or BoundFunctionKind.RuntimeChildProcessId
+                        or BoundFunctionKind.RuntimeProcessIdValue)
                     && target.Arguments.Count != 0)
                 {
                     throw new SollangException($"function value-flow target '{path}' does not accept additional arguments in this slice");
@@ -149,7 +189,7 @@ internal sealed partial class LlvmEmitter
                     current = new RuntimeInt(contextualInput, integerLiteral);
                 }
 
-                switch (function.Kind)
+                switch (flowKind)
                 {
                     case BoundFunctionKind.RuntimePrint:
                     case BoundFunctionKind.RuntimePrintLine:
@@ -159,9 +199,9 @@ internal sealed partial class LlvmEmitter
                             throw new SollangException($"{path} must be the final value-flow target");
                         }
 
-                        var standardError = function.Kind == BoundFunctionKind.RuntimePrintErrorLine;
+                        var standardError = flowKind == BoundFunctionKind.RuntimePrintErrorLine;
                         ok = EmitWriteValue(current, ok, standardError);
-                        if (function.Kind is BoundFunctionKind.RuntimePrintLine
+                        if (flowKind is BoundFunctionKind.RuntimePrintLine
                             or BoundFunctionKind.RuntimePrintErrorLine)
                         {
                             ok = standardError
@@ -219,16 +259,6 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeCloseIntWriter:
                     case BoundFunctionKind.RuntimeCloseIntReader:
                         throw new SollangException($"{path} does not accept a flowed input");
-                    case BoundFunctionKind.RuntimeRunProcess:
-                        current = current is RuntimeDynamicInlineArray argv
-                            ? EmitRuntimeRunProcessIntrinsic(function, argv)
-                            : throw new SollangException($"{path} expects a dynamic Text argv array");
-                        continue;
-                    case BoundFunctionKind.RuntimeRunProcessToFile:
-                        current = current is RuntimeStruct request
-                            ? EmitRuntimeRunProcessToFileIntrinsic(function, request)
-                            : throw new SollangException($"{path} expects a RunToFileRequest");
-                        continue;
                     case BoundFunctionKind.RuntimeExitProcess:
                         if (!isLast)
                         {
@@ -281,29 +311,60 @@ internal sealed partial class LlvmEmitter
                         current = EmitRuntimeRangeStream(function, current, path);
                         continue;
                     case BoundFunctionKind.RuntimeMouseEvents:
-                        if (target.Arguments.Count != 1)
+                        if (target.Arguments.Count != 0)
                         {
                             throw new SollangException(
-                                $"{path} expects one overflow argument after the flowed capacity");
+                                $"{path} does not accept arguments after the flowed Source");
                         }
                         current = EmitRuntimeMouseEvents(
                             function,
                             current,
-                            EmitExpression(target.Arguments[0]),
                             path);
                         continue;
                     case BoundFunctionKind.RuntimeSocketListen:
                     case BoundFunctionKind.RuntimeSocketAccept:
                     case BoundFunctionKind.RuntimeSocketConnect:
                     case BoundFunctionKind.RuntimeSocketReceive:
+                    case BoundFunctionKind.RuntimeSocketReceiveAppend:
+                    case BoundFunctionKind.RuntimeSocketReceiveVectored:
+                    case BoundFunctionKind.RuntimeSocketPeek:
                     case BoundFunctionKind.RuntimeSocketSend:
+                    case BoundFunctionKind.RuntimeSocketSendRange:
+                    case BoundFunctionKind.RuntimeSocketSendVectored:
+                    case BoundFunctionKind.RuntimeSocketTryClone:
                     case BoundFunctionKind.RuntimeSocketSendText:
                     case BoundFunctionKind.RuntimeSocketShutdown:
                     case BoundFunctionKind.RuntimeSocketBindDatagram:
                     case BoundFunctionKind.RuntimeSocketLocalPort:
+                    case BoundFunctionKind.RuntimeSocketLocalEndpoint:
+                    case BoundFunctionKind.RuntimeSocketRemoteEndpoint:
+                    case BoundFunctionKind.RuntimeSocketSetNoDelay:
+                    case BoundFunctionKind.RuntimeSocketNoDelay:
+                    case BoundFunctionKind.RuntimeSocketSetKeepAlive:
+                    case BoundFunctionKind.RuntimeSocketKeepAlive:
+                    case BoundFunctionKind.RuntimeSocketSetLinger:
+                    case BoundFunctionKind.RuntimeSocketLinger:
+                    case BoundFunctionKind.RuntimeSocketSetReadTimeout:
+                    case BoundFunctionKind.RuntimeSocketReadTimeout:
+                    case BoundFunctionKind.RuntimeSocketSetWriteTimeout:
+                    case BoundFunctionKind.RuntimeSocketWriteTimeout:
                     case BoundFunctionKind.RuntimeSocketSendTo:
                     case BoundFunctionKind.RuntimeSocketReceiveFrom:
-                        current = EmitFlowFunctionCall(function, current, expression.Source, target.Arguments);
+                    case BoundFunctionKind.RuntimeSocketPeekFrom:
+                    case BoundFunctionKind.RuntimeSocketClose:
+                    case BoundFunctionKind.RuntimeSocketSetNonblocking:
+                    case BoundFunctionKind.RuntimeSocketPoll:
+                    case BoundFunctionKind.RuntimeSocketReactorWait:
+                    case BoundFunctionKind.RuntimeDnsLookup:
+                    case BoundFunctionKind.RuntimeRunProcess:
+                    case BoundFunctionKind.RuntimeRunProcessToFile:
+                    case BoundFunctionKind.RuntimeCollectProcess:
+                    case BoundFunctionKind.RuntimeSpawnProcess:
+                    case BoundFunctionKind.RuntimeWaitProcess:
+                    case BoundFunctionKind.RuntimeChildProcessId:
+                    case BoundFunctionKind.RuntimeProcessIdValue:
+                        current = EmitFlowFunctionCall(function, current, expression.Source, target.Arguments, i == 0, ownsFlowTemporary);
+                        ownsFlowTemporary = IsOwnedContainerRuntimeValue(current);
                         continue;
                     case BoundFunctionKind.RuntimeOpenFileAsync:
                     case BoundFunctionKind.RuntimeOpenWriteFileAsync:
@@ -314,7 +375,8 @@ internal sealed partial class LlvmEmitter
                         continue;
                     case BoundFunctionKind.User:
                     case BoundFunctionKind.Native:
-                        current = EmitFlowFunctionCall(function, current, expression.Source, target.Arguments);
+                        current = EmitFlowFunctionCall(function, current, expression.Source, target.Arguments, i == 0, ownsFlowTemporary);
+                        ownsFlowTemporary = IsOwnedContainerRuntimeValue(current);
                         continue;
                     default:
                         throw new SollangException($"unsupported runtime function kind '{function.Kind}'");
@@ -393,6 +455,14 @@ internal sealed partial class LlvmEmitter
                     offsetExpression: target.Arguments[0]);
             result = new RuntimeFlowResult(value, null, _mainOk);
             return true;
+        }
+
+        // Match semantic call precedence before selecting a container intrinsic by name.
+        if (TryResolveFlowTargetFunction(target, current.Type, out var declaredFunction)
+            && declaredFunction.IsVisibleFrom(_currentFunction?.ModuleName ?? "")
+            && declaredFunction.Kind is BoundFunctionKind.User or BoundFunctionKind.Native)
+        {
+            return false;
         }
 
         switch (path)
@@ -728,7 +798,9 @@ internal sealed partial class LlvmEmitter
                     throw new SollangException("push expects exactly one Int argument");
                 }
 
-                var arrayName = RequireMutableContainerSource(source, "push");
+                var arrayName = source is NameExpression
+                    ? RequireMutableContainerSource(source, "push")
+                    : RequireMutableContainerProjection(source, "push");
                 var pushed = current is RuntimeDynamicInlineArray contextualArray
                     && target.Arguments[0] is DictionaryLiteralExpression contextualElement
                     && _program.Types.IsStruct(contextualArray.ElementType)
@@ -747,8 +819,15 @@ internal sealed partial class LlvmEmitter
                     RuntimeDynamicInlineArray array => EmitDynamicInlineArrayPush(array, pushed),
                     _ => throw new SollangException("push argument does not match array element type")
                 };
-                StoreMutableContainer(arrayName, pushedArray);
-                _locals[arrayName] = pushedArray;
+                if (arrayName is not null)
+                {
+                    StoreMutableContainer(arrayName, pushedArray);
+                    _locals[arrayName] = pushedArray;
+                }
+                else
+                {
+                    StoreMutableContainerProjection(source, pushedArray, "push");
+                }
                 if (current is RuntimeDynamicInlineArray ownedElementArray
                     && _program.Types.ContainsOwnedStorage(ownedElementArray.ElementType))
                 {
@@ -1047,7 +1126,7 @@ internal sealed partial class LlvmEmitter
 
         if (!_mutableLocals.Contains(name.Name))
         {
-            throw new SollangException($"{operation} requires a mutable owner binding; use '=> {name.Name.TrimEnd('!')}!'");
+            throw new SollangException($"{operation} requires writable owner storage; change a readonly parameter from '{name.Name.TrimEnd('!')}: Type' to '{name.Name.TrimEnd('!')}: mut Type', declare an instance receiver as 'mut self', or bind local owned storage with '=> {name.Name.TrimEnd('!')}!'");
         }
 
         return name.Name;

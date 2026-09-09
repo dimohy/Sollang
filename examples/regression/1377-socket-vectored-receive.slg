@@ -1,0 +1,46 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+# Receives one stream prefix into two reusable caller-owned segments with one
+# native scatter operation.
+observe: -> Result<Bool, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localEndpoint? => endpoint
+    endpoint -> connect? => client
+    listener -> accept? => server
+
+    [UInt8(41), 42, 43, 44, 45; ~] => payload
+    client -> send(payload)? => sent
+    [
+        socket.ReceiveBuffer { bytes: [UInt8; 2~] },
+        socket.ReceiveBuffer { bytes: [UInt8; 4~] }; ~
+    ] => buffers!
+    server -> receiveVectored(buffers!)? => received
+
+    client -> close
+    server -> close
+    listener -> close
+
+    Result<Bool, socket.SocketError>.Ok(
+        sent == 5
+            and received == 5
+            and (buffers![0] -> receivedLength) == 2
+            and (buffers![0] -> byteAt(0)) == 41
+            and (buffers![0] -> byteAt(1)) == 42
+            and (buffers![1] -> receivedLength) == 3
+            and (buffers![1] -> byteAt(0)) == 43
+            and (buffers![1] -> byteAt(1)) == 44
+            and (buffers![1] -> byteAt(2)) == 45)
+}
+
+main {
+    observe() -> when {
+        Ok(valid) { "socket-vectored-receive=$valid" -> println }
+        Err(error) { "socket-vectored-receive-error=$(error.code)" -> println }
+    }
+}

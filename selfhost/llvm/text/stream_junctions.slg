@@ -409,21 +409,21 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
 junctionRequiresConcurrent junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     context.streamPlan.junctions[junctionIndex] => junction
     false => concurrent!
-    (junction.kind == 2 and (junction.policy == 1 or junction.policy == 3))
+    junction.kind == 2 and (junction.policy == 1 or junction.policy == 3)
         -> if {
-        junction.inputStart => inputIndex!
-        inputIndex! < junction.inputStart + junction.inputCount
-            -> while {
-            context.streamPlan.junctionInputs[inputIndex!].typeId => inputTypeId
-            (inputTypeId >= 0 and inputTypeId < (context.types -> len))
-                -> if {
-                context.types[inputTypeId] => inputType
-                (inputType.kind == 7 and inputType.symbol == 4)
-                    -> if { true => concurrent! }
-            }
-            inputIndex! + 1 => inputIndex!
+            junction.inputStart => inputIndex!
+            inputIndex! < junction.inputStart + junction.inputCount
+                -> while {
+                    context.streamPlan.junctionInputs[inputIndex!].typeId => inputTypeId
+                    inputTypeId >= 0 and inputTypeId < (context.types -> len)
+                        -> if {
+                            context.types[inputTypeId] => inputType
+                            inputType.kind == 7 and inputType.symbol == 4
+                                -> if { true => concurrent! }
+                        }
+                    inputIndex! + 1 => inputIndex!
+                }
         }
-    }
     concurrent!
 }
 
@@ -475,7 +475,8 @@ emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterCon
         ownedSwitch! < junction.inputCount -> while {
             context.streamPlan.junctionInputs[junction.inputStart + ownedSwitch!] => ownedSwitchInput
             context.types[ownedSwitchInput.typeId].first => ownedSwitchType
-            context.typeTraits[ownedSwitchType] % 2 == 1 -> if { "    i32 $(ownedSwitch!), label %drop$(ownedSwitch!)" -> println }
+            context.typeTraits[ownedSwitchType] % 2 == 1
+                -> if { "    i32 $(ownedSwitch!), label %drop$(ownedSwitch!)" -> println }
             ownedSwitch! + 1 => ownedSwitch!
         }
         "  ]" -> println
@@ -697,35 +698,35 @@ emitStreamJunctionRuntimes context: ref emitterContext.EmitContext, state: ref C
     0 => junctionIndex!
     junctionIndex! < (context.streamPlan.junctions -> len)
         -> while {
-        context.streamPlan.junctions[junctionIndex!] => junction
-        (junction.kind == 2 and junction.policy == 0)
-            -> if { junctionIndex! -> emitZipJunctionRuntime(context, state) }
-        (junction.kind == 2 and junction.policy == 1 and not (junctionIndex! -> junctionRequiresConcurrent(context, state)))
-            -> if { junctionIndex! -> emitMergeJunctionRuntime(context, state) }
-        (junction.kind == 2 and junction.policy == 1 and (junctionIndex! -> junctionRequiresConcurrent(context, state)))
-            -> if {
-            not concurrentRuntimeEmitted! -> if {
-                context.expectedPathStyle == 1 -> if { streamJoinRuntime.emitWindowsPlatform() } else { streamJoinRuntime.emitLinuxPlatform() }
-                streamJoinRuntime.emitCommon()
-                true => concurrentRuntimeEmitted!
-            }
-            junctionIndex! -> emitConcurrentMergeJunctionRuntime(context, state)
+            context.streamPlan.junctions[junctionIndex!] => junction
+            junction.kind == 2 and junction.policy == 0
+                -> if { junctionIndex! -> emitZipJunctionRuntime(context, state) }
+            junction.kind == 2 and junction.policy == 1 and not (junctionIndex! -> junctionRequiresConcurrent(context, state))
+                -> if { junctionIndex! -> emitMergeJunctionRuntime(context, state) }
+            junction.kind == 2 and junction.policy == 1 and (junctionIndex! -> junctionRequiresConcurrent(context, state))
+                -> if {
+                    not concurrentRuntimeEmitted! -> if {
+                        context.expectedPathStyle == 1 -> if { streamJoinRuntime.emitWindowsPlatform() } else { streamJoinRuntime.emitLinuxPlatform() }
+                        streamJoinRuntime.emitCommon()
+                        true => concurrentRuntimeEmitted!
+                    }
+                    junctionIndex! -> emitConcurrentMergeJunctionRuntime(context, state)
+                }
+            junction.kind == 2 and junction.policy == 2
+                -> if { junctionIndex! -> emitConcatJunctionRuntime(context, state) }
+            junction.kind == 2 and junction.policy == 3 and not (junctionIndex! -> junctionRequiresConcurrent(context, state))
+                -> if { junctionIndex! -> emitLatestJunctionRuntime(context, state) }
+            junction.kind == 2 and junction.policy == 3 and (junctionIndex! -> junctionRequiresConcurrent(context, state))
+                -> if {
+                    not concurrentRuntimeEmitted! -> if {
+                        context.expectedPathStyle == 1 -> if { streamJoinRuntime.emitWindowsPlatform() } else { streamJoinRuntime.emitLinuxPlatform() }
+                        streamJoinRuntime.emitCommon()
+                        true => concurrentRuntimeEmitted!
+                    }
+                    junctionIndex! -> emitConcurrentLatestJunctionRuntime(context, state)
+                }
+            junctionIndex! + 1 => junctionIndex!
         }
-        (junction.kind == 2 and junction.policy == 2)
-            -> if { junctionIndex! -> emitConcatJunctionRuntime(context, state) }
-        (junction.kind == 2 and junction.policy == 3 and not (junctionIndex! -> junctionRequiresConcurrent(context, state)))
-            -> if { junctionIndex! -> emitLatestJunctionRuntime(context, state) }
-        (junction.kind == 2 and junction.policy == 3 and (junctionIndex! -> junctionRequiresConcurrent(context, state)))
-            -> if {
-            not concurrentRuntimeEmitted! -> if {
-                context.expectedPathStyle == 1 -> if { streamJoinRuntime.emitWindowsPlatform() } else { streamJoinRuntime.emitLinuxPlatform() }
-                streamJoinRuntime.emitCommon()
-                true => concurrentRuntimeEmitted!
-            }
-            junctionIndex! -> emitConcurrentLatestJunctionRuntime(context, state)
-        }
-        junctionIndex! + 1 => junctionIndex!
-    }
 }
 
 emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -750,7 +751,8 @@ emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, 
     "  %join$(expressionIndex)_done = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount)" -> println
     "  store i1 false, ptr %join$(expressionIndex)_done, align 1" -> println
     "%sollang.stream" => resultType!
-    context.types[expression.typeId].symbol == 4 -> if { "%sollang.event_stream" => resultType! }
+    context.types[expression.typeId].symbol == 4
+        -> if { "%sollang.event_stream" => resultType! }
     "  %join$(expressionIndex)_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex)_context, 0" -> println
     "  %join$(expressionIndex)_with_next = insertvalue $(resultType!) %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
     "  %v$(expressionIndex) = insertvalue $(resultType!) %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println
@@ -781,7 +783,8 @@ emitMergeJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int
         activeIndex! + 1 => activeIndex!
     }
     "%sollang.stream" => resultType!
-    context.types[expression.typeId].symbol == 4 -> if { "%sollang.event_stream" => resultType! }
+    context.types[expression.typeId].symbol == 4
+        -> if { "%sollang.event_stream" => resultType! }
     "  %join$(expressionIndex)_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex)_context, 0" -> println
     "  %join$(expressionIndex)_with_next = insertvalue $(resultType!) %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
     "  %v$(expressionIndex) = insertvalue $(resultType!) %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println
@@ -814,7 +817,8 @@ emitLatestJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: In
         activeIndex! + 1 => activeIndex!
     }
     "%sollang.stream" => resultType!
-    context.types[expression.typeId].symbol == 4 -> if { "%sollang.event_stream" => resultType! }
+    context.types[expression.typeId].symbol == 4
+        -> if { "%sollang.event_stream" => resultType! }
     "  %join$(expressionIndex)_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex)_context, 0" -> println
     "  %join$(expressionIndex)_with_next = insertvalue $(resultType!) %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
     "  %v$(expressionIndex) = insertvalue $(resultType!) %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println
@@ -910,7 +914,8 @@ emitConcatJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: In
     "  %join$(expressionIndex)_cursor = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(junction.inputCount)" -> println
     "  store i32 0, ptr %join$(expressionIndex)_cursor, align 4" -> println
     "%sollang.stream" => resultType!
-    context.types[expression.typeId].symbol == 4 -> if { "%sollang.event_stream" => resultType! }
+    context.types[expression.typeId].symbol == 4
+        -> if { "%sollang.event_stream" => resultType! }
     "  %join$(expressionIndex)_with_context = insertvalue $(resultType!) poison, ptr %join$(expressionIndex)_context, 0" -> println
     "  %join$(expressionIndex)_with_next = insertvalue $(resultType!) %join$(expressionIndex)_with_context, ptr @sollang_join_$(expressionIndex)_next, 1" -> println
     "  %v$(expressionIndex) = insertvalue $(resultType!) %join$(expressionIndex)_with_next, ptr @sollang_join_$(expressionIndex)_drop, 2" -> println

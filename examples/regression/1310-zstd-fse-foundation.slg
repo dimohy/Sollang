@@ -1,0 +1,38 @@
+# RFC 8878 Appendix A table cells and reverse bit order cross-check the FSE core.
+import std.compress.zstd.fse as fse
+
+run: -> Result<Unit, fse.Failure> uses Console {
+    fse.predefinedLiteralLengths()? => literals
+    literals -> symbol(0)? => state0Symbol
+    literals -> bits(0)? => state0Bits
+    literals -> base(0)? => state0Base
+    literals -> symbol(1)? => state1Symbol
+    literals -> bits(1)? => state1Bits
+    literals -> base(1)? => state1Base
+    "zstd-fse-literals=$(literals -> accuracy),$state0Symbol,$state0Bits,$state0Base,$state1Symbol,$state1Bits,$state1Base"
+        -> println
+
+    fse.rle(17)? => repeated
+    repeated -> symbol(0)? => repeatedSymbol
+    "zstd-fse-rle=$(repeated -> accuracy),$repeatedSymbol" -> println
+
+    [UInt8(5)] => encoded
+    encoded -> fse.decodeReverse(0, 1)? => reader!
+    reader! -> read(encoded, 1)? => newestBit
+    reader! -> read(encoded, 1)? => oldestBit
+    "zstd-fse-reverse=$newestBit,$oldestBit,$(reader! -> complete)" -> println
+
+    [1, 1] -> fse.fromNormalized(5) -> when {
+        Ok(_) { false }
+        Err(_) { true }
+    } => invalidTotal
+    "zstd-fse-invalid=$invalidTotal" -> println
+    Result<Unit, fse.Failure>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(_) { "zstd-fse-error" -> println }
+    }
+}

@@ -77,8 +77,8 @@ function applyEdit(text, edit) {
 }
 
 console.log('[0/4] Running parser-backed language-tool verification.');
-const source = 'main {\ntrue\nand true\nor false\n-> if {\n"ok"\n-> println\n}\nvalue\n-> map { it }\n-> tap { it }\n=> result\n}\n\n';
-const expected = 'main {\n    true\n        and true\n        or false\n        -> if {\n            "ok"\n                -> println\n        }\n    value\n        -> map { it }\n        -> tap { it }\n        => result\n}\n';
+const source = 'main {\ntrue\nand true\nor false\n-> if {\n"ok"\n-> println\n}\ntrue -> if {\n"""\nraw\n""" -> println\n}\naaaaaaaaaaaaaaaaaaaa == bbbbbbbbbbbbbbbbbbbb -> if { "44" -> println }\naaaaaaaaaaaaaaaaaaaa == bbbbbbbbbbbbbbbbbbbbb -> if { "45" -> println }\nfirstValue == 123 and secondValue == 456 and thirdValue == 789 -> if { "long" -> println }\nvalue\n-> map { it }\n-> tap { it }\n=> result\n}\n\n';
+const expected = 'main {\n    true\n        and true\n        or false\n        -> if {\n            "ok"\n                -> println\n        }\n    true -> if {\n        """\n        raw\n        """ -> println\n    }\n    aaaaaaaaaaaaaaaaaaaa == bbbbbbbbbbbbbbbbbbbb -> if { "44" -> println }\n    aaaaaaaaaaaaaaaaaaaa == bbbbbbbbbbbbbbbbbbbbb\n        -> if { "45" -> println }\n    firstValue == 123 and secondValue == 456 and thirdValue == 789\n        -> if { "long" -> println }\n    value\n        -> map { it }\n        -> tap { it }\n        => result\n}\n';
 const first = await run(['format', '--stdin'], source);
 requireValue(first.code === 0, first.stderr || `formatter exited ${first.code}`);
 requireValue(first.stdout === expected, `unexpected formatter output: ${JSON.stringify(first.stdout)}`);

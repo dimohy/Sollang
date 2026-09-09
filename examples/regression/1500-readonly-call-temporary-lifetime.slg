@@ -1,0 +1,24 @@
+factoryAudit: -> [UInt8; 1] { [13] }
+firstByteAudit values: [UInt8] -> UInt8 { values[0] }
+extraByteAudit ignored: Int, values: [UInt8] -> UInt8 { values[0] }
+struct Owner { values: [UInt8; 1] }
+borrowAudit owner: ref Owner -> ref Owner { owner }
+readAudit owner: ref Owner -> UInt8 { owner.values[0] }
+firstAudit values: [Int] -> Int { values[0] }
+extraAudit ignored: Int, values: [Int] -> Int { values[0] }
+mark value: Int -> Int uses Console { value -> println
+    value }
+main {
+    [7] -> firstAudit -> println
+    firstAudit([8]) -> println
+    0 -> extraAudit([9]) -> println
+    extraAudit(0, [10]) -> println
+    [mark(11)] -> firstAudit -> println
+    [12; 2] -> firstAudit -> println
+    factoryAudit() -> firstByteAudit -> println
+    firstByteAudit(factoryAudit()) -> println
+    0 -> extraByteAudit(factoryAudit()) -> println
+    Owner { values: [17] } => owner
+    owner -> borrowAudit -> readAudit -> println
+    owner -> readAudit -> println
+}

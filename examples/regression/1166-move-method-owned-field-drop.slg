@@ -1,0 +1,35 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+# A move method may consume one affine field; its remaining fields drop once.
+struct Owner {
+    resource: socket.UdpSocket
+    remaining: [Int; ~]
+}
+
+impl Owner {
+    public close: move self -> Unit uses Network {
+        self.resource -> close
+    }
+}
+
+run: -> Result<Unit, socket.SocketError> uses Network {
+    socket.DatagramBindOptions {
+        endpoint: net.loopback(0) -> unified
+        reuseAddress: true
+    } -> bind? => resource
+    Owner {
+        resource: resource
+        remaining: [4, 5]
+    } => owner
+    owner -> close
+    Result<Unit, socket.SocketError>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { "closed" -> println }
+        Err(error) { "socket-error=$(error.code)" -> println }
+    }
+}

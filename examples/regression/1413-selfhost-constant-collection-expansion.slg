@@ -1,0 +1,52 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.semantic.constant_collections as collection
+
+check label: Text, source: Text -> Unit uses Console {
+    source -> ast.lowerExpression => nodes
+    source -> collection.expand(nodes, 1) -> when {
+        Ok(expansion) {
+            "$label:dictionary=$(expansion.dictionary),count=$(expansion.constants -> len)" -> println
+            expansion.constants -> each value {
+                nodes[value.sourceNode] => origin
+                "$(value.value)@$(origin.start):$(origin.length)" -> println
+            }
+        }
+        Err(error) {
+            error -> when {
+                InvalidAst(_) { "$label:invalid-ast" -> println }
+                InvalidRange(_) { "$label:descending" -> println }
+                ExpansionLimit(_) { "$label:limit" -> println }
+                InvalidSelector(_) { "$label:selector" -> println }
+                Expression(failure) { "$label:constant@$(failure.start):$(failure.length)" -> println }
+            }
+        }
+    }
+}
+
+limitBoundary source: Text -> Unit uses Console {
+    source -> ast.lowerExpression => nodes
+    source -> collection.expand(nodes, 1) -> when {
+        Ok(expansion) {
+            expansion.constants -> len => count
+            "boundary:count=$count,first=$(expansion.constants[0].value),last=$(expansion.constants[count - 1].value)" -> println
+        }
+        Err(_) { "boundary:unexpected-error" -> println }
+    }
+}
+
+main {
+    "range" -> check("[1..3]")
+    "named" -> check("[1..3 -> each item { item * item }]")
+    "implicit" -> check("[1..<3 -> each { it + 10 }]")
+    "dictionary" -> check("{1..2 -> each { it: it * 10 }}")
+    "empty" -> check("[2..<2 -> each { missing }]")
+    "descending" -> check("[3..1]")
+    "limit" -> check("[0..100000]")
+    "nonconstant" -> check("[1..2 -> each { missing }]")
+    "overflow" -> check("[1..2 -> each { 9223372036854775807 + it }]")
+    "maximum" -> check("[9223372036854775807..9223372036854775807]")
+    "wide" -> check("[(-9223372036854775807 - 1)..9223372036854775807]")
+    "bound" -> check("[low..3]")
+    "[1..100000]" -> limitBoundary
+    "[0..<100000]" -> limitBoundary
+}

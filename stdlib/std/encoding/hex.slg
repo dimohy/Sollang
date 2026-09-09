@@ -1,0 +1,243 @@
+namespace std.encoding.hex
+
+import std.encoding.hex.error as errors
+
+# Pure RFC 4648 base16 values. Codec configuration and streaming state are
+# ordinary Sollang values; no runtime intrinsic, ambient effect, or hidden
+# allocation is involved. Every write is bounded before output mutation.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct EncodePlan {
+    public inputLength: Int
+    public outputLength: Int
+}
+
+public struct DecodePlan {
+    public inputLength: Int
+    public outputLength: Int
+}
+
+public struct Codec {
+    public uppercase: Bool
+}
+
+public struct Encoder {
+    public codec: Codec
+    public maxOutputBytes: Int
+    public produced: Int
+    public inputOffset: UIntSize
+}
+
+public struct Decoder {
+    public maxOutputBytes: Int
+    public produced: Int
+    public inputOffset: UIntSize
+    public pendingNibble: Int
+    public pendingOffset: UIntSize
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorEncodePlan kind: errors.Kind, offset: UIntSize -> Result<EncodePlan, Error> {
+    Result<EncodePlan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecodePlan kind: errors.Kind, offset: UIntSize -> Result<DecodePlan, Error> {
+    Result<DecodePlan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBytes kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
+    Result<[UInt8; ~], Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorEncoder kind: errors.Kind, offset: UIntSize -> Result<Encoder, Error> {
+    Result<Encoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecoder kind: errors.Kind, offset: UIntSize -> Result<Decoder, Error> {
+    Result<Decoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorUnit kind: errors.Kind, offset: UIntSize -> Result<Unit, Error> {
+    Result<Unit, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+nibble value: UInt8 -> Int {
+    value >= 48 and value <= 57 -> if { Int(value - 48) -> return }
+    value >= 65 and value <= 70 -> if { Int(value - 65) + 10 -> return }
+    value >= 97 and value <= 102 -> if { Int(value - 97) + 10 -> return }
+    -1
+}
+
+digit value: Int, uppercase: Bool -> UInt8 {
+    value < 10 -> if { UInt8(value + 48) -> return }
+    uppercase -> if { UInt8(value - 10 + 65) } else { UInt8(value - 10 + 97) }
+}
+
+public lower: -> Codec => Codec { uppercase: false }
+
+public upper: -> Codec => Codec { uppercase: true }
+
+impl Codec {
+    public planEncode: self, inputLength: Int, maxOutputBytes: Int -> Result<EncodePlan, Error> {
+        maxOutputBytes >= 0 and inputLength >= 0 -> unless {
+            errorEncodePlan(errors.Kind.InvalidLimit, 0) -> return
+        }
+        inputLength <= maxOutputBytes / 2 -> unless {
+            errorEncodePlan(errors.Kind.OutputLimitExceeded, UIntSize(inputLength)) -> return
+        }
+        Result<EncodePlan, Error>.Ok(EncodePlan {
+            inputLength: inputLength
+            outputLength: inputLength * 2
+        })
+    }
+
+    public planDecode: self, input: [UInt8], maxOutputBytes: Int -> Result<DecodePlan, Error> {
+        maxOutputBytes >= 0 -> unless {
+            errorDecodePlan(errors.Kind.InvalidLimit, 0) -> return
+        }
+        (input -> len) % 2 == 0 -> unless {
+            errorDecodePlan(errors.Kind.OddLength, UIntSize(input -> len)) -> return
+        }
+        0 => index!
+        index! < (input -> len) -> while {
+            (input[index!] -> nibble) >= 0 -> unless {
+                errorDecodePlan(errors.Kind.InvalidByte, UIntSize(index!)) -> return
+            }
+            index! + 1 => index!
+        }
+        (input -> len) / 2 => outputLength
+        outputLength <= maxOutputBytes -> unless {
+            errorDecodePlan(errors.Kind.OutputLimitExceeded, UIntSize(input -> len)) -> return
+        }
+        Result<DecodePlan, Error>.Ok(DecodePlan {
+            inputLength: input -> len
+            outputLength: outputLength
+        })
+    }
+
+    public encoder: self, maxOutputBytes: Int -> Result<Encoder, Error> {
+        maxOutputBytes >= 0 -> unless {
+            errorEncoder(errors.Kind.InvalidLimit, 0) -> return
+        }
+        Result<Encoder, Error>.Ok(Encoder {
+            codec: self
+            maxOutputBytes: maxOutputBytes
+            produced: 0
+            inputOffset: 0
+        })
+    }
+
+    public decoder: self, maxOutputBytes: Int -> Result<Decoder, Error> {
+        maxOutputBytes >= 0 -> unless {
+            errorDecoder(errors.Kind.InvalidLimit, 0) -> return
+        }
+        Result<Decoder, Error>.Ok(Decoder {
+            maxOutputBytes: maxOutputBytes
+            produced: 0
+            inputOffset: 0
+            pendingNibble: -1
+            pendingOffset: 0
+        })
+    }
+
+    public encode: self, input: [UInt8], maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        self -> encoder(maxOutputBytes)? => encoder!
+        [UInt8; ~] => output!
+        encoder! -> write(input, output!)? => written
+        encoder! -> finish?
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public decode: self, input: [UInt8], maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        self -> decoder(maxOutputBytes)? => decoder!
+        [UInt8; ~] => output!
+        decoder! -> write(input, output!)? => written
+        decoder! -> finish?
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+}
+
+impl Encoder {
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        input -> len => inputLength
+        inputLength <= (self.maxOutputBytes - self.produced) / 2
+            -> unless {
+                errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset + UIntSize(inputLength)) -> return
+            }
+        inputLength * 2 => added
+        output -> reserve((output -> len) + added)
+        0 => index!
+        index! < inputLength -> while {
+            Int(input[index!]) => value
+            output -> push((value / 16) -> digit(self.codec.uppercase))
+            output -> push((value % 16) -> digit(self.codec.uppercase))
+            index! + 1 => index!
+        }
+        self.produced + added => produced
+        self.inputOffset + UIntSize(inputLength) => inputOffset
+        produced => self.produced
+        inputOffset => self.inputOffset
+        Result<Int, Error>.Ok(added)
+    }
+
+    public finish: move self -> Result<Unit, Error> {
+        Result<Unit, Error>.Ok
+    }
+}
+
+impl Decoder {
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.pendingNibble >= 0 -> if { 1 } else { 0 } => pendingLength
+        (pendingLength + (input -> len)) / 2 => added
+        added <= self.maxOutputBytes - self.produced
+            -> unless {
+                errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset + UIntSize(input -> len)) -> return
+            }
+
+        0 => validationIndex!
+        validationIndex! < (input -> len) -> while {
+            (input[validationIndex!] -> nibble) >= 0 -> unless {
+                errorInt(errors.Kind.InvalidByte, self.inputOffset + UIntSize(validationIndex!)) -> return
+            }
+            validationIndex! + 1 => validationIndex!
+        }
+
+        output -> reserve((output -> len) + added)
+        0 => index!
+        self.pendingNibble >= 0 and index! < (input -> len)
+            -> if {
+                input[index!] -> nibble => low
+                output -> push(UInt8(self.pendingNibble * 16 + low))
+                -1 => self.pendingNibble
+                index! + 1 => index!
+            }
+        index! + 1 < (input -> len) -> while {
+            input[index!] -> nibble => high
+            input[index! + 1] -> nibble => low
+            output -> push(UInt8(high * 16 + low))
+            index! + 2 => index!
+        }
+        index! < (input -> len) -> if {
+            input[index!] -> nibble => self.pendingNibble
+            self.inputOffset + UIntSize(index!) => self.pendingOffset
+        }
+        self.produced + added => produced
+        self.inputOffset + UIntSize(input -> len) => inputOffset
+        produced => self.produced
+        inputOffset => self.inputOffset
+        Result<Int, Error>.Ok(added)
+    }
+
+    public finish: move self -> Result<Unit, Error> {
+        self.pendingNibble < 0 -> unless {
+            errorUnit(errors.Kind.OddLength, self.inputOffset) -> return
+        }
+        Result<Unit, Error>.Ok
+    }
+}

@@ -1,0 +1,864 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.environment_runtime as environmentRuntime
+import sollang.compiler.llvm.emitter.socket_runtime as socketRuntime
+import sollang.compiler.llvm.emitter.dns_runtime as dnsRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sollang.compiler.source_style as sourceStyle
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+import sys.runtime as runtime
+
+
+emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
+    context -> invalidValueLayoutType => invalidLayout
+    invalidLayout >= 0 -> if {
+        context.types[invalidLayout] => invalidType
+        invalidType.module >= 0 and invalidType.module < (context.ranges -> len)
+            and invalidType.symbol >= 0 -> if {
+                context.ranges[invalidType.module] => sourceRange
+                context.symbols[sourceRange.symbolStart + invalidType.symbol] => declaration
+                context.nodes[sourceRange.astStart + declaration.astNode] => declarationAst
+                "; sollang compiler error S058: type has a recursive by-value layout (source $(invalidType.module), byte $(declarationAst.start), length $(declarationAst.length)); use explicit box or heap-backed storage to break the value cycle" -> println
+            } else {
+                "; sollang compiler error S058: type has a recursive by-value layout; use explicit box or heap-backed storage to break the value cycle" -> println
+            }
+        return
+    }
+    context -> invalidInterpolationCapacityNode => invalidCapacity
+    invalidCapacity >= 0 -> if {
+        context.interpolations[invalidCapacity] => invalidCapacityNode
+        "; sollang semantic error: capacity requires a growable/bounded array, dictionary or Arena receiver (interpolation $invalidCapacity, token $(invalidCapacityNode.sourceToken))" -> println
+    }
+    context -> unresolvedGenericAbiNode => unresolvedAbi
+    unresolvedAbi >= 0 -> if {
+        context.ir[unresolvedAbi] => unresolved
+        "; sollang compiler error S047: unresolved generic ABI requires function specialization at ir $unresolvedAbi (source $(unresolved.sourceModule), ast $(unresolved.astNode), type $(unresolved.typeId))" -> println
+    }
+    context -> concreteFunctionsBySymbol => functions
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        context -> irInvariantCode(irIndex!, functions) => invariantCode
+        invariantCode != 0
+            -> if {
+                context.ir[irIndex!] => node
+                irIndex! => diagnosticIrIndex
+                node.sourceModule => sourceModule
+                node.astNode => astNode
+                context.ranges[sourceModule] => diagnosticRange
+                context.nodes[diagnosticRange.astStart + astNode] => diagnosticAst
+                context.sources[sourceModule] -> slice(diagnosticAst.start, diagnosticAst.length) => diagnosticExpression
+                invariantCode == 57 -> if {
+                    context -> streamJoinInputContract(node) => joinContract
+                    joinContract.code == 1 -> if {
+                        "; sollang compiler error S057: $diagnosticExpression expects a product of at least two streams (source $sourceModule, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                    } else {
+                        joinContract.code == 2 -> if {
+                            "; sollang compiler error S057: $diagnosticExpression input field at ordinal $(joinContract.fieldOrdinal) must be Stream<T> or EventStream<T>; provide a stream producer for every field (source $sourceModule, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                        } else {
+                            "; sollang compiler error S057: $diagnosticExpression input field at ordinal $(joinContract.fieldOrdinal) has a different stream type; merge and concat require matching stream element types (source $sourceModule, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                        }
+                    }
+                }
+                invariantCode != 57 -> if {
+                    invariantCode == 55 -> if {
+                        context -> concreteCallFunctionIndex(irIndex!, functions) => mismatchFunction
+                        context -> arrayCallElementMismatch(irIndex!, mismatchFunction) => mismatchOrdinal
+                        "; sollang compiler error S055: array argument $mismatchOrdinal has an incompatible element type in '$diagnosticExpression'; already-typed arrays cannot be implicitly narrowed or reinterpreted; provide matching element storage or explicitly convert elements (source $sourceModule, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                    } else {
+                        invariantCode == 13 -> if {
+                            context.ir[node.operand0] => diagnosticArrayElement
+                            "; sollang compiler error S006: non-empty array literal has no canonical storage type at ir $diagnosticIrIndex (arrayType $(node.typeId)/$(node.typeKind)/$(node.typeOrigin)/$(node.typeModule)/$(node.typeSymbol), first $(node.operand0), firstType $(diagnosticArrayElement.typeId)/$(diagnosticArrayElement.typeKind)/$(diagnosticArrayElement.typeOrigin)/$(diagnosticArrayElement.typeModule)/$(diagnosticArrayElement.typeSymbol), firstSource $(diagnosticArrayElement.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                        } else {
+                            invariantCode == 14 -> if {
+                                "; sollang compiler error S007: array literal storage element type disagrees with its first lowered operand at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                            } else {
+                                invariantCode == 15 -> if {
+                                    node -> irScalarIntegerWidth(context) => diagnosticResultWidth
+                                    context.ir[node.operand0] => diagnosticLeft
+                                    context.ir[node.operand1] => diagnosticRight
+                                    diagnosticLeft -> irScalarIntegerWidth(context) => diagnosticLeftWidth
+                                    diagnosticRight -> irScalarIntegerWidth(context) => diagnosticRightWidth
+                                    "; sollang compiler error S008: arithmetic requires compatible numeric scalar operands and result; result width $diagnosticResultWidth, operand widths $diagnosticLeftWidth/$diagnosticRightWidth at ir $diagnosticIrIndex (types $(node.typeSymbol)/$(diagnosticLeft.typeSymbol)/$(diagnosticRight.typeSymbol), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                } else {
+                                    invariantCode == 16 -> if {
+                                        "; sollang compiler error S009: scalar binding initializer has no binding or parameter value source at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                    } else {
+                                        invariantCode == 17 -> if {
+                                            "; sollang compiler error S010: inverse guard identity disagrees between AST and Typed IR at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                        } else {
+                                            invariantCode == 11 -> if {
+                                                "; sollang compiler error S011: enum subject pattern does not lower to an enum constructor at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                            } else {
+                                                invariantCode == 18 -> if {
+                                                    "; sollang compiler error S012: subject when has no canonical comparison subject at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                } else {
+                                                    invariantCode == 19 -> if {
+                                                        context.ir[node.parent] => subjectArmDiagnostic
+                                                        subjectArmDiagnostic.parent => subjectControlDiagnosticIndex
+                                                        context.ir[subjectControlDiagnosticIndex] => subjectControlDiagnostic
+                                                        -1 => followingKind!
+                                                        -1 => followingParent!
+                                                        -1 => followingAst!
+                                                        -1 => followingNext!
+                                                        diagnosticIrIndex + 1 < (context.ir -> len) -> if {
+                                                            context.ir[diagnosticIrIndex + 1] => following
+                                                            following.kind => followingKind!
+                                                            following.parent => followingParent!
+                                                            following.astNode => followingAst!
+                                                            following.nextOperand => followingNext!
+                                                        }
+                                                        "; sollang compiler error S013: subject when comparison has no canonical operand pair at ir $diagnosticIrIndex (left $(node.operand0), expectedLeft $(subjectControlDiagnostic.operand0), right $(node.operand1), next $(node.nextOperand), following $(diagnosticIrIndex + 1)/$(followingKind!)/parent$(followingParent!)/ast$(followingAst!)/next$(followingNext!), arm $(node.parent)/$(subjectArmDiagnostic.kind), control $subjectControlDiagnosticIndex/$(subjectControlDiagnostic.kind), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); repair the exact arm-local value edge before LLVM emission" -> println
+                                                    } else {
+                                                        invariantCode == 8 -> if {
+                                                            "; sollang compiler error S014: member read has no canonical base operand at ir $diagnosticIrIndex (parent $(node.parent), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                        } else {
+                                                            invariantCode == 4 -> if {
+                                                                "; sollang compiler error S015: binary expression has no canonical right operand at ir $diagnosticIrIndex (parent $(node.parent), operand0 $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                            } else {
+                                                                invariantCode == 10 -> if {
+                                                                    "; sollang compiler error S016: conditional expression has no canonical condition operand at ir $diagnosticIrIndex (parent $(node.parent), operand1 $(node.operand1), nextOperand $(node.nextOperand), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                } else {
+                                                                    invariantCode == 20 -> if {
+                                                                        context.ir[node.operand0] => memberOwnerDiagnostic
+                                                                        -1 => memberOwnerDiagnosticParentKind!
+                                                                        -1 => memberOwnerDiagnosticControlKind!
+                                                                        -1 => memberOwnerDiagnosticSubjectType!
+                                                                        -1 => memberOwnerDiagnosticSubjectKind!
+                                                                        -1 => memberOwnerDiagnosticSubjectOrigin!
+                                                                        -1 => memberOwnerDiagnosticSubjectModule!
+                                                                        -1 => memberOwnerDiagnosticSubjectSymbol!
+                                                                        -1 => memberOwnerDiagnosticSubjectFirst!
+                                                                        -1 => memberOwnerDiagnosticSubjectSecond!
+                                                                        -1 => memberOwnerDiagnosticSubjectNodeKind!
+                                                                        -1 => memberOwnerDiagnosticSubjectNodeOpcode!
+                                                                        -1 => memberOwnerDiagnosticSubjectNodeParent!
+                                                                        -1 => memberOwnerDiagnosticSubjectNodeOperand0!
+                                                                        -1 => memberOwnerDiagnosticSubjectNodeNext!
+                                                                        -1 => memberOwnerDiagnosticArmOpcode!
+                                                                        -1 => memberOwnerDiagnosticOwnerSource!
+                                                                        -1 => memberOwnerDiagnosticOwnerSymbolKind!
+                                                                        -1 => memberOwnerDiagnosticOwnerSymbolAst!
+                                                                        -1 => memberOwnerDiagnosticOwnerSymbolTypeAst!
+                                                                        0 => memberOwnerDiagnosticVariantCount!
+                                                                        -1 => memberOwnerDiagnosticTakeIr!
+                                                                        -1 => memberOwnerDiagnosticTakeParent!
+                                                                        -1 => memberOwnerDiagnosticTakeType!
+                                                                        -1 => memberOwnerDiagnosticTakeOperandType!
+                                                                        UIntSize(0) => memberOwnerDiagnosticTakeStart!
+                                                                        memberOwnerDiagnostic.parent >= 0 -> if {
+                                                                            context.ir[memberOwnerDiagnostic.parent].kind => memberOwnerDiagnosticParentKind!
+                                                                            context.ir[memberOwnerDiagnostic.parent].opcode => memberOwnerDiagnosticArmOpcode!
+                                                                            context.ir[memberOwnerDiagnostic.parent].parent => memberOwnerDiagnosticControl
+                                                                            memberOwnerDiagnosticControl >= 0 -> if {
+                                                                                context.ir[memberOwnerDiagnosticControl].kind => memberOwnerDiagnosticControlKind!
+                                                                                context.ranges[sourceModule] => memberOwnerDiagnosticSourceRange
+                                                                                context.nodes[memberOwnerDiagnosticSourceRange.astStart + context.ir[memberOwnerDiagnosticControl].astNode] => memberOwnerDiagnosticControlAst
+                                                                                0 => memberOwnerDiagnosticTakeSearch!
+                                                                                memberOwnerDiagnosticTakeSearch! < (context.ir -> len)
+                                                                                    -> while {
+                                                                                        context.ir[memberOwnerDiagnosticTakeSearch!] => memberOwnerDiagnosticTakeCandidate
+                                                                                        memberOwnerDiagnosticTakeCandidate.sourceModule == sourceModule and memberOwnerDiagnosticTakeCandidate.kind == 9 and memberOwnerDiagnosticTakeCandidate.opcode == -213 and memberOwnerDiagnosticTakeCandidate.astNode >= 0
+                                                                                            -> if {
+                                                                                                context.nodes[memberOwnerDiagnosticSourceRange.astStart + memberOwnerDiagnosticTakeCandidate.astNode] => memberOwnerDiagnosticTakeAst
+                                                                                                memberOwnerDiagnosticTakeAst.start < memberOwnerDiagnosticControlAst.start and (memberOwnerDiagnosticTakeIr! < 0 or memberOwnerDiagnosticTakeAst.start > memberOwnerDiagnosticTakeStart!)
+                                                                                                    -> if {
+                                                                                                        memberOwnerDiagnosticTakeSearch! => memberOwnerDiagnosticTakeIr!
+                                                                                                        memberOwnerDiagnosticTakeCandidate.parent => memberOwnerDiagnosticTakeParent!
+                                                                                                        memberOwnerDiagnosticTakeCandidate.typeId => memberOwnerDiagnosticTakeType!
+                                                                                                        memberOwnerDiagnosticTakeCandidate.operand0 >= 0
+                                                                                                            -> if { context.ir[memberOwnerDiagnosticTakeCandidate.operand0].typeId => memberOwnerDiagnosticTakeOperandType! }
+                                                                                                        memberOwnerDiagnosticTakeAst.start => memberOwnerDiagnosticTakeStart!
+                                                                                                    }
+                                                                                            }
+                                                                                        memberOwnerDiagnosticTakeSearch! + 1 => memberOwnerDiagnosticTakeSearch!
+                                                                                    }
+                                                                                context.ir[memberOwnerDiagnosticControl].operand0 => memberOwnerDiagnosticSubject
+                                                                                memberOwnerDiagnosticSubject >= 0 -> if {
+                                                                                    context.ir[memberOwnerDiagnosticSubject].kind => memberOwnerDiagnosticSubjectNodeKind!
+                                                                                    context.ir[memberOwnerDiagnosticSubject].opcode => memberOwnerDiagnosticSubjectNodeOpcode!
+                                                                                    context.ir[memberOwnerDiagnosticSubject].parent => memberOwnerDiagnosticSubjectNodeParent!
+                                                                                    context.ir[memberOwnerDiagnosticSubject].operand0 => memberOwnerDiagnosticSubjectNodeOperand0!
+                                                                                    context.ir[memberOwnerDiagnosticSubject].nextOperand => memberOwnerDiagnosticSubjectNodeNext!
+                                                                                    context.ir[memberOwnerDiagnosticSubject].typeId => memberOwnerDiagnosticSubjectType!
+                                                                                    memberOwnerDiagnosticSubjectType! >= 0 and memberOwnerDiagnosticSubjectType! < (context.types -> len)
+                                                                                        -> if {
+                                                                                            context.types[memberOwnerDiagnosticSubjectType!] => memberOwnerDiagnosticSubjectCanonical
+                                                                                            memberOwnerDiagnosticSubjectCanonical.kind => memberOwnerDiagnosticSubjectKind!
+                                                                                            memberOwnerDiagnosticSubjectCanonical.origin => memberOwnerDiagnosticSubjectOrigin!
+                                                                                            memberOwnerDiagnosticSubjectCanonical.module => memberOwnerDiagnosticSubjectModule!
+                                                                                            memberOwnerDiagnosticSubjectCanonical.symbol => memberOwnerDiagnosticSubjectSymbol!
+                                                                                            memberOwnerDiagnosticSubjectCanonical.first => memberOwnerDiagnosticSubjectFirst!
+                                                                                            memberOwnerDiagnosticSubjectCanonical.second => memberOwnerDiagnosticSubjectSecond!
+                                                                                            memberOwnerDiagnosticSubjectCanonical.module => memberOwnerDiagnosticOwnerSource!
+                                                                                            memberOwnerDiagnosticSubjectCanonical.origin == 2
+                                                                                                -> if {
+                                                                                                    memberOwnerDiagnosticSubjectCanonical.module >= 0 and memberOwnerDiagnosticSubjectCanonical.module < (context.modules -> len)
+                                                                                                        -> if {
+                                                                                                            context.modules[memberOwnerDiagnosticSubjectCanonical.module].sourceIndex => memberOwnerDiagnosticOwnerSource!
+                                                                                                        }
+                                                                                                }
+                                                                                            memberOwnerDiagnosticOwnerSource! >= 0 and memberOwnerDiagnosticOwnerSource! < (context.ranges -> len)
+                                                                                                -> if {
+                                                                                                    context.ranges[memberOwnerDiagnosticOwnerSource!] => memberOwnerDiagnosticOwnerRange
+                                                                                                    memberOwnerDiagnosticSubjectCanonical.symbol >= 0 and memberOwnerDiagnosticSubjectCanonical.symbol < memberOwnerDiagnosticOwnerRange.symbolCount
+                                                                                                        -> if {
+                                                                                                            context.symbols[memberOwnerDiagnosticOwnerRange.symbolStart + memberOwnerDiagnosticSubjectCanonical.symbol] => memberOwnerDiagnosticOwnerSymbol
+                                                                                                            memberOwnerDiagnosticOwnerSymbol.kind => memberOwnerDiagnosticOwnerSymbolKind!
+                                                                                                            memberOwnerDiagnosticOwnerSymbol.astNode => memberOwnerDiagnosticOwnerSymbolAst!
+                                                                                                            memberOwnerDiagnosticOwnerSymbol.typeNode => memberOwnerDiagnosticOwnerSymbolTypeAst!
+                                                                                                            0 => memberOwnerDiagnosticVariantSearch!
+                                                                                                            memberOwnerDiagnosticVariantSearch! < memberOwnerDiagnosticOwnerRange.symbolCount
+                                                                                                                -> while {
+                                                                                                                    context.symbols[memberOwnerDiagnosticOwnerRange.symbolStart + memberOwnerDiagnosticVariantSearch!] => memberOwnerDiagnosticVariant
+                                                                                                                    memberOwnerDiagnosticVariant.kind == 27 and memberOwnerDiagnosticVariant.parent == memberOwnerDiagnosticSubjectCanonical.symbol
+                                                                                                                        -> if { memberOwnerDiagnosticVariantCount! + 1 => memberOwnerDiagnosticVariantCount! }
+                                                                                                                    memberOwnerDiagnosticVariantSearch! + 1 => memberOwnerDiagnosticVariantSearch!
+                                                                                                                }
+                                                                                                        }
+                                                                                                }
+                                                                                        }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        -1 => memberOwnerDiagnosticBindingKind!
+                                                                        -1 => memberOwnerDiagnosticBindingParent!
+                                                                        -1 => memberOwnerDiagnosticBindingOperand!
+                                                                        -1 => memberOwnerDiagnosticBindingType!
+                                                                        -1 => memberOwnerDiagnosticInitializerKind!
+                                                                        -1 => memberOwnerDiagnosticInitializerSymbol!
+                                                                        -1 => memberOwnerDiagnosticInitializerTarget!
+                                                                        -1 => memberOwnerDiagnosticInitializerType!
+                                                                        memberOwnerDiagnostic.operand0 >= 0 and memberOwnerDiagnostic.operand0 < (context.ir -> len)
+                                                                            -> if {
+                                                                                context.ir[memberOwnerDiagnostic.operand0] => memberOwnerDiagnosticBinding
+                                                                                memberOwnerDiagnosticBinding.kind => memberOwnerDiagnosticBindingKind!
+                                                                                memberOwnerDiagnosticBinding.parent => memberOwnerDiagnosticBindingParent!
+                                                                                memberOwnerDiagnosticBinding.operand0 => memberOwnerDiagnosticBindingOperand!
+                                                                                memberOwnerDiagnosticBinding.typeId => memberOwnerDiagnosticBindingType!
+                                                                                memberOwnerDiagnosticBinding.operand0 >= 0 and memberOwnerDiagnosticBinding.operand0 < (context.ir -> len)
+                                                                                    -> if {
+                                                                                        context.ir[memberOwnerDiagnosticBinding.operand0] => memberOwnerDiagnosticInitializer
+                                                                                        memberOwnerDiagnosticInitializer.kind => memberOwnerDiagnosticInitializerKind!
+                                                                                        memberOwnerDiagnosticInitializer.symbol => memberOwnerDiagnosticInitializerSymbol!
+                                                                                        memberOwnerDiagnosticInitializer.targetModule => memberOwnerDiagnosticInitializerTarget!
+                                                                                        memberOwnerDiagnosticInitializer.typeId => memberOwnerDiagnosticInitializerType!
+                                                                                    }
+                                                                            }
+                                                                        context.types -> typeIds.materializedReadTypeId(memberOwnerDiagnostic.typeId) => diagnosticProductOwnerType
+                                                                        diagnosticProductOwnerType >= 0
+                                                                            and diagnosticProductOwnerType < (context.types -> len)
+                                                                            and context.types[diagnosticProductOwnerType].kind == 10
+                                                                            -> if {
+                                                                                "; sollang compiler error S017: unknown structural product member '$diagnosticExpression'; use a declared field label or valid positional field (source $sourceModule, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                            } else {
+                                                                                "; sollang compiler error S017: member base canonical owner does not map to a source module at ir $diagnosticIrIndex (parent $(node.parent), operand0 $(node.operand0), base $(memberOwnerDiagnostic.kind)/$(memberOwnerDiagnostic.parent)/$(memberOwnerDiagnostic.operand0)/$(memberOwnerDiagnostic.symbol), binding $(memberOwnerDiagnosticBindingKind!)/$(memberOwnerDiagnosticBindingParent!)/$(memberOwnerDiagnosticBindingOperand!)/$(memberOwnerDiagnosticBindingType!), initializer $(memberOwnerDiagnosticInitializerKind!)/$(memberOwnerDiagnosticInitializerSymbol!)/$(memberOwnerDiagnosticInitializerTarget!)/$(memberOwnerDiagnosticInitializerType!), arm/control/opcode $(memberOwnerDiagnosticParentKind!)/$(memberOwnerDiagnosticControlKind!)/$(memberOwnerDiagnosticArmOpcode!), subjectNode $(memberOwnerDiagnosticSubjectNodeKind!)/$(memberOwnerDiagnosticSubjectNodeOpcode!)/$(memberOwnerDiagnosticSubjectNodeParent!)/$(memberOwnerDiagnosticSubjectNodeOperand0!)/$(memberOwnerDiagnosticSubjectNodeNext!), subjectType $(memberOwnerDiagnosticSubjectType!)/$(memberOwnerDiagnosticSubjectKind!)/$(memberOwnerDiagnosticSubjectOrigin!)/$(memberOwnerDiagnosticSubjectModule!)/$(memberOwnerDiagnosticSubjectSymbol!)/$(memberOwnerDiagnosticSubjectFirst!)/$(memberOwnerDiagnosticSubjectSecond!), take $(memberOwnerDiagnosticTakeIr!)/$(memberOwnerDiagnosticTakeParent!)/$(memberOwnerDiagnosticTakeType!)/$(memberOwnerDiagnosticTakeOperandType!), owner $(memberOwnerDiagnosticOwnerSource!)/$(memberOwnerDiagnosticOwnerSymbolKind!)/$(memberOwnerDiagnosticOwnerSymbolAst!)/$(memberOwnerDiagnosticOwnerSymbolTypeAst!)/$(memberOwnerDiagnosticVariantCount!), baseType $(memberOwnerDiagnostic.typeId)/$(memberOwnerDiagnostic.typeKind)/$(memberOwnerDiagnostic.typeOrigin)/$(memberOwnerDiagnostic.typeModule)/$(memberOwnerDiagnostic.typeSymbol), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                            }
+                                                                    } else {
+                                                                        invariantCode == 21 -> if {
+                                                                            -1 => enumMatchDiagnosticSubjectKind!
+                                                                            -1 => enumMatchDiagnosticSubjectType!
+                                                                            -1 => enumMatchDiagnosticSubjectTypeKind!
+                                                                            node.operand0 >= 0 and node.operand0 < (context.ir -> len)
+                                                                                -> if {
+                                                                                    context.ir[node.operand0].kind => enumMatchDiagnosticSubjectKind!
+                                                                                    context.ir[node.operand0].typeId => enumMatchDiagnosticSubjectType!
+                                                                                    enumMatchDiagnosticSubjectType! >= 0 and enumMatchDiagnosticSubjectType! < (context.types -> len)
+                                                                                        -> if { context.types[enumMatchDiagnosticSubjectType!].kind => enumMatchDiagnosticSubjectTypeKind! }
+                                                                                }
+                                                                            "; sollang compiler error S018: enum match has no canonical enum subject at ir $diagnosticIrIndex (operand0 $(node.operand0), subjectKind $(enumMatchDiagnosticSubjectKind!), subjectType $(enumMatchDiagnosticSubjectType!)/$(enumMatchDiagnosticSubjectTypeKind!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                        } else {
+                                                                            invariantCode == 22 -> if {
+                                                                                "; sollang compiler error S019: value-producing enum match has an arm without a canonical result value at ir $diagnosticIrIndex (firstArm $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                            } else {
+                                                                                invariantCode == 23 -> if {
+                                                                                    "; sollang compiler error S020: enum match subject name has no parameter ABI value or concrete producer at ir $diagnosticIrIndex (subject $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                } else {
+                                                                                    invariantCode == 24 -> if {
+                                                                                        "; sollang compiler error S021: enum match subject is a non-materialized control or declaration node at ir $diagnosticIrIndex (subject $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                    } else {
+                                                                                        invariantCode == 25 -> if {
+                                                                                            -1 => typedMatchDiagnosticArm!
+                                                                                            -1 => typedMatchDiagnosticValue!
+                                                                                            -1 => typedMatchDiagnosticType!
+                                                                                            node.operand1 => typedMatchDiagnosticArmSearch!
+                                                                                            typedMatchDiagnosticArmSearch! >= 0
+                                                                                                and typedMatchDiagnosticArmSearch! < (context.ir -> len)
+                                                                                                and context.ir[typedMatchDiagnosticArmSearch!].parent == diagnosticIrIndex
+                                                                                                and typedMatchDiagnosticArm! < 0 -> while {
+                                                                                                    context.ir[typedMatchDiagnosticArmSearch!] => typedMatchDiagnosticArmNode
+                                                                                                    typedMatchDiagnosticArmSearch! => typedMatchDiagnosticRegion!
+                                                                                                    typedMatchDiagnosticArmNode.operand1 >= 0
+                                                                                                        and typedMatchDiagnosticArmNode.operand1 < (context.ir -> len)
+                                                                                                        and context.ir[typedMatchDiagnosticArmNode.operand1].kind == 19
+                                                                                                        -> if {
+                                                                                                            typedMatchDiagnosticArmNode.operand1 => typedMatchDiagnosticRegion!
+                                                                                                        }
+                                                                                                    context.ir[typedMatchDiagnosticRegion!].operand1 => typedMatchDiagnosticCandidate
+                                                                                                    typedMatchDiagnosticCandidate >= 0
+                                                                                                        and typedMatchDiagnosticCandidate < (context.ir -> len)
+                                                                                                        and context.ir[typedMatchDiagnosticCandidate].kind != 23
+                                                                                                        and context.ir[typedMatchDiagnosticCandidate].typeId != node.typeId
+                                                                                                        -> if {
+                                                                                                            typedMatchDiagnosticArmSearch! => typedMatchDiagnosticArm!
+                                                                                                            typedMatchDiagnosticCandidate => typedMatchDiagnosticValue!
+                                                                                                            context.ir[typedMatchDiagnosticCandidate].typeId => typedMatchDiagnosticType!
+                                                                                                        }
+                                                                                                    typedMatchDiagnosticArmNode.nextOperand => typedMatchDiagnosticArmSearch!
+                                                                                                }
+                                                                                            context.ir[typedMatchDiagnosticValue!] => typedMatchDiagnosticValueNode
+                                                                                            "; sollang compiler error S022: value-producing enum match arm result type disagrees with the match result type at ir $diagnosticIrIndex (matchType $(node.typeId)/$(node.typeOrigin)/$(node.typeModule)/$(node.typeSymbol), arm $(typedMatchDiagnosticArm!), value $(typedMatchDiagnosticValue!), valueKind $(typedMatchDiagnosticValueNode.kind), valueType $(typedMatchDiagnosticType!)/$(typedMatchDiagnosticValueNode.typeOrigin)/$(typedMatchDiagnosticValueNode.typeModule)/$(typedMatchDiagnosticValueNode.typeSymbol), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                        } else {
+                                                                                            invariantCode == 26 -> if {
+                                                                                                "; sollang compiler error S023: value-producing enum match arm retains a transparent non-SSA wrapper instead of its concrete producer at ir $diagnosticIrIndex (firstArm $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                            } else {
+                                                                                                invariantCode == 27 -> if {
+                                                                                                    "; sollang compiler error S024: value-producing if has a branch without a concrete region result at ir $diagnosticIrIndex (then $(node.operand1), else $(node.nextOperand), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                } else {
+                                                                                                    invariantCode == 28 -> if {
+                                                                                                        "; sollang compiler error S026: enum payload binding type disagrees with the matched variant payload type at ir $diagnosticIrIndex (type $(node.typeId), arm $(node.parent), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                    } else {
+                                                                                                        invariantCode == 29 -> if {
+                                                                                                            "; sollang compiler error S027: fixed or bounded array return literal does not use the function's canonical array type at ir $diagnosticIrIndex (type $(node.typeId), return $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                        } else {
+                                                                                                            invariantCode == 30 -> if {
+                                                                                                                node.operand0 => structFieldDiagnosticValue!
+                                                                                                                0 => structFieldDiagnosticOrdinal!
+                                                                                                                -1 => structFieldDiagnosticExpected!
+                                                                                                                -1 => structFieldDiagnosticActual!
+                                                                                                                -1 => structFieldDiagnosticMismatchOrdinal!
+                                                                                                                -1 => structFieldDiagnosticMismatchValue!
+                                                                                                                structFieldDiagnosticValue! >= 0
+                                                                                                                    and structFieldDiagnosticValue! < (context.ir -> len)
+                                                                                                                    and structFieldDiagnosticExpected! < 0 -> while {
+                                                                                                                        -1 => structFieldDiagnosticCandidate!
+                                                                                                                        0 => structFieldDiagnosticSearch!
+                                                                                                                        structFieldDiagnosticSearch! < (context.fields -> len)
+                                                                                                                            and structFieldDiagnosticCandidate! < 0 -> while {
+                                                                                                                                context.fields[structFieldDiagnosticSearch!] => structFieldDiagnosticField
+                                                                                                                                structFieldDiagnosticField.ownerType == node.typeId
+                                                                                                                                    and structFieldDiagnosticField.ordinal == structFieldDiagnosticOrdinal!
+                                                                                                                                    -> if {
+                                                                                                                                        structFieldDiagnosticField.fieldType => structFieldDiagnosticCandidate!
+                                                                                                                                    }
+                                                                                                                                structFieldDiagnosticSearch! + 1 => structFieldDiagnosticSearch!
+                                                                                                                            }
+                                                                                                                        structFieldDiagnosticCandidate! >= 0
+                                                                                                                            and structFieldDiagnosticCandidate! < (context.types -> len)
+                                                                                                                            and (context.types[structFieldDiagnosticCandidate!].kind == 3
+                                                                                                                            or context.types[structFieldDiagnosticCandidate!].kind == 4
+                                                                                                                            or context.types[structFieldDiagnosticCandidate!].kind == 12)
+                                                                                                                            and context.ir[structFieldDiagnosticValue!].typeId != structFieldDiagnosticCandidate!
+                                                                                                                            -> if {
+                                                                                                                                structFieldDiagnosticCandidate! => structFieldDiagnosticExpected!
+                                                                                                                                context.ir[structFieldDiagnosticValue!].typeId => structFieldDiagnosticActual!
+                                                                                                                                structFieldDiagnosticOrdinal! => structFieldDiagnosticMismatchOrdinal!
+                                                                                                                                structFieldDiagnosticValue! => structFieldDiagnosticMismatchValue!
+                                                                                                                            }
+                                                                                                                        context.ir[structFieldDiagnosticValue!].nextOperand => structFieldDiagnosticValue!
+                                                                                                                        structFieldDiagnosticOrdinal! + 1 => structFieldDiagnosticOrdinal!
+                                                                                                                    }
+                                                                                                                -1 => structFieldDiagnosticExpectedKind!
+                                                                                                                -1 => structFieldDiagnosticExpectedElement!
+                                                                                                                -1 => structFieldDiagnosticExpectedLength!
+                                                                                                                -1 => structFieldDiagnosticExpectedOrigin!
+                                                                                                                -1 => structFieldDiagnosticExpectedModule!
+                                                                                                                -1 => structFieldDiagnosticExpectedSymbol!
+                                                                                                                -1 => structFieldDiagnosticActualKind!
+                                                                                                                -1 => structFieldDiagnosticActualElement!
+                                                                                                                -1 => structFieldDiagnosticActualLength!
+                                                                                                                -1 => structFieldDiagnosticActualOrigin!
+                                                                                                                -1 => structFieldDiagnosticActualModule!
+                                                                                                                -1 => structFieldDiagnosticActualSymbol!
+                                                                                                                -1 => structFieldDiagnosticValueKind!
+                                                                                                                -1 => structFieldDiagnosticValueOpcode!
+                                                                                                                -1 => structFieldDiagnosticValueOperand!
+                                                                                                                -1 => structFieldDiagnosticValueSymbol!
+                                                                                                                -1 => structFieldDiagnosticValueAst!
+                                                                                                                -1 => structFieldDiagnosticSourceKind!
+                                                                                                                -1 => structFieldDiagnosticSourceType!
+                                                                                                                -1 => structFieldDiagnosticSourceOperand!
+                                                                                                                -1 => structFieldDiagnosticSourceAst!
+                                                                                                                -1 => structFieldDiagnosticSourceTypeKind!
+                                                                                                                -1 => structFieldDiagnosticSourceTypeOrigin!
+                                                                                                                -1 => structFieldDiagnosticSourceTypeModule!
+                                                                                                                -1 => structFieldDiagnosticSourceTypeSymbol!
+                                                                                                                -1 => structFieldDiagnosticInitializerKind!
+                                                                                                                -1 => structFieldDiagnosticInitializerType!
+                                                                                                                -1 => structFieldDiagnosticInitializerAst!
+                                                                                                                0 => structFieldDiagnosticSourceFieldCount!
+                                                                                                                0 => structFieldDiagnosticEquivalentFieldCount!
+                                                                                                                -1 => structFieldDiagnosticValueStart!
+                                                                                                                -1 => structFieldDiagnosticValueLength!
+                                                                                                                -1 => structFieldDiagnosticSourceStart!
+                                                                                                                -1 => structFieldDiagnosticSourceLength!
+                                                                                                                0 => structFieldDiagnosticTryCount!
+                                                                                                                -1 => structFieldDiagnosticTryAst!
+                                                                                                                -1 => structFieldDiagnosticTryParent!
+                                                                                                                -1 => structFieldDiagnosticTryStart!
+                                                                                                                -1 => structFieldDiagnosticTryLength!
+                                                                                                                structFieldDiagnosticExpected! >= 0 and structFieldDiagnosticExpected! < (context.types -> len)
+                                                                                                                    -> if {
+                                                                                                                        context.types[structFieldDiagnosticExpected!] => structFieldDiagnosticExpectedType
+                                                                                                                        structFieldDiagnosticExpectedType.kind => structFieldDiagnosticExpectedKind!
+                                                                                                                        structFieldDiagnosticExpectedType.first => structFieldDiagnosticExpectedElement!
+                                                                                                                        structFieldDiagnosticExpectedType.length => structFieldDiagnosticExpectedLength!
+                                                                                                                        structFieldDiagnosticExpectedType.origin => structFieldDiagnosticExpectedOrigin!
+                                                                                                                        structFieldDiagnosticExpectedType.module => structFieldDiagnosticExpectedModule!
+                                                                                                                        structFieldDiagnosticExpectedType.symbol => structFieldDiagnosticExpectedSymbol!
+                                                                                                                    }
+                                                                                                                structFieldDiagnosticActual! >= 0 and structFieldDiagnosticActual! < (context.types -> len)
+                                                                                                                    -> if {
+                                                                                                                        context.types[structFieldDiagnosticActual!] => structFieldDiagnosticActualType
+                                                                                                                        structFieldDiagnosticActualType.kind => structFieldDiagnosticActualKind!
+                                                                                                                        structFieldDiagnosticActualType.first => structFieldDiagnosticActualElement!
+                                                                                                                        structFieldDiagnosticActualType.length => structFieldDiagnosticActualLength!
+                                                                                                                        structFieldDiagnosticActualType.origin => structFieldDiagnosticActualOrigin!
+                                                                                                                        structFieldDiagnosticActualType.module => structFieldDiagnosticActualModule!
+                                                                                                                        structFieldDiagnosticActualType.symbol => structFieldDiagnosticActualSymbol!
+                                                                                                                    }
+                                                                                                                structFieldDiagnosticMismatchValue! >= 0 and structFieldDiagnosticMismatchValue! < (context.ir -> len)
+                                                                                                                    -> if {
+                                                                                                                        context.ir[structFieldDiagnosticMismatchValue!] => structFieldDiagnosticValueNode
+                                                                                                                        structFieldDiagnosticValueNode.kind => structFieldDiagnosticValueKind!
+                                                                                                                        structFieldDiagnosticValueNode.opcode => structFieldDiagnosticValueOpcode!
+                                                                                                                        structFieldDiagnosticValueNode.operand0 => structFieldDiagnosticValueOperand!
+                                                                                                                        structFieldDiagnosticValueNode.symbol => structFieldDiagnosticValueSymbol!
+                                                                                                                        structFieldDiagnosticValueNode.astNode => structFieldDiagnosticValueAst!
+                                                                                                                        context.nodes[diagnosticRange.astStart + structFieldDiagnosticValueNode.astNode] => structFieldDiagnosticValueAstNode
+                                                                                                                        Int(structFieldDiagnosticValueAstNode.start) => structFieldDiagnosticValueStart!
+                                                                                                                        Int(structFieldDiagnosticValueAstNode.length) => structFieldDiagnosticValueLength!
+                                                                                                                        structFieldDiagnosticValueNode.operand0 >= 0 and structFieldDiagnosticValueNode.operand0 < (context.ir -> len)
+                                                                                                                            -> if {
+                                                                                                                                context.ir[structFieldDiagnosticValueNode.operand0] => structFieldDiagnosticSourceNode
+                                                                                                                                structFieldDiagnosticSourceNode.kind => structFieldDiagnosticSourceKind!
+                                                                                                                                structFieldDiagnosticSourceNode.typeId => structFieldDiagnosticSourceType!
+                                                                                                                                structFieldDiagnosticSourceNode.operand0 => structFieldDiagnosticSourceOperand!
+                                                                                                                                structFieldDiagnosticSourceNode.astNode => structFieldDiagnosticSourceAst!
+                                                                                                                                context.nodes[diagnosticRange.astStart + structFieldDiagnosticSourceNode.astNode] => structFieldDiagnosticSourceAstNode
+                                                                                                                                Int(structFieldDiagnosticSourceAstNode.start) => structFieldDiagnosticSourceStart!
+                                                                                                                                Int(structFieldDiagnosticSourceAstNode.length) => structFieldDiagnosticSourceLength!
+                                                                                                                                0 => structFieldDiagnosticTrySearch!
+                                                                                                                                structFieldDiagnosticTrySearch! < diagnosticRange.astCount
+                                                                                                                                    -> while {
+                                                                                                                                        context.nodes[diagnosticRange.astStart + structFieldDiagnosticTrySearch!] => structFieldDiagnosticTryCandidate
+                                                                                                                                        structFieldDiagnosticTryCandidate.kind == 82
+                                                                                                                                            -> if {
+                                                                                                                                                structFieldDiagnosticTryCount! + 1 => structFieldDiagnosticTryCount!
+                                                                                                                                                structFieldDiagnosticTryAst! < 0 -> if {
+                                                                                                                                                    structFieldDiagnosticTrySearch! => structFieldDiagnosticTryAst!
+                                                                                                                                                    structFieldDiagnosticTryCandidate.parent => structFieldDiagnosticTryParent!
+                                                                                                                                                    Int(structFieldDiagnosticTryCandidate.start) => structFieldDiagnosticTryStart!
+                                                                                                                                                    Int(structFieldDiagnosticTryCandidate.length) => structFieldDiagnosticTryLength!
+                                                                                                                                                }
+                                                                                                                                            }
+                                                                                                                                        structFieldDiagnosticTrySearch! + 1 => structFieldDiagnosticTrySearch!
+                                                                                                                                    }
+                                                                                                                                structFieldDiagnosticSourceNode.typeId >= 0 and structFieldDiagnosticSourceNode.typeId < (context.types -> len)
+                                                                                                                                    -> if {
+                                                                                                                                        context.types[structFieldDiagnosticSourceNode.typeId] => structFieldDiagnosticSourceSemanticType
+                                                                                                                                        structFieldDiagnosticSourceSemanticType.kind => structFieldDiagnosticSourceTypeKind!
+                                                                                                                                        structFieldDiagnosticSourceSemanticType.origin => structFieldDiagnosticSourceTypeOrigin!
+                                                                                                                                        structFieldDiagnosticSourceSemanticType.module => structFieldDiagnosticSourceTypeModule!
+                                                                                                                                        structFieldDiagnosticSourceSemanticType.symbol => structFieldDiagnosticSourceTypeSymbol!
+                                                                                                                                        0 => structFieldDiagnosticFieldCountSearch!
+                                                                                                                                        structFieldDiagnosticFieldCountSearch! < (context.fields -> len)
+                                                                                                                                            -> while {
+                                                                                                                                                context.fields[structFieldDiagnosticFieldCountSearch!] => structFieldDiagnosticCountField
+                                                                                                                                                structFieldDiagnosticCountField.ownerType == structFieldDiagnosticSourceNode.typeId
+                                                                                                                                                    -> if {
+                                                                                                                                                        structFieldDiagnosticSourceFieldCount! + 1 => structFieldDiagnosticSourceFieldCount!
+                                                                                                                                                    }
+                                                                                                                                                structFieldDiagnosticCountField.ownerType >= 0
+                                                                                                                                                    and context.types[structFieldDiagnosticCountField.ownerType].kind == structFieldDiagnosticSourceSemanticType.kind
+                                                                                                                                                    and context.types[structFieldDiagnosticCountField.ownerType].origin == structFieldDiagnosticSourceSemanticType.origin
+                                                                                                                                                    and context.types[structFieldDiagnosticCountField.ownerType].module == structFieldDiagnosticSourceSemanticType.module
+                                                                                                                                                    and context.types[structFieldDiagnosticCountField.ownerType].symbol == structFieldDiagnosticSourceSemanticType.symbol
+                                                                                                                                                    -> if {
+                                                                                                                                                        structFieldDiagnosticEquivalentFieldCount! + 1 => structFieldDiagnosticEquivalentFieldCount!
+                                                                                                                                                    }
+                                                                                                                                                structFieldDiagnosticFieldCountSearch! + 1 => structFieldDiagnosticFieldCountSearch!
+                                                                                                                                            }
+                                                                                                                                    }
+                                                                                                                                structFieldDiagnosticSourceNode.operand0 >= 0 and structFieldDiagnosticSourceNode.operand0 < (context.ir -> len)
+                                                                                                                                    -> if {
+                                                                                                                                        context.ir[structFieldDiagnosticSourceNode.operand0] => structFieldDiagnosticInitializerNode
+                                                                                                                                        structFieldDiagnosticInitializerNode.kind => structFieldDiagnosticInitializerKind!
+                                                                                                                                        structFieldDiagnosticInitializerNode.typeId => structFieldDiagnosticInitializerType!
+                                                                                                                                        structFieldDiagnosticInitializerNode.astNode => structFieldDiagnosticInitializerAst!
+                                                                                                                                    }
+                                                                                                                            }
+                                                                                                                    }
+                                                                                                                "; sollang compiler error S028: array-valued struct field initializer disagrees with the declared canonical array shape at ir $diagnosticIrIndex (structType $(node.typeId), field $(structFieldDiagnosticMismatchOrdinal!), value $(structFieldDiagnosticMismatchValue!)/$(structFieldDiagnosticValueKind!)/$(structFieldDiagnosticValueOpcode!)/$(structFieldDiagnosticValueOperand!)/$(structFieldDiagnosticValueSymbol!)/$(structFieldDiagnosticValueAst!)/$(structFieldDiagnosticValueStart!)/$(structFieldDiagnosticValueLength!), sourceNode $(structFieldDiagnosticSourceKind!)/$(structFieldDiagnosticSourceType!)/$(structFieldDiagnosticSourceOperand!)/$(structFieldDiagnosticSourceAst!)/$(structFieldDiagnosticSourceStart!)/$(structFieldDiagnosticSourceLength!)/$(structFieldDiagnosticSourceTypeKind!)/$(structFieldDiagnosticSourceTypeOrigin!)/$(structFieldDiagnosticSourceTypeModule!)/$(structFieldDiagnosticSourceTypeSymbol!)/$(structFieldDiagnosticSourceFieldCount!)/$(structFieldDiagnosticEquivalentFieldCount!), try $(structFieldDiagnosticTryCount!)/$(structFieldDiagnosticTryAst!)/$(structFieldDiagnosticTryParent!)/$(structFieldDiagnosticTryStart!)/$(structFieldDiagnosticTryLength!), initializer $(structFieldDiagnosticInitializerKind!)/$(structFieldDiagnosticInitializerType!)/$(structFieldDiagnosticInitializerAst!), expected $(structFieldDiagnosticExpected!)/$(structFieldDiagnosticExpectedKind!)/$(structFieldDiagnosticExpectedElement!)/$(structFieldDiagnosticExpectedLength!)/$(structFieldDiagnosticExpectedOrigin!)/$(structFieldDiagnosticExpectedModule!)/$(structFieldDiagnosticExpectedSymbol!), actual $(structFieldDiagnosticActual!)/$(structFieldDiagnosticActualKind!)/$(structFieldDiagnosticActualElement!)/$(structFieldDiagnosticActualLength!)/$(structFieldDiagnosticActualOrigin!)/$(structFieldDiagnosticActualModule!)/$(structFieldDiagnosticActualSymbol!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                            } else {
+                                                                                                                invariantCode == 31 -> if {
+                                                                                                                    "; sollang compiler error S029: fixed repeat literal type length disagrees with its static repeat count at ir $diagnosticIrIndex (type $(node.typeId), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                } else {
+                                                                                                                    invariantCode == 32 -> if {
+                                                                                                                        "; sollang compiler error S030: try-result binding retained the enclosing Result type instead of its success payload at ir $diagnosticIrIndex (type $(node.typeId), initializer $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                    } else {
+                                                                                                                        invariantCode == 33 -> if {
+                                                                                                                            context.ir[node.operand0] => diagnosticMemberBase
+                                                                                                                            0 => diagnosticMemberFieldCount!
+                                                                                                                            -1 => diagnosticMemberFirstFieldType!
+                                                                                                                            -1 => diagnosticMemberFirstFieldStatus!
+                                                                                                                            0 => diagnosticMemberFieldSearch!
+                                                                                                                            diagnosticMemberFieldSearch! < (context.fields -> len)
+                                                                                                                                -> while {
+                                                                                                                                    context.fields[diagnosticMemberFieldSearch!] => diagnosticMemberField
+                                                                                                                                    diagnosticMemberField.ownerType == diagnosticMemberBase.typeId
+                                                                                                                                        -> if {
+                                                                                                                                            diagnosticMemberFieldCount! + 1 => diagnosticMemberFieldCount!
+                                                                                                                                            diagnosticMemberFirstFieldType! < 0 -> if {
+                                                                                                                                                diagnosticMemberField.fieldType => diagnosticMemberFirstFieldType!
+                                                                                                                                                diagnosticMemberField.status => diagnosticMemberFirstFieldStatus!
+                                                                                                                                            }
+                                                                                                                                        }
+                                                                                                                                    diagnosticMemberFieldSearch! + 1 => diagnosticMemberFieldSearch!
+                                                                                                                                }
+                                                                                                                            "; sollang compiler error S031: nominal member '$diagnosticExpression' reached final Typed IR without its declared field type at ir $diagnosticIrIndex (base $(node.operand0), baseType $(diagnosticMemberBase.typeId), fields $(diagnosticMemberFieldCount!), firstField $(diagnosticMemberFirstFieldType!)/$(diagnosticMemberFirstFieldStatus!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                        } else {
+                                                                                                                            invariantCode == 35 -> if {
+                                                                                                                                "; sollang compiler error S033: nominal struct literal does not use the canonical identity that owns its field table at ir $diagnosticIrIndex (type $(node.typeId), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                            } else {
+                                                                                                                                invariantCode == 36 -> if {
+                                                                                                                                    "; sollang compiler error S040: subject when retained a self-referential subject at ir $diagnosticIrIndex (source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                } else {
+                                                                                                                                    invariantCode == 40 -> if {
+                                                                                                                                        context.ir[node.operand0] => invalidCapacityReceiver
+                                                                                                                                        "; sollang compiler error S044: capacity receiver resolved to a scalar value at ir $diagnosticIrIndex (receiver $(node.operand0), receiverKind $(invalidCapacityReceiver.kind), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                    } else {
+                                                                                                                                        invariantCode == 41 -> if {
+                                                                                                                                            -1 => invalidPartitionSourceType!
+                                                                                                                                            node.operand0 >= 0 and node.operand0 < (context.ir -> len)
+                                                                                                                                                -> if { context.ir[node.operand0].typeId => invalidPartitionSourceType! }
+                                                                                                                                            "; sollang compiler error S045: partition route product does not preserve its canonical stream source type at ir $diagnosticIrIndex (productType $(node.typeId), sourceIr $(node.operand0), sourceType $(invalidPartitionSourceType!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                        } else {
+                                                                                                                                            invariantCode == 42 -> if {
+                                                                                                                                                context -> concreteCallFunctionIndex(diagnosticIrIndex, functions) => invalidCallFunction
+                                                                                                                                                context -> runtimeParameterCount(invalidCallFunction) => invalidCallExpected
+                                                                                                                                                context -> linkedCallArgumentCount(diagnosticIrIndex, invalidCallExpected) => invalidCallActual
+                                                                                                                                                context -> implicitFlowArgumentCount(diagnosticIrIndex, invalidCallActual, invalidCallExpected) => invalidCallImplicit
+                                                                                                                                                -1 => invalidCallOperand0Kind!
+                                                                                                                                                -1 => invalidCallOperand0Symbol!
+                                                                                                                                                -1 => invalidCallOperand0Next!
+                                                                                                                                                -1 => invalidCallOperand1Kind!
+                                                                                                                                                -1 => invalidCallOperand1Symbol!
+                                                                                                                                                node.operand0 >= 0 and node.operand0 < (context.ir -> len)
+                                                                                                                                                    -> if {
+                                                                                                                                                        context.ir[node.operand0] => invalidCallOperand0
+                                                                                                                                                        invalidCallOperand0.kind => invalidCallOperand0Kind!
+                                                                                                                                                        invalidCallOperand0.symbol => invalidCallOperand0Symbol!
+                                                                                                                                                        invalidCallOperand0.nextOperand => invalidCallOperand0Next!
+                                                                                                                                                    }
+                                                                                                                                                node.operand1 >= 0 and node.operand1 < (context.ir -> len)
+                                                                                                                                                    -> if {
+                                                                                                                                                        context.ir[node.operand1] => invalidCallOperand1
+                                                                                                                                                        invalidCallOperand1.kind => invalidCallOperand1Kind!
+                                                                                                                                                        invalidCallOperand1.symbol => invalidCallOperand1Symbol!
+                                                                                                                                                    }
+                                                                                                                                                invalidCallOperand0Kind! => sealedInvalidCallOperand0Kind
+                                                                                                                                                invalidCallOperand0Symbol! => sealedInvalidCallOperand0Symbol
+                                                                                                                                                invalidCallOperand0Next! => sealedInvalidCallOperand0Next
+                                                                                                                                                invalidCallOperand1Kind! => sealedInvalidCallOperand1Kind
+                                                                                                                                                invalidCallOperand1Symbol! => sealedInvalidCallOperand1Symbol
+                                                                                                                                                "; sollang compiler verification failure V001: resolved call argument plan does not match its concrete runtime parameter contract at ir $diagnosticIrIndex (expected $invalidCallExpected, linked $invalidCallActual, implicit $invalidCallImplicit, operand0 $(node.operand0), operand0Kind $sealedInvalidCallOperand0Kind, operand0Symbol $sealedInvalidCallOperand0Symbol, operand0Next $sealedInvalidCallOperand0Next, operand1 $(node.operand1), operand1Kind $sealedInvalidCallOperand1Kind, operand1Symbol $sealedInvalidCallOperand1Symbol, target $(node.targetModule)/$(node.symbol), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                                0 => invalidCallCandidateIndex!
+                                                                                                                                                0 => invalidCallCandidateCount!
+                                                                                                                                                invalidCallCandidateIndex! < (context.ir -> len)
+                                                                                                                                                    and invalidCallCandidateCount! < 24 -> while {
+                                                                                                                                                        context.ir[invalidCallCandidateIndex!] => invalidCallCandidate
+                                                                                                                                                        invalidCallCandidate.sourceModule == sourceModule
+                                                                                                                                                            and invalidCallCandidate.astNode >= 0
+                                                                                                                                                            and invalidCallCandidate.astNode < diagnosticRange.astCount
+                                                                                                                                                            -> if {
+                                                                                                                                                                context.nodes[diagnosticRange.astStart + invalidCallCandidate.astNode]
+                                                                                                                                                                    => invalidCallCandidateAst
+                                                                                                                                                                (invalidCallCandidateAst.start >= diagnosticAst.start
+                                                                                                                                                                    and invalidCallCandidateAst.start + invalidCallCandidateAst.length <= diagnosticAst.start + diagnosticAst.length)
+                                                                                                                                                                    or (invalidCallCandidateIndex! >= diagnosticIrIndex - 20
+                                                                                                                                                                    and invalidCallCandidateIndex! <= diagnosticIrIndex + 5)
+                                                                                                                                                                    -> if {
+                                                                                                                                                                        "; V001 candidate ir $(invalidCallCandidateIndex!) (kind $(invalidCallCandidate.kind), parent $(invalidCallCandidate.parent), ast $(invalidCallCandidate.astNode), byte $(invalidCallCandidateAst.start), length $(invalidCallCandidateAst.length), symbol $(invalidCallCandidate.symbol), payloadToken $(invalidCallCandidate.payloadToken), operand0 $(invalidCallCandidate.operand0), operand1 $(invalidCallCandidate.operand1), next $(invalidCallCandidate.nextOperand), type $(invalidCallCandidate.typeId))" -> println
+                                                                                                                                                                        invalidCallCandidateCount! + 1 => invalidCallCandidateCount!
+                                                                                                                                                                    }
+                                                                                                                                                            }
+                                                                                                                                                        invalidCallCandidateIndex! + 1 => invalidCallCandidateIndex!
+                                                                                                                                                    }
+                                                                                                                                            } else {
+                                                                                                                                                invariantCode == 43 -> if {
+                                                                                                                                                    context.ir[node.operand0] => invalidPatternBinding
+                                                                                                                                                    "; sollang compiler error S046: pattern payload reference type disagrees with its canonical binding at ir $diagnosticIrIndex (referenceType $(node.typeId), binding $(node.operand0), bindingType $(invalidPatternBinding.typeId), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                                } else {
+                                                                                                                                                    invariantCode == 44 -> if {
+                                                                                                                                                        "; sollang compiler error S047: trailing call retained a control expression subject as a duplicate peer argument at ir $diagnosticIrIndex (subject $(node.operand0), control $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                                    } else {
+                                                                                                                                                        invariantCode == 45 -> if {
+                                                                                                                                                            "; sollang compiler error S048: empty array expression has no canonical slice, fixed, growable, or bounded ABI at ir $diagnosticIrIndex (arrayType $(node.typeId), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                                        } else {
+                                                                                                                                                            invariantCode == 46 -> if {
+                                                                                                                                                                "; sollang compiler error S050: enum match selected a subject type that does not declare the written arm variant at ir $diagnosticIrIndex (subject $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); if the source arm is wrong, match the Option/Result or nominal enum producer that declares it and use that type's exact variant name; otherwise this is a compiler integrity defect and LLVM emission has been stopped before invalid payload storage" -> println
+                                                                                                                                                            } else {
+                                                                                                                                                                invariantCode == 47 -> if {
+                                                                                                                                                                    "; sollang compiler error S051: collection mutation has no canonical writable owner at ir $diagnosticIrIndex (opcode $(node.opcode), receiver $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); change a readonly parameter from 'name: Type' to 'name: mut Type', declare an instance receiver as 'mut self', or bind local owned storage with '=> name!'. LLVM emission has been stopped before invalid storage or heap corruption" -> println
+                                                                                                                                                                } else {
+                                                                                                                                                                    invariantCode == 48 -> if {
+                                                                                                                                                                        "; sollang compiler verification failure V002: projected collection mutation has no implemented canonical member-storage path at ir $diagnosticIrIndex (opcode $(node.opcode), receiver $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); the source already owns writable storage, so do not rewrite it to bypass this check; repair the compiler emitter to store through the resolved member place before enabling this intrinsic" -> println
+                                                                                                                                                                    } else {
+                                                                                                                                                                        invariantCode == 49 -> if {
+                                                                                                                                                                            "; sollang compiler verification failure V003: builtin console effect has no supported ordinary or materialized emission form at ir $diagnosticIrIndex (kind $(node.kind), symbol $(node.symbol), opcode $(node.opcode), parent $(node.parent), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); do not rewrite the source to hide this failure; extend typed.isConsoleRuntimeCall and every entry, function, and control-region emitter consumer before regenerating the compiler" -> println
+                                                                                                                                                                        } else {
+                                                                                                                                                                            invariantCode == 50 -> if {
+                                                                                                                                                                                node.operand0 < 0 or node.operand0 >= (context.ir -> len)
+                                                                                                                                                                                    -> if {
+                                                                                                                                                                                        "; sollang compiler error S050: unresolved receiverless call '$diagnosticExpression' (source $sourceModule, byte $(diagnosticAst.start), length $(diagnosticAst.length)); resolve its declared function target before LLVM emission" -> println
+                                                                                                                                                                                        return
+                                                                                                                                                                                    }
+                                                                                                                                                                                context.ir[node.operand0] => unresolvedCallReceiver
+                                                                                                                                                                                -1 => unresolvedCallContainerType!
+                                                                                                                                                                                -1 => unresolvedCallContainerKind!
+                                                                                                                                                                                -1 => unresolvedCallContainerFirst!
+                                                                                                                                                                                -1 => unresolvedCallContainerSecond!
+                                                                                                                                                                                -1 => unresolvedCallBinding!
+                                                                                                                                                                                -1 => unresolvedCallBindingType!
+                                                                                                                                                                                -1 => unresolvedCallBindingOrigin!
+                                                                                                                                                                                -1 => unresolvedCallBindingSymbol!
+                                                                                                                                                                                -1 => unresolvedCallProducer!
+                                                                                                                                                                                -1 => unresolvedCallProducerKind!
+                                                                                                                                                                                -1 => unresolvedCallProducerType!
+                                                                                                                                                                                -1 => unresolvedCallProducerOrigin!
+                                                                                                                                                                                -1 => unresolvedCallProducerSymbol!
+                                                                                                                                                                                unresolvedCallReceiver.kind == 5
+                                                                                                                                                                                    and unresolvedCallReceiver.operand0 >= 0
+                                                                                                                                                                                    and unresolvedCallReceiver.operand0 < (context.ir -> len)
+                                                                                                                                                                                    -> if {
+                                                                                                                                                                                        unresolvedCallReceiver.operand0 => unresolvedCallBinding!
+                                                                                                                                                                                        context.ir[unresolvedCallBinding!] => unresolvedCallBindingNode
+                                                                                                                                                                                        unresolvedCallBindingNode.typeId => unresolvedCallBindingType!
+                                                                                                                                                                                        unresolvedCallBindingNode.typeOrigin => unresolvedCallBindingOrigin!
+                                                                                                                                                                                        unresolvedCallBindingNode.typeSymbol => unresolvedCallBindingSymbol!
+                                                                                                                                                                                        unresolvedCallBindingNode.operand0 => unresolvedCallProducer!
+                                                                                                                                                                                        unresolvedCallProducer! >= 0
+                                                                                                                                                                                            and unresolvedCallProducer! < (context.ir -> len)
+                                                                                                                                                                                            -> if {
+                                                                                                                                                                                                context.ir[unresolvedCallProducer!] => unresolvedCallProducerNode
+                                                                                                                                                                                                unresolvedCallProducerNode.kind => unresolvedCallProducerKind!
+                                                                                                                                                                                                unresolvedCallProducerNode.typeId => unresolvedCallProducerType!
+                                                                                                                                                                                                unresolvedCallProducerNode.typeOrigin => unresolvedCallProducerOrigin!
+                                                                                                                                                                                                unresolvedCallProducerNode.typeSymbol => unresolvedCallProducerSymbol!
+                                                                                                                                                                                            }
+                                                                                                                                                                                    }
+                                                                                                                                                                                unresolvedCallReceiver.kind == 15
+                                                                                                                                                                                    and unresolvedCallReceiver.operand0 >= 0
+                                                                                                                                                                                    and unresolvedCallReceiver.operand0 < (context.ir -> len)
+                                                                                                                                                                                    -> if {
+                                                                                                                                                                                        context.ir[unresolvedCallReceiver.operand0].typeId => unresolvedCallContainerType!
+                                                                                                                                                                                        unresolvedCallContainerType! >= 0 and unresolvedCallContainerType! < (context.types -> len)
+                                                                                                                                                                                            -> if {
+                                                                                                                                                                                                context.types[unresolvedCallContainerType!] => unresolvedCallContainer
+                                                                                                                                                                                                unresolvedCallContainer.kind => unresolvedCallContainerKind!
+                                                                                                                                                                                                unresolvedCallContainer.first => unresolvedCallContainerFirst!
+                                                                                                                                                                                                unresolvedCallContainer.second => unresolvedCallContainerSecond!
+                                                                                                                                                                                            }
+                                                                                                                                                                                    }
+                                                                                                                                                                                "; sollang compiler verification failure V006: unresolved call identity reached LLVM emission at ir $diagnosticIrIndex (target $(node.targetModule)/$(node.symbol), opcode $(node.opcode), receiver $(node.operand0)/$(unresolvedCallReceiver.kind)/$(unresolvedCallReceiver.typeId)/$(unresolvedCallReceiver.typeOrigin)/$(unresolvedCallReceiver.typeModule)/$(unresolvedCallReceiver.typeSymbol), alias $(unresolvedCallBinding!)/$(unresolvedCallBindingType!)/$(unresolvedCallBindingOrigin!)/$(unresolvedCallBindingSymbol!)/$(unresolvedCallProducer!)/$(unresolvedCallProducerKind!)/$(unresolvedCallProducerType!)/$(unresolvedCallProducerOrigin!)/$(unresolvedCallProducerSymbol!), containerType $(unresolvedCallContainerType!)/$(unresolvedCallContainerKind!)/$(unresolvedCallContainerFirst!)/$(unresolvedCallContainerSecond!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); do not rewrite valid source to hide this failure; repair typed call or receiver-aware intrinsic resolution so neither an ordinary -1 opcode nor provisional path opcode -215/-230 crosses the boundary with a -1/-1 declaration identity" -> println
+                                                                                                                                                                                0 => unresolvedCallAstCandidate!
+                                                                                                                                                                                astNode > 8 -> if { astNode - 8 => unresolvedCallAstCandidate! }
+                                                                                                                                                                                unresolvedCallAstCandidate! < diagnosticRange.astCount
+                                                                                                                                                                                    and unresolvedCallAstCandidate! <= astNode + 12
+                                                                                                                                                                                    -> while {
+                                                                                                                                                                                        context.nodes[diagnosticRange.astStart + unresolvedCallAstCandidate!]
+                                                                                                                                                                                            => unresolvedCallAst
+                                                                                                                                                                                        "; V006 ast candidate $(unresolvedCallAstCandidate!) kind $(unresolvedCallAst.kind) parent $(unresolvedCallAst.parent) rule $(unresolvedCallAst.cstRuleId) span $(unresolvedCallAst.start)/$(unresolvedCallAst.length) tokens $(unresolvedCallAst.firstToken)/$(unresolvedCallAst.tokenCount) payload $(unresolvedCallAst.payloadToken)" -> println
+                                                                                                                                                                                        unresolvedCallAstCandidate! + 1 => unresolvedCallAstCandidate!
+                                                                                                                                                                                    }
+                                                                                                                                                                                unresolvedCallBinding! >= 0 -> if {
+                                                                                                                                                                                    0 => unresolvedAliasCandidateIndex!
+                                                                                                                                                                                    unresolvedCallBinding! > 8 -> if {
+                                                                                                                                                                                        unresolvedCallBinding! - 8 => unresolvedAliasCandidateIndex!
+                                                                                                                                                                                    }
+                                                                                                                                                                                    unresolvedAliasCandidateIndex! < (context.ir -> len)
+                                                                                                                                                                                        and unresolvedAliasCandidateIndex! <= node.operand0 + 2
+                                                                                                                                                                                        -> while {
+                                                                                                                                                                                            context.ir[unresolvedAliasCandidateIndex!] => unresolvedAliasCandidate
+                                                                                                                                                                                            "; V006 alias candidate ir $(unresolvedAliasCandidateIndex!) kind $(unresolvedAliasCandidate.kind) parent $(unresolvedAliasCandidate.parent) ast $(unresolvedAliasCandidate.astNode) symbol $(unresolvedAliasCandidate.symbol) type $(unresolvedAliasCandidate.typeId)/$(unresolvedAliasCandidate.typeKind)/$(unresolvedAliasCandidate.typeOrigin)/$(unresolvedAliasCandidate.typeModule)/$(unresolvedAliasCandidate.typeSymbol) operand $(unresolvedAliasCandidate.operand0)/$(unresolvedAliasCandidate.operand1)/$(unresolvedAliasCandidate.nextOperand) flags $(unresolvedAliasCandidate.flags)" -> println
+                                                                                                                                                                                            unresolvedAliasCandidateIndex! + 1 => unresolvedAliasCandidateIndex!
+                                                                                                                                                                                        }
+                                                                                                                                                                                }
+                                                                                                                                                                            } else {
+                                                                                                                                                                                invariantCode == 51 -> if {
+                                                                                                                                                                                    "; sollang compiler verification failure V008: instance method lost its declared self receiver before LLVM emission at ir $diagnosticIrIndex (parameter $(node.operand1), source $sourceModule, symbol $(node.symbol), ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); the source method is valid, so do not add a dummy parameter or rewrite it as a global function; repair synthetic self symbol collection or Typed IR receiver lowering, then regenerate the self-host compiler" -> println
+                                                                                                                                                                                } else {
+                                                                                                                                                                                    invariantCode == 52 -> if {
+                                                                                                                                                                                        context.ir[node.operand0] => valueAliasBinding
+                                                                                                                                                                                        "; sollang compiler verification failure V010: immutable value binding read disagrees with its canonical binding before LLVM emission at ir $diagnosticIrIndex (readType $(node.typeId), binding $(node.operand0), bindingType $(valueAliasBinding.typeId), initializer $(valueAliasBinding.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); do not rewrite the valid `value => name` source or add a conversion; repair late Typed IR value-alias sealing so the binding and every direct read retain the producer's exact type" -> println
+                                                                                                                                                                                    } else {
+                                                                                                                                                                                        invariantCode == 53 -> if {
+                                                                                                                                                                                            "; sollang compiler verification failure V011: value-producing enum match retained provisional Unit after a continuing arm acquired a canonical non-Unit terminal at ir $diagnosticIrIndex (type $(node.typeId)/$(node.typeOrigin)/$(node.typeSymbol), firstArm $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); do not rewrite the valid `when` expression or add a conversion; repair late match-result sealing so the match, receiving binding, direct reads, and branch conditions share the arm terminal's exact type" -> println
+                                                                                                                                                                                        } else {
+                                                                                                                                                                                            invariantCode == 39 -> if {
+                                                                                                                                                                                                context.ir[node.operand0] => invalidMemberBase
+                                                                                                                                                                                                "; sollang compiler error S043: dotted member base is outside its structural source span at ir $diagnosticIrIndex (base $(node.operand0), baseKind $(invalidMemberBase.kind), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                                                                            } else {
+                                                                                                                                                                                                invariantCode == 38 -> if {
+                                                                                                                                                                                                    context.ir[node.operand0] => invalidLengthReceiver
+                                                                                                                                                                                                    "; sollang compiler error S042: len receiver resolved to a scalar value at ir $diagnosticIrIndex (receiver $(node.operand0), receiverKind $(invalidLengthReceiver.kind), receiverType $(invalidLengthReceiver.typeId)/$(invalidLengthReceiver.typeKind)/$(invalidLengthReceiver.typeOrigin)/$(invalidLengthReceiver.typeModule)/$(invalidLengthReceiver.typeSymbol), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                                                                                } else {
+                                                                                                                                                                                                    invariantCode == 37 -> if {
+                                                                                                                                                                                                        -1 => bindingDiagnosticType!
+                                                                                                                                                                                                        -1 => bindingDiagnosticValue!
+                                                                                                                                                                                                        -1 => bindingDiagnosticValueType!
+                                                                                                                                                                                                        -1 => bindingDiagnosticElseValue!
+                                                                                                                                                                                                        -1 => bindingDiagnosticElseValueType!
+                                                                                                                                                                                                        node.kind == 17 -> if {
+                                                                                                                                                                                                            node.typeId => bindingDiagnosticType!
+                                                                                                                                                                                                            node.operand0 => bindingDiagnosticValue!
+                                                                                                                                                                                                            bindingDiagnosticValue! >= 0 and bindingDiagnosticValue! < (context.ir -> len)
+                                                                                                                                                                                                                -> if {
+                                                                                                                                                                                                                    context.ir[bindingDiagnosticValue!].typeId => bindingDiagnosticValueType!
+                                                                                                                                                                                                                }
+                                                                                                                                                                                                        } else {
+                                                                                                                                                                                                            node.kind == 18 -> if {
+                                                                                                                                                                                                                node.typeId => bindingDiagnosticType!
+                                                                                                                                                                                                                node.operand1 >= 0 and node.operand1 < (context.ir -> len)
+                                                                                                                                                                                                                    -> if {
+                                                                                                                                                                                                                        context.ir[node.operand1].operand1 => bindingDiagnosticValue!
+                                                                                                                                                                                                                        bindingDiagnosticValue! >= 0 and bindingDiagnosticValue! < (context.ir -> len)
+                                                                                                                                                                                                                            -> if {
+                                                                                                                                                                                                                                context.ir[bindingDiagnosticValue!].typeId => bindingDiagnosticValueType!
+                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                node.nextOperand >= 0 and node.nextOperand < (context.ir -> len)
+                                                                                                                                                                                                                    -> if {
+                                                                                                                                                                                                                        context.ir[node.nextOperand].operand1 => bindingDiagnosticElseValue!
+                                                                                                                                                                                                                        bindingDiagnosticElseValue! >= 0 and bindingDiagnosticElseValue! < (context.ir -> len)
+                                                                                                                                                                                                                            -> if {
+                                                                                                                                                                                                                                context.ir[bindingDiagnosticElseValue!].typeId => bindingDiagnosticElseValueType!
+                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                    }
+                                                                                                                                                                                                            } else {
+                                                                                                                                                                                                                node.operand0 >= 0 and node.operand0 < (context.ir -> len)
+                                                                                                                                                                                                                    -> if {
+                                                                                                                                                                                                                        context.ir[node.operand0].typeId => bindingDiagnosticType!
+                                                                                                                                                                                                                        context.ir[node.operand0].operand0 => bindingDiagnosticValue!
+                                                                                                                                                                                                                        bindingDiagnosticValue! >= 0 and bindingDiagnosticValue! < (context.ir -> len)
+                                                                                                                                                                                                                            -> if {
+                                                                                                                                                                                                                                context.ir[bindingDiagnosticValue!].typeId => bindingDiagnosticValueType!
+                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                    }
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                        -1 => bindingDiagnosticNodeTypeOrigin!
+                                                                                                                                                                                                        -1 => bindingDiagnosticNodeTypeModule!
+                                                                                                                                                                                                        -1 => bindingDiagnosticNodeTypeSymbol!
+                                                                                                                                                                                                        -1 => bindingDiagnosticValueTypeOrigin!
+                                                                                                                                                                                                        -1 => bindingDiagnosticValueTypeModule!
+                                                                                                                                                                                                        -1 => bindingDiagnosticValueTypeSymbol!
+                                                                                                                                                                                                        -1 => bindingDiagnosticValueSymbol!
+                                                                                                                                                                                                        node.typeId >= 0 and node.typeId < (context.types -> len)
+                                                                                                                                                                                                            -> if {
+                                                                                                                                                                                                                context.types[node.typeId] => bindingDiagnosticNodeType
+                                                                                                                                                                                                                bindingDiagnosticNodeType.origin => bindingDiagnosticNodeTypeOrigin!
+                                                                                                                                                                                                                bindingDiagnosticNodeType.module => bindingDiagnosticNodeTypeModule!
+                                                                                                                                                                                                                bindingDiagnosticNodeType.symbol => bindingDiagnosticNodeTypeSymbol!
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                        bindingDiagnosticValueType! >= 0 and bindingDiagnosticValueType! < (context.types -> len)
+                                                                                                                                                                                                            -> if {
+                                                                                                                                                                                                                context.types[bindingDiagnosticValueType!] => bindingDiagnosticValueSemanticType
+                                                                                                                                                                                                                bindingDiagnosticValueSemanticType.origin => bindingDiagnosticValueTypeOrigin!
+                                                                                                                                                                                                                bindingDiagnosticValueSemanticType.module => bindingDiagnosticValueTypeModule!
+                                                                                                                                                                                                                bindingDiagnosticValueSemanticType.symbol => bindingDiagnosticValueTypeSymbol!
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                        bindingDiagnosticValue! >= 0 and bindingDiagnosticValue! < (context.ir -> len)
+                                                                                                                                                                                                            -> if {
+                                                                                                                                                                                                                context.ir[bindingDiagnosticValue!].symbol => bindingDiagnosticValueSymbol!
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                        "; sollang compiler error S041: value binding or control type disagrees with its canonical produced value at ir $diagnosticIrIndex (kind $(node.kind), symbol $(node.symbol), type $(node.typeId)/$(bindingDiagnosticNodeTypeOrigin!)/$(bindingDiagnosticNodeTypeModule!)/$(bindingDiagnosticNodeTypeSymbol!), canonicalType $(bindingDiagnosticType!), then/value $(bindingDiagnosticValue!)/$(bindingDiagnosticValueSymbol!)/$(bindingDiagnosticValueType!)/$(bindingDiagnosticValueTypeOrigin!)/$(bindingDiagnosticValueTypeModule!)/$(bindingDiagnosticValueTypeSymbol!), else $(bindingDiagnosticElseValue!)/$(bindingDiagnosticElseValueType!), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                                                                                    } else {
+                                                                                                                                                                                                        invariantCode == 54 -> if {
+                                                                                                                                                                                                            "; sollang compiler error S054: cannot bind a unit value at ir $diagnosticIrIndex (initializer $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length)); remove the binding when only effects are needed, or make every continuing branch end in a concrete value of the same type" -> println
+                                                                                                                                                                                                        } else {
+                                                                                                                                                                                                            "; sollang ir error: invariant $invariantCode at ir $diagnosticIrIndex (kind $(node.kind), parent $(node.parent), operand0 $(node.operand0), operand1 $(node.operand1), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                }
+                                                                                                                                                                                            }
+                                                                                                                                                                                        }
+                                                                                                                                                                                    }
+                                                                                                                                                                                }
+                                                                                                                                                                            }
+                                                                                                                                                                        }
+                                                                                                                                                                    }
+                                                                                                                                                                }
+                                                                                                                                                            }
+                                                                                                                                                        }
+                                                                                                                                                    }
+                                                                                                                                                }
+                                                                                                                                            }
+                                                                                                                                        }
+                                                                                                                                    }
+                                                                                                                                }
+                                                                                                                            }
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        irIndex! + 1 => irIndex!
+    }
+    context -> emitRuntimeAbiDiagnostic
+}

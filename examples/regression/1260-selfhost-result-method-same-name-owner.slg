@@ -1,0 +1,69 @@
+import sollang.compiler.semantic.context as semanticContext
+
+# A Result-propagated method factory must preserve its exact inferred owner
+# when several public inherent methods in the imported module share a name.
+main {
+    """
+    namespace fixture.windows
+
+    public struct Limits {
+        public value: Int
+    }
+
+    public struct Window {
+        public value: Int
+    }
+
+    public struct Table {
+        public value: Int
+    }
+
+    impl Limits {
+        public window: self -> Result<Window, Int> {
+            Result<Window, Int>.Ok(Window { value: self.value })
+        }
+    }
+
+    impl Table {
+        public read: self -> Int => self.value
+        public available: self -> Int => self.value
+    }
+
+    impl Window {
+        public fill: mut self -> Result<Unit, Int> {
+            self.value + 1 => self.value
+            Result<Unit, Int>.Ok
+        }
+
+        public read: mut self -> Int => self.value
+        public available: self -> Int => self.value
+    }
+    """ => librarySource
+
+    """
+    namespace sample
+
+    import fixture.windows as windows
+
+    run: -> Result<Int, Int> {
+        windows.Limits { value: 41 } -> window? => window!
+        window! -> fill?
+        window! -> read => value
+        Result<Int, Int>.Ok(value + (window! -> available))
+    }
+    """ => sampleSource
+
+    [librarySource, sampleSource; ~] -> semanticContext.prepare => prepared
+    0 => resolved!
+    0 => failed!
+    0 => callIndex!
+    callIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[callIndex!] => call
+        call.sourceModule == 1 -> if {
+            call.status == 0 -> if { resolved! + 1 => resolved! }
+            call.status != 0 -> if { failed! + 1 => failed! }
+        }
+        callIndex! + 1 => callIndex!
+    }
+    "result-method-owner=$(resolved!),$(failed!)" -> println
+}

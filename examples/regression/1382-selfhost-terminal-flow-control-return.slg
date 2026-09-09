@@ -1,0 +1,38 @@
+struct Listener {
+    value: Int
+}
+
+struct Parsed {
+    bytes: [UInt8; ~]
+}
+
+struct Options {
+    listener: Listener
+}
+
+impl Listener {
+    public listen: self -> Result<Int, Int> {
+        Result<Int, Int>.Ok(self.value)
+    }
+}
+
+impl Options {
+    public start: self -> Result<Int, Int> {
+        Result<Parsed, Int>.Ok(Parsed { bytes: [5; ~] }) -> when {
+            Err(error) { Result<Int, Int>.Err(error) -> return }
+            Ok(parsed) {
+                self.listener -> listen -> when {
+                    Err(error) { Result<Int, Int>.Err(error) -> return }
+                    Ok(value) { Result<Int, Int>.Ok(value) -> return }
+                }
+            }
+        }
+    }
+}
+
+main {
+    Options { listener: Listener { value: 2 } } -> start -> when {
+        Err(error) { "nested-terminal-wrapper-error=$error" -> println }
+        Ok(value) { "nested-terminal-wrapper=$value" -> println }
+    }
+}

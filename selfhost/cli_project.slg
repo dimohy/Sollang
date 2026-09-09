@@ -11,13 +11,13 @@ unitValue: -> Unit {
 }
 
 public struct ProjectInput {
-    status: Int
-    source: Text
-    sourceDirectory: Text
-    projectDirectory: Text
-    productName: Text
-    multiProduct: Bool
-    dependencyCount: Int
+    public status: Int
+    public source: Text
+    public sourceDirectory: Text
+    public projectDirectory: Text
+    public productName: Text
+    public multiProduct: Bool
+    public dependencyCount: Int
 }
 
 textEndsWith value: Text, suffix: Text -> Bool {
@@ -26,7 +26,7 @@ textEndsWith value: Text, suffix: Text -> Bool {
     suffixLength <= valueLength => matches!
     valueLength - suffixLength => start
     UIntSize(0) => index!
-    (matches! and index! < suffixLength) -> while {
+    matches! and index! < suffixLength -> while {
         (value -> byte(start + index!)) != (suffix -> byte(index!))
             -> if { false => matches! }
         index! + 1 => index!
@@ -37,7 +37,7 @@ textEndsWith value: Text, suffix: Text -> Bool {
 textEquals left: Text, right: Text -> Bool {
     (left -> len) == (right -> len) => matches!
     UIntSize(0) => index!
-    (matches! and index! < (left -> len)) -> while {
+    matches! and index! < (left -> len) -> while {
         (left -> byte(index!)) != (right -> byte(index!))
             -> if { false => matches! }
         index! + 1 => index!
@@ -51,7 +51,7 @@ directoryOf value: Text -> Text {
     UIntSize(0) => index!
     index! < (value -> len) -> while {
         value -> byte(index!) => current
-        (current == 47 or current == 92) -> if {
+        current == 47 or current == 92 -> if {
             index! => lastSeparator!
             true => found!
         }
@@ -135,58 +135,58 @@ normalizePath value: move path.Path -> Result<path.Path, Text> {
     false => wroteComponent!
 
     windows! -> if {
-        (sourceLength >= 3 and source[1] == 58 and source[2] == 92)
+        sourceLength >= 3 and source[1] == 58 and source[2] == 92
             -> if {
-            output! -> push(source[0])
-            output! -> push(58)
-            output! -> push(92)
-            3 => index!
-            (index! < sourceLength and source[Int(index!)] == 92)
-                -> while {
-                index! + 1 => index!
+                output! -> push(source[0])
+                output! -> push(58)
+                output! -> push(92)
+                3 => index!
+                index! < sourceLength and source[Int(index!)] == 92
+                    -> while {
+                        index! + 1 => index!
+                    }
             }
-        }
     } else {
-        (sourceLength > 0 and source[0] == 47) -> if {
+        sourceLength > 0 and source[0] == 47 -> if {
             output! -> push(47)
             1 => index!
-            (index! < sourceLength and source[Int(index!)] == 47)
+            index! < sourceLength and source[Int(index!)] == 47
                 -> while {
-                index! + 1 => index!
-            }
+                    index! + 1 => index!
+                }
         }
     }
 
     false => escaped!
-    (index! < sourceLength and not escaped!) -> while {
+    index! < sourceLength and not escaped! -> while {
         index! => componentStart
-        (index! < sourceLength and (windows! -> if { source[Int(index!)] != 92 } else { source[Int(index!)] != 47 }))
+        index! < sourceLength and (windows! -> if { source[Int(index!)] != 92 } else { source[Int(index!)] != 47 })
             -> while {
-            index! + 1 => index!
-        }
+                index! + 1 => index!
+            }
         index! => componentEnd
         componentEnd - componentStart => componentLength
-        (index! < sourceLength and (windows! -> if { source[Int(index!)] == 92 } else { source[Int(index!)] == 47 }))
+        index! < sourceLength and (windows! -> if { source[Int(index!)] == 92 } else { source[Int(index!)] == 47 })
             -> while {
-            index! + 1 => index!
-        }
+                index! + 1 => index!
+            }
 
         componentLength == 1 and source[Int(componentStart)] == 46 => currentDirectory
         componentLength == 2 and source[Int(componentStart)] == 46 and source[Int(componentStart + 1)] == 46 => parentDirectory
-        (componentLength > 0 and not currentDirectory and not parentDirectory)
+        componentLength > 0 and not currentDirectory and not parentDirectory
             -> if {
-            UIntSize(output! -> len) => truncateStart
-            wroteComponent! -> if {
-                windows! -> if { output! -> push(92) } else { output! -> push(47) }
+                UIntSize(output! -> len) => truncateStart
+                wroteComponent! -> if {
+                    windows! -> if { output! -> push(92) } else { output! -> push(47) }
+                }
+                componentStarts! -> push(truncateStart)
+                componentStart => componentByteIndex!
+                componentByteIndex! < componentEnd -> while {
+                    output! -> push(source[Int(componentByteIndex!)])
+                    componentByteIndex! + 1 => componentByteIndex!
+                }
+                true => wroteComponent!
             }
-            componentStarts! -> push(truncateStart)
-            componentStart => componentByteIndex!
-            componentByteIndex! < componentEnd -> while {
-                output! -> push(source[Int(componentByteIndex!)])
-                componentByteIndex! + 1 => componentByteIndex!
-            }
-            true => wroteComponent!
-        }
         parentDirectory -> if {
             UIntSize(componentStarts! -> len) > 0 -> if {
                 componentStarts! -> take(Int(UIntSize(componentStarts! -> len) - 1)) => truncateTo
@@ -248,11 +248,11 @@ manifestOwnedPath option: Text, style: path.Style -> path.Path {
 sameSpanText source: file.SourceText, left: project.TextSpan, right: project.TextSpan -> Bool {
     left.length == right.length => same!
     UIntSize(0) => index!
-    (same! and index! < left.length) -> while {
+    same! and index! < left.length -> while {
         (source -> byte(left.start + index!)) != (source -> byte(right.start + index!))
             -> if {
-            false => same!
-        }
+                false => same!
+            }
         index! + 1 => index!
     }
     same!
@@ -282,7 +282,7 @@ public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManife
     0 => status!
     option -> manifestOwnedPath(style) -> normalizePath -> when {
         Ok(normalized) {
-            path.pathText(normalized) => normalizedText
+            normalized -> pathText => normalizedText
             manifests! -> push(normalizedText -> path.fromText(style))
             unitValue()
         }
@@ -300,141 +300,141 @@ public resolvePathGraph option: Text, sources: mut [path.Path; ~], packageManife
     [path.Path; ~] => requirements!
     requirements! -> push("" -> path.fromText(style))
     0 => processed!
-    (status! == 0 and processed! < (manifests! -> len))
+    status! == 0 and processed! < (manifests! -> len)
         -> while {
-        processed! >= 64 -> if { 23 => status! }
-        status! == 0 -> if {
-            path.pathText(manifests![processed!]) => queuedManifestText
-            queuedManifestText -> path.fromText(style) => manifestPath
-            path.pathText(manifestPath) => manifestText
-            false => skipCurrent!
+            processed! >= 64 -> if { 23 => status! }
             status! == 0 -> if {
-                parents![processed!] => ancestor!
-                (not skipCurrent! and ancestor! >= 0) -> while {
-                    path.equalsText(canonicalManifests![ancestor!], manifestText)
-                        -> if {
-                        24 => status!
+                manifests![processed!] -> pathText => queuedManifestText
+                queuedManifestText -> path.fromText(style) => manifestPath
+                manifestPath -> pathText => manifestText
+                false => skipCurrent!
+                status! == 0 -> if {
+                    parents![processed!] => ancestor!
+                    not skipCurrent! and ancestor! >= 0 -> while {
+                        canonicalManifests![ancestor!] -> equalsText(manifestText)
+                            -> if {
+                                24 => status!
+                            }
+                        parents![ancestor!] => ancestor!
                     }
-                    parents![ancestor!] => ancestor!
+                    0 => seenIndex!
+                    status! == 0 and not skipCurrent! and seenIndex! < processed!
+                        -> while {
+                            canonicalManifests![seenIndex!] -> equalsText(manifestText)
+                                -> if {
+                                    true => skipCurrent!
+                                }
+                            seenIndex! + 1 => seenIndex!
+                        }
+                    canonicalManifests! -> push(manifestText -> path.fromText(style))
                 }
-                0 => seenIndex!
-                (status! == 0 and not skipCurrent! and seenIndex! < processed!)
-                    -> while {
-                    path.equalsText(canonicalManifests![seenIndex!], manifestText)
-                        -> if {
-                        true => skipCurrent!
-                    }
-                    seenIndex! + 1 => seenIndex!
-                }
-                canonicalManifests! -> push(manifestText -> path.fromText(style))
-            }
-            manifestText -> directoryOf => manifestDirectoryText
-            manifestDirectoryText -> path.fromText(style) => manifestDirectory
-            (status! == 0 and not skipCurrent!) -> if {
-            manifestText -> file.openRead -> when {
-                Ok(_) {}
-                Err(_) { 28 => status! }
-            }
-            status! == 0 -> if {
-                manifestText -> file.mapText => source
-                source -> len => sourceLength
-                source -> slice(UIntSize(0), sourceLength) => sourceView
-                sourceView -> project.parse => parsed
-                parsed.status != 0 -> if { 29 => status! }
-
-                (status! == 0 and processed! > 0) -> if {
-                    source -> spanText(parsed.name) => manifestName
-                    not (path.equalsText(expectedNames![processed!], manifestName))
-                        -> if {
-                        25 => status!
+                manifestText -> directoryOf => manifestDirectoryText
+                manifestDirectoryText -> path.fromText(style) => manifestDirectory
+                status! == 0 and not skipCurrent! -> if {
+                    manifestText -> file.openRead -> when {
+                        Ok(_) {}
+                        Err(_) { 28 => status! }
                     }
                     status! == 0 -> if {
-                        path.pathText(requirements![processed!]) => requirementText
-                        source -> spanText(parsed.version) => manifestVersion
-                        requirementText -> versions.accepts(manifestVersion) => accepted
-                        (accepted.status != 0 or not accepted.accepted)
-                            -> if { 26 => status! }
-                    }
-                }
+                        manifestText -> file.mapText => source
+                        source -> len => sourceLength
+                        source -> slice(UIntSize(0), sourceLength) => sourceView
+                        sourceView -> project.parse => parsed
+                        parsed.status != 0 -> if { 29 => status! }
 
-                status! == 0 -> if {
-                    packageManifests -> push(manifestText -> path.fromText(style))
-                    source -> spanText(parsed.name) => packageName
-                    packageNames -> push(packageName -> path.fromText(style))
-                    source -> spanText(parsed.version) => packageVersion
-                    packageVersions -> push(packageVersion -> path.fromText(style))
-                }
-
-                (status! == 0 and processed! > 0) -> if {
-                    -1 => productIndex!
-                    0 => candidateIndex!
-                    candidateIndex! < (parsed.products -> len) -> while {
-                        source -> sameSpanText(parsed.products[candidateIndex!].name, parsed.name)
-                            -> if {
-                            candidateIndex! => productIndex!
+                        status! == 0 and processed! > 0 -> if {
+                            source -> spanText(parsed.name) => manifestName
+                            not (expectedNames![processed!] -> equalsText(manifestName))
+                                -> if {
+                                    25 => status!
+                                }
+                            status! == 0 -> if {
+                                requirements![processed!] -> pathText => requirementText
+                                source -> spanText(parsed.version) => manifestVersion
+                                requirementText -> versions.accepts(manifestVersion) => accepted
+                                accepted.status != 0 or not accepted.accepted
+                                    -> if { 26 => status! }
+                            }
                         }
-                        candidateIndex! + 1 => candidateIndex!
-                    }
-                    productIndex! < 0 -> if {
-                        22 => status!
-                    } else {
-                        source -> spanText(parsed.products[productIndex!].root) => rootRelative
-                        path.pathText(manifestDirectory) => directoryText
-                        directoryText -> joinedPath(rootRelative, style) => rootPath
-                        path.pathText(rootPath) => rootText
-                        rootText -> directoryOf => sourceDirectoryText
-                        sourceDirectoryText -> path.fromText(style) => sourceDirectory
-                        sourceDirectory -> sourceRoot.discoverDirect => discovered
-                        0 => discoveredIndex!
-                        discoveredIndex! < (discovered -> len) -> while {
-                            path.pathText(discovered[discoveredIndex!]) => discoveredText
-                            sources -> push(discoveredText -> path.fromText(style))
-                            discoveredIndex! + 1 => discoveredIndex!
-                        }
-                    }
-                }
 
-                0 => dependencyIndex!
-                (status! == 0 and dependencyIndex! < (parsed.dependencies -> len))
-                    -> while {
-                    parsed.dependencies[dependencyIndex!].path.length == 0
-                        -> if {
-                        20 => status!
-                    } else {
-                        source -> spanText(parsed.dependencies[dependencyIndex!].path) => dependencyRelative
-                        path.pathText(manifestDirectory) => directoryText
-                        directoryText -> joinedPath(dependencyRelative, style) => dependencyDirectory
-                        path.pathText(dependencyDirectory) => dependencyDirectoryText
-                        dependencyDirectoryText -> joinedPath("sollang.project", style) => dependencyManifest
-                        dependencyManifest -> normalizePath -> when {
-                            Ok(normalized) {
-                                path.pathText(normalized) => dependencyManifestText
-                                manifests! -> push(dependencyManifestText -> path.fromText(style))
-                                parents! -> push(processed!)
-                                source -> spanText(parsed.dependencies[dependencyIndex!].name) => dependencyName
-                                expectedNames! -> push(dependencyName -> path.fromText(style))
-                                parsed.dependencies[dependencyIndex!].version.length > 0
+                        status! == 0 -> if {
+                            packageManifests -> push(manifestText -> path.fromText(style))
+                            source -> spanText(parsed.name) => packageName
+                            packageNames -> push(packageName -> path.fromText(style))
+                            source -> spanText(parsed.version) => packageVersion
+                            packageVersions -> push(packageVersion -> path.fromText(style))
+                        }
+
+                        status! == 0 and processed! > 0 -> if {
+                            -1 => productIndex!
+                            0 => candidateIndex!
+                            candidateIndex! < (parsed.products -> len) -> while {
+                                source -> sameSpanText(parsed.products[candidateIndex!].name, parsed.name)
                                     -> if {
-                                    source -> spanText(parsed.dependencies[dependencyIndex!].version)
-                                } else {
-                                    "*"
-                                } => dependencyRequirement
-                                requirements! -> push(dependencyRequirement -> path.fromText(style))
-                                unitValue()
+                                        candidateIndex! => productIndex!
+                                    }
+                                candidateIndex! + 1 => candidateIndex!
                             }
-                            Err(_) {
-                                27 => status!
-                                unitValue()
+                            productIndex! < 0 -> if {
+                                22 => status!
+                            } else {
+                                source -> spanText(parsed.products[productIndex!].root) => rootRelative
+                                manifestDirectory -> pathText => directoryText
+                                directoryText -> joinedPath(rootRelative, style) => rootPath
+                                rootPath -> pathText => rootText
+                                rootText -> directoryOf => sourceDirectoryText
+                                sourceDirectoryText -> path.fromText(style) => sourceDirectory
+                                sourceDirectory -> sourceRoot.discoverDirect => discovered
+                                0 => discoveredIndex!
+                                discoveredIndex! < (discovered -> len) -> while {
+                                    discovered[discoveredIndex!] -> pathText => discoveredText
+                                    sources -> push(discoveredText -> path.fromText(style))
+                                    discoveredIndex! + 1 => discoveredIndex!
+                                }
                             }
                         }
+
+                        0 => dependencyIndex!
+                        status! == 0 and dependencyIndex! < (parsed.dependencies -> len)
+                            -> while {
+                                parsed.dependencies[dependencyIndex!].path.length == 0
+                                    -> if {
+                                        20 => status!
+                                    } else {
+                                        source -> spanText(parsed.dependencies[dependencyIndex!].path) => dependencyRelative
+                                        manifestDirectory -> pathText => directoryText
+                                        directoryText -> joinedPath(dependencyRelative, style) => dependencyDirectory
+                                        dependencyDirectory -> pathText => dependencyDirectoryText
+                                        dependencyDirectoryText -> joinedPath("sollang.project", style) => dependencyManifest
+                                        dependencyManifest -> normalizePath -> when {
+                                            Ok(normalized) {
+                                                normalized -> pathText => dependencyManifestText
+                                                manifests! -> push(dependencyManifestText -> path.fromText(style))
+                                                parents! -> push(processed!)
+                                                source -> spanText(parsed.dependencies[dependencyIndex!].name) => dependencyName
+                                                expectedNames! -> push(dependencyName -> path.fromText(style))
+                                                parsed.dependencies[dependencyIndex!].version.length > 0
+                                                    -> if {
+                                                        source -> spanText(parsed.dependencies[dependencyIndex!].version)
+                                                    } else {
+                                                        "*"
+                                                    } => dependencyRequirement
+                                                requirements! -> push(dependencyRequirement -> path.fromText(style))
+                                                unitValue()
+                                            }
+                                            Err(_) {
+                                                27 => status!
+                                                unitValue()
+                                            }
+                                        }
+                                    }
+                                dependencyIndex! + 1 => dependencyIndex!
+                            }
                     }
-                    dependencyIndex! + 1 => dependencyIndex!
                 }
+                status! == 0 -> if { processed! + 1 => processed! }
             }
-            }
-            status! == 0 -> if { processed! + 1 => processed! }
         }
-    }
     status!
 }
 

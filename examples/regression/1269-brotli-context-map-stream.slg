@@ -1,0 +1,99 @@
+import std.compress.brotli.context_map as context_maps
+import std.compress.brotli.prefix_code as codes
+import std.compress.brotli.prefix_table as prefix
+
+isNeedPrefix progress: context_maps.ReaderRead, expected: Int -> Bool => progress -> when {
+    NeedPrefix(alphabetSize) { alphabetSize == expected }
+    else { false }
+}
+
+isNeedMore progress: codes.DescriptionRead -> Bool => progress -> when {
+    NeedMore(bits) { bits > 0 }
+    else { false }
+}
+
+isReady progress: context_maps.ReaderRead -> Bool => progress -> when {
+    Ready { true }
+    else { false }
+}
+
+equals values: [Int], expected: [Int] -> Bool {
+    (values -> len) == (expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (values -> len) -> while {
+        values[index!] == expected[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+failed: -> Result<Bool, context_maps.Error> => Result<Bool, context_maps.Error>.Ok(false)
+
+check reader: move context_maps.Reader, window: mut prefix.Window -> Result<Bool, context_maps.Error> {
+    reader => reader!
+    window -> fill([161], prefix.Position { byteIndex: 0, bitIndex: 0 }, 8) -> when {
+        Err(_) { failed() -> return }
+        Ok(_) { }
+    }
+    reader! -> read(window)? => first
+    first -> isNeedPrefix(2) -> unless { failed() -> return }
+
+    reader! -> prefixDescription? => description!
+    description! -> read(window) -> when {
+        Err(_) { failed() -> return }
+        Ok(progress) { progress -> isNeedMore -> unless { failed() -> return } }
+    }
+
+    (window -> available) + 8 => required
+    window -> fill([52], prefix.Position { byteIndex: 0, bitIndex: 0 }, required) -> when {
+        Err(_) { failed() -> return }
+        Ok(_) { }
+    }
+    description! -> read(window) -> when {
+        Err(_) { failed() -> return }
+        Ok(progress) {
+            progress -> when {
+                Ready { }
+                else { failed() -> return }
+            }
+        }
+    }
+    description! -> intoTable -> when {
+        Err(_) { failed() -> return }
+        Ok(table) {
+            reader! -> installPrefix(table)?
+        }
+    }
+    reader! -> read(window)? => completed
+    completed -> isReady -> unless { failed() -> return }
+    reader! -> finish? => streamed
+    Result<Bool, context_maps.Error>.Ok(
+    streamed.treeCount == 2 and (streamed -> intoValues -> equals([0, 1, 1, 0])))
+}
+
+main {
+    context_maps.Limits {
+        maxEntries: 16_384
+        maxTrees: 256
+        maxTableEntries: 1_080
+    } -> parser -> when {
+        Err(_) { "context-map-stream=false" -> println }
+        Ok(parser) {
+            parser -> reader(4) -> when {
+                Err(_) { "context-map-stream=false" -> println }
+                Ok(reader) {
+                    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+                        Err(_) { "context-map-stream=false" -> println }
+                        Ok(window) {
+                            window => window!
+                            reader -> check(window!) -> when {
+                                Err(_) { "context-map-stream=false" -> println }
+                                Ok(checked) { "context-map-stream=$(checked)" -> println }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

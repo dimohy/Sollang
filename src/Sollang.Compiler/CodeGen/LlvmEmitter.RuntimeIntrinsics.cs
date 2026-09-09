@@ -68,6 +68,14 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(BoundType.Int64, value);
     }
 
+    private RuntimeInt EmitRuntimeUtcNowMillisIntrinsic(string path)
+    {
+        _ = path;
+        var value = NextTemp("utc_now_ms");
+        EmitCall(value, "i64", "sollang_utc_now_millis", "");
+        return new RuntimeInt(BoundType.Int64, value);
+    }
+
     private RuntimeProducerStream EmitRuntimeRangeStream(
         BoundFunction function,
         RuntimeValue argument,
@@ -115,35 +123,43 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeProducerStream EmitRuntimeMouseEvents(
         BoundFunction function,
-        RuntimeValue capacityValue,
-        RuntimeValue overflowValue,
+        RuntimeValue sourceValue,
         string path)
     {
         if (!_program.Types.TryGetEventStreamValue(function.ReturnType, out var elementType)
-            || !_program.Types.TryResolve("sys.event.MouseEvent", out var mouseEventType)
+            || !_program.Types.TryResolve("sys.input.mouse.Event", out var mouseEventType)
             || elementType != mouseEventType)
         {
-            throw new SollangException($"{path} must return EventStream<sys.event.MouseEvent>");
+            throw new SollangException($"{path} must return EventStream<sys.input.mouse.Event>");
         }
-        if (capacityValue is not RuntimeInt { Type: BoundType.Int } capacity
-            || overflowValue is not RuntimeEnum overflow
-            || !_program.Types.TryResolve("sys.event.EventOverflowPolicy", out var overflowType)
-            || overflow.Type != overflowType)
+        if (sourceValue is not RuntimeStruct source
+            || !_program.Types.IsStruct(source.Type)
+            || _program.Types.GetStruct(source.Type) is not { Name: "sys.input.mouse.Source" } sourceDefinition)
         {
-            throw new SollangException(
-                $"{path} expects Int capacity and sys.event.EventOverflowPolicy");
+            throw new SollangException($"{path} expects sys.input.mouse.Source");
         }
+
+        var capacityField = sourceDefinition.GetField("capacity");
+        var overflowField = sourceDefinition.GetField("overflow");
+        var capacity = NextTemp("mouse_event_capacity");
+        EmitAssign(
+            capacity,
+            $"extractvalue {LlvmStructType(source.Type)} {source.ValueName}, {capacityField.Index}");
+        var overflow = NextTemp("mouse_event_overflow_value");
+        EmitAssign(
+            overflow,
+            $"extractvalue {LlvmStructType(source.Type)} {source.ValueName}, {overflowField.Index}");
 
         var overflowTag = NextTemp("mouse_event_overflow");
         EmitAssign(
             overflowTag,
-            $"extractvalue {LlvmEnumType(overflow.Type)} {overflow.ValueName}, 0");
+            $"extractvalue {LlvmEnumType(overflowField.Type)} {overflow}, 0");
         var context = NextTemp("mouse_event_context");
         EmitCall(
             context,
             "ptr",
             "sollang_mouse_event_stream_create",
-            $"i32 {capacity.ValueName}, i32 {overflowTag}");
+            $"i32 {capacity}, i32 {overflowTag}");
         var created = NextTemp("mouse_event_stream_created");
         EmitCompare(created, "ne", "ptr", context, "null");
         EmitTrapUnless(created, "mouse_event_stream_create");
@@ -1142,7 +1158,7 @@ internal sealed partial class LlvmEmitter
         if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
             || resultTypes.Ok != TypeId.DynamicUInt8Array
             || !_program.Types.IsEnum(resultTypes.Error)
-            || _program.Types.GetEnum(resultTypes.Error).Name != "sys.crypto.random.Error")
+            || _program.Types.GetEnum(resultTypes.Error).Name != "std.crypto.random.Error")
         {
             throw new SollangException($"{path} has an invalid secure random result type");
         }

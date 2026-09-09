@@ -1,0 +1,21 @@
+# A growable array received through a mutable parameter is reconstructed as an
+# SSA aggregate. Passing that complete value onward by readonly reference must
+# materialize a call-scoped record; `%arg` is not a pointer in this ABI.
+struct Entry {
+    value: Int
+}
+
+measure entries: ref [Entry; ~], keys: ref [Int; ~] -> Int {
+    (entries -> len) + (keys -> len)
+}
+
+update entries: mut [Entry; ~], keys: move [Int; ~] -> Int {
+    entries -> measure(keys)
+}
+
+main {
+    [Entry { value: 7 }, Entry { value: 9 }; ~] => entries!
+    [1, 2, 3; ~] => keys
+    entries! -> update(keys) => count
+    "count=$count" -> println
+}

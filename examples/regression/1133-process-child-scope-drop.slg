@@ -1,0 +1,19 @@
+# Verifies that an abandoned Child owner is terminated and reaped at scope exit.
+import sys.process as process
+
+dropLabel child: ref process.Child -> Text => "dropped"
+
+main {
+    process.arguments() => args
+    args -> len => count
+    count > 1 -> if {
+        0 => childDone
+    } else {
+        process.command(args[0]) => command!
+        command! -> arg("--child")
+        command! -> spawn -> when {
+            Result<process.Child, Text>.Ok(child) => child -> dropLabel -> println
+            Result<process.Child, Text>.Err(error) => error -> println
+        }
+    }
+}

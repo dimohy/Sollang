@@ -1,0 +1,64 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+import std.time as time
+
+# Poll observes the affine socket directly and never consumes queued data.
+observe immediate: time.Duration -> Result<Bool, socket.SocketError> uses Network {
+    Option<time.Duration>.Some(immediate) => timeout
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+
+    listener -> poll(socket.PollMode.Read, timeout)? => listenerInitiallyReadable
+    listener -> localEndpoint? => endpoint
+    endpoint -> connect? => client
+    listener -> poll(socket.PollMode.Read, timeout)? => listenerReadable
+    listener -> accept? => server
+    client -> poll(socket.PollMode.Write, timeout)? => clientWritable
+    server -> poll(socket.PollMode.Error, timeout)? => serverError
+    [UInt8; ~] => payload!
+    payload! -> push(114)
+    payload! -> push(101)
+    payload! -> push(97)
+    payload! -> push(100)
+    payload! -> push(121)
+    client -> sendAll(payload!)?
+    server -> poll(socket.PollMode.Read, timeout)? => serverReadable
+    server -> receive(16)? => received
+    server -> poll(socket.PollMode.Read, timeout)? => serverStillReadable
+
+    socket.DatagramBindOptions {
+        endpoint: net.loopback(0) -> unified
+        reuseAddress: true
+    } -> bind? => datagram
+    datagram -> poll(socket.PollMode.Write, timeout)? => datagramWritable
+
+    datagram -> close
+    client -> close
+    server -> close
+    listener -> close
+    Result<Bool, socket.SocketError>.Ok(
+        not listenerInitiallyReadable
+            and listenerReadable
+            and clientWritable
+            and not serverError
+            and serverReadable
+            and not serverStillReadable
+            and datagramWritable
+            and (received -> len) == 5
+            and received[0] == 114
+            and received[4] == 121)
+}
+
+main {
+    time.milliseconds(0) -> when {
+        Ok(immediate) => observe(immediate) -> when {
+            Ok(valid) { "socket-poll=$valid" -> println }
+            Err(error) { "socket-poll-error=$(error.code)" -> println }
+        }
+        Err(_) { "socket-poll-duration-error" -> println }
+    }
+}

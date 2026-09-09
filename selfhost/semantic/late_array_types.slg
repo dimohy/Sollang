@@ -1,0 +1,187 @@
+namespace sollang.compiler.semantic.late_array_types
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+import syntax.generated.slg as grammar
+
+public struct Candidate {
+    public sourceModule: Int
+    public astNode: Int
+    public typeId: Int
+    public status: Int
+}
+
+public struct Resolved {
+    public sourceModule: Int
+    public astNode: Int
+    public globalAst: Int
+    public typeId: Int
+}
+
+# Indexed/member paths are resolved after the first composite sweep. Resolve
+# each direct element subtree again at the path fixed point, and replace any
+# stale scalar or array shape before Typed IR can observe it.
+public resolve prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], candidates: [Candidate], expressionIndexByAst: [Int] -> [Resolved; ~] {
+    [Int; ~] => nearestDistanceByChild!
+    [Int; ~] => nearestTypeByChild!
+    [Bool; ~] => nearestHomogeneousByChild!
+    [Int; ~] => directChildCount!
+    [Int; ~] => typedChildCount!
+    [Int; ~] => firstChildType!
+    [Bool; ~] => homogeneous!
+    0 => seed!
+    seed! < (prepared.package.nodes -> len) -> while {
+        nearestDistanceByChild! -> push(1_000_000)
+        nearestTypeByChild! -> push(-1)
+        nearestHomogeneousByChild! -> push(true)
+        directChildCount! -> push(0)
+        typedChildCount! -> push(0)
+        firstChildType! -> push(-1)
+        homogeneous! -> push(true)
+        seed! + 1 => seed!
+    }
+    0 => candidateIndex!
+    candidateIndex! < (candidates -> len) -> while {
+        candidates[candidateIndex!] => candidate
+        candidate.status == 0 and candidate.typeId >= 0
+            -> if {
+                types -> typeIds.materializedReadTypeId(candidate.typeId) => candidateValueTypeId
+                prepared.package.ranges[candidate.sourceModule] => candidateRange
+                prepared.package.nodes[candidateRange.astStart + candidate.astNode].parent
+                    => ancestor!
+                candidate.astNode => directChild!
+                1 => distance!
+                true => open!
+                ancestor! >= 0 and open! -> while {
+                    prepared.package.nodes[candidateRange.astStart + ancestor!] => ancestorNode
+                    candidateRange.astStart + ancestor! => ancestorGlobal
+                    ancestorNode.kind == 37 -> if {
+                        candidateRange.astStart + directChild! => directChildGlobal
+                        distance! < nearestDistanceByChild![directChildGlobal]
+                            -> if {
+                                distance! => nearestDistanceByChild![directChildGlobal]
+                                candidateValueTypeId => nearestTypeByChild![directChildGlobal]
+                                true => nearestHomogeneousByChild![directChildGlobal]
+                            } else {
+                                distance! == nearestDistanceByChild![directChildGlobal]
+                                    and candidateValueTypeId != nearestTypeByChild![directChildGlobal]
+                                    -> if { false => nearestHomogeneousByChild![directChildGlobal] }
+                            }
+                        false => open!
+                    } else {
+                        ancestor! => directChild!
+                        ancestorNode.parent => ancestor!
+                        distance! + 1 => distance!
+                    }
+                }
+            }
+        candidateIndex! + 1 => candidateIndex!
+    }
+
+    0 => childSourceIndex!
+    childSourceIndex! < (prepared.package.ranges -> len)
+        -> while {
+            prepared.package.ranges[childSourceIndex!] => childRange
+            0 => childAstIndex!
+            childAstIndex! < childRange.astCount -> while {
+                prepared.package.nodes[childRange.astStart + childAstIndex!] => childNode
+                childNode.parent >= 0 -> if {
+                    childRange.astStart + childNode.parent => parentGlobal
+                    prepared.package.nodes[parentGlobal].kind == 37
+                        -> if {
+                            directChildCount![parentGlobal] + 1 => directChildCount![parentGlobal]
+                            childRange.astStart + childAstIndex! => childGlobal
+                            nearestTypeByChild![childGlobal] >= 0
+                                and nearestHomogeneousByChild![childGlobal]
+                                -> if {
+                                    typedChildCount![parentGlobal] + 1 => typedChildCount![parentGlobal]
+                                    firstChildType![parentGlobal] < 0 -> if {
+                                        nearestTypeByChild![childGlobal] => firstChildType![parentGlobal]
+                                    } else {
+                                        nearestTypeByChild![childGlobal] != firstChildType![parentGlobal]
+                                            -> if { false => homogeneous![parentGlobal] }
+                                    }
+                                } else {
+                                    false => homogeneous![parentGlobal]
+                                }
+                        }
+                }
+                childAstIndex! + 1 => childAstIndex!
+            }
+            childSourceIndex! + 1 => childSourceIndex!
+        }
+
+    [Resolved; ~] => resolved!
+    0 => sourceIndex!
+    sourceIndex! < (prepared.package.ranges -> len)
+        -> while {
+            prepared.package.ranges[sourceIndex!] => sourceRange
+            0 => astIndex!
+            astIndex! < sourceRange.astCount -> while {
+                prepared.package.nodes[sourceRange.astStart + astIndex!] => node
+                sourceRange.astStart + astIndex! => globalAst
+                node.kind == 37
+                    and firstChildType![globalAst] >= 0
+                    and directChildCount![globalAst] > 0
+                    and typedChildCount![globalAst] == directChildCount![globalAst]
+                    and homogeneous![globalAst]
+                    -> if {
+                        prepared.package -> typeIds.arrayStorageSyntax(sourceIndex!, astIndex!) => storage
+                        storage.dynamic => dynamic
+                        storage.bounded => bounded
+                        storage.length => declaredLength
+                        4 => kind!
+                        directChildCount![globalAst] => length!
+                        dynamic -> if {
+                            3 => kind!
+                            -1 => length!
+                        }
+                        bounded -> if {
+                            12 => kind!
+                            declaredLength => length!
+                        }
+                        kind! == 4 and declaredLength >= 0
+                            -> if { declaredLength => length! }
+                        firstChildType![globalAst] => elementType
+                        -1 => typeId!
+                        0 => typeSearch!
+                        typeSearch! < (types -> len) and typeId! < 0 -> while {
+                            types[typeSearch!] => known
+                            known.kind == kind!
+                                and known.origin == -1
+                                and known.module == -1
+                                and known.symbol == -1
+                                and known.first == elementType
+                                and known.length == length!
+                                and known.status == 0
+                                -> if { typeSearch! => typeId! }
+                            typeSearch! + 1 => typeSearch!
+                        }
+                        typeId! < 0 -> if {
+                            types -> len => typeId!
+                            types -> push(typeIds.SemanticType {
+                                kind: kind!
+                                origin: -1
+                                module: -1
+                                symbol: -1
+                                first: elementType
+                                second: -1
+                                length: length!
+                                lengthHash: 0
+                                containsParameter: types[elementType].containsParameter
+                                status: 0
+                            })
+                        }
+                        resolved! -> push(Resolved {
+                            sourceModule: sourceIndex!
+                            astNode: astIndex!
+                            globalAst: globalAst
+                            typeId: typeId!
+                        })
+                    }
+                astIndex! + 1 => astIndex!
+            }
+            sourceIndex! + 1 => sourceIndex!
+        }
+    resolved!
+}

@@ -1,0 +1,37 @@
+# One RFC 8878 sequence copies three literals and a six-byte overlapping match.
+import std.compress.zstd.fse as fse
+import std.compress.zstd.sequence as sequence
+
+matches bytes: [UInt8] -> Bool {
+    [UInt8(97), 98, 99, 97, 98, 99, 97, 98, 99] => expected
+    (bytes -> len) == (expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (expected -> len) -> while {
+        bytes[index!] == expected[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+run: -> Result<Unit, sequence.Failure> uses Console {
+    # count=1; LL/OF/ML use RLE codes 3/2/3; reverse bits encode offset extra 2.
+    [UInt8(1), 84, 3, 2, 3, 6] => encoded
+    [UInt8(97), 98, 99] => literals
+    [UInt8; ~] => history
+    fse.empty() => priorLiteralLengths
+    fse.empty() => priorOffsets
+    fse.empty() => priorMatchLengths
+    sequence.decode(encoded, 0, literals, history, 0, 1_024, 9,
+        priorLiteralLengths, false, priorOffsets, false, priorMatchLengths, false,
+        1, 4, 8)? => decoded
+    "zstd-sequence-rle=$(decoded.output -> matches),$(decoded.recentOffset1),$(decoded.recentOffset2),$(decoded.recentOffset3)"
+        -> println
+    Result<Unit, sequence.Failure>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(_) { "zstd-sequence-error" -> println }
+    }
+}

@@ -1,24 +1,181 @@
 namespace sys.process
 
-# Runs one executable directly and connects only its standard output to a
-# newly created or truncated file. Arguments remain literal argv entries; no
-# shell parsing or command-string quoting is introduced.
-public struct RunToFileRequest {
-    argv: [Text; ~]
-    output: Text
+import sys.process as model
+
+# One ordered child-environment edit. Later entries for the same key win.
+# `removed` distinguishes an explicit removal from an empty value.
+public struct EnvironmentChange {
+    public name: Text
+    public value: Text
+    public removed: Bool
 }
 
-public arguments: -> Arguments uses Process = intrinsic
+# Directional standard-input policy. A file is opened only for the child and
+# the parent descriptor is closed immediately after a successful spawn.
+public enum Input {
+    Inherit
+    File(Text)
+    Null
+}
 
-public environment name: Text -> Option<Text> uses Environment = intrinsic
+# Directional standard-output policy shared by stdout and stderr. Pipe is not
+# exposed until Child owns bounded, concurrently drained pipe endpoints.
+public enum Output {
+    Inherit
+    File(Text)
+    Null
+}
 
-# Runs one executable directly without a shell. The first item is the program
-# and remaining items are literal argv entries.
-public run argv: [Text; ~] -> Result<Int, Text> uses Process = intrinsic
+# Explicit per-stream memory ceilings for child-output collection. Bytes beyond
+# either ceiling are still drained to prevent pipe deadlock, then discarded.
+public struct CaptureLimits {
+    public standardOutputBytes: UIntSize
+    public standardErrorBytes: UIntSize
+}
 
-public runToFile request: RunToFileRequest -> Result<Int, Text> uses Process, File = intrinsic
+# Bounded raw child output. Bytes remain undecoded so callers choose the text
+# encoding instead of inheriting a process-global or locale-dependent policy.
+public struct CapturedOutput {
+    public status: ExitStatus
+    public standardOutput: [UInt8; ~]
+    public standardError: [UInt8; ~]
+    public standardOutputTruncated: Bool
+    public standardErrorTruncated: Bool
+}
 
-# Terminates the current process with the supplied status code. Compiler
-# drivers use this after emitting a fatal diagnostic so no invalid artifact is
-# mistaken for successful output.
-public exit code: Int -> Unit uses Process = intrinsic
+# A command owns one literal argv vector. The first entry is the executable;
+# remaining entries are passed without shell parsing, expansion, or quoting.
+public struct Command {
+    public argv: [Text; ~]
+    public workingDirectoryValue: Text
+    public hasWorkingDirectory: Bool
+    public environmentChanges: [EnvironmentChange; ~]
+    public inheritsEnvironment: Bool
+    public standardInput: Input
+    public standardOutput: Output
+    public standardError: Output
+}
+
+# Normal process termination is a domain value rather than an unlabelled Int.
+# Signal and forced-termination detail will extend this value in the bounded
+# lifecycle slice; current primitives produce ordinary exit codes.
+public struct ExitStatus {
+    public code: Int
+}
+
+# Stable domain value for the operating-system identifier assigned at spawn.
+# It is captured with the Child so reading it needs no extra runtime call. The
+# value is observational rather than an ownership or signalling capability;
+# operating systems may reuse it after the child has been reaped.
+public struct ProcessId {
+    public value: UInt64
+}
+
+# A running child is an affine operating-system resource. Its private token
+# cannot be copied or constructed by user code. `wait(move)` consumes and reaps
+# it; abandoning the owner kills and reaps the attached process.
+public struct Child {
+    public token: UInt64
+    public processId: ProcessId
+}
+
+# Creates one literal command without invoking a shell. Configuration belongs
+# to the returned instance; command is the only pre-value factory boundary.
+public command program: Text -> Command => Command {
+    argv: [program,; ~]
+    workingDirectoryValue: ""
+    hasWorkingDirectory: false
+    environmentChanges: [EnvironmentChange; ~]
+    inheritsEnvironment: true
+    standardInput: model.Input.Inherit
+    standardOutput: model.Output.Inherit
+    standardError: model.Output.Inherit
+}
+
+impl Command {
+    public arg: mut self, value: Text -> Unit {
+        self.argv -> push(value)
+    }
+
+    # Drains values into this command in order. The mutable source makes the
+    # ownership transfer explicit until move-mutable parameters are supported.
+    public args: mut self, values: mut [Text; ~] -> Unit {
+        values -> len => remaining!
+        remaining! > 0 -> while {
+            values -> take(0) => value
+            self.argv -> push(value)
+            remaining! - 1 => remaining!
+        }
+    }
+
+    public argumentCount: self -> UIntSize => UIntSize(self.argv -> len)
+
+    # Configures only the child process. The parent process working directory
+    # is never changed, so independent Command instances remain race-free.
+    public workingDirectory: mut self, path: Text -> Unit {
+        path => self.workingDirectoryValue
+        true => self.hasWorkingDirectory
+    }
+
+    # Inserts or replaces one child-only mapping. Runtime resolution is ordered:
+    # the last edit for a key wins without mutating the parent environment.
+    public setEnvironment: mut self, name: Text, value: Text -> Unit {
+        self.environmentChanges -> push(EnvironmentChange { name: name, value: value, removed: false })
+    }
+
+    # Prevents this key from being inherited by the child. A later
+    # setEnvironment for the same key restores it with the supplied value.
+    public removeEnvironment: mut self, name: Text -> Unit {
+        self.environmentChanges -> push(EnvironmentChange { name: name, value: "", removed: true })
+    }
+
+    # Discards earlier edits and disables all parent-environment inheritance.
+    # Later setEnvironment calls build an explicit minimal environment.
+    public clearEnvironment: mut self -> Unit {
+        [EnvironmentChange; ~] => self.environmentChanges
+        false => self.inheritsEnvironment
+    }
+
+    # Configures only this child's standard input. It never replaces the
+    # parent's descriptor, including while another Command is spawning.
+    public stdin: mut self, input: Input -> Unit {
+        input => self.standardInput
+    }
+
+    # Configures only this child's standard output.
+    public stdout: mut self, output: Output -> Unit {
+        output => self.standardOutput
+    }
+
+    # Configures only this child's standard error.
+    public stderr: mut self, output: Output -> Unit {
+        output => self.standardError
+    }
+
+    # Executes this command and returns a labelled exit status. This is the
+    # preferred synchronous API; run remains the self-host/runtime compatibility
+    # edge and delegates to the same spawn/wait lifecycle primitives.
+    public status: move self -> Result<ExitStatus, Text> uses Process {
+        self -> run -> when {
+            Result<Int, Text>.Ok(code) => Result<ExitStatus, Text>.Ok(ExitStatus { code: code })
+            Result<Int, Text>.Err(error) => Result<ExitStatus, Text>.Err(error)
+        }
+    }
+
+    public statusToFile: move self, output: Text -> Result<ExitStatus, Text> uses Process, File {
+        self -> runToFile(output) -> when {
+            Result<Int, Text>.Ok(code) => Result<ExitStatus, Text>.Ok(ExitStatus { code: code })
+            Result<Int, Text>.Err(error) => Result<ExitStatus, Text>.Err(error)
+        }
+    }
+}
+
+impl ExitStatus {
+    public succeeded: self -> Bool => self.code == 0
+
+    public exitCode: self -> Int => self.code
+}
+
+# Runtime bindings for this public process model live in
+# stdlib/sys/runtime/process.slg. The separate fragment is still the same
+# logical sys.process module, so calls lower directly without a facade.

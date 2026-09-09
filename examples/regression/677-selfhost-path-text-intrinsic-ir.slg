@@ -5,32 +5,34 @@ import sollang.compiler.ir.typed as typedIr
 # SourceText, and never falls back to an argument-less external call.
 main {
     [
-        """
-        namespace sys.path
+    """
+    namespace sys.path
 
-        public struct Path {
-            bytes: [UInt8; ~]
-            style: Int
-        }
+    public struct Path {
+        public bytes: [UInt8; ~]
+        public style: Int
+    }
 
-        public pathText value: ref Path -> Text = intrinsic
-        """,
-        """
-        import sys.path as path
+    impl Path {
+        public pathText: self -> Text = intrinsic
+    }
+    """,
+    """
+    import sys.path as path
 
-        inspect value: ref path.Path -> Text {
-            path.pathText(value)
-        }
+    inspect value: ref path.Path -> Text {
+        value -> pathText
+    }
 
-        main { }
-        """; ~
+    main { }
+    """; ~
     ] => sources
     sources -> typedIr.lower => ir
     false => found!
     0 => index!
     index! < (ir -> len) -> while {
         ir[index!] => node
-        (node.kind == 6 and node.opcode == -230) -> if {
+        node.kind == 6 and node.opcode == -230 -> if {
             node.operand0 >= 0 -> if {
                 "pathText intrinsic = -230,operand"
             } else {

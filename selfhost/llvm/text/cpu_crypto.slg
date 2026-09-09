@@ -1,0 +1,246 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+
+# First CPU-specialized vertical slice. Identity is the complete resolved
+# std.crypto.aes128.Key.encryptBlock owner path, not the method spelling alone.
+isAes128EncryptBlockFunction functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[functionIndex] => function
+    function.kind == 0
+        and function.sourceModule >= 0
+        and function.sourceModule < (context.modules -> len)
+        and context.modules[function.sourceModule].pathHash == 2286033953050804087
+        and function.symbol >= 0
+        and function.operand1 >= 0
+        and function.nextOperand >= 0
+        and context.ir[function.nextOperand].nextOperand < 0
+        => matches!
+    matches! -> if {
+        context.ranges[function.sourceModule] => range
+        function.symbol < range.symbolCount -> if {
+            context.symbols[range.symbolStart + function.symbol] => symbol
+            symbol.nameToken >= 0 and symbol.nameToken < range.tokenCount
+                -> if {
+                    context.tokens[range.tokenStart + symbol.nameToken] => token
+                    token.span.length == 12 => nameMatches!
+                    "encryptBlock" => expected
+                    UIntSize(0) => byteIndex!
+                    nameMatches! and byteIndex! < token.span.length
+                        -> while {
+                            (context.sources[function.sourceModule] -> byte(token.span.start + byteIndex!)) != (expected -> byte(byteIndex!))
+                                -> if { false => nameMatches! }
+                            byteIndex! + 1 => byteIndex!
+                        }
+                    nameMatches! -> if {
+                        functionIndex -> functionCaptures(context, state) => captures
+                        (captures -> len) == 0 => matches!
+                    } else {
+                        false => matches!
+                    }
+                } else {
+                    false => matches!
+                }
+        } else {
+            false => matches!
+        }
+    }
+    matches!
+}
+
+usesAes128CpuSpecialization context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => usesSpecialization!
+    context.targetArchitecture == 1
+        and context.cpuDispatchPolicy == 1
+        and (context.allowedCpuFeatures / 8 % 2) == 1
+        -> if {
+            0 => functionIndex!
+            functionIndex! < (context.ir -> len) and not usesSpecialization!
+                -> while {
+                    functionIndex! -> isAes128EncryptBlockFunction(context, state)
+                        -> if { true => usesSpecialization! }
+                    functionIndex! + 1 => functionIndex!
+                }
+        }
+    usesSpecialization!
+}
+
+writeAes128FunctionSymbol functionIndex: Int, suffix: Text, context: ref emitterContext.EmitContext -> Unit uses Console {
+    context.ir[functionIndex] => function
+    "@sollang_m" -> print
+    function.sourceModule -> writeDecimal
+    "_s" -> print
+    function.symbol -> writeDecimal
+    suffix -> print
+}
+
+writeAes128Signature functionIndex: Int, suffix: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => function
+    function -> writeIrType(context, state)
+    " " -> print
+    functionIndex -> writeAes128FunctionSymbol(suffix, context)
+    "(" -> print
+    context.ir[function.operand1] -> writeIrType(context, state)
+    " %arg, " -> print
+    context.ir[function.nextOperand] -> writeIrType(context, state)
+    " %arg1)" -> print
+}
+
+writeAes128CallArguments functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => function
+    context.ir[function.operand1] -> writeIrType(context, state)
+    " %arg, " -> print
+    context.ir[function.nextOperand] -> writeIrType(context, state)
+    " %arg1" -> print
+}
+
+aes128ExpandedKeyTypeId receiverTypeId: Int, context: ref emitterContext.EmitContext -> Int {
+    -1 => expandedTypeId!
+    0 => fieldIndex!
+    fieldIndex! < (context.fields -> len) and expandedTypeId! < 0
+        -> while {
+            context.fields[fieldIndex!] => field
+            field.status == 0 and field.ownerType == receiverTypeId and field.ordinal == 0
+                -> if { field.fieldType => expandedTypeId! }
+            fieldIndex! + 1 => fieldIndex!
+        }
+    expandedTypeId!
+}
+
+emitAes128CpuRuntime functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => function
+    context.ir[function.operand1] => receiver
+    context.ir[function.nextOperand] => input
+    receiver.typeId -> aes128ExpandedKeyTypeId(context) => expandedTypeId
+
+    "@sollang_cpu_features = internal global i64 -1, align 8" -> println
+    "@sollang_aes128_selected = internal global ptr " -> print
+    functionIndex -> writeAes128FunctionSymbol("_resolve", context)
+    ", align 8" -> println
+    "declare <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64>, <2 x i64>)" -> println
+    "declare <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64>, <2 x i64>)" -> println
+    "" -> println
+    "define internal i64 @sollang_cpu_features_once() {" -> println
+    "entry:" -> println
+    "  %cached = load atomic i64, ptr @sollang_cpu_features monotonic, align 8" -> println
+    "  %initialized = icmp ne i64 %cached, -1" -> println
+    "  br i1 %initialized, label %ready, label %detect" -> println
+    "detect:" -> println
+    """
+      %leaf1 = call { i32, i32, i32, i32 } asm "xchgq %rbx, ${1:q}\0Acpuid\0Axchgq %rbx, ${1:q}", "={ax},=r,={cx},={dx},0,2"(i32 1, i32 0)
+    """ -> println
+    "  %leaf1_ecx = extractvalue { i32, i32, i32, i32 } %leaf1, 2" -> println
+    "  %leaf1_edx = extractvalue { i32, i32, i32, i32 } %leaf1, 3" -> println
+    "  %sse2_bits = and i32 %leaf1_edx, 67108864" -> println
+    "  %has_sse2 = icmp ne i32 %sse2_bits, 0" -> println
+    "  %sse2_mask = select i1 %has_sse2, i64 1, i64 0" -> println
+    "  %aes_bits = and i32 %leaf1_ecx, 33554432" -> println
+    "  %has_aes = icmp ne i32 %aes_bits, 0" -> println
+    "  %aes_mask = select i1 %has_aes, i64 8, i64 0" -> println
+    "  %detected = or i64 %sse2_mask, %aes_mask" -> println
+    "  %installed = cmpxchg ptr @sollang_cpu_features, i64 -1, i64 %detected monotonic monotonic" -> println
+    "  %observed = extractvalue { i64, i1 } %installed, 0" -> println
+    "  %won = extractvalue { i64, i1 } %installed, 1" -> println
+    "  %features = select i1 %won, i64 %detected, i64 %observed" -> println
+    "  ret i64 %features" -> println
+    "ready:" -> println
+    "  ret i64 %cached" -> println
+    "}" -> println
+    "" -> println
+
+    "define internal " -> print
+    functionIndex -> writeAes128Signature("_x86", context, state)
+    " #1 {" -> println
+    "entry:" -> println
+    "  %expanded_slice = extractvalue " -> print
+    receiver -> writeIrType(context, state)
+    " %arg, 0" -> println
+    "  %expanded = extractvalue " -> print
+    expandedTypeId -> writeSemanticTypeId(context, state)
+    " %expanded_slice, 0" -> println
+    "  %input = extractvalue " -> print
+    input -> writeIrType(context, state)
+    " %arg1, 0" -> println
+    "  %output = call ptr @malloc(i64 16)" -> println
+    "  %allocated = icmp ne ptr %output, null" -> println
+    "  br i1 %allocated, label %encrypt, label %allocation_failed" -> println
+    "allocation_failed:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "encrypt:" -> println
+    "  %input_value = load <2 x i64>, ptr %input, align 1" -> println
+    "  %round0 = load <2 x i64>, ptr %expanded, align 1" -> println
+    "  %state0 = xor <2 x i64> %input_value, %round0" -> println
+    1 => round!
+    round! < 10 -> while {
+        (round! - 1) => previousRound
+        round! * 16 => keyOffset
+        "  %key$(round!)_ptr = getelementptr i8, ptr %expanded, i64 $(keyOffset)" -> println
+        "  %key$(round!) = load <2 x i64>, ptr %key$(round!)_ptr, align 1" -> println
+        "  %state$(round!) = call <2 x i64> @llvm.x86.aesni.aesenc(<2 x i64> %state$(previousRound), <2 x i64> %key$(round!))" -> println
+        round! + 1 => round!
+    }
+    "  %key10_ptr = getelementptr i8, ptr %expanded, i64 160" -> println
+    "  %key10 = load <2 x i64>, ptr %key10_ptr, align 1" -> println
+    "  %state10 = call <2 x i64> @llvm.x86.aesni.aesenclast(<2 x i64> %state9, <2 x i64> %key10)" -> println
+    "  store <2 x i64> %state10, ptr %output, align 1" -> println
+    "  %result0 = insertvalue " -> print
+    function -> writeIrType(context, state)
+    " poison, ptr %output, 0" -> println
+    "  %result = insertvalue " -> print
+    function -> writeIrType(context, state)
+    " %result0, i64 16, 1" -> println
+    "  ret " -> print
+    function -> writeIrType(context, state)
+    " %result" -> println
+    "}" -> println
+    "" -> println
+
+    "define internal " -> print
+    functionIndex -> writeAes128Signature("_resolve", context, state)
+    " {" -> println
+    "entry:" -> println
+    "  %features = call i64 @sollang_cpu_features_once()" -> println
+    "  %aes_feature = and i64 %features, 8" -> println
+    "  %has_aes = icmp eq i64 %aes_feature, 8" -> println
+    "  %selected = select i1 %has_aes, ptr " -> print
+    functionIndex -> writeAes128FunctionSymbol("_x86", context)
+    ", ptr " -> print
+    functionIndex -> writeAes128FunctionSymbol("_portable", context)
+    "" -> println
+    "  store atomic ptr %selected, ptr @sollang_aes128_selected monotonic, align 8" -> println
+    "  %result = tail call " -> print
+    function -> writeIrType(context, state)
+    " %selected(" -> print
+    functionIndex -> writeAes128CallArguments(context, state)
+    ")" -> println
+    "  ret " -> print
+    function -> writeIrType(context, state)
+    " %result" -> println
+    "}" -> println
+    "" -> println
+
+    "define " -> print
+    functionIndex -> writeAes128Signature("", context, state)
+    " {" -> println
+    "entry:" -> println
+    "  %selected = load atomic ptr, ptr @sollang_aes128_selected monotonic, align 8" -> println
+    "  %result = tail call " -> print
+    function -> writeIrType(context, state)
+    " %selected(" -> print
+    functionIndex -> writeAes128CallArguments(context, state)
+    ")" -> println
+    "  ret " -> print
+    function -> writeIrType(context, state)
+    " %result" -> println
+    "}" -> println
+    """
+    attributes #1 = { nounwind "target-features"="+aes,+sse2" }
+    """ -> println
+    "" -> println
+}
+
+emitAes128FunctionSet functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    functionIndex -> emitFunctionNamed("_portable", context, state) => functionEnd
+    functionIndex -> emitAes128CpuRuntime(context, state)
+    functionEnd
+}

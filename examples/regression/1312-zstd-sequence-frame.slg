@@ -1,0 +1,56 @@
+# RFC 8878 compressed blocks execute RLE FSE tables and same-frame Repeat mode.
+import std.compress.zstd as zstd
+
+matches bytes: [UInt8], expected: [UInt8] -> Bool {
+    (bytes -> len) == (expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (expected -> len) -> while {
+        bytes[index!] == expected[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+run: -> Result<Unit, zstd.Error> uses Console {
+    zstd.Limits {
+        maxEncodedBytes: 128
+        maxDecodedBytes: 64
+        # The independent zstd frame advertises its standard 2 MiB window.
+        maxWindowBytes: 2_097_152
+        maxFrames: 1
+        maxSkippableFrameBytes: 0
+    } -> codec(zstd.FrameOptions { checksum: false })? => codec
+
+    # Raw literals "abc", one RLE-coded sequence, offset 3, match length 6.
+    [UInt8(40), 181, 47, 253, 0, 0, 85, 0, 0,
+        24, 97, 98, 99, 1, 84, 3, 2, 3, 6] => oneBlock
+    codec -> decompress(oneBlock)? => oneOutput
+    [UInt8(97), 98, 99, 97, 98, 99, 97, 98, 99] => oneExpected
+    "zstd-sequence-frame=$(oneOutput -> matches(oneExpected))" -> println
+
+    # The second compressed block reuses all three FSE tables with mode 3.
+    [UInt8(40), 181, 47, 253, 0, 0, 84, 0, 0,
+        24, 97, 98, 99, 1, 84, 3, 2, 3, 6,
+        61, 0, 0, 24, 100, 101, 102, 1, 252, 6] => repeatedTables
+    codec -> decompress(repeatedTables)? => repeatedOutput
+    [UInt8(97), 98, 99, 97, 98, 99, 97, 98, 99,
+        100, 101, 102, 100, 101, 102, 100, 101, 102] => repeatedExpected
+    "zstd-sequence-repeat=$(repeatedOutput -> matches(repeatedExpected))" -> println
+
+    # zstd 1.5.x -3 --no-check independently emits predefined FSE tables here.
+    [UInt8(40), 181, 47, 253, 0, 88, 77, 0, 0,
+        24, 97, 98, 99, 1, 0, 134, 110, 8] => officialPredefined
+    codec -> decompress(officialPredefined)? => officialOutput
+    [UInt8(97), 98, 99, 97, 98, 99, 97, 98, 99, 97, 98, 99,
+        97, 98, 99, 97, 98, 99, 97, 98, 99, 97, 98, 99,
+        97, 98, 99, 97, 98, 99] => officialExpected
+    "zstd-sequence-official=$(officialOutput -> matches(officialExpected))" -> println
+    Result<Unit, zstd.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(error) { "zstd-sequence-error=$(error.offset)" -> println }
+    }
+}

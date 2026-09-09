@@ -1,0 +1,627 @@
+namespace std.net.quic.frame
+
+import std.net.quic.error as errors
+import std.net.quic.frame as model
+import std.net.quic.transport_parameters as transport
+import std.net.quic.varint
+
+public struct Crypto {
+    public offset: UInt64
+    public data: [UInt8; ~]
+}
+
+public struct Stream {
+    public id: UInt64
+    public offset: UInt64
+    public fin: Bool
+    public data: [UInt8; ~]
+}
+
+public struct ResetStream {
+    public id: UInt64
+    public applicationErrorCode: UInt64
+    public finalSize: UInt64
+}
+
+public struct StopSending {
+    public id: UInt64
+    public applicationErrorCode: UInt64
+}
+
+public struct Datagram {
+    public data: [UInt8; ~]
+}
+
+public struct MaxStreamData {
+    public id: UInt64
+    public maximum: UInt64
+}
+
+public struct MaxStreams {
+    public bidirectional: Bool
+    public maximum: UInt64
+}
+
+public struct StreamDataBlocked {
+    public id: UInt64
+    public limit: UInt64
+}
+
+public struct StreamsBlocked {
+    public bidirectional: Bool
+    public limit: UInt64
+}
+
+public struct ConnectionClose {
+    public application: Bool
+    public errorCode: UInt64
+    public frameType: UInt64
+    public reason: [UInt8; ~]
+}
+
+public struct NewConnectionId {
+    public sequence: UInt64
+    public retirePriorTo: UInt64
+    public connectionId: [UInt8; ~]
+    public statelessResetToken: [UInt8; 16]
+}
+
+public struct AckRange {
+    public gap: UInt64
+    public rangeLength: UInt64
+}
+
+public struct Ack {
+    public largestAcknowledged: UInt64
+    public ackDelay: UInt64
+    public firstRange: UInt64
+    public ranges: [AckRange; ~]
+}
+
+public enum Value {
+    Padding(UInt64)
+    Ping
+    Ack(Ack)
+    ResetStream(ResetStream)
+    StopSending(StopSending)
+    Crypto(Crypto)
+    Stream(Stream)
+    Datagram(Datagram)
+    MaxData(UInt64)
+    MaxStreamData(MaxStreamData)
+    MaxStreams(MaxStreams)
+    DataBlocked(UInt64)
+    StreamDataBlocked(StreamDataBlocked)
+    StreamsBlocked(StreamsBlocked)
+    NewConnectionId(NewConnectionId)
+    RetireConnectionId(UInt64)
+    ConnectionClose(ConnectionClose)
+    HandshakeDone
+}
+
+public struct Decoded {
+    public frame: Value
+    public nextOffset: UIntSize
+}
+
+error kind: errors.Kind, code: UInt64 -> errors.Error {
+    errors.Error { kind: kind, code: code }
+}
+
+appendVarint output: mut [UInt8; ~], value: UInt64 -> Result<Bool, errors.Error> {
+    varint.encode(value)? => encoded
+    0 => index!
+    index! < (encoded -> len) -> while {
+        output -> push(encoded[index!])
+        index! + 1 => index!
+    }
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+encodePadding count: UInt64 -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    UInt64(0) => index!
+    index! < count -> while {
+        output! -> push(0)
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodePing: -> Result<[UInt8; ~], errors.Error> {
+    varint.encode(1)
+}
+
+validateAck ack: ref Ack -> Result<Bool, errors.Error> {
+    ack.firstRange <= ack.largestAcknowledged -> unless {
+        Result<Bool, errors.Error>.Err(error(errors.Kind.ProtocolViolation, ack.firstRange)) -> return
+    }
+    ack.largestAcknowledged - ack.firstRange => smallest!
+    0 => index!
+    index! < (ack.ranges -> len) -> while {
+        ack.ranges[index!] => range
+        range.gap + 2 <= smallest! -> unless {
+            Result<Bool, errors.Error>.Err(error(errors.Kind.ProtocolViolation, range.gap)) -> return
+        }
+        smallest! - range.gap - 2 => largest
+        range.rangeLength <= largest -> unless {
+            Result<Bool, errors.Error>.Err(error(errors.Kind.ProtocolViolation, range.rangeLength)) -> return
+        }
+        largest - range.rangeLength => smallest!
+        index! + 1 => index!
+    }
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+impl Ack {
+    public acknowledges: self, packetNumber: UInt64 -> Result<Bool, errors.Error> {
+        validateAck(self)? => valid
+        packetNumber > self.largestAcknowledged -> if {
+            Result<Bool, errors.Error>.Ok(false) -> return
+        }
+        self.largestAcknowledged - self.firstRange => smallest!
+        packetNumber >= smallest! -> if {
+            Result<Bool, errors.Error>.Ok(true) -> return
+        }
+        0 => index!
+        index! < (self.ranges -> len) -> while {
+            self.ranges[index!] => range
+            smallest! - range.gap - 2 => largest
+            largest - range.rangeLength => nextSmallest
+            packetNumber >= nextSmallest and packetNumber <= largest
+                -> if {
+                    Result<Bool, errors.Error>.Ok(true) -> return
+                }
+            nextSmallest => smallest!
+            index! + 1 => index!
+        }
+        Result<Bool, errors.Error>.Ok(false)
+    }
+}
+
+encodeAck ack: move Ack -> Result<[UInt8; ~], errors.Error> {
+    validateAck(ack)? => valid
+    [UInt8; ~] => output!
+    output! -> push(2)
+    output! -> appendVarint(ack.largestAcknowledged)? => largestWritten
+    output! -> appendVarint(ack.ackDelay)? => delayWritten
+    output! -> appendVarint(UInt64(ack.ranges -> len))? => countWritten
+    output! -> appendVarint(ack.firstRange)? => firstWritten
+    0 => index!
+    index! < (ack.ranges -> len) -> while {
+        output! -> appendVarint(ack.ranges[index!].gap)? => gapWritten
+        output! -> appendVarint(ack.ranges[index!].rangeLength)? => rangeWritten
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeCrypto crypto: move Crypto -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    output! -> push(6)
+    output! -> appendVarint(crypto.offset) => offsetResult
+    offsetResult? => offsetWritten
+    output! -> appendVarint(UInt64(crypto.data -> len)) => lengthResult
+    lengthResult? => lengthWritten
+    output! -> appendBytes(crypto.data)
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeStream streamFrame: move Stream -> Result<[UInt8; ~], errors.Error> {
+    UInt8(10) => frameType!
+    streamFrame.offset > 0 -> if { frameType! + 4 => frameType! }
+    streamFrame.fin -> if { frameType! + 1 => frameType! }
+    [UInt8; ~] => output!
+    output! -> push(frameType!)
+    output! -> appendVarint(streamFrame.id) => idResult
+    idResult? => idWritten
+    streamFrame.offset > 0 -> if {
+        output! -> appendVarint(streamFrame.offset) => offsetResult
+        offsetResult? => offsetWritten
+    }
+    output! -> appendVarint(UInt64(streamFrame.data -> len)) => lengthResult
+    lengthResult? => lengthWritten
+    output! -> appendBytes(streamFrame.data)
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeResetStream value: ResetStream -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    output! -> push(4)
+    output! -> appendVarint(value.id)? => idWritten
+    output! -> appendVarint(value.applicationErrorCode)? => errorWritten
+    output! -> appendVarint(value.finalSize)? => finalSizeWritten
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeStopSending value: StopSending -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    output! -> push(5)
+    output! -> appendVarint(value.id)? => idWritten
+    output! -> appendVarint(value.applicationErrorCode)? => errorWritten
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeDatagram datagram: move Datagram -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    output! -> push(49)
+    output! -> appendVarint(UInt64(datagram.data -> len)) => lengthResult
+    lengthResult? => lengthWritten
+    output! -> appendBytes(datagram.data)
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeLimit frameType: UInt64, value: UInt64 -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    output! -> appendVarint(frameType)? => typeWritten
+    output! -> appendVarint(value)? => valueWritten
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeStreamCountLimit frameType: UInt64, value: UInt64 -> Result<[UInt8; ~], errors.Error> {
+    value -> transport.streamCount -> when {
+        Err(invalid) {
+            Result<[UInt8; ~], errors.Error>.Err(
+            error(errors.Kind.Transport, errors.frameEncodingError())) -> return
+        }
+        Ok(count) { encodeLimit(frameType, count -> value) }
+    }
+}
+
+decodeStreamCount value: UInt64 -> Result<UInt64, errors.Error> {
+    value -> transport.streamCount -> when {
+        Err(invalid) {
+            Result<UInt64, errors.Error>.Err(
+            error(errors.Kind.Transport, errors.frameEncodingError()))
+        }
+        Ok(count) { Result<UInt64, errors.Error>.Ok(count -> value) }
+    }
+}
+
+encodeStreamLimit frameType: UInt64, id: UInt64, value: UInt64 -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    output! -> appendVarint(frameType)? => typeWritten
+    output! -> appendVarint(id)? => idWritten
+    output! -> appendVarint(value)? => valueWritten
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeConnectionClose close: move ConnectionClose -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    output! -> push(close.application -> if { 29 } else { 28 })
+    output! -> appendVarint(close.errorCode)? => errorWritten
+    close.application -> unless {
+        output! -> appendVarint(close.frameType)? => frameTypeWritten
+    }
+    output! -> appendVarint(UInt64(close.reason -> len))? => reasonLengthWritten
+    output! -> appendBytes(close.reason)
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+encodeNewConnectionId value: move NewConnectionId -> Result<[UInt8; ~], errors.Error> {
+    (value.connectionId -> len) >= 1
+        and (value.connectionId -> len) <= 20
+        and value.retirePriorTo <= value.sequence -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.ProtocolViolation, value.sequence)) -> return
+        }
+    [UInt8; ~] => output!
+    output! -> appendVarint(24)? => typeWritten
+    output! -> appendVarint(value.sequence)? => sequenceWritten
+    output! -> appendVarint(value.retirePriorTo)? => retireWritten
+    output! -> push(UInt8(value.connectionId -> len))
+    output! -> appendBytes(value.connectionId)
+    output! -> appendBytes(value.statelessResetToken)
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+public encodeValue frame: move Value -> Result<[UInt8; ~], errors.Error> {
+    frame -> when {
+        Padding(count) => encodePadding(count)
+        Ping => encodePing()
+        Ack(ack) => encodeAck(ack)
+        ResetStream(value) => encodeResetStream(value)
+        StopSending(value) => encodeStopSending(value)
+        Crypto(crypto) => encodeCrypto(crypto)
+        Stream(streamFrame) => encodeStream(streamFrame)
+        Datagram(datagram) => encodeDatagram(datagram)
+        MaxData(maximum) => encodeLimit(16, maximum)
+        MaxStreamData(limit) => encodeStreamLimit(17, limit.id, limit.maximum)
+        MaxStreams(limit) => encodeStreamCountLimit(limit.bidirectional
+            -> if { 18 } else { 19 }, limit.maximum)
+        DataBlocked(limit) => encodeLimit(20, limit)
+        StreamDataBlocked(blocked) => encodeStreamLimit(21, blocked.id, blocked.limit)
+        StreamsBlocked(blocked) => encodeStreamCountLimit(blocked.bidirectional
+            -> if { 22 } else { 23 }, blocked.limit)
+        NewConnectionId(value) => encodeNewConnectionId(value)
+        RetireConnectionId(sequence) => encodeLimit(25, sequence)
+        ConnectionClose(close) => encodeConnectionClose(close)
+        HandshakeDone => varint.encode(30)
+    }
+}
+
+public encodeAll frames: mut [Value; ~] -> Result<[UInt8; ~], errors.Error> {
+    [UInt8; ~] => output!
+    frames -> len => remaining!
+    remaining! > 0 -> while {
+        frames -> take(0) => value
+        encodeValue(value)? => encoded
+        output! -> appendBytes(encoded)
+        remaining! - 1 => remaining!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(output!)
+}
+
+copyPayload bytes: [UInt8], offset: UIntSize, length: UInt64 -> Result<[UInt8; ~], errors.Error> {
+    length > UInt64(UIntSize(bytes -> len) - offset)
+        -> if {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Truncated, UInt64(offset))) -> return
+        }
+    [UInt8; ~] => data!
+    UInt64(0) => index!
+    index! < length -> while {
+        data! -> push(bytes[Int(offset + UIntSize(index!))])
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], errors.Error>.Ok(data!)
+}
+
+decodePadding bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    offset => cursor!
+    cursor! < UIntSize(bytes -> len) and bytes[Int(cursor!)] == 0
+        -> while {
+            cursor! + 1 => cursor!
+        }
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.Padding(UInt64(cursor! - offset))
+        nextOffset: cursor!
+    })
+}
+
+decodeCrypto bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => decodedOffset
+    varint.decode(bytes, decodedOffset.nextOffset)? => decodedLength
+    copyPayload(bytes, decodedLength.nextOffset, decodedLength.value)? => data
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.Crypto(Crypto { offset: decodedOffset.value, data: data })
+        nextOffset: decodedLength.nextOffset + UIntSize(decodedLength.value)
+    })
+}
+
+decodeAck bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => largest
+    varint.decode(bytes, largest.nextOffset)? => delay
+    varint.decode(bytes, delay.nextOffset)? => rangeCount
+    varint.decode(bytes, rangeCount.nextOffset)? => firstRange
+    [AckRange; ~] => ranges!
+    firstRange.nextOffset => cursor!
+    UInt64(0) => index!
+    index! < rangeCount.value -> while {
+        varint.decode(bytes, cursor!)? => gap
+        varint.decode(bytes, gap.nextOffset)? => rangeLength
+        ranges! -> push(AckRange { gap: gap.value, rangeLength: rangeLength.value })
+        rangeLength.nextOffset => cursor!
+        index! + 1 => index!
+    }
+    Ack {
+        largestAcknowledged: largest.value
+        ackDelay: delay.value
+        firstRange: firstRange.value
+        ranges: ranges!
+    } => ack
+    validateAck(ack)? => valid
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.Ack(ack)
+        nextOffset: cursor!
+    })
+}
+
+decodeResetStream bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => id
+    varint.decode(bytes, id.nextOffset)? => applicationErrorCode
+    varint.decode(bytes, applicationErrorCode.nextOffset)? => finalSize
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.ResetStream(ResetStream {
+            id: id.value
+            applicationErrorCode: applicationErrorCode.value
+            finalSize: finalSize.value
+        })
+        nextOffset: finalSize.nextOffset
+    })
+}
+
+decodeStopSending bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => id
+    varint.decode(bytes, id.nextOffset)? => applicationErrorCode
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.StopSending(StopSending {
+            id: id.value
+            applicationErrorCode: applicationErrorCode.value
+        })
+        nextOffset: applicationErrorCode.nextOffset
+    })
+}
+
+decodeStream bytes: [UInt8], offset: UIntSize, frameType: UInt64 -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => decodedId
+    frameType % 8 >= 4 -> if {
+        varint.decode(bytes, decodedId.nextOffset)?
+    } else {
+        varint.Decoded { value: 0, nextOffset: decodedId.nextOffset }
+    } => decodedOffset
+    frameType % 4 >= 2 -> if {
+        varint.decode(bytes, decodedOffset.nextOffset)?
+    } else {
+        varint.Decoded {
+            value: UInt64(UIntSize(bytes -> len) - decodedOffset.nextOffset)
+            nextOffset: decodedOffset.nextOffset
+        }
+    } => decodedLength
+    copyPayload(bytes, decodedLength.nextOffset, decodedLength.value)? => data
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.Stream(Stream {
+            id: decodedId.value
+            offset: decodedOffset.value
+            fin: frameType % 2 == 1
+            data: data
+        })
+        nextOffset: decodedLength.nextOffset + UIntSize(decodedLength.value)
+    })
+}
+
+decodeDatagram bytes: [UInt8], offset: UIntSize, hasLength: Bool -> Result<Decoded, errors.Error> {
+    hasLength -> if {
+        varint.decode(bytes, offset)?
+    } else {
+        varint.Decoded { value: UInt64(UIntSize(bytes -> len) - offset), nextOffset: offset }
+    } => decodedLength
+    copyPayload(bytes, decodedLength.nextOffset, decodedLength.value)? => data
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.Datagram(Datagram { data: data })
+        nextOffset: decodedLength.nextOffset + UIntSize(decodedLength.value)
+    })
+}
+
+decodeLimit bytes: [UInt8], offset: UIntSize, frameType: UInt64 -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => value
+    value.value => limit!
+    frameType == 18 or frameType == 19 or frameType == 22 or frameType == 23
+        -> if {
+            value.value -> decodeStreamCount? => limit!
+        }
+    frameType -> when {
+        == 16 { model.Value.MaxData(value.value) }
+        18..19 { model.Value.MaxStreams(MaxStreams { bidirectional: frameType == 18, maximum: limit! }) }
+        == 20 { model.Value.DataBlocked(value.value) }
+        22..23 { model.Value.StreamsBlocked(StreamsBlocked { bidirectional: frameType == 22, limit: limit! }) }
+        else { Result<Decoded, errors.Error>.Err(error(errors.Kind.ProtocolViolation, frameType)) -> return }
+    } => decodedFrame
+    Result<Decoded, errors.Error>.Ok(Decoded { frame: decodedFrame, nextOffset: value.nextOffset })
+}
+
+decodeStreamLimit bytes: [UInt8], offset: UIntSize, frameType: UInt64 -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => id
+    varint.decode(bytes, id.nextOffset)? => value
+    frameType -> when {
+        == 17 { model.Value.MaxStreamData(MaxStreamData { id: id.value, maximum: value.value }) }
+        == 21 { model.Value.StreamDataBlocked(StreamDataBlocked { id: id.value, limit: value.value }) }
+        else { Result<Decoded, errors.Error>.Err(error(errors.Kind.ProtocolViolation, frameType)) -> return }
+    } => decodedFrame
+    Result<Decoded, errors.Error>.Ok(Decoded { frame: decodedFrame, nextOffset: value.nextOffset })
+}
+
+decodeConnectionClose bytes: [UInt8], offset: UIntSize, application: Bool -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => errorCode
+    application -> if {
+        varint.Decoded { value: 0, nextOffset: errorCode.nextOffset }
+    } else {
+        varint.decode(bytes, errorCode.nextOffset)?
+    } => frameType
+    varint.decode(bytes, frameType.nextOffset)? => reasonLength
+    copyPayload(bytes, reasonLength.nextOffset, reasonLength.value)? => reason
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.ConnectionClose(ConnectionClose {
+            application: application
+            errorCode: errorCode.value
+            frameType: frameType.value
+            reason: reason
+        })
+        nextOffset: reasonLength.nextOffset + UIntSize(reasonLength.value)
+    })
+}
+
+decodeNewConnectionId bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => sequence
+    varint.decode(bytes, sequence.nextOffset)? => retirePriorTo
+    retirePriorTo.value <= sequence.value -> unless {
+        Result<Decoded, errors.Error>.Err(error(errors.Kind.ProtocolViolation, retirePriorTo.value)) -> return
+    }
+    retirePriorTo.nextOffset < UIntSize(bytes -> len)
+        -> unless {
+            Result<Decoded, errors.Error>.Err(error(errors.Kind.Truncated, UInt64(retirePriorTo.nextOffset))) -> return
+        }
+    bytes[Int(retirePriorTo.nextOffset)] => connectionIdLength
+    connectionIdLength >= 1 and connectionIdLength <= 20
+        -> unless {
+            Result<Decoded, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(connectionIdLength))) -> return
+        }
+    retirePriorTo.nextOffset + 1 => connectionIdOffset
+    copyPayload(bytes, connectionIdOffset, UInt64(connectionIdLength))? => connectionId
+    connectionIdOffset + UIntSize(connectionIdLength) => tokenOffset
+    copyPayload(bytes, tokenOffset, 16)? => tokenBytes
+    [UInt8(0); 16] => token!
+    0 => index!
+    index! < 16 -> while {
+        tokenBytes[index!] => token![index!]
+        index! + 1 => index!
+    }
+    Result<Decoded, errors.Error>.Ok(Decoded {
+        frame: model.Value.NewConnectionId(NewConnectionId {
+            sequence: sequence.value
+            retirePriorTo: retirePriorTo.value
+            connectionId: connectionId
+            statelessResetToken: token!
+        })
+        nextOffset: tokenOffset + 16
+    })
+}
+
+public decode bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
+    varint.decode(bytes, offset)? => decodedType
+    decodedType.value => frameType
+    frameType -> when {
+        == 0 { decodePadding(bytes, offset) }
+        == 1 {
+            Result<Decoded, errors.Error>.Ok(Decoded { frame: model.Value.Ping, nextOffset: decodedType.nextOffset })
+        }
+        == 2 { decodeAck(bytes, decodedType.nextOffset) }
+        == 4 { decodeResetStream(bytes, decodedType.nextOffset) }
+        == 5 { decodeStopSending(bytes, decodedType.nextOffset) }
+        == 6 { decodeCrypto(bytes, decodedType.nextOffset) }
+        8..15 { decodeStream(bytes, decodedType.nextOffset, frameType) }
+        == 16 { decodeLimit(bytes, decodedType.nextOffset, frameType) }
+        == 17 { decodeStreamLimit(bytes, decodedType.nextOffset, frameType) }
+        18..20 { decodeLimit(bytes, decodedType.nextOffset, frameType) }
+        == 21 { decodeStreamLimit(bytes, decodedType.nextOffset, frameType) }
+        22..23 { decodeLimit(bytes, decodedType.nextOffset, frameType) }
+        == 24 { decodeNewConnectionId(bytes, decodedType.nextOffset) }
+        == 25 {
+            varint.decode(bytes, decodedType.nextOffset)? => sequence
+            Result<Decoded, errors.Error>.Ok(Decoded {
+                frame: model.Value.RetireConnectionId(sequence.value)
+                nextOffset: sequence.nextOffset
+            })
+        }
+        28..29 { decodeConnectionClose(bytes, decodedType.nextOffset, frameType == 29) }
+        == 30 {
+            Result<Decoded, errors.Error>.Ok(Decoded {
+                frame: model.Value.HandshakeDone
+                nextOffset: decodedType.nextOffset
+            })
+        }
+        48..49 { decodeDatagram(bytes, decodedType.nextOffset, frameType == 49) }
+        else { Result<Decoded, errors.Error>.Err(error(errors.Kind.ProtocolViolation, frameType)) }
+    }
+}
+
+public decodeAll bytes: [UInt8] -> Result<[Value; ~], errors.Error> {
+    [Value; ~] => frames!
+    UIntSize(0) => offset!
+    offset! < UIntSize(bytes -> len) -> while {
+        decode(bytes, offset!)? => decoded
+        decoded.nextOffset => nextOffset
+        nextOffset > offset! -> unless {
+            Result<[Value; ~], errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(offset!))) -> return
+        }
+        frames! -> push(decoded.frame)
+        nextOffset => offset!
+    }
+    Result<[Value; ~], errors.Error>.Ok(frames!)
+}

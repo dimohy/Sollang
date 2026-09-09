@@ -1,0 +1,117 @@
+# RFC 8878 direct-weight Huffman literals: one stream, four streams, and treeless reuse.
+import std.compress.zstd as zstd
+import std.compress.zstd.error as zstd_errors
+
+kindCode kind: zstd_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    InputLimitExceeded { 1 }
+    OutputLimitExceeded { 2 }
+    WindowLimitExceeded { 3 }
+    FrameLimitExceeded { 4 }
+    SkippableLimitExceeded { 5 }
+    TruncatedInput { 6 }
+    InvalidMagic { 7 }
+    InvalidHeader { 8 }
+    UnsupportedDictionary { 9 }
+    ChecksumMismatch { 10 }
+    UnsupportedCompressedBlock { 11 }
+    InvalidBlock { 12 }
+    SizeMismatch { 13 }
+}
+
+appendAbTable output: mut [UInt8; ~] -> Unit {
+    output -> push(225)
+    0 => index!
+    index! < 48 -> while {
+        output -> push(0)
+        index! + 1 => index!
+    }
+    output -> push(1)
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+rejects codec: zstd.Codec, input: [UInt8], expectedKind: Int -> Result<Bool, zstd.Error> {
+    codec -> decoder? => decoder!
+    decoder! -> write(input)? => accepted
+    [UInt8(9); ~] => output!
+    decoder! -> finish(output!) -> when {
+        Ok(_) { Result<Bool, zstd.Error>.Ok(false) }
+        Err(error) {
+            Result<Bool, zstd.Error>.Ok(
+                (error.kind -> kindCode) == expectedKind
+                    and (output! -> len) == 1
+                    and output![0] == 9)
+        }
+    }
+}
+
+run: -> Result<Unit, zstd.Error> uses Console {
+    zstd.Limits {
+        maxEncodedBytes: 512
+        maxDecodedBytes: 64
+        maxWindowBytes: 1_024
+        maxFrames: 1
+        maxSkippableFrameBytes: 0
+    } -> codec(zstd.FrameOptions { checksum: false })? => codec
+
+    # Direct weights define symbols 'a' and 'b'; 0x2a decodes to "ababa".
+    [UInt8(40), 181, 47, 253, 0, 0, 189, 1, 0, 82, 192, 12; ~] => oneStream!
+    oneStream! -> appendAbTable
+    oneStream! -> push(42)
+    oneStream! -> push(0)
+    codec -> decompress(oneStream!)? => oneOutput
+    [UInt8(97), 98, 97, 98, 97] => ababa
+    "zstd-huffman-one=$(oneOutput -> matches(ababa))" -> println
+
+    # Four independent streams use a six-byte jump table and exact output quarters.
+    [UInt8(40), 181, 47, 253, 0, 0, 5, 2, 0, 70, 1, 15; ~] => fourStreams!
+    fourStreams! -> appendAbTable
+    [UInt8(1), 0, 1, 0, 1, 0, 42, 53, 48, 63, 0] => fourTail
+    0 => fourIndex!
+    fourIndex! < (fourTail -> len) -> while {
+        fourStreams! -> push(fourTail[fourIndex!])
+        fourIndex! + 1 => fourIndex!
+    }
+    codec -> decompress(fourStreams!)? => fourOutput
+    [UInt8(97), 98, 97, 98, 97, 98, 97, 98, 97, 98,
+        98, 97, 97, 97, 97, 98, 98, 98, 98, 98] => fourExpected
+    "zstd-huffman-four=$(fourOutput -> matches(fourExpected))" -> println
+
+    # A second treeless block reuses the table installed by the first block.
+    [UInt8(40), 181, 47, 253, 0, 0, 188, 1, 0, 82, 192, 12; ~] => treeless!
+    treeless! -> appendAbTable
+    [UInt8(42), 0, 45, 0, 0, 83, 64, 0, 53, 0] => treelessTail
+    0 => treeIndex!
+    treeIndex! < (treelessTail -> len) -> while {
+        treeless! -> push(treelessTail[treeIndex!])
+        treeIndex! + 1 => treeIndex!
+    }
+    codec -> decompress(treeless!)? => treelessOutput
+    [UInt8(97), 98, 97, 98, 97, 98, 97, 98, 97, 98] => treelessExpected
+    "zstd-huffman-treeless=$(treelessOutput -> matches(treelessExpected))" -> println
+
+    # A zero terminal byte has no final-bit marker and must not commit output.
+    oneStream! -> take((oneStream! -> len) - 2) => oldTail
+    oneStream! -> take((oneStream! -> len) - 1) => oldSequences
+    oneStream! -> push(0)
+    oneStream! -> push(0)
+    codec -> rejects(oneStream!, 12)? => terminalRejected
+    "zstd-huffman-terminal=$(terminalRejected)" -> println
+    Result<Unit, zstd.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(error) { "zstd-error=$(error.kind -> kindCode)" -> println }
+    }
+}

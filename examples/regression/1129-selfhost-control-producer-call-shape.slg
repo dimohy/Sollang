@@ -1,0 +1,72 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# A call that produces a following control is not itself a trailing consumer.
+# The final Typed IR must preserve that direction while keeping the control's
+# canonical subject on the call result.
+main {
+    """"
+        namespace sample
+
+        enum Frame {
+            Data(Int)
+            Padding
+        }
+
+        main {
+            [Frame.Data(7),; ~] => frames!
+            frames! -> take(0) -> when {
+                Data(value) { value }
+                Padding { 0 }
+            } => selected
+            selected -> println
+        }
+    """" => sampleSource
+
+    [sampleSource,; ~] -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    0 => indexedProducerWrappers!
+    0 => astIndex!
+    astIndex! < (context.controlProducerWrapperByAst -> len)
+        -> while {
+        context.controlProducerWrapperByAst[astIndex!]
+            -> if {
+            indexedProducerWrappers! + 1 => indexedProducerWrappers!
+        }
+        astIndex! + 1 => astIndex!
+    }
+    0 => producerWrappers!
+    0 => invalidTrailingCalls!
+    0 => takeControlSubjects!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.operand0 >= 0
+            and node.operand1 >= 0
+            and (ir[node.operand1].kind == 18
+            or ir[node.operand1].kind == 27
+            or ir[node.operand1].kind == 33
+            or ir[node.operand1].kind == 34)
+            and ir[node.operand1].operand0 == node.operand0
+            -> if {
+                node -> typedIr.isTransparentControlProducerWrapper
+                    -> if {
+                        producerWrappers! + 1 => producerWrappers!
+                    } else {
+                        node.kind == 6 or node.kind == 9
+                            -> if { invalidTrailingCalls! + 1 => invalidTrailingCalls! }
+                    }
+            }
+        node.opcode == -213
+            and node.parent >= 0
+            and (ir[node.parent] -> typedIr.isTransparentControlProducerWrapper)
+            and ir[node.parent].operand0 == index!
+            and ir[node.parent].operand1 >= 0
+            and ir[ir[node.parent].operand1].operand0 == index!
+            -> if {
+                takeControlSubjects! + 1 => takeControlSubjects!
+            }
+        index! + 1 => index!
+    }
+    "indexed wrappers=$(indexedProducerWrappers!),control producer wrappers=$(producerWrappers!),invalid trailing calls=$(invalidTrailingCalls!),take control subjects=$(takeControlSubjects!)" -> println
+}

@@ -1,0 +1,56 @@
+import std.net as net
+import std.net.socket as socket
+
+sendRequest endpoint: net.Endpoint -> Result<Unit, socket.SocketError> uses Network {
+    endpoint -> connect? => connection
+    [UInt8; ~] => bytes!
+    bytes! -> push(112)
+    bytes! -> push(105)
+    bytes! -> push(110)
+    bytes! -> push(103)
+    connection -> sendAll(bytes!)?
+    connection -> close
+    Result<Unit, socket.SocketError>.Ok
+}
+
+main {
+    net.loopback(43180) -> unified => endpoint
+    socket.ListenOptions {
+        endpoint: endpoint
+        backlog: 8
+        reuseAddress: true
+    } -> listen -> when {
+        Err(error) { "listen-error=$(error.code)" -> println }
+        Ok(listener) {
+            endpoint -> sendRequest -> when {
+                Err(error) { "send-error=$(error.code)" -> println }
+                Ok(_) {
+                    listener -> accept -> when {
+                        Err(error) { "accept-error=$(error.code)" -> println }
+                        Ok(connection) {
+                            [UInt8; ~] => buffer!
+                            buffer! -> reserve(16)
+                            buffer! -> push(104)
+                            buffer! -> push(105)
+                            connection -> receiveAppend(buffer!) -> when {
+                                Err(error) { "receive-error=$(error.code)" -> println }
+                                Ok(received) {
+                                    connection -> close
+                                    listener -> close
+                                    received == 4
+                                        and (buffer! -> len) == 6
+                                        and buffer![0] == 104
+                                        and buffer![1] == 105
+                                        and buffer![2] == 112
+                                        and buffer![5] == 103
+                                        -> if { "socket-receive-append=ok" } else { "socket-receive-append=failed" }
+                                        -> println
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,49 @@
+import sollang.compiler.llvm.text as llvm
+
+# A readonly parameter cannot receive the updated heap header produced by a
+# collection mutation. Checked self-host emission must diagnose the source
+# contract before it can fabricate an undefined local slot or emit malformed
+# LLVM.
+main {
+    [
+    """
+    invalidPush values: [Text; ~] -> Unit {
+        values -> push("llvm")
+    }
+
+    invalidTake values: [Int; ~] -> Int {
+        values -> take(0)
+    }
+
+    invalidPut values: {Text: Int} -> Unit {
+        values -> put("parser", 1)
+    }
+
+    invalidReserve values: [Int; ~] -> Unit {
+        values -> reserve(4)
+    }
+
+    struct Buffer {
+        values: [Int; ~]
+    }
+
+    impl Buffer {
+        reserveMore: mut self -> Unit {
+            self.values -> reserve(4)
+        }
+    }
+
+    struct DictBuffer {
+        values: {Text: Int}
+    }
+
+    impl DictBuffer {
+        takeValue: mut self -> Int => self.values -> take("parser")
+    }
+
+    main { }
+    """; ~
+    ] => sources
+    sources -> llvm.emitChecked => diagnostics
+    "readonly collection mutation diagnostics = $diagnostics" -> println
+}

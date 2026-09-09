@@ -1,0 +1,105 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+# Receiver types for a Set binding can settle after the first intrinsic pass.
+# Final Typed IR and backend dispatch must cover ordinary and materialized Set
+# operations before LLVM.
+main {
+    """"
+        makeSet: -> Set<Int> uses Console {
+            Set<Int>(4) => values!
+            values! -> insert(10) => first
+            values! -> insert(20) => second
+            values! -> insert(10) => duplicate
+            values! -> insert(30) => third
+            values! -> insert(4) => inserted4
+            values! -> insert(5) => inserted5
+            values! -> insert(6) => inserted6
+            values! -> insert(7) => inserted7
+            values! -> insert(8) => inserted8
+            values! -> insert(9) => inserted9
+            values! -> insert(11) => inserted11
+            values! -> insert(12) => inserted12
+            values! -> insert(13) => inserted13
+            values! -> insert(14) => inserted14
+            values! -> insert(15) => inserted15
+            values! -> insert(16) => inserted16
+            first -> if { "first" -> println }
+            duplicate -> if { "duplicate" -> println }
+            values!
+        }
+
+        main {
+            makeSet() => values!
+            values! -> contains(20) => before
+            values! -> remove(20) => removed
+            values! -> remove(20) => removedAgain
+            values! -> contains(20) => after
+        }
+    """" => source
+
+    [source,; ~] -> semanticContext.prepare => context
+    context -> typedIr.lowerContext => ir
+    0 => inserts!
+    0 => contains!
+    0 => removes!
+    0 => ordinarySetCalls!
+    0 => materializedSetCalls!
+    0 => ordinaryMissingTypeIds!
+    0 => ordinaryFlatSetReceivers!
+    0 => unresolvedSets!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.opcode == -255 -> if { inserts! + 1 => inserts! }
+        node.opcode == -256 -> if { contains! + 1 => contains! }
+        node.opcode == -257 -> if { removes! + 1 => removes! }
+        node.opcode <= -255 and node.opcode >= -257 -> if {
+            node.kind == 6 -> if {
+                ir[node.operand0] => ordinaryReceiver
+                ordinaryReceiver.typeId < 0 -> if {
+                    ordinaryMissingTypeIds! + 1 => ordinaryMissingTypeIds!
+                }
+                ordinaryReceiver.typeKind == 7
+                    and ordinaryReceiver.typeOrigin == 4
+                    and ordinaryReceiver.typeSymbol == 5
+                    -> if { ordinaryFlatSetReceivers! + 1 => ordinaryFlatSetReceivers! }
+                ordinarySetCalls! + 1 => ordinarySetCalls!
+            }
+            node.kind == 9 -> if { materializedSetCalls! + 1 => materializedSetCalls! }
+        }
+        (node.kind == 6 or node.kind == 9)
+            and node.symbol == -1
+            and node.targetModule == -1
+            and node.opcode == -1
+            and node.operand0 >= 0
+            -> if {
+                ir[node.operand0] => receiver
+                (receiver.typeKind == 7
+                    and receiver.typeOrigin == 4
+                    and receiver.typeSymbol == 5) => receiverIsSet!
+                receiver.typeId => receiverTypeId!
+                not receiverIsSet!
+                    and receiverTypeId! >= 0
+                    and receiverTypeId! < (context.semantic.types -> len)
+                    and context.semantic.types[receiverTypeId!].kind == 8
+                    -> if { context.semantic.types[receiverTypeId!].first => receiverTypeId! }
+                not receiverIsSet!
+                    and receiverTypeId! >= 0
+                    and receiverTypeId! < (context.semantic.types -> len)
+                    -> if {
+                        context.semantic.types[receiverTypeId!] => receiverType
+                        receiverType.kind == 7
+                            and receiverType.origin == 4
+                            and receiverType.symbol == 5
+                            -> if { true => receiverIsSet! }
+                    }
+                receiverIsSet! -> if { unresolvedSets! + 1 => unresolvedSets! }
+                "unresolved index=$(index!),kind=$(node.kind),typeKind=$(node.typeKind),typeOrigin=$(node.typeOrigin),typeSymbol=$(node.typeSymbol),typeId=$(node.typeId),operand0=$(node.operand0),operand1=$(node.operand1),receiverKind=$(receiver.kind),receiverTypeKind=$(receiver.typeKind),receiverTypeOrigin=$(receiver.typeOrigin),receiverTypeSymbol=$(receiver.typeSymbol),receiverTypeId=$(receiver.typeId),receiverNext=$(receiver.nextOperand)" -> println
+            }
+        index! + 1 => index!
+    }
+    "set insert=$(inserts!),contains=$(contains!),remove=$(removes!),unresolved=$(unresolvedSets!)" -> println
+    "set ordinary=$(ordinarySetCalls!),materialized=$(materializedSetCalls!)" -> println
+    "set ordinaryMissingTypeIds=$(ordinaryMissingTypeIds!),ordinaryFlatSetReceivers=$(ordinaryFlatSetReceivers!)" -> println
+}

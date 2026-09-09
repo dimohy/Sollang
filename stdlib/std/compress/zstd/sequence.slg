@@ -1,0 +1,446 @@
+namespace std.compress.zstd.sequence
+
+import std.compress.zstd.fse as fse
+import std.compress.zstd.sequence as model
+
+# RFC 8878 sections 3.1.1.3.2 through 3.1.1.5 sequence decoding.
+public enum Failure {
+    Invalid
+}
+
+enum Kind {
+    LiteralLength
+    Offset
+    MatchLength
+}
+
+struct Cursor {
+    offset: Int
+    end: Int
+}
+
+struct Prepared {
+    literalLengths: fse.Table
+    offsets: fse.Table
+    matchLengths: fse.Table
+    replacesLiteralLengths: Bool
+    replacesOffsets: Bool
+    replacesMatchLengths: Bool
+    literalLengthMode: Int
+    offsetMode: Int
+    matchLengthMode: Int
+    bitstreamOffset: Int
+}
+
+struct RecentOffsets {
+    first: Int
+    second: Int
+    third: Int
+}
+
+public struct Decoded {
+    public output: [UInt8; ~]
+    public literalLengths: fse.Table
+    public offsets: fse.Table
+    public matchLengths: fse.Table
+    public replacesLiteralLengths: Bool
+    public replacesOffsets: Bool
+    public replacesMatchLengths: Bool
+    public recentOffset1: Int
+    public recentOffset2: Int
+    public recentOffset3: Int
+}
+
+errorTable: -> Result<fse.Table, Failure> {
+    Result<fse.Table, Failure>.Err(model.Failure.Invalid)
+}
+
+errorPrepared: -> Result<Prepared, Failure> {
+    Result<Prepared, Failure>.Err(model.Failure.Invalid)
+}
+
+errorDecoded: -> Result<Decoded, Failure> {
+    Result<Decoded, Failure>.Err(model.Failure.Invalid)
+}
+
+errorInt: -> Result<Int, Failure> {
+    Result<Int, Failure>.Err(model.Failure.Invalid)
+}
+
+powerOfTwo exponent: Int -> Int {
+    exponent >= 0 -> unless { 0 -> return }
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+sequenceCount input: [UInt8], cursor: mut Cursor -> Result<Int, Failure> {
+    cursor -> byte(input)? => first
+    first == 0 -> if { Result<Int, Failure>.Ok(0) -> return }
+    first < 128 -> if { Result<Int, Failure>.Ok(first) -> return }
+    first < 255 -> if {
+        cursor -> byte(input)? => second
+        Result<Int, Failure>.Ok((first - 128) * 256 + second) -> return
+    }
+    cursor -> byte(input)? => second
+    cursor -> byte(input)? => third
+    Result<Int, Failure>.Ok(second + third * 256 + 32_512)
+}
+
+predefined kind: Kind -> Result<fse.Table, Failure> {
+    kind -> when {
+        LiteralLength {
+            fse.predefinedLiteralLengths() -> when {
+                Ok(table) { Result<fse.Table, Failure>.Ok(table) }
+                Err(_) { errorTable() }
+            }
+        }
+        Offset {
+            fse.predefinedOffsets() -> when {
+                Ok(table) { Result<fse.Table, Failure>.Ok(table) }
+                Err(_) { errorTable() }
+            }
+        }
+        MatchLength {
+            fse.predefinedMatchLengths() -> when {
+                Ok(table) { Result<fse.Table, Failure>.Ok(table) }
+                Err(_) { errorTable() }
+            }
+        }
+    }
+}
+
+maximumSymbol kind: Kind -> Int => kind -> when {
+    LiteralLength { 35 }
+    Offset { 31 }
+    MatchLength { 52 }
+}
+
+maximumAccuracy kind: Kind -> Int => kind -> when {
+    LiteralLength { 9 }
+    Offset { 8 }
+    MatchLength { 9 }
+}
+
+prepareTable input: [UInt8], cursor: mut Cursor, kind: Kind, mode: Int, hasPrevious: Bool -> Result<fse.Table, Failure> {
+    mode -> when {
+        == 0 { kind -> predefined }
+        == 1 {
+            cursor -> byte(input)? => symbol
+            symbol <= (kind -> maximumSymbol) -> unless { errorTable() -> return }
+            fse.rle(symbol) -> when {
+                Ok(table) { Result<fse.Table, Failure>.Ok(table) }
+                Err(_) { errorTable() }
+            }
+        }
+        == 2 {
+            cursor.end - cursor.offset => available
+            fse.parseDescription(input, cursor.offset, available,
+            (kind -> maximumSymbol) + 1, kind -> maximumAccuracy) -> when {
+                Err(_) { errorTable() }
+                Ok(description) {
+                    cursor.offset + description.bytesRead => cursor.offset
+                    Result<fse.Table, Failure>.Ok(description.table)
+                }
+            }
+        }
+        == 3 {
+            hasPrevious -> unless { errorTable() -> return }
+            Result<fse.Table, Failure>.Ok(fse.empty())
+        }
+        else { errorTable() }
+    }
+}
+
+prepare input: [UInt8], cursor: mut Cursor, hasLiteralLengths: Bool, hasOffsets: Bool, hasMatchLengths: Bool -> Result<Prepared, Failure> {
+    cursor -> byte(input)? => modes
+    modes % 4 == 0 -> unless { errorPrepared() -> return }
+    (modes / 64) % 4 => literalLengthMode
+    (modes / 16) % 4 => offsetMode
+    (modes / 4) % 4 => matchLengthMode
+    prepareTable(input, cursor, model.Kind.LiteralLength, literalLengthMode, hasLiteralLengths)?
+        => literalLengths
+    prepareTable(input, cursor, model.Kind.Offset, offsetMode, hasOffsets)? => offsets
+    prepareTable(input, cursor, model.Kind.MatchLength, matchLengthMode, hasMatchLengths)?
+        => matchLengths
+    cursor.offset < cursor.end -> unless { errorPrepared() -> return }
+    Result<Prepared, Failure>.Ok(Prepared {
+        literalLengths: literalLengths
+        offsets: offsets
+        matchLengths: matchLengths
+        replacesLiteralLengths: literalLengthMode != 3
+        replacesOffsets: offsetMode != 3
+        replacesMatchLengths: matchLengthMode != 3
+        literalLengthMode: literalLengthMode
+        offsetMode: offsetMode
+        matchLengthMode: matchLengthMode
+        bitstreamOffset: cursor.offset
+    })
+}
+
+activeAccuracy mode: Int, previous: ref fse.Table, replacement: ref fse.Table -> Result<Int, Failure> {
+    mode == 3 -> if {
+        previous -> hasData -> unless { errorInt() -> return }
+        Result<Int, Failure>.Ok(previous -> accuracy) -> return
+    }
+    replacement -> hasData -> unless { errorInt() -> return }
+    Result<Int, Failure>.Ok(replacement -> accuracy)
+}
+
+activeSymbol mode: Int, previous: ref fse.Table, replacement: ref fse.Table, state: Int -> Result<Int, Failure> {
+    mode == 3 -> if {
+        previous -> symbol(state) -> when {
+            Ok(symbol) { Result<Int, Failure>.Ok(symbol) }
+            Err(_) { errorInt() }
+        } => selected
+        selected -> return
+    }
+    replacement -> symbol(state) -> when {
+        Ok(symbol) { Result<Int, Failure>.Ok(symbol) }
+        Err(_) { errorInt() }
+    }
+}
+
+activeUpdate mode: Int, previous: ref fse.Table, replacement: ref fse.Table, state: Int, reader: mut fse.ReverseBits, input: [UInt8] -> Result<Int, Failure> {
+    mode == 3 -> if {
+        previous -> update(state, reader, input) -> when {
+            Ok(next) { Result<Int, Failure>.Ok(next) }
+            Err(_) { errorInt() }
+        } => selected
+        selected -> return
+    }
+    replacement -> update(state, reader, input) -> when {
+        Ok(next) { Result<Int, Failure>.Ok(next) }
+        Err(_) { errorInt() }
+    }
+}
+
+literalLengthBase code: Int -> Result<Int, Failure> {
+    code >= 0 and code <= 35 -> unless { errorInt() -> return }
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+    12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32, 40,
+    48, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192,
+    16_384, 32_768, 65_536] => bases
+    Result<Int, Failure>.Ok(bases[code])
+}
+
+literalLengthBits code: Int -> Result<Int, Failure> {
+    code >= 0 and code <= 35 -> unless { errorInt() -> return }
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12,
+    13, 14, 15, 16] => bits
+    Result<Int, Failure>.Ok(bits[code])
+}
+
+matchLengthBase code: Int -> Result<Int, Failure> {
+    code >= 0 and code <= 52 -> unless { errorInt() -> return }
+    [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+    17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+    31, 32, 33, 34, 35, 37, 39, 41, 43, 47, 51, 59, 67, 83,
+    99, 131, 259, 515, 1_027, 2_051, 4_099, 8_195, 16_387,
+    32_771, 65_539] => bases
+    Result<Int, Failure>.Ok(bases[code])
+}
+
+matchLengthBits code: Int -> Result<Int, Failure> {
+    code >= 0 and code <= 52 -> unless { errorInt() -> return }
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11,
+    12, 13, 14, 15, 16] => bits
+    Result<Int, Failure>.Ok(bits[code])
+}
+
+copyLiterals literals: [UInt8], literalOffset: Int, count: Int, output: mut [UInt8; ~], maxOutputBytes: Int -> Result<Int, Failure> {
+    count >= 0 and literalOffset >= 0 and literalOffset + count <= (literals -> len)
+        and count <= maxOutputBytes - (output -> len)
+        -> unless { errorInt() -> return }
+    0 => index!
+    index! < count -> while {
+        output -> push(literals[literalOffset + index!])
+        index! + 1 => index!
+    }
+    Result<Int, Failure>.Ok(literalOffset + count)
+}
+
+copyMatch history: [UInt8], frameOutputBytes: Int, offset: Int, count: Int, windowSize: Int, output: mut [UInt8; ~], maxOutputBytes: Int -> Result<Int, Failure> {
+    frameOutputBytes >= 0 and frameOutputBytes <= (history -> len)
+        and offset > 0 and offset <= windowSize
+        and offset <= frameOutputBytes + (output -> len)
+        and count >= 0 and count <= maxOutputBytes - (output -> len)
+        -> unless { errorInt() -> return }
+    (history -> len) - frameOutputBytes => frameStart
+    0 => index!
+    index! < count -> while {
+        frameOutputBytes + (output -> len) - offset => source
+        source < frameOutputBytes -> if {
+            output -> push(history[frameStart + source])
+        } else {
+            output -> push(output[source - frameOutputBytes])
+        }
+        index! + 1 => index!
+    }
+    Result<Int, Failure>.Ok(count)
+}
+
+public decode input: [UInt8], sequenceOffset: Int, literals: [UInt8], history: [UInt8], frameOutputBytes: Int, windowSize: Int, maxOutputBytes: Int, previousLiteralLengths: ref fse.Table, hasLiteralLengths: Bool, previousOffsets: ref fse.Table, hasOffsets: Bool, previousMatchLengths: ref fse.Table, hasMatchLengths: Bool, recentOffset1: Int, recentOffset2: Int, recentOffset3: Int -> Result<Decoded, Failure> {
+    sequenceOffset >= 0 and sequenceOffset < (input -> len)
+        and maxOutputBytes >= 0 and windowSize > 0
+        and recentOffset1 > 0 and recentOffset2 > 0 and recentOffset3 > 0
+        -> unless { errorDecoded() -> return }
+    Cursor { offset: sequenceOffset, end: input -> len } => cursor!
+    input -> sequenceCount(cursor!)? => count
+    count == 0 -> if {
+        cursor!.offset == cursor!.end and (literals -> len) <= maxOutputBytes
+            -> unless { errorDecoded() -> return }
+        [UInt8; ~] => output!
+        output! -> reserve(literals -> len)
+        copyLiterals(literals, 0, literals -> len, output!, maxOutputBytes)? => consumed
+        Result<Decoded, Failure>.Ok(Decoded {
+            output: output!
+            literalLengths: fse.empty()
+            offsets: fse.empty()
+            matchLengths: fse.empty()
+            replacesLiteralLengths: false
+            replacesOffsets: false
+            replacesMatchLengths: false
+            recentOffset1: recentOffset1
+            recentOffset2: recentOffset2
+            recentOffset3: recentOffset3
+        }) -> return
+    }
+
+    prepare(input, cursor!, hasLiteralLengths, hasOffsets, hasMatchLengths)? => prepared
+    input -> fse.decodeReverse(prepared.bitstreamOffset, cursor!.end - prepared.bitstreamOffset) -> when {
+        Err(_) { errorDecoded() -> return }
+        Ok(value) { value }
+    } => reader!
+    activeAccuracy(prepared.literalLengthMode, previousLiteralLengths,
+    prepared.literalLengths)? => literalAccuracy
+    activeAccuracy(prepared.offsetMode, previousOffsets, prepared.offsets)? => offsetAccuracy
+    activeAccuracy(prepared.matchLengthMode, previousMatchLengths,
+    prepared.matchLengths)? => matchAccuracy
+    reader! -> read(input, literalAccuracy) -> when {
+        Err(_) { errorDecoded() -> return }
+        Ok(value) { value }
+    } => literalState!
+    reader! -> read(input, offsetAccuracy) -> when {
+        Err(_) { errorDecoded() -> return }
+        Ok(value) { value }
+    } => offsetState!
+    reader! -> read(input, matchAccuracy) -> when {
+        Err(_) { errorDecoded() -> return }
+        Ok(value) { value }
+    } => matchState!
+
+    RecentOffsets {
+        first: recentOffset1
+        second: recentOffset2
+        third: recentOffset3
+    } => recent!
+    [UInt8; ~] => output!
+    # Reserve known literal storage only; the configured safety ceiling may be
+    # much larger than this block and must not become eager memory use.
+    output! -> reserve(literals -> len)
+    0 => literalOffset!
+    0 => sequence!
+    sequence! < count -> while {
+        activeSymbol(prepared.offsetMode, previousOffsets, prepared.offsets, offsetState!)?
+            => offsetCode
+        activeSymbol(prepared.literalLengthMode, previousLiteralLengths,
+        prepared.literalLengths, literalState!)? => literalCode
+        activeSymbol(prepared.matchLengthMode, previousMatchLengths,
+        prepared.matchLengths, matchState!)? => matchCode
+        offsetCode >= 0 and offsetCode <= 31 -> unless { errorDecoded() -> return }
+        reader! -> read(input, offsetCode) -> when {
+            Err(_) { errorDecoded() -> return }
+            Ok(value) { value }
+        } => offsetExtra
+        (offsetCode -> powerOfTwo) + offsetExtra => offsetValue
+        matchCode -> matchLengthBits? => matchBits
+        reader! -> read(input, matchBits) -> when {
+            Err(_) { errorDecoded() -> return }
+            Ok(value) { value }
+        } => matchExtra
+        matchCode -> matchLengthBase? => matchBase
+        matchBase + matchExtra => matchLength
+        literalCode -> literalLengthBits? => literalBits
+        reader! -> read(input, literalBits) -> when {
+            Err(_) { errorDecoded() -> return }
+            Ok(value) { value }
+        } => literalExtra
+        literalCode -> literalLengthBase? => literalBase
+        literalBase + literalExtra => literalLength
+        copyLiterals(literals, literalOffset!, literalLength, output!, maxOutputBytes)?
+            => literalOffset!
+        recent! -> resolve(offsetValue, literalLength)? => offset
+        copyMatch(history, frameOutputBytes, offset, matchLength, windowSize,
+        output!, maxOutputBytes)? => copied
+
+        sequence! + 1 < count -> if {
+            activeUpdate(prepared.literalLengthMode, previousLiteralLengths,
+            prepared.literalLengths, literalState!, reader!, input)? => literalState!
+            activeUpdate(prepared.matchLengthMode, previousMatchLengths,
+            prepared.matchLengths, matchState!, reader!, input)? => matchState!
+            activeUpdate(prepared.offsetMode, previousOffsets,
+            prepared.offsets, offsetState!, reader!, input)? => offsetState!
+        }
+        sequence! + 1 => sequence!
+    }
+    reader! -> complete -> unless { errorDecoded() -> return }
+    copyLiterals(literals, literalOffset!, (literals -> len) - literalOffset!,
+    output!, maxOutputBytes)? => allLiterals
+    Result<Decoded, Failure>.Ok(Decoded {
+        output: output!
+        literalLengths: prepared.literalLengths
+        offsets: prepared.offsets
+        matchLengths: prepared.matchLengths
+        replacesLiteralLengths: prepared.replacesLiteralLengths
+        replacesOffsets: prepared.replacesOffsets
+        replacesMatchLengths: prepared.replacesMatchLengths
+        recentOffset1: recent!.first
+        recentOffset2: recent!.second
+        recentOffset3: recent!.third
+    })
+}
+
+impl Cursor {
+    public byte: mut self, input: [UInt8] -> Result<Int, Failure> {
+        self.offset >= 0 and self.offset < self.end and self.end <= (input -> len)
+            -> unless { errorInt() -> return }
+        Int(input[self.offset]) => value
+        self.offset + 1 => self.offset
+        Result<Int, Failure>.Ok(value)
+    }
+}
+
+impl RecentOffsets {
+    public resolve: mut self, offsetValue: Int, literalLength: Int -> Result<Int, Failure> {
+        offsetValue > 0 -> unless { errorInt() -> return }
+        offsetValue > 3 -> if {
+            offsetValue - 3 => offset
+            self.second => self.third
+            self.first => self.second
+            offset => self.first
+            Result<Int, Failure>.Ok(offset) -> return
+        }
+        offsetValue - 1 => index!
+        literalLength == 0 -> if { index! + 1 => index! }
+        index! == 0 -> if { Result<Int, Failure>.Ok(self.first) -> return }
+        index! -> when {
+            == 1 { self.second }
+            == 2 { self.third }
+            == 3 { self.first - 1 }
+            else { 0 }
+        } => offset
+        offset > 0 -> unless { errorInt() -> return }
+        index! > 1 -> if { self.second => self.third }
+        self.first => self.second
+        offset => self.first
+        Result<Int, Failure>.Ok(offset)
+    }
+}

@@ -1,0 +1,24 @@
+# Qualified module/type lookup must not replace an already resolved value root.
+import sollang.compiler.semantic.qualified as qualified
+
+main {
+    [
+        """
+        namespace example.shadow
+        enum Error { Failed }
+        struct Holder { Failed: Int }
+        shadow value: Int -> Int {
+            Holder { Failed: value } => Error
+            Error.Failed
+        }
+        """; ~
+    ] -> qualified.resolve -> len => shadowCount
+    [
+        """
+        namespace example.owner
+        enum Error { Failed }
+        create: -> Error => Error.Failed
+        """; ~
+    ] -> qualified.resolve -> len => enumCount
+    "shadow=$shadowCount enum=$enumCount" -> println
+}

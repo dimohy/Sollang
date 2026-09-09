@@ -1,0 +1,107 @@
+import std.compress.brotli.prefix_code.error as code_errors
+import std.compress.brotli.prefix_table as prefix
+import std.compress.brotli.prefix_table.error as table_errors
+import std.compress.brotli.tree_group as groups
+import std.compress.brotli.tree_group.error as group_errors
+
+mapCodeError kind: code_errors.Kind -> group_errors.Kind => kind -> when {
+    TruncatedInput { group_errors.Kind.TruncatedInput }
+    else { group_errors.Kind.InvalidPrefixCode }
+}
+
+mapTableError kind: table_errors.Kind -> group_errors.Kind => kind -> when {
+    TruncatedInput { group_errors.Kind.TruncatedInput }
+    else { group_errors.Kind.InvalidPrefixCode }
+}
+
+failed kind: group_errors.Kind, offset: UIntSize -> Result<Int, groups.Error> {
+    Result<Int, groups.Error>.Err(groups.Error { kind: kind, offset: offset })
+}
+
+feedNextTree reader: mut groups.Reader, window: mut prefix.Window, input: [UInt8], start: Int -> Result<Int, groups.Error> {
+    reader -> prefixDescription? => description!
+    start => index!
+    true -> while {
+        description! -> read(window) -> when {
+            Err(error) { failed(error.kind -> mapCodeError, error.offset) -> return }
+            Ok(progress) {
+                progress -> when {
+                    NeedMore(_) {
+                        index! < (input -> len)
+                            -> unless { failed(group_errors.Kind.TruncatedInput, UIntSize(index!)) -> return }
+                        (window -> available) + 8 => required
+                        window -> fill(
+                        [input[index!]],
+                        prefix.Position { byteIndex: 0, bitIndex: 0 },
+                        required) -> when {
+                            Err(error) { failed(error.kind -> mapTableError, error.offset) -> return }
+                            Ok(_) { index! + 1 => index! }
+                        }
+                    }
+                    Ready {
+                        description! -> intoTable -> when {
+                            Err(error) { failed(error.kind -> mapCodeError, error.offset) -> return }
+                            Ok(table) { reader -> installTree(table)? }
+                        }
+                        Result<Int, groups.Error>.Ok(index!) -> return
+                    }
+                }
+            }
+        }
+    }
+    failed(group_errors.Kind.InvalidPrefixCode, UIntSize(index!))
+}
+
+isNeedTree progress: groups.ReaderRead, expected: Int -> Bool => progress -> when {
+    NeedTree(index) { index == expected }
+    else { false }
+}
+
+isReady progress: groups.ReaderRead -> Bool => progress -> when {
+    Ready { true }
+    else { false }
+}
+
+check reader: move groups.Reader, window: mut prefix.Window -> Result<Bool, groups.Error> {
+    reader => reader!
+    reader! -> next -> isNeedTree(0) -> unless { Result<Bool, groups.Error>.Ok(false) -> return }
+    [UInt8(77), 174, 201, 1] => input
+    reader! -> feedNextTree(window, input, 0)? => next
+    reader! -> next -> isNeedTree(1) -> unless { Result<Bool, groups.Error>.Ok(false) -> return }
+    reader! -> feedNextTree(window, input, next)? => end
+    reader! -> next -> isReady -> unless { Result<Bool, groups.Error>.Ok(false) -> return }
+    reader! -> finish? => streamed
+    streamed -> intoTrees => trees
+    Result<Bool, groups.Error>.Ok(
+    end == 4 and (trees -> len) == 2
+        and (trees[0] -> entryCount) == 4
+        and (trees[1] -> entryCount) == 4)
+}
+
+main {
+    groups.Limits {
+        maxTrees: 256
+        maxAlphabetSize: 704
+        maxTableEntries: 1_080
+        maxTotalTableEntries: 276_480
+    } -> parser -> when {
+        Err(_) { "tree-group-stream=false" -> println }
+        Ok(parser) {
+            parser -> reader(4, 2, 2) -> when {
+                Err(_) { "tree-group-stream=false" -> println }
+                Ok(reader) {
+                    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+                        Err(_) { "tree-group-stream=false" -> println }
+                        Ok(window) {
+                            window => window!
+                            reader -> check(window!) -> when {
+                                Err(_) { "tree-group-stream=false" -> println }
+                                Ok(checked) { "tree-group-stream=$(checked)" -> println }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

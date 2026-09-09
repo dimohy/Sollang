@@ -1,0 +1,51 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+
+struct Observation {
+    sent: UIntSize
+    received: UIntSize
+    length: Int
+    sourceMatches: Bool
+    first: UInt32
+    last: UInt32
+}
+
+roundtrip local: net.Endpoint -> Result<Observation, socket.SocketError> uses Network {
+    socket.DatagramBindOptions {
+        endpoint: local
+        reuseAddress: true
+    } -> bind? => receiver
+    receiver -> localPort? => receiverPort
+    net.loopback(0) -> unified => senderEndpoint
+    socket.DatagramBindOptions {
+        endpoint: senderEndpoint
+        reuseAddress: true
+    } -> bind? => sender
+    sender -> localPort? => senderPort
+    [UInt8(112), 105, 110, 103; ~] => ping
+    net.loopback(receiverPort) -> unified => destination
+    sender -> sendTo(destination, ping)? => sent
+    [UInt8; 16~] => buffer!
+    receiver -> receiveFromInto(buffer!)? => receipt
+    receipt.source -> port => sourcePort
+    sender -> close
+    receiver -> close
+    Result<Observation, socket.SocketError>.Ok(Observation {
+        sent: sent
+        received: receipt.count
+        length: buffer! -> len
+        sourceMatches: sourcePort == senderPort
+        first: UInt32(buffer![0])
+        last: UInt32(buffer![Int(receipt.count) - 1])
+    })
+}
+
+main {
+    net.loopback(0) -> unified -> roundtrip -> when {
+        Ok(observation) {
+            "udp-into=$(observation.sent),$(observation.received),$(observation.length),$(observation.sourceMatches),$(observation.first),$(observation.last)" -> println
+        }
+        Err(error) { "udp-error=$(error.code)" -> println }
+    }
+}

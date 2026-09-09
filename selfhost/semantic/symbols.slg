@@ -6,16 +6,16 @@ import sys.file as file
 # Symbol and AST indexes are stable offsets into owned arrays. This keeps the
 # semantic graph relocatable and avoids one heap allocation per declaration.
 public struct Symbol {
-    kind: Int
-    parent: Int
-    astNode: Int
-    nameToken: Int
-    typeNode: Int
-    secondaryTypeNode: Int
-    blockNameToken: Int
-    blockTypeNode: Int
-    blockResultTypeNode: Int
-    flags: Int
+    public kind: Int
+    public parent: Int
+    public astNode: Int
+    public nameToken: Int
+    public typeNode: Int
+    public secondaryTypeNode: Int
+    public blockNameToken: Int
+    public blockTypeNode: Int
+    public blockResultTypeNode: Int
+    public flags: Int
 }
 
 public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
@@ -39,7 +39,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         node.kind == 61 -> if { true => isSymbol! }
         node.kind == 48 -> if { true => isSymbol! }
         node.kind == 64 -> if { true => isSymbol! }
-        (node.kind == 50 or node.kind == 51) -> if { true => isSymbol! }
+        node.kind == 50 or node.kind == 51 -> if { true => isSymbol! }
         node.kind == 58 -> if { true => isSymbol! }
         node.kind == 60 -> if { true => isSymbol! }
         node.kind == 67 -> if { true => isSymbol! }
@@ -50,7 +50,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         isSymbol! -> if {
             -1 => parentSymbol!
             node.parent => parentAst!
-            (parentAst! >= 0 and parentSymbol! < 0) -> while {
+            parentAst! >= 0 and parentSymbol! < 0 -> while {
                 astToSymbol![parentAst!] => mappedParent
                 mappedParent >= 0 -> if {
                     mappedParent => parentSymbol!
@@ -59,8 +59,8 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                 }
             }
             Symbol {
-                kind: (node.kind == 67 or node.kind == 68) -> if { 3 } else { node.kind == 60
-                    -> if { 35 } else { node.kind } }
+                kind: node.kind == 67 or node.kind == 68 -> if { 3 } else { node.kind == 60
+                        -> if { 35 } else { node.kind } }
                 parent: parentSymbol!
                 astNode: astIndex!
                 nameToken: node.payloadToken
@@ -88,20 +88,20 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         symbols![reparentSymbolIndex!] => reparentSymbol!
         nodes[reparentSymbol!.astNode].parent => reparentAst!
         -1 => nearestParentSymbol!
-        (reparentAst! >= 0 and nearestParentSymbol! < 0)
+        reparentAst! >= 0 and nearestParentSymbol! < 0
             -> while {
-            astToSymbol![reparentAst!] => reparentCandidate
-            reparentCandidate >= 0 -> if {
-                reparentCandidate => nearestParentSymbol!
-            } else {
-                nodes[reparentAst!].parent => reparentAst!
+                astToSymbol![reparentAst!] => reparentCandidate
+                reparentCandidate >= 0 -> if {
+                    reparentCandidate => nearestParentSymbol!
+                } else {
+                    nodes[reparentAst!].parent => reparentAst!
+                }
             }
-        }
-        (nearestParentSymbol! >= 0 and symbols![nearestParentSymbol!].kind == 48)
+        nearestParentSymbol! >= 0 and symbols![nearestParentSymbol!].kind == 48
             -> if {
-            nearestParentSymbol! => reparentSymbol!.parent
-            reparentSymbol! => symbols![reparentSymbolIndex!]
-        }
+                nearestParentSymbol! => reparentSymbol!.parent
+                reparentSymbol! => symbols![reparentSymbolIndex!]
+            }
         reparentSymbolIndex! + 1 => reparentSymbolIndex!
     }
 
@@ -110,102 +110,102 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     0 => typeAstIndex!
     typeAstIndex! < astCount -> while {
         nodes[typeAstIndex!] => typeAst
-        (typeAst.kind == 12 and (typeAst.parent < 0 or nodes[typeAst.parent].kind != 12))
+        typeAst.kind == 12 and (typeAst.parent < 0 or nodes[typeAst.parent].kind != 12)
             -> if {
-            typeAst.parent => typeParentAst!
-            -1 => typeOwnerSymbol!
-            (typeParentAst! >= 0 and typeOwnerSymbol! < 0)
-                -> while {
-                astToSymbol![typeParentAst!] => mappedOwner
-                mappedOwner >= 0 -> if {
-                    mappedOwner => typeOwnerSymbol!
-                } else {
-                    nodes[typeParentAst!].parent => typeParentAst!
-                }
-            }
-            typeOwnerSymbol! >= 0 -> if {
-                symbols![typeOwnerSymbol!] => owner!
-                nodes[owner!.astNode] => ownerAst
-                true => ownerTypeAllowed!
-                (owner!.kind == 7 or owner!.kind == 31) -> if {
-                    false => ownerTypeAllowed!
-                    # Method return annotations can be direct children of the
-                    # declaration even when the method has no caller-supplied
-                    # block parameter. Direct ownership is structural and
-                    # must not depend on blockNameToken being present.
-                    typeAst.parent == owner!.astNode -> if { true => ownerTypeAllowed! }
-                    typeAst.parent => ownerTypeAncestor!
-                    (ownerTypeAncestor! >= 0 and ownerTypeAncestor! != owner!.astNode and not ownerTypeAllowed!)
-                        -> while {
-                        (nodes[ownerTypeAncestor!].kind == 17 or nodes[ownerTypeAncestor!].kind == 60)
-                            -> if {
-                            true => ownerTypeAllowed!
+                typeAst.parent => typeParentAst!
+                -1 => typeOwnerSymbol!
+                typeParentAst! >= 0 and typeOwnerSymbol! < 0
+                    -> while {
+                        astToSymbol![typeParentAst!] => mappedOwner
+                        mappedOwner >= 0 -> if {
+                            mappedOwner => typeOwnerSymbol!
                         } else {
-                            nodes[ownerTypeAncestor!].parent => ownerTypeAncestor!
+                            nodes[typeParentAst!].parent => typeParentAst!
                         }
                     }
-                }
-                ownerTypeAllowed! -> if {
-                owner!.kind == 7 and ownerAst.tertiaryToken >= 0
-                    -> if {
-                    owner!.typeNode < 0 -> if {
-                        typeAstIndex! => owner!.typeNode
-                    } else {
-                        ownerAst.secondaryToken >= 0 -> if {
-                            owner!.secondaryTypeNode < 0 -> if {
-                                # The compact AST is not required to store
-                                # signature type nodes in lexical order. The
-                                # first source type is the named input and the
-                                # second is the declared result, so establish
-                                # that order from spans instead of visit order.
-                                nodes[typeAstIndex!].start < nodes[owner!.typeNode].start
+                typeOwnerSymbol! >= 0 -> if {
+                    symbols![typeOwnerSymbol!] => owner!
+                    nodes[owner!.astNode] => ownerAst
+                    true => ownerTypeAllowed!
+                    owner!.kind == 7 or owner!.kind == 31 -> if {
+                        false => ownerTypeAllowed!
+                        # Method return annotations can be direct children of the
+                        # declaration even when the method has no caller-supplied
+                        # block parameter. Direct ownership is structural and
+                        # must not depend on blockNameToken being present.
+                        typeAst.parent == owner!.astNode -> if { true => ownerTypeAllowed! }
+                        typeAst.parent => ownerTypeAncestor!
+                        ownerTypeAncestor! >= 0 and ownerTypeAncestor! != owner!.astNode and not ownerTypeAllowed!
+                            -> while {
+                                nodes[ownerTypeAncestor!].kind == 17 or nodes[ownerTypeAncestor!].kind == 60
                                     -> if {
-                                    owner!.typeNode => owner!.secondaryTypeNode
+                                        true => ownerTypeAllowed!
+                                    } else {
+                                        nodes[ownerTypeAncestor!].parent => ownerTypeAncestor!
+                                    }
+                            }
+                    }
+                    ownerTypeAllowed! -> if {
+                        owner!.kind == 7 and ownerAst.tertiaryToken >= 0
+                            -> if {
+                                owner!.typeNode < 0 -> if {
                                     typeAstIndex! => owner!.typeNode
                                 } else {
-                                    typeAstIndex! => owner!.secondaryTypeNode
+                                    ownerAst.secondaryToken >= 0 -> if {
+                                        owner!.secondaryTypeNode < 0 -> if {
+                                            # The compact AST is not required to store
+                                            # signature type nodes in lexical order. The
+                                            # first source type is the named input and the
+                                            # second is the declared result, so establish
+                                            # that order from spans instead of visit order.
+                                            nodes[typeAstIndex!].start < nodes[owner!.typeNode].start
+                                                -> if {
+                                                    owner!.typeNode => owner!.secondaryTypeNode
+                                                    typeAstIndex! => owner!.typeNode
+                                                } else {
+                                                    typeAstIndex! => owner!.secondaryTypeNode
+                                                }
+                                        } else {
+                                            owner!.blockTypeNode < 0 -> if {
+                                                typeAstIndex! => owner!.blockTypeNode
+                                            } else {
+                                                owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                            }
+                                        }
+                                    } else {
+                                        owner!.blockTypeNode < 0 -> if {
+                                            typeAstIndex! => owner!.blockTypeNode
+                                        } else {
+                                            owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                        }
+                                    }
                                 }
                             } else {
-                                owner!.blockTypeNode < 0 -> if {
-                                    typeAstIndex! => owner!.blockTypeNode
-                                } else {
-                                    owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
-                                }
+                                owner!.kind == 31 and ownerAst.tertiaryToken >= 0
+                                    -> if {
+                                        owner!.typeNode < 0 -> if {
+                                            typeAstIndex! => owner!.typeNode
+                                        } else {
+                                            owner!.blockTypeNode < 0 -> if {
+                                                typeAstIndex! => owner!.blockTypeNode
+                                            } else {
+                                                owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                            }
+                                        }
+                                    } else {
+                                        owner!.typeNode < 0 -> if {
+                                            typeAstIndex! => owner!.typeNode
+                                        } else {
+                                            owner!.secondaryTypeNode < 0 -> if {
+                                                typeAstIndex! => owner!.secondaryTypeNode
+                                            }
+                                        }
+                                    }
                             }
-                        } else {
-                            owner!.blockTypeNode < 0 -> if {
-                                typeAstIndex! => owner!.blockTypeNode
-                            } else {
-                                owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
-                            }
-                        }
+                        owner! => symbols![typeOwnerSymbol!]
                     }
-                } else {
-                    owner!.kind == 31 and ownerAst.tertiaryToken >= 0
-                        -> if {
-                        owner!.typeNode < 0 -> if {
-                            typeAstIndex! => owner!.typeNode
-                        } else {
-                            owner!.blockTypeNode < 0 -> if {
-                                typeAstIndex! => owner!.blockTypeNode
-                            } else {
-                                owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
-                            }
-                        }
-                    } else {
-                        owner!.typeNode < 0 -> if {
-                            typeAstIndex! => owner!.typeNode
-                        } else {
-                            owner!.secondaryTypeNode < 0 -> if {
-                                typeAstIndex! => owner!.secondaryTypeNode
-                            }
-                        }
-                    }
-                }
-                owner! => symbols![typeOwnerSymbol!]
                 }
             }
-        }
         typeAstIndex! + 1 => typeAstIndex!
     }
 
@@ -215,41 +215,41 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     0 => genericSymbolIndex!
     genericSymbolIndex! < beforeSecondaryGenerics
         -> while {
-        symbols![genericSymbolIndex!] => genericSymbol
-        genericSymbol.kind == 32 -> if {
-            nodes[genericSymbol.astNode].secondaryToken >= 0
-                -> if {
-                symbols! -> push(Symbol {
-                    kind: 32
-                    parent: genericSymbol.parent
-                    astNode: genericSymbol.astNode
-                    nameToken: nodes[genericSymbol.astNode].secondaryToken
-                    typeNode: -1
-                    secondaryTypeNode: -1
-                    blockNameToken: -1
-                    blockTypeNode: -1
-                    blockResultTypeNode: -1
-                    flags: 0
-                })
+            symbols![genericSymbolIndex!] => genericSymbol
+            genericSymbol.kind == 32 -> if {
+                nodes[genericSymbol.astNode].secondaryToken >= 0
+                    -> if {
+                        symbols! -> push(Symbol {
+                            kind: 32
+                            parent: genericSymbol.parent
+                            astNode: genericSymbol.astNode
+                            nameToken: nodes[genericSymbol.astNode].secondaryToken
+                            typeNode: -1
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: 0
+                        })
+                    }
+                nodes[genericSymbol.astNode].tertiaryToken >= 0
+                    -> if {
+                        symbols! -> push(Symbol {
+                            kind: 32
+                            parent: genericSymbol.parent
+                            astNode: genericSymbol.astNode
+                            nameToken: nodes[genericSymbol.astNode].tertiaryToken
+                            typeNode: -1
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: 0
+                        })
+                    }
             }
-            nodes[genericSymbol.astNode].tertiaryToken >= 0
-                -> if {
-                symbols! -> push(Symbol {
-                    kind: 32
-                    parent: genericSymbol.parent
-                    astNode: genericSymbol.astNode
-                    nameToken: nodes[genericSymbol.astNode].tertiaryToken
-                    typeNode: -1
-                    secondaryTypeNode: -1
-                    blockNameToken: -1
-                    blockTypeNode: -1
-                    blockResultTypeNode: -1
-                    flags: 0
-                })
-            }
+            genericSymbolIndex! + 1 => genericSymbolIndex!
         }
-        genericSymbolIndex! + 1 => genericSymbolIndex!
-    }
 
     # COM activation, cloning, and checked interface queries are source-level generated functions, but the
     # self-host compiler keeps them as flat symbols. No wrapper object or
@@ -259,73 +259,74 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     0 => comInterfaceSymbolIndex!
     comInterfaceSymbolIndex! < beforeComFunctions
         -> while {
-        symbols![comInterfaceSymbolIndex!] => comInterfaceSymbol
-        (comInterfaceSymbol.kind == 3 and comInterfaceSymbol.flags / 512 % 2 == 1)
-            -> if {
-            nodes[comInterfaceSymbol.astNode] => comInterfaceAst
-            false => earlierComInterface!
-            0 => comEarlierSearch!
-            comEarlierSearch! < comInterfaceSymbolIndex! -> while {
-                symbols![comEarlierSearch!] => comEarlierSymbol
-                (comEarlierSymbol.kind == 3 and comEarlierSymbol.flags / 512 % 2 == 1)
-                    -> if {
-                    nodes[comEarlierSymbol.astNode].parent == comInterfaceAst.parent
-                        -> if { true => earlierComInterface! }
-                }
-                comEarlierSearch! + 1 => comEarlierSearch!
-            }
-            not earlierComInterface! -> if {
-                symbols! -> push(Symbol {
-                    kind: 36
-                    parent: comInterfaceSymbolIndex!
-                    astNode: comInterfaceAst.parent
-                    nameToken: nodes[comInterfaceAst.parent].payloadToken
-                    typeNode: -1
-                    secondaryTypeNode: -1
-                    blockNameToken: -1
-                    blockTypeNode: -1
-                    blockResultTypeNode: -1
-                    flags: 512 + 4096
-                })
-            }
-            symbols! -> push(Symbol {
-                kind: 36
-                parent: comInterfaceSymbolIndex!
-                astNode: comInterfaceSymbol.astNode
-                nameToken: comInterfaceSymbol.nameToken
-                typeNode: -1
-                secondaryTypeNode: -1
-                blockNameToken: -1
-                blockTypeNode: -1
-                blockResultTypeNode: -1
-                flags: 512 + 8192
-            })
-            0 => comQueryTargetIndex!
-            comQueryTargetIndex! < beforeComFunctions -> while {
-                symbols![comQueryTargetIndex!] => comQueryTarget
-                (comQueryTargetIndex! != comInterfaceSymbolIndex!
-                    and comQueryTarget.kind == 3
-                    and comQueryTarget.flags / 512 % 2 == 1
-                    and nodes[comQueryTarget.astNode].parent == comInterfaceAst.parent)
-                        -> if {
+            symbols![comInterfaceSymbolIndex!] => comInterfaceSymbol
+            comInterfaceSymbol.kind == 3 and comInterfaceSymbol.flags / 512 % 2 == 1
+                -> if {
+                    nodes[comInterfaceSymbol.astNode] => comInterfaceAst
+                    false => earlierComInterface!
+                    0 => comEarlierSearch!
+                    comEarlierSearch! < comInterfaceSymbolIndex!
+                        -> while {
+                            symbols![comEarlierSearch!] => comEarlierSymbol
+                            comEarlierSymbol.kind == 3 and comEarlierSymbol.flags / 512 % 2 == 1
+                                -> if {
+                                    nodes[comEarlierSymbol.astNode].parent == comInterfaceAst.parent
+                                        -> if { true => earlierComInterface! }
+                                }
+                            comEarlierSearch! + 1 => comEarlierSearch!
+                        }
+                    not earlierComInterface! -> if {
+                        symbols! -> push(Symbol {
+                            kind: 36
+                            parent: comInterfaceSymbolIndex!
+                            astNode: comInterfaceAst.parent
+                            nameToken: nodes[comInterfaceAst.parent].payloadToken
+                            typeNode: -1
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: 512 + 4096
+                        })
+                    }
                     symbols! -> push(Symbol {
                         kind: 36
                         parent: comInterfaceSymbolIndex!
-                        astNode: comQueryTarget.astNode
-                        nameToken: comQueryTarget.nameToken
+                        astNode: comInterfaceSymbol.astNode
+                        nameToken: comInterfaceSymbol.nameToken
                         typeNode: -1
-                        secondaryTypeNode: comQueryTargetIndex!
+                        secondaryTypeNode: -1
                         blockNameToken: -1
                         blockTypeNode: -1
                         blockResultTypeNode: -1
-                        flags: 512 + 131072
+                        flags: 512 + 8192
                     })
+                    0 => comQueryTargetIndex!
+                    comQueryTargetIndex! < beforeComFunctions -> while {
+                        symbols![comQueryTargetIndex!] => comQueryTarget
+                        comQueryTargetIndex! != comInterfaceSymbolIndex!
+                            and comQueryTarget.kind == 3
+                            and comQueryTarget.flags / 512 % 2 == 1
+                            and nodes[comQueryTarget.astNode].parent == comInterfaceAst.parent
+                            -> if {
+                                symbols! -> push(Symbol {
+                                    kind: 36
+                                    parent: comInterfaceSymbolIndex!
+                                    astNode: comQueryTarget.astNode
+                                    nameToken: comQueryTarget.nameToken
+                                    typeNode: -1
+                                    secondaryTypeNode: comQueryTargetIndex!
+                                    blockNameToken: -1
+                                    blockTypeNode: -1
+                                    blockResultTypeNode: -1
+                                    flags: 512 + 131072
+                                })
+                            }
+                        comQueryTargetIndex! + 1 => comQueryTargetIndex!
+                    }
                 }
-                comQueryTargetIndex! + 1 => comQueryTargetIndex!
-            }
+            comInterfaceSymbolIndex! + 1 => comInterfaceSymbolIndex!
         }
-        comInterfaceSymbolIndex! + 1 => comInterfaceSymbolIndex!
-    }
 
     # Parameters and method self values are synthetic lexical symbols owned by
     # their declaration symbol; they reuse the declaration AST index.
@@ -333,73 +334,73 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     0 => declarationSymbolIndex!
     declarationSymbolIndex! < declaredSymbolCount
         -> while {
-        symbols![declarationSymbolIndex!] => declarationSymbol
-        nodes[declarationSymbol.astNode] => declarationAst
-        declarationAst.secondaryToken >= 0 -> if {
-            ((declarationSymbol.kind == 7 and (declarationSymbol.secondaryTypeNode >= 0 or declarationSymbol.flags / 16 % 2 == 1)) or declarationSymbol.kind == 29 or declarationSymbol.kind == 31)
-                -> if {
-                -1 => parameterTypeNode!
-                declarationSymbol.kind == 7 -> if {
-                    declarationSymbol.flags / 16 % 2 == 0 -> if { declarationSymbol.typeNode => parameterTypeNode! }
-                }
-                (declarationSymbol.kind == 31 and declarationSymbol.parent >= 0)
+            symbols![declarationSymbolIndex!] => declarationSymbol
+            nodes[declarationSymbol.astNode] => declarationAst
+            declarationAst.secondaryToken >= 0 -> if {
+                (declarationSymbol.kind == 7 and (declarationSymbol.secondaryTypeNode >= 0 or declarationSymbol.flags / 16 % 2 == 1 or (declarationSymbol.flags / 32 % 2 == 1 and declarationSymbol.typeNode >= 0))) or declarationSymbol.kind == 29 or declarationSymbol.kind == 31
                     -> if {
-                    symbols![declarationSymbol.parent].typeNode => parameterTypeNode!
-                }
-                Symbol {
-                    kind: 35
-                    parent: declarationSymbolIndex!
-                    astNode: declarationSymbol.flags / 512 % 2 == 1
-                        -> if { parameterTypeNode! } else { declarationSymbol.astNode }
-                    nameToken: declarationAst.secondaryToken
-                    typeNode: parameterTypeNode!
-                    secondaryTypeNode: -1
-                    blockNameToken: -1
-                    blockTypeNode: -1
-                    blockResultTypeNode: -1
-                    flags: declarationSymbol.flags
-                } => parameterSymbol
-                symbols! -> push(parameterSymbol)
+                        -1 => parameterTypeNode!
+                        declarationSymbol.kind == 7 -> if {
+                            declarationSymbol.flags / 16 % 2 == 0 -> if { declarationSymbol.typeNode => parameterTypeNode! }
+                        }
+                        declarationSymbol.kind == 31 and declarationSymbol.parent >= 0
+                            -> if {
+                                symbols![declarationSymbol.parent].typeNode => parameterTypeNode!
+                            }
+                        Symbol {
+                            kind: 35
+                            parent: declarationSymbolIndex!
+                            astNode: declarationSymbol.flags / 512 % 2 == 1
+                                -> if { parameterTypeNode! } else { declarationSymbol.astNode }
+                            nameToken: declarationAst.secondaryToken
+                            typeNode: parameterTypeNode!
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: declarationSymbol.flags
+                        } => parameterSymbol
+                        symbols! -> push(parameterSymbol)
+                    }
             }
-        }
-        (declarationSymbol.kind == 7
-            and declarationAst.secondaryToken < 0
-            and declarationSymbol.typeNode >= 0
-            and declarationSymbol.secondaryTypeNode >= 0)
+            declarationSymbol.kind == 7
+                and declarationAst.secondaryToken < 0
+                and declarationSymbol.typeNode >= 0
+                and (declarationSymbol.secondaryTypeNode >= 0 or declarationSymbol.flags / 32 % 2 == 1)
                 -> if {
-            # An unnamed primary input is referenced as `it`. The synthetic
-            # flag lets typed IR compare that contextual name without
-            # manufacturing a source token.
-            symbols! -> push(Symbol {
-                kind: 35
-                parent: declarationSymbolIndex!
-                astNode: declarationSymbol.astNode
-                nameToken: declarationSymbol.nameToken
-                typeNode: declarationSymbol.typeNode
-                secondaryTypeNode: -1
-                blockNameToken: -1
-                blockTypeNode: -1
-                blockResultTypeNode: -1
-                flags: declarationSymbol.flags + 262144
-            })
+                    # An unnamed primary input is referenced as `it`. The synthetic
+                    # flag lets typed IR compare that contextual name without
+                    # manufacturing a source token.
+                    symbols! -> push(Symbol {
+                        kind: 35
+                        parent: declarationSymbolIndex!
+                        astNode: declarationSymbol.astNode
+                        nameToken: declarationSymbol.nameToken
+                        typeNode: declarationSymbol.typeNode
+                        secondaryTypeNode: -1
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: declarationSymbol.flags + 262144
+                    })
+                }
+            (declarationSymbol.kind == 7 or declarationSymbol.kind == 31) and declarationSymbol.blockNameToken >= 0 and declarationSymbol.blockTypeNode >= 0
+                -> if {
+                    symbols! -> push(Symbol {
+                        kind: 35
+                        parent: declarationSymbolIndex!
+                        astNode: declarationSymbol.astNode
+                        nameToken: declarationSymbol.blockNameToken
+                        typeNode: declarationSymbol.blockTypeNode
+                        secondaryTypeNode: -1
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: 0
+                    })
+                }
+            declarationSymbolIndex! + 1 => declarationSymbolIndex!
         }
-        ((declarationSymbol.kind == 7 or declarationSymbol.kind == 31) and declarationSymbol.blockNameToken >= 0 and declarationSymbol.blockTypeNode >= 0)
-            -> if {
-            symbols! -> push(Symbol {
-                kind: 35
-                parent: declarationSymbolIndex!
-                astNode: declarationSymbol.astNode
-                nameToken: declarationSymbol.blockNameToken
-                typeNode: declarationSymbol.blockTypeNode
-                secondaryTypeNode: -1
-                blockNameToken: -1
-                blockTypeNode: -1
-                blockResultTypeNode: -1
-                flags: 0
-            })
-        }
-        declarationSymbolIndex! + 1 => declarationSymbolIndex!
-    }
 
     # Source syntax places the first declared input on the method node and
     # later inputs on AdditionalFunctionInput nodes. A COM receiver becomes the
@@ -408,49 +409,49 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     0 => comParameterFunctionIndex!
     comParameterFunctionIndex! < declaredSymbolCount
         -> while {
-        symbols![comParameterFunctionIndex!] => comParameterFunction
-        (comParameterFunction.kind == 7
-            and comParameterFunction.flags / 512 % 2 == 1
-            and comParameterFunction.flags / 4096 % 2 == 0
-            and comParameterFunction.flags / 8192 % 2 == 0)
+            symbols![comParameterFunctionIndex!] => comParameterFunction
+            comParameterFunction.kind == 7
+                and comParameterFunction.flags / 512 % 2 == 1
+                and comParameterFunction.flags / 4096 % 2 == 0
+                and comParameterFunction.flags / 8192 % 2 == 0
                 -> if {
-            [Int; ~] => comParameterIndexes!
-            -1 => comFirstInputIndex!
-            0 => comParameterSearch!
-            comParameterSearch! < (symbols! -> len) -> while {
-                symbols![comParameterSearch!] => comParameterCandidate
-                (comParameterCandidate.kind == 35 and comParameterCandidate.parent == comParameterFunctionIndex!)
-                    -> if {
-                    comParameterIndexes! -> push(comParameterSearch!)
-                    comParameterCandidate.flags / 512 % 2 == 1 -> if { comParameterSearch! => comFirstInputIndex! }
-                }
-                comParameterSearch! + 1 => comParameterSearch!
-            }
-            ((comParameterIndexes! -> len) > 1 and comFirstInputIndex! >= 0 and comParameterIndexes![0] != comFirstInputIndex!)
-                -> if {
-                symbols![comFirstInputIndex!] => comFirstInput
-                (comParameterIndexes! -> len) - 1 => comShiftIndex!
-                comShiftIndex! > 0 -> while {
-                    comParameterIndexes![comShiftIndex!] => comShiftTarget
-                    comParameterIndexes![comShiftIndex! - 1] => comShiftSource
-                    symbols![comShiftSource] => comShiftedParameter
-                    comShiftedParameter => symbols![comShiftTarget]
-                    (comShiftedParameter.astNode >= 0 and comShiftedParameter.astNode < astCount)
-                        -> if {
-                        comShiftTarget => astToSymbol![comShiftedParameter.astNode]
+                    [Int; ~] => comParameterIndexes!
+                    -1 => comFirstInputIndex!
+                    0 => comParameterSearch!
+                    comParameterSearch! < (symbols! -> len) -> while {
+                        symbols![comParameterSearch!] => comParameterCandidate
+                        comParameterCandidate.kind == 35 and comParameterCandidate.parent == comParameterFunctionIndex!
+                            -> if {
+                                comParameterIndexes! -> push(comParameterSearch!)
+                                comParameterCandidate.flags / 512 % 2 == 1 -> if { comParameterSearch! => comFirstInputIndex! }
+                            }
+                        comParameterSearch! + 1 => comParameterSearch!
                     }
-                    comShiftIndex! - 1 => comShiftIndex!
+                    (comParameterIndexes! -> len) > 1 and comFirstInputIndex! >= 0 and comParameterIndexes![0] != comFirstInputIndex!
+                        -> if {
+                            symbols![comFirstInputIndex!] => comFirstInput
+                            (comParameterIndexes! -> len) - 1 => comShiftIndex!
+                            comShiftIndex! > 0 -> while {
+                                comParameterIndexes![comShiftIndex!] => comShiftTarget
+                                comParameterIndexes![comShiftIndex! - 1] => comShiftSource
+                                symbols![comShiftSource] => comShiftedParameter
+                                comShiftedParameter => symbols![comShiftTarget]
+                                comShiftedParameter.astNode >= 0 and comShiftedParameter.astNode < astCount
+                                    -> if {
+                                        comShiftTarget => astToSymbol![comShiftedParameter.astNode]
+                                    }
+                                comShiftIndex! - 1 => comShiftIndex!
+                            }
+                            comParameterIndexes![0] => comFirstTarget
+                            comFirstInput => symbols![comFirstTarget]
+                            comFirstInput.astNode >= 0 and comFirstInput.astNode < astCount
+                                -> if {
+                                    comFirstTarget => astToSymbol![comFirstInput.astNode]
+                                }
+                        }
                 }
-                comParameterIndexes![0] => comFirstTarget
-                comFirstInput => symbols![comFirstTarget]
-                (comFirstInput.astNode >= 0 and comFirstInput.astNode < astCount)
-                    -> if {
-                    comFirstTarget => astToSymbol![comFirstInput.astNode]
-                }
-            }
+            comParameterFunctionIndex! + 1 => comParameterFunctionIndex!
         }
-        comParameterFunctionIndex! + 1 => comParameterFunctionIndex!
-    }
 
     # Every COM method and clone has one implicit readonly interface receiver.
     # Its type is derived from the parent nominal interface symbol in the type
@@ -459,27 +460,27 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     0 => comReceiverFunctionIndex!
     comReceiverFunctionIndex! < beforeComReceivers
         -> while {
-        symbols![comReceiverFunctionIndex!] => comReceiverFunction
-        (comReceiverFunction.kind == 7
-            and comReceiverFunction.flags / 512 % 2 == 1
-            and comReceiverFunction.flags / 4096 % 2 == 0
-            and comReceiverFunction.parent >= 0) -> if {
-            symbols![comReceiverFunction.parent] => comReceiverInterface
-            symbols! -> push(Symbol {
-                kind: 35
-                parent: comReceiverFunctionIndex!
-                astNode: comReceiverFunction.astNode
-                nameToken: comReceiverInterface.nameToken
-                typeNode: -1
-                secondaryTypeNode: -1
-                blockNameToken: -1
-                blockTypeNode: -1
-                blockResultTypeNode: -1
-                flags: 512 + 16384
-            })
+            symbols![comReceiverFunctionIndex!] => comReceiverFunction
+            comReceiverFunction.kind == 7
+                and comReceiverFunction.flags / 512 % 2 == 1
+                and comReceiverFunction.flags / 4096 % 2 == 0
+                and comReceiverFunction.parent >= 0 -> if {
+                    symbols![comReceiverFunction.parent] => comReceiverInterface
+                    symbols! -> push(Symbol {
+                        kind: 35
+                        parent: comReceiverFunctionIndex!
+                        astNode: comReceiverFunction.astNode
+                        nameToken: comReceiverInterface.nameToken
+                        typeNode: -1
+                        secondaryTypeNode: -1
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: 512 + 16384
+                    })
+                }
+            comReceiverFunctionIndex! + 1 => comReceiverFunctionIndex!
         }
-        comReceiverFunctionIndex! + 1 => comReceiverFunctionIndex!
-    }
 
     # Each enum arm is a lexical scope. A payload name belongs only to that
     # arm and is synthesized from the pattern's secondary token.
@@ -492,25 +493,25 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
             enumPatternAstIndex! < astCount -> while {
                 nodes[enumPatternAstIndex!] => enumPatternAst
                 enumPatternAst.parent => enumPatternOwnerAst!
-                (enumPatternOwnerAst! >= 0 and nodes[enumPatternOwnerAst!].kind == 70)
+                enumPatternOwnerAst! >= 0 and nodes[enumPatternOwnerAst!].kind == 70
                     -> if {
-                    nodes[enumPatternOwnerAst!].parent => enumPatternOwnerAst!
-                }
-                (enumPatternAst.kind == 59 and enumPatternOwnerAst! == enumArmScope.astNode and enumPatternAst.secondaryToken >= 0)
+                        nodes[enumPatternOwnerAst!].parent => enumPatternOwnerAst!
+                    }
+                enumPatternAst.kind == 59 and enumPatternOwnerAst! == enumArmScope.astNode and enumPatternAst.secondaryToken >= 0
                     -> if {
-                    symbols! -> push(Symbol {
-                        kind: 35
-                        parent: enumArmScopeIndex!
-                        astNode: enumPatternAstIndex!
-                        nameToken: enumPatternAst.secondaryToken
-                        typeNode: -1
-                        secondaryTypeNode: -1
-                        blockNameToken: -1
-                        blockTypeNode: -1
-                        blockResultTypeNode: -1
-                        flags: 0
-                    })
-                }
+                        symbols! -> push(Symbol {
+                            kind: 35
+                            parent: enumArmScopeIndex!
+                            astNode: enumPatternAstIndex!
+                            nameToken: enumPatternAst.secondaryToken
+                            typeNode: -1
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: 0
+                        })
+                    }
                 enumPatternAstIndex! + 1 => enumPatternAstIndex!
             }
         }

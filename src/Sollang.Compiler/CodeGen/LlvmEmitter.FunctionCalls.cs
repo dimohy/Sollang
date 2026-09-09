@@ -114,14 +114,16 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeFlushStandardOutputIntrinsic();
         }
 
-        if (function.Kind == BoundFunctionKind.RuntimeNowMillis)
+        if (function.Kind is BoundFunctionKind.RuntimeNowMillis or BoundFunctionKind.RuntimeUtcNowMillis)
         {
             if (expression.Arguments.Count != 0)
             {
                 throw new SollangException($"{path} does not accept arguments");
             }
 
-            return EmitRuntimeNowMillisIntrinsic(path);
+            return function.Kind == BoundFunctionKind.RuntimeUtcNowMillis
+                ? EmitRuntimeUtcNowMillisIntrinsic(path)
+                : EmitRuntimeNowMillisIntrinsic(path);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeRangeStream)
@@ -135,14 +137,13 @@ internal sealed partial class LlvmEmitter
 
         if (function.Kind == BoundFunctionKind.RuntimeMouseEvents)
         {
-            if (expression.Arguments.Count != 2)
+            if (expression.Arguments.Count != 1)
             {
-                throw new SollangException($"{path} expects capacity and overflow arguments");
+                throw new SollangException($"{path} expects exactly one Source argument");
             }
             return EmitRuntimeMouseEvents(
                 function,
                 EmitExpression(expression.Arguments[0]),
-                EmitExpression(expression.Arguments[1]),
                 path);
         }
 
@@ -410,13 +411,37 @@ internal sealed partial class LlvmEmitter
             or BoundFunctionKind.RuntimeSocketAccept
             or BoundFunctionKind.RuntimeSocketConnect
             or BoundFunctionKind.RuntimeSocketReceive
+            or BoundFunctionKind.RuntimeSocketReceiveAppend
+            or BoundFunctionKind.RuntimeSocketReceiveVectored
+            or BoundFunctionKind.RuntimeSocketPeek
             or BoundFunctionKind.RuntimeSocketSend
+            or BoundFunctionKind.RuntimeSocketSendRange
+            or BoundFunctionKind.RuntimeSocketSendVectored
+            or BoundFunctionKind.RuntimeSocketTryClone
             or BoundFunctionKind.RuntimeSocketSendText
             or BoundFunctionKind.RuntimeSocketShutdown
             or BoundFunctionKind.RuntimeSocketBindDatagram
             or BoundFunctionKind.RuntimeSocketLocalPort
+            or BoundFunctionKind.RuntimeSocketLocalEndpoint
+            or BoundFunctionKind.RuntimeSocketRemoteEndpoint
+            or BoundFunctionKind.RuntimeSocketSetNoDelay
+            or BoundFunctionKind.RuntimeSocketNoDelay
+            or BoundFunctionKind.RuntimeSocketSetKeepAlive
+            or BoundFunctionKind.RuntimeSocketKeepAlive
+            or BoundFunctionKind.RuntimeSocketSetLinger
+            or BoundFunctionKind.RuntimeSocketLinger
+            or BoundFunctionKind.RuntimeSocketSetReadTimeout
+            or BoundFunctionKind.RuntimeSocketReadTimeout
+            or BoundFunctionKind.RuntimeSocketSetWriteTimeout
+            or BoundFunctionKind.RuntimeSocketWriteTimeout
             or BoundFunctionKind.RuntimeSocketSendTo
-            or BoundFunctionKind.RuntimeSocketReceiveFrom))
+            or BoundFunctionKind.RuntimeSocketReceiveFrom
+            or BoundFunctionKind.RuntimeSocketPeekFrom
+            or BoundFunctionKind.RuntimeSocketClose
+            or BoundFunctionKind.RuntimeSocketSetNonblocking
+            or BoundFunctionKind.RuntimeSocketPoll
+            or BoundFunctionKind.RuntimeSocketReactorWait
+            or BoundFunctionKind.RuntimeDnsLookup))
         {
             throw new SollangException($"unsupported runtime function kind '{function.Kind}'");
         }
@@ -474,7 +499,11 @@ internal sealed partial class LlvmEmitter
             }
         }
 
+        var borrowedTemporaries = new List<RuntimeValue>();
         var additionalArgumentOffset = methodReceiverName is not null || function.InputType is null ? 0 : 1;
+        if (additionalArgumentOffset > 0 && argument is not null
+            && function.InputOwnership == BoundFunctionInputOwnership.Default)
+            TrackReadonlyCallTemporary(expression.Arguments[0], argument, borrowedTemporaries);
         var additionalArguments = (function.AdditionalParameters ?? [])
             .Select((parameter, index) =>
             {
@@ -485,11 +514,15 @@ internal sealed partial class LlvmEmitter
                         ? CreateReadonlyReferenceArgument(argumentExpression, parameter.Type, path)
                     : EmitFunctionArgumentExpression(argumentExpression, parameter.Type);
                 EnsureFunctionArgumentRuntimeType(value, parameter.Type, path);
+                if (parameter.Ownership == BoundFunctionInputOwnership.Default)
+                    TrackReadonlyCallTemporary(argumentExpression, value, borrowedTemporaries);
                 return value;
             })
             .ToArray();
         var value = EmitFunctionCall(function, argument, additionalArguments);
         RemoveOwnedParameterArgumentsIfNeeded(function, expression.Arguments, additionalArgumentOffset);
+        foreach (var temporary in borrowedTemporaries.AsEnumerable().Reverse())
+            DropOwnedRuntimeValue(temporary);
         return value;
     }
 
@@ -555,13 +588,22 @@ internal sealed partial class LlvmEmitter
         BoundFunction function,
         RuntimeValue argument,
         Expression source,
-        IReadOnlyList<Expression> additionalExpressions)
+        IReadOnlyList<Expression> additionalExpressions,
+        bool receivesSourcePlace, bool ownsFlowTemporary)
     {
         if (function.InputType is null)
         {
             throw new SollangException($"function '{function.Name}' does not accept a flowed input");
         }
 
+        var borrowedTemporaries = new List<RuntimeValue>();
+        if (function.InputOwnership == BoundFunctionInputOwnership.Default)
+        {
+            if (receivesSourcePlace)
+                TrackReadonlyCallTemporary(source, argument, borrowedTemporaries);
+            else if (ownsFlowTemporary && IsOwnedContainerRuntimeValue(argument))
+                borrowedTemporaries.Add(argument);
+        }
         var functionArgument = function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow
             ? CreateMutableBorrowArgument(
                 source,
@@ -582,18 +624,45 @@ internal sealed partial class LlvmEmitter
                         additionalExpressions[index], parameter.Type, function.Name, parameter.Name)
                     : _program.Types.IsReference(parameter.Type)
                         ? CreateReadonlyReferenceArgument(additionalExpressions[index], parameter.Type, function.Name)
-                        : EmitFunctionArgumentExpression(additionalExpressions[index], parameter.Type);
+                        : EmitFlowAdditionalValue(parameter.Type, additionalExpressions[index],
+                            parameter.Ownership == BoundFunctionInputOwnership.Default ? borrowedTemporaries : null);
                 EnsureFunctionArgumentRuntimeType(value, parameter.Type, function.Name);
                 return value;
             })
             .ToArray();
         var value = EmitFunctionCall(function, functionArgument, additionalArguments);
-        RemoveOwnedParameterFlowArgumentsIfNeeded(function, source, additionalExpressions);
+        RemoveOwnedParameterFlowArgumentsIfNeeded(function, source, additionalExpressions, receivesSourcePlace);
+        foreach (var temporary in borrowedTemporaries.AsEnumerable().Reverse())
+            DropOwnedRuntimeValue(temporary);
         return value;
+    }
+
+    private void TrackReadonlyCallTemporary(Expression expression, RuntimeValue value, List<RuntimeValue> temporaries)
+    {
+        if (expression is not (NameExpression or FieldAccessExpression or IndexExpression)
+            && IsOwnedContainerRuntimeValue(value))
+            temporaries.Add(value);
+    }
+
+    private RuntimeValue EmitFlowAdditionalValue(BoundType expectedType, Expression expression, List<RuntimeValue>? temporaries = null)
+    {
+        var value = EmitFunctionArgumentExpression(expression, expectedType);
+        if (temporaries is not null)
+            TrackReadonlyCallTemporary(expression, value, temporaries);
+        return _program.Types.IsSlice(expectedType)
+            ? CreateRuntimeSlice(expectedType, value)
+            : value;
     }
 
     private RuntimeValue EmitFunctionArgumentExpression(Expression expression, BoundType expectedType)
     {
+        if (_program.Types.IsReference(expectedType))
+        {
+            return CreateReadonlyReferenceArgument(
+                expression,
+                expectedType,
+                _currentFunction?.Name ?? "reference result");
+        }
         if (expression is WhenExpression whenExpression && IsIntegerType(expectedType))
         {
             return EmitWhenExpression(whenExpression, expectedType);
@@ -935,19 +1004,31 @@ internal sealed partial class LlvmEmitter
     private bool TryResolveInstanceMethod(BoundType receiverType, string methodName, out BoundFunction function)
     {
         function = null!;
-        if (!_program.Types.IsStruct(receiverType))
+        var typeName = _program.Types.IsStruct(receiverType)
+            ? _program.Types.GetStruct(receiverType).Name
+            : _program.Types.IsEnum(receiverType)
+                ? _program.Types.GetEnum(receiverType).Name
+                : null;
+        if (typeName is null)
         {
             return false;
         }
-
-        var typeName = _program.Types.GetStruct(receiverType).Name;
         if (methodName.Contains('.', StringComparison.Ordinal))
         {
             var separator = methodName.LastIndexOf('.');
             var traitName = methodName[..separator];
             var memberName = methodName[(separator + 1)..];
-            return _currentFunctions.TryGetValue(traitName + "." + typeName + "." + memberName, out function!)
-                && function.InputType == receiverType;
+            if (_currentFunctions.TryGetValue(traitName + "." + typeName + "." + memberName, out function!)
+                && function.InputType == receiverType)
+            {
+                return true;
+            }
+
+            // Semantic import resolution may canonicalize an unqualified flow
+            // target to an unrelated global. If it is not a real trait method
+            // for this receiver, retain inherent receiver precedence by using
+            // the final segment as the instance-method name.
+            methodName = memberName;
         }
 
         if (_currentFunctions.TryGetValue(typeName + "." + methodName, out function!)
@@ -1076,6 +1157,8 @@ internal sealed partial class LlvmEmitter
             var value = function.Body is null
                 ? RuntimeUnit.Instance
                 : EmitFunctionArgumentExpression(function.Body, function.ReturnType);
+            if (function.Body is not null)
+                value = PrepareBorrowedFixedStorageReturn(function.Body, value);
             EnsureRuntimeType(value, function.ReturnType, function.Name);
             var transferredOwnerName = function.Body is not null && IsOwnedContainerRuntimeValue(value)
                 ? GetFunctionResultTransferredOwnerName(function, function.Body)
@@ -1101,15 +1184,41 @@ internal sealed partial class LlvmEmitter
             or BoundFunctionKind.RuntimeSocketAccept
             or BoundFunctionKind.RuntimeSocketConnect
             or BoundFunctionKind.RuntimeSocketReceive
+            or BoundFunctionKind.RuntimeSocketReceiveAppend
+            or BoundFunctionKind.RuntimeSocketReceiveVectored
+            or BoundFunctionKind.RuntimeSocketPeek
             or BoundFunctionKind.RuntimeSocketSend
+            or BoundFunctionKind.RuntimeSocketSendRange
+            or BoundFunctionKind.RuntimeSocketSendVectored
+            or BoundFunctionKind.RuntimeSocketTryClone
             or BoundFunctionKind.RuntimeSocketSendText
             or BoundFunctionKind.RuntimeSocketShutdown
             or BoundFunctionKind.RuntimeSocketBindDatagram
             or BoundFunctionKind.RuntimeSocketLocalPort
+            or BoundFunctionKind.RuntimeSocketLocalEndpoint
+            or BoundFunctionKind.RuntimeSocketRemoteEndpoint
+            or BoundFunctionKind.RuntimeSocketSetNoDelay
+            or BoundFunctionKind.RuntimeSocketNoDelay
+            or BoundFunctionKind.RuntimeSocketSetKeepAlive
+            or BoundFunctionKind.RuntimeSocketKeepAlive
+            or BoundFunctionKind.RuntimeSocketSetLinger
+            or BoundFunctionKind.RuntimeSocketLinger
+            or BoundFunctionKind.RuntimeSocketSetReadTimeout
+            or BoundFunctionKind.RuntimeSocketReadTimeout
+            or BoundFunctionKind.RuntimeSocketSetWriteTimeout
+            or BoundFunctionKind.RuntimeSocketWriteTimeout
             or BoundFunctionKind.RuntimeSocketSendTo
-            or BoundFunctionKind.RuntimeSocketReceiveFrom)
+            or BoundFunctionKind.RuntimeSocketReceiveFrom
+            or BoundFunctionKind.RuntimeSocketPeekFrom
+            or BoundFunctionKind.RuntimeSocketClose
+            or BoundFunctionKind.RuntimeSocketSetNonblocking
+            or BoundFunctionKind.RuntimeSocketPoll
+            or BoundFunctionKind.RuntimeSocketReactorWait
+            or BoundFunctionKind.RuntimeDnsLookup)
         {
-            return EmitRuntimeSocketCall(function, argument, additionalArguments ?? []);
+            return function.Kind == BoundFunctionKind.RuntimeDnsLookup
+                ? EmitRuntimeDnsLookup(function, argument, additionalArguments ?? [])
+                : EmitRuntimeSocketCall(function, argument, additionalArguments ?? []);
         }
         if (function.Kind == BoundFunctionKind.Native)
         {
@@ -1150,14 +1259,16 @@ internal sealed partial class LlvmEmitter
             return EmitReadIntPrompt(argument);
         }
 
-        if (function.Kind == BoundFunctionKind.RuntimeNowMillis)
+        if (function.Kind is BoundFunctionKind.RuntimeNowMillis or BoundFunctionKind.RuntimeUtcNowMillis)
         {
             if (argument is not null)
             {
                 throw new SollangException($"{function.Name} does not accept an argument");
             }
 
-            return EmitRuntimeNowMillisIntrinsic(function.Name);
+            return function.Kind == BoundFunctionKind.RuntimeUtcNowMillis
+                ? EmitRuntimeUtcNowMillisIntrinsic(function.Name)
+                : EmitRuntimeNowMillisIntrinsic(function.Name);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeRangeStream)
@@ -1171,15 +1282,14 @@ internal sealed partial class LlvmEmitter
 
         if (function.Kind == BoundFunctionKind.RuntimeMouseEvents)
         {
-            if (argument is null || additionalArguments is not { Count: 1 })
+            if (argument is null || additionalArguments is { Count: > 0 })
             {
                 throw new SollangException(
-                    $"{function.Name} expects capacity and overflow arguments");
+                    $"{function.Name} expects exactly one Source argument");
             }
             return EmitRuntimeMouseEvents(
                 function,
                 argument,
-                additionalArguments[0],
                 function.Name);
         }
 
@@ -1249,20 +1359,71 @@ internal sealed partial class LlvmEmitter
 
         if (function.Kind == BoundFunctionKind.RuntimeRunProcess)
         {
-            if (argument is not RuntimeDynamicInlineArray argv)
+            if (argument is not RuntimeStruct command || additionalArguments is { Count: > 0 })
             {
-                throw new SollangException($"{function.Name} expects a dynamic Text argv array");
+                throw new SollangException($"{function.Name} expects one Command receiver");
             }
-            return EmitRuntimeRunProcessIntrinsic(function, argv);
+            return EmitRuntimeRunProcessIntrinsic(function, command);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeSpawnProcess)
+        {
+            if (argument is not RuntimeStruct command || additionalArguments is { Count: > 0 })
+            {
+                throw new SollangException($"{function.Name} expects one Command receiver");
+            }
+            return EmitRuntimeSpawnProcessIntrinsic(function, command);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeRunProcessToFile)
         {
-            if (argument is not RuntimeStruct request)
+            if (argument is not RuntimeStruct command
+                || additionalArguments is not { Count: 1 }
+                || additionalArguments[0] is not RuntimeText output)
             {
-                throw new SollangException($"{function.Name} expects a RunToFileRequest");
+                throw new SollangException($"{function.Name} expects a Command receiver and Text output path");
             }
-            return EmitRuntimeRunProcessToFileIntrinsic(function, request);
+            return EmitRuntimeRunProcessToFileIntrinsic(function, command, output);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeCollectProcess)
+        {
+            if (argument is not RuntimeStruct command
+                || additionalArguments is not { Count: 1 }
+                || additionalArguments[0] is not RuntimeStruct limits)
+            {
+                throw new SollangException(
+                    $"{function.Name} expects a Command receiver and CaptureLimits");
+            }
+            return EmitRuntimeCollectProcessIntrinsic(function, command, limits);
+        }
+
+
+        if (function.Kind == BoundFunctionKind.RuntimeWaitProcess)
+        {
+            if (argument is not RuntimeStruct child || additionalArguments is { Count: > 0 })
+            {
+                throw new SollangException($"{function.Name} expects one Child receiver");
+            }
+            return EmitRuntimeWaitProcessIntrinsic(function, child);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeChildProcessId)
+        {
+            if (argument is not RuntimeStruct child || additionalArguments is { Count: > 0 })
+            {
+                throw new SollangException($"{function.Name} expects one Child receiver");
+            }
+            return EmitRuntimeChildProcessIdIntrinsic(function, child);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeProcessIdValue)
+        {
+            if (argument is not RuntimeStruct processId || additionalArguments is { Count: > 0 })
+            {
+                throw new SollangException($"{function.Name} expects one ProcessId receiver");
+            }
+            return EmitRuntimeProcessIdValueIntrinsic(function, processId);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeExitProcess)
@@ -1445,6 +1606,7 @@ internal sealed partial class LlvmEmitter
 
         return function.ReturnType switch
         {
+            BoundType.Arguments => EmitStructFunctionCall(function, argument, additionalArguments),
             BoundType.Unit => EmitUnitFunctionCall(function, argument, additionalArguments),
             BoundType.Text => EmitTextFunctionCall(function, argument, additionalArguments),
             BoundType.Int => EmitIntFunctionCall(function, argument, additionalArguments),
@@ -1756,12 +1918,12 @@ internal sealed partial class LlvmEmitter
                 RuntimeStaticIntArray array => (
                     array.PointerName,
                     array.LengthName,
-                    BoundType.StaticIntArray,
+                    array.Type,
                     int.TryParse(array.LengthName, out var intLength) ? intLength : (int?)null),
                 RuntimeStaticTextArray array => (
                     array.PointerName,
                     array.LengthName,
-                    BoundType.StaticTextArray,
+                    array.Type,
                     int.TryParse(array.LengthName, out var textLength) ? textLength : (int?)null),
                 RuntimeStaticInlineArray array => (
                     array.PointerName,
@@ -1835,6 +1997,8 @@ internal sealed partial class LlvmEmitter
 
         return argument switch
         {
+            RuntimeArguments arguments when function.InputType == BoundType.Arguments =>
+                $"i64 {arguments.LengthName}",
             RuntimeText text when function.InputType == BoundType.Text =>
                 $"%sollang.text {BuildTextAggregate(text)}",
             RuntimeSourceText source when function.InputType == BoundType.SourceText =>
@@ -1907,7 +2071,8 @@ internal sealed partial class LlvmEmitter
         var expected = _program.Types.GetStaticArray(expectedType);
         var (pointer, length, actualElement, actualArrayType) = argument switch
         {
-            RuntimeStaticIntArray array => (array.PointerName, array.LengthName, BoundType.Int, (BoundType?)null),
+            RuntimeStaticIntArray array => (array.PointerName, array.LengthName, BoundType.Int, array.ArrayType),
+            RuntimeStaticTextArray array => (array.PointerName, array.LengthName, BoundType.Text, array.ArrayType),
             RuntimeStaticInlineArray array => (array.PointerName, array.LengthName, array.ElementType, array.ArrayType),
             _ => throw new SollangException(
                 $"function '{functionName}' expects a static array but received {argument.Type}")
@@ -2113,6 +2278,10 @@ internal sealed partial class LlvmEmitter
         if (_mutableStructSlots.TryGetValue(name.Name, out var mutablePointer))
         {
             return new RuntimeReference(referenceType, elementType, mutablePointer);
+        }
+        if (_mutableScalarSlots.TryGetValue(name.Name, out var scalarPointer))
+        {
+            return new RuntimeReference(referenceType, elementType, scalarPointer);
         }
         if (_mutableContainerSlots.ContainsKey(name.Name))
         {
@@ -2382,19 +2551,34 @@ internal sealed partial class LlvmEmitter
     {
         if (FunctionConsumesOwnedHeapInput(function)
             && function.InputType is not null
-            && additionalArgumentOffset > 0
-            && arguments[0] is NameExpression primaryName)
+            && additionalArgumentOffset > 0)
         {
-            RemoveLocal(primaryName.Name);
+            if (arguments[0] is NameExpression primaryName)
+            {
+                RemoveLocal(primaryName.Name);
+            }
+            else
+            {
+                ConsumeOwnedFieldProjection(arguments[0], function.InputType.Value);
+            }
         }
 
         var parameters = function.AdditionalParameters ?? [];
         for (var index = 0; index < parameters.Count; index++)
         {
-            if (parameters[index].Ownership == BoundFunctionInputOwnership.Move
-                && arguments[additionalArgumentOffset + index] is NameExpression name)
+            if (parameters[index].Ownership != BoundFunctionInputOwnership.Move)
+            {
+                continue;
+            }
+
+            var argument = arguments[additionalArgumentOffset + index];
+            if (argument is NameExpression name)
             {
                 RemoveLocal(name.Name);
+            }
+            else
+            {
+                ConsumeOwnedFieldProjection(argument, parameters[index].Type);
             }
         }
     }
@@ -2402,20 +2586,39 @@ internal sealed partial class LlvmEmitter
     private void RemoveOwnedParameterFlowArgumentsIfNeeded(
         BoundFunction function,
         Expression source,
-        IReadOnlyList<Expression> additionalArguments)
+        IReadOnlyList<Expression> additionalArguments,
+        bool receivesSourcePlace)
     {
-        if (FunctionConsumesOwnedHeapInput(function) && source is NameExpression primaryName)
+        // Subsequent flow edges receive an already emitted temporary. Moving
+        // that result must not remove the original expression's named place.
+        if (receivesSourcePlace && FunctionConsumesOwnedHeapInput(function))
         {
-            RemoveLocal(primaryName.Name);
+            if (source is NameExpression primaryName)
+            {
+                RemoveLocal(primaryName.Name);
+            }
+            else
+            {
+                ConsumeOwnedFieldProjection(source, function.InputType!.Value);
+            }
         }
 
         var parameters = function.AdditionalParameters ?? [];
         for (var index = 0; index < parameters.Count; index++)
         {
-            if (parameters[index].Ownership == BoundFunctionInputOwnership.Move
-                && additionalArguments[index] is NameExpression name)
+            if (parameters[index].Ownership != BoundFunctionInputOwnership.Move)
+            {
+                continue;
+            }
+
+            var argument = additionalArguments[index];
+            if (argument is NameExpression name)
             {
                 RemoveLocal(name.Name);
+            }
+            else
+            {
+                ConsumeOwnedFieldProjection(argument, parameters[index].Type);
             }
         }
     }
@@ -2710,6 +2913,17 @@ internal sealed partial class LlvmEmitter
             BoundType? receiverType = null)
         {
             BoundFunction? target = null;
+            if (_program.DynTraitConversions.TryGetValue(callSite, out var conversion))
+            {
+                if (_reachableDynTraitConversions.Add(conversion))
+                {
+                    foreach (var method in conversion.Methods)
+                    {
+                        RecordTarget(method, CanonicalFunctionName(method).Split('.'));
+                    }
+                }
+                return;
+            }
             if (receiverType is { } typedReceiver
                 && TryResolveInstanceMethod(typedReceiver, string.Join('.', path), out var instanceMethod))
             {

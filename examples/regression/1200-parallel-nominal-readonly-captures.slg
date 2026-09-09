@@ -1,0 +1,39 @@
+struct Request {
+    base: Int
+    count: Int
+}
+
+struct Batch {
+    values: [Int; ~]
+}
+
+struct LoweringConfig {
+    offset: Int
+}
+
+lowerAll requests: [Request; ~], config: ref LoweringConfig, scale: Int -> [Batch; ~] {
+    lower request: Request -> Batch {
+        [Int; ~] => values!
+        0 => index!
+        index! < request.count -> while {
+            values! -> push((request.base + config.offset + index!) * scale)
+            index! + 1 => index!
+        }
+        Batch { values: values! }
+    }
+
+    # The local worker captures both a readonly reference and a copyable scalar.
+    # Ownership diagnostics remain the authority for rejecting unsafe captures;
+    # the LLVM emitter must not silently fall back to a serial loop for these.
+    requests -> parallel request {
+        request -> lower
+    } => batches
+    batches
+}
+
+main {
+    [Request { base: 10, count: 2 }, Request { base: 20, count: 3 }; ~] => requests
+    LoweringConfig { offset: 1 } => config
+    requests -> lowerAll(config, 2) => batches
+    "batches=$(batches -> len)" -> println
+}

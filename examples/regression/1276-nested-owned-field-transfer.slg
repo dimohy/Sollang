@@ -1,0 +1,35 @@
+# A consuming aggregate transfer keeps nested moved fields alive and drops only their retained siblings.
+struct NestedOwner {
+    transferred: [Int; ~]
+    retained: [Int; ~]
+}
+
+struct Owner {
+    nested: NestedOwner
+    direct: [Int; ~]
+}
+
+struct Transferred {
+    nested: [Int; ~]
+    direct: [Int; ~]
+}
+
+impl Owner {
+    public transfer: move self -> Transferred {
+        Transferred {
+            nested: self.nested.transferred
+            direct: self.direct
+        }
+    }
+}
+
+main {
+    Owner {
+        nested: NestedOwner {
+            transferred: [11, 12]
+            retained: [21, 22, 23]
+        }
+        direct: [31]
+    } -> transfer => result
+    "nested-transfer=true" -> println
+}

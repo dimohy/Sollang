@@ -1,0 +1,166 @@
+import std.net.http as http
+import std.net.http.body as body
+
+bytesEqual left: ref [UInt8; ~], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+decodeFixed policy: body.BodyPolicy, head: ref http.RequestHead -> Result<Bool, http.Error> {
+    policy -> request(head)? => plan
+    plan -> decoder? => decoder!
+    [UInt8; ~] => output!
+    decoder! -> write([97, 98, 99, 88], output!)? => progress
+    progress.consumed == 3
+        and progress.produced == 3
+        and progress.complete
+        and (output! -> bytesEqual([97, 98, 99]))
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+decodeChunked policy: body.BodyPolicy, head: ref http.RequestHead -> Result<Bool, http.Error> {
+    policy -> request(head)? => plan
+    plan -> decoder? => decoder!
+    [UInt8; ~] => output!
+    [UInt8(52), 13, 10, 87, 105, 107, 105, 13, 10,
+    53, 13, 10, 112, 101, 100, 105, 97, 13, 10,
+    48, 13, 10, 88, 45, 84, 101, 115, 116, 58, 32, 111, 107, 13, 10, 13, 10, 90]
+        => encoded
+    decoder! -> write(encoded, output!)? => progress
+    progress.consumed + 1 == UIntSize(encoded -> len)
+        and progress.complete
+        and (output! -> bytesEqual([87, 105, 107, 105, 112, 101, 100, 105, 97]))
+        => valid
+    Result<Bool, http.Error>.Ok(valid)
+}
+
+fixedLengthWorks policy: body.BodyPolicy, parser: http.Parser -> Bool {
+    parser -> parseRequest("POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\n") -> when {
+        Err(_) { false }
+        Ok(head) => policy -> decodeFixed(head) -> when {
+            Err(_) { false }
+            Ok(valid) { valid }
+        }
+    }
+}
+
+chunkedWorks policy: body.BodyPolicy, parser: http.Parser -> Bool {
+    parser -> parseRequest("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n") -> when {
+        Err(_) { false }
+        Ok(head) => policy -> decodeChunked(head) -> when {
+            Err(_) { false }
+            Ok(valid) { valid }
+        }
+    } => plain
+    parser -> parseRequest("POST / HTTP/1.1\r\nTransfer-Encoding: gzip \t, \tchunked\r\n\r\n") -> when {
+        Err(_) { false }
+        Ok(head) => policy -> decodeChunked(head) -> when {
+            Err(_) { false }
+            Ok(valid) { valid }
+        }
+    } => withOws
+    plain and withOws
+}
+
+rejectsConflict policy: body.BodyPolicy, parser: http.Parser -> Bool {
+    parser -> parseRequest("POST / HTTP/1.1\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n") -> when {
+        Err(_) { false }
+        Ok(head) => policy -> request(head) -> when {
+            Ok(_) { false }
+            Err(error) => error.kind -> when {
+                ConflictingBodyFraming { true }
+                else { false }
+            }
+        }
+    }
+}
+
+responseRules policy: body.BodyPolicy, parser: http.Parser -> Bool {
+    parser -> parseResponse("HTTP/1.1 204 No Content\r\nContent-Length: 9\r\n\r\n") -> when {
+        Err(_) { false }
+        Ok(head) => policy -> responseContext("GET") -> plan(head) -> when {
+            Err(_) { false }
+            Ok(plan) => plan.framing -> when {
+                None { true }
+                else { false }
+            }
+        }
+    } => noContent
+    parser -> parseResponse("HTTP/1.1 200 OK\r\n\r\n") -> when {
+        Err(_) { false }
+        Ok(head) => policy -> responseContext("GET") -> plan(head) -> when {
+            Err(_) { false }
+            Ok(plan) => plan.framing -> when {
+                UntilClose { true }
+                else { false }
+            }
+        }
+    } => untilClose
+    parser -> parseResponse("HTTP/1.1 200 Connection Established\r\n\r\n") -> when {
+        Err(_) { false }
+        Ok(head) => policy -> responseContext("CONNECT") -> plan(head) -> when {
+            Err(_) { false }
+            Ok(plan) => plan.framing -> when {
+                Tunnel { true }
+                else { false }
+            }
+        }
+    } => tunnel
+    noContent and untilClose and tunnel
+}
+
+connectionTokensWork parser: http.Parser -> Result<Bool, http.Error> {
+    parser -> parseResponse("HTTP/1.1 200 OK\r\nConnection: upgrade \t, \tclose\r\n\r\n")? => head
+    head -> fieldValueHasToken(0, "close")? => closes
+    head -> fieldValueHasToken(0, "keep-alive")? => keepsAlive
+    parser -> parseResponse("HTTP/1.1 200 OK\r\nConnection: close,\r\n\r\n")? => malformed
+    malformed -> fieldValueHasToken(0, "close") -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidFieldValue { true }
+            else { false }
+        }
+    } => rejectsTrailingComma
+    Result<Bool, http.Error>.Ok(closes and not keepsAlive and rejectsTrailingComma)
+}
+
+main {
+    http.limits(8_192, 4_096, 32, 128, 4_096) -> when {
+        Err(_) { "http body setup failed" -> println }
+        Ok(headLimits) => http.parser(headLimits) -> when {
+            Err(_) { "http body setup failed" -> println }
+            Ok(parser) => body.BodyLimits {
+                maxEncodedBytes: 1_024
+                maxDecodedBytes: 1_024
+                maxChunkLineBytes: 128
+                maxTrailerBytes: 256
+                maxTrailerFields: 8
+            } -> policy -> when {
+                Err(_) { "http body setup failed" -> println }
+                Ok(policy) {
+                    policy -> fixedLengthWorks(parser) => fixed
+                    policy -> chunkedWorks(parser) => chunked
+                    policy -> rejectsConflict(parser) => conflict
+                    policy -> responseRules(parser) => responses
+                    connectionTokensWork(parser) -> when {
+                        Err(_) { false }
+                        Ok(valid) { valid }
+                    } => connectionTokens
+                    fixed
+                        and chunked
+                        and conflict
+                        and responses
+                        and connectionTokens
+                        -> if { "http body ok" } else { "http body failed" }
+                        -> println
+                }
+            }
+        }
+    }
+}

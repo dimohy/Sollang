@@ -10,9 +10,17 @@ internal static class FunctionControlFlowFacts
 
     public static bool AllPathsReturn(Expression expression) => !MayReachContinuation(expression);
 
-    public static bool MayReachContinuation(BlockBody block)
+    public static bool MayExitEarly(Expression expression) => ContainsReturn(expression);
+
+    public static bool MayReachContinuation(BoundFunction function) =>
+        MayReachContinuation(function.BlockBody, function.Body);
+
+    public static bool MayReachContinuation(BlockBody block) =>
+        MayReachContinuation(block.Statements, block.Value);
+
+    private static bool MayReachContinuation(IEnumerable<Statement> statements, Expression? value)
     {
-        foreach (var statement in block.Statements)
+        foreach (var statement in statements)
         {
             if (!MayReachContinuation(statement))
             {
@@ -20,7 +28,7 @@ internal static class FunctionControlFlowFacts
             }
         }
 
-        return block.Value is null || MayReachContinuation(block.Value);
+        return value is null || MayReachContinuation(value);
     }
 
     private static bool MayReachContinuation(Statement statement) => statement switch
@@ -193,7 +201,7 @@ internal static class FunctionControlFlowFacts
         StructLiteralExpression structure => structure.Fields.Any(field => ContainsReturn(field.Value)),
         ProductExpression product => product.Elements.Any(element => ContainsReturn(element.Value)),
         FieldAccessExpression field => ContainsReturn(field.Source),
-        TryExpression attempt => ContainsReturn(attempt.Value),
+        TryExpression => true,
         BoxExpression box => ContainsReturn(box.Value),
         MapExpression map => ContainsReturn(map.Path)
             || (map.Offset is not null && ContainsReturn(map.Offset))

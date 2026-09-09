@@ -1,0 +1,33 @@
+namespace std.net.quic.tls_transcript
+
+import std.crypto.sha256
+
+public struct Transcript {
+    public bytes: [UInt8; ~]
+}
+
+public create: -> Transcript => Transcript { bytes: [] }
+
+appendBytes bytes: mut [UInt8; ~], message: [UInt8] -> Unit {
+    0 => index!
+    index! < (message -> len) -> while {
+        bytes -> push(message[index!])
+        index! + 1 => index!
+    }
+}
+
+impl Transcript {
+    public append: mut self, message: [UInt8] -> Unit {
+        self.bytes -> appendBytes(message)
+    }
+
+    public hash: self -> [UInt8; 32] {
+        sha256.create() => hasher!
+        hasher! -> update(self.bytes)
+        hasher! -> finish
+    }
+
+    public byteCount: self -> Int {
+        self.bytes -> len
+    }
+}

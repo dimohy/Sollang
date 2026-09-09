@@ -42,6 +42,7 @@ internal static class SemanticStableIdentity
             {
                 fields.Add(field.Name);
                 fields.Add(Type(types, field.Type));
+                fields.Add(field.IsPublic ? "public" : "private");
             }
         }
         foreach (var enumeration in types.Enums.Where(static value => value.IsPublic)
@@ -71,7 +72,14 @@ internal static class SemanticStableIdentity
                 fields.Add(method.Name);
                 fields.Add(((int)method.SelfOwnership).ToString(CultureInfo.InvariantCulture));
                 fields.Add(method.ReturnType is { } result ? Type(types, result) : "-");
-                fields.Add(method.ReturnAssociatedTypeName ?? "");
+                fields.Add(method.ReturnAssociatedTypeSyntax ?? "");
+                fields.Add(method.AdditionalParameters.Count.ToString(CultureInfo.InvariantCulture));
+                foreach (var parameter in method.AdditionalParameters)
+                {
+                    fields.Add(((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture));
+                    fields.Add(parameter.Type is { } parameterType ? Type(types, parameterType) : "-");
+                    fields.Add(parameter.AssociatedTypeSyntax ?? "");
+                }
             }
         }
         var seen = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);

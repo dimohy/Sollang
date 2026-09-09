@@ -1,0 +1,31 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        import sample.opaque_value as opaque
+
+        main {
+            opaque.Token { raw: 1 } => forged
+            UInt64(7) -> opaque.token => token!
+            token!.raw => raw
+            UInt64(8) => token!.raw
+        }
+        """,
+        """
+        namespace sample.opaque_value
+
+        public struct Token {
+            raw: UInt64
+        }
+
+        public token value: UInt64 -> Token => Token { raw: value }
+
+        impl Token {
+            public value: self -> UInt64 => self.raw
+        }
+        """; ~
+    ] => sources
+    sources -> llvm.emitChecked => diagnosticCount
+    "diagnostics = $diagnosticCount" -> println
+}

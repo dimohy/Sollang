@@ -1,6 +1,8 @@
 # Sollang Copilot instructions
 
-Read `docs/AI_AGENT_GUIDE.md` before generating or changing Sollang code. Follow
-its source-of-truth order and root-cause-only verification contract. When a
-change affects the language surface, CLI, targets, standard library, examples,
-or verification workflow, update the canonical guide in the same change.
+Read `docs/AI_SLG_BEST_PRACTICES.md`, the single AI guide, before generating or changing Sollang code. Follow
+its source-of-truth order and verification guidance. Language, CLI, target,
+and standard-library contract changes belong in `docs/SPEC.md` and their
+affected examples and verification contracts. Keep the single guide's syntax,
+usage and beauty criteria current; do not use it for progress
+records. Update `docs/SESSION_HANDOFF.md` only on an explicit handoff request.

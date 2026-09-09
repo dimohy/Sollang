@@ -1,16 +1,26 @@
 # EventStream latest initializes every input once, then emits a snapshot for each arrived update.
-import sys.event
+import sys.input.mouse
 
-latestEvents left: move EventStream<MouseEvent>, right: move EventStream<MouseEvent> -> EventStream<(left: MouseEvent, right: MouseEvent)> {
+latestEvents left: move EventStream<mouse.Event>, right: move EventStream<mouse.Event> -> EventStream<(left: mouse.Event, right: mouse.Event)> {
     (left: left, right: right) -> latest
 }
 
-main {
-    2 -> event.mouseEvents(event.EventOverflowPolicy.CoalesceMotion) => left
-    2 -> event.mouseEvents(event.EventOverflowPolicy.CoalesceMotion) => right
+run: -> Result<Unit, mouse.Error> uses Console {
+    2 -> mouse.source(mouse.OverflowPolicy.CoalesceMotion)? => leftSource
+    leftSource -> events => left
+    2 -> mouse.source(mouse.OverflowPolicy.CoalesceMotion)? => rightSource
+    rightSource -> events => right
     left -> latestEvents(right) => latest
     latest -> each events {
         "$(events.left.x):$(events.right.x)" -> println
         stop
+    }
+    Result<Unit, mouse.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(unit) { }
+        Err(error) { "mouse source capacity=$(error.invalidCapacity)" -> println }
     }
 }

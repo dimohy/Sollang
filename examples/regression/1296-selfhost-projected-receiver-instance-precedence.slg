@@ -1,0 +1,34 @@
+struct PacketKey {
+    value: UInt64
+}
+
+struct PreparedPacketKey {
+    value: UInt64
+}
+
+struct Protector {
+    packet: PreparedPacketKey
+}
+
+impl PreparedPacketKey {
+    public seal: self, packetNumber: UInt64 -> UInt64 {
+        self.value + packetNumber
+    }
+}
+
+# This same-name global is a valid fallback only when the receiver really is a
+# PacketKey. It must never displace the inherent method of a projected
+# PreparedPacketKey receiver.
+public seal packetKey: PacketKey, packetNumber: UInt64 -> UInt64 {
+    packetKey.value + packetNumber + 1000
+}
+
+sealProtected protector: ref Protector, packetNumber: UInt64 -> UInt64 {
+    protector.packet -> seal(packetNumber)
+}
+
+main {
+    Protector { packet: PreparedPacketKey { value: 7 } } => protector
+    protector -> sealProtected(2) => sealed
+    sealed -> println
+}

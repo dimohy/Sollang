@@ -1,11 +1,19 @@
 # Sollang Language Specification
 
 Status: implemented living specification
-Updated: 2026-08-18
+Updated: 2026-09-03
 
 This document is the living specification for Sollang. Normative language
 rules follow the current compiler and executable examples; historical design
 rationale is retained where it still explains the accepted syntax.
+
+This is the authoritative specification for AI consumers as well as human
+readers. `AI_SLG_BEST_PRACTICES.md` is the single AI syntax and coding-style
+guide and points here for detailed contracts. When language, ownership, effects, API, CLI,
+or target behavior changes, update the relevant section here and the affected
+grammar, examples, and verification contracts in the same change. Keep run
+results, completion percentages, defect histories, and session notes outside
+the specification. Describe target implementation limits explicitly.
 
 ## Current Boundary
 
@@ -30,7 +38,8 @@ The implemented language includes:
   semantics, typed IR, ownership, LLVM emission, and Windows/Linux native
   toolchain orchestration.
 
-The auditable self-hosting boundary is complete at **60/60 gates (100%)**.
+Self-hosting verification requirements are documented in `STAGE3_COMPILER.md`;
+completion must be established from current-source verification evidence.
 Browser WebAssembly remains a supported output target with a deliberately
 narrower host-capability surface. Publishing/signing services, broader codecs,
 and richer editor features are product extensions, not implicit language rules.
@@ -321,9 +330,9 @@ block        := "{" statement* "}"
 statement    := guard_loop_control_statement | loop_control_statement | each_statement | binding_statement | index_assignment_statement | field_assignment_statement | expression_statement | block_function_call
 block_function_call := range_or_logical_expression "->" path identifier? block
 each_statement := "each" identifier "in" range_expression block
-binding_statement := identifier "=" expression statement_end | expression "=>" identifier "!"? statement_end
-index_assignment_statement := expression "=>" identifier "!"? "[" expression "]" statement_end
-field_assignment_statement := expression "=>" identifier "!"? "." identifier statement_end
+binding_statement := identifier "=" expression statement_end | expression newline* "=>" identifier "!"? statement_end
+index_assignment_statement := expression newline* "=>" identifier "!"? "[" expression "]" statement_end
+field_assignment_statement := expression newline* "=>" identifier "!"? "." identifier statement_end
 expression_statement := expression statement_end
 loop_control_statement := ("break" | "continue") statement_end
 guard_loop_control_statement := range_or_logical_expression "->" "if" ("break" | "continue") statement_end
@@ -347,9 +356,11 @@ subject_comparison := "==" | "!=" | "<" | "<=" | ">" | ">="
 when_arm_body := "=>" expression | "->" expression | block_body
 block_body := "{" statement* expression? "}"
 logical_or_expression := logical_and_expression ("or" logical_and_expression)*
-logical_and_expression := equality_expression ("and" equality_expression)*
+logical_and_expression := value_flow_comparison_expression ("and" value_flow_comparison_expression)*
 equality_expression := comparison_expression (("==" | "!=") comparison_expression)*
 comparison_expression := additive_expression (("<" | "<=" | ">" | ">=") additive_expression)*
+value_flow_comparison_expression := value_flow_expression (("==" | "!=" | "<" | "<=" | ">" | ">=") additive_expression)*
+value_flow_expression := equality_expression ("->" ordinary_value_flow_target)* "?"*
 additive_expression := multiplicative_expression (("+" | "-") multiplicative_expression)*
 multiplicative_expression := unary_expression (("*" | "/" | "%") unary_expression)*
 unary_expression := "not" unary_expression | "-" unary_expression | primary
@@ -373,6 +384,9 @@ interpolation := "$" identifier | "$(" expression ")"
 
 Notes:
 
+- `raw_string_text` is always literal text. `$name` and `$(expression)` are
+  interpolation only inside an ordinary quoted string; raw strings preserve
+  those bytes unchanged and never perform binding or expression resolution.
 - Newline is a statement separator, not an indentation rule.
 - Parenthesized call arguments may start on the following line and continue as
   comma-separated lines; newlines inside the parentheses do not end the call.
@@ -403,6 +417,13 @@ Notes:
   typed-IR, ownership, or LLVM preparation. A rejected parse may retain
   recovery nodes for diagnostics, but those partial nodes cannot enter later
   compiler phases.
+- A fixed value literal retains its concrete element count through an immutable
+  or mutable binding. `[10, 20]` and `[10; 2]` are `[Int; 2]`;
+  `["one", "two"]` is `[Text; 2]`. Binding does not erase the count to an
+  unspecified `N` or change the storage shape.
+- A function's fixed-array argument must match the declared concrete length.
+  When both lengths are known, a mismatch is rejected before LLVM emission.
+  The rule applies to the primary input and every additional input.
 - A concrete type annotation `[T; N]` carries an exact nonnegative length.
   Struct initialization accepts a compatible owned array only after proving a
   literal count or emitting a runtime equality check before ownership transfer.
@@ -457,7 +478,10 @@ Notes:
 - Parentheses group expressions.
 - `#` starts a line comment outside string literals.
 - numeric comparison operators require compatible numeric operands and return
-  `Bool`.
+  `Bool`. `Text == Text` and `Text != Text` compare UTF-8 contents, not the
+  backing pointer/length aggregate identity. Text equality is allocation-free,
+  rejects mixed operand types, and does not imply lexical ordering; use an
+  explicit text comparison API when ordering is required.
 - `and` and `or` short-circuit and require `Bool` operands.
 - `not` requires a `Bool` operand.
 - `value -> function` is parsed as a fluent flow expression with `value` as the
@@ -763,12 +787,27 @@ S042 and S044 reject scalar receivers for `len` and `capacity`; S043 rejects a
 dotted member whose base crosses its structural source span or becomes scalar.
 S045 rejects a partition route product unless every field preserves the exact
 canonical `Stream<T>` or `EventStream<T>` wrapper of the partition source.
-N001 is a source-style note, not a warning: a control condition of 45 or more
-characters that still shares a line with `if`, `unless`, `while`, a
+N001 is a source-style note, not a warning: a control condition whose source
+spelling is 45 or more characters and still shares a line with `if`, `unless`, `while`, a
 standalone `when` arm, a `partition` predicate, or `if break`/`if continue`
 should move the condition to its own line and keep `->` with the control
 keyword. Short `and`/`or` conditions stay inline. User sources may keep the
-note; repository sources wrap those lines.
+note; repository sources wrap those lines. Qualified semantic names do not
+inflate the source-style length. `sollang format` wraps inline `if`, `unless`,
+and `while` conditions using the same lexical boundary.
+N002 is a source-style note for redundant parentheses around an entire
+single- or multi-line `if`, `unless`, or `while` condition. Write
+`ready and active -> if {` rather than `(ready and active) -> if {`.
+Parentheses that group only part of a condition remain significant and are
+not reported. `sollang format` removes only the redundant whole-condition
+pair even when its opening and closing tokens are on different lines.
+Regular value transformations bind as logical and comparison operands, while
+control-flow targets consume the completed condition. Therefore
+`ready and text -> predicate -> if { ... }` means
+`ready and (text -> predicate)`, and `text -> len < limit` means
+`(text -> len) < limit`, without redundant grouping parentheses. Control and
+junction targets such as `if`, `while`, `when`, `branch`, and `partition`
+remain at the outer flow precedence.
 Fixed-point inference treats a preceding `Range` or other provisional type as
 unresolved and updates an already-recorded partition expression when the
 canonical product becomes available.
@@ -847,6 +886,50 @@ Each input independently accepts the existing readonly, `mut`, or `move`
 ownership mode. Compile-time generic parameters remain in angle brackets and
 are not counted as runtime inputs. Additional runtime arguments are statically
 checked for count, type, ownership, and duplicate parameter names.
+
+An ownership, lifetime, scope, or affine violation that can be proven from the
+program is a blocking compile error. Diagnostics identify the offending owner
+and give a source-level repair: transfer through `move`, retain a borrow, use a
+consuming operation such as `take`, use the returned replacement owner, or make
+an explicit copy when the type supports one. Reusing a value after a consuming
+call never falls through to generated code where it could become a double drop,
+use-after-free, or heap corruption. Conversely, malformed LLVM or invalid drop
+state produced from valid ownership-correct source is a compiler-integrity
+error, not a user-source error.
+For every statically provable source error in this safety class, the compiler
+diagnostic states both the violated contract and at least one concrete Sollang
+repair form. A compiler-integrity error does not invent source advice: checked
+emission stops and identifies the compiler boundary that failed.
+Checked self-host emission applies blocking diagnostic S051 to every mutating
+collection intrinsic whose receiver has no canonical writable owner. It guides
+readonly source toward `name: mut Type`, `mut self`, or `=> name!`. If a
+writable projected intrinsic has no implemented canonical member-storage path,
+verification failure V002 stops emission without inventing source advice. This
+separates a repairable source ownership error from a compiler-integrity defect
+before invalid field storage or heap corruption.
+Builtin console effects are ordered effects even when Typed IR materializes the
+call as an expression. Checked emission accepts only the canonical ordinary or
+materialized forms. Verification failure V003 stops before LLVM when a builtin
+console symbol has any unsupported representation and directs compiler
+maintainers to update the shared predicate plus entry-point, named-function,
+and nested control-region consumers; valid user source is not rewritten to
+compensate for an incomplete emitter.
+Verification failure V004 runs after LLVM text generation but before `llvm-as`.
+It lists direct `sollang_m*_s*` calls that have neither a definition nor a
+declaration. This is an internal emitter reachability or closure defect; valid
+user source is not rewritten to hide it.
+
+A value-producing enum `when` arm may itself be a value-producing `if` or
+`when`. The arm result is the nested control's merge value. Selecting a value
+defined in only one branch is invalid lowering because it does not dominate the
+arm result store; valid source is not required to rewrite the expression into a
+temporary binding to compensate.
+
+An indexed value passed to a readonly reference parameter preserves its
+canonical addressable place from reference-argument preparation through call
+writing. Re-canonicalizing the argument and selecting its loaded value is
+invalid lowering because the call would no longer name the emitted indexed
+place.
 
 ## Structured Async Functions
 
@@ -952,9 +1035,11 @@ For a `move` input, each suspension state records whether the original input
 owner is still live; cancellation drops either that context owner or the owner
 to which it was transferred, never both.
 
-Time suspension uses the public `Duration` value type and the affine
-`sleep: Duration -> async Unit` intrinsic. `milliseconds` and `seconds` build a
-duration without losing the unit at the call site:
+Time suspension uses the public non-negative `Duration` value type and the
+affine `sleep: Duration -> async Unit` intrinsic. `milliseconds`, `seconds`,
+`minutes`, and `hours` are fallible construction boundaries that reject a
+negative input and unit-scaling overflow without losing the unit at the call
+site:
 
 ```sollang
 250 -> milliseconds -> sleep -> await
@@ -962,12 +1047,19 @@ duration without losing the unit at the call site:
 
 Integer literals are contextually checked as the constructor's `Long` input,
 so the concise spelling keeps the full 64-bit range without an explicit cast.
+Duration state is observed and transformed through instance methods.
+`checkedAdd`, `checkedSub`, `checkedMultiply(UInt32)`, and
+`checkedDivide(UInt32)` return typed errors for overflow, a negative result, or
+a zero divisor; `absoluteDifference` always returns a non-negative value.
+`MonotonicInstant` and `UtcInstant` likewise accept durations only through
+checked instance addition/subtraction, and compute elapsed durations through
+`later -> durationSince(earlier)`.
 
 `sleep` registers its Task in the executor's deadline-ordered timer queue. It
 does not allocate an OS thread and does not remain in the runnable queue. When
 there is no ready work, the executor waits only until the nearest monotonic
-deadline, then moves every due timer to the FIFO ready tail. Zero and negative
-durations complete immediately. Canceling a sleeping Task unlinks it from the
+deadline, then moves every due timer to the FIFO ready tail. A zero duration
+completes immediately; a negative duration cannot be constructed. Canceling a sleeping Task unlinks it from the
 timer queue and destroys its context exactly once. File-descriptor readiness,
 task groups, closure-capture analysis, and failure propagation follow.
 
@@ -1059,6 +1151,49 @@ time. The current LLVM backends lower `each` directly to basic blocks with an
 SSA phi value for the item binding, with no heap allocation, function pointer,
 closure object, or dynamic block dispatch.
 
+## Static Trait Method Contracts
+
+A trait method declares `self`, optionally preceded by `mut` or `move`, then
+zero or more comma-separated named inputs before its result type:
+
+```sollang
+trait Reader {
+    readInto: mut self, output: mut [UInt8; ~] -> Int
+}
+```
+
+Each implementation must provide the declared method with the same receiver
+ownership, additional-input count, positional input ownership and types, and
+result type. The receiver is separate from the additional-input sequence.
+Signature mismatches are semantic errors, including for implementations that
+have not been called; they must not reach LLVM call or wrapper emission.
+
+A qualified call `receiver -> Reader.readInto(output)` supplies the receiver
+once and the remaining inputs in declaration order. Generic functions may
+preserve mutable receiver and buffer borrows with the same explicit signature:
+
+```sollang
+read<T> reader: mut T, output: mut [UInt8; ~] -> Int where T: Reader {
+    reader -> Reader.readInto(output)
+}
+```
+
+Associated type bindings participate in signature comparison inside composite
+input and result annotations. With `type Item = Int`, `[Item; ~]`, `[Item; 2]`,
+and `{Text: Item}` resolve to `[Int; ~]`, `[Int; 2]`, and `{Text: Int}`.
+Substitution preserves the container kind and fixed length. A differing element
+type or fixed/growable shape is not a matching implementation signature.
+The same substitution applies to an associated type inside the result storage.
+A generic constraint such as `C: Comparison, C.Item == T` ties the method's
+associated item type to the caller's type argument.
+
+Static dispatch identifies the requested trait by its declaring module and
+symbol, including an explicit import alias. A same-named trait in another
+module does not supply a matching implementation. The Windows native path
+supports the additional-input, generic mutable-buffer, imported trait identity,
+and composite associated-type forms described here. This target boundary does
+not imply Linux/WASM closure or support for every recursive generic type shape.
+
 ## Dynamic Trait Objects
 
 Static trait dispatch remains the default. Runtime polymorphism is explicit:
@@ -1080,6 +1215,10 @@ types and synchronous, capture-free methods with readonly `self`, no additional
 arguments, and an `Int` result. Concrete values with nested owned storage are
 rejected until conversion has an explicit recursive move-transfer contract.
 These restrictions are diagnostics, not implicit fallback to static dispatch.
+In particular, a valid static implementation does not make an additional-input
+trait dyn-compatible. Trait conversion checks the declared additional inputs,
+receiver ownership, result type, and associated type declarations before
+emitting an erased wrapper or vtable.
 
 ## Standard Library Imports And Aliases
 
@@ -1133,21 +1272,90 @@ readInt -> sys.io.readInt
 
 ### TCP, UDP, and QUIC
 
-`sys.socket` is the portable native socket module for `windows-x64` and
+`std.net.socket` is the portable public socket module for `windows-x64` and
 `linux-x64`. It defines affine `TcpListener`, `TcpStream`, and `UdpSocket`
-values, an `Endpoint { address: Text, port: UInt16 }`, structured
+values, consumes the allocation-free `std.net.Endpoint.V4`/`.V6` enum, structured
 `SocketError { kind, code }`, TCP `listen`/`connect`/`accept`/`send`/`receive`
-and `shutdown`, and UDP `bindDatagram`/`sendTo`/`receiveFrom`. Every operation
+and `shutdown`, and UDP `bind`/`sendTo`/`receiveFrom`/`receiveFromInto`.
+`localPort` is available
+on every socket owner, including a TCP listener bound to port zero. Stateful operations are
+inherent methods on their owning value and are normally called with Sollang's
+pipeline syntax. Every operation
 that can access the network declares `uses Network` and returns `Result`.
+
+`TcpStream.shutdown(direction)` keeps the stream owner alive and disables only
+`ShutdownDirection.Receive`, `.Send`, or `.Both`; call `close: move self` to
+release it. The three direction tags map directly to the portable native
+shutdown ABI, so selecting a direction adds no allocation or wrapper dispatch.
+
+`TcpStream.setNoDelay(enabled)` changes `TCP_NODELAY` on the live connection and
+`TcpStream.noDelay` observes the kernel value. Both keep the affine owner alive,
+return `Result`, and lower directly to one native socket-option call. The public
+API intentionally exposes the portable policy name rather than native option
+levels or numbers, and it does not allocate or cache a second copy of the state.
+
+`TcpStream.setReadTimeout(timeout)` and `setWriteTimeout(timeout)` configure
+synchronous relative I/O timeouts on the live stream. Their argument is
+`Option<std.time.Duration>`: `Some(duration)` requires a positive duration and
+`None` clears the option. `readTimeout` and `writeTimeout` return
+`Result<Option<std.time.Duration>, SocketError>`, where `None` means blocking
+behavior. A queried value can be rounded upward to the target kernel's timer
+granularity. These operations are non-consuming, allocate no wrapper, and map
+directly to `SO_RCVTIMEO`/`SO_SNDTIMEO`; they do not define asynchronous or
+absolute-deadline semantics.
+
+`TcpStream.setKeepAlive(enabled)` and `keepAlive` configure and observe the live
+kernel keep-alive switch. `TcpStream.setLinger(timeout)` accepts
+`Option<std.time.Duration>`: `None` disables linger and `Some(duration)` requires
+a positive value rounded upward to the target kernel's whole-second unit.
+`linger` returns the effective `Option<Duration>`. All four are non-consuming
+instance methods with direct native lowering and no wrapper allocation, cached
+state, or function-name-based code generation.
+
+`TcpStream.receive(maxBytes)` allocates and returns an owned byte array for
+convenience. `TcpStream.receiveInto(buffer!)` is the reusable-buffer path:
+`buffer` is a mutable growable `[UInt8; ~]`, its current capacity bounds the
+single native receive, and success replaces its logical length with the number
+of bytes received. The operation writes directly into existing storage and
+returns that same count. Failure leaves the prior logical length unchanged.
+Intrinsic lowering loads the buffer pointer and capacity from the mutable-owner
+ABI and calls the platform receive primitive without a wrapper, allocation, or
+payload copy.
+
+`TcpStream.peekInto(buffer!)` uses the same caller-owned buffer contract without
+consuming queued stream bytes. Each successful call replaces the buffer length
+with the observed count; failure preserves its prior length. It is a distinct
+typed intrinsic that lowers directly to the platform receive primitive with the
+peek flag, without allocation, copying, a wrapper call, or function-name-based
+code generation. Multiple peeks before `receiveInto` observe the same queued
+bytes; the following `receiveInto` consumes them.
+
+`UdpSocket.receiveFrom(maxBytes)` allocates and returns an owned `Datagram` for
+convenience. `UdpSocket.receiveFromInto(buffer!)` receives directly into the
+capacity of a mutable growable byte buffer and returns
+`DatagramReceipt { source, count }`; payload ownership remains with the caller.
+Success replaces the buffer's logical length with `count`, while failure leaves
+the prior length unchanged. Lowering calls `recvfrom` through the same fixed
+stack endpoint descriptor as the allocating path, with no payload allocation,
+copy, wrapper call, text conversion, or DNS lookup.
 
 Programs flatten sequential failure with postfix `?`:
 
 ```sollang
-sendPing endpoint: socket.Endpoint -> Result<Bool, socket.SocketError> uses Network {
-    socket.connect(endpoint)? => connection
-    socket.sendText(connection, "ping")? => count
-    socket.shutdown(connection)?
-    Result<Bool, socket.SocketError>.Ok(count == UIntSize(4))
+sendPing endpoint: net.Endpoint, timeout: time.Duration -> Result<Bool, socket.SocketError> uses Network {
+    endpoint -> connect? => connection
+    connection -> sendText("ping")? => count
+    connection -> setNoDelay(true)?
+    connection -> noDelay? => lowLatency
+    connection -> setReadTimeout(Option<time.Duration>.Some(timeout))?
+    connection -> readTimeout? => observedTimeout
+    observedTimeout -> when {
+        Option<time.Duration>.Some(_) { true }
+        Option<time.Duration>.None { false }
+    } => hasTimeout
+    connection -> shutdown(socket.ShutdownDirection.Both)?
+    connection -> close
+    Result<Bool, socket.SocketError>.Ok(count == UIntSize(4) and lowLatency and hasTimeout)
 }
 ```
 
@@ -1155,19 +1363,306 @@ This is the standard alternative to nesting a `when` for every operation. A
 `when` remains appropriate at a boundary that renders, retries, translates, or
 otherwise recovers from the final error.
 
-`sys.quic` provides affine `Identity`, `Endpoint`, `Connection`, and `BiStream`
+`std.net.quic` provides affine `Identity`, `Endpoint`, `Connection`, and `BiStream`
 values; generated identities, explicit peer-certificate pinning, bidirectional
 streams, and unreliable datagrams; and the same flat `Result`/`?` contract.
-One QUIC endpoint owns one UDP socket and drives inbound handshakes in the
-Sollang runtime, so a process may call `connect` before `accept` without a
-parallel source-language rendezvous. Protocol state, TLS 1.3, packet protection,
-loss recovery, flow control, streams, and datagrams are pure reachable Sollang
-standard-library modules. The completed native path does not require a Rust
-crate, `sollang_quic.dll`, or `libsollang_quic.so`; the obsolete adapter and
-its packaging/linker paths have been removed. Browser WASM does not silently
-emulate native networking capabilities.
+Its peer representation is the shared `std.net.Endpoint`. User code normally
+constructs loopback and wildcard values with `quic.loopback(port)` and
+`quic.anyAddress(port)`. Arbitrary numeric IPv4 text uses the strict,
+DNS-free parser `quic.ipv4(address, port) -> Result<Endpoint, QuicError>`:
 
-`sys.quic.initial_engine` integrates the v1/v2 long-header parser, Initial key
+```sollang
+quic.loopback(44_434) => local
+quic.ipv4("192.0.2.42", 44_434)? => peer
+quic.generateIdentity()? => identity
+quic.bind(local)? => endpoint!
+endpoint! -> listen(identity)? => listener!
+```
+
+`std.net` also defines allocation-free numeric IPv6 values. `Ipv6Address`
+stores eight 16-bit groups, while `Ipv6Endpoint` keeps `port`, `flowInfo`, and
+`scopeId` explicit. `std.net.Endpoint` is the common `V4`/`V6` value enum.
+`std.net.ipv6(text, port)` and `ipv6Scoped(text, port, scopeId)` are pure,
+fallible parsers: they accept hexadecimal groups and one `::` compression but
+perform no DNS lookup. URI brackets are not address bytes, and interface zones
+are endpoint scope metadata rather than part of `Ipv6Address`. Native socket
+listen, connect, UDP bind, and UDP send lower the common enum to a fixed 32-byte
+stack descriptor and support both address families without text conversion.
+UDP receive publishes `Datagram.source: Endpoint` through the inverse fixed
+descriptor path, with no address string or second heap allocation. The public
+QUIC bind/connect and connection peer state preserve the same enum. The signed
+P2P peer-record encoding remains IPv4-specific and is not a dual-stack
+discovery contract.
+
+`std.net.dns.Resolver` is the explicit system-name-resolution boundary. A
+resolver value carries `AddressFamily`, `maxResults`, and `maxHostBytes`; its
+`resolver -> lookup(host, port)` method declares `uses Network` and returns an
+owned ordered `[std.net.Endpoint; ~]`. The runtime preserves system resolver
+order, removes exact duplicate numeric endpoints without reordering, attaches
+the requested numeric port, and returns `ResultLimitExceeded` instead of
+silently truncating. The foundation accepts ASCII DNS presentation names only,
+rejects numeric literals so callers use the pure IPv4/IPv6 parsers, and does
+not silently apply IDNA, service-name lookup, timeout, retry, or address-family
+preference policy. It may block in the system resolver. `wasm32-browser`
+requires an explicit host-provided resolver and fails compilation otherwise.
+
+Direct `{ a, b, c, d, port }` literals expose the storage representation and
+are not the preferred application surface. Empty components, non-decimal
+components, and octets above 255 are rejected before network access.
+`quic.bind(local)` creates the affine transport owner. One `Endpoint` owns one
+UDP socket, the connection-ID route table, and a bounded pending-datagram queue.
+`endpoint! -> listen(identity)` transfers the server identity into a reusable
+`Listener`; `listener! -> accept(endpoint!)` returns an independent affine
+`Connection` and may be called repeatedly. Closing the Listener stops only
+future accepts. Accepted Connections remain usable until each is explicitly
+closed, and closing a Connection unregisters only its route. Closing Endpoint
+finally releases the shared transport.
+
+`ConnectionOptions` is an inline pre-construction policy value. Its
+`maxInboundBidirectionalStreams` is the initial cumulative RFC 9000 stream
+credit. `pendingInboundBidirectionalStreams`, `pendingApplicationFrames`, and
+`pendingApplicationBytes` independently bound local decoded state awaiting the
+application. Nested `ReceiveWindowSizes` carries the connection-wide and the
+locally/remotely initiated bidirectional stream receive credits. Explicit
+server policy uses `endpoint! -> listenWith(identity, options)`; explicit client
+policy uses `endpoint! -> connectWith(peer, certificate, options)`. The shorter
+`listen` and `connect` forms apply reviewed defaults. All limits are validated
+before listener mutation, random generation, or network access, and are stored
+as direct scalar fields without a wrapper or dynamic dispatch. Receive windows
+may be any QUIC variable-length integer through `2^62 - 1`; they do not inherit
+MsQuic's power-of-two restriction.
+
+Local pending-queue exhaustion returns `QueueLimitExceeded` with the exact
+active limit. It is distinct from a peer's `FLOW_CONTROL_ERROR`,
+`STREAM_LIMIT_ERROR`, or malformed transport parameter. STREAM admission checks
+frame and byte capacity, computes the next connection-flow state, and validates
+the peer identity before committing any identity, flow, queue, or byte-count
+mutation. A rejected frame therefore leaves all prior queued streams intact.
+
+Connection and stream operations receive `mut Endpoint` explicitly so the hot
+path uses direct static calls without an implicit parent object, wrapper
+allocation, or hidden copy. Routing uses fixed eight-byte connection IDs folded
+into scalar keys, queues a datagram addressed to another live Connection, and
+fails explicitly when the bounded queue is full. A long header is rejected
+before reading its CID unless at least fourteen bytes are available; a short
+header requires at least nine. Protocol state, TLS 1.3, packet protection, loss
+recovery, flow control, streams, and datagrams are pure reachable Sollang
+standard-library modules. The completed native path does not require a Rust
+crate, `sollang_quic.dll`, or `libsollang_quic.so`; the obsolete adapter and its
+packaging/linker paths have been removed. Browser WASM does not silently emulate
+native networking capabilities.
+
+Public library APIs follow an instance-first rule. If an operation has a
+natural state, owner, or domain-value receiver, it is declared in `impl` and
+called as `value -> method(arguments)`. Dot calls remain equivalent syntax.
+Module functions are reserved for construction, parsing before a receiver
+exists, and genuinely process-global boundaries. This is a zero-cost rule:
+intrinsic methods lower directly to the same runtime primitive, and ordinary
+method migration may not add an O0 wrapper frame, allocation, branch, or copy.
+Consuming `close: move self` ends an affine resource immediately; otherwise
+scope exit performs the same exactly-once drop.
+
+The reviewed top-level `stdlib/std` exceptions are a machine-checked contract.
+Every exception is classified as a factory, receiver-less parser, generic flow
+adapter, pure constant, or explicit migration debt. Adding an unclassified
+global or retaining a stale exception after an instance migration fails
+`scripts/verify-stdlib-instance-policy.ps1`.
+The same gate freezes `sys.path` at its reviewed raw boundaries and a shrinking
+set of ten migration-debt globals; new debt is not permitted.
+
+The library layering contract is `std -> sys`. `std` owns portable public APIs,
+domain values, and pure algorithms; `sys` owns only irreducible target and OS
+primitives. `sys` must not import `std`, and a public feature must not remain in
+both namespaces after its replacement path is verified. Existing protocol code
+under `std.net.quic` is migrated incrementally into `std.net.quic`; this transition
+does not authorize new portable APIs to accumulate under `sys`.
+
+The canonical portable path vocabulary is migrating from `sys.path.Path` to
+`std.path.Path`. Lexical style, components, joining, comparison, and confined
+normalization are pure instance operations. Filesystem metadata and canonical
+resolution are explicit `uses File` operations backed by raw `sys` primitives;
+lexical normalization does not claim to resolve symbolic links. The migration
+must not introduce a reverse `sys -> std` dependency or leave two public path
+types after the replacement is verified.
+
+`std.uuid.Codec` is an immutable RFC 9562 policy value. Its pure `v4` method
+accepts exactly sixteen caller-owned entropy octets; pure `v7` accepts a
+`UtcInstant` plus exactly ten entropy octets. Both validate lengths before any
+index and set the RFC version/variant bits. `std.uuid.Generator` separately owns
+the explicit `WallClock` and `SecureRandom` instances used by effectful `v4`
+and `v7`; deterministic construction never reads ambient clock or randomness.
+
+`std.encoding.hex` and `std.encoding.base64` are pure, instance-first byte
+codecs. A `Codec` creates a bounded `Encoder` or `Decoder`; repeated `write`
+calls mutate that instance and `finish` consumes it. One-shot `encode` and
+`decode` remain methods on the immutable codec value. Every operation accepts
+an explicit maximum output size or inherits the bound fixed when the stateful
+instance was created. Validation and output-length planning complete before
+reserving or committing mutable state, so an error leaves the codec state and
+caller-owned output unchanged.
+
+Hex reports an exact invalid-byte offset and rejects an unfinished half-byte at
+`finish`. Base64 implements strict RFC 4648 Basic and URL-safe alphabets in
+padded and raw forms. It rejects whitespace, mixed alphabets, misplaced or
+missing padding, non-zero padding bits, and trailing data after a padded
+quantum; MIME line folding is not silently accepted. These modules perform no
+native call, hidden allocation beyond the caller's requested result buffer,
+ambient I/O, or target-specific fallback.
+
+`std.encoding.binary.ByteOrder` is an immutable explicit big- or little-endian
+policy. It creates a `Reader` owning only an input cursor or a bounded `Writer`
+owning only output-limit and produced-count state. The caller supplies every
+input slice and mutable output buffer. UInt16/UInt32/UInt64 and canonical
+unsigned base-128 varints therefore add no native-byte-order dependency or
+hidden buffer copy. Failed fixed-width reads and writes are transactional;
+varints use at most ten bytes, reject overflow and longer-than-minimal forms,
+and report the exact failing byte offset.
+
+`std.hash.crc32.Polynomial` selects the reflected IEEE or Castagnoli polynomial
+and creates a mutable scalar `Hasher`. `write`, `checksum`, and `reset` are
+inherent methods; there is no process-global checksum state. The fixed-input
+instance path is allocation- and copy-free at O0. GZIP keeps its existing
+private CRC until shared-code throughput and all compression gates establish
+that consolidation does not regress performance.
+
+`std.compress.gzip` is a pure, instance-first GZIP codec. A `Limits` value
+constructs a `Codec` with mandatory maximum output bytes and maximum expansion
+ratio. `codec -> planCompress`, `compress`, `planCompressFixed`,
+`compressFixed`, `planDecompress`, and `decompress`
+validate complete bounds before producing a result. The current writer emits a
+deterministic RFC 1952 header and RFC 1951 stored blocks (compression level 0);
+`compressFixed` emits a fixed-Huffman block using a bounded 4,096-slot
+latest-match table after `planCompressFixed` proves its worst-case output bound;
+the reader accepts stored, fixed-Huffman, and dynamic-Huffman blocks, validates
+canonical code trees and LZ77 distances, supports overlapping back-reference
+copies across block history, and validates LEN/NLEN, optional header fields and
+header CRC when present, CRC32, ISIZE, exact stream termination, output size,
+and expansion ratio. Reserved block types and malformed codes fail explicitly.
+`codec -> encoder()` constructs a stored-block streaming `Encoder`. Its
+`write(input, output)` method emits non-final blocks immediately into the
+caller-owned output while retaining only incremental CRC32, modulo ISIZE, and
+bounded output accounting. It reserves the final empty block and trailer in
+its limit check before mutating output; `finish: move self` emits that block,
+CRC32, and ISIZE. `codec -> decoder(DecoderLimits)` creates an affine,
+chunk-fed transactional decoder. `write` advances the GZIP header, DEFLATE bit
+reservoir, active Huffman tables, LZ history, CRC32, ISIZE, and member state;
+consumed compressed bytes are not retained or reparsed. The decoder accepts at
+most `maxMembers`, keeps unverified member output private, and `finish: move
+self` appends the verified aggregate only when every final block, CRC32, ISIZE,
+output limit, and expansion ratio is valid. Any failure leaves caller output
+unchanged. `decompressMembers` retains a complete-input bulk decoder while
+fixture 1214 requires semantic parity with the incremental path. A direct route
+through the byte-resumable decoder was rejected after the same-input runtime
+median regressed by 24.7%; future consolidation must use a measured shared core
+without that abstraction cost. Dynamic-Huffman writing, ZIP, and Brotli are
+separate follow-up gates.
+
+`std.compress.zstd` is the pure Sollang RFC 8878 foundation. Its `Limits` value
+independently bounds encoded bytes, decoded bytes, frame window bytes, data
+frame count, and each skippable-frame payload. `Limits.codec` creates an
+immutable `Codec`; `Codec.encoder(expectedInputBytes)` and `Codec.decoder`
+create affine state instances, while `compress` and `decompress` are one-shot
+instance conveniences over the same public lifecycle. The deterministic writer
+emits an independent single-segment frame with raw blocks no larger than 128
+KiB. Encoder writes publish raw blocks directly to caller-owned output without
+retaining input, and consuming `finish` checks the declared content size before
+emitting the final block. The incremental decoder accepts raw and RLE blocks,
+bounded skippable frames, and concatenated independent frames one byte at a
+time. It does not retain encoded input and appends private decoded output to the
+caller only when consuming `finish` at a validated frame boundary. Invalid
+magic, header, block, size, truncation, and every limit fail explicitly.
+Entropy-compressed blocks, dictionaries, and content checksums are not yet
+implemented and return distinct unsupported errors rather than a fallback.
+Brotli follows as a separate bounded codec/encoder/decoder contract over
+caller-owned buffers or portable `std.io` streams; neither format adds ambient
+file APIs or unbounded allocating globals.
+
+`std.uri.parse(text, maxInputBytes)` parses an RFC 3986 URI-reference without
+performing DNS, IDNA conversion, file access, or scheme-specific network I/O.
+The result retains raw percent-encoded component spans over one `SourceText`
+and distinguishes an absent query or fragment from a present empty component.
+`Reference` exposes component text and classification as instance methods.
+Authority hosts are either a registered-name span, a numeric IPv4 value, or a
+bracketed numeric IPv6 value; an unbracketed colon is reserved for the decimal
+port, whose accepted range is 0 through 65535. Numeric-looking dotted hosts
+must parse as IPv4 and are not silently reclassified as registered names.
+
+`std.uri.percent` provides immutable component-specific `Codec` values for
+unreserved, user-info, registered-name, path-segment, path, query, and fragment
+rules. Planning and encode/decode are instance operations with a required
+maximum output size. Percent triplets are strict hexadecimal byte encodings,
+errors retain the exact input offset, encoding uses uppercase hex, and decode
+does not reinterpret `+` as space. URI normalization, relative-reference
+resolution, form encoding, IDNA, DNS, and scheme-specific behavior are
+separate future contracts rather than hidden parser behavior.
+
+`std.text.json` provides strict, bounded RFC 8259 token reading and generation. A
+`Reader` owns one retained `SourceText` view and yields ordered `Token` values;
+string and number tokens retain raw spans so decoding and numeric precision are
+explicit caller decisions. `decodeString` validates escapes, UTF-8, Unicode
+scalar values, and its output bound. Reader limits independently bound input
+bytes, nesting depth, token count, and decoded string bytes. Comments, trailing
+commas, invalid UTF-8, lone surrogates, `NaN`, and infinities are rejected.
+Repeated object names remain ordered tokens and are never silently collapsed.
+
+A `Writer` instance owns its structural state and growable byte buffer.
+`beginArray`, `endArray`, `beginObject`, `endObject`, `name`, `nullValue`,
+`boolean`, `number`, and `string` mutate that instance. Construction fixes
+maximum output bytes and nesting depth. Each operation validates its complete
+input and planned byte count before changing state or output, so an error is
+transactional. `number` accepts an exact already-formatted JSON number rather
+than choosing floating-point precision or formatting policy. `intoBytes: move
+self` requires one complete document and transfers the existing output buffer
+without copying it. Parsing and generation perform no ambient file, network,
+locale, reflection, or hidden serialization work.
+
+`std.net.http` provides a pure, bounded HTTP/1.0 and HTTP/1.1 message-head parser.
+Create a `Parser` from explicit limits, then call `parser -> parseRequest(text)`
+or `parser -> parseResponse(text)`. A parsed head owns one retained
+`SourceText`; start-line components and fields are spans over that source.
+Fields preserve input order and duplicates, and case-insensitive lookup is an
+instance operation rather than an implicit dictionary collapse.
+
+The parser requires CRLF, rejects bare CR or LF, obsolete line folding,
+whitespace before a field-name colon, invalid token bytes, and invalid field
+value bytes. Limits independently bound the complete head, start line, field
+count, field-name bytes, and field-value bytes. Parsing stops at the empty line
+and reports `bodyStart`; it does not choose message-body framing, open a socket,
+resolve a host, negotiate TLS or QUIC, follow redirects, retry, decompress, or
+invent timeout and cancellation policy. Those remain explicit higher layers.
+
+`std.net.http.response` provides the matching pure, bounded HTTP/1.x response-
+head writer. `ResponseLimits.policy` fixes the complete head, field count,
+field-name, and field-value bounds. `ResponsePolicy.response` validates the
+request method, version, RFC 9110 status range, reason phrase, explicit body
+length, and connection mode before creating a mutable `ResponseWriter`.
+`ResponseWriter.field` preserves ordered duplicates but rejects invalid token
+names, invalid values, and caller-supplied `Content-Length`,
+`Transfer-Encoding`, `Connection`, or `Trailer`; framing fields have one owner.
+Consuming `finish` appends the bounded automatic framing and yields a
+`ResponseHead`. Its head byte buffer transfers through consuming `intoBytes`
+without copying, while the body remains in caller-owned storage. HEAD and 304
+suppress body transmission while retaining representation length;
+informational and 204 responses omit Content-Length, and successful CONNECT is
+a tunnel. This layer does not send bytes or own a socket, timeout, server loop,
+content decoder, TLS session, QUIC connection, or protocol upgrade.
+
+`std.net.http.request` provides the matching pure, bounded HTTP/1.x request-
+head writer. A `RequestTarget` explicitly selects origin, absolute, authority,
+or asterisk form. `RequestPolicy.request` validates the method-dependent form,
+version, authority, explicit body length, connection mode, and independent
+head limits before returning a mutable `RequestWriter`. Ordered application
+fields are appended with `field`; Host, Content-Length, Transfer-Encoding,
+Connection, and Trailer remain reserved to the framing owner. Consuming
+`finish` emits exactly one Host, the required Content-Length and connection
+field, and yields a `RequestHead` whose existing bytes transfer without a
+copy. CONNECT requires authority-form with an explicit port, asterisk-form is
+OPTIONS-only, and fragments, user-info, controls, whitespace, and invalid
+schemes are rejected. The body remains caller-owned. This layer performs no
+network, DNS, TLS, redirect, decompression, timeout, cancellation, or protocol
+downgrade work.
+
+`std.net.quic.initial_engine` integrates the v1/v2 long-header parser, Initial key
 derivation, header protection, AEAD, packet-number restoration, CRYPTO frame,
 and ClientHello/ServerHello framing. A client Initial is padded to at least
 1200 bytes. The server derives client Initial keys from the original
@@ -1177,8 +1672,8 @@ by PADDING, and replies with the server Initial key direction. Fixtures 929 and
 foundational self-interoperability checks, not yet independent QUIC endpoint
 interoperability.
 
-`sys.quic.handshake_engine` applies the negotiated TLS handshake traffic
-secret to v1/v2 Handshake long-header packets. `sys.quic.application_engine`
+`std.net.quic.handshake_engine` applies the negotiated TLS handshake traffic
+secret to v1/v2 Handshake long-header packets. `std.net.quic.application_engine`
 applies the application traffic secret to 1-RTT short-header packets, validates
 the destination connection ID and reserved bits, carries STREAM and DATAGRAM
 frames, and advances the receive key phase only after authentication succeeds
@@ -1187,6 +1682,10 @@ forms and HANDSHAKE_DONE have their RFC wire values and strict length checks.
 MAX_DATA, MAX_STREAM_DATA, MAX_STREAMS, DATA_BLOCKED, STREAM_DATA_BLOCKED, and
 STREAMS_BLOCKED share the same varint codec and preserve the bidirectional or
 unidirectional stream-limit bit in their nominal values.
+Stream IDs are connection-local 62-bit QUIC varints. Their two low bits encode
+initiator and direction, leaving a 60-bit per-family sequence; stream-count
+limits and local allocation reject values beyond that family range before ID
+multiplication so overflow cannot alias an earlier stream.
 `frame.encodeAll` and `frame.decodeAll` preserve ordered frame sequences, and
 the 1-RTT application engine seals and opens that sequence as one authenticated
 packet rather than requiring one frame per packet.
@@ -1216,7 +1715,7 @@ plus exact DNS SAN matching is not general X.509 path, validity, revocation,
 wildcard, IP-address, or IDNA service-identity validation; those remain separate
 authentication gates for a general-purpose Internet-facing QUIC endpoint.
 
-`sys.quic.p2p` builds an authenticated direct-peer session on that QUIC
+`std.net.quic.p2p` builds an authenticated direct-peer session on that QUIC
 transport. `PeerId` is the SHA-256 digest of an Ed25519 public key. A signed,
 expiring `PeerRecord` binds that identity to an IPv4 endpoint and the exact
 QUIC certificate used for transport pinning. `dial` verifies the record before
@@ -1229,8 +1728,12 @@ application protocol byte string. `sendMessage` and `receiveMessage` use
 length-prefixed messages on the authenticated channel, `finish` closes the
 application direction, and `close` closes the QUIC connection. The present
 connection implementation exposes one bidirectional stream, so authentication,
-protocol negotiation, and messages deliberately reuse stream zero. Protocol
-names are limited to 1,024 bytes and messages to 60,000 bytes.
+protocol negotiation, and messages currently reuse stream zero. This is a
+bounded P2P-channel implementation limit, not permission for repeated
+`Connection.openBi`/`acceptBi` calls to manufacture separate owners with the
+same wire ID. Connection-local non-reusing stream identities are required
+before multiplexed or unidirectional public APIs. Protocol names are limited
+to 1,024 bytes and messages to 60,000 bytes.
 
 This is direct P2P for peers whose advertised UDP endpoint is reachable, such
 as a LAN peer or a public/forwarded address. A `PeerRecord` is suitable for a
@@ -1359,9 +1862,13 @@ source whose `next` may wait for external input. Dropping it performs structured
 cancellation: signal cancellation, wake or interrupt the producer, join its
 worker, restore platform state, and release its fixed storage.
 
-`sys.event.mouseEvents(capacity, overflow)` provides the first concrete event
-source. `capacity` must be in `2..65536`. Its ring buffer never grows, and
-`EventOverflowPolicy` is one of:
+`sys.input.mouse.source(capacity, overflow)` validates the first concrete hot
+input source plan. `capacity` must be in `2..65536`; invalid dynamic values are
+typed `Error` results and invalid literals are rejected during compilation.
+`Source.events: move self -> EventStream<Event>` starts the subscription without
+a public wrapper, consumes the plan exactly once, and owns cancellation until
+the stream is dropped. Its ring buffer never grows, and `OverflowPolicy` is one
+of:
 
 - `DropNewest`: retain queued events and discard the incoming event.
 - `DropOldest`: discard the oldest queued event and retain the incoming event.
@@ -1437,14 +1944,29 @@ current privilege is the global alias layer. The backend inlines the Sollang
 `sys.io` wrappers and lowers the `sys.runtime` intrinsic boundary to the
 selected platform I/O implementation.
 
+`std.crypto.sha256.create()` constructs a `Hasher` with bounded 64-byte block
+storage. Its inherent `update(mut self, source: [UInt8])` processes a borrowed
+byte slice without retaining it; consuming `finish(move self)` returns the
+complete `[UInt8; 32]` digest. Empty input requires no update. One-shot and
+incremental hashing use this same instance contract; there is no public
+`sha256.digest` convenience wrapper.
+
+`std.crypto.hmac_sha256.create(key: [UInt8])` constructs an owned `Hasher`.
+The key is borrowed only during construction. Its inherent
+`update(mut self, source: [UInt8])` borrows each message segment without
+retaining it; `finish(move self)` consumes the instance and returns the
+complete `[UInt8; 32]` MAC. Empty updates do not change the result, and
+segment boundaries do not change the MAC. One-shot input uses the same
+instance contract; there is no public `hmac_sha256.digest` wrapper.
+
 The current purpose-oriented file and random libraries follow the same wrapper
 pattern:
 
 ```sollang
 seedRandom value: Int -> Unit
 randomBelow maxExclusive: Int -> Int
-sys.crypto.random.bytes count: UIntSize
-    -> Result<[UInt8; ~], sys.crypto.random.Error> uses Random
+std.crypto.random.bytes count: UIntSize
+    -> Result<[UInt8; ~], std.crypto.random.Error> uses Random
 
 openIntWriter path: Text -> Unit
 writeInt value: Int -> Unit
@@ -1456,7 +1978,7 @@ closeIntReader: -> Unit
 ```
 
 `seedRandom` and `randomBelow` are deterministic workflow primitives and are
-not cryptographic. `sys.crypto.random.bytes` allocates an independently owned
+not cryptographic. `std.crypto.random.bytes` allocates an independently owned
 byte array and fills it from the operating-system cryptographic source:
 `BCryptGenRandom` with `BCRYPT_USE_SYSTEM_PREFERRED_RNG` on Windows and
 `getrandom` on Linux. Failure is returned as `Error.Unavailable`; it never
@@ -1501,6 +2023,34 @@ This produces sorted unique values with one pseudo-random choice per bucket. It
 is not a uniform sample over all possible 100,000,000-element subsets of
 `1..1,000,000,000`.
 
+## HTTP Message Body Framing
+
+`std.net.http.body` is the pure RFC 9112 message-body boundary over an already
+parsed head. Construct `BodyPolicy` from explicit encoded, decoded, chunk-line,
+trailer-byte, and trailer-field limits. Use `policy -> request(head)` or
+`policy -> responseContext(method) -> plan(head)`, then create an affine
+`BodyDecoder`. Feed a complete caller-owned view through
+`decoder! -> write(input, output!)`. When a receive buffer also contains a
+header prefix or pipelined suffix, use
+`decoder! -> writeRange(input, offset, length, output!)`; it validates the
+range before decoder/output mutation and reports `BodyProgress.consumed`
+relative to that range without copying input. Advance the caller's cursor by
+`offset + consumed` and retain the remaining bytes because consumption stops
+before the next pipelined message. Consuming
+`finish` completes close-delimited response bodies and rejects incomplete
+fixed-length or chunked bodies. Preserve RFC precedence: reject simultaneous
+Transfer-Encoding and Content-Length, reject duplicate Content-Length under
+the strict security policy, require final `chunked` for framed requests, give
+HEAD/1xx/204/304 no body, and expose successful CONNECT as a tunnel. The
+decoder validates chunk CRLF and trailers incrementally without retaining the
+complete encoded input. It still performs no socket I/O, content decoding,
+client pooling, server orchestration, timeout, redirect, retry, or cancellation.
+`BodyDecoder.completion()` performs the same terminal-framing check without
+consuming the decoder. Use it only when an affine aggregate such as
+`RequestBody` must validate one projected field and then move the complete
+aggregate exactly once; ordinary standalone decoder callers should keep using
+consuming `finish()`.
+
 ## Numeric Expressions
 
 Numeric expressions use stable, fixed-width primitives:
@@ -1513,6 +2063,10 @@ Float32(1.5) * Float32(2.0) => scaled
 Numeric rules:
 
 - Decimal integer literals default to `Int`, which is always `Int32`.
+- When a destination integer type is known from an argument, return, `when`
+  arm, struct initializer, or direct/projected field assignment, an integer
+  literal is checked and lowered as that exact destination type. This is
+  contextual typing, not implicit widening or narrowing of a typed value.
 - Fractional or exponent literals default to `Float`, which is always
   IEEE-754 `Float32`.
 - Explicit widths are `Int8/16/32/64`, `UInt8/16/32/64`, and `Float32/64`.
@@ -1534,7 +2088,41 @@ Numeric rules:
   function ABI all use that target width. Ordinary `Int` remains `Int32` on
   every target.
 
-## Nested Structs
+## Struct Field Visibility And Nested Structs
+
+Struct fields are private to their declaring logical module unless the field
+itself is marked `public`:
+
+```sollang
+public struct StreamCount {
+    raw: UInt64
+}
+
+public struct Point {
+    public x: Int
+    public y: Int
+}
+```
+
+The nominal type and its public functions or inherent methods remain visible
+through imports. All source fragments with the same namespace belong to one
+logical module, so a factory and an `impl` may directly access private fields
+from different files. Outside that module, a struct literal is valid only when
+every field needed to construct the value is public. Reading or writing a field
+requires that exact field to be public. Private-field misuse is rejected before
+LLVM, and the diagnostic directs the caller to a public factory or public
+instance method. The check follows the resolved nominal owner through inferred
+member chains, so `wrapper.inner.secret` cannot bypass a private `secret` field
+merely because the caller did not spell `Inner`.
+
+Field visibility has no runtime representation. Private and public fields use
+the same inline layout, calling convention, ownership, and direct projection.
+Visibility must not introduce a heap wrapper, object header, dynamic dispatch,
+hidden copy, or retained validation result. Fixture 1391 fixes same-module and
+public-field access plus the one-`UInt64` case as one LLVM aggregate with direct
+`insertvalue` and `extractvalue`; fixtures 1392, 1393, and the historical
+`opaque-struct-*` diagnostic identifiers fix the self-host and private-field
+boundary. The obsolete `opaque` struct modifier is rejected by the grammar.
 
 Struct declarations may contain helper struct declarations:
 
@@ -1569,6 +2157,21 @@ values -> fixedLength<3>
 `[]` is reserved for arrays, indexing, and collection expansion. The former
 generic square-bracket spelling is not accepted.
 
+Inherent methods may declare method-scoped generic parameters after the method
+name and before the colon: `identity<T>: self, value: T -> T => value` inside
+an `impl` block. A trailing `where` clause supplies constraints. Infer these
+parameters from the matching inputs, preserving the receiver's owner type and
+keeping different instantiations separate. Managed compilation supports this
+surface. Native direct calls publish separate concrete function bodies and
+call signatures for ordinary functions and inherent methods, preserving
+receiver ownership and method scope. Direct trait-constraint calls in a concrete
+body resolve against both the requested trait and receiver type. Managed nested
+generic helper calls preserve distinct type instantiations. Native nested helper
+calls and recursive calls preserve concrete integer and Text specializations
+and reuse identical instantiations. Other recursive type shapes
+require further target verification.
+Parsing alone does not establish target support.
+
 Postfix `?` applies only to `Result<T, E>`. On `Ok`, its expression value is the
 success payload. On `Err`, it returns `Result<U, E>.Err(error)` from the nearest
 enclosing Result-returning function after deterministic local cleanup. Error
@@ -1584,6 +2187,14 @@ An enum-pattern payload containing owned storage is a borrow unless the match
 subject itself is a named owner or a fresh owned temporary. Re-wrapping a
 borrowed payload in an owned aggregate, or passing it to a `move` input, is a
 semantic error rather than an implicit pointer copy.
+
+The same transfer rule applies when an aggregate containing a borrowed owned
+value enters owned container storage through `push`, `put`, heap insertion, or
+set insertion. Fixed arrays count as owned storage in the current ABI. The
+compiler must reject the borrowed form with an actionable move-or-copy repair
+before LLVM emission; a `move` parameter has exactly one cleanup path. When a
+`move self` method consumes one projected owned field, cleanup drops only the
+remaining live sibling fields and never invokes the full owner drop afterward.
 
 Result constructors
 consume named owned payloads and transfer their single drop obligation into the
@@ -1604,6 +2215,9 @@ integers, the compiler expands these forms into ordinary array elements or
 dictionary entries before semantic analysis. An explicit item name may replace
 `it`, as in `[1..3 -> each item { item * item }]`. Nonconstant expressions are
 diagnosed; compile-time expansion currently has a 100,000-element limit.
+Outside a collection literal, `source -> each item { ... }` is a runtime block
+statement. It may be the last statement of a `Unit` function or branch; its
+position does not turn it into a compile-time collection expansion.
 
 Container storage is explicit in the type. Implementations must not silently
 switch an inline owner to heap storage.
@@ -1616,6 +2230,26 @@ Static arrays:
 numbers[0] => first
 numbers -> len => count
 ```
+
+For nominal struct elements, name the element type once and initialize each
+record by field name:
+
+```sollang
+struct Point {
+    x: Int
+    y: Int
+}
+
+[Point; { x: 10, y: 20 }, { x: 30, y: 40 }] => points
+```
+
+This form has the exact fixed type `[Point; 2]`. Each record must initialize
+every declared field exactly once. Unknown names, duplicate or missing fields,
+and incompatible field types are compile-time errors. Field identity is its
+name, independent of initializer order; aggregate storage follows declaration
+order. Effectful initializer expressions retain source order. A numeric literal
+inherits the declared integer field type only when its value fits that type;
+a typed variable does not gain an implicit narrowing conversion.
 
 An array repeat with a concrete count has that exact fixed-array type. In a
 declared array context its repeated value inherits the element type, so
@@ -1635,6 +2269,13 @@ values![2] => third
 values! -> capacity => capacity
 
 99 => values![1]
+```
+
+`capacity` accepts growable arrays, bounded arrays, dictionaries, and `Arena`.
+The same receiver contract applies inside interpolation, including readonly
+owners and projected fields. Fixed arrays, slices, and `Text` have no capacity
+operation and are rejected before LLVM emission. Interpolated calls preserve
+source order and evaluate each expression once.
 
 Bounded inline arrays and dictionaries:
 
@@ -1744,6 +2385,8 @@ Container rules:
 - Typed empty arrays and dictionaries without capacity hints begin with a null
   pointer and zero capacity. Their first mutation allocates initial storage;
   readonly use of the empty value performs no heap allocation.
+- `[T; N~]` is a typed empty growable array with `len == 0` and
+  `capacity == N`; its payload allocation is performed once at construction.
 - Indexing is checked. Out-of-bounds array access and missing dictionary keys
   trap in the current runtime slice.
 - An indexed element that recursively owns storage is a place, not a copied
@@ -2035,6 +2678,13 @@ The caller body cannot feed constraints back into that choice.
 `Text`; `each` binds `Text`. The first item is the executable name supplied by
 the host and must not be treated as a canonical or security-checked path.
 
+Passing, returning, capturing, or storing an `Arguments` value copies the view,
+not its argument strings. It can be used as a primary or additional function
+input, a generic value, an aggregate field, or a branch result without `move`.
+On Windows, the managed and self-host call ABI represents this view with an
+`i64` count snapshot; element storage remains owned by the process runtime.
+Forwarding the view adds no allocation or cleanup obligation.
+
 On Windows, Sollang uses the operating system's Unicode command-line parser and
 converts each UTF-16 item to validated UTF-8 storage retained until program
 exit. That storage is released exactly once by the runtime. On Linux, the
@@ -2069,29 +2719,120 @@ environment lookup until a host capability is explicitly supplied.
 
 ## Structured Child Processes
 
-`sys.process.run` executes one program directly without invoking a shell:
+An owned `sys.process.Command` executes one program directly without invoking a
+shell. `spawn` consumes its configuration and returns the running affine
+`Child`; `wait` consumes and reaps that child:
 
 ```sollang
 import sys.process as process
 
-["clang", "module.ll", "-o", "module.exe"; ~] => argv
-argv -> process.run => status
+process.command("clang") => command!
+command! -> arg("module.ll")
+command! -> arg("-o")
+command! -> arg("module.exe")
+command! -> workingDirectory("build")
+command! -> spawn -> when {
+    Result<process.Child, Text>.Ok(child) => child -> wait
+    Result<process.Child, Text>.Err(error) => Result<process.ExitStatus, Text>.Err(error)
+} => result
 ```
 
-Its signature is `[Text; ~] -> Result<Int, Text>`. The first item is the
-program path or search name and every remaining item is one literal argv entry;
+The primary signatures are
+`move Command -> Result<Child, Text>` and
+`move Child -> Result<ExitStatus, Text>`. The command's first
+owned argv item is the program path or search name and every remaining item is one literal argv entry;
 spaces, Unicode, quotes, and backslashes are not reparsed as shell syntax.
-`Ok(exitCode)` represents normal termination. `Err("spawn")`, `Err("wait")`,
+`Ok(status)` represents normal termination; `status.succeeded` and
+`status.exitCode` expose intent without treating an unlabelled integer as a
+process object. A successfully spawned child also contains a `ProcessId` domain
+value. `child -> id` observes it without consuming the affine child, and
+`processId -> asUInt64` exposes its positive numeric representation. Both are
+pure field projections: they perform no host call, allocation, resource copy,
+or dynamic dispatch. The native ownership token remains distinct from this
+identifier; on Windows it is a process handle and the PID is captured once with
+`GetProcessId`, while Linux uses the spawned PID as both native token and
+identifier. `ProcessId` is observational data rather than an ownership or
+signalling capability, and its number may be reused by the host after the child
+is reaped. An unconsumed `Child` remains attached to its lexical owner;
+scope exit kills and reaps it before releasing the platform handle or PID.
+After `wait(move)`, a second use is a compile-time ownership error with guidance
+to retain a returned owner, borrow before moving, or create a new owner.
+`Err("spawn")`, `Err("wait")`,
 and `Err("signal")` distinguish host launch failure, wait failure, and POSIX
 signal termination. The argv owner remains valid and is dropped normally after
-the call.
+the runtime call; the `Command` itself is consumed. `statusToFile` has the same
+result contract while directing standard output to an explicit path. The raw
+`run` and `runToFile` intrinsics are compatibility boundaries for the current
+self-host compiler and are not the preferred user vocabulary.
+
+`workingDirectory(path)` mutates only that `Command` instance and configures
+the child's initial directory. It does not change the parent process directory
+and does not reinterpret the command program as relative to the child
+directory. Independent commands may therefore be prepared and spawned without
+a process-global directory race. Windows supplies the directory directly to
+`CreateProcessW`; Linux supplies it through the `posix_spawn` file-action set.
+
+`stdin(Input)`, `stdout(Output)`, and `stderr(Output)` also mutate only that
+`Command` instance. `Input` and `Output` are distinct directional types; their
+current variants are `Inherit`, `File(Text)`, and `Null`. The inherited defaults use the
+ordinary allocation-free stdio path. A file variant opens a temporary parent
+handle, supplies it only to the selected child descriptor, and closes the
+parent copy immediately after spawn. Windows selects the three handles passed
+to `STARTUPINFO`; Linux attaches guarded `posix_spawn` `dup2` and close actions
+for descriptors 0, 1, and 2. Neither platform temporarily replaces a parent
+descriptor. `Null` uses `NUL` on Windows and `/dev/null` on Linux without
+changing a parent stream. `Pipe` is intentionally absent until `Child` exposes
+typed live endpoints; bounded synchronous capture is a separate operation.
+On Windows, selecting process execution also selects the configured stdio
+runtime body, so its `CreateFileA` declaration is required even when the current
+command uses only inherited streams. This is compile-time capability closure;
+it does not open a file on the inherited fast path.
+`statusToFile(path)` is the compatibility spelling for an explicit stdout file
+override. It retains the configured stdin and stderr policies; only the
+Command's stdout policy is replaced by the supplied path.
+
+`collect(CaptureLimits)` consumes a `Command` and returns
+`Result<CapturedOutput, Text>`. `CaptureLimits.standardOutputBytes` and
+`standardErrorBytes` are mandatory independent byte limits. Collection retains
+the command's configured stdin policy and replaces stdout and stderr with
+private child-only pipes. Both pipes are drained concurrently while the child
+runs. Bytes beyond a limit are still drained and discarded;
+`standardOutputTruncated` or `standardErrorTruncated` records that loss. The
+retained `standardOutput` and `standardError` values are raw growable byte
+arrays, so text decoding and malformed-byte policy remain explicit at the call
+site. `status` records the same `ExitStatus` domain value as `wait` and
+`Command.status`. Pipe creation, reader threads, and capture allocation are
+capability-selected and absent from commands that use the ordinary
+spawn/status path. There is no unbounded convenience overload. Example 1182
+writes a pipe-filling stderr sequence before stdout and verifies concurrent
+draining and truncation on managed and self-host Windows/Linux targets.
+Capability selection follows the resolved process intrinsic rather than the
+spelling `collect`; an unrelated instance method with that name does not emit
+pipe or reader-thread runtime.
+
+`setEnvironment(name, value)`, `removeEnvironment(name)`, and
+`clearEnvironment` mutate only the `Command` instance. Edits are ordered and
+the last edit for a platform-equivalent key wins. Clearing removes prior edits,
+disables parent inheritance, and allows later sets to construct a minimal child
+environment. The parent environment is never modified. With inheritance and no
+edits, Windows passes a null environment pointer and Linux reuses `environ`, so
+the common path performs no environment copy or allocation. A customized
+Windows launch uses case-insensitive key matching, a
+`CompareStringOrdinal`-sorted UTF-16 double-NUL block, and
+`CREATE_UNICODE_ENVIRONMENT`; Linux supplies a merged zero-terminated
+`char **` to `posix_spawnp`.
 
 Windows strictly converts UTF-8 entries to UTF-16, applies the Microsoft argv
-quoting rules, and waits through `_wspawnvp`. Linux creates temporary
-zero-terminated argv storage, calls `posix_spawnp`, waits with `waitpid`, and
-releases every temporary allocation. Browser wasm rejects the capability until
-a host process interface is supplied. Example 87 verifies self-launch, spaces,
-Hangul, exit status, and a missing executable on Windows and Linux.
+quoting rules, retains one process handle, and validates both wait and exit-code
+reads before closing it. Linux creates temporary zero-terminated argv storage,
+calls `posix_spawnp`, and retries interrupted `waitpid`; an unrecoverable wait
+failure kills and reaps before returning `Err("wait")`. Browser wasm rejects
+the capability until a host process interface is supplied. Examples 87 and
+1132-1133 verify synchronous compatibility, positive identifier observation,
+explicit wait, missing-executable spawn failure, and scope-drop cleanup on
+Windows and Linux. Example 1160 additionally executes the same binary as a
+child and proves that a relative file becomes visible through the configured
+child directory.
 
 ## Owned Portable Paths
 
@@ -2384,6 +3125,14 @@ dispatched `Display` trait that writes into an interpolation sink. There is no
 implicit reflection, debug formatting fallback, or automatic heap promotion.
 Formatting adapters/options may be added explicitly without changing the
 default `$name` and `$(expression)` syntax.
+
+The complete expression before a flow call remains its receiver inside
+interpolation. For example, `$(outer.inner -> read)` statically dispatches
+`read` on the type of `outer.inner`; `outer.inner` is not reinterpreted as a
+qualified function name. This has the same allocation-free instance-call ABI as
+the equivalent expression outside interpolation. Entry, named-function, and
+nested-control lowering use the same interpolation call emitter; a deferred
+instance call is not filtered out by a consumer-specific node-kind list.
 
 Triple-quoted raw literals preserve quotes, backslashes, and `$` markers as
 ordinary text. A multiline raw literal removes its opening newline, closing
@@ -2845,8 +3594,8 @@ function(value)
 The callable path after `->` is authoritative independently of syntax in the
 source expression. An opening parenthesis in an earlier direct call or enum
 constructor does not bound qualified-target lookup. Thus
-`frames.Value.Crypto(payload) -> frame.encode?` resolves `frame.encode`, even
-when the enclosing function is also named `encode`.
+`frames.Value.Crypto(payload) -> frames.encodeValue?` resolves the qualified frame
+codec even when the enclosing function is also named `encode`.
 
 Chained value-flow calls are parsed left-to-right:
 
@@ -2854,7 +3603,8 @@ Chained value-flow calls are parsed left-to-right:
 text -> trim -> lower -> slugify => slug
 ```
 
-A newline may appear before a continuing `->` or the result-binding `=>`.
+A newline may appear before a continuing `->` or any binding/assignment `=>`,
+including indexed and field targets.
 Because neither token can begin an independent statement, the continuation is
 unambiguous:
 
@@ -3078,6 +3828,16 @@ Current backend:
 - growable arrays preserve `Text` and user-value element layouts, support typed
   empty capacity hints, checked indexing, `len`/`capacity`, type-checked mutable
   `push`, aggregate-aware growth copying, and runtime-length recursive drop
+- growable arrays may own growable array elements such as `[[Int; ~]; ~]`;
+  each element uses the growable owner's pointer/length/capacity descriptor,
+  ownership transfers on insertion, and recursive drop releases inner storage
+  before the outer buffer. A readonly borrow of an owned array cannot be copied
+  into that owning storage.
+- a borrowed parameter that transitively owns storage cannot be embedded in an
+  owned function result; ownership must be transferred with `move`, or the API
+  must return a borrow or an explicit copy. This is a compile-time error with a
+  source-level repair hint in both managed and self-host compilers; checked
+  self-host emission stops before LLVM output
 - value-flow calls: `value -> function` and compatibility spelling
   `value -> function()` are parsed as a flow AST and lowered by
   semantic/codegen stages according to target position; bare flow targets cannot
@@ -3187,8 +3947,10 @@ The compiler implementation is organized by responsibility:
 - `Semantics`: current binding/interpolation/I/O/loop lowering
 - `CodeGen`: shared LLVM IR generation plus target runtime platform layers
 - `Tooling`: LLVM, Windows linker, and WSL Linux linker integration
-- `stdlib/sys`: Sollang standard library modules for I/O, random, file
-  workflow wrappers, and intrinsic boundary declarations
+- `stdlib/sys`: system-effect modules such as console/standard-stream I/O,
+  process, and file, plus runtime ABI fragments under `stdlib/sys/runtime/**`
+- `stdlib/std`: portable value and algorithm modules, including in-memory
+  Reader/Writer implementations under `std.io`
 - `tests/Sollang.ExampleTests`: executable sample expected stdout runner
 - `selfhost`: Sollang lexer/parser/CST/AST, semantics, typed IR, ownership,
   incremental cache, LLVM emission, and native compiler driver modules

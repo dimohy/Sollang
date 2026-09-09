@@ -1,0 +1,54 @@
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    # Keep the consumer first: qualified struct-literal receivers and the
+    # synthetic outer pipeline call must resolve without source-order coupling.
+    """"
+        namespace sample.consumer
+
+        import sample.socket as socket
+
+        probe options: socket.Options -> Result<UInt16, socket.Failure> {
+            options -> bind -> when {
+                Ok(bound) { bound -> localPort }
+                Err(error) { Result<UInt16, socket.Failure>.Err(error) }
+            }
+        }
+    """" => consumerSource
+
+    """"
+        namespace sample.socket
+
+        public struct Socket { public token: UInt64 }
+        public struct Options { public value: Int }
+        public enum Failure { Failed }
+
+        impl Options {
+            public bind: self -> Result<Socket, Failure> = intrinsic
+        }
+    """" => socketSource
+
+    """"
+        namespace sample.socket
+
+        impl Socket {
+            public localPort: self -> Result<UInt16, Failure> = intrinsic
+        }
+    """" => runtimeSource
+
+    [consumerSource, socketSource, runtimeSource; ~]
+        -> semanticContext.prepare => prepared
+    0 => consumerCalls!
+    0 => failedCalls!
+    0 => bindCalls!
+    0 => localPortCalls!
+    prepared.calls -> each call {
+        call.sourceModule == 0 -> if {
+            consumerCalls! + 1 => consumerCalls!
+            call.status != 0 -> if { failedCalls! + 1 => failedCalls! }
+            call.targetSourceModule == 1 -> if { bindCalls! + 1 => bindCalls! }
+            call.targetSourceModule == 2 -> if { localPortCalls! + 1 => localPortCalls! }
+        }
+    }
+    "consumer=$(consumerCalls!),bind=$(bindCalls!),localPort=$(localPortCalls!),failed=$(failedCalls!)" -> println
+}

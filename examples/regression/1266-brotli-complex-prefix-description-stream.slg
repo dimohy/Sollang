@@ -1,0 +1,85 @@
+import std.compress.brotli.prefix_code as codes
+import std.compress.brotli.prefix_table as prefix
+
+isNeedMore progress: codes.DescriptionRead, expected: Int -> Bool => progress -> when {
+    NeedMore(bits) { bits == expected }
+    else { false }
+}
+
+isReady progress: codes.DescriptionRead -> Bool => progress -> when {
+    Ready { true }
+    else { false }
+}
+
+checkComplexReader reader: move codes.DescriptionReader, window: mut prefix.Window -> Bool {
+    reader => reader!
+    window -> fill([112], prefix.Position { byteIndex: 0, bitIndex: 0 }, 8) -> when {
+        Err(_) { false -> return }
+        Ok(_) { }
+    }
+    reader! -> read(window) -> when {
+        Err(_) { false -> return }
+        Ok(progress) { progress -> isNeedMore(2) -> unless { false -> return } }
+    }
+
+    (window -> available) + 16 => secondRequired
+    window -> fill([0, 0], prefix.Position { byteIndex: 0, bitIndex: 0 }, secondRequired) -> when {
+        Err(_) { false -> return }
+        Ok(_) { }
+    }
+    reader! -> read(window) -> when {
+        Err(_) { false -> return }
+        Ok(progress) { progress -> isNeedMore(2) -> unless { false -> return } }
+    }
+
+    (window -> available) + 16 => thirdRequired
+    window -> fill([0, 0], prefix.Position { byteIndex: 0, bitIndex: 0 }, thirdRequired) -> when {
+        Err(_) { false -> return }
+        Ok(_) { }
+    }
+    reader! -> read(window) -> when {
+        Err(_) { false -> return }
+        Ok(progress) { progress -> isReady -> unless { false -> return } }
+    }
+    reader! -> intoTable -> when {
+        Err(_) { false }
+        Ok(table) {
+            table -> probe(0, 2) -> when {
+                Err(_) { false }
+                Ok(probed) {
+                    probed -> when {
+                        Ready(decoded) {
+                            decoded.symbol == 0 and decoded.consumedBits == 2
+                                and (window -> available) == 0
+                        }
+                        else { false }
+                    }
+                }
+            }
+        }
+    }
+}
+
+checkComplex parser: codes.Parser, window: mut prefix.Window -> Result<Bool, codes.Error> {
+    parser -> descriptionReader(4, 5)? => reader
+    reader -> checkComplexReader(window) => checked
+    Result<Bool, codes.Error>.Ok(checked)
+}
+
+main {
+    codes.Limits { maxAlphabetSize: 704, maxTableEntries: 1_080 } -> parser -> when {
+        Err(_) { "complex-prefix-stream=false" -> println }
+        Ok(parser) {
+            prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+                Err(_) { "complex-prefix-stream=false" -> println }
+                Ok(window) {
+                    window => window!
+                    parser -> checkComplex(window!) -> when {
+                        Err(_) { "complex-prefix-stream=false" -> println }
+                        Ok(checked) { "complex-prefix-stream=$(checked)" -> println }
+                    }
+                }
+            }
+        }
+    }
+}

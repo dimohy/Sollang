@@ -76,6 +76,13 @@ canonical grammar and generated table enforce this special-before-general
 ordering. `while` likewise has a dedicated `WhileFlowTarget` rather than
 depending on the generic block-call fallback. Self-hosted regressions prevent
 the C# grammar builder and Sollang parser VM from drifting back to ambiguous order.
+Ordinary value-flow targets form one logical operand, but control, junction,
+`return`, and stream `stop` targets remain at the outer flow level. Separate
+`ValueFlowExpression` and `ValueFlowComparisonExpression` rules preserve both
+`condition == value -> consumeBool` and `text -> len == expectedLength`, while
+`ready and text -> predicate` keeps the right-hand value flow inside its
+logical operand. CST-to-AST lowering classifies the explicit comparison
+wrapper; it must not recover a missing side by type or token proximity.
 Its rule and keyword descriptor are appended after existing grammar entries so
 previous stable rule ids and keyword operator codes do not move.
 Array items use the same ordered-choice discipline: the direct

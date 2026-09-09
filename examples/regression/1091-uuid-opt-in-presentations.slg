@@ -1,0 +1,39 @@
+import std.uuid
+import std.uuid.error as errors
+
+errorText kind: errors.Kind -> Text => kind -> when {
+    InvalidLength { "length" }
+    InvalidPrefix { "prefix" }
+    InvalidSeparator { "separator" }
+    InvalidHexDigit { "hex" }
+    RandomUnavailable { "random" }
+    ClockBeforeUnixEpoch { "clock" }
+    TimestampOverflow { "timestamp" }
+    InvalidEntropyLength { "entropy" }
+}
+
+main {
+    uuid.codec() => codec
+    codec -> parseBraced("{01890F4C-7C00-7CC3-98C8-4C0C9C5F7A21}") -> when {
+        Ok(value) { "braced=$(value -> version)" -> println }
+        Err(error) { "braced=error" -> println }
+    }
+    codec -> parseUrn("URN:UUID:01890f4c-7c00-7cc3-98c8-4c0c9c5f7a21") -> when {
+        Ok(value) { "urn=$(value -> version)" -> println }
+        Err(error) { "urn=error" -> println }
+    }
+    codec -> parseUrn("url:uuid:01890f4c-7c00-7cc3-98c8-4c0c9c5f7a21") -> when {
+        Ok(value) { "prefix=accepted" -> println }
+        Err(error) {
+            error -> errorKind -> errorText => kind
+            "prefix=$kind@$(error -> errorOffset)" -> println
+        }
+    }
+    codec -> parseBraced("{01890f4c-7c00-7cc3-98c8-4c0c9c5f7a2z}") -> when {
+        Ok(value) { "hex=accepted" -> println }
+        Err(error) {
+            error -> errorKind -> errorText => kind
+            "hex=$kind@$(error -> errorOffset)" -> println
+        }
+    }
+}

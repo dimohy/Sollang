@@ -1,0 +1,284 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+# An imported value produced by a Result match and bound for the next
+# statement keeps its enum-valued member projection as the following subject.
+main {
+    """"
+        namespace sample.result_member_http
+
+        public struct Head {
+            public status: Int
+        }
+
+        public struct Error {
+            public offset: UIntSize
+        }
+    """" => httpSource
+    """"
+        namespace sample.result_member_body
+
+        import sample.result_member_http as http
+        import sample.result_member_body as model
+
+        public enum Framing {
+            None
+            ContentLength(UIntSize)
+            UntilClose
+        }
+
+        public struct Policy {
+            public marker: Int
+        }
+
+        public struct Context {
+            public policy: Policy
+            public verb: Text
+        }
+
+        public struct Plan {
+            public framing: Framing
+            public policy: Policy
+        }
+
+        impl Policy {
+            public responseContext: self, verb: Text -> Context => Context {
+                policy: self
+                verb: verb
+            }
+        }
+
+        impl Context {
+            public plan: self, head: ref http.Head -> Result<Plan, http.Error> {
+                Result<Plan, http.Error>.Ok(model.Plan {
+                    framing: model.Framing.None
+                    policy: self.policy
+                })
+            }
+        }
+    """" => bodySource
+    """"
+        namespace sample.result_member_client
+
+        import sample.result_member_http as http
+        import sample.result_member_body as body
+        import sample.result_member_client as model
+
+        struct Response {
+            policy: body.Policy
+            head: http.Head
+        }
+
+        classify: -> Bool {
+            Response {
+                policy: body.Policy { marker: 0 }
+                head: http.Head { status: 200 }
+            } => response
+            response.policy -> responseContext("GET") => context
+            context -> plan(response.head) -> when {
+                Err(_) { false -> return }
+                Ok(value) { value }
+            } => plan
+            plan.framing -> when {
+                None { body.Framing.ContentLength(7) }
+                ContentLength(value) { body.Framing.ContentLength(value) }
+                UntilClose { body.Framing.UntilClose }
+            } => resumed
+            resumed -> when {
+                None { false }
+                ContentLength(value) { value == 7 }
+                UntilClose { false }
+            }
+        }
+    """" => clientSource
+
+    [httpSource, bodySource, clientSource,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => types
+    prepared -> typedIr.lowerResolvedContextParallel(types) => ir
+    false => valid!
+    0 => index!
+    index! < (ir -> len) -> while {
+        ir[index!] => node
+        node.sourceModule == 2 and node.kind == 27 and node.operand0 >= 0
+            -> if {
+                ir[node.operand0].kind == 13 -> if { true => valid! }
+            }
+        index! + 1 => index!
+    }
+    false => controlBindingRematch!
+    0 => rematchIndex!
+    rematchIndex! < (ir -> len) -> while {
+        ir[rematchIndex!] => rematch
+        rematch.sourceModule == 2 and rematch.kind == 27 and rematch.operand0 >= 0
+            -> if {
+                ir[rematch.operand0] => subjectRead
+                subjectRead.kind == 5 and subjectRead.operand0 >= 0
+                    -> if {
+                        ir[subjectRead.operand0] => subjectBinding
+                        subjectBinding.kind == 17 and subjectBinding.operand0 >= 0
+                            and ir[subjectBinding.operand0].kind == 27
+                            -> if { true => controlBindingRematch! }
+                    }
+            }
+        rematchIndex! + 1 => rematchIndex!
+    }
+    "result-bound-member-subject=$(valid!)" -> println
+    "control-binding-rematch=$(controlBindingRematch!)" -> println
+
+    [
+    "examples/regression/1386-http-client-connection-reuse.slg",
+    "stdlib/std/compress/brotli.slg",
+    "stdlib/std/compress/brotli/command.slg",
+    "stdlib/std/compress/brotli/command/error.slg",
+    "stdlib/std/compress/brotli/compressed_header.slg",
+    "stdlib/std/compress/brotli/compressed_header/error.slg",
+    "stdlib/std/compress/brotli/compressed_stream.slg",
+    "stdlib/std/compress/brotli/context_map.slg",
+    "stdlib/std/compress/brotli/context_map/error.slg",
+    "stdlib/std/compress/brotli/decoder_phase.slg",
+    "stdlib/std/compress/brotli/error.slg",
+    "stdlib/std/compress/brotli/literal_context.slg",
+    "stdlib/std/compress/brotli/prefix_code.slg",
+    "stdlib/std/compress/brotli/prefix_code/error.slg",
+    "stdlib/std/compress/brotli/prefix_table.slg",
+    "stdlib/std/compress/brotli/prefix_table/error.slg",
+    "stdlib/std/compress/brotli/static_dictionary_data.slg",
+    "stdlib/std/compress/brotli/static_dictionary.slg",
+    "stdlib/std/compress/brotli/static_dictionary/error.slg",
+    "stdlib/std/compress/brotli/tree_group.slg",
+    "stdlib/std/compress/brotli/tree_group/error.slg",
+    "stdlib/std/compress/gzip.slg",
+    "stdlib/std/compress/gzip/decoder_phase.slg",
+    "stdlib/std/compress/gzip/error.slg",
+    "stdlib/std/compress/zstd.slg",
+    "stdlib/std/compress/zstd/decoder_phase.slg",
+    "stdlib/std/compress/zstd/error.slg",
+    "stdlib/std/compress/zstd/fse.slg",
+    "stdlib/std/compress/zstd/huffman.slg",
+    "stdlib/std/compress/zstd/sequence.slg",
+    "stdlib/std/crypto/aes128_gcm_result.slg",
+    "stdlib/std/crypto/aes128_gcm.slg",
+    "stdlib/std/crypto/aes128.slg",
+    "stdlib/std/crypto/bits.slg",
+    "stdlib/std/crypto/ed25519_error.slg",
+    "stdlib/std/crypto/ed25519.slg",
+    "stdlib/std/crypto/field25519.slg",
+    "stdlib/std/crypto/hkdf_sha256.slg",
+    "stdlib/std/crypto/hmac_sha256.slg",
+    "stdlib/std/crypto/random.slg",
+    "stdlib/std/crypto/sha256.slg",
+    "stdlib/std/crypto/sha512.slg",
+    "stdlib/std/crypto/tls13_hkdf.slg",
+    "stdlib/std/crypto/tls13_keys.slg",
+    "stdlib/std/crypto/x25519.slg",
+    "stdlib/std/encoding/base64.slg",
+    "stdlib/std/encoding/base64/error.slg",
+    "stdlib/std/encoding/base64/types.slg",
+    "stdlib/std/encoding/binary.slg",
+    "stdlib/std/encoding/binary/error.slg",
+    "stdlib/std/encoding/hex.slg",
+    "stdlib/std/encoding/hex/error.slg",
+    "stdlib/std/hash/crc32.slg",
+    "stdlib/std/hash/xxhash64.slg",
+    "stdlib/std/io.slg",
+    "stdlib/std/net.slg",
+    "stdlib/std/net/dns.slg",
+    "stdlib/std/net/http.slg",
+    "stdlib/std/net/http/body.slg",
+    "stdlib/std/net/http/client.slg",
+    "stdlib/std/net/http/error.slg",
+    "stdlib/std/net/http/request.slg",
+    "stdlib/std/net/http/response.slg",
+    "stdlib/std/net/http/server.slg",
+    "stdlib/std/net/parse_error.slg",
+    "stdlib/std/net/quic.slg",
+    "stdlib/std/net/quic/application_engine.slg",
+    "stdlib/std/net/quic/connection_state.slg",
+    "stdlib/std/net/quic/crypto_stream.slg",
+    "stdlib/std/net/quic/error.slg",
+    "stdlib/std/net/quic/frame.slg",
+    "stdlib/std/net/quic/handshake_engine.slg",
+    "stdlib/std/net/quic/initial_engine.slg",
+    "stdlib/std/net/quic/keys.slg",
+    "stdlib/std/net/quic/loss_recovery.slg",
+    "stdlib/std/net/quic/p2p.slg",
+    "stdlib/std/net/quic/packet_number.slg",
+    "stdlib/std/net/quic/packet_recovery.slg",
+    "stdlib/std/net/quic/packet.slg",
+    "stdlib/std/net/quic/protection.slg",
+    "stdlib/std/net/quic/reassembly.slg",
+    "stdlib/std/net/quic/stream_state.slg",
+    "stdlib/std/net/quic/tls_auth.slg",
+    "stdlib/std/net/quic/tls_client_phase.slg",
+    "stdlib/std/net/quic/tls_client_state.slg",
+    "stdlib/std/net/quic/tls_handshake.slg",
+    "stdlib/std/net/quic/tls_hello.slg",
+    "stdlib/std/net/quic/tls_server_phase.slg",
+    "stdlib/std/net/quic/tls_server_state.slg",
+    "stdlib/std/net/quic/tls_transcript.slg",
+    "stdlib/std/net/quic/traffic_keys.slg",
+    "stdlib/std/net/quic/transport_parameters.slg",
+    "stdlib/std/net/quic/varint.slg",
+    "stdlib/std/net/quic/version_negotiation.slg",
+    "stdlib/std/net/quic/version_packet.slg",
+    "stdlib/std/net/quic/x509_ed25519.slg",
+    "stdlib/std/net/quic/x509_identity.slg",
+    "stdlib/std/net/socket.slg",
+    "stdlib/std/sequence.slg",
+    "stdlib/std/text/json.slg",
+    "stdlib/std/text/json/error.slg",
+    "stdlib/std/time.slg",
+    "stdlib/std/uri.slg",
+    "stdlib/std/uri/error.slg",
+    "stdlib/std/uri/percent.slg",
+    "stdlib/std/uri/percent/error.slg",
+    "stdlib/std/uri/percent/types.slg",
+    "stdlib/std/uuid.slg",
+    "stdlib/std/uuid/error.slg",
+    "stdlib/sys/directory.slg",
+    "stdlib/sys/directory/kind.slg",
+    "stdlib/sys/file.slg",
+    "stdlib/sys/input/mouse.slg",
+    "stdlib/sys/io.slg",
+    "stdlib/sys/path.slg",
+    "stdlib/sys/process.slg",
+    "stdlib/sys/random.slg",
+    "stdlib/sys/runtime/clock.slg",
+    "stdlib/sys/runtime/console.slg",
+    "stdlib/sys/runtime/dns.slg",
+    "stdlib/sys/runtime/integer_file.slg",
+    "stdlib/sys/runtime/mouse_event.slg",
+    "stdlib/sys/runtime/parallel.slg",
+    "stdlib/sys/runtime/path.slg",
+    "stdlib/sys/runtime/process.slg",
+    "stdlib/sys/runtime/random.slg",
+    "stdlib/sys/runtime/sequence.slg",
+    "stdlib/sys/runtime/socket.slg",
+    "stdlib/sys/runtime/time.slg",
+    "stdlib/sys/text.slg",
+    ; ~
+    ] => fullPaths
+    fullPaths -> semanticContext.prepareFiles => fullPrepared
+    fullPrepared -> expressionTypeIds.resolveContext => fullTypes
+    fullPrepared -> typedIr.lowerResolvedContextParallel(fullTypes) => fullIr
+    false => fullValid!
+    false => fullMember!
+    -1 => fullSubjectKind!
+    0 => fullIndex!
+    fullIndex! < (fullIr -> len) -> while {
+        fullIr[fullIndex!] => node
+        node.sourceModule == 59 and node.astNode == 1262 and node.kind == 13
+            -> if { true => fullMember! }
+        node.sourceModule == 59 and node.astNode == 1264 and node.kind == 27
+            -> if {
+                node.operand0 >= 0 -> if {
+                    fullIr[node.operand0].kind => fullSubjectKind!
+                    fullSubjectKind! == 13 -> if { true => fullValid! }
+                }
+            }
+        fullIndex! + 1 => fullIndex!
+    }
+    "full-result-bound-member-subject=$(fullValid!)" -> println
+    "full-member=$(fullMember!),subject-kind=$(fullSubjectKind!)" -> println
+}

@@ -1,0 +1,42 @@
+import regression.early_return_owner as model
+
+# Calls resolved after semantic ownership analysis still transfer one owner.
+afterTransfer flag: Bool, owner: move model.Owner -> Int uses Console {
+    "before" -> println
+    owner -> intoObservedValues => values
+    "after" -> println
+    flag -> if { values -> len -> return }
+    values -> len
+}
+beforeTransfer flag: Bool, owner: move model.Owner -> Int {
+    flag -> if { 1 -> return }
+    owner -> intoValues => values
+    values -> len
+}
+siblingTransfer flag: Bool, owner: move model.Owner -> Int {
+    flag -> if {
+        owner -> intoValues => values
+        values -> len => count
+        count -> return
+    } else { 1 -> return }
+    0
+}
+readonlyCall flag: Bool, owner: move model.Owner -> Int {
+    owner -> model.observe => count
+    flag -> if { count -> return }
+    count
+}
+additionalTransfer flag: Bool, owner: move model.Owner -> Int {
+    7 -> model.takeValues(owner) => values
+    values -> len => count
+    flag -> if { count -> return }
+    count
+}
+main {
+    true -> afterTransfer(model.Owner { values: [7,; ~] }) -> println
+    true -> beforeTransfer(model.Owner { values: [7,; ~] }) -> println
+    false -> siblingTransfer(model.Owner { values: [7,; ~] }) -> println
+    true -> siblingTransfer(model.Owner { values: [7,; ~] }) -> println
+    true -> readonlyCall(model.Owner { values: [7,; ~] }) -> println
+    true -> additionalTransfer(model.Owner { values: [7,; ~] }) -> println
+}

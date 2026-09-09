@@ -1,0 +1,980 @@
+namespace std.compress.zstd
+
+import std.compress.zstd.error as errors
+import std.compress.zstd.decoder_phase as phases
+import std.compress.zstd.fse as fse
+import std.compress.zstd.huffman as huffman
+import std.compress.zstd.sequence as sequence
+import std.hash.xxhash64 as xxhash64
+
+# RFC 8878 Zstandard foundation. The deterministic writer emits independent
+# single-segment frames containing raw blocks. The incremental decoder accepts
+# raw and RLE blocks plus bounded skippable frames. Compressed blocks with raw
+# or RLE literals and direct-weight Huffman literals with zero sequences decode
+# transactionally, including one/four streams and same-frame treeless reuse.
+# FSE-compressed Huffman weights and dictionaries remain gates.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+struct CompressedBlock {
+    output: [UInt8; ~]
+    huffmanTable: huffman.Table
+    replacesHuffmanTable: Bool
+    literalLengthTable: fse.Table
+    offsetTable: fse.Table
+    matchLengthTable: fse.Table
+    replacesLiteralLengthTable: Bool
+    replacesOffsetTable: Bool
+    replacesMatchLengthTable: Bool
+    recentOffset1: Int
+    recentOffset2: Int
+    recentOffset3: Int
+}
+
+public struct Limits {
+    public maxEncodedBytes: Int
+    public maxDecodedBytes: Int
+    public maxWindowBytes: Int
+    public maxFrames: Int
+    public maxSkippableFrameBytes: Int
+}
+
+public struct FrameOptions {
+    public checksum: Bool
+}
+
+public struct Codec {
+    public limits: Limits
+    public frame: FrameOptions
+}
+
+public struct Encoder {
+    public maxEncodedBytes: Int
+    public expectedInputBytes: Int
+    public acceptedInputBytes: Int
+    public producedBytes: Int
+    public started: Bool
+    public checksum: Bool
+    public hash: xxhash64.Hasher
+}
+
+public struct Decoder {
+    public maxEncodedBytes: Int
+    public maxDecodedBytes: Int
+    public maxWindowBytes: Int
+    public maxFrames: Int
+    public maxSkippableFrameBytes: Int
+    public totalInputBytes: Int
+    public processedInputBytes: Int
+    public frameCount: Int
+    public phase: phases.Phase
+    public fieldValue: UInt64
+    public fieldPosition: Int
+    public fieldBytes: Int
+    public descriptor: Int
+    public dictionaryBytes: Int
+    public contentSizeBytes: Int
+    public contentSizePresent: Bool
+    public contentSize: UInt64
+    public checksumPresent: Bool
+    public frameHash: xxhash64.Hasher
+    public windowSize: Int
+    public frameOutputBytes: Int
+    public blockHeader: Int
+    public blockRemaining: Int
+    public lastBlock: Bool
+    public compressedBlock: [UInt8; ~]
+    public huffmanTable: huffman.Table
+    public hasHuffmanTable: Bool
+    public literalLengthTable: fse.Table
+    public offsetTable: fse.Table
+    public matchLengthTable: fse.Table
+    public hasLiteralLengthTable: Bool
+    public hasOffsetTable: Bool
+    public hasMatchLengthTable: Bool
+    public recentOffset1: Int
+    public recentOffset2: Int
+    public recentOffset3: Int
+    public verifiedOutput: [UInt8; ~]
+    public failed: Bool
+    public failure: Error
+}
+
+errorCodec kind: errors.Kind, offset: UIntSize -> Result<Codec, Error> {
+    Result<Codec, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorEncoder kind: errors.Kind, offset: UIntSize -> Result<Encoder, Error> {
+    Result<Encoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecoder kind: errors.Kind, offset: UIntSize -> Result<Decoder, Error> {
+    Result<Decoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBytes kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
+    Result<[UInt8; ~], Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorCompressedBlock kind: errors.Kind, offset: UIntSize -> Result<CompressedBlock, Error> {
+    Result<CompressedBlock, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+powerOfTwo exponent: Int -> UInt64 {
+    UInt64(1) => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+appendLe16 output: mut [UInt8; ~], value: Int -> Unit {
+    output -> push(UInt8(value % 256))
+    output -> push(UInt8((value / 256) % 256))
+}
+
+appendLe24 output: mut [UInt8; ~], value: Int -> Unit {
+    output -> push(UInt8(value % 256))
+    output -> push(UInt8((value / 256) % 256))
+    output -> push(UInt8((value / 65_536) % 256))
+}
+
+appendLe32 output: mut [UInt8; ~], value: Int -> Unit {
+    output -> push(UInt8(value % 256))
+    output -> push(UInt8((value / 256) % 256))
+    output -> push(UInt8((value / 65_536) % 256))
+    output -> push(UInt8((value / 16_777_216) % 256))
+}
+
+contentSizeBytes length: Int -> Int {
+    length <= 255 -> if { 1 -> return }
+    length <= 65_791 -> if { 2 -> return }
+    4
+}
+
+frameHeaderLength length: Int -> Int {
+    5 + (length -> contentSizeBytes)
+}
+
+appendFrameHeader output: mut [UInt8; ~], length: Int, checksum: Bool -> Unit {
+    # Zstandard magic 0xFD2FB528, little-endian on the wire.
+    output -> push(40)
+    output -> push(181)
+    output -> push(47)
+    output -> push(253)
+    length -> contentSizeBytes => bytes
+    checksum -> if { 4 } else { 0 } => checksumFlag
+    bytes == 1 -> if {
+        output -> push(UInt8(32 + checksumFlag))
+        output -> push(UInt8(length))
+    }
+    bytes == 2 -> if {
+        output -> push(UInt8(96 + checksumFlag))
+        output -> appendLe16(length - 256)
+    }
+    bytes == 4 -> if {
+        output -> push(UInt8(160 + checksumFlag))
+        output -> appendLe32(length)
+    }
+}
+
+appendChecksum output: mut [UInt8; ~], checksum: UInt64 -> Unit {
+    output -> push(UInt8(checksum % 256))
+    output -> push(UInt8((checksum / 256) % 256))
+    output -> push(UInt8((checksum / 65_536) % 256))
+    output -> push(UInt8((checksum / 16_777_216) % 256))
+}
+
+appendRawBlocks input: [UInt8], output: mut [UInt8; ~] -> Int {
+    0 => inputOffset!
+    0 => produced!
+    inputOffset! < (input -> len) -> while {
+        (input -> len) - inputOffset! => remaining
+        remaining > 131_072 -> if { 131_072 } else { remaining } => blockLength
+        output -> appendLe24(blockLength * 8)
+        0 => byteIndex!
+        byteIndex! < blockLength -> while {
+            output -> push(input[inputOffset! + byteIndex!])
+            byteIndex! + 1 => byteIndex!
+        }
+        inputOffset! + blockLength => inputOffset!
+        produced! + 3 + blockLength => produced!
+    }
+    produced!
+}
+
+fail decoder: mut Decoder, kind: errors.Kind, offset: Int -> Unit {
+    not decoder.failed -> if {
+        true => decoder.failed
+        Error { kind: kind, offset: UIntSize(offset) } => decoder.failure
+    }
+}
+
+resetField decoder: mut Decoder, phase: phases.Phase, bytes: Int -> Unit {
+    phase => decoder.phase
+    0 => decoder.fieldValue
+    0 => decoder.fieldPosition
+    bytes => decoder.fieldBytes
+}
+
+readFieldByte decoder: mut Decoder, byte: UInt8 -> Bool {
+    decoder.fieldValue + UInt64(byte) * (decoder.fieldPosition * 8 -> powerOfTwo)
+        => decoder.fieldValue
+    decoder.fieldPosition + 1 => decoder.fieldPosition
+    decoder.fieldPosition == decoder.fieldBytes
+}
+
+beginBlock decoder: mut Decoder -> Unit {
+    decoder -> resetField(phases.Phase.BlockHeader, 3)
+    0 => decoder.blockHeader
+}
+
+completeFrame decoder: mut Decoder -> Unit {
+    decoder.contentSizePresent and UInt64(decoder.frameOutputBytes) != decoder.contentSize
+        -> if {
+            decoder -> fail(errors.Kind.SizeMismatch, decoder.processedInputBytes)
+            return
+        }
+    decoder.frameCount + 1 > decoder.maxFrames -> if {
+        decoder -> fail(errors.Kind.FrameLimitExceeded, decoder.processedInputBytes)
+        return
+    }
+    decoder.frameCount + 1 => decoder.frameCount
+    decoder -> resetField(phases.Phase.Magic, 4)
+}
+
+completeDataBlocks decoder: mut Decoder -> Unit {
+    decoder.checksumPresent -> if {
+        decoder -> resetField(phases.Phase.Checksum, 4)
+    } else {
+        decoder -> completeFrame
+    }
+}
+
+finishChecksum decoder: mut Decoder -> Unit {
+    decoder.frameHash -> checksum => frameChecksum
+    frameChecksum % 4_294_967_296 => actual
+    decoder.fieldValue == actual -> unless {
+        decoder -> fail(errors.Kind.ChecksumMismatch, decoder.processedInputBytes - 4)
+        return
+    }
+    decoder -> completeFrame
+}
+
+beginFrameHeader decoder: mut Decoder -> Unit {
+    decoder -> resetField(phases.Phase.Descriptor, 1)
+    0 => decoder.frameOutputBytes
+    false => decoder.contentSizePresent
+    0 => decoder.contentSize
+    false => decoder.checksumPresent
+    decoder.frameHash -> reset
+    0 => decoder.windowSize
+    decoder.huffmanTable -> reset
+    false => decoder.hasHuffmanTable
+    decoder.literalLengthTable -> reset
+    decoder.offsetTable -> reset
+    decoder.matchLengthTable -> reset
+    false => decoder.hasLiteralLengthTable
+    false => decoder.hasOffsetTable
+    false => decoder.hasMatchLengthTable
+    1 => decoder.recentOffset1
+    4 => decoder.recentOffset2
+    8 => decoder.recentOffset3
+}
+
+finishDescriptor decoder: mut Decoder -> Unit {
+    Int(decoder.fieldValue) => descriptor
+    descriptor => decoder.descriptor
+    (descriptor / 8) % 2 == 0 and (descriptor / 16) % 2 == 0
+        -> unless {
+            decoder -> fail(errors.Kind.InvalidHeader, decoder.processedInputBytes - 1)
+            return
+        }
+    (descriptor / 4) % 2 == 1 => decoder.checksumPresent
+    descriptor % 4 -> when {
+        == 0 { 0 }
+        == 1 { 1 }
+        == 2 { 2 }
+        == 3 { 4 }
+        else { 0 }
+    } => dictionaryBytes
+    dictionaryBytes => decoder.dictionaryBytes
+    descriptor / 64 -> when {
+        == 0 { (descriptor / 32) % 2 }
+        == 1 { 2 }
+        == 2 { 4 }
+        == 3 { 8 }
+        else { 0 }
+    } => sizeBytes
+    sizeBytes => decoder.contentSizeBytes
+    sizeBytes > 0 => decoder.contentSizePresent
+    (descriptor / 32) % 2 == 0 -> if {
+        decoder -> resetField(phases.Phase.Window, 1)
+    } else {
+        dictionaryBytes > 0 -> if {
+            decoder -> resetField(phases.Phase.Dictionary, dictionaryBytes)
+        } else {
+            decoder -> resetField(phases.Phase.ContentSize, sizeBytes)
+        }
+    }
+}
+
+finishWindow decoder: mut Decoder -> Unit {
+    Int(decoder.fieldValue) => descriptor
+    descriptor / 8 => exponent
+    descriptor % 8 => mantissa
+    10 + exponent -> powerOfTwo => windowBase
+    windowBase + (windowBase / 8) * UInt64(mantissa) => windowSize
+    windowSize <= UInt64(decoder.maxWindowBytes)
+        -> unless {
+            decoder -> fail(errors.Kind.WindowLimitExceeded, decoder.processedInputBytes - 1)
+            return
+        }
+    Int(windowSize) => decoder.windowSize
+    decoder.dictionaryBytes > 0 -> if {
+        decoder -> resetField(phases.Phase.Dictionary, decoder.dictionaryBytes)
+    } else {
+        decoder.contentSizeBytes > 0 -> if {
+            decoder -> resetField(phases.Phase.ContentSize, decoder.contentSizeBytes)
+        } else {
+            decoder -> beginBlock
+        }
+    }
+}
+
+finishDictionary decoder: mut Decoder -> Unit {
+    decoder.fieldValue == 0
+        -> unless {
+            decoder -> fail(errors.Kind.UnsupportedDictionary, decoder.processedInputBytes - decoder.fieldBytes)
+            return
+        }
+    decoder.contentSizeBytes > 0 -> if {
+        decoder -> resetField(phases.Phase.ContentSize, decoder.contentSizeBytes)
+    } else {
+        decoder -> beginBlock
+    }
+}
+
+finishContentSize decoder: mut Decoder -> Unit {
+    decoder.fieldValue => contentSize!
+    decoder.contentSizeBytes == 2 -> if { contentSize! + 256 => contentSize! }
+    contentSize! => decoder.contentSize
+    (decoder.descriptor / 32) % 2 == 1 -> if {
+        contentSize! <= UInt64(decoder.maxWindowBytes)
+            -> unless {
+                decoder -> fail(errors.Kind.WindowLimitExceeded, decoder.processedInputBytes - decoder.fieldBytes)
+                return
+            }
+        Int(contentSize!) => decoder.windowSize
+    }
+    decoder -> beginBlock
+}
+
+appendBytes destination: mut [UInt8; ~], source: [UInt8] -> Unit {
+    0 => index!
+    index! < (source -> len) -> while {
+        destination -> push(source[index!])
+        index! + 1 => index!
+    }
+}
+
+decodeHuffmanStreams table: ref huffman.Table, input: [UInt8], headerBytes: Int, treeBytes: Int, compressedSize: Int, streamCount: Int, regeneratedSize: Int, blockOffset: Int -> Result<[UInt8; ~], Error> {
+    [UInt8; ~] => output!
+    output! -> reserve(regeneratedSize)
+    compressedSize - treeBytes => streamsSize
+    streamCount == 1 -> if {
+        table -> decodeStream(input, headerBytes + treeBytes, streamsSize, regeneratedSize) -> when {
+            Err(_) {
+                errorBytes(errors.Kind.InvalidBlock, UIntSize(blockOffset + headerBytes + treeBytes)) -> return
+            }
+            Ok(decoded) { output! -> appendBytes(decoded) }
+        }
+    } else {
+        streamsSize >= 10
+            -> unless {
+                errorBytes(errors.Kind.InvalidBlock, UIntSize(blockOffset + headerBytes + treeBytes)) -> return
+            }
+        headerBytes + treeBytes => jumpOffset
+        Int(input[jumpOffset]) + Int(input[jumpOffset + 1]) * 256 => firstSize
+        Int(input[jumpOffset + 2]) + Int(input[jumpOffset + 3]) * 256 => secondSize
+        Int(input[jumpOffset + 4]) + Int(input[jumpOffset + 5]) * 256 => thirdSize
+        streamsSize - 6 - firstSize - secondSize - thirdSize => fourthSize
+        firstSize > 0 and secondSize > 0 and thirdSize > 0 and fourthSize > 0
+            -> unless { errorBytes(errors.Kind.InvalidBlock, UIntSize(blockOffset + jumpOffset)) -> return }
+        (regeneratedSize + 3) / 4 => streamOutputSize
+        regeneratedSize - streamOutputSize * 3 => fourthOutputSize
+        jumpOffset + 6 => streamOffset!
+        [firstSize, secondSize, thirdSize, fourthSize] => sizes
+        0 => streamIndex!
+        streamIndex! < 4 -> while {
+            streamIndex! == 3 -> if { fourthOutputSize } else { streamOutputSize } => expected
+            table -> decodeStream(input, streamOffset!, sizes[streamIndex!], expected) -> when {
+                Err(_) {
+                    errorBytes(errors.Kind.InvalidBlock, UIntSize(blockOffset + streamOffset!)) -> return
+                }
+                Ok(decoded) { output! -> appendBytes(decoded) }
+            }
+            streamOffset! + sizes[streamIndex!] => streamOffset!
+            streamIndex! + 1 => streamIndex!
+        }
+    }
+    (output! -> len) == regeneratedSize
+        -> unless { errorBytes(errors.Kind.InvalidBlock, UIntSize(blockOffset)) -> return }
+    Result<[UInt8; ~], Error>.Ok(output!)
+}
+
+finishSequenceBlock input: [UInt8], sequenceOffset: Int, literals: move [UInt8; ~], maxDecodedBytes: Int, blockOffset: Int, history: [UInt8], frameOutputBytes: Int, windowSize: Int, previousLiteralLengths: ref fse.Table, hasLiteralLengths: Bool, previousOffsets: ref fse.Table, hasOffsets: Bool, previousMatchLengths: ref fse.Table, hasMatchLengths: Bool, recentOffset1: Int, recentOffset2: Int, recentOffset3: Int, huffmanTable: move huffman.Table, replacesHuffmanTable: Bool -> Result<CompressedBlock, Error> {
+    sequence.decode(input, sequenceOffset, literals, history, frameOutputBytes,
+    windowSize, maxDecodedBytes, previousLiteralLengths, hasLiteralLengths,
+    previousOffsets, hasOffsets, previousMatchLengths, hasMatchLengths,
+    recentOffset1, recentOffset2, recentOffset3) -> when {
+        Err(_) {
+            errorCompressedBlock(errors.Kind.InvalidBlock,
+            UIntSize(blockOffset + sequenceOffset))
+        }
+        Ok(decoded) {
+            Result<CompressedBlock, Error>.Ok(CompressedBlock {
+                output: decoded.output
+                huffmanTable: huffmanTable
+                replacesHuffmanTable: replacesHuffmanTable
+                literalLengthTable: decoded.literalLengths
+                offsetTable: decoded.offsets
+                matchLengthTable: decoded.matchLengths
+                replacesLiteralLengthTable: decoded.replacesLiteralLengths
+                replacesOffsetTable: decoded.replacesOffsets
+                replacesMatchLengthTable: decoded.replacesMatchLengths
+                recentOffset1: decoded.recentOffset1
+                recentOffset2: decoded.recentOffset2
+                recentOffset3: decoded.recentOffset3
+            })
+        }
+    }
+}
+
+decodeCompressedBlock input: [UInt8], maxDecodedBytes: Int, blockOffset: Int, history: [UInt8], frameOutputBytes: Int, windowSize: Int, previousTable: ref huffman.Table, hasPreviousTable: Bool, previousLiteralLengths: ref fse.Table, hasLiteralLengths: Bool, previousOffsets: ref fse.Table, hasOffsets: Bool, previousMatchLengths: ref fse.Table, hasMatchLengths: Bool, recentOffset1: Int, recentOffset2: Int, recentOffset3: Int -> Result<CompressedBlock, Error> {
+    (input -> len) >= 2
+        -> unless { errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset)) -> return }
+    Int(input[0]) => first
+    first % 4 => literalType
+    (first / 4) % 4 => sizeFormat
+    1 => headerBytes!
+    first / 8 => regeneratedSize!
+    0 => compressedSize!
+    1 => streamCount!
+    literalType <= 1 -> if {
+        sizeFormat == 1 -> if {
+            (input -> len) >= 3
+                -> unless { errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset)) -> return }
+            2 => headerBytes!
+            first / 16 + Int(input[1]) * 16 => regeneratedSize!
+        }
+        sizeFormat == 3 -> if {
+            (input -> len) >= 4
+                -> unless { errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset)) -> return }
+            3 => headerBytes!
+            first / 16 + Int(input[1]) * 16 + Int(input[2]) * 4_096 => regeneratedSize!
+        }
+    } else {
+        sizeFormat <= 1 -> if {
+            (input -> len) >= 4
+                -> unless { errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset)) -> return }
+            3 => headerBytes!
+            first / 16 + (Int(input[1]) % 64) * 16 => regeneratedSize!
+            Int(input[1]) / 64 + Int(input[2]) * 4 => compressedSize!
+            sizeFormat == 0 -> if { 1 } else { 4 } => streamCount!
+        }
+        sizeFormat == 2 -> if {
+            (input -> len) >= 5
+                -> unless { errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset)) -> return }
+            4 => headerBytes!
+            first / 16 + Int(input[1]) * 16 + (Int(input[2]) % 4) * 4_096 => regeneratedSize!
+            Int(input[2]) / 4 + Int(input[3]) * 64 => compressedSize!
+            4 => streamCount!
+        }
+        sizeFormat == 3 -> if {
+            (input -> len) >= 6
+                -> unless { errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset)) -> return }
+            5 => headerBytes!
+            first / 16 + Int(input[1]) * 16 + (Int(input[2]) % 64) * 4_096 => regeneratedSize!
+            Int(input[2]) / 64 + Int(input[3]) * 4 + Int(input[4]) * 1_024 => compressedSize!
+            4 => streamCount!
+        }
+    }
+    regeneratedSize! <= maxDecodedBytes
+        -> unless {
+            errorCompressedBlock(errors.Kind.OutputLimitExceeded, UIntSize(blockOffset + headerBytes!)) -> return
+        }
+    literalType <= 1 -> if {
+        literalType == 0 -> if { regeneratedSize! } else { 1 } => literalBytes
+        headerBytes! + literalBytes => sequenceOffset
+        sequenceOffset < (input -> len)
+            -> unless {
+                errorCompressedBlock(errors.Kind.TruncatedInput, UIntSize(blockOffset + sequenceOffset)) -> return
+            }
+        [UInt8; ~] => literals!
+        literals! -> reserve(regeneratedSize!)
+        literalType == 0 -> if {
+            0 => index!
+            index! < regeneratedSize! -> while {
+                literals! -> push(input[headerBytes! + index!])
+                index! + 1 => index!
+            }
+        } else {
+            0 => index!
+            index! < regeneratedSize! -> while {
+                literals! -> push(input[headerBytes!])
+                index! + 1 => index!
+            }
+        }
+        huffman.empty() => unchangedHuffman
+        finishSequenceBlock(input, sequenceOffset, literals!, maxDecodedBytes,
+        blockOffset, history, frameOutputBytes, windowSize,
+        previousLiteralLengths, hasLiteralLengths, previousOffsets, hasOffsets,
+        previousMatchLengths, hasMatchLengths, recentOffset1, recentOffset2,
+        recentOffset3, unchangedHuffman, false) -> return
+    }
+
+    headerBytes! + compressedSize! => sequenceOffset
+    sequenceOffset < (input -> len)
+        -> unless {
+            errorCompressedBlock(errors.Kind.TruncatedInput, UIntSize(blockOffset + sequenceOffset)) -> return
+        }
+    compressedSize! > 0
+        -> unless { errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset + headerBytes!)) -> return }
+
+    literalType == 2 -> if {
+        huffman.parseDirectDescription(input, headerBytes!, compressedSize!) -> when {
+            Err(failure) {
+                failure -> when {
+                    UnsupportedFseWeights {
+                        errorCompressedBlock(errors.Kind.UnsupportedCompressedBlock,
+                        UIntSize(blockOffset + headerBytes!)) -> return
+                    }
+                    Invalid {
+                        errorCompressedBlock(errors.Kind.InvalidBlock,
+                        UIntSize(blockOffset + headerBytes!)) -> return
+                    }
+                }
+            }
+            Ok(description) {
+                description.bytesRead => treeBytes
+                decodeHuffmanStreams(description.table, input, headerBytes!, treeBytes,
+                compressedSize!, streamCount!, regeneratedSize!, blockOffset) -> when {
+                    Err(error) { Result<CompressedBlock, Error>.Err(error) -> return }
+                    Ok(decoded) {
+                        description -> intoTable => replacementHuffman
+                        finishSequenceBlock(input, sequenceOffset, decoded,
+                        maxDecodedBytes, blockOffset, history, frameOutputBytes,
+                        windowSize, previousLiteralLengths, hasLiteralLengths,
+                        previousOffsets, hasOffsets, previousMatchLengths,
+                        hasMatchLengths, recentOffset1, recentOffset2,
+                        recentOffset3, replacementHuffman, true) -> return
+                    }
+                }
+            }
+        }
+    } else {
+        hasPreviousTable
+            -> unless {
+                errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset + headerBytes!)) -> return
+            }
+        decodeHuffmanStreams(previousTable, input, headerBytes!, 0, compressedSize!, streamCount!,
+        regeneratedSize!, blockOffset) -> when {
+            Err(error) { Result<CompressedBlock, Error>.Err(error) }
+            Ok(decoded) {
+                huffman.empty() => unchangedHuffman
+                finishSequenceBlock(input, sequenceOffset, decoded,
+                maxDecodedBytes, blockOffset, history, frameOutputBytes,
+                windowSize, previousLiteralLengths, hasLiteralLengths,
+                previousOffsets, hasOffsets, previousMatchLengths,
+                hasMatchLengths, recentOffset1, recentOffset2,
+                recentOffset3, unchangedHuffman, false)
+            }
+        }
+    }
+}
+
+commitCompressedBlock decoded: move CompressedBlock, decoder: mut Decoder -> Unit {
+    0 => index!
+    index! < (decoded.output -> len) -> while {
+        decoder -> appendDecoded(decoded.output[index!])
+        index! + 1 => index!
+    }
+    decoded.replacesHuffmanTable -> if {
+        decoder.huffmanTable -> replaceFrom(decoded.huffmanTable)
+        true => decoder.hasHuffmanTable
+    }
+    decoded.replacesLiteralLengthTable -> if {
+        decoder.literalLengthTable -> replaceFrom(decoded.literalLengthTable)
+        true => decoder.hasLiteralLengthTable
+    }
+    decoded.replacesOffsetTable -> if {
+        decoder.offsetTable -> replaceFrom(decoded.offsetTable)
+        true => decoder.hasOffsetTable
+    }
+    decoded.replacesMatchLengthTable -> if {
+        decoder.matchLengthTable -> replaceFrom(decoded.matchLengthTable)
+        true => decoder.hasMatchLengthTable
+    }
+    decoded.recentOffset1 => decoder.recentOffset1
+    decoded.recentOffset2 => decoder.recentOffset2
+    decoded.recentOffset3 => decoder.recentOffset3
+}
+
+completeCompressedBlock decoder: mut Decoder -> Unit {
+    decoder.processedInputBytes - (decoder.compressedBlock -> len) => blockOffset
+    decoder.maxDecodedBytes - (decoder.verifiedOutput -> len) => remainingOutput
+    decodeCompressedBlock(decoder.compressedBlock, remainingOutput, blockOffset,
+    decoder.verifiedOutput, decoder.frameOutputBytes, decoder.windowSize,
+    decoder.huffmanTable, decoder.hasHuffmanTable,
+    decoder.literalLengthTable, decoder.hasLiteralLengthTable,
+    decoder.offsetTable, decoder.hasOffsetTable,
+    decoder.matchLengthTable, decoder.hasMatchLengthTable,
+    decoder.recentOffset1, decoder.recentOffset2, decoder.recentOffset3) -> when {
+        Err(error) { decoder -> fail(error.kind, Int(error.offset)) }
+        Ok(decoded) {
+            commitCompressedBlock(decoded, decoder)
+            [UInt8; ~] => decoder.compressedBlock
+            decoder.lastBlock -> if { decoder -> completeDataBlocks } else { decoder -> beginBlock }
+        }
+    }
+}
+
+finishBlockHeader decoder: mut Decoder -> Unit {
+    Int(decoder.fieldValue) => header
+    header => decoder.blockHeader
+    header % 2 == 1 => decoder.lastBlock
+    (header / 2) % 4 => blockType
+    header / 8 => blockSize
+    blockSize <= 131_072 and blockSize <= decoder.windowSize
+        -> unless {
+            decoder -> fail(errors.Kind.InvalidBlock, decoder.processedInputBytes - 3)
+            return
+        }
+    blockSize => decoder.blockRemaining
+    blockType -> when {
+        == 0 {
+            blockSize <= decoder.maxDecodedBytes - (decoder.verifiedOutput -> len)
+                -> unless {
+                    decoder -> fail(errors.Kind.OutputLimitExceeded, decoder.processedInputBytes - 3)
+                    return
+                }
+            blockSize == 0 -> if {
+                decoder.lastBlock -> if { decoder -> completeDataBlocks } else { decoder -> beginBlock }
+            } else {
+                phases.Phase.BlockRaw => decoder.phase
+            }
+        }
+        == 1 {
+            blockSize <= decoder.maxDecodedBytes - (decoder.verifiedOutput -> len)
+                -> unless {
+                    decoder -> fail(errors.Kind.OutputLimitExceeded, decoder.processedInputBytes - 3)
+                    return
+                }
+            phases.Phase.BlockRle => decoder.phase
+        }
+        == 2 {
+            [UInt8; ~] => compressedBlock!
+            compressedBlock! -> reserve(blockSize)
+            compressedBlock! => decoder.compressedBlock
+            blockSize == 0 -> if {
+                decoder -> fail(errors.Kind.InvalidBlock, decoder.processedInputBytes - 3)
+            } else {
+                phases.Phase.BlockCompressed => decoder.phase
+            }
+        }
+        == 3 { decoder -> fail(errors.Kind.InvalidBlock, decoder.processedInputBytes - 3) }
+        else { decoder -> fail(errors.Kind.InvalidBlock, decoder.processedInputBytes - 3) }
+    }
+}
+
+appendDecoded decoder: mut Decoder, byte: UInt8 -> Unit {
+    decoder.verifiedOutput -> push(byte)
+    decoder.frameHash -> writeByte(byte)
+    decoder.frameOutputBytes + 1 => decoder.frameOutputBytes
+}
+
+processByte decoder: mut Decoder, byte: UInt8 -> Unit {
+    decoder.processedInputBytes + 1 => decoder.processedInputBytes
+    decoder.phase -> when {
+        Magic {
+            decoder -> readFieldByte(byte) => fieldComplete
+            fieldComplete -> if {
+                decoder.fieldValue == 4_247_762_216 -> if {
+                    decoder.frameCount < decoder.maxFrames -> if {
+                        decoder -> beginFrameHeader
+                    } else {
+                        decoder -> fail(errors.Kind.FrameLimitExceeded, decoder.processedInputBytes - 4)
+                    }
+                } else {
+                    decoder.fieldValue >= 407_710_288 and decoder.fieldValue <= 407_710_303
+                        -> if {
+                            decoder -> resetField(phases.Phase.SkippableSize, 4)
+                        } else {
+                            decoder -> fail(errors.Kind.InvalidMagic, decoder.processedInputBytes - 4)
+                        }
+                }
+            }
+        }
+        Descriptor {
+            decoder -> readFieldByte(byte) => descriptorComplete
+            descriptorComplete -> if { decoder -> finishDescriptor }
+        }
+        Window {
+            decoder -> readFieldByte(byte) => windowComplete
+            windowComplete -> if { decoder -> finishWindow }
+        }
+        Dictionary {
+            decoder -> readFieldByte(byte) => dictionaryComplete
+            dictionaryComplete -> if { decoder -> finishDictionary }
+        }
+        ContentSize {
+            decoder -> readFieldByte(byte) => contentSizeComplete
+            contentSizeComplete -> if { decoder -> finishContentSize }
+        }
+        BlockHeader {
+            decoder -> readFieldByte(byte) => blockHeaderComplete
+            blockHeaderComplete -> if { decoder -> finishBlockHeader }
+        }
+        BlockRaw {
+            decoder -> appendDecoded(byte)
+            decoder.blockRemaining - 1 => decoder.blockRemaining
+            decoder.blockRemaining == 0 -> if {
+                decoder.lastBlock -> if { decoder -> completeDataBlocks } else { decoder -> beginBlock }
+            }
+        }
+        BlockRle {
+            0 => index!
+            index! < decoder.blockRemaining -> while {
+                decoder -> appendDecoded(byte)
+                index! + 1 => index!
+            }
+            decoder.lastBlock -> if { decoder -> completeDataBlocks } else { decoder -> beginBlock }
+        }
+        BlockCompressed {
+            decoder.compressedBlock -> push(byte)
+            decoder.blockRemaining - 1 => decoder.blockRemaining
+            decoder.blockRemaining == 0 -> if { decoder -> completeCompressedBlock }
+        }
+        Checksum {
+            decoder -> readFieldByte(byte) => checksumComplete
+            checksumComplete -> if { decoder -> finishChecksum }
+        }
+        SkippableSize {
+            decoder -> readFieldByte(byte) => skippableSizeComplete
+            skippableSizeComplete -> if {
+                decoder.fieldValue <= UInt64(decoder.maxSkippableFrameBytes)
+                    -> unless {
+                        decoder -> fail(errors.Kind.SkippableLimitExceeded, decoder.processedInputBytes - 4)
+                        return
+                    }
+                Int(decoder.fieldValue) => decoder.blockRemaining
+                decoder.blockRemaining == 0 -> if {
+                    decoder -> resetField(phases.Phase.Magic, 4)
+                } else {
+                    phases.Phase.SkippableData => decoder.phase
+                }
+            }
+        }
+        SkippableData {
+            decoder.blockRemaining - 1 => decoder.blockRemaining
+            decoder.blockRemaining == 0 -> if { decoder -> resetField(phases.Phase.Magic, 4) }
+        }
+    }
+}
+
+atFrameBoundary decoder: ref Decoder -> Bool => decoder.phase -> when {
+    Magic { decoder.fieldPosition == 0 }
+    Descriptor { false }
+    Window { false }
+    Dictionary { false }
+    ContentSize { false }
+    BlockHeader { false }
+    BlockRaw { false }
+    BlockRle { false }
+    BlockCompressed { false }
+    Checksum { false }
+    SkippableSize { false }
+    SkippableData { false }
+}
+
+impl Limits {
+    public codec: self, frame: FrameOptions -> Result<Codec, Error> {
+        self.maxEncodedBytes > 0 and self.maxDecodedBytes >= 0
+            and self.maxWindowBytes > 0 and self.maxFrames > 0
+            and self.maxSkippableFrameBytes >= 0
+            -> unless { errorCodec(errors.Kind.InvalidLimit, 0) -> return }
+        Result<Codec, Error>.Ok(Codec { limits: self, frame: frame })
+    }
+}
+
+impl Codec {
+    public encoder: self, expectedInputBytes: Int -> Result<Encoder, Error> {
+        expectedInputBytes >= 0 and expectedInputBytes <= self.limits.maxDecodedBytes
+            and expectedInputBytes <= self.limits.maxWindowBytes
+            -> unless { errorEncoder(errors.Kind.InvalidLimit, 0) -> return }
+        expectedInputBytes == 0 -> if { 0 } else { (expectedInputBytes + 131_071) / 131_072 } => blocks
+        self.frame.checksum -> if { 4 } else { 0 } => checksumBytes
+        expectedInputBytes + (expectedInputBytes -> frameHeaderLength) + blocks * 3 + 3 + checksumBytes
+            => encodedBytes
+        encodedBytes <= self.limits.maxEncodedBytes
+            -> unless { errorEncoder(errors.Kind.OutputLimitExceeded, UIntSize(encodedBytes)) -> return }
+        xxhash64.Seed { value: 0 } -> hasher => hash
+        Result<Encoder, Error>.Ok(Encoder {
+            maxEncodedBytes: self.limits.maxEncodedBytes
+            expectedInputBytes: expectedInputBytes
+            acceptedInputBytes: 0
+            producedBytes: 0
+            started: false
+            checksum: self.frame.checksum
+            hash: hash
+        })
+    }
+
+    public decoder: self -> Result<Decoder, Error> {
+        xxhash64.Seed { value: 0 } -> hasher => frameHash
+        Result<Decoder, Error>.Ok(Decoder {
+            maxEncodedBytes: self.limits.maxEncodedBytes
+            maxDecodedBytes: self.limits.maxDecodedBytes
+            maxWindowBytes: self.limits.maxWindowBytes
+            maxFrames: self.limits.maxFrames
+            maxSkippableFrameBytes: self.limits.maxSkippableFrameBytes
+            totalInputBytes: 0
+            processedInputBytes: 0
+            frameCount: 0
+            phase: phases.Phase.Magic
+            fieldValue: 0
+            fieldPosition: 0
+            fieldBytes: 4
+            descriptor: 0
+            dictionaryBytes: 0
+            contentSizeBytes: 0
+            contentSizePresent: false
+            contentSize: 0
+            checksumPresent: false
+            frameHash: frameHash
+            windowSize: 0
+            frameOutputBytes: 0
+            blockHeader: 0
+            blockRemaining: 0
+            lastBlock: false
+            compressedBlock: [UInt8; ~]
+            huffmanTable: huffman.empty()
+            hasHuffmanTable: false
+            literalLengthTable: fse.empty()
+            offsetTable: fse.empty()
+            matchLengthTable: fse.empty()
+            hasLiteralLengthTable: false
+            hasOffsetTable: false
+            hasMatchLengthTable: false
+            recentOffset1: 1
+            recentOffset2: 4
+            recentOffset3: 8
+            verifiedOutput: [UInt8; ~]
+            failed: false
+            failure: Error { kind: errors.Kind.TruncatedInput, offset: 0 }
+        })
+    }
+
+    public compress: self, input: [UInt8] -> Result<[UInt8; ~], Error> {
+        self -> encoder(input -> len)? => encoder!
+        [UInt8; ~] => output!
+        encoder! -> write(input, output!)? => written
+        encoder! -> finish(output!)? => finished
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public decompress: self, input: [UInt8] -> Result<[UInt8; ~], Error> {
+        self -> decoder? => decoder!
+        decoder! -> write(input)? => accepted
+        [UInt8; ~] => output!
+        decoder! -> finish(output!)? => written
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+}
+
+impl Encoder {
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        (input -> len) <= self.expectedInputBytes - self.acceptedInputBytes
+            -> unless {
+                errorInt(errors.Kind.InputLimitExceeded, UIntSize(self.acceptedInputBytes + (input -> len))) -> return
+            }
+        (input -> len) == 0 -> if { Result<Int, Error>.Ok(0) -> return }
+        self.started -> if { 0 } else { self.expectedInputBytes -> frameHeaderLength }
+            => headerLength
+        self.checksum -> if { 4 } else { 0 } => checksumBytes
+        (input -> len) + 3 * (((input -> len) + 131_071) / 131_072) + headerLength
+            => added
+        added <= self.maxEncodedBytes - self.producedBytes - 3 - checksumBytes
+            -> unless {
+                UIntSize(self.producedBytes + added + 3 + checksumBytes) => requested
+                errorInt(errors.Kind.OutputLimitExceeded, requested) -> return
+            }
+        output -> reserve((output -> len) + added)
+        not self.started -> if {
+            output -> appendFrameHeader(self.expectedInputBytes, self.checksum)
+            true => self.started
+        }
+        input -> appendRawBlocks(output) => blockBytes
+        self.acceptedInputBytes + (input -> len) => self.acceptedInputBytes
+        self.producedBytes + added => self.producedBytes
+        self.hash -> write(input)
+        Result<Int, Error>.Ok(added)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.acceptedInputBytes == self.expectedInputBytes
+            -> unless { errorInt(errors.Kind.SizeMismatch, UIntSize(self.acceptedInputBytes)) -> return }
+        self.checksum -> if { 4 } else { 0 } => checksumBytes
+        self.started -> if { 3 + checksumBytes } else {
+            (self.expectedInputBytes -> frameHeaderLength) + 3 + checksumBytes
+        } => added
+        added <= self.maxEncodedBytes - self.producedBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.producedBytes + added)) -> return }
+        output -> reserve((output -> len) + added)
+        not self.started -> if { output -> appendFrameHeader(self.expectedInputBytes, self.checksum) }
+        # Empty final raw block. Earlier write blocks deliberately keep Last=0.
+        output -> appendLe24(1)
+        self.checksum -> if { output -> appendChecksum(self.hash -> checksum) }
+        Result<Int, Error>.Ok(added)
+    }
+}
+
+impl Decoder {
+    public write: mut self, input: [UInt8] -> Result<Int, Error> {
+        (input -> len) <= self.maxEncodedBytes - self.totalInputBytes
+            -> unless {
+                errorInt(errors.Kind.InputLimitExceeded, UIntSize(self.totalInputBytes + (input -> len))) -> return
+            }
+        not self.failed -> if {
+            0 => index!
+            index! < (input -> len) and not self.failed -> while {
+                self -> processByte(input[index!])
+                index! + 1 => index!
+            }
+        }
+        self.totalInputBytes + (input -> len) => self.totalInputBytes
+        Result<Int, Error>.Ok(input -> len)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.failed -> if { Result<Int, Error>.Err(self.failure) -> return }
+        self.frameCount > 0 and (self -> atFrameBoundary)
+            -> unless { errorInt(errors.Kind.TruncatedInput, UIntSize(self.processedInputBytes)) -> return }
+        output -> reserve((output -> len) + (self.verifiedOutput -> len))
+        0 => index!
+        index! < (self.verifiedOutput -> len) -> while {
+            output -> push(self.verifiedOutput[index!])
+            index! + 1 => index!
+        }
+        Result<Int, Error>.Ok(self.verifiedOutput -> len)
+    }
+}

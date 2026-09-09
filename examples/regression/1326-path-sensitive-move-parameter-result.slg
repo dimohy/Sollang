@@ -1,0 +1,42 @@
+# A move parameter transferred by only the successful tail-match arm must not
+# be dropped by the callee on that arm. The error arm retains responsibility
+# and drops the original owner exactly once.
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+struct Wrapped {
+    owner: Owner
+}
+
+gate accepted: Bool -> Result<Int, Int> {
+    accepted -> if {
+        Result<Int, Int>.Ok(1)
+    } else {
+        Result<Int, Int>.Err(7)
+    }
+}
+
+finish accepted: Bool, owner: move Owner -> Result<Wrapped, Int> {
+    gate(accepted) -> when {
+        Err(error) {
+            Result<Wrapped, Int>.Err(error)
+        }
+        Ok(_) {
+            Result<Wrapped, Int>.Ok(Wrapped { owner: owner })
+        }
+    }
+}
+
+main {
+    finish(true, Owner { bytes: [10, 20, 30; ~] }) -> when {
+        Err(_) { "success-arm=false" -> println }
+        Ok(wrapped) {
+            "success-arm=$((wrapped.owner.bytes -> len) == 3)" -> println
+        }
+    }
+    finish(false, Owner { bytes: [40, 50; ~] }) -> when {
+        Err(error) { "error-arm=$(error == 7)" -> println }
+        Ok(_) { "error-arm=false" -> println }
+    }
+}

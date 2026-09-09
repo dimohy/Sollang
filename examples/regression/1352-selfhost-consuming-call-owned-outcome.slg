@@ -1,0 +1,49 @@
+enum Mode {
+    Close
+    Reuse
+}
+
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+enum Outcome {
+    Closed
+    Reusable(Owner)
+}
+
+closeOwner owner: move Owner -> Unit {
+    owner.bytes -> len => ignored
+}
+
+reuseOwner owner: move Owner, expected: Int -> Result<Outcome, Int> {
+    owner => current
+    (current.bytes -> len) == expected -> unless { Result<Outcome, Int>.Err(1) -> return }
+    Result<Outcome, Int>.Ok(Outcome.Reusable(Owner { bytes: current.bytes }))
+}
+
+impl Owner {
+    finish: move self, mode: Mode -> Result<Outcome, Int> {
+        self => current
+        mode -> when {
+            Close {
+                current -> closeOwner
+                Result<Outcome, Int>.Ok(Outcome.Closed) -> return
+            }
+            Reuse {
+                current -> reuseOwner(3) -> return
+            }
+        }
+        Result<Outcome, Int>.Err(1)
+    }
+}
+
+main {
+    Owner { bytes: [1, 2, 3; ~] } -> finish(Mode.Reuse) -> when {
+        Err(_) { "consuming-owned-outcome=false" -> println }
+        Ok(outcome) => outcome -> when {
+            Closed { "consuming-owned-outcome=false" -> println }
+            Reusable(_) { "consuming-owned-outcome=true" -> println }
+        }
+    }
+}

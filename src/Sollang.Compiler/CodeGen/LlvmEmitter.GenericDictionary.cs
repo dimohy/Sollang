@@ -228,7 +228,7 @@ internal sealed partial class LlvmEmitter
         return hash;
     }
 
-    private string EmitInlineDictionaryKeysEqual(RuntimeValue left, RuntimeValue right)
+    private string EmitValuesEqual(RuntimeValue left, RuntimeValue right)
     {
         if (left is RuntimeInt leftInt && right is RuntimeInt rightInt)
         {
@@ -359,7 +359,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(compare);
         _currentBlockLabel = compare;
         var storedKey = LoadInlineDictionaryField(dictionary, slot, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_key");
-        var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
+        var equal = EmitValuesEqual(storedKey, key);
         EmitConditionalBranch(equal, match, next); EmitFunctionLine();
         EmitLabel(match);
         var value = LoadInlineDictionaryField(dictionary, slot, definition.ValueType, definition.ValueOffset, definition.ValueAlignment, "generic_dict_value");
@@ -418,7 +418,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(compare); _currentBlockLabel = compare;
         var storedKey = LoadInlineDictionaryField(
             dictionary, start, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_lookup_first_key");
-        var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
+        var equal = EmitValuesEqual(storedKey, key);
         EmitConditionalBranch(equal, match, fallback); EmitFunctionLine();
 
         EmitLabel(match); _currentBlockLabel = match;
@@ -515,7 +515,7 @@ internal sealed partial class LlvmEmitter
         EmitBinary(candidateSlot, "and", "i64", candidateUnwrapped, mask);
         var storedKey = LoadInlineDictionaryField(
             dictionary, candidateSlot, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_lookup_key");
-        var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
+        var equal = EmitValuesEqual(storedKey, key);
         EmitConditionalBranch(equal, match, candidateNext); EmitFunctionLine();
 
         EmitLabel(candidateNext); _currentBlockLabel = candidateNext;
@@ -579,7 +579,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(compare); _currentBlockLabel = compare;
         var storedKey = LoadInlineDictionaryField(
             dictionary, start, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_insert_first_key");
-        var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
+        var equal = EmitValuesEqual(storedKey, key);
         EmitConditionalBranch(equal, match, fallback); EmitFunctionLine();
 
         EmitLabel(match); _currentBlockLabel = match;
@@ -702,7 +702,7 @@ internal sealed partial class LlvmEmitter
         EmitBinary(candidateSlot, "and", "i64", candidateUnwrapped, mask);
         var storedKey = LoadInlineDictionaryField(
             dictionary, candidateSlot, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_key");
-        var equal = EmitInlineDictionaryKeysEqual(storedKey, key);
+        var equal = EmitValuesEqual(storedKey, key);
         EmitConditionalBranch(equal, match, candidateNext); EmitFunctionLine();
 
         EmitLabel(candidateNext); _currentBlockLabel = candidateNext;

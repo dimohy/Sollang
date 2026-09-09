@@ -1,0 +1,60 @@
+enum Error {
+    Incomplete
+}
+
+struct Decoder {
+    scratch: [Int; ~]
+    complete: Bool
+}
+
+struct Source {
+    first: [Int; ~]
+    second: [Int; ~]
+    decoder: Decoder
+}
+
+struct Target {
+    first: [Int; ~]
+    second: [Int; ~]
+}
+
+impl Decoder {
+    completion: self -> Result<Unit, Error> {
+        self.complete -> unless { Result<Unit, Error>.Err(Error.Incomplete) -> return }
+        Result<Unit, Error>.Ok
+    }
+}
+
+impl Source {
+    finish: move self -> Result<Target, Error> {
+        self.decoder -> completion -> when {
+            Err(error) { Result<Target, Error>.Err(error) -> return }
+            Ok(_) {
+                Result<Target, Error>.Ok(Target {
+                    first: self.first
+                    second: self.second
+                })
+            }
+        }
+    }
+}
+
+main {
+    Source {
+        first: [11, 12; ~]
+        second: [21, 22; ~]
+        decoder: Decoder {
+            scratch: [31, 32; ~]
+            complete: true
+        }
+    } -> finish -> when {
+        Err(error) { "result-arm-owned-field-transfer=error" -> println }
+        Ok(target) {
+            (target.first[0] == 11
+                and target.first[1] == 12
+                and target.second[0] == 21
+                and target.second[1] == 22) => valid
+            "result-arm-owned-field-transfer=$(valid)" -> println
+        }
+    }
+}

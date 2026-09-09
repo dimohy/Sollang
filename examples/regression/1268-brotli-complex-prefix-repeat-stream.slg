@@ -1,0 +1,72 @@
+import std.compress.brotli.prefix_code as codes
+import std.compress.brotli.prefix_table as prefix
+
+isWaiting progress: codes.DescriptionRead -> Bool => progress -> when {
+    NeedMore(_) { true }
+    Ready { false }
+}
+
+isReady progress: codes.DescriptionRead -> Bool => progress -> when {
+    Ready { true }
+    NeedMore(_) { false }
+}
+
+checksRepeat parser: codes.Parser, encoded: [UInt8], alphabetSize: Int, rootBits: Int, expectedEntries: Int, expectedUnread: Int -> Result<Bool, codes.Error> {
+    parser -> descriptionReader(alphabetSize, rootBits)? => reader!
+    prefix.WindowLimits { maxBufferedBits: 56 } -> window -> when {
+        Err(_) { Result<Bool, codes.Error>.Ok(false) -> return }
+        Ok(window) { window }
+    } => window!
+
+    0 => byteIndex!
+    byteIndex! < (encoded -> len) -> while {
+        (window! -> available) + 8 => required
+        window! -> fill(
+        encoded,
+        prefix.Position { byteIndex: byteIndex!, bitIndex: 0 },
+        required) -> when {
+            Err(_) { Result<Bool, codes.Error>.Ok(false) -> return }
+            Ok(position) {
+                position.byteIndex == byteIndex! + 1 and position.bitIndex == 0
+                    -> unless { Result<Bool, codes.Error>.Ok(false) -> return }
+            }
+        }
+        reader! -> read(window!) -> when {
+            Err(error) { Result<Bool, codes.Error>.Err(error) -> return }
+            Ok(progress) {
+                byteIndex! + 1 < (encoded -> len) -> if {
+                    progress -> isWaiting -> unless { Result<Bool, codes.Error>.Ok(false) -> return }
+                } else {
+                    progress -> isReady -> unless { Result<Bool, codes.Error>.Ok(false) -> return }
+                }
+            }
+        }
+        byteIndex! + 1 => byteIndex!
+    }
+
+    reader! -> intoTable -> when {
+        Err(error) { Result<Bool, codes.Error>.Err(error) }
+        Ok(table) {
+            Result<Bool, codes.Error>.Ok(
+            (table -> entryCount) == expectedEntries
+                and (window! -> available) == expectedUnread)
+        }
+    }
+}
+
+main {
+    codes.Limits { maxAlphabetSize: 704, maxTableEntries: 1_080 } -> parser -> when {
+        Err(_) { "complex-prefix-repeat-stream=false" -> println }
+        Ok(parser) {
+            parser -> checksRepeat([192, 1, 112, 14], 8, 3, 8, 3) -> when {
+                Err(_) { false }
+                Ok(checked) { checked }
+            } => repeatPrevious
+            parser -> checksRepeat([28, 0, 103, 1], 10, 2, 4, 6) -> when {
+                Err(_) { false }
+                Ok(checked) { checked }
+            } => repeatZero
+            "complex-prefix-repeat-stream=$(repeatPrevious and repeatZero)" -> println
+        }
+    }
+}

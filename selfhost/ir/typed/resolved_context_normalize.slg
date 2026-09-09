@@ -1,0 +1,47 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.expression_types as expressionTypes
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as semanticTypes
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+struct LateRuntimeSymbols {
+    directoryModuleSource: Int
+    directoryReadRawSymbol: Int
+    directoryCreateSymbol: Int
+    dnsModuleSource: Int
+    dnsLookupSymbol: Int
+}
+
+# Normalize the merged Typed IR while borrowing all compiler-owned tables.
+normalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], frozenRecursiveTypeByAst: ref [Int; ~], recursiveReferences: ref [typeIds.TypeReference; ~], recursiveTypeFlags: ref [Int; ~] -> LateRuntimeSymbols {
+    nodes -> normalizeResolvedCore(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedBindings(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedPatterns(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedControls(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedProcessRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedDirectoryRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags) => directoryRuntimeSymbols
+    nodes -> normalizeResolvedFileRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedSocketRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedDnsRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags) => dnsRuntimeSymbols
+    nodes -> normalizeResolvedContextualTypes(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedStructuralOperands(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    nodes -> normalizeResolvedLateBindings(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+    LateRuntimeSymbols { directoryModuleSource: directoryRuntimeSymbols.moduleSource, directoryReadRawSymbol: directoryRuntimeSymbols.readRawSymbol, directoryCreateSymbol: directoryRuntimeSymbols.createSymbol, dnsModuleSource: dnsRuntimeSymbols.moduleSource, dnsLookupSymbol: dnsRuntimeSymbols.lookupSymbol }
+}

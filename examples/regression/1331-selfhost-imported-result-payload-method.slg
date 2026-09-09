@@ -1,0 +1,92 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+sameText source: Text, start: UIntSize, length: UIntSize, expected: Text -> Bool {
+    length == (expected -> len) -> unless { false -> return }
+    (source -> slice(start, length)) == expected
+}
+
+main {
+    """"
+        namespace sample.library
+
+        public struct Streamed { public output: Text }
+        public struct Reader { public output: Text }
+        public enum Read {
+            NeedMore(Int)
+            Ready
+        }
+
+        impl Reader {
+            public read: mut self -> Result<Read, Int> {
+                Result<Read, Int>.Ok(Read.Ready)
+            }
+
+            public finish: move self -> Result<Streamed, Int> {
+                Result<Streamed, Int>.Ok(Streamed { output: self.output })
+            }
+        }
+
+        impl Streamed {
+            public intoOutput: move self -> Text => self.output
+        }
+    """" => librarySource
+    """"
+        namespace sample.client
+
+        import sample.library as library
+
+        consume reader: move library.Reader -> Result<Text, Int> {
+            reader => reader!
+            reader! -> read -> when {
+                Err(error) { Result<Text, Int>.Err(error) -> return }
+                Ok(progress) => progress -> when {
+                    NeedMore(bits) { Result<Text, Int>.Err(bits) -> return }
+                    Ready {
+                        reader! -> finish -> when {
+                            Err(error) { Result<Text, Int>.Err(error) -> return }
+                            Ok(streamed) {
+                                streamed -> intoOutput => output
+                                Result<Text, Int>.Ok(output) -> return
+                            }
+                        }
+                    }
+                }
+            }
+            Result<Text, Int>.Err(1)
+        }
+    """" => clientSource
+
+    [librarySource, clientSource,; ~] -> semanticContext.prepare => context
+    context -> expressionTypeIds.resolveContext => types
+    context -> typedIr.lowerResolvedContext(types) => ir
+    context.package.ranges[1] => clientRange
+
+    false => finishResolved!
+    false => payloadTyped!
+    false => outputResolved!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        node.sourceModule == 1 and node.astNode >= 0 -> if {
+            context.package.nodes[clientRange.astStart + node.astNode] => nodeAst
+            node.kind == 6
+                and node.targetModule == 0
+                and clientSource -> sameText(nodeAst.start, nodeAst.length, "reader! -> finish")
+                -> if { true => finishResolved! }
+            node.kind == 5
+                and node.typeModule == 0
+                and node.typeId >= 0
+                and clientSource -> sameText(nodeAst.start, nodeAst.length, "streamed")
+                -> if { true => payloadTyped! }
+            node.kind == 6
+                and node.targetModule == 0
+                and clientSource -> sameText(nodeAst.start, nodeAst.length, "streamed -> intoOutput")
+                -> if { true => outputResolved! }
+        }
+        irIndex! + 1 => irIndex!
+    }
+
+    "finish=$(finishResolved!),payload=$(payloadTyped!),method=$(outputResolved!)" -> println
+}

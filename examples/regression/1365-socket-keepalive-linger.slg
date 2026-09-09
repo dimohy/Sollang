@@ -1,0 +1,67 @@
+import sys.io
+import std.net as net
+import std.net.socket as socket
+import std.time as time
+
+lingerMillis timeout: Option<time.Duration> -> Long => timeout -> when {
+    Option<time.Duration>.Some(duration) => duration -> asMilliseconds
+    Option<time.Duration>.None => -1
+}
+
+observe linger: time.Duration, zero: time.Duration -> Result<Bool, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localEndpoint? => endpoint
+    endpoint -> connect? => client
+    listener -> accept? => server
+
+    client -> setKeepAlive(true)?
+    client -> keepAlive? => keepAliveEnabled
+    client -> setKeepAlive(false)?
+    client -> keepAlive? => keepAliveDisabled
+
+    client -> setLinger(Option<time.Duration>.Some(zero)) -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidArgument { true }
+            else { false }
+        }
+    } => zeroRejected
+    client -> setLinger(Option<time.Duration>.Some(linger))?
+    client -> linger? => observedLinger
+    client -> setLinger(Option<time.Duration>.None)?
+    client -> linger? => clearedLinger
+
+    observedLinger -> lingerMillis => observedMillis
+    clearedLinger -> lingerMillis => clearedMillis
+    observedMillis >= 2_000 and observedMillis <= 3_000 => lingerValid
+    client -> close
+    server -> close
+    listener -> close
+    Result<Bool, socket.SocketError>.Ok(
+        keepAliveEnabled
+            and not keepAliveDisabled
+            and zeroRejected
+            and lingerValid
+            and clearedMillis == -1)
+}
+
+main {
+    time.milliseconds(1_250) -> when {
+        Ok(linger) {
+            time.milliseconds(0) -> when {
+                Ok(zero) {
+                    observe(linger, zero) -> when {
+                        Ok(valid) { "socket-policy=$valid" -> println }
+                        Err(error) { "socket-policy-error=$(error.code)" -> println }
+                    }
+                }
+                Err(_) { "zero-duration-error" -> println }
+            }
+        }
+        Err(_) { "linger-duration-error" -> println }
+    }
+}

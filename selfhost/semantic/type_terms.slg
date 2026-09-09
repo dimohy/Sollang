@@ -13,182 +13,175 @@ import syntax.generated.slg as grammar
 # 12 bounded inline array, 13 bounded inline dictionary,
 # 14 fixed inline BitSet.
 public struct TypeTerm {
-    astNode: Int
-    canonical: Int
-    kind: Int
-    nameToken: Int
-    nameId: Int
-    firstArgument: Int
-    secondArgument: Int
-    lengthToken: Int
-    lengthId: Int
-}
-
-public struct TypeTermRequest {
-    source: Text
-    nodes: [ast.AstNode; ~]
-    tokens: [syntax.SyntaxToken; ~]
+    public astNode: Int
+    public canonical: Int
+    public kind: Int
+    public nameToken: Int
+    public nameId: Int
+    public firstArgument: Int
+    public secondArgument: Int
+    public lengthToken: Int
+    public lengthId: Int
 }
 
 public struct SubstitutionRequest {
-    terms: [TypeTerm; ~]
-    root: Int
-    parameter: Int
-    replacement: Int
+    public terms: [TypeTerm; ~]
+    public root: Int
+    public parameter: Int
+    public replacement: Int
 }
 
 public struct SubstitutionResult {
-    terms: [TypeTerm; ~]
-    root: Int
-    status: Int
+    public terms: [TypeTerm; ~]
+    public root: Int
+    public status: Int
 }
 
 # Lowers every TypeAnnotation, including nested children, into one arena.
 public lower source: Text -> [TypeTerm; ~] {
     source -> ast.lower => nodes
     source -> lexer.lex => tokens
-    TypeTermRequest { source: source, nodes: nodes, tokens: tokens } => request
-    request -> lowerPrepared
+    source -> lowerPrepared(nodes, tokens)
 }
 
-public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
+public lowerPrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syntax.SyntaxToken; ~] -> [TypeTerm; ~] {
     [TypeTerm; ~] => terms!
     [Int; ~] => astToTerm!
     0 => astMapIndex!
-    astMapIndex! < (request.nodes -> len) -> while {
+    astMapIndex! < (nodes -> len) -> while {
         astToTerm! -> push(-1)
         astMapIndex! + 1 => astMapIndex!
     }
 
     0 => astIndex!
-    astIndex! < (request.nodes -> len) -> while {
-        request.nodes[astIndex!] => node
+    astIndex! < (nodes -> len) -> while {
+        nodes[astIndex!] => node
         node.kind == 12 -> if {
             node.firstToken => firstToken!
             true => findingFirst!
-            (firstToken! < node.firstToken + node.tokenCount and findingFirst!)
+            firstToken! < node.firstToken + node.tokenCount and findingFirst!
                 -> while {
-                (request.tokens[firstToken!].kind == grammar.triviaIdWhitespace() or request.tokens[firstToken!].kind == grammar.triviaIdComment())
-                    -> if {
-                    firstToken! + 1 => firstToken!
-                } else {
-                    false => findingFirst!
+                    tokens[firstToken!].kind == grammar.triviaIdWhitespace() or tokens[firstToken!].kind == grammar.triviaIdComment()
+                        -> if {
+                            firstToken! + 1 => firstToken!
+                        } else {
+                            false => findingFirst!
+                        }
                 }
-            }
             1 => kind!
             -1 => nameToken!
             -1 => lengthToken!
             node.cstRuleId == grammar.ruleIdProductType()
                 -> if {
-                10 => kind!
-            }
+                    10 => kind!
+                }
             node.cstRuleId == grammar.ruleIdProductTypeField()
                 -> if {
-                11 => kind!
-                node.firstToken => productFieldToken!
-                false => productFieldColon!
-                productFieldToken! < node.firstToken + node.tokenCount
-                    -> while {
-                    request.tokens[productFieldToken!].kind == grammar.tokenIdColon()
-                        -> if { true => productFieldColon! }
-                    (not productFieldColon! and nameToken! < 0 and request.tokens[productFieldToken!].kind == grammar.tokenIdIdentifier())
-                        -> if {
-                        productFieldToken! => nameToken!
-                    }
-                    productFieldToken! + 1 => productFieldToken!
-                }
-                not productFieldColon! -> if { -1 => nameToken! }
-            }
-            (kind! == 1 and request.tokens[firstToken!].kind == grammar.tokenIdLeftBracket())
-                -> if {
-                2 => kind!
-                0 => depth!
-                false => outerSemicolon!
-                false => outerTilde!
-                false => outerBounded!
-                firstToken! => shapeToken!
-                shapeToken! < node.firstToken + node.tokenCount
-                    -> while {
-                    request.tokens[shapeToken!].kind == grammar.tokenIdLeftBracket()
-                        -> if { depth! + 1 => depth! }
-                    request.tokens[shapeToken!].kind == grammar.tokenIdRightBracket()
-                        -> if { depth! - 1 => depth! }
-                    (depth! == 1 and request.tokens[shapeToken!].kind == grammar.tokenIdSemicolon())
-                        -> if { true => outerSemicolon! }
-                    (depth! == 1 and request.tokens[shapeToken!].kind == grammar.tokenIdTilde())
-                        -> if { true => outerTilde! }
-                    (depth! == 1 and request.tokens[shapeToken!].kind == grammar.tokenIdLessEqual())
-                        -> if { true => outerBounded! }
-                    (outerSemicolon! and lengthToken! < 0 and depth! == 1 and (request.tokens[shapeToken!].kind == grammar.tokenIdIdentifier() or request.tokens[shapeToken!].kind == grammar.tokenIdNumber()))
-                        -> if {
-                        shapeToken! => lengthToken!
-                    }
-                    shapeToken! + 1 => shapeToken!
-                }
-                outerSemicolon! -> if {
-                    outerBounded! -> if { 12 => kind! } else {
-                        outerTilde! -> if { 3 => kind! } else { 4 => kind! }
-                    }
-                }
-            } else {
-                (kind! == 1 and request.tokens[firstToken!].kind == grammar.tokenIdLeftBrace())
-                    -> if {
-                    5 => kind!
-                    false => dictionaryBounded!
-                    firstToken! => dictionaryShapeToken!
-                    dictionaryShapeToken! < node.firstToken + node.tokenCount
+                    11 => kind!
+                    node.firstToken => productFieldToken!
+                    false => productFieldColon!
+                    productFieldToken! < node.firstToken + node.tokenCount
                         -> while {
-                        request.tokens[dictionaryShapeToken!].kind == grammar.tokenIdLessEqual()
-                            -> if { true => dictionaryBounded! }
-                        (dictionaryBounded! and lengthToken! < 0 and request.tokens[dictionaryShapeToken!].kind == grammar.tokenIdNumber())
-                            -> if {
-                            dictionaryShapeToken! => lengthToken!
-                        }
-                        dictionaryShapeToken! + 1 => dictionaryShapeToken!
-                    }
-                    dictionaryBounded! -> if { 13 => kind! }
-                } else {
-                    (kind! == 1 and request.tokens[firstToken!].kind == grammar.tokenIdIdentifier())
-                        -> if {
-                        firstToken! => nameToken!
-                        request.tokens[firstToken!] => firstName
-                        firstName.span.length == 3 -> if {
-                            request.source -> byte(firstName.span.start) => keywordByte0
-                            request.source -> byte(firstName.span.start + 1) => keywordByte1
-                            request.source -> byte(firstName.span.start + 2) => keywordByte2
-                            (keywordByte0 == 98 and keywordByte1 == 111 and keywordByte2 == 120)
+                            tokens[productFieldToken!].kind == grammar.tokenIdColon()
+                                -> if { true => productFieldColon! }
+                            not productFieldColon! and nameToken! < 0 and tokens[productFieldToken!].kind == grammar.tokenIdIdentifier()
                                 -> if {
-                                6 => kind!
-                                -1 => nameToken!
-                            }
-                            (keywordByte0 == 114 and keywordByte1 == 101 and keywordByte2 == 102)
-                                -> if {
-                                8 => kind!
-                                -1 => nameToken!
-                            }
-                        }
-                        firstName.span.length == 6 -> if {
-                            request.source -> byte(firstName.span.start) => keywordByte0
-                            request.source -> byte(firstName.span.start + 1) => keywordByte1
-                            request.source -> byte(firstName.span.start + 2) => keywordByte2
-                            request.source -> byte(firstName.span.start + 3) => keywordByte3
-                            request.source -> byte(firstName.span.start + 4) => keywordByte4
-                            request.source -> byte(firstName.span.start + 5) => keywordByte5
-                            (keywordByte0 == 66 and keywordByte1 == 105 and keywordByte2 == 116 and keywordByte3 == 83 and keywordByte4 == 101 and keywordByte5 == 116)
-                                -> if {
-                                14 => kind!
-                                firstToken! + 1 => bitSetToken!
-                                (bitSetToken! < node.firstToken + node.tokenCount and lengthToken! < 0)
-                                    -> while {
-                                    request.tokens[bitSetToken!].kind == grammar.tokenIdNumber()
-                                        -> if { bitSetToken! => lengthToken! }
-                                    bitSetToken! + 1 => bitSetToken!
+                                    productFieldToken! => nameToken!
                                 }
-                            }
+                            productFieldToken! + 1 => productFieldToken!
+                        }
+                    not productFieldColon! -> if { -1 => nameToken! }
+                }
+            kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdLeftBracket()
+                -> if {
+                    2 => kind!
+                    0 => depth!
+                    false => outerSemicolon!
+                    false => outerTilde!
+                    false => outerBounded!
+                    firstToken! => shapeToken!
+                    shapeToken! < node.firstToken + node.tokenCount
+                        -> while {
+                            tokens[shapeToken!].kind == grammar.tokenIdLeftBracket()
+                                -> if { depth! + 1 => depth! }
+                            tokens[shapeToken!].kind == grammar.tokenIdRightBracket()
+                                -> if { depth! - 1 => depth! }
+                            depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdSemicolon()
+                                -> if { true => outerSemicolon! }
+                            depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdTilde()
+                                -> if { true => outerTilde! }
+                            depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdLessEqual()
+                                -> if { true => outerBounded! }
+                            outerSemicolon! and lengthToken! < 0 and depth! == 1 and (tokens[shapeToken!].kind == grammar.tokenIdIdentifier() or tokens[shapeToken!].kind == grammar.tokenIdNumber())
+                                -> if {
+                                    shapeToken! => lengthToken!
+                                }
+                            shapeToken! + 1 => shapeToken!
+                        }
+                    outerSemicolon! -> if {
+                        outerBounded! -> if { 12 => kind! } else {
+                            outerTilde! -> if { 3 => kind! } else { 4 => kind! }
                         }
                     }
+                } else {
+                    kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdLeftBrace()
+                        -> if {
+                            5 => kind!
+                            false => dictionaryBounded!
+                            firstToken! => dictionaryShapeToken!
+                            dictionaryShapeToken! < node.firstToken + node.tokenCount
+                                -> while {
+                                    tokens[dictionaryShapeToken!].kind == grammar.tokenIdLessEqual()
+                                        -> if { true => dictionaryBounded! }
+                                    dictionaryBounded! and lengthToken! < 0 and tokens[dictionaryShapeToken!].kind == grammar.tokenIdNumber()
+                                        -> if {
+                                            dictionaryShapeToken! => lengthToken!
+                                        }
+                                    dictionaryShapeToken! + 1 => dictionaryShapeToken!
+                                }
+                            dictionaryBounded! -> if { 13 => kind! }
+                        } else {
+                            kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    firstToken! => nameToken!
+                                    tokens[firstToken!] => firstName
+                                    firstName.span.length == 3 -> if {
+                                        source -> byte(firstName.span.start) => keywordByte0
+                                        source -> byte(firstName.span.start + 1) => keywordByte1
+                                        source -> byte(firstName.span.start + 2) => keywordByte2
+                                        keywordByte0 == 98 and keywordByte1 == 111 and keywordByte2 == 120
+                                            -> if {
+                                                6 => kind!
+                                                -1 => nameToken!
+                                            }
+                                        keywordByte0 == 114 and keywordByte1 == 101 and keywordByte2 == 102
+                                            -> if {
+                                                8 => kind!
+                                                -1 => nameToken!
+                                            }
+                                    }
+                                    firstName.span.length == 6 -> if {
+                                        source -> byte(firstName.span.start) => keywordByte0
+                                        source -> byte(firstName.span.start + 1) => keywordByte1
+                                        source -> byte(firstName.span.start + 2) => keywordByte2
+                                        source -> byte(firstName.span.start + 3) => keywordByte3
+                                        source -> byte(firstName.span.start + 4) => keywordByte4
+                                        source -> byte(firstName.span.start + 5) => keywordByte5
+                                        keywordByte0 == 66 and keywordByte1 == 105 and keywordByte2 == 116 and keywordByte3 == 83 and keywordByte4 == 101 and keywordByte5 == 116
+                                            -> if {
+                                                14 => kind!
+                                                firstToken! + 1 => bitSetToken!
+                                                bitSetToken! < node.firstToken + node.tokenCount and lengthToken! < 0
+                                                    -> while {
+                                                        tokens[bitSetToken!].kind == grammar.tokenIdNumber()
+                                                            -> if { bitSetToken! => lengthToken! }
+                                                        bitSetToken! + 1 => bitSetToken!
+                                                    }
+                                            }
+                                    }
+                                }
+                        }
                 }
-            }
             TypeTerm {
                 astNode: astIndex!
                 canonical: -1
@@ -217,32 +210,32 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
         0 => childIndex!
         childIndex! < (terms! -> len) -> while {
             terms![childIndex!] => child
-            request.nodes[child.astNode].parent == term!.astNode
+            nodes[child.astNode].parent == term!.astNode
                 -> if {
-                firstChild! < 0 -> if {
-                    childIndex! => firstChild!
-                } else {
-                    request.nodes[child.astNode].firstToken < request.nodes[terms![firstChild!].astNode].firstToken
-                        -> if {
-                        firstChild! => secondChild!
+                    firstChild! < 0 -> if {
                         childIndex! => firstChild!
                     } else {
-                        secondChild! < 0 -> if {
-                            childIndex! => secondChild!
-                        } else {
-                            request.nodes[child.astNode].firstToken < request.nodes[terms![secondChild!].astNode].firstToken
-                                -> if {
-                                childIndex! => secondChild!
+                        nodes[child.astNode].firstToken < nodes[terms![firstChild!].astNode].firstToken
+                            -> if {
+                                firstChild! => secondChild!
+                                childIndex! => firstChild!
+                            } else {
+                                secondChild! < 0 -> if {
+                                    childIndex! => secondChild!
+                                } else {
+                                    nodes[child.astNode].firstToken < nodes[terms![secondChild!].astNode].firstToken
+                                        -> if {
+                                            childIndex! => secondChild!
+                                        }
+                                }
                             }
-                        }
                     }
                 }
-            }
             childIndex! + 1 => childIndex!
         }
         firstChild! => term!.firstArgument
         secondChild! => term!.secondArgument
-        (term!.kind == 1 and firstChild! >= 0) -> if {
+        term!.kind == 1 and firstChild! >= 0 -> if {
             term!.nameToken >= 0 -> if {
                 7 => term!.kind
             } else {
@@ -255,46 +248,46 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
         term!.nameToken >= 0 -> if {
             termIndex! => term!.nameId
             0 => priorNameIndex!
-            (priorNameIndex! < termIndex! and term!.nameId == termIndex!)
+            priorNameIndex! < termIndex! and term!.nameId == termIndex!
                 -> while {
-                terms![priorNameIndex!].nameToken >= 0 -> if {
-                    request.tokens[term!.nameToken] => currentName
-                    request.tokens[terms![priorNameIndex!].nameToken] => priorName
-                    currentName.span.length == priorName.span.length => sameName!
-                    UIntSize(0) => nameByte!
-                    (sameName! and nameByte! < currentName.span.length)
-                        -> while {
-                        request.source -> byte(currentName.span.start + nameByte!) => currentByte
-                        request.source -> byte(priorName.span.start + nameByte!) => priorByte
-                        currentByte != priorByte -> if { false => sameName! }
-                        nameByte! + 1 => nameByte!
+                    terms![priorNameIndex!].nameToken >= 0 -> if {
+                        tokens[term!.nameToken] => currentName
+                        tokens[terms![priorNameIndex!].nameToken] => priorName
+                        currentName.span.length == priorName.span.length => sameName!
+                        UIntSize(0) => nameByte!
+                        sameName! and nameByte! < currentName.span.length
+                            -> while {
+                                source -> byte(currentName.span.start + nameByte!) => currentByte
+                                source -> byte(priorName.span.start + nameByte!) => priorByte
+                                currentByte != priorByte -> if { false => sameName! }
+                                nameByte! + 1 => nameByte!
+                            }
+                        sameName! -> if { terms![priorNameIndex!].nameId => term!.nameId }
                     }
-                    sameName! -> if { terms![priorNameIndex!].nameId => term!.nameId }
+                    priorNameIndex! + 1 => priorNameIndex!
                 }
-                priorNameIndex! + 1 => priorNameIndex!
-            }
         }
         term!.lengthToken >= 0 -> if {
             termIndex! => term!.lengthId
             0 => priorLengthIndex!
-            (priorLengthIndex! < termIndex! and term!.lengthId == termIndex!)
+            priorLengthIndex! < termIndex! and term!.lengthId == termIndex!
                 -> while {
-                terms![priorLengthIndex!].lengthToken >= 0 -> if {
-                    request.tokens[term!.lengthToken] => currentLength
-                    request.tokens[terms![priorLengthIndex!].lengthToken] => priorLength
-                    currentLength.span.length == priorLength.span.length => sameLength!
-                    UIntSize(0) => lengthByte!
-                    (sameLength! and lengthByte! < currentLength.span.length)
-                        -> while {
-                        request.source -> byte(currentLength.span.start + lengthByte!) => currentByte
-                        request.source -> byte(priorLength.span.start + lengthByte!) => priorByte
-                        currentByte != priorByte -> if { false => sameLength! }
-                        lengthByte! + 1 => lengthByte!
+                    terms![priorLengthIndex!].lengthToken >= 0 -> if {
+                        tokens[term!.lengthToken] => currentLength
+                        tokens[terms![priorLengthIndex!].lengthToken] => priorLength
+                        currentLength.span.length == priorLength.span.length => sameLength!
+                        UIntSize(0) => lengthByte!
+                        sameLength! and lengthByte! < currentLength.span.length
+                            -> while {
+                                source -> byte(currentLength.span.start + lengthByte!) => currentByte
+                                source -> byte(priorLength.span.start + lengthByte!) => priorByte
+                                currentByte != priorByte -> if { false => sameLength! }
+                                lengthByte! + 1 => lengthByte!
+                            }
+                        sameLength! -> if { terms![priorLengthIndex!].lengthId => term!.lengthId }
                     }
-                    sameLength! -> if { terms![priorLengthIndex!].lengthId => term!.lengthId }
+                    priorLengthIndex! + 1 => priorLengthIndex!
                 }
-                priorLengthIndex! + 1 => priorLengthIndex!
-            }
         }
         term! => terms![termIndex!]
         termIndex! + 1 => termIndex!
@@ -317,18 +310,18 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
                 0 => productFieldSearch!
                 productFieldSearch! < (terms! -> len) -> while {
                     terms![productFieldSearch!] => productFieldCandidate
-                    (productFieldCandidate.kind == 11 and request.nodes[productFieldCandidate.astNode].parent == productRoot!.astNode)
+                    productFieldCandidate.kind == 11 and nodes[productFieldCandidate.astNode].parent == productRoot!.astNode
                         -> if {
-                        request.nodes[productFieldCandidate.astNode].start => productFieldStart
-                        (previousProductField! < 0 or productFieldStart > previousProductStart!)
-                            -> if {
-                            (nextProductField! < 0 or productFieldStart < nextProductStart!)
+                            nodes[productFieldCandidate.astNode].start => productFieldStart
+                            previousProductField! < 0 or productFieldStart > previousProductStart!
                                 -> if {
-                                productFieldSearch! => nextProductField!
-                                productFieldStart => nextProductStart!
-                            }
+                                    nextProductField! < 0 or productFieldStart < nextProductStart!
+                                        -> if {
+                                            productFieldSearch! => nextProductField!
+                                            productFieldStart => nextProductStart!
+                                        }
+                                }
                         }
-                    }
                     productFieldSearch! + 1 => productFieldSearch!
                 }
                 nextProductField! >= 0 -> if {
@@ -354,55 +347,55 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
     # canonical ids; structurally equal trees reuse the first representative.
     0 => canonicalized!
     true => changed!
-    (canonicalized! < (terms! -> len) and changed!)
+    canonicalized! < (terms! -> len) and changed!
         -> while {
-        false => changed!
-        0 => candidateIndex!
-        candidateIndex! < (terms! -> len) -> while {
-            terms![candidateIndex!] => candidate!
-            candidate!.canonical < 0 -> if {
-                false => firstReady!
-                candidate!.firstArgument < 0 -> if {
-                    true => firstReady!
-                } else {
-                    terms![candidate!.firstArgument].canonical >= 0 => firstReady!
-                }
-                false => secondReady!
-                candidate!.secondArgument < 0 -> if {
-                    true => secondReady!
-                } else {
-                    terms![candidate!.secondArgument].canonical >= 0 => secondReady!
-                }
-                (firstReady! and secondReady!) -> if {
-                    candidateIndex! => candidate!.canonical
-                    0 => representativeIndex!
-                    (representativeIndex! < candidateIndex! and candidate!.canonical == candidateIndex!)
-                        -> while {
-                        terms![representativeIndex!] => representative
-                        representative.canonical >= 0 -> if {
-                            -1 => candidateFirst!
-                            candidate!.firstArgument >= 0 -> if { terms![candidate!.firstArgument].canonical => candidateFirst! }
-                            -1 => representativeFirst!
-                            representative.firstArgument >= 0 -> if { terms![representative.firstArgument].canonical => representativeFirst! }
-                            -1 => candidateSecond!
-                            candidate!.secondArgument >= 0 -> if { terms![candidate!.secondArgument].canonical => candidateSecond! }
-                            -1 => representativeSecond!
-                            representative.secondArgument >= 0 -> if { terms![representative.secondArgument].canonical => representativeSecond! }
-                            (candidate!.kind == representative.kind and candidate!.nameId == representative.nameId and candidate!.lengthId == representative.lengthId and candidateFirst! == representativeFirst! and candidateSecond! == representativeSecond!)
-                                -> if {
-                                representative.canonical => candidate!.canonical
-                            }
-                        }
-                        representativeIndex! + 1 => representativeIndex!
+            false => changed!
+            0 => candidateIndex!
+            candidateIndex! < (terms! -> len) -> while {
+                terms![candidateIndex!] => candidate!
+                candidate!.canonical < 0 -> if {
+                    false => firstReady!
+                    candidate!.firstArgument < 0 -> if {
+                        true => firstReady!
+                    } else {
+                        terms![candidate!.firstArgument].canonical >= 0 => firstReady!
                     }
-                    candidate! => terms![candidateIndex!]
-                    canonicalized! + 1 => canonicalized!
-                    true => changed!
+                    false => secondReady!
+                    candidate!.secondArgument < 0 -> if {
+                        true => secondReady!
+                    } else {
+                        terms![candidate!.secondArgument].canonical >= 0 => secondReady!
+                    }
+                    firstReady! and secondReady! -> if {
+                        candidateIndex! => candidate!.canonical
+                        0 => representativeIndex!
+                        representativeIndex! < candidateIndex! and candidate!.canonical == candidateIndex!
+                            -> while {
+                                terms![representativeIndex!] => representative
+                                representative.canonical >= 0 -> if {
+                                    -1 => candidateFirst!
+                                    candidate!.firstArgument >= 0 -> if { terms![candidate!.firstArgument].canonical => candidateFirst! }
+                                    -1 => representativeFirst!
+                                    representative.firstArgument >= 0 -> if { terms![representative.firstArgument].canonical => representativeFirst! }
+                                    -1 => candidateSecond!
+                                    candidate!.secondArgument >= 0 -> if { terms![candidate!.secondArgument].canonical => candidateSecond! }
+                                    -1 => representativeSecond!
+                                    representative.secondArgument >= 0 -> if { terms![representative.secondArgument].canonical => representativeSecond! }
+                                    candidate!.kind == representative.kind and candidate!.nameId == representative.nameId and candidate!.lengthId == representative.lengthId and candidateFirst! == representativeFirst! and candidateSecond! == representativeSecond!
+                                        -> if {
+                                            representative.canonical => candidate!.canonical
+                                        }
+                                }
+                                representativeIndex! + 1 => representativeIndex!
+                            }
+                        candidate! => terms![candidateIndex!]
+                        canonicalized! + 1 => canonicalized!
+                        true => changed!
+                    }
                 }
+                candidateIndex! + 1 => candidateIndex!
             }
-            candidateIndex! + 1 => candidateIndex!
         }
-    }
     terms!
 }
 
@@ -417,79 +410,79 @@ public substitute request: move SubstitutionRequest -> SubstitutionResult {
         mapIndex! + 1 => mapIndex!
     }
     0 => status!
-    (request.root < 0 or request.root >= (request.terms -> len) or request.parameter < 0 or request.parameter >= (request.terms -> len) or request.replacement < 0 or request.replacement >= (request.terms -> len))
+    request.root < 0 or request.root >= (request.terms -> len) or request.parameter < 0 or request.parameter >= (request.terms -> len) or request.replacement < 0 or request.replacement >= (request.terms -> len)
         -> if {
-        1 => status!
-    }
+            1 => status!
+        }
     status! == 0 -> if {
         0 => completed!
         true => changed!
-        (completed! < (request.terms -> len) and changed!)
+        completed! < (request.terms -> len) and changed!
             -> while {
-            false => changed!
-            0 => sourceIndex!
-            sourceIndex! < (request.terms -> len) -> while {
-                mapped![sourceIndex!] < 0 -> if {
-                    request.terms[sourceIndex!] => sourceTerm
-                    sourceTerm.canonical == request.terms[request.parameter].canonical
-                        -> if {
-                        mapped![request.replacement] >= 0 -> if {
-                            mapped![request.replacement] => mapped![sourceIndex!]
-                            completed! + 1 => completed!
-                            true => changed!
-                        }
-                    } else {
-                        false => firstReady!
-                        sourceTerm.firstArgument < 0 -> if {
-                            true => firstReady!
-                        } else {
-                            mapped![sourceTerm.firstArgument] >= 0 => firstReady!
-                        }
-                        false => secondReady!
-                        sourceTerm.secondArgument < 0 -> if {
-                            true => secondReady!
-                        } else {
-                            mapped![sourceTerm.secondArgument] >= 0 => secondReady!
-                        }
-                        (firstReady! and secondReady!) -> if {
-                            -1 => mappedFirst!
-                            sourceTerm.firstArgument >= 0 -> if { mapped![sourceTerm.firstArgument] => mappedFirst! }
-                            -1 => mappedSecond!
-                            sourceTerm.secondArgument >= 0 -> if { mapped![sourceTerm.secondArgument] => mappedSecond! }
-                            -1 => existing!
-                            0 => outputIndex!
-                            (outputIndex! < (output! -> len) and existing! < 0)
-                                -> while {
-                                output![outputIndex!] => outputTerm
-                                (outputTerm.kind == sourceTerm.kind and outputTerm.nameId == sourceTerm.nameId and outputTerm.lengthId == sourceTerm.lengthId and outputTerm.firstArgument == mappedFirst! and outputTerm.secondArgument == mappedSecond!)
-                                    -> if {
-                                    outputIndex! => existing!
+                false => changed!
+                0 => sourceIndex!
+                sourceIndex! < (request.terms -> len) -> while {
+                    mapped![sourceIndex!] < 0 -> if {
+                        request.terms[sourceIndex!] => sourceTerm
+                        sourceTerm.canonical == request.terms[request.parameter].canonical
+                            -> if {
+                                mapped![request.replacement] >= 0 -> if {
+                                    mapped![request.replacement] => mapped![sourceIndex!]
+                                    completed! + 1 => completed!
+                                    true => changed!
                                 }
-                                outputIndex! + 1 => outputIndex!
+                            } else {
+                                false => firstReady!
+                                sourceTerm.firstArgument < 0 -> if {
+                                    true => firstReady!
+                                } else {
+                                    mapped![sourceTerm.firstArgument] >= 0 => firstReady!
+                                }
+                                false => secondReady!
+                                sourceTerm.secondArgument < 0 -> if {
+                                    true => secondReady!
+                                } else {
+                                    mapped![sourceTerm.secondArgument] >= 0 => secondReady!
+                                }
+                                firstReady! and secondReady! -> if {
+                                    -1 => mappedFirst!
+                                    sourceTerm.firstArgument >= 0 -> if { mapped![sourceTerm.firstArgument] => mappedFirst! }
+                                    -1 => mappedSecond!
+                                    sourceTerm.secondArgument >= 0 -> if { mapped![sourceTerm.secondArgument] => mappedSecond! }
+                                    -1 => existing!
+                                    0 => outputIndex!
+                                    outputIndex! < (output! -> len) and existing! < 0
+                                        -> while {
+                                            output![outputIndex!] => outputTerm
+                                            outputTerm.kind == sourceTerm.kind and outputTerm.nameId == sourceTerm.nameId and outputTerm.lengthId == sourceTerm.lengthId and outputTerm.firstArgument == mappedFirst! and outputTerm.secondArgument == mappedSecond!
+                                                -> if {
+                                                    outputIndex! => existing!
+                                                }
+                                            outputIndex! + 1 => outputIndex!
+                                        }
+                                    existing! < 0 -> if {
+                                        output! -> len => existing!
+                                        output! -> push(TypeTerm {
+                                            astNode: sourceTerm.astNode
+                                            canonical: existing!
+                                            kind: sourceTerm.kind
+                                            nameToken: sourceTerm.nameToken
+                                            nameId: sourceTerm.nameId
+                                            firstArgument: mappedFirst!
+                                            secondArgument: mappedSecond!
+                                            lengthToken: sourceTerm.lengthToken
+                                            lengthId: sourceTerm.lengthId
+                                        })
+                                    }
+                                    existing! => mapped![sourceIndex!]
+                                    completed! + 1 => completed!
+                                    true => changed!
+                                }
                             }
-                            existing! < 0 -> if {
-                                output! -> len => existing!
-                                output! -> push(TypeTerm {
-                                    astNode: sourceTerm.astNode
-                                    canonical: existing!
-                                    kind: sourceTerm.kind
-                                    nameToken: sourceTerm.nameToken
-                                    nameId: sourceTerm.nameId
-                                    firstArgument: mappedFirst!
-                                    secondArgument: mappedSecond!
-                                    lengthToken: sourceTerm.lengthToken
-                                    lengthId: sourceTerm.lengthId
-                                })
-                            }
-                            existing! => mapped![sourceIndex!]
-                            completed! + 1 => completed!
-                            true => changed!
-                        }
                     }
+                    sourceIndex! + 1 => sourceIndex!
                 }
-                sourceIndex! + 1 => sourceIndex!
             }
-        }
         completed! < (request.terms -> len) -> if { 2 => status! }
     }
     -1 => resultRoot!

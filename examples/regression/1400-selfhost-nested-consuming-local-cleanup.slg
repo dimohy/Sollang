@@ -1,0 +1,38 @@
+struct Reader {
+    entries: [Int; ~]
+}
+
+impl Reader {
+    finish: move self -> Result<[Int; ~], Int> {
+        self.entries => entries
+        Result<[Int; ~], Int>.Ok(entries)
+    }
+}
+
+reader: -> Result<Reader, Int> {
+    Result<Reader, Int>.Ok(Reader { entries: [3, 5, 8; ~] })
+}
+
+read accepted: Bool -> Result<[Int; ~], Int> {
+    reader()? => source!
+    source!.entries -> push(13)
+    Result<Bool, Int>.Ok(accepted) -> when {
+        Err(error) { Result<[Int; ~], Int>.Err(error) -> return }
+        Ok(enabled) {
+            enabled -> unless { Result<[Int; ~], Int>.Err(1) -> return }
+            source! -> finish? => entries
+            Result<[Int; ~], Int>.Ok(entries)
+        }
+    }
+}
+
+main {
+    read(true) -> when {
+        Err(_) { "nested-consume=false" -> println }
+        Ok(entries) { "nested-consume=$((entries -> len) == 4 and entries[2] == 8)" -> println }
+    }
+    read(false) -> when {
+        Err(error) { "retained-owner=$(error == 1)" -> println }
+        Ok(_) { "retained-owner=false" -> println }
+    }
+}

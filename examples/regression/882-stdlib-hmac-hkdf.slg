@@ -1,5 +1,5 @@
-import sys.crypto.hmac_sha256 as hmac
-import sys.crypto.hkdf_sha256 as hkdf
+import std.crypto.hmac_sha256 as hmac
+import std.crypto.hkdf_sha256 as hkdf
 
 hmacKey: -> [UInt8; 20] => [11; 20]
 hmacMessage: -> [UInt8; 8] => [72, 105, 32, 84, 104, 101, 114, 101]
@@ -7,13 +7,36 @@ inputKeyMaterial: -> [UInt8; 22] => [11; 22]
 salt: -> [UInt8; 13] => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 info: -> [UInt8; 10] => [240, 241, 242, 243, 244, 245, 246, 247, 248, 249]
 
+same left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] != right[index!] -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
 main {
-    hmac.digest(hmacKey(), hmacMessage()) => mac
+    hmacKey() -> hmac.create => hasher!
+    hasher! -> update(hmacMessage())
+    hasher! -> finish => mac
     hkdf.extract(salt(), inputKeyMaterial()) => pseudorandomKey
     pseudorandomKey -> hkdf.expand42(info()) => output
-    (mac[0] == 176 and mac[31] == 247
-        and pseudorandomKey[0] == 7 and pseudorandomKey[31] == 229
-        and output[0] == 60 and output[41] == 101) -> if {
-        "hmac-hkdf=ok"
-    } else { "hmac-hkdf=failed" } -> println
+    [170; 131] -> hmac.create => longHasher!
+    longHasher! -> update([84, 101, 115, 116, 32, 85, 115, 105, 110, 103, 32, 76, 97, 114, 103, 101, 114, 32, 84, 104, 97, 110, 32, 66, 108, 111, 99, 107, 45, 83, 105, 122, 101, 32, 75, 101, 121, 32, 45, 32, 72, 97, 115, 104, 32, 75, 101, 121, 32, 70, 105, 114, 115, 116])
+    longHasher! -> finish => longMac
+    [170; 64] -> hmac.create => boundaryHasher!
+    boundaryHasher! -> update(hmacMessage())
+    boundaryHasher! -> finish => boundaryMac
+    [UInt8(176), 52, 76, 97, 216, 219, 56, 83, 92, 168, 175, 206, 175, 11, 241, 43, 136, 29, 194, 0, 201, 131, 61, 167, 38, 233, 55, 108, 46, 50, 207, 247] => expectedMac
+    [UInt8(7), 119, 9, 54, 44, 46, 50, 223, 13, 220, 63, 13, 196, 123, 186, 99, 144, 182, 199, 59, 181, 15, 156, 49, 34, 236, 132, 74, 215, 194, 179, 229] => expectedKey
+    [UInt8(60), 178, 95, 37, 250, 172, 213, 122, 144, 67, 79, 100, 208, 54, 47, 42, 45, 45, 10, 144, 207, 26, 90, 76, 93, 176, 45, 86, 236, 196, 197, 191, 52, 0, 114, 8, 213, 184, 135, 24, 88, 101] => expectedOutput
+    [UInt8(96), 228, 49, 89, 30, 224, 182, 127, 13, 138, 38, 170, 203, 245, 183, 127, 142, 11, 198, 33, 55, 40, 197, 20, 5, 70, 4, 15, 14, 227, 127, 84] => expectedLong
+    [UInt8(235), 239, 52, 225, 61, 10, 15, 224, 69, 147, 208, 67, 188, 122, 134, 81, 6, 219, 6, 4, 33, 29, 64, 76, 24, 32, 109, 134, 46, 93, 120, 82] => expectedBoundary
+    same(mac, expectedMac) and same(pseudorandomKey, expectedKey)
+        and same(output, expectedOutput) and same(longMac, expectedLong)
+        and same(boundaryMac, expectedBoundary) -> if {
+            "hmac-hkdf=ok"
+        } else { "hmac-hkdf=failed" } -> println
 }

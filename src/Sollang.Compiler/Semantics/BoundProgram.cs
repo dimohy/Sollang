@@ -138,7 +138,10 @@ internal sealed record BoundFunction(
     NativeErrorConvention NativeError = NativeErrorConvention.Direct,
     BoundType? NativeSuccessType = null,
     IReadOnlyList<GenericParameterDeclaration>? GenericParameters = null,
-    IReadOnlyDictionary<string, BoundType>? SpecializedGenericTypes = null);
+    IReadOnlyDictionary<string, BoundType>? SpecializedGenericTypes = null)
+{
+    public bool IsVisibleFrom(string moduleName) => IsLocal || IsPublic || ModuleName == moduleName;
+}
 
 internal sealed record BoundFunctionParameter(
     string Name,
@@ -152,9 +155,15 @@ internal sealed record BoundTraitMethod(
     string Name,
     BoundFunctionInputOwnership SelfOwnership,
     TypeId? ReturnType,
-    string? ReturnAssociatedTypeName,
+    string? ReturnAssociatedTypeSyntax,
     int Line,
-    int Column);
+    int Column,
+    IReadOnlyList<BoundTraitParameter> AdditionalParameters);
+
+internal sealed record BoundTraitParameter(
+    BoundFunctionInputOwnership Ownership,
+    TypeId? Type,
+    string? AssociatedTypeSyntax);
 
 internal sealed record BoundTraitAssociatedType(string Name, int Line, int Column);
 
@@ -193,6 +202,7 @@ internal enum BoundFunctionKind
     RuntimeClosestInt,
     RuntimeCloseIntReader,
     RuntimeNowMillis,
+    RuntimeUtcNowMillis,
     RuntimeSleep,
     RuntimeArguments,
     RuntimeEnvironment,
@@ -203,6 +213,11 @@ internal enum BoundFunctionKind
     RuntimeParallelPeakWorkers,
     RuntimeRunProcess,
     RuntimeRunProcessToFile,
+    RuntimeCollectProcess,
+    RuntimeSpawnProcess,
+    RuntimeWaitProcess,
+    RuntimeChildProcessId,
+    RuntimeProcessIdValue,
     RuntimeExitProcess,
     RuntimeBorrowSourceText,
     RuntimeBorrowSourceBytes,
@@ -229,15 +244,39 @@ internal enum BoundFunctionKind
     RuntimeAtomicReplaceFile,
     RuntimeSocketListen,
     RuntimeSocketAccept,
+    RuntimeSocketTryClone,
     RuntimeSocketConnect,
     RuntimeSocketReceive,
+    RuntimeSocketReceiveAppend,
+    RuntimeSocketReceiveVectored,
+    RuntimeSocketPeek,
     RuntimeSocketSend,
+    RuntimeSocketSendRange,
+    RuntimeSocketSendVectored,
     RuntimeSocketSendText,
     RuntimeSocketShutdown,
     RuntimeSocketBindDatagram,
     RuntimeSocketLocalPort,
+    RuntimeSocketLocalEndpoint,
+    RuntimeSocketRemoteEndpoint,
+    RuntimeSocketSetNoDelay,
+    RuntimeSocketNoDelay,
+    RuntimeSocketSetKeepAlive,
+    RuntimeSocketKeepAlive,
+    RuntimeSocketSetLinger,
+    RuntimeSocketLinger,
+    RuntimeSocketSetReadTimeout,
+    RuntimeSocketReadTimeout,
+    RuntimeSocketSetWriteTimeout,
+    RuntimeSocketWriteTimeout,
     RuntimeSocketSendTo,
     RuntimeSocketReceiveFrom,
+    RuntimeSocketPeekFrom,
+    RuntimeSocketClose,
+    RuntimeSocketSetNonblocking,
+    RuntimeSocketPoll,
+    RuntimeSocketReactorWait,
+    RuntimeDnsLookup,
     RuntimeRangeStream,
     RuntimeMouseEvents,
     Native
@@ -277,7 +316,7 @@ internal enum TypeId
     File,
     FileWriter,
     SourceText,
-    RunToFileRequest,
+    ProcessCommand,
     AtomicReplaceRequest,
     Path,
     PathStyle,
@@ -301,7 +340,13 @@ internal enum TypeId
     FirstUserDefined = 1024
 }
 
-internal sealed record BoundStructField(string Name, TypeId Type, int Index, int Line, int Column);
+internal sealed record BoundStructField(
+    string Name,
+    TypeId Type,
+    int Index,
+    int Line,
+    int Column,
+    bool IsPublic = false);
 
 internal sealed record BoundStructDefinition(
     TypeId Id,
@@ -452,7 +497,9 @@ internal sealed class TypeDefinitionTable
         IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
         IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes,
         IReadOnlyDictionary<TypeId, BoundReferenceDefinition> references,
-        int pointerSize)
+        int pointerSize,
+        IReadOnlyDictionary<TypeId, TypeId>? declaredOptions = null,
+        IReadOnlyDictionary<TypeId, (TypeId Ok, TypeId Error)>? declaredResults = null)
     {
         _names = new Dictionary<string, TypeId>(names, StringComparer.Ordinal);
         _structs = new Dictionary<TypeId, BoundStructDefinition>(structs);
@@ -463,8 +510,22 @@ internal sealed class TypeDefinitionTable
             static reference => reference.ElementType,
             static reference => reference.Id);
         _pointerSize = pointerSize;
+        if (declaredOptions is not null)
+        {
+            foreach (var (id, value) in declaredOptions)
+            {
+                RegisterOptionShape(id, value, _enums[id].Name);
+            }
+        }
+        if (declaredResults is not null)
+        {
+            foreach (var (id, shape) in declaredResults)
+            {
+                RegisterResultShape(id, shape.Ok, shape.Error, _enums[id].Name);
+            }
+        }
         foreach (var definition in _enums.Values.Where(static definition =>
-                     definition.Name is "sys.directory.RawResult" or "sys.directory.ReadResult"))
+                     IsRuntimeResultAlias(definition.Name)))
         {
             var ok = definition.Variants.First(static variant => variant.Name == "Ok").PayloadType!.Value;
             var error = definition.Variants.First(static variant => variant.Name == "Err").PayloadType!.Value;
@@ -506,6 +567,16 @@ internal sealed class TypeDefinitionTable
     public IReadOnlyCollection<BoundBitSetDefinition> BitSets => _bitSets.Values.ToArray();
 
     public bool TryResolve(string name, out TypeId type) => _names.TryGetValue(name, out type);
+
+    public bool TryResolveInModule(string name, string? moduleName, out TypeId type)
+    {
+        if (!name.Contains('.') && !string.IsNullOrEmpty(moduleName)
+            && _names.TryGetValue(moduleName + "." + name, out type))
+        {
+            return true;
+        }
+        return TryResolve(name, out type);
+    }
 
     public void AddAlias(string name, TypeId type) => _names.TryAdd(name, type);
 
@@ -1064,6 +1135,9 @@ internal sealed class TypeDefinitionTable
     private string DisplayTypeName(TypeId type) =>
         _names.FirstOrDefault(item => item.Value == type).Key ?? ((int)type).ToString();
 
+    internal static bool IsRuntimeResultAlias(string name) =>
+        name is "sys.directory.RawResult" or "sys.directory.ReadResult";
+
     public TypeId GetOrAddOption(TypeId valueType, string displayName)
     {
         if (_optionsByValue.TryGetValue(valueType, out var existing))
@@ -1073,14 +1147,23 @@ internal sealed class TypeDefinitionTable
         }
         var id = AllocateParametricTypeId();
         var payloadWords = (InlineSizeOf(valueType) + 7) / 8;
-        _enums.Add(id, new BoundEnumDefinition(id, displayName, [
+        _enums.Add(id, CreateOptionDefinition(id, valueType, displayName, payloadWords));
+        RegisterOptionShape(id, valueType, displayName);
+        return id;
+    }
+
+    internal static BoundEnumDefinition CreateOptionDefinition(
+        TypeId id, TypeId valueType, string displayName, int payloadWords) =>
+        new(id, displayName, [
             new BoundEnumVariant("None", null, 0, 0, 0),
             new BoundEnumVariant("Some", valueType, 1, 0, 0)
-        ], payloadWords, 0, 0, ModuleName: "", IsPublic: true));
+        ], payloadWords, 0, 0, ModuleName: "", IsPublic: true);
+
+    private void RegisterOptionShape(TypeId id, TypeId valueType, string displayName)
+    {
         _optionsByValue.Add(valueType, id);
         _optionValues.Add(id, valueType);
         _names.TryAdd(displayName, id);
-        return id;
     }
 
     public TypeId GetOrAddResult(TypeId okType, TypeId errorType, string displayName)
@@ -1092,14 +1175,23 @@ internal sealed class TypeDefinitionTable
         }
         var id = AllocateParametricTypeId();
         var payloadWords = (Math.Max(InlineSizeOf(okType), InlineSizeOf(errorType)) + 7) / 8;
-        _enums.Add(id, new BoundEnumDefinition(id, displayName, [
+        _enums.Add(id, CreateResultDefinition(id, okType, errorType, displayName, payloadWords));
+        RegisterResultShape(id, okType, errorType, displayName);
+        return id;
+    }
+
+    internal static BoundEnumDefinition CreateResultDefinition(
+        TypeId id, TypeId okType, TypeId errorType, string displayName, int payloadWords) =>
+        new(id, displayName, [
             new BoundEnumVariant("Ok", okType, 0, 0, 0),
             new BoundEnumVariant("Err", errorType, 1, 0, 0)
-        ], payloadWords, 0, 0, ModuleName: "", IsPublic: true));
+        ], payloadWords, 0, 0, ModuleName: "", IsPublic: true);
+
+    private void RegisterResultShape(TypeId id, TypeId okType, TypeId errorType, string displayName)
+    {
         _resultsByTypes.Add((okType, errorType), id);
         _resultTypes.Add(id, (okType, errorType));
         _names.TryAdd(displayName, id);
-        return id;
     }
 
     public bool TryGetOptionValue(TypeId type, out TypeId valueType) =>
@@ -1162,6 +1254,40 @@ internal sealed class TypeDefinitionTable
     public bool TryGetEventStreamValue(TypeId type, out TypeId valueType) =>
         _eventStreamValues.TryGetValue(type, out valueType);
 
+    public bool IsCopyableFixedArray(TypeId type)
+    {
+        return IsStaticArray(type)
+            && GetStaticArray(type).FixedLength is not null
+            && !ContainsOwnedStorage(GetStaticArray(type).ElementType);
+    }
+
+    // Copyable value semantics are independent of descriptor backing ownership.
+    // Keep ContainsOwnedStorage authoritative for allocation and drop planning.
+    public bool RequiresFixedStorageCopy(TypeId type) =>
+        RequiresFixedStorageCopy(type, new HashSet<TypeId>());
+
+    private bool RequiresFixedStorageCopy(TypeId type, HashSet<TypeId> visiting)
+    {
+        if (IsCopyableFixedArray(type)) return true;
+        if (!_structs.TryGetValue(type, out var structure)
+            || structure.ComInterface is not null || structure.NativeHandle is not null
+            || !visiting.Add(type)) return false;
+        try
+        {
+            var copiesStorage = false;
+            foreach (var field in structure.Fields)
+            {
+                if (!ContainsOwnedStorage(field.Type)) continue;
+                if (!RequiresFixedStorageCopy(field.Type, visiting)) return false;
+                copiesStorage = true;
+            }
+            return copiesStorage;
+        }
+        finally
+        {
+            visiting.Remove(type);
+        }
+    }
     public bool ContainsOwnedStorage(TypeId type)
     {
         return ContainsOwnedStorage(type, new HashSet<TypeId>());
@@ -1188,7 +1314,7 @@ internal sealed class TypeDefinitionTable
             return true;
         }
         if (_structs.TryGetValue(type, out var nativeOwner)
-            && nativeOwner.Name is "sys.socket.TcpListener" or "sys.socket.TcpStream" or "sys.socket.UdpSocket")
+            && nativeOwner.Name is "std.net.socket.TcpListener" or "std.net.socket.TcpStream" or "std.net.socket.UdpSocket" or "sys.process.Child")
         {
             return true;
         }

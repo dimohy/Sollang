@@ -1,0 +1,180 @@
+namespace std.hash.xxhash64
+
+import std.crypto.bits as bits
+
+# The XXH64 non-cryptographic hash from the canonical xxHash specification.
+# Seed is the immutable policy; Hasher retains at most one 32-byte stripe.
+public struct Seed {
+    public value: UInt64
+}
+
+public struct Hasher {
+    public seed: UInt64
+    public totalBytes: UInt64
+    public stripeCount: UInt64
+    public accumulator1: UInt64
+    public accumulator2: UInt64
+    public accumulator3: UInt64
+    public accumulator4: UInt64
+    public buffer: [UInt8; 32]
+    public buffered: Int
+}
+
+prime1: -> UInt64 => 11_400_714_785_074_694_791
+prime2: -> UInt64 => 14_029_467_366_897_019_727
+prime3: -> UInt64 => 1_609_587_929_392_839_161
+prime4: -> UInt64 => 9_650_029_242_287_828_579
+prime5: -> UInt64 => 2_870_177_450_012_600_261
+
+rotateLeft value: UInt64, count: UInt64 -> UInt64 {
+    count % 64 => normalized
+    normalized == 0 -> if { value } else {
+        bits.rotateRight64(value, 64 - normalized)
+    }
+}
+
+read32 input: [UInt8], offset: Int -> UInt64 {
+    UInt64(input[offset]) => byte0
+    UInt64(input[offset + 1]) * 256 => byte1
+    UInt64(input[offset + 2]) * 65_536 => byte2
+    UInt64(input[offset + 3]) * 16_777_216 => byte3
+    byte0 + byte1 + byte2 + byte3
+}
+
+read64 input: [UInt8], offset: Int -> UInt64 {
+    input -> read32(offset) => low
+    (input -> read32(offset + 4)) * 4_294_967_296 => high
+    low + high
+}
+
+round accumulator: UInt64, lane: UInt64 -> UInt64 {
+    (accumulator + lane * prime2()) -> rotateLeft(31) => rotated
+    rotated * prime1()
+}
+
+mergeRound accumulator: UInt64, lane: UInt64 -> UInt64 {
+    bits.xor64(accumulator, round(0, lane)) * prime1() + prime4()
+}
+
+setByte buffer: mut [UInt8; 32], index: Int, value: UInt8 -> Unit {
+    value => buffer[index]
+}
+
+processStripe hasher: mut Hasher, input: [UInt8], offset: Int -> Unit {
+    round(hasher.accumulator1, input -> read64(offset)) => hasher.accumulator1
+    round(hasher.accumulator2, input -> read64(offset + 8)) => hasher.accumulator2
+    round(hasher.accumulator3, input -> read64(offset + 16)) => hasher.accumulator3
+    round(hasher.accumulator4, input -> read64(offset + 24)) => hasher.accumulator4
+    hasher.stripeCount + 1 => hasher.stripeCount
+}
+
+appendByte hasher: mut Hasher, byte: UInt8 -> Unit {
+    setByte(hasher.buffer, hasher.buffered, byte)
+    hasher.buffered + 1 => hasher.buffered
+    hasher.buffered == 32 -> if {
+        hasher -> processStripe(hasher.buffer, 0)
+        0 => hasher.buffered
+    }
+}
+
+impl Seed {
+    public hasher: self -> Hasher => Hasher {
+        seed: self.value
+        totalBytes: 0
+        stripeCount: 0
+        accumulator1: self.value + prime1() + prime2()
+        accumulator2: self.value + prime2()
+        accumulator3: self.value
+        accumulator4: self.value - prime1()
+        buffer: [0; 32]
+        buffered: 0
+    }
+
+    public checksum: self, input: [UInt8] -> UInt64 {
+        self -> hasher => hasher!
+        hasher! -> write(input)
+        hasher! -> checksum
+    }
+}
+
+impl Hasher {
+    public writeByte: mut self, byte: UInt8 -> Unit {
+        self -> appendByte(byte)
+        self.totalBytes + 1 => self.totalBytes
+    }
+
+    public write: mut self, input: [UInt8] -> Unit {
+        input -> len => inputLength
+        0 => index!
+        self.buffered > 0 -> if {
+            32 - self.buffered => remaining
+            0 => copied!
+            index! < inputLength and copied! < remaining -> while {
+                self -> appendByte(input[index!])
+                index! + 1 => index!
+                copied! + 1 => copied!
+            }
+        }
+        index! + 32 <= inputLength -> while {
+            self -> processStripe(input, index!)
+            index! + 32 => index!
+        }
+        index! < inputLength -> while {
+            self -> appendByte(input[index!])
+            index! + 1 => index!
+        }
+        self.totalBytes + UInt64(inputLength) => self.totalBytes
+    }
+
+    public checksum: self -> UInt64 {
+        self.stripeCount > 0 -> if {
+            self.accumulator1 -> rotateLeft(1) => rotated1
+            self.accumulator2 -> rotateLeft(7) => rotated2
+            self.accumulator3 -> rotateLeft(12) => rotated3
+            self.accumulator4 -> rotateLeft(18) => rotated4
+            rotated1 + rotated2 + rotated3 + rotated4 => mixed!
+            mixed! -> mergeRound(self.accumulator1) => mixed!
+            mixed! -> mergeRound(self.accumulator2) => mixed!
+            mixed! -> mergeRound(self.accumulator3) => mixed!
+            mixed! -> mergeRound(self.accumulator4) => mixed!
+            mixed!
+        } else {
+            self.seed + prime5()
+        } => hash!
+        hash! + self.totalBytes => hash!
+        0 => offset!
+        offset! + 8 <= self.buffered -> while {
+            round(0, self.buffer -> read64(offset!)) => lane
+            bits.xor64(hash!, lane) -> rotateLeft(27) => rotated
+            rotated * prime1() + prime4() => hash!
+            offset! + 8 => offset!
+        }
+        offset! + 4 <= self.buffered -> if {
+            bits.xor64(hash!, (self.buffer -> read32(offset!)) * prime1())
+                -> rotateLeft(23) => rotated
+            rotated * prime2() + prime3() => hash!
+            offset! + 4 => offset!
+        }
+        offset! < self.buffered -> while {
+            bits.xor64(hash!, UInt64(self.buffer[offset!]) * prime5())
+                -> rotateLeft(11) => rotated
+            rotated * prime1() => hash!
+            offset! + 1 => offset!
+        }
+        bits.xor64(hash!, bits.shiftRight64(hash!, 33)) => hash!
+        hash! * prime2() => hash!
+        bits.xor64(hash!, bits.shiftRight64(hash!, 29)) => hash!
+        hash! * prime3() => hash!
+        bits.xor64(hash!, bits.shiftRight64(hash!, 32))
+    }
+
+    public reset: mut self -> Unit {
+        self.seed + prime1() + prime2() => self.accumulator1
+        self.seed + prime2() => self.accumulator2
+        self.seed => self.accumulator3
+        self.seed - prime1() => self.accumulator4
+        0 => self.totalBytes
+        0 => self.stripeCount
+        0 => self.buffered
+    }
+}
