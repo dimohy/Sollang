@@ -376,6 +376,7 @@ $interpolationIr = [IO.File]::ReadAllText($interpolationIrPath)
 $streamIr = [IO.File]::ReadAllText($streamIrPath)
 $corePrepare = [IO.File]::ReadAllText($corePreparePath)
 $text = [IO.File]::ReadAllText($textPath) + "`n" + [IO.File]::ReadAllText($entryExpressionsPath) + "`n" + $corePrepare
+$entryExpressions = [IO.File]::ReadAllText($entryExpressionsPath)
 $functionScheduling = [IO.File]::ReadAllText($functionSchedulingPath)
 $foundation = [IO.File]::ReadAllText($foundationPath)
 $coreCalls = [IO.File]::ReadAllText($coreCallsPath) + "`n" + [IO.File]::ReadAllText($callArgumentsPath) + "`n" + [IO.File]::ReadAllText($aggregateValuesPath)
@@ -383,6 +384,7 @@ $functionCalls = [IO.File]::ReadAllText($functionCallsPath)
 $functionReturns = [IO.File]::ReadAllText($functionReturnsPath)
 $controlRegions = [IO.File]::ReadAllText($controlRegionsPath) + "`n" + [IO.File]::ReadAllText($controlRegionExpressionsPath)
 $functions = [IO.File]::ReadAllText($functionsPath) + "`n" + [IO.File]::ReadAllText($functionExpressionsPath) + "`n" + $functionCalls + "`n" + $functionReturns
+$functionExpressions = [IO.File]::ReadAllText($functionExpressionsPath)
 $control = [IO.File]::ReadAllText($controlPath) + "`n" + $controlRegions
 $containers = [IO.File]::ReadAllText($containersPath) + "`n" + [IO.File]::ReadAllText($containerControlPath)
 $memberSymbolCollisionFixture = [IO.File]::ReadAllText((Join-Path $RepositoryRoot "examples/regression/1319-selfhost-member-symbol-collision-index.slg"))
@@ -2338,6 +2340,19 @@ Assert-Contains $nativeExactFixtureBatchVerifier '$compilerPath = (Resolve-Path 
 Assert-Contains $nativeExactFixtureBatchVerifier 'Assert-NativeExactFixturePlan -Fixture $Fixture' "native exact batch rejects duplicate artifact writers before fan-out"
 Assert-Contains $foundation 'and context.ir[functionBodyIndex].operand0 == nodeIndex!' "function-body direct control result materialization demand"
 Assert-Contains $foundation 'context.ir[ownerIndex].kind == 0 or context.ir[ownerIndex].kind == 11' "ordinary and entry function control result owners"
+Assert-Contains $typedResolvedContextFinalize 'sealBooleanWhenResultTypes nodes: mut [TypedIrNode; ~] -> Unit' "late Boolean when result-type sealing authority"
+Assert-Contains $typedResolvedContextFinalize 'booleanWhenFirstArmType.typeId => booleanWhen!.typeId' "Boolean when adopts its first arm canonical result type"
+Assert-Contains $foundation 'node.kind == 33 or node.kind == 34 -> if {' "Boolean and subject when hoisted result storage"
+Assert-Contains $control 'emitBooleanWhen whenIndex: Int' "shared Boolean when LLVM control emitter"
+Assert-Contains $control 'arm.operand1 -> emitRegionValueRoot(emissionOrder, context, state)' "Boolean when conditional arm root emission"
+Assert-Contains $control 'armIndex! -> emitRegionValueRoot(emissionOrder, context, state)' "Boolean when else root emission"
+Assert-Contains $control 'booleanWhen -> emitIfResultStore' "Boolean when branch result storage"
+Assert-Contains $control 'ptr %if$(whenIndex)_result' "Boolean when merged result load"
+Assert-Contains $functionExpressions 'expression.kind == 33 -> if { expressionIndex -> emitBooleanWhen(expressionOrder, context, state) }' "ordinary function Boolean when delegation"
+Assert-Contains $entryExpressions 'entryExpression.kind == 33 -> if { entryExpressionIndex -> emitBooleanWhen(entryOrder, context, state) }' "entry function Boolean when delegation"
+Assert-Contains $functionScheduling 'or context.ir[containmentAncestor!].kind == 33' "ordinary Boolean when owns flattened arm expressions"
+Assert-Contains $entryExpressions 'context.ir[entryScheduleAncestor!].kind == 19 or context.ir[entryScheduleAncestor!].kind == 20 or context.ir[entryScheduleAncestor!].kind == 33' "entry Boolean when owns flattened arm expressions"
+Assert-Contains $browserStage2 '1681-function-boolean-when-result.slg' "focused browser Boolean when value regression"
 Assert-Contains $control 'ownerBody.kind == 1 and ownerBody.operand0 == matchIndex' "direct function-body match emission demand"
 Assert-Contains $typedResolvedContextFinalize 'nodes[finalReturnedBodyIndex!].operand0 == finalReturnedMatchIndex!' "returned match contextual type follows the enclosing body"
 Assert-Contains $typedResolvedContextFinalize 'function.typeId => directFunctionResult!.typeId' "direct function-body match adopts the declared return type during return sealing"

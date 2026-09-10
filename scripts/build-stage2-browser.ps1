@@ -191,6 +191,7 @@ $regressionCases = @(
     @("examples\regression\1390-browser-time-domain-separation.slg", "browser-stage2-time-domain-separation.ll", "examples\regression\expected\1390-browser-time-domain-separation.stdout.txt"),
     @("examples\regression\1391-opaque-struct-instance-boundary.slg", "browser-stage2-opaque-struct-instance-boundary.ll", "examples\regression\expected\1391-opaque-struct-instance-boundary.stdout.txt", "", "examples\regression\expected\1391-opaque-struct-instance-boundary.sources.txt"),
     @("examples\regression\1321-parallel-additional-borrow-result.slg", "browser-stage2-parallel-additional-borrow-result.ll", "examples\regression\expected\1321-parallel-additional-borrow-result.stdout.txt"),
+    @("examples\regression\1681-function-boolean-when-result.slg", "browser-stage2-function-boolean-when-result.ll", "examples\regression\expected\1681-function-boolean-when-result.stdout.txt"),
     @("examples\regression\575-multiplication-table.slg", "browser-stage2-println-call-order.ll", "examples\regression\expected\575-multiplication-table.stdout.txt"),
     @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.slg",

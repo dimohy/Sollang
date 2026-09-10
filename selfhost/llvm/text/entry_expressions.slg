@@ -134,7 +134,7 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
                         entryScheduleNode.kind == 19 => entryInsideControlRegion!
                         entryScheduleAncestor! > functionIndex and not entryInsideControlRegion!
                             -> while {
-                                context.ir[entryScheduleAncestor!].kind == 19 or context.ir[entryScheduleAncestor!].kind == 20
+                                context.ir[entryScheduleAncestor!].kind == 19 or context.ir[entryScheduleAncestor!].kind == 20 or context.ir[entryScheduleAncestor!].kind == 33
                                     -> if { true => entryInsideControlRegion! } else { context.ir[entryScheduleAncestor!].parent => entryScheduleAncestor! }
                             }
                         false => entryInsideIfCondition!
@@ -3898,33 +3898,7 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                 entryExpression -> storageAlign(context, state) -> writeDecimalLine
             }
     }
-    entryExpression.kind == 33 -> if {
-        entryExpression.operand0 => entryWhenArmIndex!
-        true => entryWhenArmOpen!
-        entryWhenArmIndex! >= 0 and entryWhenArmOpen!
-            -> while {
-                context.ir[entryWhenArmIndex!] => entryWhenArm
-                entryWhenArm.kind != 19 or entryWhenArm.parent != entryExpressionIndex
-                    -> if {
-                        false => entryWhenArmOpen!
-                    } else {
-                        entryWhenArm.operand0 >= 0 and entryWhenArm.operand1 >= 0 and entryWhenArm.operand0 != entryWhenArm.operand1 and context.ir[entryWhenArm.operand0].kind != 19
-                            -> if {
-                                WhileBranchRequest { whileIndex: entryWhenArmIndex!, ownerIndex: functionIndex, conditionIndex: entryWhenArm.operand0 } -> emitWhileBranch(entryOrder, context, state)
-                                "while$(entryWhenArmIndex!)_body:" -> println
-                                entryWhenArm.operand1 -> emitRegion(entryOrder, context, state)
-                                "  br label %when$(entryExpressionIndex)_end" -> println
-                                "while$(entryWhenArmIndex!)_exit:" -> println
-                            } else {
-                                entryWhenArm.operand1 >= 0 -> if { entryWhenArm.operand1 -> emitRegion(entryOrder, context, state) } else { entryWhenArm.operand0 -> emitRegion(entryOrder, context, state) }
-                                "  br label %when$(entryExpressionIndex)_end" -> println
-                                false => entryWhenArmOpen!
-                            }
-                        entryWhenArmOpen! -> if { entryWhenArm.nextOperand => entryWhenArmIndex! }
-                    }
-            }
-        "when$(entryExpressionIndex)_end:" -> println
-    }
+    entryExpression.kind == 33 -> if { entryExpressionIndex -> emitBooleanWhen(entryOrder, context, state) }
     entryExpression.kind == 20 -> if {
         "  br label %while$(entryExpressionIndex)_header" -> println
         "while$(entryExpressionIndex)_header:" -> println

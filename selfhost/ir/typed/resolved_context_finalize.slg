@@ -475,6 +475,32 @@ sealFinalContextualNumericLiterals nodes: mut [TypedIrNode; ~] -> Unit {
 }
 
 # Finalize returned controls, ownership flags, and runtime intrinsic opcodes.
+sealBooleanWhenResultTypes nodes: mut [TypedIrNode; ~] -> Unit {
+    0 => booleanWhenIndex!
+    booleanWhenIndex! < (nodes -> len) -> while {
+        nodes[booleanWhenIndex!] => booleanWhen!
+        booleanWhen!.kind == 33
+            and booleanWhen!.typeOrigin == 1
+            and booleanWhen!.typeSymbol == 0
+            and booleanWhen!.operand0 >= 0
+            and booleanWhen!.operand0 < (nodes -> len)
+            -> if {
+                nodes[booleanWhen!.operand0] => booleanWhenFirstArmType
+                not (booleanWhenFirstArmType.typeOrigin == 1 and booleanWhenFirstArmType.typeSymbol == 0)
+                    -> if {
+                        booleanWhenFirstArmType.typeOrigin => booleanWhen!.typeOrigin
+                        booleanWhenFirstArmType.typeModule => booleanWhen!.typeModule
+                        booleanWhenFirstArmType.typeSymbol => booleanWhen!.typeSymbol
+                        booleanWhenFirstArmType.typeId => booleanWhen!.typeId
+                        booleanWhenFirstArmType.typeKind => booleanWhen!.typeKind
+                        booleanWhenFirstArmType.typeFlags => booleanWhen!.typeFlags
+                        booleanWhen! => nodes[booleanWhenIndex!]
+                    }
+            }
+        booleanWhenIndex! + 1 => booleanWhenIndex!
+    }
+}
+
 finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], runtimeSymbols: ref LateRuntimeSymbols, finalWrappedValueByNode: ref [Int; ~] -> Unit {
     # Final return selection above is the authority for which control value
     # leaves a function. Apply that declared type to a returned enum or numeric
@@ -1989,6 +2015,7 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
             }
         ownedResourceNodeIndex! + 1 => ownedResourceNodeIndex!
     }
+    nodes -> sealBooleanWhenResultTypes
     nodes -> repairTrailingConsoleControlResults(prepared)
     nodes -> repairTrailingConsoleControlResults(prepared)
     nodes -> settleLateFinalFunctionControlResults(prepared)

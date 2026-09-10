@@ -828,6 +828,113 @@ subjectWhenArmResultValueIndex armResultIndex: Int, context: ref emitterContext.
     }
     resolved!
 }
+emitRegionValueRoot valueIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    valueIndex => regionOwner!
+    regionOwner! >= 0 and context.ir[regionOwner!].kind != 0 and context.ir[regionOwner!].kind != 11
+        -> while { context.ir[regionOwner!].parent => regionOwner! }
+    context.pointerBitWidth / 8 => regionPointerAlignment
+    valueIndex -> emitRegionBindingExpressions(regionOwner!, emissionOrder, context, state)
+    valueIndex -> emitRegionControlExpressions(regionOwner!, context, state)
+    valueIndex -> emitRegionIntrinsicExpressions(regionOwner!, regionPointerAlignment, context, state)
+    valueIndex -> emitRegionArrayExpressions(regionOwner!, context, state)
+    valueIndex -> emitRegionMemberExpressions(regionOwner!, context, state)
+    valueIndex -> emitRegionOperatorExpressions(regionOwner!, emissionOrder, context, state)
+    valueIndex -> emitRegionCallExpressions(regionOwner!, emissionOrder, context, state)
+}
+emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[whenIndex] => booleanWhen
+    whenIndex => whenOwner!
+    whenOwner! >= 0 and context.ir[whenOwner!].kind != 0 and context.ir[whenOwner!].kind != 11
+        -> while {
+            context.ir[whenOwner!].parent => whenOwner!
+        }
+    whenIndex -> controlValueUsed(whenOwner!, context, state) => whenValueUsed!
+    whenOwner! >= 0
+        and (context.ir[whenOwner!].kind == 0 or context.ir[whenOwner!].kind == 11)
+        and context.ir[whenOwner!].operand0 >= 0
+        and context.ir[whenOwner!].operand0 < (context.ir -> len)
+        and context.ir[context.ir[whenOwner!].operand0].kind == 1
+        and context.ir[context.ir[whenOwner!].operand0].operand0 == whenIndex
+        -> if { true => whenValueUsed! }
+    false => whenHasArm!
+    false => whenHasElse!
+    true => whenAllArmsReturn!
+    booleanWhen.operand0 => returnArmIndex!
+    true => returnArmOpen!
+    returnArmIndex! >= 0 and returnArmOpen! -> while {
+        context.ir[returnArmIndex!] => returnArm
+        returnArm.parent != whenIndex -> if {
+            false => returnArmOpen!
+        } else {
+            true => whenHasArm!
+            returnArmIndex! => returnArmRegion!
+            returnArm.kind == 19 and returnArm.operand1 >= 0
+                -> if {
+                    returnArm.operand1 => returnArmRegion!
+                } else {
+                    true => whenHasElse!
+                }
+            returnArmRegion! -> regionReturns(context, state)
+                -> unless { false => whenAllArmsReturn! }
+            returnArm.nextOperand => returnArmIndex!
+        }
+    }
+    not (whenHasArm! and whenHasElse!) -> if { false => whenAllArmsReturn! }
+    whenAllArmsReturn!
+        and not (whenIndex -> controlIsLastRegionChild(context, state))
+        -> if { false => whenAllArmsReturn! }
+    booleanWhen.operand0 => armIndex!
+    0 => armOrdinal!
+    true => armOpen!
+    armIndex! >= 0 and armOpen! -> while {
+        context.ir[armIndex!] => arm
+        arm.parent != whenIndex -> if {
+            false => armOpen!
+        } else {
+            arm.kind == 19 -> if {
+                WhileBranchRequest { whileIndex: armIndex!, ownerIndex: whenOwner!, conditionIndex: arm.operand0 } -> emitWhileBranch(emissionOrder, context, state)
+                "while$(armIndex!)_body:" -> println
+                arm.operand1 -> regionReturns(context, state) => armReturns
+                arm.operand1 -> emitRegion(emissionOrder, context, state)
+                not armReturns -> if {
+                    arm.operand1 -> emitRegionValueRoot(emissionOrder, context, state)
+                    whenValueUsed! and not (booleanWhen.typeOrigin == 1 and booleanWhen.typeSymbol == 0)
+                        -> if {
+                            arm.operand1 -> subjectWhenArmResultValueIndex(context, state) => armValueIndex
+                            booleanWhen -> emitIfResultStore(armValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
+                        }
+                    "  br label %when$(whenIndex)_end" -> println
+                }
+                "while$(armIndex!)_exit:" -> println
+                arm.nextOperand => armIndex!
+                armOrdinal! + 1 => armOrdinal!
+            } else {
+                armIndex! -> regionReturns(context, state) => elseReturns
+                armIndex! -> emitRegion(emissionOrder, context, state)
+                not elseReturns -> if {
+                    armIndex! -> emitRegionValueRoot(emissionOrder, context, state)
+                    whenValueUsed! and not (booleanWhen.typeOrigin == 1 and booleanWhen.typeSymbol == 0)
+                        -> if {
+                            armIndex! -> subjectWhenArmResultValueIndex(context, state) => elseValueIndex
+                            booleanWhen -> emitIfResultStore(elseValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
+                        }
+                    "  br label %when$(whenIndex)_end" -> println
+                }
+                false => armOpen!
+            }
+        }
+    }
+    not whenAllArmsReturn! -> if {
+        "when$(whenIndex)_end:" -> println
+        whenValueUsed! and not (booleanWhen.typeOrigin == 1 and booleanWhen.typeSymbol == 0)
+            -> if {
+                "  %v$(whenIndex) = load " -> print
+                booleanWhen -> writeIrType(context, state)
+                ", ptr %if$(whenIndex)_result, align " -> print
+                booleanWhen -> storageAlign(context, state) -> writeDecimalLine
+            }
+    }
+}
 emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[whenIndex] => subjectWhen
     context.ir[subjectWhen.operand0] => subject
