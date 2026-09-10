@@ -73,6 +73,39 @@ if ($interruptedProgress.status -cne "interrupted-without-result") {
     throw "missing completion record was not classified as an interruption"
 }
 
+foreach ($linuxProgressCase in @(
+    [ordered]@{ Verification = "Stage2Linux"; Stage = "linux-stage2"; Current = 3; Completed = 2; Total = 6; Percent = 33.3 },
+    [ordered]@{ Verification = "Stage3Linux"; Stage = "linux-stage3"; Current = 2; Completed = 1; Total = 3; Percent = 33.3 }
+)) {
+    $linuxRunId = "$runId-$($linuxProgressCase.Verification.ToLowerInvariant())"
+    $linuxLogPath = Join-Path $scratchRoot "$linuxRunId.log"
+    $linuxCompletionRecordPath = Join-Path $scratchRoot "$linuxRunId.result.json"
+    "[$($linuxProgressCase.Stage) $($linuxProgressCase.Current)/$($linuxProgressCase.Total)] active" |
+        Set-Content -LiteralPath $linuxLogPath -Encoding utf8
+    ([ordered]@{
+        schemaVersion = 1
+        runId = $linuxRunId
+        verification = $linuxProgressCase.Verification
+        executionMode = "detached-supervisor"
+        supervisorPid = 2147483647
+        observerPid = $PID
+        survivesObserverDisconnect = $true
+        logPath = $linuxLogPath
+        completionRecordPath = $linuxCompletionRecordPath
+        launchedAtUtc = [DateTimeOffset]::UtcNow.ToString("O")
+    } | ConvertTo-Json -Depth 5) |
+        Set-Content -LiteralPath "$linuxCompletionRecordPath.launch.json" -Encoding utf8
+    $linuxProgress = & $progressReaderPath -CompletionRecordPath $linuxCompletionRecordPath | ConvertFrom-Json
+    if ($linuxProgress.status -cne "interrupted-without-result" -or
+        $linuxProgress.completed -ne $linuxProgressCase.Completed -or
+        $linuxProgress.total -ne $linuxProgressCase.Total -or
+        $linuxProgress.percent -ne $linuxProgressCase.Percent) {
+        throw "$($linuxProgressCase.Verification) progress mapping is incorrect"
+    }
+}
+
+Write-Host "[detached selfhost verification] PASS Linux Stage2/Stage3 progress mappings."
+
 $observer = Start-Process `
     -FilePath (Get-Process -Id $PID).Path `
     -ArgumentList @(

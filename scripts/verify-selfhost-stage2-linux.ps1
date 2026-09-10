@@ -25,6 +25,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 & (Join-Path $PSScriptRoot "verify-zstd-foundation-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-brotli-foundation-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-http-body-framing-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-portable-memory-io-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-http-response-writing-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-http-request-writing-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-http-client-contract.ps1") -RepositoryRoot $repoRoot
@@ -784,6 +785,13 @@ foreach ($referenceEscape in @(
     }
 }
 Write-Host "[linux-stage2 6/6] PASS E17-E23 ownership violations block LLVM emission in stage-1 and stage-2."
+$traitContractFixtures = @(
+    'trait-contract-count',
+    'trait-contract-order',
+    'trait-contract-ownership',
+    'trait-contract-type',
+    'trait-contract-dyn'
+)
 & (Join-Path $PSScriptRoot "verify-selfhost-unresolved-call-diagnostic.ps1") `
     -Compiler $stage1Path `
     -Label "linux-stage1" `
@@ -793,6 +801,12 @@ Write-Host "[linux-stage2 6/6] PASS E17-E23 ownership violations block LLVM emis
     -Compiler $stage1Path `
     -Label "linux-stage1" `
     -Target linux `
+    -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-selfhost-trait-ownership-diagnostics.ps1") `
+    -Compiler $stage1Path `
+    -Label "linux-stage1" `
+    -Target linux `
+    -Fixture $traitContractFixtures `
     -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-selfhost-private-field-diagnostics.ps1") `
     -Compiler $stage1Path `
@@ -811,13 +825,20 @@ Write-Host "[linux-stage2 6/6] PASS E17-E23 ownership violations block LLVM emis
     -Target linux `
     -Distribution $Distribution `
     -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-selfhost-trait-ownership-diagnostics.ps1") `
+    -Compiler $stage2Path `
+    -Label "linux-stage2" `
+    -Target linux `
+    -Distribution $Distribution `
+    -Fixture $traitContractFixtures `
+    -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-selfhost-private-field-diagnostics.ps1") `
     -Compiler $stage2Path `
     -Label "linux-stage2" `
     -Target linux `
     -Distribution $Distribution `
     -RepositoryRoot $repoRoot
-Write-Host "[linux-stage2 6/6] PASS unresolved calls, invalid Result propagation, and private-field access remain blocked before LLVM in stage-1 and stage-2."
+Write-Host "[linux-stage2 6/6] PASS unresolved calls, invalid Result propagation, trait signatures, and private-field access remain blocked before LLVM in stage-1 and stage-2."
 if ($stage2WasRebuilt) {
     if (-not (Test-Stage2ArtifactReceipt `
             -LlvmPath $stage2LlvmPath `

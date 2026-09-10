@@ -352,9 +352,9 @@ an implementation binds `Item` to `Int`. Keep the associated-type equality
 visible in a generic algorithm when an input type must agree with the trait's
 item type, as in `where C: Comparison, C.Item == T`. Qualify an imported trait
 through its module alias when another module declares the same trait name.
-The Windows native static-dispatch path supports these additional-input and
-mutable-buffer forms; this does not establish other target backends or every
-nested generic shape.
+The Windows and Linux native static-dispatch paths support these
+additional-input and mutable-buffer forms; this does not establish every other
+target backend or nested generic shape.
 
 Constrain generics with a trailing `where` and call the intended trait
 explicitly when several implementations could compete. `dyn Trait` is a

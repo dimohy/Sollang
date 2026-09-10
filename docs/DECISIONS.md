@@ -21667,3 +21667,42 @@ authoritative union plan from `verify-native-exact-fixture-batch.ps1` rather
 than duplicating platform-local lists. Seed-capability canaries remain smaller
 and explicitly named because they reject an incompatible seed before the
 expensive compiler build; they do not replace the promoted-compiler suite.
+
+## D643 — Portable memory I/O publishes static caller-buffer protocols
+
+Status: implemented and promoted on Windows/Linux Stage2/Stage3; broader portable I/O backlog remains in progress
+Date: 2026-09-10
+
+`std.io` now publishes `Reader` and `Writer` traits whose sole required methods
+are the caller-buffer partial-transfer primitives fixed by D474. Both traits
+return one portable `Result<Int, Error>` progress contract without introducing
+a wrapper object. `MemoryReader` retains its allocation-free `readInto`.
+`MemoryWriter` preserves the source-compatible inherent `write: ... -> Int`;
+its qualified trait implementation returns the same exact progress in
+`Result<Int, Error>` without changing the concrete API. Keeping the protocol
+result concrete also avoids an unnecessary unresolved generic ABI in the
+self-host while the separate associated-type fixtures retain that compiler
+coverage.
+
+Fixture 1680 calls both protocols through imported qualified static dispatch,
+mutates the caller-owned read buffer exactly, and verifies the bounded partial
+writer result. Consumer-defined cross-module generic adapters remain explicitly
+unpublished because the current self-host retains their unspecialized template;
+same-module generic trait dispatch remains covered by fixture 1455 rather than
+weakening the invariant. Fixtures 1094 and 1188 remain independent
+concrete compatibility and transactional-read controls. The shared contract is
+machine-readable in `scripts/contracts/portable-memory-io.json` and runs before
+all four Windows/Linux Stage2 and Stage3 gates.
+
+The Linux trait diagnostic path is now explicit rather than inferred from a
+positive fixture. Count, order, ownership, type, and dyn-compatibility negatives
+run against both compiler generations through one cross-target verifier. A new
+order fixture swaps two differently typed parameters so positional agreement is
+proved independently of parameter count. The compiler-contract verifier freezes
+that Linux routing. The authoritative 359-fixture native-exact plan now passes
+under Windows and Linux Stage2/Stage3, including fixtures 1455 and 1680; both
+platforms reached their authenticated fixed points with the five focused trait
+signature diagnostics passing under both self-host generations. Generic
+transactional exact reads, bounded replay/read-all/copy adapters, file/socket
+implementations, and async buffering remain pending; the portable memory I/O
+backlog therefore remains in progress.

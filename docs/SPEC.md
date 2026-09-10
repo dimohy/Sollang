@@ -1485,6 +1485,32 @@ lexical normalization does not claim to resolve symbolic links. The migration
 must not introduce a reverse `sys -> std` dependency or leave two public path
 types after the replacement is verified.
 
+`std.io.Reader` and `std.io.Writer` are public static protocols over one
+caller-buffer partial-transfer primitive. Both operations return the fixed
+`Result<Int, Error>` progress contract without a wrapper object, payload
+allocation, or dynamic dispatch. `Reader.readInto` borrows a mutable
+growable-byte destination and `Writer.write` borrows a read-only byte input;
+implementations may not retain either caller buffer. `MemoryReader` and
+`MemoryWriter` implement these protocols while preserving their existing
+inherent methods. A concrete `MemoryWriter` therefore keeps its source-compatible
+partial `write` returning `Int`, while its qualified protocol implementation
+returns the same exact progress as `Result<Int, Error>`.
+
+This portable slice proves imported qualified static dispatch for concrete
+implementations. Consumer-defined generic adapters whose constraints name an
+imported protocol remain unpublished until the self-host specializes that
+cross-module body on every promoted target; same-module generic trait dispatch
+remains covered independently by the compiler trait contract.
+
+`MemoryReader.readExactInto` remains transactional: it validates the configured
+limit and complete source range before changing its cursor or the destination.
+This guarantee does not extend automatically to an effectful stream. A future
+generic exact helper requires either a checkpoint capability or an explicitly
+bounded replay adapter that stages bytes privately and retains a failed partial
+prefix. Bounded `readAll`, copy policy, file/socket implementations, and async
+buffering remain unpublished; no unbounded aggregate helper or implicit buffer
+is part of the portable protocol.
+
 `std.uuid.Codec` is an immutable RFC 9562 policy value. Its pure `v4` method
 accepts exactly sixteen caller-owned entropy octets; pure `v7` accepts a
 `UtcInstant` plus exactly ten entropy octets. Both validate lengths before any

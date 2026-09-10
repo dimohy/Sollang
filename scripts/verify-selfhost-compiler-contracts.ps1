@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 & (Join-Path $PSScriptRoot "verify-ai-slg-best-practices.ps1") -RepositoryRoot $RepositoryRoot
+& (Join-Path $PSScriptRoot "verify-portable-memory-io-contract.ps1") -RepositoryRoot $RepositoryRoot
 & (Join-Path $PSScriptRoot "verify-project-progress.ps1") -RepositoryRoot $RepositoryRoot
 & (Join-Path $PSScriptRoot "verify-native-exact-source-closure-contract.ps1")
 & (Join-Path $PSScriptRoot "verify-http-server-contract.ps1") -RepositoryRoot $RepositoryRoot
@@ -183,6 +184,8 @@ $nativeFormatVerifierPath = Join-Path $RepositoryRoot "scripts/verify-native-cli
 $ownedBlockVerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-owned-block-result-diagnostics.ps1"
 $unresolvedCallDiagnosticVerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-unresolved-call-diagnostic.ps1"
 $resultPropagationDiagnosticVerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-result-propagation-diagnostics.ps1"
+$traitOwnershipDiagnosticVerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-trait-ownership-diagnostics.ps1"
+$traitOwnershipDiagnosticContractPath = Join-Path $RepositoryRoot "scripts/contracts/trait-ownership-diagnostics.json"
 $privateFieldDiagnosticVerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-private-field-diagnostics.ps1"
 $nativeProcessVerifierPath = Join-Path $RepositoryRoot "scripts/verify-native-process-child-lifecycle.ps1"
 $nativeQuicEndpointOwnershipVerifierPath = Join-Path $RepositoryRoot "scripts/verify-native-quic-endpoint-ownership.ps1"
@@ -540,6 +543,8 @@ $nativeFormatVerifier = [IO.File]::ReadAllText($nativeFormatVerifierPath)
 $ownedBlockVerifier = [IO.File]::ReadAllText($ownedBlockVerifierPath)
 $unresolvedCallDiagnosticVerifier = [IO.File]::ReadAllText($unresolvedCallDiagnosticVerifierPath)
 $resultPropagationDiagnosticVerifier = [IO.File]::ReadAllText($resultPropagationDiagnosticVerifierPath)
+$traitOwnershipDiagnosticVerifier = [IO.File]::ReadAllText($traitOwnershipDiagnosticVerifierPath)
+$traitOwnershipDiagnosticContract = [IO.File]::ReadAllText($traitOwnershipDiagnosticContractPath)
 $nativeProcessVerifier = [IO.File]::ReadAllText($nativeProcessVerifierPath)
 $nativeQuicEndpointOwnershipVerifier = [IO.File]::ReadAllText($nativeQuicEndpointOwnershipVerifierPath)
 $nativeQuicEndpointOwnershipLinuxVerifier = [IO.File]::ReadAllText($nativeQuicEndpointOwnershipLinuxVerifierPath)
@@ -2141,12 +2146,30 @@ Assert-Contains $stage3Verifier 'Name = "stage3"; Path = $stage3Path' "Stage3 ca
 Assert-Contains $stage3Verifier '-Label $diagnosticCompiler.Name' "Stage3 unresolved-call generation label"
 Assert-Contains $linuxStage2 'verify-selfhost-unresolved-call-diagnostic.ps1' "Linux Stage2 unresolved-call negative-control gate"
 Assert-Contains $linuxStage2 'verify-selfhost-result-propagation-diagnostics.ps1' "Linux Stage2 Result propagation owner diagnostic gate"
+Assert-MatchCount $linuxStage2 'verify-selfhost-trait-ownership-diagnostics\.ps1' 2 "Linux Stage2 host and candidate trait signature diagnostics"
+Assert-Contains $linuxStage2 '-Fixture $traitContractFixtures' "Linux Stage2 focused trait signature selection"
 Assert-Contains $linuxStage2 '-Compiler $stage1Path' "Linux Stage2 host Stage1 unresolved-call diagnostic parity"
 Assert-Contains $linuxStage2 '-Compiler $stage2Path' "Linux Stage2 candidate unresolved-call diagnostic parity"
 Assert-Contains $linuxStage3 'verify-selfhost-unresolved-call-diagnostic.ps1' "Linux Stage3 unresolved-call negative-control gate"
 Assert-Contains $linuxStage3 'verify-selfhost-result-propagation-diagnostics.ps1' "Linux Stage3 Result propagation owner diagnostic gate"
+Assert-MatchCount $linuxStage3 'verify-selfhost-trait-ownership-diagnostics\.ps1' 1 "Linux Stage3 fixed-point trait signature diagnostic loop"
+Assert-Contains $linuxStage3 '-Fixture $traitContractFixtures' "Linux Stage3 focused trait signature selection"
 Assert-Contains $linuxStage3 'Name = "linux-stage2"; Path = $stage2Path' "Linux Stage3 Stage2 unresolved-call diagnostic parity"
 Assert-Contains $linuxStage3 'Name = "linux-stage3"; Path = $stage3Path' "Linux Stage3 candidate unresolved-call diagnostic parity"
+Assert-Contains $traitOwnershipDiagnosticVerifier "[ValidateSet('windows', 'linux')]" "trait diagnostics explicit target contract"
+Assert-Contains $traitOwnershipDiagnosticVerifier "Convert-ToTraitDiagnosticWslPath" "trait diagnostics WSL path boundary"
+Assert-Contains $traitOwnershipDiagnosticVerifier "@('-d', `$Distribution, '--'" "trait diagnostics WSL compiler execution"
+foreach ($traitContractCase in @(
+    'trait-contract-count',
+    'trait-contract-order',
+    'trait-contract-ownership',
+    'trait-contract-type',
+    'trait-contract-dyn'
+)) {
+    Assert-Contains $traitOwnershipDiagnosticContract ('"id": "' + $traitContractCase + '"') "trait signature diagnostic $traitContractCase"
+    Assert-Contains $linuxStage2 ("'" + $traitContractCase + "'") "Linux Stage2 trait signature case $traitContractCase"
+    Assert-Contains $linuxStage3 ("'" + $traitContractCase + "'") "Linux Stage3 trait signature case $traitContractCase"
+}
 Assert-Contains $stage3Verifier '--exact 1128-selfhost-late-set-intrinsic-classification' "Stage3 late Set intrinsic managed fixture"
 Assert-Contains $stage3Verifier '--exact 1129-selfhost-control-producer-call-shape' "Stage3 control-producer wrapper managed fixture"
 Assert-Contains $stage3Verifier '--exact 1162-selfhost-zero-argument-mut-receiver' "Stage3 zero-argument receiver runtime fixture"
@@ -3050,6 +3073,9 @@ if ($staleRanges) {
 Assert-Contains $detachedVerification 'executionMode = "detached-supervisor"' "detached execution mode evidence"
 Assert-Matches $detachedVerification '(?s)\$scratchRoot = .*?if \(\$Verification -eq "Stage3" -and \$SeedMode -eq "Stage2Bridge"\)' "Stage3 seed mode fail-fast before launch"
 Assert-Contains $detachedVerification '-WindowStyle Hidden' "hidden detached supervisor launch"
+Assert-Contains $detachedVerification '"Stage2Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage2-linux.ps1" }' "detached Linux Stage2 routing"
+Assert-Contains $detachedVerification '"Stage3Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage3-linux.ps1" }' "detached Linux Stage3 routing"
+Assert-Contains $detachedVerification 'if ($ResumeCandidate) { $targetArguments += "-ResumeCandidate" } else { $targetArguments += "-Rebuild" }' "detached Linux Stage2 fresh rebuild or receipt-bound resume"
 Assert-Matches $detachedVerification '(?s)Start-Process.*?-RedirectStandardOutput \$LogPath.*?-PassThru' "supervised process with authoritative exit code"
 Assert-NotMatches $detachedVerification '(?s)Start-Process.*?-RedirectStandardOutput \$LogPath.*?-Wait\b' "no inherited-handle Start-Process wait"
 Assert-Contains $detachedVerification '$targetProcess.WaitForExit(1000)' "exact supervised-process bounded wait sampling"
@@ -3059,12 +3085,16 @@ Assert-Contains $detachedVerification 'failureIds = @($failureIds)' "exact failu
 Assert-Matches $detachedVerification '(?s)if \(-not \$cancelled -and \$exitCode -ne 0.*?fail\(\?:ed\|ure\)\?.*?\[regex\]::Matches\(\$line' "failure identifiers require nonzero exit and failure context"
 Assert-Contains $detachedVerification 'Move-Item -LiteralPath $temporaryPath -Destination $Path -Force' "atomic completion record publication"
 Assert-Contains $detachedVerification '$targetProcess.Kill($true)' "supported cancellation terminates the supervised process tree"
+Assert-Matches $detachedVerification '(?s)Get-DescendantProcessIds.*?CreationDate.*?CreationDate -lt \$CreatedAfter.*?-CreatedAfter \$targetProcess\.StartTime' "detached cancellation rejects stale PID-reuse descendants"
 Assert-Contains $detachedVerification '$failureIds.Add("CANCELLATION_REQUESTED")' "supported cancellation preserves its exact failure ID"
 Assert-Contains $detachedCancellation 'The recorded supervisor PID does not identify the expected run' "cancellation request binds to the recorded supervisor identity"
 Assert-Contains $detachedCancellation '@($result.orphanProcessIds).Count -ne 0' "cancellation request rejects orphan processes"
 Assert-Contains $detachedVerificationContract '$observer.Id -eq $result.supervisorPid' "observer and supervisor process separation check"
 Assert-Contains $detachedVerificationContract 'exit code 7 and 2/2 failure IDs preserved' "detached execution behavior evidence"
 Assert-Contains $detachedProgress '"interrupted-without-result"' "missing completion record interruption classification"
+Assert-Contains $detachedProgress '"stage2linux" { "linux-stage2" }' "detached Linux Stage2 progress prefix"
+Assert-Contains $detachedProgress '"stage3linux" { "linux-stage3" }' "detached Linux Stage3 progress prefix"
+Assert-Contains $detachedProgress '"stage2linux" { 6 }' "detached Linux Stage2 measured denominator"
 Assert-Contains $detachedProgress '$current - 1' "running stage completion excludes the active ordinal"
 Assert-Contains $detachedProgress 'percent = [math]::Round' "measured detached stage percentage"
 Assert-Contains $detachedProgress '[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete' "live log share-safe progress read"

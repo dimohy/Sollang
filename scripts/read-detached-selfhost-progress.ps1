@@ -33,8 +33,19 @@ if (-not (Test-Path -LiteralPath $launch.logPath -PathType Leaf)) {
 }
 
 $logText = Read-SharedText -Path $launch.logPath
-$stageName = $launch.verification.ToString().ToLowerInvariant()
-$total = if ($stageName -eq "stage2") { 7 } elseif ($stageName -eq "stage3") { 3 } else { 1 }
+$verificationName = $launch.verification.ToString().ToLowerInvariant()
+$stageName = switch ($verificationName) {
+    "stage2linux" { "linux-stage2" }
+    "stage3linux" { "linux-stage3" }
+    default { $verificationName }
+}
+$total = switch ($verificationName) {
+    "stage2" { 7 }
+    "stage3" { 3 }
+    "stage2linux" { 6 }
+    "stage3linux" { 3 }
+    default { 1 }
+}
 $ordinals = [regex]::Matches($logText, "(?im)^\[$stageName (?<ordinal>\d+)/$total\]") |
     ForEach-Object { [int]$_.Groups["ordinal"].Value }
 $current = if (@($ordinals).Count -gt 0) { [int](($ordinals | Measure-Object -Maximum).Maximum) } else { 0 }

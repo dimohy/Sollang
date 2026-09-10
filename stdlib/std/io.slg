@@ -21,6 +21,17 @@ public enum Read {
     End
 }
 
+# Portable byte streams expose exactly one caller-buffer primitive per
+# direction. The result is fixed so portable callers share one exact error and
+# progress contract without a wrapper object or dynamic dispatch.
+public trait Reader {
+    readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>
+}
+
+public trait Writer {
+    write: mut self, input: [UInt8] -> Result<Int, Error>
+}
+
 # MemoryReader owns its backing bytes. Reads advance an explicit cursor and
 # never perform an unbounded read. readExact is transactional on failure.
 public struct MemoryReader {
@@ -160,6 +171,23 @@ impl MemoryReader {
     }
 }
 
+impl Reader for MemoryReader {
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        (output -> len) <= self.maxReadBytes -> unless {
+            Result<Int, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+        }
+        self -> remaining => available
+        (output -> len) < available -> if { output -> len } else { available } => count
+        0 => index!
+        index! < count -> while {
+            self.bytes[self.offset + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.offset + count => self.offset
+        Result<Int, Error>.Ok(count)
+    }
+}
+
 impl MemoryWriter {
     public byteCount: self -> Int => self.bytes -> len
 
@@ -187,5 +215,14 @@ impl MemoryWriter {
     public intoBytes: move self -> [UInt8; ~] {
         self.bytes => bytes
         bytes
+    }
+}
+
+impl Writer for MemoryWriter {
+    public write: mut self, input: [UInt8] -> Result<Int, Error> {
+        self -> remainingCapacity => available
+        (input -> len) < available -> if { input -> len } else { available } => count
+        appendRange(input, 0, count, self.bytes)
+        Result<Int, Error>.Ok(count)
     }
 }

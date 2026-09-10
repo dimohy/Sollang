@@ -20,6 +20,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 & (Join-Path $PSScriptRoot "verify-zstd-foundation-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-brotli-foundation-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-http-body-framing-contract.ps1") -RepositoryRoot $repoRoot
+& (Join-Path $PSScriptRoot "verify-portable-memory-io-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-http-response-writing-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-http-request-writing-contract.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-http-client-contract.ps1") -RepositoryRoot $repoRoot
@@ -403,6 +404,13 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     -OutputDirectory $artifactsDir `
     -Jobs $Jobs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$traitContractFixtures = @(
+    'trait-contract-count',
+    'trait-contract-order',
+    'trait-contract-ownership',
+    'trait-contract-type',
+    'trait-contract-dyn'
+)
 foreach ($diagnosticCompiler in @(
     [ordered]@{ Name = "linux-stage2"; Path = $stage2Path },
     [ordered]@{ Name = "linux-stage3"; Path = $stage3Path }
@@ -418,6 +426,13 @@ foreach ($diagnosticCompiler in @(
         -Label $diagnosticCompiler.Name `
         -Target linux `
         -Distribution $Distribution `
+        -RepositoryRoot $repoRoot
+    & (Join-Path $PSScriptRoot "verify-selfhost-trait-ownership-diagnostics.ps1") `
+        -Compiler $diagnosticCompiler.Path `
+        -Label $diagnosticCompiler.Name `
+        -Target linux `
+        -Distribution $Distribution `
+        -Fixture $traitContractFixtures `
         -RepositoryRoot $repoRoot
     & (Join-Path $PSScriptRoot "verify-selfhost-private-field-diagnostics.ps1") `
         -Compiler $diagnosticCompiler.Path `

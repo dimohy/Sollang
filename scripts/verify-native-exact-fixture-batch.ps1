@@ -13,6 +13,7 @@ param(
     [ValidateRange(1000, 3600000)][int]$TimeoutMilliseconds = 3600000,
     [switch]$ValidateInputsOnly,
     [string[]]$Fixture = @(
+        "1094-io-memory-reader-writer",
         "1184-non-process-collect-has-no-process-runtime",
         "1185-selfhost-projected-receiver-instance-call",
         "1186-selfhost-interpolation-projected-call-topology",
@@ -369,7 +370,8 @@ param(
         "857-dictionary-put-if-absent",
         "858-dictionary-put-if-absent-owned",
         "66-generic-dictionary-function-contracts",
-        "487-selfhost-borrowed-container-return-analysis"
+        "487-selfhost-borrowed-container-return-analysis",
+        "1680-io-shared-caller-buffer-traits"
     )
 )
 

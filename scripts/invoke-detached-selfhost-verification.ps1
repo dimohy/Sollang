@@ -1,11 +1,12 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Stage2", "Stage3", "Probe")]
+    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "Probe")]
     [string]$Verification,
     [ValidateSet("Slg", "Stage2Bridge", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
     [ValidateRange(1, 64)]
     [int]$Jobs = 8,
+    [string]$Distribution = "Ubuntu",
     [switch]$ResumeCandidate,
     [string]$RunId = "",
     [string]$LogPath = "",
@@ -93,6 +94,7 @@ if (-not $Supervisor) {
         "-Verification", $Verification,
         "-SeedMode", $SeedMode,
         "-Jobs", $Jobs.ToString(),
+        "-Distribution", (ConvertTo-ProcessArgument $Distribution),
         "-RunId", $RunId,
         "-LogPath", (ConvertTo-ProcessArgument $LogPath),
         "-CompletionRecordPath", (ConvertTo-ProcessArgument $CompletionRecordPath),
@@ -145,8 +147,11 @@ $orphanProcessIds = [Collections.Generic.List[int]]::new()
 $standardErrorPath = "$LogPath.stderr"
 
 function Get-DescendantProcessIds {
-    param([Parameter(Mandatory)][int]$RootProcessId)
-    $records = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)
+    param(
+        [Parameter(Mandatory)][int]$RootProcessId,
+        [Parameter(Mandatory)][datetime]$CreatedAfter
+    )
+    $records = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate)
     $pending = [Collections.Generic.Queue[int]]::new()
     $found = [Collections.Generic.HashSet[int]]::new()
     $pending.Enqueue($RootProcessId)
@@ -154,6 +159,7 @@ function Get-DescendantProcessIds {
         $parent = $pending.Dequeue()
         foreach ($record in $records) {
             if ([int]$record.ParentProcessId -ne $parent) { continue }
+            if ([datetime]$record.CreationDate -lt $CreatedAfter) { continue }
             $child = [int]$record.ProcessId
             if ($found.Add($child)) { $pending.Enqueue($child) }
         }
@@ -174,6 +180,8 @@ try {
     $targetScript = switch ($Verification) {
         "Stage2" { Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1" }
         "Stage3" { Join-Path $PSScriptRoot "verify-selfhost-stage3.ps1" }
+        "Stage2Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage2-linux.ps1" }
+        "Stage3Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage3-linux.ps1" }
         "Probe" { Join-Path $PSScriptRoot "contracts\fixtures\detached-verification-probe.ps1" }
     }
     if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf)) {
@@ -189,6 +197,13 @@ try {
         "Stage3" {
             $targetArguments += @("-SeedMode", $SeedMode, "-Jobs", $Jobs.ToString())
             if ($ResumeCandidate) { $targetArguments += "-ResumeCandidate" }
+        }
+        "Stage2Linux" {
+            $targetArguments += @("-Distribution", (ConvertTo-ProcessArgument $Distribution), "-Jobs", $Jobs.ToString())
+            if ($ResumeCandidate) { $targetArguments += "-ResumeCandidate" } else { $targetArguments += "-Rebuild" }
+        }
+        "Stage3Linux" {
+            $targetArguments += @("-Distribution", (ConvertTo-ProcessArgument $Distribution), "-Jobs", $Jobs.ToString())
         }
         "Probe" { $targetArguments += @("-Outcome", $ProbeOutcome) }
     }
@@ -206,7 +221,9 @@ try {
         $request = Read-CancellationRequest
         if ($null -eq $request) { continue }
 
-        $capturedProcessIds = @($targetProcess.Id) + @(Get-DescendantProcessIds -RootProcessId $targetProcess.Id)
+        $capturedProcessIds = @($targetProcess.Id) + @(Get-DescendantProcessIds `
+            -RootProcessId $targetProcess.Id `
+            -CreatedAfter $targetProcess.StartTime)
         try {
             $targetProcess.Kill($true)
         }

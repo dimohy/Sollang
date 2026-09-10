@@ -29,6 +29,27 @@ function Assert-CollaborationEvidence {
             (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Sha256) {
             throw "collaboration evidence hash mismatch: $RelativePath"
         }
+        if ($RelativePath.EndsWith('.git-object.json', [StringComparison]::Ordinal)) {
+            $receipt = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            if ($receipt.kind -cne 'git-object-receipt' -or $receipt.version -ne 1 -or
+                $receipt.commit -cnotmatch '^[a-f0-9]{40,64}$' -or
+                $receipt.blob -cnotmatch '^[a-f0-9]{40,64}$' -or
+                $receipt.workingTreeSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+                [string]::IsNullOrWhiteSpace($receipt.path) -or
+                [IO.Path]::IsPathRooted($receipt.path) -or
+                $receipt.path.Contains('\\', [StringComparison]::Ordinal) -or
+                @($receipt.path.Split('/') | Where-Object { $_ -ceq '..' }).Count -gt 0) {
+                throw 'invalid collaboration Git object receipt'
+            }
+            $commit = (& git -C $root rev-parse --verify "$($receipt.commit)^{commit}" 2>$null)
+            if ($LASTEXITCODE -ne 0 -or $commit.Trim() -cne $receipt.commit) {
+                throw 'collaboration Git object receipt commit is unavailable'
+            }
+            $blob = (& git -C $root rev-parse "$($receipt.commit):$($receipt.path)" 2>$null)
+            if ($LASTEXITCODE -ne 0 -or $blob.Trim() -cne $receipt.blob) {
+                throw 'collaboration Git object receipt does not match the committed path'
+            }
+        }
         return $path
     }
 
