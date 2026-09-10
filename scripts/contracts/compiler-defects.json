@@ -5477,12 +5477,17 @@
     {
       "id": "C2026-09-07-354",
       "classification": "latent-defect",
-      "state": "open",
+      "state": "candidate-fixed",
       "owner": "selfhost/llvm/text/runtime_preamble.slg",
       "rootCause": "Native runtime dependency discovery emits realloc only for push or text materialization and omits reserve. Track array reallocation as a shared dependency for both push and reserve, including the outer allocator declaration gate, so a reserve-only program emits a complete LLVM runtime closure.",
       "focusedFixture": "1573-named-mutable-receiver-borrow-reuse; 1466 implicit cleanup; 1509 stack literal; 1527 projected table push",
-      "closureGate": "Reserve-only named mutable owner reuse, push and fixed-stack controls, exact native allocations/releases, direct-call closure, current full native suite and changed-source Windows Stage2/Stage3.",
-      "closedEvidence": [],
+      "closureGate": "Emit the shared array reallocation dependency for reserve as well as push/text materialization, including its outer allocator declaration gate. Pass reserve-only named mutable reuse, moving fixed-array implicit cleanup, named fixed stack literals, and projected table push in managed and current self-host exact native paths; defer full changed-source Stage2/Stage3 until all focused defects are resolved.",
+      "closedEvidence": [
+        "The historical baseline LLVM for fixture 1573 failed assembly because reserve-only dependency discovery omitted the shared array reallocation runtime closure and its allocator declaration gate.",
+        "The structured runtime-preamble invariant tracks array reallocation for reserve as well as push and text materialization, so reserve-only programs emit a complete LLVM runtime dependency closure.",
+        "The current managed compiler passed fixtures 1573, 1466, 1509, and 1527 (4/4), and the current self-host compiler passed direct-call closure, LLVM contracts, assembly, link, and exact execution for the same fixtures (4/4), for a focused total of 8/8.",
+        "Full changed-source Windows/Linux/browser Stage2/Stage3 remains deliberately deferred until the remaining focused defects are resolved."
+      ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-07-354/as-us-001.json",
         "inputFingerprint": "D77F0B9B7AAA8861A5C68BE500C6802CAD14969ECEC01C44C6A3F2D57675F1C6",
