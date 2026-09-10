@@ -21,6 +21,7 @@ $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 & (Join-Path $PSScriptRoot "verify-selfhost-fragment-manifests.ps1")
 & (Join-Path $PSScriptRoot "verify-selfhost-source-structure.ps1")
 & (Join-Path $PSScriptRoot "verify-llvm-emitter-modules.ps1")
+& (Join-Path $PSScriptRoot "verify-llvm-emitter-split-abi.ps1")
 & (Join-Path $PSScriptRoot "verify-selfhost-llvm-function-diff.ps1") `
     -RepositoryRoot $RepositoryRoot
 

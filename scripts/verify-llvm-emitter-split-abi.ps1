@@ -51,8 +51,8 @@ $helperNames = foreach ($relativePath in $fragmentPaths) {
     }
 }
 $helperNames = @($helperNames | Sort-Object -Unique)
-if ($helperNames.Count -ne 295) {
-    throw "Expected 295 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
+if ($helperNames.Count -ne 314) {
+    throw "Expected 314 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
 }
 $requiredLibraryHelpers = @(
     "isImportedLibraryFunction"
@@ -88,8 +88,8 @@ $readonlyHelpers = foreach ($relativePath in $readonlyFragmentPaths) {
     }
 }
 $readonlyHelpers = @($readonlyHelpers | Sort-Object LlvmName -Unique)
-if ($readonlyHelpers.Count -ne 91) {
-    throw "Expected 91 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
+if ($readonlyHelpers.Count -ne 99) {
+    throw "Expected 99 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
 }
 $requiredLibraryReadonlyHelpers = @(
     "libraryImportDiagnosticCount"
@@ -143,28 +143,30 @@ if (-not $emitCore.Success) {
     throw "Generated LLVM omits emitCore."
 }
 $emitCoreParameters = @($emitCore.Groups["parameters"].Value.Split(",") | ForEach-Object { $_.Trim() })
-if ($emitCoreParameters.Count -lt 1 -or $emitCoreParameters[-1] -notmatch '^ptr %') {
-    throw "emitCore copies EmitContext by value: $($emitCore.Value.Split("`n")[0])"
+if ($emitCoreParameters.Count -lt 2 `
+    -or $emitCoreParameters[-2] -notmatch '^ptr %' `
+    -or $emitCoreParameters[-1] -notmatch '^ptr %') {
+    throw "emitCore must borrow EmitContext and CoreEmitterState as its two trailing pointer parameters: $($emitCore.Value.Split("`n")[0])"
 }
 
-$stableAllocations = @([regex]::Matches(
+$coreAggregateAllocations = @([regex]::Matches(
     $emitCore.Groups["body"].Value,
     '(?m)^\s*(?<pointer>%ref_arg[0-9]+) = alloca (?<type>%sollang\.struct\.[0-9]+), align [0-9]+\r?$'))
-if ($stableAllocations.Count -ne 1) {
-    throw "emitCore must reuse its EmitContext pointer and materialize exactly one stable CoreEmitterState slot; found $($stableAllocations.Count) aggregate reference slots."
+if ($coreAggregateAllocations.Count -ne 0) {
+    throw "emitCore must reuse its borrowed EmitContext/CoreEmitterState pointers without aggregate rematerialization; found $($coreAggregateAllocations.Count) aggregate reference slots."
 }
-$statePointer = $stableAllocations[0].Groups["pointer"].Value
-$stateType = $stableAllocations[0].Groups["type"].Value
-$stateStores = [regex]::Matches(
-    $emitCore.Groups["body"].Value,
-    "(?m)^\s*store $([regex]::Escape($stateType)) [^,]+, ptr $([regex]::Escape($statePointer)),")
-if ($stateStores.Count -ne 1) {
-    throw "emitCore must initialize the stable CoreEmitterState slot exactly once; found $($stateStores.Count)."
+
+$stateFactory = [regex]::Match(
+    $llvmText,
+    '(?m)^define [^\r\n]*?(?<type>%sollang\.struct\.[0-9]+) @sollang_fn_sollang_compiler_llvm_text_prepareScheduledCoreEmitterState\(')
+if (-not $stateFactory.Success) {
+    throw "Generated LLVM omits the CoreEmitterState preparation boundary."
 }
+$stateType = $stateFactory.Groups["type"].Value
 
 $contextMaterializationPattern =
     '(?ms)^\s*(?<pointer>%ref_arg[0-9]+) = alloca (?<type>%sollang\.struct\.[0-9]+), align [0-9]+\r?\n' +
-    '.*?^\s*call void @sollang_fn_sollang_compiler_llvm_text_emitCore\([^\r\n]*ptr \k<pointer>\)'
+    '.*?^\s*call void @sollang_fn_sollang_compiler_llvm_text_emitCore\([^\r\n]*ptr \k<pointer>, ptr %[A-Za-z0-9_]+\)'
 $contextMaterializations = @([regex]::Matches($llvmText, $contextMaterializationPattern))
 if ($contextMaterializations.Count -ne 3) {
     throw "Expected the Windows, Linux, and Wasm entry points to each materialize one EmitContext owner; found $($contextMaterializations.Count)."
@@ -311,4 +313,4 @@ foreach ($typedResultQueryCall in $typedResultQueryCalls) {
     }
 }
 
-Write-Host "PASS LLVM emitter split ABI: stateful helpers=$($helperNames.Count), readonly helpers=$($readonlyHelpers.Count), entry-context owners=3, core-state materializations=1, helper forwards=$forwardedCalls, typed-borrowed-tables=5, typed-com-calls=$($typedComCalls.Count), typed-shape-calls=$($typedShapeCalls.Count), typed-result-query-calls=$($typedResultQueryCalls.Count), per-call aggregate copies=0"
+Write-Host "PASS LLVM emitter split ABI: stateful helpers=$($helperNames.Count), readonly helpers=$($readonlyHelpers.Count), entry-context owners=3, core-state materializations=0, helper forwards=$forwardedCalls, typed-borrowed-tables=5, typed-com-calls=$($typedComCalls.Count), typed-shape-calls=$($typedShapeCalls.Count), typed-result-query-calls=$($typedResultQueryCalls.Count), per-call aggregate copies=0"

@@ -17028,7 +17028,7 @@ identity evidence.
 
 ## D479 — Canonical type identity is independent of table insertion order
 
-Status: managed/self-host permutation passed; Windows/Linux fixed-point proof pending
+Status: closed; managed/self-host permutation and Windows/Linux fixed-point proof passed
 Date: 2026-08-27
 
 Retaining `ExpressionTypeIdSet.referenceIndexByTypeAst` added one growable-array
@@ -17064,12 +17064,17 @@ runtime result while inserting an unrelated growable-array type and an unrelated
 preceding field. Both passed the managed exact gate, then the newest self-host
 compiler passed direct-call closure, LLVM contracts, `llvm-as`, native linking,
 and exact execution for both fixtures in one bounded batch. This proves the
-focused table insertion no longer changes canonical field/binding identity; the
-real compiler closure and Windows/Linux fixed points remain the closure authority.
+focused table insertion no longer changes canonical field/binding identity.
+The current Windows and Linux Stage3 compilers also pass the real 58-source
+fixture-1043 closure through direct-call analysis, LLVM assembly, native link,
+and exact execution. A differently declared `[Text; ~]` binding assigned to the
+`[sys.file.SourceText; ~]` field is rejected by managed and both native compilers
+before LLVM emission. The four authenticated Windows/Linux Stage2/Stage3 gates
+reached fixed point with zero failures and zero orphan processes, closing C76.
 
 ## D480 — A missing readonly-reference root is a producer defect, not a value-copy fallback
 
-Status: candidate-fixed; Windows/Linux fixed-point proof pending
+Status: closed; Windows/Linux capture, negative-control, performance, and fixed-point proof passed
 Date: 2026-08-27
 
 The first ManagedRecovery Stage1 crossed the repaired canonical-field pass but
@@ -17118,9 +17123,13 @@ the user to bind the value to an immutable name before borrowing it.
 The capture lookup allocates no wrapper or index structure. Ordinary roots
 inside the current function return through the existing path and are excluded
 from capture scanning by the frozen function-end boundary; only a root outside
-that range can scan the already-frozen capture slice. Formal schema-v3
-performance comparison and Windows/Linux Stage2/Stage3 fixed points remain
-required before C77 closes.
+that range can scan the already-frozen capture slice. The frozen three-sample
+C77 comparisons pass the typed-IR wall, CPU, and memory thresholds and the
+expression-types non-regression thresholds. Fixture 1192 passes the complete
+Windows/Linux Stage2/Stage3 native-exact plans, the current native compilers
+reject the E22 temporary projection before LLVM, and fixture 1043 passes exact
+native execution on both platforms. The four authenticated fixed points finish
+the C77 closure gate with zero failures and zero orphan processes.
 
 ## D481 — Compiler table handles must be distinct without runtime overhead
 
@@ -17156,7 +17165,7 @@ raw `Int` link.
 
 ## D482 — Bounded compiler failures preserve partial evidence before cleanup
 
-Status: candidate-fixed; formal Windows/Linux gate pending
+Status: closed; failure preservation and formal Windows/Linux gates passed
 Date: 2026-08-27
 
 Analysis during the long SLG feedback generation found that `Invoke-ToFile`
@@ -17177,11 +17186,16 @@ diagnostic; if publication itself fails, the combined error retains that causal
 message first and appends the preservation failure. The behavioral contract
 proves exact content movement, the empty negative control, and a real timeout
 that preserves flushed partial stdout/stderr; the self-host source contract
-pins the shared path.
+pins the shared path. The Windows/WSL integration contract also passes
+concurrent capture and process-tree controls. All four authenticated
+Windows/Linux Stage2/Stage3 runs consume the bounded helper and publish output
+receipts only after complete candidate verification; none authenticates a
+`.partial` artifact. They finish with exit code zero, no failures, and no orphan
+processes, closing C78.
 
 ## D483 — Emitter structure failures belong in the self-host fail-fast preflight
 
-Status: superseded by D635; retained as historical structure inventory
+Status: closed by D635 and the integrated module/split-ABI fail-fast gates
 Date: 2026-08-27
 
 The incremental self-host gate runs the compiler source contract before an
@@ -17252,6 +17266,16 @@ The manifest verifier now counts each facade/module/fragment entry and includes
 a duplicate negative control; membership alone was insufficient because two
 copies can silently shift source and symbol ordinals while still satisfying
 `-contains`.
+
+D635 later replaced the obsolete line ceilings with explicit module,
+same-namespace fragment, manifest, and schedulability contracts. The current
+preflight runs both `verify-llvm-emitter-modules.ps1` and
+`verify-llvm-emitter-split-abi.ps1` before expensive compiler generation. The
+ABI gate inventories 314 stateful and 99 readonly helpers, verifies 3,119
+direct pointer forwards, three entry Context owners, borrowed CoreEmitterState
+with zero core rematerializations, and zero per-call aggregate copies. The
+complete preflight and authenticated Windows/Linux Stage2/Stage3 fixed points
+pass, closing C79 while retaining this section as historical structure context.
 
 ## D484 — C82 worker eligibility and performance evidence follow bootstrap provenance
 
