@@ -75,3 +75,37 @@ if ($propagatingResult.ExitCode -eq 0 -or
     throw "unknown propagating instance target did not fail once with binding guidance before LLVM under $Label ($compilerPath)"
 }
 Write-Host "[selfhost unresolved call] PASS $Label distinguishes the instance method name from the result binding before LLVM emission."
+
+$ambiguityRoot = (Resolve-Path -LiteralPath (Join-Path `
+    $RepositoryRoot `
+    "examples/regression/diagnostics/open-import-ambiguous.slg")).Path
+$ambiguityAlpha = (Resolve-Path -LiteralPath (Join-Path `
+    $RepositoryRoot `
+    "examples/regression/diagnostics/collision/alpha.slg")).Path
+$ambiguityBeta = (Resolve-Path -LiteralPath (Join-Path `
+    $RepositoryRoot `
+    "examples/regression/diagnostics/collision/beta.slg")).Path
+$ambiguityArguments = @($Target, $ambiguityRoot, $ambiguityAlpha, $ambiguityBeta)
+if (-not [string]::IsNullOrWhiteSpace($Distribution)) {
+    $ambiguityArguments = @(
+        "-d", $Distribution, "--", (Convert-ToWslPath $compilerPath), $Target,
+        (Convert-ToWslPath $ambiguityRoot),
+        (Convert-ToWslPath $ambiguityAlpha),
+        (Convert-ToWslPath $ambiguityBeta)
+    )
+}
+$ambiguityResult = Invoke-VerificationProcessCapture `
+    -FilePath $filePath `
+    -ArgumentList $ambiguityArguments `
+    -Description "$Label open-import ambiguity diagnostic"
+$ambiguityText = $ambiguityResult.Stdout + $ambiguityResult.Stderr
+$ambiguityExpected = (Get-Content -LiteralPath (Join-Path `
+    $RepositoryRoot `
+    "examples/regression/diagnostics/open-import-ambiguous.stderr.contains.txt") -Raw).Trim()
+if ($ambiguityResult.ExitCode -ne 1 -or
+    -not $ambiguityText.Contains($ambiguityExpected) -or
+    [regex]::Matches($ambiguityText, [regex]::Escape($ambiguityExpected)).Count -ne 1 -or
+    $ambiguityText -match '(?m)^target (datalayout|triple)') {
+    throw "open-import ambiguity did not fail once with candidate guidance before LLVM under $Label ($compilerPath)`n$ambiguityText"
+}
+Write-Host "[selfhost unresolved call] PASS $Label reports exact open-import candidates and qualification guidance before LLVM emission."

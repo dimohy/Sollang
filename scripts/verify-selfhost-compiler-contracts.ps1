@@ -1431,6 +1431,8 @@ Assert-Contains $textContext "finalCallResolvedByAst![finalCallRange.astStart + 
 Assert-Contains $emitterDiagnostics "context.finalCallResolvedByAst[finalCallAst]" "constant-time resolved-call diagnostic lookup"
 Assert-NotContains $emitterDiagnostics "finalCallSearch! < (context.ir -> len)" "per-call full Typed IR diagnostic scan"
 Assert-Contains $emitterDiagnostics "and not finalCallResolved!" "resolved inherent call diagnostic suppression"
+Assert-Contains $emitterDiagnostics "emitOpenImportAmbiguity" "open-import candidate diagnostic reconstruction"
+Assert-Contains $emitterDiagnostics "not emittedAmbiguity" "open-import diagnostic after ordinary resolution failure"
 Assert-Contains $text 'functionHasDeclaredEffects! => functionHasDeclaredEffectsBySymbol![captureGlobalSymbolIndex]' "single-pass function effect classification"
 Assert-Contains $functionScheduling 'state.frozenFunctionsHaveDeclaredEffectsBySymbol[targetGlobalSymbol] => hasEffects!' "constant-time scheduler effect lookup"
 Assert-NotContains $functionScheduling 'targetFunctionIndex! < (context.ir -> len)' "per-effect-query full Typed IR function scan"
@@ -2634,6 +2636,8 @@ foreach ($quicOwnershipGate in @(
 }
 Assert-Contains $unresolvedCallDiagnosticVerifier 'unknown-value-flow-target.slg' "unresolved-call diagnostic fixture"
 Assert-Contains $unresolvedCallDiagnosticVerifier "unresolved call target 'println2'" "exact unresolved-call diagnostic"
+Assert-Contains $unresolvedCallDiagnosticVerifier 'open-import-ambiguous.slg' "open-import ambiguity diagnostic fixture"
+Assert-Contains $unresolvedCallDiagnosticVerifier 'open-import-ambiguous.stderr.contains.txt' "open-import ambiguity expected guidance"
 Assert-Contains $unresolvedCallDiagnosticVerifier '[regex]::Matches' "single unresolved-call diagnostic gate"
 Assert-Contains $unresolvedCallDiagnosticVerifier "'(?m)^target (datalayout|triple)'" "unresolved-call pre-LLVM gate"
 Assert-Contains $unresolvedCallDiagnosticVerifier 'Invoke-VerificationProcessCapture' "unresolved-call bounded capture helper"

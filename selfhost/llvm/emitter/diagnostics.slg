@@ -5,9 +5,11 @@ import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.emitter.type_queries as typeQueries
 import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
 # Compute the executable call-graph closure once per consumer. Function bodies
@@ -1414,6 +1416,77 @@ public isBlockingUnresolvedCall context: ref emitterContext.EmitContext, callInd
     blocking!
 }
 
+emitOpenImportAmbiguity context: ref emitterContext.EmitContext, call: calls.ModuleCallResolution, nameToken: syntax.SyntaxToken, name: Text -> Bool uses Console {
+    [Int; ~] => matchingImports!
+    context.ranges[call.sourceModule] => sourceRange
+    context.sources[call.sourceModule] -> len => sourceLength
+    context.sources[call.sourceModule] -> slice(UIntSize(0), sourceLength) => source
+    0 => importIndex!
+    importIndex! < (context.imports -> len) -> while {
+        context.imports[importIndex!] => edge
+        context.resolvedImports[importIndex!] => resolved
+        false => importMatches!
+        edge.sourceModule == call.sourceModule and resolved.status == 0
+            -> if {
+                context.modules[resolved.targetModule] => importedModule
+                0 => fragmentIndex!
+                fragmentIndex! < (context.modules -> len) and not importMatches!
+                    -> while {
+                        context.modules[fragmentIndex!] => fragment
+                        fragment.pathHash == importedModule.pathHash -> if {
+                            fragment.sourceIndex => targetSource
+                            context.ranges[targetSource] => targetRange
+                            context.sources[targetSource] -> len => targetLength
+                            context.sources[targetSource] -> slice(UIntSize(0), targetLength) => targetText
+                            0 => symbolIndex!
+                            symbolIndex! < targetRange.symbolCount and not importMatches!
+                                -> while {
+                                    context.symbols[targetRange.symbolStart + symbolIndex!] => candidate
+                                    candidate.kind == 7 and candidate.parent < 0 and candidate.nameToken >= 0 and candidate.flags / 4 % 2 == 1
+                                        -> if {
+                                            context.tokens[targetRange.tokenStart + candidate.nameToken] => candidateName
+                                            candidateName.span.length == nameToken.span.length => sameName!
+                                            UIntSize(0) => nameByte!
+                                            sameName! and nameByte! < nameToken.span.length
+                                                -> while {
+                                                    (source -> byte(nameToken.span.start + nameByte!)) != (targetText -> byte(candidateName.span.start + nameByte!))
+                                                        -> if {
+                                                            false => sameName!
+                                                        }
+                                                    nameByte! + 1 => nameByte!
+                                                }
+                                            sameName! -> if { true => importMatches! }
+                                        }
+                                    symbolIndex! + 1 => symbolIndex!
+                                }
+                        }
+                        fragmentIndex! + 1 => fragmentIndex!
+                    }
+            }
+        importMatches! -> if { matchingImports! -> push(importIndex!) }
+        importIndex! + 1 => importIndex!
+    }
+    (matchingImports! -> len) > 1 -> if {
+        "; sollang semantic error: imported symbol '$name' is ambiguous between " -> print
+        0 => matchIndex!
+        matchIndex! < (matchingImports! -> len) -> while {
+            matchIndex! > 0 -> if { ", " -> print }
+            context.imports[matchingImports![matchIndex!]] => matchingEdge
+            "'" -> print
+            source -> slice(matchingEdge.pathStart, matchingEdge.pathLength) -> print
+            ".$name'" -> print
+            matchIndex! + 1 => matchIndex!
+        }
+        context.imports[matchingImports![0]] => firstEdge
+        context.tokens[sourceRange.tokenStart + firstEdge.aliasToken] => firstAlias
+        "; use a qualified name such as '" -> print
+        source -> slice(firstAlias.span.start, firstAlias.span.length) -> print
+        ".$name' or an import alias for the module (source $(call.sourceModule), byte $(nameToken.span.start), length $(nameToken.span.length))" -> println
+        true -> return
+    }
+    false
+}
+
 public emitCallDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
     0 => callIndex!
     callIndex! < (context.calls -> len) -> while {
@@ -1442,10 +1515,13 @@ public emitCallDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
                         call.status == 5 -> if {
                             "; sollang semantic error: zero-input function '$name' must be called with parentheses: '$name()' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
                         } else {
-                            propagatingTarget! -> if {
-                                "; sollang semantic error: unresolved instance call target '$name'; the identifier after '->' is the method name, while the identifier after '=>' is the result binding; use an existing instance method name before '?' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
-                            } else {
-                                "; sollang semantic error: unresolved call target '$name' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
+                            context -> emitOpenImportAmbiguity(call, nameToken, name) => emittedAmbiguity
+                            not emittedAmbiguity -> if {
+                                propagatingTarget! -> if {
+                                    "; sollang semantic error: unresolved instance call target '$name'; the identifier after '->' is the method name, while the identifier after '=>' is the result binding; use an existing instance method name before '?' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
+                                } else {
+                                    "; sollang semantic error: unresolved call target '$name' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
+                                }
                             }
                         }
                     }

@@ -88,16 +88,17 @@ $readonlyHelpers = foreach ($relativePath in $readonlyFragmentPaths) {
     }
 }
 $readonlyHelpers = @($readonlyHelpers | Sort-Object LlvmName -Unique)
-if ($readonlyHelpers.Count -ne 99) {
-    throw "Expected 99 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
+if ($readonlyHelpers.Count -ne 100) {
+    throw "Expected 100 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
 }
-$requiredLibraryReadonlyHelpers = @(
+$requiredDiagnosticReadonlyHelpers = @(
     "libraryImportDiagnosticCount"
     "emitLibraryImportDiagnostics"
+    "emitOpenImportAmbiguity"
 )
-foreach ($requiredLibraryReadonlyHelper in $requiredLibraryReadonlyHelpers) {
-    if ($requiredLibraryReadonlyHelper -notin $readonlyHelpers.Name) {
-        throw "Library diagnostic helper '$requiredLibraryReadonlyHelper' is missing from the readonly pointer-ABI gate."
+foreach ($requiredDiagnosticReadonlyHelper in $requiredDiagnosticReadonlyHelpers) {
+    if ($requiredDiagnosticReadonlyHelper -notin $readonlyHelpers.Name) {
+        throw "Diagnostic helper '$requiredDiagnosticReadonlyHelper' is missing from the readonly pointer-ABI gate."
     }
 }
 foreach ($helper in $readonlyHelpers) {
