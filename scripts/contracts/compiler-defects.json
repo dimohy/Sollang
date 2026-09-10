@@ -5317,12 +5317,17 @@
     {
       "id": "C2026-09-06-344",
       "classification": "latent-defect",
-      "state": "open",
-      "owner": "src/Sollang.Compiler/Semantics/SemanticCompiler.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs",
-      "rootCause": "Managed readonly Int view compatibility and value-generic fixed-array argument emission still use legacy static-array sentinel types. Interned fixed-length Int arrays are rejected by fold, and Int/Text generic calls discard canonical RuntimeValue.Type and report a sentinel instead of the specialized array identity. Preserve registered element identity and fixed length through shared compatibility and argument emission.",
+      "state": "candidate-fixed",
+      "owner": "src/Sollang.Compiler/Semantics/SemanticCompiler.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs; selfhost/semantic/type_ids.slg; selfhost/ir/typed/ordinary_function_finalize_phases.slg; selfhost/ir/typed/source_lowering_finalize.slg; selfhost/llvm/text/functions.slg; selfhost/llvm/text/entry_expressions.slg; selfhost/llvm/emitter/diagnostics.slg",
+      "rootCause": "Managed readonly Int view compatibility and value-generic fixed-array argument emission used legacy static-array sentinel types, while self-host parity had three additional gaps: symbolic fixed-array length hashes were not specialized to concrete lengths, fold source classification did not materialize readonly/reference value types, and LLVM fold carriers plus value-generic diagnostics assumed dynamic arrays. Preserve canonical element and length identity through specialization, materialized fold reads, carrier selection, and exact diagnostics.",
       "focusedFixture": "25-arrays-dictionaries; 51-fixed-array-value-generics; value-generic-fixed-array-size-mismatch; value-generic-fixed-array-required",
-      "closureGate": "Preserve fixed Int/Text/inline/owned generic inputs and fold output, reject wrong element and length contracts, full managed/native parity and changed-source Windows Stage2/Stage3.",
-      "closedEvidence": [],
+      "closureGate": "Preserve fixed Int/Text/inline/owned generic inputs and fold output, reject dynamic and wrong-length contracts, and pass focused managed/current-selfhost parity plus compiler contracts. Defer full changed-source Windows/Linux/browser Stage2/Stage3 until all known focused defects and planned source changes are resolved.",
+      "closedEvidence": [
+        "The managed compiler passes both positive fixed-array fixtures with exact output and both negative value-generic diagnostics with exit code 1, no executable, no LLVM output, and zero warnings.",
+        "The current self-host candidate passes both positive fixtures through direct-call closure, LLVM contracts, assembly, and exact execution, including fixed-array fold and value-generic specialization.",
+        "The current self-host candidate emits both exact value-generic fixed-array diagnostics with exit code 1, no executable, no LLVM output, and zero warnings.",
+        "All six changed Sollang sources pass native format checking, the complete self-host compiler contract suite passes with the new structural invariants, and the Release solution build has zero warnings and zero errors. Full Stage2/Stage3 remains deferred to the final zero-open-defect and zero-planned-source-change checkpoint."
+      ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-06-344/as-us-001.json",
         "inputFingerprint": "D1296AF3B9576BD2C98C55A539D0CAECF1C0138339B2914A29968C38DEAB6E62",

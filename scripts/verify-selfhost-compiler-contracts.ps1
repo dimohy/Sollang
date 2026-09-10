@@ -1657,6 +1657,17 @@ $escapedMultilineSourceFiles = @(
 if ($escapedMultilineSourceFiles.Count -ne 0) {
     throw "embedded multiline Sollang fixture source must use raw triple-quoted text: $($escapedMultilineSourceFiles -join ', ')"
 }
+Assert-Contains $typeIds "[UInt64; ~] => lengthParameterHashes!" "value-generic fixed-array length-parameter identity"
+Assert-Contains $typeIds "lengthReplacements![lengthParameterIndex!] != actual.length" "value-generic fixed-array repeated-length unification"
+Assert-Contains $typeIds "known.length == specializedLength! and known.lengthHash == specializedLengthHash!" "specialized fixed-array canonical interning"
+Assert-Contains $typedOrdinaryFunctionFinalize "typeIds.materializedReadTypeId(foldSourceCandidate.typeId)" "ordinary fold fixed-array reference materialization"
+Assert-Contains $typedOrdinaryFunctionFinalize "frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 4" "ordinary fold fixed-array source acceptance"
+Assert-Contains $typedSourceLoweringFinalize "typeIds.materializedReadTypeId(entryFoldSourceCandidate.typeId)" "entry fold fixed-array reference materialization"
+Assert-Contains $typedSourceLoweringFinalize "frozenRecursiveSemanticTypes[entryFoldSourceCandidateValueType].kind == 4" "entry fold fixed-array source acceptance"
+Assert-Contains $functions 'and context.types[foldSource -> effectiveTypeId(context, state)].kind == 4' "ordinary fold fixed-array LLVM carrier selection"
+Assert-Contains $entryExpressions 'and context.types[entryFoldSource -> effectiveTypeId(context, state)].kind == 4' "entry fold fixed-array LLVM carrier selection"
+Assert-Contains $emitterDiagnostics "value-generic function '`$valueGenericName' requires a fixed array input" "selfhost value-generic fixed-array-required diagnostic"
+Assert-Contains $emitterDiagnostics '"; $(valueGenericLength!)] but received [" -> print' "selfhost value-generic fixed-array-size diagnostic"
 Assert-Contains $semanticOwnership "current.kind == 4 or current.kind == 7 -> if {" "fixed-array ownership follows recursive element classification"
 Assert-Contains $semanticOwnership "current.first >= 0 -> if { pending! -> push(current.first) }" "fixed-array element ownership is traversed"
 Assert-Contains $semanticOwnership 'not referenceBorrowUsedAfterMutation! -> if {' "E23 index/call mutation falls back to field-sensitive carrier liveness"

@@ -920,6 +920,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                         lengthByte! + 1 => lengthByte!
                                     }
                                 }
+                                term.kind == 4 and lengthValue! < 0 and lengthHash! != 0
+                                    -> if { true => containsParameter! }
                                 term.kind == 11 -> if {
                                     -1 => lengthValue!
                                     term.nameToken >= 0 -> if {
@@ -1234,6 +1236,9 @@ public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int
     [Int; ~] => parameterModules!
     [Int; ~] => parameterSymbols!
     [Int; ~] => replacements!
+    [UInt64; ~] => lengthParameterHashes!
+    [Int; ~] => lengthReplacements!
+    [UInt64; ~] => lengthReplacementHashes!
     0 => status!
     (inputTemplates -> len) != (actualInputs -> len)
         or resultTemplate < 0 or resultTemplate >= (types -> len)
@@ -1290,8 +1295,29 @@ public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int
                     # compile-time value parameter. Its concrete length is checked at
                     # the call surface; structural unification must still infer the
                     # element type from [T; N] against [Concrete; literal].
-                    status! == 0 and template.kind == 4 and template.length >= 0 and template.lengthHash != actual.lengthHash
+                    status! == 0 and template.kind == 4 and template.length >= 0 and template.length != actual.length
                         -> if { 2 => status! }
+                    status! == 0 and template.kind == 4 and template.length < 0 and template.lengthHash != 0
+                        -> if {
+                            actual.length < 0 -> if { 2 => status! } else {
+                                -1 => lengthParameterIndex!
+                                0 => lengthParameterSearch!
+                                lengthParameterSearch! < (lengthParameterHashes! -> len) and lengthParameterIndex! < 0
+                                    -> while {
+                                        lengthParameterHashes![lengthParameterSearch!] == template.lengthHash
+                                            -> if { lengthParameterSearch! => lengthParameterIndex! }
+                                        lengthParameterSearch! + 1 => lengthParameterSearch!
+                                    }
+                                lengthParameterIndex! >= 0 -> if {
+                                    lengthReplacements![lengthParameterIndex!] != actual.length
+                                        -> if { 2 => status! }
+                                } else {
+                                    lengthParameterHashes! -> push(template.lengthHash)
+                                    lengthReplacements! -> push(actual.length)
+                                    lengthReplacementHashes! -> push(actual.lengthHash)
+                                }
+                            }
+                        }
                     status! == 0 -> if {
                         template.first < 0 and actual.first >= 0 -> if { 2 => status! }
                         template.first >= 0 and actual.first < 0 -> if { 2 => status! }
@@ -1397,10 +1423,29 @@ public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int
                                     }
                             }
 
+                            current.length => specializedLength!
+                            current.lengthHash => specializedLengthHash!
+                            current.kind == 4 and current.length < 0 and current.lengthHash != 0
+                                -> if {
+                                    0 => specializedLengthSearch!
+                                    specializedLengthSearch! < (lengthParameterHashes! -> len)
+                                        and specializedLength! < 0 -> while {
+                                            lengthParameterHashes![specializedLengthSearch!] == current.lengthHash
+                                                -> if {
+                                                    lengthReplacements![specializedLengthSearch!] => specializedLength!
+                                                    lengthReplacementHashes![specializedLengthSearch!] => specializedLengthHash!
+                                                }
+                                            specializedLengthSearch! + 1 => specializedLengthSearch!
+                                        }
+                                }
                             nodeId => replacementType!
                             first! != current.first or second! != current.second
+                                or specializedLength! != current.length
+                                or specializedLengthHash! != current.lengthHash
                                 -> if {
                                     current.origin == 3 => containsParameter!
+                                    current.kind == 4 and specializedLength! < 0 and specializedLengthHash! != 0
+                                        -> if { true => containsParameter! }
                                     first! >= 0 -> if { types[first!].containsParameter
                                             -> if { true => containsParameter! } }
                                     second! >= 0 -> if { types[second!].containsParameter
@@ -1410,7 +1455,7 @@ public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int
                                     existingSearch! < (types -> len) and existing! < 0
                                         -> while {
                                             types[existingSearch!] => known
-                                            known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first! and known.second == second! and known.lengthHash == current.lengthHash and known.status == current.status
+                                            known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first! and known.second == second! and known.length == specializedLength! and known.lengthHash == specializedLengthHash! and known.status == current.status
                                                 -> if {
                                                     existingSearch! => existing!
                                                 }
@@ -1425,8 +1470,8 @@ public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int
                                             symbol: current.symbol
                                             first: first!
                                             second: second!
-                                            length: current.length
-                                            lengthHash: current.lengthHash
+                                            length: specializedLength!
+                                            lengthHash: specializedLengthHash!
                                             containsParameter: containsParameter!
                                             status: current.status
                                         })

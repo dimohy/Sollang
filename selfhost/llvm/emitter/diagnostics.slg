@@ -2961,6 +2961,89 @@ fixedArrayCallDiagnostics context: ref emitterContext.EmitContext, writeDiagnost
         context.ir[callIndex!] => call
         call.kind == 6 and call.targetModule >= 0 and call.symbol >= 0 and call.operand0 >= 0
             -> if {
+                -1 => valueGenericTemplate!
+                0 => valueGenericTemplateSearch!
+                valueGenericTemplateSearch! < (context.ir -> len) and valueGenericTemplate! < 0
+                    -> while {
+                        context.ir[valueGenericTemplateSearch!] => valueGenericCandidate
+                        valueGenericCandidate.kind == 0
+                            and valueGenericCandidate.sourceModule == call.targetModule
+                            and valueGenericCandidate.symbol == call.symbol
+                            and valueGenericCandidate.operand1 >= 0 -> if {
+                                context.ir[valueGenericCandidate.operand1].typeId => valueGenericExpectedId!
+                                valueGenericExpectedId! >= 0 and context.types[valueGenericExpectedId!].kind == 8
+                                    -> if { context.types[valueGenericExpectedId!].first => valueGenericExpectedId! }
+                                valueGenericExpectedId! >= 0
+                                    and context.types[valueGenericExpectedId!].kind == 4
+                                    and context.types[valueGenericExpectedId!].length < 0
+                                    and context.types[valueGenericExpectedId!].lengthHash != 0
+                                    -> if { valueGenericTemplateSearch! => valueGenericTemplate! }
+                            }
+                        valueGenericTemplateSearch! + 1 => valueGenericTemplateSearch!
+                    }
+                valueGenericTemplate! >= 0 -> if {
+                    context.ir[call.operand0].typeId => valueGenericActualId!
+                    valueGenericActualId! >= 0 and context.types[valueGenericActualId!].kind == 8
+                        -> if { context.types[valueGenericActualId!].first => valueGenericActualId! }
+                    -1 => valueGenericLength!
+                    context.ranges[call.sourceModule] => valueGenericCallRange
+                    context.nodes[valueGenericCallRange.astStart + call.astNode] => valueGenericCallAst
+                    false => inValueGenericArguments!
+                    valueGenericCallAst.firstToken => valueGenericTokenIndex!
+                    valueGenericTokenIndex! < valueGenericCallAst.firstToken + valueGenericCallAst.tokenCount
+                        -> while {
+                            context.tokens[valueGenericCallRange.tokenStart + valueGenericTokenIndex!] => valueGenericToken
+                            valueGenericToken.kind == grammar.tokenIdLess()
+                                -> if { true => inValueGenericArguments! }
+                            inValueGenericArguments! and valueGenericLength! < 0
+                                and valueGenericToken.kind == grammar.tokenIdNumber()
+                                -> if {
+                                    0 => valueGenericLength!
+                                    UIntSize(0) => valueGenericByteIndex!
+                                    valueGenericByteIndex! < valueGenericToken.span.length
+                                        -> while {
+                                            context.sources[call.sourceModule] -> byte(valueGenericToken.span.start + valueGenericByteIndex!) => valueGenericByte
+                                            valueGenericLength! * 10 + Int(valueGenericByte - 48) => valueGenericLength!
+                                            valueGenericByteIndex! + 1 => valueGenericByteIndex!
+                                        }
+                                }
+                            valueGenericToken.kind == grammar.tokenIdGreater()
+                                -> if { false => inValueGenericArguments! }
+                            valueGenericTokenIndex! + 1 => valueGenericTokenIndex!
+                        }
+                    valueGenericActualId! >= 0 -> if {
+                        context.types[valueGenericActualId!] => valueGenericActual
+                        valueGenericActual.kind != 4 -> if {
+                            count! + 1 => count!
+                            writeDiagnostics -> if {
+                                context.ranges[call.targetModule] => valueGenericTargetRange
+                                context.symbols[valueGenericTargetRange.symbolStart + call.symbol] => valueGenericFunction
+                                context.tokens[valueGenericTargetRange.tokenStart + valueGenericFunction.nameToken] => valueGenericNameToken
+                                context.sources[call.targetModule] -> slice(valueGenericNameToken.span.start, valueGenericNameToken.span.length) => valueGenericName
+                                "; sollang semantic error: value-generic function '$valueGenericName' requires a fixed array input" -> println
+                            }
+                        } else {
+                            valueGenericLength! >= 0 and valueGenericActual.length >= 0
+                                and valueGenericActual.length != valueGenericLength!
+                                -> if {
+                                    count! + 1 => count!
+                                    writeDiagnostics -> if {
+                                        "; sollang semantic error: value-generic function expects [" -> print
+                                        valueGenericActual.first >= 0
+                                            and context.types[valueGenericActual.first].kind == 1
+                                            and context.types[valueGenericActual.first].origin == 1
+                                            -> if { context.types[valueGenericActual.first].symbol -> writeNativeAbiTypeName } else { "type#$(valueGenericActual.first)" -> print }
+                                        "; $(valueGenericLength!)] but received [" -> print
+                                        valueGenericActual.first >= 0
+                                            and context.types[valueGenericActual.first].kind == 1
+                                            and context.types[valueGenericActual.first].origin == 1
+                                            -> if { context.types[valueGenericActual.first].symbol -> writeNativeAbiTypeName } else { "type#$(valueGenericActual.first)" -> print }
+                                        "; $(valueGenericActual.length)]" -> println
+                                    }
+                                }
+                        }
+                    }
+                }
                 context -> emitterContext.genericFunctionForCall(callIndex!) => functionIndex!
                 functionIndex! < 0 -> if {
                     0 => search!
