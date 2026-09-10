@@ -165,30 +165,67 @@ emitDiscoveredWasmChecked paths: move [path.Path; ~] -> Int uses Console, File {
     diagnosticCount
 }
 
+containsCanonicalSource canonicalPaths: ref [path.Path; ~], candidate: Text -> Bool {
+    false => found!
+    0 => index!
+    index! < (canonicalPaths -> len) and not found!
+        -> while {
+            canonicalPaths[index!] -> equalsText(candidate)
+                -> if { true => found! }
+            index! + 1 => index!
+        }
+    found!
+}
+
+appendUniqueMappedSource sourcePathText: Text, style: path.Style, canonicalPaths: mut [path.Path; ~], owners: mut [file.SourceText; ~] -> Unit uses File {
+    sourcePathText -> path.fromText(style) -> query -> when {
+        Ok(info) {
+            info.canonical -> pathText => canonicalView
+            canonicalPaths -> containsCanonicalSource(canonicalView) => duplicate
+            not duplicate -> if {
+                canonicalView -> path.fromText(style) => canonical
+                canonicalPaths -> push(canonical)
+                sourcePathText -> file.mapText => owner
+                owners -> push(owner)
+            }
+        }
+        Err(error) {
+            # Preserve the existing file mapping diagnostic when canonicalization fails.
+            sourcePathText -> file.mapText => owner
+            owners -> push(owner)
+        }
+    }
+}
+
+mapUniqueSources paths: ref [path.Path; ~], explicitPaths: [Text; ~] -> [file.SourceText; ~] uses File {
+    [path.Path; ~] => canonicalPaths!
+    [file.SourceText; ~] => owners!
+    paths[0].style => style
+    0 => sourcePathIndex!
+    sourcePathIndex! < (paths -> len) -> while {
+        paths[sourcePathIndex!] -> pathText => sourcePathText
+        sourcePathText -> appendUniqueMappedSource(style, canonicalPaths!, owners!)
+        sourcePathIndex! + 1 => sourcePathIndex!
+    }
+    0 => explicitPathIndex!
+    explicitPathIndex! < (explicitPaths -> len) -> while {
+        explicitPaths[explicitPathIndex!] -> appendUniqueMappedSource(style, canonicalPaths!, owners!)
+        explicitPathIndex! + 1 => explicitPathIndex!
+    }
+    owners!
+}
+
 emitDiscoveredAndExplicitChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File {
     (paths -> len) == 0 -> if {
         "; sollang source root error: source root contains no readable .slg files" -> println
         1
     } else {
-        [file.SourceText; ~] => owners!
-        0 => sourcePathIndex!
-        sourcePathIndex! < (paths -> len) -> while {
-            paths[sourcePathIndex!] -> pathText => sourcePathText
-            sourcePathText -> file.mapText => owner
-            owners! -> push(owner)
-            sourcePathIndex! + 1 => sourcePathIndex!
-        }
-        0 => explicitPathIndex!
-        explicitPathIndex! < (explicitPaths -> len) -> while {
-            explicitPaths[explicitPathIndex!] -> file.mapText => owner
-            owners! -> push(owner)
-            explicitPathIndex! + 1 => explicitPathIndex!
-        }
+        paths -> mapUniqueSources(explicitPaths) => owners
         [Text; ~] => sources!
         0 => sourceIndex!
-        sourceIndex! < (owners! -> len) -> while {
-            owners![sourceIndex!] -> len => sourceLength
-            owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sourceIndex! < (owners -> len) -> while {
+            owners[sourceIndex!] -> len => sourceLength
+            owners[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
             sources! -> push(source)
             sourceIndex! + 1 => sourceIndex!
         }
@@ -201,25 +238,12 @@ emitDiscoveredAndExplicitLinuxChecked paths: move [path.Path; ~], explicitPaths:
         "; sollang source root error: source root contains no readable .slg files" -> println
         1
     } else {
-        [file.SourceText; ~] => owners!
-        0 => sourcePathIndex!
-        sourcePathIndex! < (paths -> len) -> while {
-            paths[sourcePathIndex!] -> pathText => sourcePathText
-            sourcePathText -> file.mapText => owner
-            owners! -> push(owner)
-            sourcePathIndex! + 1 => sourcePathIndex!
-        }
-        0 => explicitPathIndex!
-        explicitPathIndex! < (explicitPaths -> len) -> while {
-            explicitPaths[explicitPathIndex!] -> file.mapText => owner
-            owners! -> push(owner)
-            explicitPathIndex! + 1 => explicitPathIndex!
-        }
+        paths -> mapUniqueSources(explicitPaths) => owners
         [Text; ~] => sources!
         0 => sourceIndex!
-        sourceIndex! < (owners! -> len) -> while {
-            owners![sourceIndex!] -> len => sourceLength
-            owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sourceIndex! < (owners -> len) -> while {
+            owners[sourceIndex!] -> len => sourceLength
+            owners[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
             sources! -> push(source)
             sourceIndex! + 1 => sourceIndex!
         }
@@ -232,25 +256,12 @@ emitDiscoveredAndExplicitWasmChecked paths: move [path.Path; ~], explicitPaths: 
         "; sollang source root error: source root contains no readable .slg files" -> println
         1
     } else {
-        [file.SourceText; ~] => owners!
-        0 => sourcePathIndex!
-        sourcePathIndex! < (paths -> len) -> while {
-            paths[sourcePathIndex!] -> pathText => sourcePathText
-            sourcePathText -> file.mapText => owner
-            owners! -> push(owner)
-            sourcePathIndex! + 1 => sourcePathIndex!
-        }
-        0 => explicitPathIndex!
-        explicitPathIndex! < (explicitPaths -> len) -> while {
-            explicitPaths[explicitPathIndex!] -> file.mapText => owner
-            owners! -> push(owner)
-            explicitPathIndex! + 1 => explicitPathIndex!
-        }
+        paths -> mapUniqueSources(explicitPaths) => owners
         [Text; ~] => sources!
         0 => sourceIndex!
-        sourceIndex! < (owners! -> len) -> while {
-            owners![sourceIndex!] -> len => sourceLength
-            owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sourceIndex! < (owners -> len) -> while {
+            owners[sourceIndex!] -> len => sourceLength
+            owners[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
             sources! -> push(source)
             sourceIndex! + 1 => sourceIndex!
         }
