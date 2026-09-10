@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "Probe")]
+    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Probe")]
     [string]$Verification,
     [ValidateSet("Slg", "Stage2Bridge", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
@@ -12,6 +12,8 @@ param(
     [string]$LogPath = "",
     [string]$CompletionRecordPath = "",
     [string]$CancellationRequestPath = "",
+    [string]$BrowserCandidateCompiler = "",
+    [string]$BrowserFocusedFixture = "",
     [ValidateSet("Pass", "Fail", "Wait")]
     [string]$ProbeOutcome = "Fail",
     [switch]$Supervisor
@@ -22,6 +24,12 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $scratchRoot = Join-Path $repositoryRoot "artifacts\scratch"
 if ($Verification -eq "Stage3" -and $SeedMode -eq "Stage2Bridge") {
     throw "Stage3 does not accept SeedMode Stage2Bridge"
+}
+if (($BrowserCandidateCompiler -eq "") -ne ($BrowserFocusedFixture -eq "")) {
+    throw "BrowserCandidateCompiler and BrowserFocusedFixture must be supplied together"
+}
+if ($Verification -ne "BrowserStage2" -and $BrowserCandidateCompiler -ne "") {
+    throw "focused browser inputs require Verification BrowserStage2"
 }
 
 function ConvertTo-ProcessArgument {
@@ -101,6 +109,12 @@ if (-not $Supervisor) {
         "-CancellationRequestPath", (ConvertTo-ProcessArgument $CancellationRequestPath),
         "-ProbeOutcome", $ProbeOutcome
     )
+    if ($BrowserCandidateCompiler -ne "") {
+        $argumentList += @(
+            "-BrowserCandidateCompiler", (ConvertTo-ProcessArgument $BrowserCandidateCompiler),
+            "-BrowserFocusedFixture", (ConvertTo-ProcessArgument $BrowserFocusedFixture)
+        )
+    }
     if ($ResumeCandidate) {
         $argumentList += "-ResumeCandidate"
     }
@@ -182,6 +196,7 @@ try {
         "Stage3" { Join-Path $PSScriptRoot "verify-selfhost-stage3.ps1" }
         "Stage2Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage2-linux.ps1" }
         "Stage3Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage3-linux.ps1" }
+        "BrowserStage2" { Join-Path $PSScriptRoot "build-stage2-browser.ps1" }
         "Probe" { Join-Path $PSScriptRoot "contracts\fixtures\detached-verification-probe.ps1" }
     }
     if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf)) {
@@ -204,6 +219,16 @@ try {
         }
         "Stage3Linux" {
             $targetArguments += @("-Distribution", (ConvertTo-ProcessArgument $Distribution), "-Jobs", $Jobs.ToString())
+        }
+        "BrowserStage2" {
+            if ($BrowserCandidateCompiler -ne "") {
+                $targetArguments += @(
+                    "-Stage2Compiler", (ConvertTo-ProcessArgument $BrowserCandidateCompiler),
+                    "-FocusedFixture", (ConvertTo-ProcessArgument $BrowserFocusedFixture),
+                    "-AllowUnpromotedCandidate",
+                    "-CandidateOutputDirectory", (ConvertTo-ProcessArgument ("artifacts\scratch\browser-focused-" + $RunId))
+                )
+            }
         }
         "Probe" { $targetArguments += @("-Outcome", $ProbeOutcome) }
     }

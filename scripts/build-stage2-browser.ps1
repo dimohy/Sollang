@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [string]$Stage2Compiler = "artifacts\example-tests\selfhost-stage2.exe",
-    [switch]$ReuseCompilerArtifact
+    [switch]$ReuseCompilerArtifact,
+    [string]$FocusedFixture = "",
+    [switch]$AllowUnpromotedCandidate,
+    [string]$CandidateOutputDirectory = "artifacts\scratch\browser-focused"
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,13 +19,30 @@ $llvmAs = Join-Path $llvmRoot "bin\llvm-as.exe"
 $clang = Join-Path $llvmRoot "bin\clang.exe"
 $wasmLd = Join-Path $llvmRoot "bin\wasm-ld.exe"
 $nodePath = (Get-Command node -ErrorAction Stop).Source
-$compilerLlvm = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.ll"
-$compilerError = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.err"
-$compilerBitcode = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.bc"
-$compilerObject = Join-Path $repoRoot "artifacts\sollangc-browser-stage2.o"
-$compilerArtifact = Join-Path $repoRoot "artifacts\sollangc-browser.wasm"
-$compilerFingerprint = Join-Path $repoRoot "artifacts\sollangc-browser.inputs.sha256"
-$compilerReceipt = Join-Path $repoRoot "artifacts\sollangc-browser.outputs.sha256"
+$focusedMode = -not [string]::IsNullOrWhiteSpace($FocusedFixture)
+if ($AllowUnpromotedCandidate -ne $focusedMode) {
+    throw "AllowUnpromotedCandidate and FocusedFixture must be supplied together"
+}
+if ($AllowUnpromotedCandidate -and $ReuseCompilerArtifact) {
+    throw "an unpromoted focused candidate cannot reuse a previously published browser artifact"
+}
+$compilerOutputRoot = if ($AllowUnpromotedCandidate) {
+    [System.IO.Path]::GetFullPath((Join-Path $repoRoot $CandidateOutputDirectory))
+} else {
+    Join-Path $repoRoot "artifacts"
+}
+$artifactRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "artifacts"))
+if (-not $compilerOutputRoot.StartsWith($artifactRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "browser compiler output must remain under $artifactRoot"
+}
+New-Item -ItemType Directory -Path $compilerOutputRoot -Force | Out-Null
+$compilerLlvm = Join-Path $compilerOutputRoot "sollangc-browser-stage2.ll"
+$compilerError = Join-Path $compilerOutputRoot "sollangc-browser-stage2.err"
+$compilerBitcode = Join-Path $compilerOutputRoot "sollangc-browser-stage2.bc"
+$compilerObject = Join-Path $compilerOutputRoot "sollangc-browser-stage2.o"
+$compilerArtifact = Join-Path $compilerOutputRoot "sollangc-browser.wasm"
+$compilerFingerprint = Join-Path $compilerOutputRoot "sollangc-browser.inputs.sha256"
+$compilerReceipt = Join-Path $compilerOutputRoot "sollangc-browser.outputs.sha256"
 $publicCompiler = Join-Path $repoRoot "public\sollangc-stage2-0.4.260817.wasm"
 
 function Invoke-BrowserTool {
@@ -61,18 +81,22 @@ $candidateInputFingerprint = Get-BrowserStage2InputFingerprint `
     -Manifest $manifestPath `
     -RepositoryRoot $repoRoot
 Invoke-BrowserTool $stage2Path (@("format", "--check") + $browserSources) "browser compiler source format"
-$stage2FileName = [System.IO.Path]::GetFileNameWithoutExtension($stage2Path)
-if (-not $stage2FileName.Contains("stage2", [System.StringComparison]::Ordinal)) {
-    throw "browser compiler input must be a receipt-bound Stage2 artifact with a Stage3 sibling: $stage2Path"
+if ($AllowUnpromotedCandidate) {
+    Write-Host "[browser candidate] Focused fixture $FocusedFixture uses an explicit unpromoted compiler and scratch-only outputs."
+} else {
+    $stage2FileName = [System.IO.Path]::GetFileNameWithoutExtension($stage2Path)
+    if (-not $stage2FileName.Contains("stage2", [System.StringComparison]::Ordinal)) {
+        throw "browser compiler input must be a receipt-bound Stage2 artifact with a Stage3 sibling: $stage2Path"
+    }
+    $stage3FileName = $stage2FileName.Replace("stage2", "stage3", [System.StringComparison]::Ordinal)
+    $stage3Path = Join-Path `
+        ([System.IO.Path]::GetDirectoryName($stage2Path)) `
+        ($stage3FileName + [System.IO.Path]::GetExtension($stage2Path))
+    & (Join-Path $PSScriptRoot "verify-selfhost-stage3-artifacts.ps1") `
+        -Platform windows `
+        -Stage3Path $stage3Path `
+        -RepositoryRoot $repoRoot
 }
-$stage3FileName = $stage2FileName.Replace("stage2", "stage3", [System.StringComparison]::Ordinal)
-$stage3Path = Join-Path `
-    ([System.IO.Path]::GetDirectoryName($stage2Path)) `
-    ($stage3FileName + [System.IO.Path]::GetExtension($stage2Path))
-& (Join-Path $PSScriptRoot "verify-selfhost-stage3-artifacts.ps1") `
-    -Platform windows `
-    -Stage3Path $stage3Path `
-    -RepositoryRoot $repoRoot
 
 if ($ReuseCompilerArtifact) {
     $receiptCurrent = Test-Stage2ArtifactReceipt `
@@ -135,8 +159,7 @@ if ($ReuseCompilerArtifact) {
 
 }
 
-Write-Host "[browser 3/4] Execute browser compiler regressions."
-foreach ($case in @(
+$regressionCases = @(
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-implicit-main-multiplication-table.slg", "browser-stage2-implicit-main-multiplication-table.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-implicit-main-multiplication-table.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-each.slg", "browser-stage2-range-each.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-each.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-fold.slg", "browser-stage2-range-fold.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-fold.stdout.txt"),
@@ -167,6 +190,7 @@ foreach ($case in @(
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-result-propagation-control.slg", "browser-stage2-result-propagation-control.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-result-propagation-control.stdout.txt"),
     @("examples\regression\1390-browser-time-domain-separation.slg", "browser-stage2-time-domain-separation.ll", "examples\regression\expected\1390-browser-time-domain-separation.stdout.txt"),
     @("examples\regression\1391-opaque-struct-instance-boundary.slg", "browser-stage2-opaque-struct-instance-boundary.ll", "examples\regression\expected\1391-opaque-struct-instance-boundary.stdout.txt", "", "examples\regression\expected\1391-opaque-struct-instance-boundary.sources.txt"),
+    @("examples\regression\1321-parallel-additional-borrow-result.slg", "browser-stage2-parallel-additional-borrow-result.ll", "examples\regression\expected\1321-parallel-additional-borrow-result.stdout.txt"),
     @("examples\regression\575-multiplication-table.slg", "browser-stage2-println-call-order.ll", "examples\regression\expected\575-multiplication-table.stdout.txt"),
     @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.slg",
@@ -174,8 +198,18 @@ foreach ($case in @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.stdout.txt",
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.stdin.txt"
     )
-)) {
-    $programLlvm = Join-Path $repoRoot "artifacts\$($case[1])"
+)
+if ($focusedMode) {
+    $regressionCases = @($regressionCases | Where-Object {
+        [System.IO.Path]::GetFileNameWithoutExtension($_[0]) -ceq $FocusedFixture
+    })
+    if ($regressionCases.Count -ne 1) {
+        throw "focused browser fixture is not registered exactly once: $FocusedFixture"
+    }
+}
+Write-Host "[browser 3/4] Execute $($regressionCases.Count) browser compiler regression(s)."
+foreach ($case in $regressionCases) {
+    $programLlvm = Join-Path $compilerOutputRoot $case[1]
     $programBitcode = [System.IO.Path]::ChangeExtension($programLlvm, ".bc")
     $programObject = [System.IO.Path]::ChangeExtension($programLlvm, ".o")
     $programWasm = [System.IO.Path]::ChangeExtension($programLlvm, ".wasm")
@@ -219,6 +253,7 @@ foreach ($case in @(
     Invoke-BrowserTool $nodePath $verifyArguments "browser program execution $($case[0])"
 }
 
+if (-not $focusedMode) {
 foreach ($diagnosticCase in @(
     @(
         "examples\regression\diagnostics\browser-interpolation-boundary.slg",
@@ -306,6 +341,7 @@ foreach ($diagnosticCase in @(
     }
     Invoke-BrowserTool $nodePath $diagnosticArguments "browser diagnostic $($diagnosticCase[0])"
 }
+}
 
 if (-not $ReuseCompilerArtifact) {
     $currentInputFingerprint = Get-BrowserStage2InputFingerprint `
@@ -330,12 +366,17 @@ if (-not $ReuseCompilerArtifact) {
     Move-Item -LiteralPath $candidateFingerprintPath -Destination $compilerFingerprint -Force
 }
 
-Write-Host "[browser 4/4] Publish only the verified compiler artifact."
-Copy-Item -LiteralPath $compilerArtifact -Destination $publicCompiler -Force
 $artifactHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $compilerArtifact).Hash
-$publicHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $publicCompiler).Hash
-if ($artifactHash -ne $publicHash) {
-    throw "published browser compiler hash differs from the verified artifact"
-}
+if ($AllowUnpromotedCandidate) {
+    Write-Host "[browser 4/4] Retain the verified focused candidate under artifacts without publication."
+    Write-Host "[browser focused candidate] PASS $artifactHash"
+} else {
+    Write-Host "[browser 4/4] Publish only the verified compiler artifact."
+    Copy-Item -LiteralPath $compilerArtifact -Destination $publicCompiler -Force
+    $publicHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $publicCompiler).Hash
+    if ($artifactHash -ne $publicHash) {
+        throw "published browser compiler hash differs from the verified artifact"
+    }
 
-Write-Host "[browser stage2] PASS $publicHash"
+    Write-Host "[browser stage2] PASS $publicHash"
+}

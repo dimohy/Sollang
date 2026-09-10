@@ -37,6 +37,7 @@ $verificationName = $launch.verification.ToString().ToLowerInvariant()
 $stageName = switch ($verificationName) {
     "stage2linux" { "linux-stage2" }
     "stage3linux" { "linux-stage3" }
+    "browserstage2" { "browser" }
     default { $verificationName }
 }
 $total = switch ($verificationName) {
@@ -44,6 +45,7 @@ $total = switch ($verificationName) {
     "stage3" { 3 }
     "stage2linux" { 6 }
     "stage3linux" { 3 }
+    "browserstage2" { 4 }
     default { 1 }
 }
 $ordinals = [regex]::Matches($logText, "(?im)^\[$stageName (?<ordinal>\d+)/$total\]") |
