@@ -95,6 +95,95 @@ public struct ReadyEvent {
     public error: Bool
 }
 
+# Fixed before completion-reactor creation so capacity failures occur before
+# network effects or native allocation. The three bounds remain distinct: one
+# reactor can retain more registrations than it permits simultaneous operations,
+# and one dequeue observes at most completionBatch terminal operations.
+public struct CompletionReactorOptions {
+    public registrations: UIntSize
+    public pendingOperations: UIntSize
+    public completionBatch: UIntSize
+}
+
+public enum OperationDirection {
+    Receive
+    Send
+}
+
+public enum OperationState {
+    Vacant
+    Pending
+    Completed
+    Cancelled
+}
+
+# A reusable affine operation owner. Its growable byte buffer crosses an async
+# boundary only by move. Native identity, progress, and failure are private so
+# only the socket runtime can publish a terminal transition.
+public struct OperationSlot {
+    key: UInt64
+    direction: OperationDirection
+    bytes: [UInt8; ~]
+    offset: UIntSize
+    length: UIntSize
+    state: OperationState
+    transferred: Option<UIntSize>
+    error: Option<SocketError>
+    nativeIdentity: Option<UInt64>
+}
+
+public operationSlot bytes: move [UInt8; ~], key: UInt64, direction: OperationDirection -> OperationSlot {
+    UIntSize(bytes -> len) => length
+    OperationSlot {
+        key: key
+        direction: direction
+        bytes: bytes
+        offset: 0
+        length: length
+        state: OperationState.Vacant
+        transferred: Option<UIntSize>.None
+        error: Option<SocketError>.None
+        nativeIdentity: Option<UInt64>.None
+    }
+}
+
+impl CompletionReactorOptions {
+    public validate: self -> Result<CompletionReactorOptions, SocketError> {
+        self.registrations >= 1
+            and self.registrations <= 1024
+            and self.pendingOperations >= 1
+            and self.pendingOperations <= self.registrations
+            and self.completionBatch >= 1
+            and self.completionBatch <= self.pendingOperations
+            -> unless {
+                Result<CompletionReactorOptions, SocketError>.Err(SocketError {
+                    kind: SocketErrorKind.InvalidArgument
+                    code: 0
+                }) -> return
+            }
+        Result<CompletionReactorOptions, SocketError>.Ok(self)
+    }
+}
+
+impl OperationSlot {
+    public applicationKey: self -> UInt64 => self.key
+
+    public operationDirection: self -> OperationDirection => self.direction
+
+    public operationState: self -> OperationState => self.state
+
+    public byteLength: self -> UIntSize => self.length
+
+    public transferredCount: self -> Option<UIntSize> => self.transferred
+
+    public completionError: self -> Option<SocketError> => self.error
+
+    public intoBytes: move self -> [UInt8; ~] {
+        self.bytes => bytes
+        bytes
+    }
+}
+
 # A reusable multi-socket wait policy. The value owns its explicit event limit
 # and retains registered socket borrows until clear releases them.
 public struct Reactor {

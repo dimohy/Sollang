@@ -1347,6 +1347,22 @@ the prior length unchanged. Lowering calls `recvfrom` through the same fixed
 stack endpoint descriptor as the allocating path, with no payload allocation,
 copy, wrapper call, text conversion, or DNS lookup.
 
+The completion-reactor foundation separates reusable operation ownership from
+the existing synchronous readiness `Reactor`. `CompletionReactorOptions`
+fixes registration, pending-operation, and completion-batch capacities before
+any network effect or native allocation; each value is in `1..1024`, with
+`completionBatch <= pendingOperations <= registrations`. Its `validate` method
+returns `InvalidArgument` without changing external state. `operationSlot`
+consumes a caller-owned growable byte buffer into an affine `OperationSlot` in
+the `Vacant` state. The slot exposes its application key, direction, state,
+exact byte length, optional terminal transfer count, and optional error through
+instance methods, so an absent result is distinct from a real zero-byte completion;
+consuming `intoBytes` returns the original buffer without a payload copy.
+Native identity and state-transition fields remain private. Submission,
+completion dequeue, cancellation, and platform runtime integration are not yet
+public: the existing `Reactor.waitInto` remains a bounded `WSAPoll`/`poll`
+readiness operation and is not described as IOCP/epoll completion.
+
 Programs flatten sequential failure with postfix `?`:
 
 ```sollang

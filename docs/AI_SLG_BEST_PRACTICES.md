@@ -958,6 +958,12 @@ Do not expose an easy one-shot API by keeping a second parser or protocol engine
 beside the streaming implementation. Convenience should route through the same
 bounded instance or a measured shared core.
 
+For a reusable async I/O owner, validate every capacity relation before the
+first effect, move caller storage into one affine operation value, keep native
+identity and lifecycle mutation private, and provide a consuming method that
+returns the original storage. Do not label synchronous readiness as completion
+or add an async-looking wrapper around a blocking worker.
+
 ## 18. Comments, names, and embedded SLG
 
 Use short English `#` comments in examples and regression fixtures to state the

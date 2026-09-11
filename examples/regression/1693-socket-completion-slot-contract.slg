@@ -1,0 +1,55 @@
+import std.net.socket as socket
+
+valid options: socket.CompletionReactorOptions -> Bool {
+    options -> validate -> when {
+        Err(_) { false }
+        Ok(_) { true }
+    }
+}
+
+main {
+    socket.CompletionReactorOptions {
+        registrations: 4
+        pendingOperations: 3
+        completionBatch: 2
+    } -> validate -> when {
+        Err(_) { "valid=0" -> println }
+        Ok(options) {
+            "valid=$(options.registrations),$(options.pendingOperations),$(options.completionBatch)" -> println
+        }
+    }
+
+    socket.CompletionReactorOptions {
+        registrations: 2
+        pendingOperations: 3
+        completionBatch: 1
+    } -> validate -> when {
+        Err(_) { "invalid=1" -> println }
+        Ok(_) { "invalid=none" -> println }
+    }
+
+    socket.CompletionReactorOptions { registrations: 0, pendingOperations: 1, completionBatch: 1 } -> valid => minimum
+    socket.CompletionReactorOptions { registrations: 1025, pendingOperations: 1, completionBatch: 1 } -> valid => maximum
+    socket.CompletionReactorOptions { registrations: 2, pendingOperations: 1, completionBatch: 2 } -> valid => batchRelation
+    socket.CompletionReactorOptions { registrations: 1024, pendingOperations: 1024, completionBatch: 1024 } -> valid => upperBoundary
+    "bounds=$minimum,$maximum,$batchRelation,$upperBoundary" -> println
+
+    [11, 12, 13; ~] -> socket.operationSlot(77, socket.OperationDirection.Receive) => slot
+    slot -> operationDirection -> when {
+        Receive { "receive" }
+        Send { "send" }
+    } => direction
+    slot -> operationState -> when {
+        Vacant { "vacant" }
+        Pending { "pending" }
+        Completed { "completed" }
+        Cancelled { "cancelled" }
+    } => state
+    slot -> transferredCount -> when {
+        None { "transferred=none" -> println }
+        Some(count) { "transferred=$count" -> println }
+    }
+    "slot=$(slot -> applicationKey),$direction,$state,$(slot -> byteLength)" -> println
+    slot -> intoBytes => bytes
+    "bytes=$(bytes -> len),$(bytes[0]),$(bytes[2])" -> println
+}

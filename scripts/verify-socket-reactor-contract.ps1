@@ -29,6 +29,7 @@ $selfhostEmitter = Read-Authority "selfhost/llvm/text/platform_io.slg"
 $selfhostRuntime = Read-Authority "selfhost/llvm/emitter/socket_runtime.slg"
 $nativeExactBatch = Read-Authority "scripts/verify-native-exact-fixture-batch.ps1"
 $fixture = Read-Authority "examples/regression/1378-socket-reactor-wait-into.slg"
+$completionSlotFixture = Read-Authority "examples/regression/1693-socket-completion-slot-contract.slg"
 $completionContractText = Read-Authority "scripts/contracts/socket-completion-reactor.json"
 $completionContractSchema = Join-Path $RepositoryRoot "scripts/contracts/socket-completion-reactor.schema.json"
 if (-not (Test-Json -Json $completionContractText -SchemaFile $completionContractSchema)) {
@@ -53,6 +54,14 @@ Require $fixture "reactor! -> registerStream(firstServer, 101, socket.InterestMo
 Require $fixture "reactor! -> registerStream(secondServer, 202, socket.InterestMode.Read)?" "second keyed registration"
 Require $fixture "reactor! -> clear" "registered-borrow release before close"
 Require $nativeExactBatch '"1378-socket-reactor-wait-into"' "Stage2/Stage3 native promotion fixture"
+Require $nativeExactBatch '"1693-socket-completion-slot-contract"' "completion slot native promotion fixture"
+Require $publicSocket "public struct CompletionReactorOptions {" "bounded completion reactor options"
+Require $publicSocket "public struct OperationSlot {" "affine operation slot owner"
+Require $publicSocket "public operationSlot bytes: move [UInt8; ~], key: UInt64, direction: OperationDirection -> OperationSlot" "owned-buffer operation slot factory"
+Require $publicSocket "public validate: self -> Result<CompletionReactorOptions, SocketError>" "pre-effect capacity validation"
+Require $publicSocket "public intoBytes: move self -> [UInt8; ~]" "consuming caller-buffer recovery"
+Require $completionSlotFixture "-> socket.operationSlot(77, socket.OperationDirection.Receive)" "natural operation-slot construction"
+Require $completionSlotFixture "slot -> intoBytes => bytes" "affine buffer recovery"
 
 if (@($completionContract.states) -join ',' -cne 'Vacant,Pending,Completed,Cancelled') {
     throw "socket completion reactor states must retain their exact affine order"
@@ -82,6 +91,10 @@ if ($completionContract.platforms.'windows-x64'.primitive -cne 'IOCP with GetQue
 $milestones = @($completionContract.milestones)
 if ($milestones.Count -ne 6 -or @($milestones.id | Sort-Object -Unique).Count -ne 6) {
     throw "socket completion reactor must track six distinct implementation milestones"
+}
+$implementedMilestones = @($milestones | Where-Object status -In @('implemented', 'verified')).id
+if (@($implementedMilestones) -join ',' -cne 'configuration,slot') {
+    throw "socket completion reactor implemented milestone set is stale"
 }
 foreach ($forbidden in @(
     'blocking worker thread presented as socket async',

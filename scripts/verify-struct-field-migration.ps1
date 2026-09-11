@@ -98,6 +98,9 @@ $expectedPrivateFields = [ordered]@{
     'stdlib/std/io.slg' = 5
     # File adapters encapsulate their affine handles and explicit positions.
     'stdlib/std/io/file.slg' = 4
+    # Completion slots expose observations and consuming buffer recovery only;
+    # the socket runtime exclusively owns native identity and state transitions.
+    'stdlib/std/net/socket.slg' = 9
     # Cross-module method-owner fixtures construct and inspect state through methods.
     'examples/regression/fixtures/1501-method-owner-leaf.slg' = 1
     'examples/regression/fixtures/1501-method-owner-wrapper.slg' = 2
