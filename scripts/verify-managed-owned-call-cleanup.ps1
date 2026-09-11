@@ -35,6 +35,7 @@ $cases = @(
     @{name='1527-projected-table-push-loop';allocations=5},
     @{name='1529-fixed-field-named';allocations=2},
     @{name='1538-branch-fixed-outer-reuse';allocations=4},
+    @{name='1539-branch-fixed-owned-elements';allocations=4},
     @{name='1543-fixed-int-branch-result';allocations=2},
     @{name='1544-fixed-text-branch-result';allocations=2},
     @{name='1545-fixed-field-copy-independence';allocations=6},

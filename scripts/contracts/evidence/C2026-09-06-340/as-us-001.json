@@ -3,9 +3,9 @@
   "traceAuthority": "orchestrator",
   "orchestratorEvidence": {
     "targetRepository": "P:/MyWorks/Sollang",
-    "targetRevision": "1af49d7312ee8267977d2fca155b37223a273ebe",
+    "targetRevision": "8070eacb7fb2bcb37c2e1e4d656a9620830c5fa6",
     "runner": "agentic-shaping-orchestrator",
-    "runId": "C2026-09-06-340-signal-observed",
+    "runId": "C2026-09-06-340-structured-and-applied",
     "executedCommands": [
       {
         "command": "C:\\Program Files\\dotnet\\dotnet.exe P:\\MyWorks\\Sollang/src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll build P:\\MyWorks\\Sollang/examples/regression/1539-branch-fixed-owned-elements.slg --target windows-x64 --llvm P:\\MyWorks\\Sollang/.tools/llvm-22.1.8 -O1 -o P:\\MyWorks\\Sollang/artifacts/scratch/windows-completion/managed-phi-work/C2026-09-06-340-baseline.exe",
@@ -13,6 +13,20 @@
         "expectedExitCode": 1,
         "outputSha256": "2CC1E87B8E4354C59C60AB183C79E299BE5952B7DB42973EBBD60C19B8422547",
         "exitCode": 1
+      },
+      {
+        "command": "current managed and self-host nested owned-element verification: one exact positive, two owned-place negatives, and one exact allocation/release fixture per compiler; selfhost compiler contracts; Release solution build",
+        "purpose": "validator",
+        "expectedExitCode": 0,
+        "outputSha256": "F76C15465E01D58C6CBD8C10131D002AF0238E2970916936F15A1226C921C7F5",
+        "exitCode": 0
+      },
+      {
+        "command": "artifacts/scratch/c340-current/c340-selfhost-driver-v3.exe build examples/regression/1539-branch-fixed-owned-elements.slg --target windows-x64 --stdlib stdlib --llvm .tools/llvm-22.1.8 -O1",
+        "purpose": "consumer",
+        "expectedExitCode": 0,
+        "outputSha256": "F76C15465E01D58C6CBD8C10131D002AF0238E2970916936F15A1226C921C7F5",
+        "exitCode": 0
       }
     ],
     "inputFingerprint": "B38624E37B4C42483BBAFDD2213A8F74FF36FDDF761D0637E74D983209C321CB"
@@ -22,22 +36,51 @@
       "scripts/contracts/evidence/C2026-09-06-340/baseline.json",
       "scripts/contracts/evidence/C2026-09-06-340/candidate.json",
       "artifacts/scratch/windows-completion/managed-phi-work/local-projection-candidate-results.json",
-      "artifacts/scratch/windows-completion/managed-phi-work/projection-negative-results.json"
+      "artifacts/scratch/windows-completion/managed-phi-work/projection-negative-results.json",
+      "scripts/contracts/evidence/C2026-09-06-340/current-focused.json"
     ],
     "machineDecidable": true,
     "durable": true,
     "id": "C2026-09-06-340"
   },
   "decision": {
-    "claimLevel": "signal-observed",
-    "plannedAsset": {
+    "claimLevel": "structured-and-applied",
+    "asset": {
       "kind": "invariant",
-      "nextGate": "Preserve exact output, sibling field lifetime and existing owned-place negative diagnostics, managed/native parity and changed-source Windows Stage2/Stage3.",
-      "authorityPath": "src/Sollang.Compiler/Semantics/SemanticCompiler.cs"
+      "authorityPath": "selfhost/semantic/ownership_check.slg",
+      "inputFingerprint": "B38624E37B4C42483BBAFDD2213A8F74FF36FDDF761D0637E74D983209C321CB",
+      "validatorEvidence": [
+        "scripts/contracts/evidence/C2026-09-06-340/current-focused.json",
+        "scripts/verify-selfhost-compiler-contracts.ps1",
+        "scripts/verify-managed-owned-call-cleanup.ps1",
+        "examples/regression/1539-branch-fixed-owned-elements.slg",
+        "examples/regression/diagnostics/array-owned-element-index.slg",
+        "examples/regression/diagnostics/array-owned-copy.slg"
+      ]
     },
-    "reason": "Managed nested indexing propagates the final owned-element escape restriction into the source place lookup. A scalar read through an owned array element and field is rejected before the final scalar type can be checked. Source lookup must preserve place identity; the selected result retains the existing escape checks.",
-    "structured": false
+    "application": {
+      "productionPathChanged": true,
+      "consumerEvidence": [
+        "src/Sollang.Compiler/Semantics/SemanticCompiler.cs",
+        "selfhost/semantic/ownership_check.slg",
+        "selfhost/llvm/emitter/diagnostics.slg"
+      ]
+    },
+    "measurementPlan": {
+      "metric": "lateFailures",
+      "measurementCommand": "pwsh -NoProfile -File scripts/measure-compiler-defect-late-failures.ps1 -DefectId C2026-09-06-340",
+      "baselineEvidence": [
+        "scripts/contracts/evidence/C2026-09-06-340/baseline.json"
+      ],
+      "candidateEvidence": [
+        "scripts/contracts/evidence/C2026-09-06-340/candidate.json",
+        "scripts/contracts/evidence/C2026-09-06-340/current-focused.json"
+      ],
+      "measuredInputFingerprint": "B38624E37B4C42483BBAFDD2213A8F74FF36FDDF761D0637E74D983209C321CB"
+    },
+    "reason": "Owned-place analysis must preserve scalar projection reads, reject indexed affine escapes, and prevent a plain named affine value from creating a second owner before LLVM while retaining explicit transfer and moved-parameter aliases.",
+    "structured": true
   },
-  "currentTaskComplete": false,
+  "currentTaskComplete": true,
   "forbiddenActions": []
 }

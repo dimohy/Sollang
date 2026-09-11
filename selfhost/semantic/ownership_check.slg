@@ -1391,6 +1391,66 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
 
     typed -> typedIr.movesFrom => moves
     [OwnershipDiagnostic; ~] => diagnostics!
+    # A plain binding from an existing affine value would copy its storage and
+    # create two owners. Only independently copyable values may use this form;
+    # ownership transfer remains explicit through a consuming operation.
+    0 => directOwnedCopyIndex!
+    directOwnedCopyIndex! < (typed -> len) -> while {
+        typed[directOwnedCopyIndex!] => directOwnedCopy
+        directOwnedCopy.kind == 17
+            and directOwnedCopy.operand0 >= 0
+            and directOwnedCopy.operand0 < (typed -> len)
+            and typed[directOwnedCopy.operand0].kind == 5
+            and (prepared -> semanticTypeContainsOwnedStorage(types, types -> typeIds.materializedReadTypeId(typed[directOwnedCopy.operand0].typeId)))
+            -> if {
+                false => directOwnedCopyTransfers!
+                0 => directOwnedCopyMoveIndex!
+                directOwnedCopyMoveIndex! < (moves -> len) and not directOwnedCopyTransfers!
+                    -> while {
+                        moves[directOwnedCopyMoveIndex!].siteIr == directOwnedCopy.operand0
+                            -> if { true => directOwnedCopyTransfers! }
+                        directOwnedCopyMoveIndex! + 1 => directOwnedCopyMoveIndex!
+                    }
+                typed[directOwnedCopy.operand0] => directOwnedCopySource
+                false => directOwnedCopySourceIsParameter!
+                0 => directOwnedCopySourceSearch!
+                directOwnedCopySourceSearch! < (typed -> len) and not directOwnedCopySourceIsParameter!
+                    -> while {
+                        typed[directOwnedCopySourceSearch!] => directOwnedCopySourceCandidate
+                        directOwnedCopySourceCandidate.kind == 10
+                            and directOwnedCopySourceCandidate.sourceModule == directOwnedCopySource.sourceModule
+                            and directOwnedCopySourceCandidate.symbol == directOwnedCopySource.symbol
+                            -> if { true => directOwnedCopySourceIsParameter! }
+                        directOwnedCopySourceSearch! + 1 => directOwnedCopySourceSearch!
+                    }
+                not directOwnedCopyTransfers!
+                    and not directOwnedCopySourceIsParameter!
+                    and directOwnedCopySource.sourceModule >= 0
+                    and directOwnedCopySource.sourceModule < (prepared.package.ranges -> len)
+                    and directOwnedCopySource.astNode >= 0
+                    -> if {
+                        prepared.package.ranges[directOwnedCopySource.sourceModule] => directOwnedCopyRange
+                        directOwnedCopySource.astNode < directOwnedCopyRange.astCount
+                            -> if {
+                                prepared.package.nodes[directOwnedCopyRange.astStart + directOwnedCopySource.astNode] => directOwnedCopyAst
+                                diagnostics! -> push(OwnershipDiagnostic {
+                                    code: 34
+                                    sourceModule: directOwnedCopySource.sourceModule
+                                    functionSymbol: -1
+                                    expectedOrigin: -1
+                                    expectedModule: -1
+                                    expectedSymbol: -1
+                                    actualOrigin: directOwnedCopy.operand0
+                                    actualModule: -1
+                                    actualSymbol: directOwnedCopyIndex!
+                                    actualBuiltin: -1
+                                    span: syntax.SourceSpan { fileId: directOwnedCopySource.sourceModule, start: directOwnedCopyAst.start, length: directOwnedCopyAst.length }
+                                })
+                            }
+                    }
+            }
+        directOwnedCopyIndex! + 1 => directOwnedCopyIndex!
+    }
     # A terminating alternative has no ownership state at the continuation.
     # Compare only live alternatives, using the same Typed IR termination table
     # that seals control values, and reject a retained path beside a moved path.
