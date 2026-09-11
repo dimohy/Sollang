@@ -7,6 +7,8 @@ public enum ErrorKind {
     UnexpectedEnd
     OutputLimitExceeded
     InvalidPosition
+    InvalidProgress
+    WriteZero
 }
 
 public struct Error {
@@ -29,7 +31,25 @@ public trait Reader {
 }
 
 public trait Writer {
-    write: mut self, input: [UInt8] -> Result<Int, Error>
+    writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error>
+}
+
+public enum CopyCompletion {
+    End
+    Limit
+}
+
+public struct CopyOutcome {
+    public bytes: Int
+    public completion: CopyCompletion
+}
+
+# The policy owns both resource ceilings. copy is synchronous because Reader
+# and Writer are synchronous protocols; asynchronous file/socket adapters use a
+# distinct task-returning contract instead of blocking behind this surface.
+public struct TransferPolicy {
+    public maxBytes: Int
+    public bufferBytes: Int
 }
 
 # MemoryReader owns its backing bytes. Reads advance an explicit cursor and
@@ -78,6 +98,16 @@ public memoryWriter maxOutputBytes: Int -> Result<MemoryWriter, Error> {
     Result<MemoryWriter, Error>.Ok(MemoryWriter {
         bytes: [UInt8; ~]
         maxOutputBytes: maxOutputBytes
+    })
+}
+
+public transferPolicy maxBytes: Int, bufferBytes: Int -> Result<TransferPolicy, Error> {
+    maxBytes >= 0 and bufferBytes > 0 -> unless {
+        Result<TransferPolicy, Error>.Err(error(model.ErrorKind.InvalidLimit, 0)) -> return
+    }
+    Result<TransferPolicy, Error>.Ok(TransferPolicy {
+        maxBytes: maxBytes
+        bufferBytes: bufferBytes
     })
 }
 
@@ -200,6 +230,18 @@ impl MemoryWriter {
         count
     }
 
+    public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error> {
+        UIntSize(input -> len) => inputLength
+        offset <= inputLength and length <= inputLength - offset
+            -> unless {
+                Result<Int, Error>.Err(error(model.ErrorKind.InvalidPosition, offset)) -> return
+            }
+        self -> remainingCapacity => available
+        Int(length) < available -> if { Int(length) } else { available } => count
+        appendRange(input, Int(offset), count, self.bytes)
+        Result<Int, Error>.Ok(count)
+    }
+
     public writeAll: mut self, input: [UInt8] -> Result<Int, Error> {
         (input -> len) <= (self -> remainingCapacity)
             -> unless {
@@ -219,10 +261,83 @@ impl MemoryWriter {
 }
 
 impl Writer for MemoryWriter {
-    public write: mut self, input: [UInt8] -> Result<Int, Error> {
+    public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error> {
+        UIntSize(input -> len) => inputLength
+        offset <= inputLength and length <= inputLength - offset
+            -> unless {
+                Result<Int, Error>.Err(error(model.ErrorKind.InvalidPosition, offset)) -> return
+            }
         self -> remainingCapacity => available
-        (input -> len) < available -> if { input -> len } else { available } => count
-        appendRange(input, 0, count, self.bytes)
+        Int(length) < available -> if { Int(length) } else { available } => count
+        appendRange(input, Int(offset), count, self.bytes)
         Result<Int, Error>.Ok(count)
+    }
+}
+
+impl CopyOutcome {
+    public byteCount: self -> Int => self.bytes
+
+    public reachedEnd: self -> Bool => self.completion -> when {
+        End { true }
+        Limit { false }
+    }
+}
+
+impl TransferPolicy {
+    # Copies through one reusable caller-owned buffer. The source is never read
+    # beyond maxBytes, so Limit is observable without consuming a probe byte.
+    # A writer that reports successful zero progress fails deterministically.
+    public copy<R, W>: self, reader: mut R, writer: mut W -> Result<CopyOutcome, Error> where R: Reader, W: Writer {
+        [UInt8; ~] => buffer!
+        0 => initialized!
+        initialized! < self.bufferBytes -> while {
+            buffer! -> push(0)
+            initialized! + 1 => initialized!
+        }
+
+        0 => transferred!
+        false => ended!
+        transferred! < self.maxBytes and not ended! -> while {
+            self.maxBytes - transferred! => remaining
+            (buffer! -> len) > remaining -> while {
+                buffer! -> take((buffer! -> len) - 1) => removed
+            }
+
+            reader -> model.Reader.readInto(buffer!)? => readCount
+            readCount >= 0 and readCount <= (buffer! -> len)
+                -> unless {
+                    Result<CopyOutcome, Error>.Err(
+                    error(model.ErrorKind.InvalidProgress, UIntSize(transferred!))) -> return
+                }
+            readCount == 0 -> if {
+                true => ended!
+            } else {
+                0 => written!
+                written! < readCount -> while {
+                    writer
+                        -> model.Writer.writeRange(
+                    buffer!,
+                    UIntSize(written!),
+                    UIntSize(readCount - written!))? => writeCount
+                    writeCount > 0 and writeCount <= readCount - written!
+                        -> unless {
+                            writeCount == 0 -> if {
+                                Result<CopyOutcome, Error>.Err(
+                                error(model.ErrorKind.WriteZero, UIntSize(transferred! + written!))) -> return
+                            }
+                            Result<CopyOutcome, Error>.Err(
+                            error(model.ErrorKind.InvalidProgress, UIntSize(transferred! + written!))) -> return
+                        }
+                    written! + writeCount => written!
+                }
+                transferred! + readCount => transferred!
+            }
+        }
+
+        ended! -> if { model.CopyCompletion.End } else { model.CopyCompletion.Limit } => completion
+        Result<CopyOutcome, Error>.Ok(CopyOutcome {
+            bytes: transferred!
+            completion: completion
+        })
     }
 }

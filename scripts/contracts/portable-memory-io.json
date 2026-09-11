@@ -1,6 +1,6 @@
 {
   "$schema": "portable-memory-io.schema.json",
-  "version": 1,
+  "version": 2,
   "module": "std.io",
   "sources": [
     "stdlib/std/io.slg"
@@ -8,15 +8,19 @@
   "fixtures": [
     "1094-io-memory-reader-writer",
     "1188-io-memory-reader-caller-buffer",
-    "1680-io-shared-caller-buffer-traits"
+    "1680-io-shared-caller-buffer-traits",
+    "1683-io-bounded-transfer-policy"
   ],
   "surfaces": [
     "Reader.readInto",
-    "Writer.write",
+    "Writer.writeRange",
     "MemoryReader.readInto",
     "MemoryReader.readExactInto",
     "MemoryWriter.write",
-    "MemoryWriter.writeAll"
+    "MemoryWriter.writeRange",
+    "MemoryWriter.writeAll",
+    "TransferPolicy.copy",
+    "CopyOutcome.reachedEnd"
   ],
   "invariants": [
     "reader and writer protocols each expose one caller-buffer partial-transfer primitive",
@@ -30,12 +34,17 @@
     "partial transfer reports an exact count without a payload allocation",
     "exact memory reads validate limits and complete availability before mutation",
     "allocating read and readExact remain bounded convenience methods",
+    "writer range bounds are validated before output mutation",
+    "TransferPolicy owns maximum transfer and reusable buffer byte ceilings",
+    "copy never reads a probe byte beyond its maximum transfer ceiling",
+    "copy retries partial writes from the exact unwritten range",
+    "successful zero write progress is a typed WriteZero error",
+    "CopyOutcome distinguishes observed source end from policy limit",
+    "consumer-defined imported Reader and Writer implementations are monomorphized without dynamic dispatch",
     "unbounded readAll copy and implicit buffering are absent"
   ],
   "unsupported": [
-    "consumer-defined cross-module generic adapters over imported protocol constraints",
     "generic transactional exact reads without checkpoint or bounded replay",
-    "bounded readAll and copy policy adapters",
     "file socket and reactor protocol implementations",
     "asynchronous buffering and backpressure"
   ]

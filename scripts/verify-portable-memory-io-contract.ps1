@@ -34,13 +34,18 @@ foreach ($required in @(
     'public trait Reader',
     'readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>',
     'public trait Writer',
-    'write: mut self, input: [UInt8] -> Result<Int, Error>',
+    'writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error>',
     'impl Reader for MemoryReader',
     'public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>',
     'impl Writer for MemoryWriter',
-    'public write: mut self, input: [UInt8] -> Result<Int, Error>',
+    'public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error>',
     'public readExactInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>',
-    'public writeAll: mut self, input: [UInt8] -> Result<Int, Error>'
+    'public writeAll: mut self, input: [UInt8] -> Result<Int, Error>',
+    'public struct TransferPolicy',
+    'public copy<R, W>: self, reader: mut R, writer: mut W -> Result<CopyOutcome, Error>',
+    'where R: Reader, W: Writer',
+    'model.ErrorKind.WriteZero',
+    'model.CopyCompletion.Limit'
 )) {
     if (-not $source.Contains($required, [StringComparison]::Ordinal)) {
         throw "Portable memory I/O implementation is missing: $required"
@@ -50,7 +55,7 @@ if ([regex]::Matches($source, '(?m)^public trait Reader \{').Count -ne 1 -or
     [regex]::Matches($source, '(?m)^public trait Writer \{').Count -ne 1) {
     throw 'Portable memory I/O must declare exactly one public Reader and Writer protocol'
 }
-foreach ($forbidden in @('public readAll:', 'public copy:', 'ReplayReader', 'BufferedReader', 'BufferedWriter')) {
+foreach ($forbidden in @('public readAll:', 'ReplayReader', 'BufferedReader', 'BufferedWriter')) {
     if ($source.Contains($forbidden, [StringComparison]::Ordinal)) {
         throw "Portable memory I/O published an unsupported unbounded or buffered surface: $forbidden"
     }
@@ -59,7 +64,7 @@ foreach ($forbidden in @('public readAll:', 'public copy:', 'ReplayReader', 'Buf
 $fixture = [IO.File]::ReadAllText((Join-Path $root 'examples/regression/1680-io-shared-caller-buffer-traits.slg'))
 foreach ($required in @(
     'reader! -> io.Reader.readInto(output!)',
-    'writer! -> io.Writer.write(output!)',
+    'writer! -> io.Writer.writeRange(output!, 0, UIntSize(output! -> len))',
     'read=$readCount,$(output![0]),$(output![1]),$(output![2]),pos=$(reader! -> position)',
     'write=$writeCount,$(written[0]),$(written[1])'
 )) {
@@ -67,9 +72,18 @@ foreach ($required in @(
         throw "Portable memory I/O fixture no longer proves: $required"
     }
 }
-if ($fixture.Contains('where T: io.Reader', [StringComparison]::Ordinal) -or
-    $fixture.Contains('where T: io.Writer', [StringComparison]::Ordinal)) {
-    throw 'Portable memory I/O fixture must not claim unsupported cross-module generic adapter specialization'
+$copyFixture = [IO.File]::ReadAllText((Join-Path $root 'examples/regression/1683-io-bounded-transfer-policy.slg'))
+foreach ($required in @(
+    'impl io.Writer for ChunkWriter',
+    'impl io.Writer for ZeroWriter',
+    'completePolicy -> copy(completeReader!, completeWriter!)',
+    'limitedPolicy -> copy(limitedReader!, limitedWriter!)',
+    'WriteZero',
+    'io.transferPolicy(1, 0)'
+)) {
+    if (-not $copyFixture.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable memory I/O copy fixture no longer proves: $required"
+    }
 }
 
 $spec = [IO.File]::ReadAllText((Join-Path $root 'docs/SPEC.md'))

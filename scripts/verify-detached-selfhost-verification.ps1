@@ -140,9 +140,10 @@ if ($result.executionMode -cne "detached-supervisor") { throw "unexpected execut
 if ($result.exitCode -ne 7) { throw "probe exit code was not preserved" }
 if ($result.status -cne "failed") { throw "probe status was not preserved" }
 if (@($result.failureIds) -notcontains "E999") { throw "diagnostic failure id E999 was not preserved" }
+if (@($result.failureIds) -notcontains "S015") { throw "self-host diagnostic failure id S015 was not preserved" }
 if (@($result.failureIds) -notcontains "9999-detached-supervisor-probe") { throw "fixture failure id was not preserved" }
 if (@($result.failureIds) -contains "1411-borrowed-receiver-error-reuse") { throw "passing fixture name containing error was misclassified as a failure identifier" }
-if (@($result.failureIds).Count -ne 2) { throw "failed probe reported unexpected failure identifiers" }
+if (@($result.failureIds).Count -ne 3) { throw "failed probe reported unexpected failure identifiers" }
 if (-not (Test-Path -LiteralPath $logPath -PathType Leaf)) { throw "durable log is missing" }
 if ($observer.Id -eq $result.supervisorPid) { throw "observer and supervisor must be distinct processes" }
 $failedProgress = & $progressReaderPath -CompletionRecordPath $completionRecordPath | ConvertFrom-Json
@@ -150,7 +151,7 @@ if ($failedProgress.status -cne "failed" -or $failedProgress.exitCode -ne 7) {
     throw "failed detached progress state is incorrect"
 }
 
-Write-Host "[detached selfhost verification] PASS observer exited independently; exit code 7 and 2/2 failure IDs preserved."
+Write-Host "[detached selfhost verification] PASS observer exited independently; exit code 7 and 3/3 failure IDs preserved."
 
 $passRunId = "$runId-pass"
 $passLogPath = Join-Path $scratchRoot "$passRunId.log"

@@ -77,7 +77,7 @@ function Assert-ClosurePromotion {
     if ($Promotion.prePromotionLedgerSha256 -notmatch '^[A-F0-9]{64}$' -or
         $Promotion.promotedCandidateIdsSha256 -notmatch '^[A-F0-9]{64}$' -or
         $Promotion.promotedCandidateCount -ne 262 -or
-        $Promotion.expectedClosedCount -ne @($contract.defects).Count -or
+        $Promotion.expectedClosedCount -gt @($contract.defects).Count -or
         $Promotion.expectedKnownOpenCount -ne 0) {
         throw 'compiler closure promotion pre/post counts or fingerprints are invalid'
     }

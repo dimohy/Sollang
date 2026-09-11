@@ -338,13 +338,21 @@ caller-owned output buffers explicit through a generic mutable borrow:
 
 ```sollang
 trait Reader {
-    readInto: mut self, output: mut [UInt8; ~] -> Int
+    readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>
 }
 
-read<T> reader: mut T, output: mut [UInt8; ~] -> Int where T: Reader {
+read<T> reader: mut T, output: mut [UInt8; ~] -> Result<Int, Error> where T: Reader {
     reader -> Reader.readInto(output)
 }
 ```
+
+For partial output, put the unwritten range in the protocol instead of copying
+or deleting a written prefix: `Writer.writeRange(input, offset, length)`. A
+bounded transfer policy should be an instance that owns its byte and reusable
+buffer ceilings, retries exact partial ranges, treats successful zero progress
+as an error, and distinguishes source end from reaching the caller's limit.
+Keep this protocol synchronous; use a separate task-returning protocol when the
+underlying file or socket operation actually suspends.
 
 Associated types may occur inside input or result storage: for example,
 `[Item; ~]`, `[Item; 2]`, and `{Text: Item}` retain their declared shape when

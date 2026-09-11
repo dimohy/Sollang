@@ -372,6 +372,7 @@ param(
         "66-generic-dictionary-function-contracts",
         "487-selfhost-borrowed-container-return-analysis",
         "1680-io-shared-caller-buffer-traits",
+        "1683-io-bounded-transfer-policy",
         "1682-selfhost-retained-array-branch-moves"
     )
 )

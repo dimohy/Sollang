@@ -40,7 +40,11 @@ internal sealed partial class LlvmEmitter
                     out var resolvedReceiver)
                 && CanonicalFunctionName(method) == CanonicalFunctionName(function))
             {
-                function = method;
+                // Keep the concrete specialization selected by semantic
+                // resolution. Lexical lookup is needed only to recover the
+                // implicit receiver; replacing the specialization with its
+                // generic declaration can inline an early return into a
+                // caller with a different Result success type.
                 methodReceiverName = resolvedReceiver;
             }
         }
@@ -2924,14 +2928,18 @@ internal sealed partial class LlvmEmitter
                 }
                 return;
             }
-            if (receiverType is { } typedReceiver
+            // A semantic generic resolution is more specific than a lexical
+            // receiver lookup. Preserve that specialization so control-flow
+            // facts such as early returns select the same standalone function
+            // later used by emission.
+            if (_program.ResolvedGenericCalls.TryGetValue(callSite, out var generic))
+            {
+                target = generic;
+            }
+            else if (receiverType is { } typedReceiver
                 && TryResolveInstanceMethod(typedReceiver, string.Join('.', path), out var instanceMethod))
             {
                 target = instanceMethod;
-            }
-            else if (_program.ResolvedGenericCalls.TryGetValue(callSite, out var generic))
-            {
-                target = generic;
             }
             else if (TryResolveFunctionForScan(path, scope, caller, out var resolved))
             {

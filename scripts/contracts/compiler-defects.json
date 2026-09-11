@@ -6134,6 +6134,69 @@
         "baselineReceipt": "scripts/contracts/evidence/C2026-09-11-375/baseline.json",
         "candidateReceipt": "scripts/contracts/evidence/C2026-09-11-375/candidate.json"
       }
+    },
+    {
+      "id": "C2026-09-11-376",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs generic instance reachability",
+      "rootCause": "Standalone stdlib reachability preferred a lexical receiver-method lookup over the already resolved generic specialization. Emission retained the specialization, so the standalone set contained a different function identity and an early-returning generic method was inlined into a caller whose Result success payload had a different LLVM enum type.",
+      "focusedFixture": "1683-io-bounded-transfer-policy compiles a generic instance copy method with explicit error returns and postfix Result propagation into run returning Result<Bool, io.Error>; exact output covers complete, bounded-limit, zero-write, and invalid-buffer paths.",
+      "closureGate": "Preserve semantic generic specialization identity while recovering only the implicit receiver, prefer that specialization during stdlib reachability scanning, pass managed Release warning zero, compile/link/exact execution for fixture 1683, portable I/O contracts, compiler defect verification, and the final batched Stage2/Stage3 promotion after the stdlib/runtime change set is ready.",
+      "closedEvidence": [
+        "The baseline LLVM placed an explicit Result<CopyOutcome, io.Error>.Err return directly in run, producing ret %sollang.enum.1933 from a function declared as %sollang.enum.2315 and clang rejected the module.",
+        "Managed call lowering now keeps the concrete specialization selected by semantic resolution and lexical lookup recovers only its implicit receiver.",
+        "Standalone stdlib reachability now prefers the resolved generic specialization, aligning control-flow classification with the exact function emitted at the call site.",
+        "Managed Release builds with zero warnings and fixture 1683 compiles, links, and produces all four expected output lines. Final Stage2/Stage3 promotion remains pending with the accumulated stdlib/runtime batch."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-11-376/as-us-001.json",
+        "inputFingerprint": "62228EC7EFD1C7A5396BCF93FC8C567963BCC17FD98B9DBC14108C1087B9D7DC",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-11-376/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-11-376/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-11-377",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "selfhost/syntax/ast.slg generic inherent method receiver header",
+      "rootCause": "The declaration header scanner treated every comma as the end of the first input header. In copy<R, W>: self, the comma between generic parameters disabled receiver detection before the signature colon, so W became the receiver token and self.bufferBytes was omitted from Typed IR.",
+      "focusedFixture": "1163-selfhost-method-receiver-metadata now requires four exact receiver=self lines including genericReceiver<T, U>, while 1683-io-bounded-transfer-policy exercises the original generic instance method through three concrete specializations.",
+      "closureGate": "Only commas after the signature colon may end the first input header; pass the structural scanner contract, managed and current-source native fixture 1163, detached current-source self-host fixture 1683 with exact output and managed differential, then include the fix in the final accumulated Stage2/Stage3 promotion.",
+      "closedEvidence": [
+        "The baseline Stage3 compiler reported S015 at the exact initialized! < self.bufferBytes AST in all three generic specializations because each comparison had a left operand but no generated right member node.",
+        "Typed IR and AST diagnostics showed source AST 1330 was self.bufferBytes while the method receiver parameter carried the W generic token, proving the generic comma prematurely ended receiver-header scanning.",
+        "The scanner now changes firstParameterHeader only for a comma after the signature colon; the speculative final binary repair was removed because it could not create a missing member node.",
+        "Fixture 1163 passes managed and current-source native execution with four exact receiver=self lines. Detached run c377-generic-receiver-v3 passes fixture 1683 LLVM closure, assembly, link, exact execution, managed differential, exit code 0, zero failure IDs, and zero orphan processes. Final accumulated Stage2/Stage3 promotion remains pending."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-11-377/as-us-001.json",
+        "inputFingerprint": "62228EC7EFD1C7A5396BCF93FC8C567963BCC17FD98B9DBC14108C1087B9D7DC",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-11-377/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-11-377/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-11-378",
+      "classification": "latent-defect",
+      "state": "closed",
+      "owner": "scripts/invoke-detached-selfhost-verification.ps1 failure identifier extraction",
+      "rootCause": "The detached supervisor extracted E diagnostics and fixture IDs but not self-host S diagnostics. A failed run containing three S015 errors therefore published failureIds as an empty array even though its durable log contained exact compiler failure IDs.",
+      "focusedFixture": "detached-verification-probe emits E999, S015, a passing fixture name containing error, and the failing fixture ID; verify-detached-selfhost-verification requires exactly the three true failure IDs.",
+      "closureGate": "Extract E and S diagnostic identifiers only from nonzero failure-context lines, preserve fixture IDs, reject passing names that merely contain error, and pass failed, successful, spaced-path, and supported-cancellation behavior checks.",
+      "closedEvidence": [
+        "Detached C377 v2 exited 1 with three S015 diagnostics in its log but recorded failureIds as an empty array.",
+        "The supervisor failure-context extractor now accepts both E and S diagnostic families without broadening successful-run extraction.",
+        "The focused behavior suite preserves E999, S015, and 9999-detached-supervisor-probe as 3/3 failure IDs while excluding the passing fixture name.",
+        "Successful runs retain zero failure IDs and zero orphan processes; supported cancellation retains only CANCELLATION_REQUESTED and zero orphan processes."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-11-378/as-us-001.json",
+        "inputFingerprint": "880C3FB087D745FB14A59E92678D1C6C39690A665B5CEABDE64633297980E8E3",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-11-378/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-11-378/candidate.json"
+      }
     }
   ]
 }

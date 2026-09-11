@@ -15,6 +15,7 @@ if ($Outcome -eq "Pass") {
     exit 0
 }
 Write-Output "probe output before controlled failure E999"
+Write-Output "sollang compiler error S015: controlled diagnostic"
 Write-Output "[1/1] PASS 1411-borrowed-receiver-error-reuse"
 Write-Output "FAIL 9999-detached-supervisor-probe"
 exit 7

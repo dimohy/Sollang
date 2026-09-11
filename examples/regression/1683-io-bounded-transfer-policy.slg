@@ -1,0 +1,84 @@
+import std.io as io
+
+struct ChunkWriter {
+    bytes: [UInt8; ~]
+    maximumWrite: Int
+}
+
+struct ZeroWriter {
+    writes: Int
+}
+
+appendRange source: [UInt8], offset: UIntSize, length: UIntSize, output: mut [UInt8; ~] -> Unit {
+    UIntSize(0) => index!
+    index! < length -> while {
+        output -> push(source[Int(offset + index!)])
+        index! + 1 => index!
+    }
+}
+
+impl io.Writer for ChunkWriter {
+    public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, io.Error> {
+        UIntSize(input -> len) => inputLength
+        offset <= inputLength
+            and length <= inputLength - offset
+            -> unless {
+            Result<Int, io.Error>.Err(io.Error { kind: io.ErrorKind.InvalidPosition, offset: offset }) -> return
+        }
+        Int(length) < self.maximumWrite -> if { Int(length) } else { self.maximumWrite } => count
+        appendRange(input, offset, UIntSize(count), self.bytes)
+        Result<Int, io.Error>.Ok(count)
+    }
+}
+
+impl io.Writer for ZeroWriter {
+    public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, io.Error> {
+        self.writes + 1 => self.writes
+        Result<Int, io.Error>.Ok(0)
+    }
+}
+
+run: -> Result<Bool, io.Error> uses Console {
+    io.transferPolicy(8, 3)? => completePolicy
+    io.memoryReader([10, 20, 30, 40, 50], 3)? => completeReader!
+    ChunkWriter { bytes: [UInt8; ~], maximumWrite: 2 } => completeWriter!
+    completePolicy -> copy(completeReader!, completeWriter!)? => complete
+    "complete=$(complete -> byteCount),end=$(complete -> reachedEnd),writes=$(completeWriter!.bytes -> len),last=$(completeWriter!.bytes[4])" -> println
+
+    io.transferPolicy(4, 3)? => limitedPolicy
+    io.memoryReader([1, 2, 3, 4, 5, 6], 3)? => limitedReader!
+    ChunkWriter { bytes: [UInt8; ~], maximumWrite: 2 } => limitedWriter!
+    limitedPolicy -> copy(limitedReader!, limitedWriter!)? => limited
+    "limited=$(limited -> byteCount),end=$(limited -> reachedEnd),pos=$(limitedReader! -> position),last=$(limitedWriter!.bytes[3])" -> println
+
+    io.transferPolicy(2, 2)? => zeroPolicy
+    io.memoryReader([7, 8], 2)? => zeroReader!
+    ZeroWriter { writes: 0 } => zeroWriter!
+    zeroPolicy -> copy(zeroReader!, zeroWriter!) -> when {
+        Ok(value) { "unexpected-zero=$(value -> byteCount)" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                WriteZero { "zero@$(failure -> errorOffset),writes=$(zeroWriter!.writes),pos=$(zeroReader! -> position)" -> println }
+                else { "wrong-zero-error" -> println }
+            }
+        }
+    }
+
+    io.transferPolicy(1, 0) -> when {
+        Ok(value) { "unexpected-policy" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                InvalidLimit { "invalid-buffer" -> println }
+                else { "wrong-policy-error" -> println }
+            }
+        }
+    }
+    Result<Bool, io.Error>.Ok(true)
+}
+
+main {
+    run() -> when {
+        Ok(value) { }
+        Err(failure) { "unexpected-error@$(failure -> errorOffset)" -> println }
+    }
+}

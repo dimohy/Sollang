@@ -1,4 +1,5 @@
 import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
 import sollang.compiler.semantic.symbols as symbols
 
 # Receiver metadata must survive scalar, collection, and multi-field mutation.
@@ -26,10 +27,15 @@ main {
             [EnvironmentChange; ~] => self.environmentChanges
             false => self.inheritsEnvironment
         }
+
+        public genericReceiver<T, U>: self, value: T -> Bool {
+            true
+        }
     }
     """ => source
 
     source -> ast.lower => nodes
+    source -> lexer.lex => tokens
     0 => methodCount!
     0 => methodReceiverCount!
     0 => memberAssignmentCount!
@@ -39,7 +45,12 @@ main {
         nodes[nodeIndex!] => node
         node.kind == 31 -> if {
             methodCount! + 1 => methodCount!
-            node.secondaryToken >= 0 -> if { methodReceiverCount! + 1 => methodReceiverCount! }
+            node.secondaryToken >= 0 -> if {
+                methodReceiverCount! + 1 => methodReceiverCount!
+                tokens[node.secondaryToken] => receiverToken
+                source -> slice(receiverToken.span.start, receiverToken.span.length) => receiver
+                "receiver=$receiver" -> println
+            }
         }
         node.kind == 54 -> if { memberAssignmentCount! + 1 => memberAssignmentCount! }
         nodeIndex! + 1 => nodeIndex!
@@ -48,14 +59,14 @@ main {
 
     source -> symbols.collect => declarations
     0 => methodSymbolCount!
-    0 => receiverSymbolCount!
+    0 => methodInputSymbolCount!
     0 => declarationIndex!
     declarations -> len => declarationCount
     declarationIndex! < declarationCount -> while {
         declarations[declarationIndex!] => declaration
         declaration.kind == 31 -> if { methodSymbolCount! + 1 => methodSymbolCount! }
-        declaration.kind == 35 -> if { receiverSymbolCount! + 1 => receiverSymbolCount! }
+        declaration.kind == 35 -> if { methodInputSymbolCount! + 1 => methodInputSymbolCount! }
         declarationIndex! + 1 => declarationIndex!
     }
-    "symbols=$(methodSymbolCount!),$(receiverSymbolCount!)" -> println
+    "symbols=$(methodSymbolCount!),$(methodInputSymbolCount!)" -> println
 }

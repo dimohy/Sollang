@@ -311,7 +311,7 @@ finally {
             if ($line -notmatch '(?i)(?<![a-z0-9-])(?:fail(?:ed|ure)?|error|exception|throw|fatal)(?![a-z0-9-])') {
                 continue
             }
-            foreach ($match in [regex]::Matches($line, '(?i)\b(?:E\d+|\d{3,4}-[a-z0-9][a-z0-9-]*|AS-[A-Z]+-\d+(?:-[A-Z0-9-]+)?|SUPERVISOR_EXECUTION_FAILURE)\b')) {
+            foreach ($match in [regex]::Matches($line, '(?i)\b(?:[ES]\d+|\d{3,4}-[a-z0-9][a-z0-9-]*|AS-[A-Z]+-\d+(?:-[A-Z0-9-]+)?|SUPERVISOR_EXECUTION_FAILURE)\b')) {
                 if (-not $failureIds.Contains($match.Value)) {
                     $failureIds.Add($match.Value)
                 }
