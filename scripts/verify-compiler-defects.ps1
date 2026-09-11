@@ -66,6 +66,108 @@ function Resolve-ShapingEvidencePath {
     $resolved
 }
 
+function Assert-ClosurePromotion {
+    param([Parameter(Mandatory)][psobject]$Promotion)
+
+    if ($Promotion.schemaVersion -ne 1 -or
+        $Promotion.promotionId -cne 'compiler-stabilization-v0.5-2026-09-11' -or
+        $Promotion.branch -cne 'v0.5') {
+        throw 'compiler closure promotion identity is invalid'
+    }
+    if ($Promotion.prePromotionLedgerSha256 -notmatch '^[A-F0-9]{64}$' -or
+        $Promotion.promotedCandidateIdsSha256 -notmatch '^[A-F0-9]{64}$' -or
+        $Promotion.promotedCandidateCount -ne 262 -or
+        $Promotion.expectedClosedCount -ne @($contract.defects).Count -or
+        $Promotion.expectedKnownOpenCount -ne 0) {
+        throw 'compiler closure promotion pre/post counts or fingerprints are invalid'
+    }
+
+    $requiredRuns = @(
+        'Stage2',
+        'Stage3',
+        'Stage2Linux',
+        'Stage3Linux',
+        'Incremental',
+        'BrowserStage2'
+    )
+    $runs = @($Promotion.runs)
+    if ($runs.Count -ne $requiredRuns.Count -or
+        @($runs.verification | Sort-Object -Unique).Count -ne $requiredRuns.Count) {
+        throw 'compiler closure promotion must preserve six distinct base/delta runs'
+    }
+    foreach ($verification in $requiredRuns) {
+        if ($runs.verification -cnotcontains $verification) {
+            throw "compiler closure promotion is missing $verification"
+        }
+    }
+
+    foreach ($run in $runs) {
+        if ([string]::IsNullOrWhiteSpace($run.runId) -or
+            $run.status -cne 'passed' -or
+            $run.exitCode -ne 0 -or
+            @($run.failureIds).Count -ne 0 -or
+            @($run.orphanProcessIds).Count -ne 0 -or
+            $run.resultSha256 -notmatch '^[A-F0-9]{64}$' -or
+            $run.logSha256 -notmatch '^[A-F0-9]{64}$' -or
+            [string]::IsNullOrWhiteSpace($run.summary)) {
+            throw "compiler closure promotion run '$($run.runId)' is not a clean terminal success"
+        }
+
+        $resultPath = Resolve-ShapingEvidencePath -RelativePath $run.resultPath `
+            -Description "$($run.runId) result"
+        if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+            $actualResultSha256 = (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash
+            $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            if ($actualResultSha256 -cne $run.resultSha256 -or
+                $result.runId -cne $run.runId -or
+                $result.verification -cne $run.verification -or
+                $result.status -cne 'passed' -or
+                $result.exitCode -ne 0 -or
+                @($result.failureIds).Count -ne 0 -or
+                @($result.orphanProcessIds).Count -ne 0) {
+                throw "compiler closure promotion run '$($run.runId)' differs from its source result"
+            }
+        }
+
+        $logPath = Resolve-ShapingEvidencePath -RelativePath $run.logPath `
+            -Description "$($run.runId) log"
+        if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+            $actualLogSha256 = (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash
+            if ($actualLogSha256 -cne $run.logSha256) {
+                throw "compiler closure promotion run '$($run.runId)' differs from its source log"
+            }
+        }
+    }
+
+    $baseRevision = (& git -C $RepositoryRoot rev-parse "$($Promotion.baseStageRevision)^{commit}" 2>$null).Trim()
+    $verifiedHeadRevision = (& git -C $RepositoryRoot rev-parse "$($Promotion.verifiedHeadRevision)^{commit}" 2>$null).Trim()
+    if ($LASTEXITCODE -ne 0 -or
+        $baseRevision -notmatch '^[a-f0-9]{40}$' -or
+        $verifiedHeadRevision -cne $Promotion.verifiedHeadRevision) {
+        throw 'compiler closure promotion revisions are unavailable'
+    }
+    & git -C $RepositoryRoot merge-base --is-ancestor $baseRevision $verifiedHeadRevision
+    if ($LASTEXITCODE -ne 0) {
+        throw 'compiler closure promotion base is not an ancestor of its verified head'
+    }
+    & git -C $RepositoryRoot merge-base --is-ancestor $verifiedHeadRevision HEAD
+    if ($LASTEXITCODE -ne 0) {
+        throw 'compiler closure promotion verified head is not an ancestor of HEAD'
+    }
+    foreach ($delta in @($Promotion.deltaCommits)) {
+        $deltaRevision = (& git -C $RepositoryRoot rev-parse "$($delta.revision)^{commit}" 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($delta.defectId)) {
+            throw "compiler closure promotion delta '$($delta.defectId)' is unavailable"
+        }
+        & git -C $RepositoryRoot merge-base --is-ancestor $deltaRevision $verifiedHeadRevision
+        if ($LASTEXITCODE -ne 0) {
+            throw "compiler closure promotion delta '$($delta.defectId)' is outside the verified head"
+        }
+    }
+
+    Write-Host "[compiler closure promotion] PASS $($Promotion.promotedCandidateCount) candidates, $($runs.Count) base/delta runs, and clean terminal results."
+}
+
 function Assert-ShapingReceipt {
     param(
         [Parameter(Mandatory)][string]$DefectId,
@@ -250,6 +352,17 @@ foreach ($defect in @($contract.defects)) {
         }
     }
 }
+
+if ([string]::IsNullOrWhiteSpace($contract.closurePromotion)) {
+    throw 'compiler defect ledger is missing closurePromotion'
+}
+$closurePromotionPath = Resolve-ShapingEvidencePath -RelativePath $contract.closurePromotion `
+    -Description 'compiler closure promotion'
+if (-not (Test-Path -LiteralPath $closurePromotionPath -PathType Leaf)) {
+    throw "compiler closure promotion is missing: $closurePromotionPath"
+}
+$closurePromotion = Get-Content -LiteralPath $closurePromotionPath -Raw | ConvertFrom-Json
+Assert-ClosurePromotion -Promotion $closurePromotion
 
 $knownOpen = @($contract.defects | Where-Object state -ne "closed")
 $byClass = $knownOpen | Group-Object classification | Sort-Object Name
