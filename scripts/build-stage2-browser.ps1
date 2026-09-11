@@ -12,6 +12,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "verification-process.ps1")
 . (Join-Path $PSScriptRoot "stage2-artifact-receipt.ps1")
 . (Join-Path $PSScriptRoot "browser-stage2-input-fingerprint.ps1")
+. (Join-Path $PSScriptRoot "browser-output-scope.ps1")
 $stage2Path = (Resolve-Path (Join-Path $repoRoot $Stage2Compiler)).Path
 $manifestPath = Join-Path $repoRoot "selfhost\browser_driver.sources.txt"
 $llvmRoot = Join-Path $repoRoot ".tools\llvm-22.1.8"
@@ -26,15 +27,15 @@ if ($AllowUnpromotedCandidate -ne $focusedMode) {
 if ($AllowUnpromotedCandidate -and $ReuseCompilerArtifact) {
     throw "an unpromoted focused candidate cannot reuse a previously published browser artifact"
 }
-$compilerOutputRoot = if ($AllowUnpromotedCandidate) {
+$compilerOutputCandidate = if ($AllowUnpromotedCandidate) {
     [System.IO.Path]::GetFullPath((Join-Path $repoRoot $CandidateOutputDirectory))
 } else {
     Join-Path $repoRoot "artifacts"
 }
 $artifactRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "artifacts"))
-if (-not $compilerOutputRoot.StartsWith($artifactRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "browser compiler output must remain under $artifactRoot"
-}
+$compilerOutputRoot = Assert-BrowserCompilerOutputRoot `
+    -CandidatePath $compilerOutputCandidate `
+    -ArtifactRoot $artifactRoot
 New-Item -ItemType Directory -Path $compilerOutputRoot -Force | Out-Null
 $compilerLlvm = Join-Path $compilerOutputRoot "sollangc-browser-stage2.ll"
 $compilerError = Join-Path $compilerOutputRoot "sollangc-browser-stage2.err"
