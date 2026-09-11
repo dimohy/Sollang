@@ -1297,6 +1297,35 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
             }
         matches!
     }
+    bindingDeclaredBeforeControl moveEvent: typedIr.MoveEvent, controlIndex: Int -> Bool {
+        false => declared!
+        controlIndex >= 0
+            and controlIndex < (typed -> len)
+            and moveEvent.sourceModule >= 0
+            and moveEvent.sourceModule < (prepared.package.ranges -> len)
+            and typed[controlIndex].sourceModule == moveEvent.sourceModule
+            and typed[controlIndex].astNode >= 0
+            -> if {
+                prepared.package.ranges[moveEvent.sourceModule] => declarationRange
+                prepared.package.nodes[declarationRange.astStart + typed[controlIndex].astNode].start => controlStart
+                0 => declarationSearch!
+                declarationSearch! < (typed -> len) and not declared!
+                    -> while {
+                        typed[declarationSearch!] => declarationCandidate
+                        (declarationCandidate.kind == 10 or declarationCandidate.kind == 17)
+                            and declarationCandidate.sourceModule == moveEvent.sourceModule
+                            and declarationCandidate.symbol == moveEvent.symbol
+                            and declarationCandidate.astNode >= 0
+                            and declarationCandidate.astNode < declarationRange.astCount
+                            -> if {
+                                prepared.package.nodes[declarationRange.astStart + declarationCandidate.astNode].start < controlStart
+                                    -> if { true => declared! }
+                            }
+                        declarationSearch! + 1 => declarationSearch!
+                    }
+            }
+        declared!
+    }
     moveReinitializedBefore moveIndex: Int, beforeStart: UIntSize -> Bool {
         moves[moveIndex] => candidateMove
         prepared.package.ranges[candidateMove.sourceModule] => candidateRange
@@ -1362,6 +1391,102 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
 
     typed -> typedIr.movesFrom => moves
     [OwnershipDiagnostic; ~] => diagnostics!
+    # A terminating alternative has no ownership state at the continuation.
+    # Compare only live alternatives, using the same Typed IR termination table
+    # that seals control values, and reject a retained path beside a moved path.
+    typed -> typedIr.terminatingControlFlags => terminatingControls
+    0 => alternativeMoveIndex!
+    alternativeMoveIndex! < (moves -> len) -> while {
+        moves[alternativeMoveIndex!] => alternativeMove
+        alternativeMove.regionIr >= 0
+            and alternativeMove.regionIr < (typed -> len)
+            and typed[alternativeMove.regionIr].kind == 19
+            and not terminatingControls[alternativeMove.regionIr]
+            and alternativeMove.bindingIr >= 0
+            and alternativeMove.bindingIr < (typed -> len)
+            and (prepared -> semanticTypeContainsOwnedStorage(types, typed[alternativeMove.bindingIr].typeId))
+            -> if {
+                typed[alternativeMove.regionIr].parent => alternativeControlIndex
+                alternativeControlIndex >= 0
+                    and alternativeControlIndex < (typed -> len)
+                    and typed[alternativeControlIndex].kind == 18
+                    and (alternativeMove -> bindingDeclaredBeforeControl(alternativeControlIndex))
+                    -> if {
+                        typed[alternativeControlIndex] => alternativeControl
+                        -1 => retainingAlternativeRegion!
+                        alternativeControl.operand1 == alternativeMove.regionIr
+                            -> if {
+                                alternativeControl.nextOperand < 0 -> if {
+                                    alternativeMove.regionIr => retainingAlternativeRegion!
+                                } else {
+                                    alternativeControl.nextOperand => retainingAlternativeRegion!
+                                }
+                            } else {
+                                alternativeControl.nextOperand == alternativeMove.regionIr
+                                    -> if { alternativeControl.operand1 => retainingAlternativeRegion! }
+                            }
+                        false => retainingAlternativeContinues!
+                        retainingAlternativeRegion! == alternativeMove.regionIr
+                            -> if {
+                                true => retainingAlternativeContinues!
+                            } else {
+                                retainingAlternativeRegion! >= 0
+                                    and retainingAlternativeRegion! < (typed -> len)
+                                    and not terminatingControls[retainingAlternativeRegion!]
+                                    -> if {
+                                        false => retainingAlternativeMoves!
+                                        0 => retainingMoveSearch!
+                                        retainingMoveSearch! < (moves -> len) and not retainingAlternativeMoves!
+                                            -> while {
+                                                moves[retainingMoveSearch!] => retainingMove
+                                                retainingMove.sourceModule == alternativeMove.sourceModule
+                                                    and retainingMove.symbol == alternativeMove.symbol
+                                                    and retainingMove.regionIr >= 0
+                                                    and retainingMove.regionIr < (typed -> len)
+                                                    and not terminatingControls[retainingMove.regionIr]
+                                                    and (retainingMove.siteIr -> nodeBelongsTo(retainingAlternativeRegion!))
+                                                    -> if { true => retainingAlternativeMoves! }
+                                                retainingMoveSearch! + 1 => retainingMoveSearch!
+                                            }
+                                        not retainingAlternativeMoves!
+                                            -> if { true => retainingAlternativeContinues! }
+                                    }
+                            }
+                        retainingAlternativeContinues! -> if {
+                            false => duplicateAlternativeDiagnostic!
+                            0 => existingAlternativeDiagnosticIndex!
+                            existingAlternativeDiagnosticIndex! < (diagnostics! -> len)
+                                and not duplicateAlternativeDiagnostic! -> while {
+                                    diagnostics![existingAlternativeDiagnosticIndex!] => existingAlternativeDiagnostic
+                                    existingAlternativeDiagnostic.code == 33
+                                        and existingAlternativeDiagnostic.sourceModule == alternativeMove.sourceModule
+                                        and existingAlternativeDiagnostic.actualOrigin == alternativeControlIndex
+                                        and typed[existingAlternativeDiagnostic.actualSymbol].symbol == alternativeMove.symbol
+                                        -> if { true => duplicateAlternativeDiagnostic! }
+                                    existingAlternativeDiagnosticIndex! + 1 => existingAlternativeDiagnosticIndex!
+                                }
+                            not duplicateAlternativeDiagnostic! -> if {
+                                prepared.package.ranges[alternativeMove.sourceModule] => alternativeRange
+                                prepared.package.nodes[alternativeRange.astStart + alternativeControl.astNode] => alternativeAst
+                                diagnostics! -> push(OwnershipDiagnostic {
+                                    code: 33
+                                    sourceModule: alternativeMove.sourceModule
+                                    functionSymbol: -1
+                                    expectedOrigin: -1
+                                    expectedModule: -1
+                                    expectedSymbol: -1
+                                    actualOrigin: alternativeControlIndex
+                                    actualModule: -1
+                                    actualSymbol: alternativeMove.bindingIr
+                                    actualBuiltin: -1
+                                    span: syntax.SourceSpan { fileId: alternativeMove.sourceModule, start: alternativeAst.start, length: alternativeAst.length }
+                                })
+                            }
+                        }
+                    }
+            }
+        alternativeMoveIndex! + 1 => alternativeMoveIndex!
+    }
     # Indexed owned elements remain places. A local owner does not make a copy
     # of its element safe; extraction must use an explicit consuming operation.
     0 => indexedOwnedIndex!

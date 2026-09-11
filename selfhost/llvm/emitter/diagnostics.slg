@@ -1123,6 +1123,17 @@ public emitOwnershipDiagnostics context: ref emitterContext.EmitContext -> Unit 
                                                         diagnostic.code == 32 -> if {
                                                             "; sollang error[E32]: readonly slice parameter cannot escape beyond the call (source $(diagnostic.sourceModule), byte $(diagnostic.span.start), length $(diagnostic.span.length)); return an owned copy instead" -> println
                                                         }
+                                                        diagnostic.code == 33 -> if {
+                                                            context.ir[diagnostic.actualSymbol] => mixedOwnedBinding
+                                                            context.ranges[mixedOwnedBinding.sourceModule] => mixedOwnedRange
+                                                            context.tokens[mixedOwnedRange.tokenStart + mixedOwnedBinding.payloadToken] => mixedOwnedNameToken
+                                                            context.sources[mixedOwnedBinding.sourceModule] -> slice(mixedOwnedNameToken.span.start, mixedOwnedNameToken.span.length) => mixedOwnedName
+                                                            "; sollang semantic error: owned binding '$mixedOwnedName" -> print
+                                                            mixedOwnedNameToken.span.start + mixedOwnedNameToken.span.length < (context.sources[mixedOwnedBinding.sourceModule] -> len)
+                                                                and (context.sources[mixedOwnedBinding.sourceModule] -> byte(mixedOwnedNameToken.span.start + mixedOwnedNameToken.span.length)) == 33
+                                                                -> if { "!" -> print }
+                                                            "' must be consumed on every control-flow branch or on none of them" -> println
+                                                        }
                                                         diagnostic.code == 28 -> if {
                                                             context.ir[diagnostic.actualSymbol] => containerRebind
                                                             context.ranges[containerRebind.sourceModule] => containerRebindRange
@@ -3596,6 +3607,7 @@ public blockingDiagnosticCount context: ref emitterContext.EmitContext -> Int us
             diagnosticCode == 28 -> if { count! + 1 => count! }
             diagnosticCode == 31 -> if { count! + 1 => count! }
             diagnosticCode == 32 -> if { count! + 1 => count! }
+            diagnosticCode == 33 -> if { count! + 1 => count! }
             diagnosticIndex! + 1 => diagnosticIndex!
         }
     0 => interpolationIndex!
