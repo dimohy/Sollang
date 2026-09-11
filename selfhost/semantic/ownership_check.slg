@@ -1326,6 +1326,24 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
             }
         declared!
     }
+    moveConsumesWholeBinding moveEvent: typedIr.MoveEvent -> Bool {
+        false => consumes!
+        moveEvent.memberIr < 0
+            and moveEvent.siteIr >= 0
+            and moveEvent.siteIr < (typed -> len)
+            -> if {
+                typed[moveEvent.siteIr] => moveSite
+                moveSite.kind == 6
+                    or moveSite.kind == 9
+                    or moveSite.kind == 24
+                    or moveSite.kind == 25
+                    or (moveSite.kind == 5
+                    and moveSite.typeKind == 4
+                    and moveSite.typeFlags / 2 % 2 == 1)
+                    -> if { true => consumes! }
+            }
+        consumes!
+    }
     moveReinitializedBefore moveIndex: Int, beforeStart: UIntSize -> Bool {
         moves[moveIndex] => candidateMove
         prepared.package.ranges[candidateMove.sourceModule] => candidateRange
@@ -1462,6 +1480,7 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
             and alternativeMove.regionIr < (typed -> len)
             and typed[alternativeMove.regionIr].kind == 19
             and not terminatingControls[alternativeMove.regionIr]
+            and (alternativeMove -> moveConsumesWholeBinding)
             and alternativeMove.bindingIr >= 0
             and alternativeMove.bindingIr < (typed -> len)
             and (prepared -> semanticTypeContainsOwnedStorage(types, typed[alternativeMove.bindingIr].typeId))

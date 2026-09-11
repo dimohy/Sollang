@@ -371,7 +371,8 @@ param(
         "858-dictionary-put-if-absent-owned",
         "66-generic-dictionary-function-contracts",
         "487-selfhost-borrowed-container-return-analysis",
-        "1680-io-shared-caller-buffer-traits"
+        "1680-io-shared-caller-buffer-traits",
+        "1682-selfhost-retained-array-branch-moves"
     )
 )
 

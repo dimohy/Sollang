@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Probe")]
+    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "Probe")]
     [string]$Verification,
     [ValidateSet("Slg", "Stage2Bridge", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
@@ -14,6 +14,7 @@ param(
     [string]$CancellationRequestPath = "",
     [string]$BrowserCandidateCompiler = "",
     [string]$BrowserFocusedFixture = "",
+    [string]$IncrementalFixture = "",
     [ValidateSet("Pass", "Fail", "Wait")]
     [string]$ProbeOutcome = "Fail",
     [switch]$Supervisor
@@ -30,6 +31,9 @@ if (($BrowserCandidateCompiler -eq "") -ne ($BrowserFocusedFixture -eq "")) {
 }
 if ($Verification -ne "BrowserStage2" -and $BrowserCandidateCompiler -ne "") {
     throw "focused browser inputs require Verification BrowserStage2"
+}
+if (($Verification -eq "Incremental") -ne (-not [string]::IsNullOrWhiteSpace($IncrementalFixture))) {
+    throw "IncrementalFixture is required only for Verification Incremental"
 }
 
 function ConvertTo-ProcessArgument {
@@ -115,6 +119,11 @@ if (-not $Supervisor) {
             "-BrowserFocusedFixture", (ConvertTo-ProcessArgument $BrowserFocusedFixture)
         )
     }
+    if ($IncrementalFixture -ne "") {
+        $argumentList += @(
+            "-IncrementalFixture", (ConvertTo-ProcessArgument $IncrementalFixture)
+        )
+    }
     if ($ResumeCandidate) {
         $argumentList += "-ResumeCandidate"
     }
@@ -197,6 +206,7 @@ try {
         "Stage2Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage2-linux.ps1" }
         "Stage3Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage3-linux.ps1" }
         "BrowserStage2" { Join-Path $PSScriptRoot "build-stage2-browser.ps1" }
+        "Incremental" { Join-Path $PSScriptRoot "verify-selfhost-incremental.ps1" }
         "Probe" { Join-Path $PSScriptRoot "contracts\fixtures\detached-verification-probe.ps1" }
     }
     if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf)) {
@@ -229,6 +239,13 @@ try {
                     "-CandidateOutputDirectory", (ConvertTo-ProcessArgument ("artifacts\scratch\browser-focused-" + $RunId))
                 )
             }
+        }
+        "Incremental" {
+            $targetArguments += @(
+                "-Fixture", (ConvertTo-ProcessArgument $IncrementalFixture),
+                "-SeedMode", $SeedMode,
+                "-CompareStage2:`$false"
+            )
         }
         "Probe" { $targetArguments += @("-Outcome", $ProbeOutcome) }
     }
