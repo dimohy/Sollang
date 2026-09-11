@@ -1,0 +1,66 @@
+# A reusable reactor batch must cross an affine Task boundary without losing
+# either its reactor owner or the owned operation-slot array on await/cancel.
+enum OperationDirection {
+    Receive
+    Send
+}
+
+enum OperationState {
+    Vacant
+    Pending
+    Completed
+    Cancelled
+}
+
+struct NativeSocket {
+    token: UInt64
+}
+
+struct OperationSlot {
+    key: UInt64
+    connection: NativeSocket
+    direction: OperationDirection
+    bytes: [UInt8; ~]
+    offset: UIntSize
+    length: UIntSize
+    state: OperationState
+}
+
+struct AsyncReactor {
+    token: UInt64
+    maximumOperations: UIntSize
+    maximumCompletions: UIntSize
+}
+
+struct CompletionBatch {
+    reactor: AsyncReactor
+    operations: [OperationSlot; ~]
+    completed: UIntSize
+}
+
+operation key: UInt64 -> OperationSlot => OperationSlot {
+    key: key
+    connection: NativeSocket { token: key + 10 }
+    direction: OperationDirection.Receive
+    bytes: [0, 0; ~]
+    offset: 0
+    length: 2
+    state: OperationState.Vacant
+}
+
+waitBatch reactor: move AsyncReactor, operations: move [OperationSlot; ~] -> async CompletionBatch {
+    CompletionBatch { reactor: reactor, operations: operations, completed: 0 }
+}
+
+main {
+    [7 -> operation,; ~] => cancelledOperations
+    AsyncReactor { token: 13, maximumOperations: 2, maximumCompletions: 2 }
+        -> waitBatch(cancelledOperations) => cancelled
+    cancelled -> cancel
+
+    [9 -> operation,; ~] => operations
+    AsyncReactor { token: 17, maximumOperations: 2, maximumCompletions: 2 }
+        -> waitBatch(operations) => task
+    task -> await => completion
+    "completed=$(completion.completed),slots=$(completion.operations -> len)" -> println
+}

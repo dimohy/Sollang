@@ -8,6 +8,7 @@ internal sealed partial class LlvmEmitter
     private void EmitLabel(string label)
     {
         EmitFunctionLine($"{label}:");
+        _currentBlockLabel = label;
         _currentBlockTerminated = false;
     }
 
