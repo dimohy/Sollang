@@ -18,6 +18,7 @@ $fixtures = (Resolve-Path -LiteralPath $FixtureRoot).Path
 $clang = (Resolve-Path -LiteralPath (Join-Path $LlvmRoot 'bin/clang.exe')).Path
 $shim = (Resolve-Path -LiteralPath (Join-Path $repoRoot 'tests/native-interop/owned_array_audit.c')).Path
 $cases = @(
+    @{name='882-stdlib-hmac-hkdf';allocations=140},
     @{name='1631-boxed-enum-member-consume';allocations=1},
     @{name='1632-boxed-enum-member-borrow-reuse';allocations=1},
     @{name='1633-boxed-temporary-readonly-call';allocations=1},
@@ -34,12 +35,16 @@ $cases = @(
     @{name='1500-readonly-call-temporary-lifetime';allocations=10},
     @{name='1527-projected-table-push-loop';allocations=5},
     @{name='1529-fixed-field-named';allocations=2},
+    @{name='1533-fixed-branch-binding';allocations=1},
+    @{name='1534-fixed-branch-loop-binding';allocations=1},
+    @{name='1535-branch-value-owner';allocations=2},
     @{name='1536-branch-value-fixed';allocations=2},
     @{name='1537-branch-fixed-mixed-storage';allocations=2},
     @{name='1538-branch-fixed-outer-reuse';allocations=4},
     @{name='1539-branch-fixed-owned-elements';allocations=4},
     @{name='1540-branch-fixed-mutable-local';allocations=2},
     @{name='1541-branch-fixed-return';allocations=2},
+    @{name='1542-entry-branch-lifetime';allocations=2},
     @{name='1543-fixed-int-branch-result';allocations=2},
     @{name='1544-fixed-text-branch-result';allocations=2},
     @{name='1545-fixed-field-copy-independence';allocations=6},
