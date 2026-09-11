@@ -1,9 +1,10 @@
 {
   "$schema": "portable-memory-io.schema.json",
-  "version": 4,
+  "version": 5,
   "module": "std.io",
   "sources": [
     "stdlib/std/io.slg",
+    "stdlib/std/io/file.slg",
     "stdlib/std/net/socket.slg"
   ],
   "fixtures": [
@@ -12,7 +13,8 @@
     "1680-io-shared-caller-buffer-traits",
     "1683-io-bounded-transfer-policy",
     "1684-io-bounded-transactional-replay",
-    "1685-io-socket-protocol-adapters"
+    "1685-io-socket-protocol-adapters",
+    "1688-io-file-protocol-adapters"
   ],
   "surfaces": [
     "Reader.readInto",
@@ -30,7 +32,15 @@
     "ReplayBuffer.bufferedBytes",
     "ReplayBuffer.readExactFrom",
     "TcpStream.Reader.readInto",
-    "TcpStream.Writer.writeRange"
+    "TcpStream.Writer.writeRange",
+    "ByteReader.readInto",
+    "ByteReader.position",
+    "ByteReader.intoFile",
+    "ByteWriter.writeRange",
+    "ByteWriter.position",
+    "ByteWriter.intoFileWriter",
+    "File.readIntoAt",
+    "FileWriter.writeRangeAt"
   ],
   "invariants": [
     "reader and writer protocols each expose one caller-buffer partial-transfer primitive",
@@ -61,10 +71,21 @@
     "socket protocol calls preserve SocketError instead of erasing platform failure details",
     "socket protocol implementations retain the explicit Network effect",
     "socket Writer forwards the exact borrowed range to sendRange",
-    "unbounded readAll copy and implicit buffering are absent"
+    "unbounded readAll copy and implicit buffering are absent",
+    "ByteReader and ByteWriter own their native handles through affine fields",
+    "file adapters retain explicit UInt64 positions instead of ambient cursors",
+    "file adapter positions advance only by a successful platform byte count",
+    "file reads target the caller buffer's visible length directly without resizing it",
+    "file writes validate offset and length before any platform effect",
+    "file protocol implementations preserve their Text failure domain",
+    "file protocol operations use position-independent native I/O",
+    "native end of file is successful zero-byte progress",
+    "consuming adapter recovery returns the exact owned handle for ordinary scope cleanup",
+    "file protocol implementations retain the explicit File effect",
+    "browser targets reject unavailable native file I/O explicitly without fallback"
   ],
   "unsupported": [
-    "file and reactor protocol implementations",
+    "reactor protocol implementations",
     "asynchronous buffering and backpressure"
   ]
 }

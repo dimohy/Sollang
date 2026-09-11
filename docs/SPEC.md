@@ -1501,6 +1501,15 @@ partial `write` returning `Int`, while `writeRange` returns the same exact
 progress as `Result<Int, Error>`. `std.net.socket.TcpStream` implements both
 protocols by forwarding directly to `receiveInto` and `sendRange`; its methods
 retain `uses Network` and `SocketError`, and add no wrapper owner or payload copy.
+`std.io.file.ByteReader` and `ByteWriter` are affine adapters that consume a
+`sys.file.File` or `FileWriter`, retain an explicit `UInt64` position, and
+implement the same protocols with `uses File` and `Text` failure. Their
+operations call position-independent `readIntoAt` and `writeRangeAt`, advance
+only by successful progress, and can be consumed to recover the exact native
+owner. A read fills only the caller buffer's visible length and treats native
+end-of-file as successful zero progress. A write validates its complete source
+range before any platform effect. Windows uses overlapped offsets, Linux uses
+`pread`/`pwrite`, and browser targets return an explicit unavailable result.
 
 `TransferPolicy` is an immutable instance owning a maximum transfer count and a
 positive reusable-buffer size. Its generic `copy` method statically dispatches
@@ -1521,11 +1530,11 @@ to the caller destination only after the entire request is present. A failed
 short read retains its prefix for the next logical read. The adapter advances a
 logical published cursor and never claims that the underlying file or socket
 cursor moved backward. Checkpoint-capable sources may provide a separate exact
-path later. Bounded transactional `readAll`, file/socket protocol implementations,
+path later. Bounded transactional `readAll`, reactor protocol implementations,
 and async buffering remain unpublished; no unbounded aggregate helper or
 implicit buffer is part of the portable protocol. This synchronous protocol
-must not hide a blocking operation behind an async-looking API; future file and
-socket adapters expose real task-returning suspension separately.
+must not hide a blocking operation behind an async-looking API; future
+task-returning adapters expose real suspension separately.
 
 `std.uuid.Codec` is an immutable RFC 9562 policy value. Its pure `v4` method
 accepts exactly sixteen caller-owned entropy octets; pure `v7` accepts a

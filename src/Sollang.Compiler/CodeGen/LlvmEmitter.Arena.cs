@@ -147,7 +147,7 @@ internal sealed partial class LlvmEmitter
         EmitPhi(capacity, "i64", (arena.CapacityName, keepLabel), (newCapacity, growEndLabel));
         return (
             new RuntimeArena(pointer, end, capacity),
-            new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(offset)));
+            new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(offset)));
     }
 
     private void EmitArenaStore(RuntimeArena arena, RuntimeInt offset, RuntimeInt value)
@@ -199,7 +199,7 @@ internal sealed partial class LlvmEmitter
         return widened;
     }
 
-    private string EmitArenaResultSize(string value)
+    private string EmitUIntSizeFromI64(string value)
     {
         if (_platform.PointerBitWidth == 64)
         {

@@ -1012,6 +1012,187 @@ internal sealed partial class LlvmEmitter
         return handle;
     }
 
+    private RuntimeEnum EmitRuntimeFileBufferCall(
+        BoundFunction function,
+        RuntimeStruct file,
+        IReadOnlyList<RuntimeValue> arguments)
+    {
+        return function.Kind switch
+        {
+            BoundFunctionKind.RuntimeReadBytesAt => EmitRuntimeReadBytesAt(function, file, arguments),
+            BoundFunctionKind.RuntimeWriteBytesAt => EmitRuntimeWriteBytesAt(function, file, arguments),
+            _ => throw new SollangException($"unsupported file buffer intrinsic '{function.Name}'")
+        };
+    }
+
+    private RuntimeEnum EmitRuntimeReadBytesAt(
+        BoundFunction function,
+        RuntimeStruct file,
+        IReadOnlyList<RuntimeValue> arguments)
+    {
+        if (arguments.Count != 2
+            || arguments[0] is not RuntimeMutableContainerReference output
+            || !_program.Types.IsDynamicArray(output.TargetType)
+            || _program.Types.GetDynamicArray(output.TargetType).ElementType != BoundType.UInt8
+            || arguments[1] is not RuntimeInt { Type: BoundType.UInt64 } offset)
+        {
+            throw new SollangException($"{function.Name} expects mut [UInt8; ~], UInt64");
+        }
+
+        ValidateFileByteCountResult(function);
+        var pointer = NextTemp("file_read_into_pointer");
+        var length = NextTemp("file_read_into_length");
+        EmitLoad(pointer, "ptr", output.PointerAddress, 8);
+        EmitLoad(length, "i64", output.LengthAddress, 8);
+        var raw = NextTemp("file_read_into_result");
+        EmitCall(
+            raw,
+            "%sollang.file_count_result",
+            "sollang_platform_read_owned_file_at",
+            $"i64 {ExtractOwnedFileHandle(file)}, ptr {pointer}, i64 {length}, i64 {offset.ValueName}");
+        return EmitFileByteCountResult(function, raw, "file_read_into");
+    }
+
+    private RuntimeEnum EmitRuntimeWriteBytesAt(
+        BoundFunction function,
+        RuntimeStruct writer,
+        IReadOnlyList<RuntimeValue> arguments)
+    {
+        if (arguments.Count != 4
+            || arguments[1] is not RuntimeInt { Type: BoundType.UIntSize } inputOffset
+            || arguments[2] is not RuntimeInt { Type: BoundType.UIntSize } length
+            || arguments[3] is not RuntimeInt { Type: BoundType.UInt64 } fileOffset)
+        {
+            throw new SollangException($"{function.Name} expects ref [UInt8; ~], UIntSize, UIntSize, UInt64");
+        }
+
+        var inputValue = arguments[0] is RuntimeReference reference
+            ? LoadReference(reference)
+            : arguments[0];
+        if (inputValue is not RuntimeDynamicInlineArray input
+            || input.ElementType != BoundType.UInt8)
+        {
+            throw new SollangException($"{function.Name} expects ref [UInt8; ~]");
+        }
+
+        ValidateFileByteCountResult(function);
+        var inputOffset64 = EmitRuntimeIntegerAsI64(inputOffset, "file_write_range_offset64");
+        var length64 = EmitRuntimeIntegerAsI64(length, "file_write_range_length64");
+        var offsetInBounds = NextTemp("file_write_range_offset_in_bounds");
+        EmitCompare(offsetInBounds, "ule", "i64", inputOffset64, input.LengthName);
+        var remaining = NextTemp("file_write_range_remaining");
+        EmitAssign(remaining, $"sub i64 {input.LengthName}, {inputOffset64}");
+        var lengthInBounds = NextTemp("file_write_range_length_in_bounds");
+        EmitCompare(lengthInBounds, "ule", "i64", length64, remaining);
+        var rangeValid = NextTemp("file_write_range_valid");
+        EmitAssign(rangeValid, $"and i1 {offsetInBounds}, {lengthInBounds}");
+
+        var performLabel = NextLabel("file_write_range_perform");
+        var rangeErrorLabel = NextLabel("file_write_range_invalid");
+        var platformSuccessLabel = NextLabel("file_write_range_success");
+        var platformErrorLabel = NextLabel("file_write_range_io_error");
+        var endLabel = NextLabel("file_write_range_end");
+        var incoming = new List<(RuntimeValue Value, string Label)>();
+        var definition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = definition.Variants.First(variant => variant.Name == "Ok");
+        var errVariant = definition.Variants.First(variant => variant.Name == "Err");
+        EmitConditionalBranch(rangeValid, performLabel, rangeErrorLabel);
+
+        EmitLabel(rangeErrorLabel);
+        _currentBlockLabel = rangeErrorLabel;
+        var rangeError = EmitRuntimeErrorText("range");
+        incoming.Add((EmitEnumValue(function.ReturnType, errVariant, rangeError), _currentBlockLabel));
+        EmitBranch(endLabel);
+
+        EmitLabel(performLabel);
+        _currentBlockLabel = performLabel;
+        var pointer = NextTemp("file_write_range_pointer");
+        EmitAssign(pointer, $"getelementptr i8, ptr {input.PointerName}, i64 {inputOffset64}");
+        var raw = NextTemp("file_write_range_result");
+        EmitCall(
+            raw,
+            "%sollang.file_count_result",
+            "sollang_platform_write_owned_file_at",
+            $"i64 {ExtractOwnedFileHandle(writer, "sys.file.FileWriter")}, ptr {pointer}, i64 {length64}, i64 {fileOffset.ValueName}");
+        var count = NextTemp("file_write_range_count");
+        EmitAssign(count, $"extractvalue %sollang.file_count_result {raw}, 0");
+        var platformOk = NextTemp("file_write_range_ok");
+        EmitAssign(platformOk, $"extractvalue %sollang.file_count_result {raw}, 1");
+        var succeeded = NextTemp("file_write_range_succeeded");
+        EmitCompare(succeeded, "ne", "i32", platformOk, "0");
+        EmitConditionalBranch(succeeded, platformSuccessLabel, platformErrorLabel);
+
+        EmitLabel(platformSuccessLabel);
+        _currentBlockLabel = platformSuccessLabel;
+        incoming.Add((EmitEnumValue(
+            function.ReturnType,
+            okVariant,
+            new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(count))), _currentBlockLabel));
+        EmitBranch(endLabel);
+
+        EmitLabel(platformErrorLabel);
+        _currentBlockLabel = platformErrorLabel;
+        var ioError = EmitRuntimeErrorText("io");
+        incoming.Add((EmitEnumValue(function.ReturnType, errVariant, ioError), _currentBlockLabel));
+        EmitBranch(endLabel);
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi("file_write_range_result", function.ReturnType, incoming);
+    }
+
+    private RuntimeEnum EmitFileByteCountResult(
+        BoundFunction function,
+        string raw,
+        string prefix)
+    {
+        var definition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = definition.Variants.First(variant => variant.Name == "Ok");
+        var errVariant = definition.Variants.First(variant => variant.Name == "Err");
+        var count = NextTemp(prefix + "_count");
+        EmitAssign(count, $"extractvalue %sollang.file_count_result {raw}, 0");
+        var platformOk = NextTemp(prefix + "_ok");
+        EmitAssign(platformOk, $"extractvalue %sollang.file_count_result {raw}, 1");
+        var succeeded = NextTemp(prefix + "_succeeded");
+        EmitCompare(succeeded, "ne", "i32", platformOk, "0");
+        var successLabel = NextLabel(prefix + "_success");
+        var errorLabel = NextLabel(prefix + "_error");
+        var endLabel = NextLabel(prefix + "_end");
+        EmitConditionalBranch(succeeded, successLabel, errorLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var success = EmitEnumValue(
+            function.ReturnType,
+            okVariant,
+            new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(count)));
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        var error = EmitEnumValue(
+            function.ReturnType,
+            errVariant,
+            EmitRuntimeErrorText("io"));
+        EmitBranch(endLabel);
+        var errorExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi(prefix + "_result", function.ReturnType, [(success, successExit), (error, errorExit)]);
+    }
+
+    private void ValidateFileByteCountResult(BoundFunction function)
+    {
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.UIntSize
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw new SollangException($"{function.Name} must return Result<UIntSize, Text>");
+        }
+    }
+
     private void EmitReturnIfReadFailed(string readOk)
     {
         var isOk = NextTemp("read_is_ok");

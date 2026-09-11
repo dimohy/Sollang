@@ -407,7 +407,7 @@ internal sealed partial class LlvmEmitter
         return EmitSocketResult(
             function,
             raw,
-            new RuntimeInt(BoundType.UIntSize, raw.Value),
+            new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(raw.Value)),
             successAction: () => EmitStore("i64", raw.Value, buffer.LengthAddress, 8));
     }
 
@@ -434,7 +434,7 @@ internal sealed partial class LlvmEmitter
         return EmitSocketResult(
             function,
             raw,
-            new RuntimeInt(BoundType.UIntSize, raw.Value),
+            new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(raw.Value)),
             successAction: () =>
             {
                 var publishedLength = NextTemp("socket_receive_append_published_length");
@@ -1065,7 +1065,7 @@ internal sealed partial class LlvmEmitter
         {
             throw new SollangException($"{function.Name} must return a UIntSize result");
         }
-        return EmitSocketResult(function, raw, new RuntimeInt(BoundType.UIntSize, raw.Value));
+        return EmitSocketResult(function, raw, new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(raw.Value)));
     }
 
     private RuntimeEnum EmitSocketResult(

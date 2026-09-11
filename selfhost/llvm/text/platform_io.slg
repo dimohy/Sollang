@@ -1509,6 +1509,9 @@ nominalFieldType ownerType: Int, ordinal: Int, context: ref emitterContext.EmitC
 
 emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[request.callIndex] => call
+    call.opcode == -304 -> if {
+        call.operand0 -> emitMutableBorrowArgumentValues(request.callIndex, request.ownerIndex, 0, context, state)
+    }
     -1 => enclosingFileMatch!
     call.parent => fileCallAncestor!
     fileCallAncestor! >= 0 and enclosingFileMatch! < 0
@@ -1630,6 +1633,143 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         "  %v$(request.callIndex)_file_destination_length = extractvalue %sollang.text %v$(request.callIndex)_file_destination, 1" -> println
         "  %v$(request.callIndex)_file_replace_raw = call i32 @sollang_platform_atomic_replace_file(ptr %v$(request.callIndex)_file_temporary_data, i64 %v$(request.callIndex)_file_temporary_length, ptr %v$(request.callIndex)_file_destination_data, i64 %v$(request.callIndex)_file_destination_length)" -> println
         "  %v$(request.callIndex) = icmp ne i32 %v$(request.callIndex)_file_replace_raw, 0" -> println
+    }
+    call.opcode == -304 or call.opcode == -305 -> if {
+        call.operand0 => firstArgumentIndex
+        firstArgumentIndex -> aggregateValueIndex(context, state) => firstValueIndex
+        context.ir[firstValueIndex] => firstValue
+        context.ir[firstArgumentIndex].nextOperand => secondArgumentIndex!
+        context.ir[secondArgumentIndex!].nextOperand => thirdArgumentIndex!
+        context.ir[thirdArgumentIndex!].nextOperand => fourthArgumentIndex!
+        -1 => fifthArgumentIndex!
+        fourthArgumentIndex! >= 0 -> if { context.ir[fourthArgumentIndex!].nextOperand => fifthArgumentIndex! }
+        secondArgumentIndex! -> aggregateValueIndex(context, state) => secondArgumentIndex!
+        thirdArgumentIndex! -> aggregateValueIndex(context, state) => thirdArgumentIndex!
+        fourthArgumentIndex! >= 0 -> if { fourthArgumentIndex! -> aggregateValueIndex(context, state) => fourthArgumentIndex! }
+        fifthArgumentIndex! >= 0 -> if { fifthArgumentIndex! -> aggregateValueIndex(context, state) => fifthArgumentIndex! }
+        "  %v$(request.callIndex)_file_buffer_handle = extractvalue " -> print
+        firstValueIndex -> writeSocketReceiverType(context, state)
+        " " -> print
+        firstValueIndex -> writeSocketReceiverValue(request.ownerIndex, context, state)
+        ", 0" -> println
+        "  store " -> print
+        call -> writeIrType(context, state)
+        " zeroinitializer, ptr %v$(request.callIndex)_file_result_slot, align 8" -> println
+        call.opcode == -304 -> if {
+            "  %v$(request.callIndex)_file_read_into_pointer_address = extractvalue %sollang.mutable_container %callmut$(request.callIndex)_arg1, 0" -> println
+            "  %v$(request.callIndex)_file_read_into_length_address = extractvalue %sollang.mutable_container %callmut$(request.callIndex)_arg1, 1" -> println
+            "  %v$(request.callIndex)_file_read_into_pointer = load ptr, ptr %v$(request.callIndex)_file_read_into_pointer_address, align 8" -> println
+            "  %v$(request.callIndex)_file_read_into_length = load i64, ptr %v$(request.callIndex)_file_read_into_length_address, align 8" -> println
+            "  %v$(request.callIndex)_file_read_into_raw = call %sollang.file_count_result @sollang_platform_read_owned_file_at(i64 %v$(request.callIndex)_file_buffer_handle, ptr %v$(request.callIndex)_file_read_into_pointer, i64 %v$(request.callIndex)_file_read_into_length, i64 " -> print
+            thirdArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+            ")" -> println
+            "  %v$(request.callIndex)_file_buffer_count = extractvalue %sollang.file_count_result %v$(request.callIndex)_file_read_into_raw, 0" -> println
+            "  %v$(request.callIndex)_file_buffer_status = extractvalue %sollang.file_count_result %v$(request.callIndex)_file_read_into_raw, 1" -> println
+            "  %v$(request.callIndex)_file_buffer_ok = icmp ne i32 %v$(request.callIndex)_file_buffer_status, 0" -> println
+            "  br i1 %v$(request.callIndex)_file_buffer_ok, label %file$(request.callIndex)_buffer_ok, label %file$(request.callIndex)_buffer_io_error" -> println
+        } else {
+            context.ir[secondArgumentIndex!] => fileInput
+            fileInput.typeId => fileInputType!
+            false => fileInputReference!
+            fileInputType! >= 0 and context.types[fileInputType!].kind == 8
+                -> if {
+                    context.types[fileInputType!].first => fileInputType!
+                    true => fileInputReference!
+                    "  %v$(request.callIndex)_file_input = load " -> print
+                    fileInputType! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+                    ", align 8" -> println
+                }
+            "  %v$(request.callIndex)_file_input_data = extractvalue " -> print
+            fileInputType! -> writeSemanticTypeId(context, state)
+            " " -> print
+            fileInputReference! -> if { "%v$(request.callIndex)_file_input" -> print } else { secondArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+            ", 0" -> println
+            "  %v$(request.callIndex)_file_input_length = extractvalue " -> print
+            fileInputType! -> writeSemanticTypeId(context, state)
+            " " -> print
+            fileInputReference! -> if { "%v$(request.callIndex)_file_input" -> print } else { secondArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+            ", 1" -> println
+            context.pointerBitWidth == 32 -> if {
+                "  %v$(request.callIndex)_file_range_offset64 = zext i32 " -> print
+                thirdArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+                " to i64" -> println
+                "  %v$(request.callIndex)_file_range_length64 = zext i32 " -> print
+                fourthArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+                " to i64" -> println
+            }
+            "  %v$(request.callIndex)_file_range_offset_ok = icmp ule i64 " -> print
+            context.pointerBitWidth == 32 -> if { "%v$(request.callIndex)_file_range_offset64" -> print } else { thirdArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+            ", %v$(request.callIndex)_file_input_length" -> println
+            "  %v$(request.callIndex)_file_range_remaining = sub i64 %v$(request.callIndex)_file_input_length, " -> print
+            context.pointerBitWidth == 32 -> if { "%v$(request.callIndex)_file_range_offset64" -> print } else { thirdArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+            "" -> println
+            "  %v$(request.callIndex)_file_range_length_ok = icmp ule i64 " -> print
+            context.pointerBitWidth == 32 -> if { "%v$(request.callIndex)_file_range_length64" -> print } else { fourthArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+            ", %v$(request.callIndex)_file_range_remaining" -> println
+            "  %v$(request.callIndex)_file_range_ok = and i1 %v$(request.callIndex)_file_range_offset_ok, %v$(request.callIndex)_file_range_length_ok" -> println
+            "  br i1 %v$(request.callIndex)_file_range_ok, label %file$(request.callIndex)_buffer_perform, label %file$(request.callIndex)_buffer_range_error" -> println
+            "file$(request.callIndex)_buffer_perform:" -> println
+            "  %v$(request.callIndex)_file_input_range_data = getelementptr i8, ptr %v$(request.callIndex)_file_input_data, i64 " -> print
+            context.pointerBitWidth == 32 -> if { "%v$(request.callIndex)_file_range_offset64" -> print } else { thirdArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+            "" -> println
+            "  %v$(request.callIndex)_file_write_range_raw = call %sollang.file_count_result @sollang_platform_write_owned_file_at(i64 %v$(request.callIndex)_file_buffer_handle, ptr %v$(request.callIndex)_file_input_range_data, i64 " -> print
+            context.pointerBitWidth == 32 -> if { "%v$(request.callIndex)_file_range_length64" -> print } else { fourthArgumentIndex! -> writeValue(request.ownerIndex, context, state) }
+            ", i64 " -> print
+            fifthArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+            ")" -> println
+            "  %v$(request.callIndex)_file_buffer_count = extractvalue %sollang.file_count_result %v$(request.callIndex)_file_write_range_raw, 0" -> println
+            "  %v$(request.callIndex)_file_buffer_status = extractvalue %sollang.file_count_result %v$(request.callIndex)_file_write_range_raw, 1" -> println
+            "  %v$(request.callIndex)_file_buffer_ok = icmp ne i32 %v$(request.callIndex)_file_buffer_status, 0" -> println
+            "  br i1 %v$(request.callIndex)_file_buffer_ok, label %file$(request.callIndex)_buffer_ok, label %file$(request.callIndex)_buffer_io_error" -> println
+            "file$(request.callIndex)_buffer_range_error:" -> println
+            "  br label %file$(request.callIndex)_buffer_range_error_store" -> println
+        }
+        "file$(request.callIndex)_buffer_ok:" -> println
+        "  %v$(request.callIndex)_file_buffer_ok_tag = getelementptr inbounds " -> print
+        call -> writeIrType(context, state)
+        ", ptr %v$(request.callIndex)_file_result_slot, i32 0, i32 0" -> println
+        "  store i32 0, ptr %v$(request.callIndex)_file_buffer_ok_tag, align 4" -> println
+        "  %v$(request.callIndex)_file_buffer_ok_payload = getelementptr inbounds " -> print
+        call -> writeIrType(context, state)
+        ", ptr %v$(request.callIndex)_file_result_slot, i32 0, i32 1" -> println
+        context.pointerBitWidth == 32 -> if {
+            "  %v$(request.callIndex)_file_buffer_count32 = trunc i64 %v$(request.callIndex)_file_buffer_count to i32" -> println
+            "  store i32 %v$(request.callIndex)_file_buffer_count32, ptr %v$(request.callIndex)_file_buffer_ok_payload, align 4" -> println
+        } else {
+            "  store i64 %v$(request.callIndex)_file_buffer_count, ptr %v$(request.callIndex)_file_buffer_ok_payload, align 8" -> println
+        }
+        "  br label %file$(request.callIndex)_buffer_merge" -> println
+        "file$(request.callIndex)_buffer_io_error:" -> println
+        "  %v$(request.callIndex)_file_buffer_io_text0 = insertvalue %sollang.text poison, ptr @sollang_file_error_io, 0" -> println
+        "  %v$(request.callIndex)_file_buffer_io_text = insertvalue %sollang.text %v$(request.callIndex)_file_buffer_io_text0, i64 2, 1" -> println
+        "  br label %file$(request.callIndex)_buffer_error_store" -> println
+        call.opcode == -305 -> if {
+            "file$(request.callIndex)_buffer_range_error_store:" -> println
+            "  %v$(request.callIndex)_file_buffer_range_text0 = insertvalue %sollang.text poison, ptr @sollang_file_error_range, 0" -> println
+            "  %v$(request.callIndex)_file_buffer_range_text = insertvalue %sollang.text %v$(request.callIndex)_file_buffer_range_text0, i64 5, 1" -> println
+            "  br label %file$(request.callIndex)_buffer_error_store" -> println
+        }
+        "file$(request.callIndex)_buffer_error_store:" -> println
+        call.opcode == -305 -> if {
+            "  %v$(request.callIndex)_file_buffer_error_text = phi %sollang.text [ %v$(request.callIndex)_file_buffer_io_text, %file$(request.callIndex)_buffer_io_error ], [ %v$(request.callIndex)_file_buffer_range_text, %file$(request.callIndex)_buffer_range_error_store ]" -> println
+        } else {
+            "  %v$(request.callIndex)_file_buffer_error_text = phi %sollang.text [ %v$(request.callIndex)_file_buffer_io_text, %file$(request.callIndex)_buffer_io_error ]" -> println
+        }
+        "  %v$(request.callIndex)_file_buffer_error_tag = getelementptr inbounds " -> print
+        call -> writeIrType(context, state)
+        ", ptr %v$(request.callIndex)_file_result_slot, i32 0, i32 0" -> println
+        "  store i32 1, ptr %v$(request.callIndex)_file_buffer_error_tag, align 4" -> println
+        "  %v$(request.callIndex)_file_buffer_error_payload = getelementptr inbounds " -> print
+        call -> writeIrType(context, state)
+        ", ptr %v$(request.callIndex)_file_result_slot, i32 0, i32 1" -> println
+        "  store %sollang.text %v$(request.callIndex)_file_buffer_error_text, ptr %v$(request.callIndex)_file_buffer_error_payload, align 8" -> println
+        "  br label %file$(request.callIndex)_buffer_merge" -> println
+        "file$(request.callIndex)_buffer_merge:" -> println
+        "  %v$(request.callIndex) = load " -> print
+        call -> writeIrType(context, state)
+        ", ptr %v$(request.callIndex)_file_result_slot, align 8" -> println
     }
     call.opcode == -221 -> if {
         call.operand0 => scalarArgumentIndex!

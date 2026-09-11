@@ -1184,6 +1184,15 @@ internal sealed partial class LlvmEmitter
         RuntimeValue? argument,
         IReadOnlyList<RuntimeValue>? additionalArguments = null)
     {
+        if (function.Kind is BoundFunctionKind.RuntimeReadBytesAt
+            or BoundFunctionKind.RuntimeWriteBytesAt)
+        {
+            if (argument is not RuntimeStruct file)
+            {
+                throw new SollangException($"{function.Name} expects an owned file runtime struct");
+            }
+            return EmitRuntimeFileBufferCall(function, file, additionalArguments ?? []);
+        }
         if (function.Kind is BoundFunctionKind.RuntimeSocketListen
             or BoundFunctionKind.RuntimeSocketAccept
             or BoundFunctionKind.RuntimeSocketConnect

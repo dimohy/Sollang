@@ -3369,7 +3369,12 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %started = call i32 @ReadFile(ptr %handle, ptr %data, i32 %len, ptr null, ptr %overlapped)
               %completed = call i32 @GetOverlappedResult(ptr %handle, ptr %overlapped, ptr %count_slot, i32 1)
               %ok = icmp ne i32 %completed, 0
-              br i1 %ok, label %success, label %fail
+              br i1 %ok, label %success, label %classify_failure
+
+            classify_failure:
+              %error = call i32 @GetLastError()
+              %eof = icmp eq i32 %error, 38
+              br i1 %eof, label %success, label %fail
 
             success:
               %count32 = load i32, ptr %count_slot, align 4

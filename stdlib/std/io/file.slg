@@ -1,0 +1,63 @@
+namespace std.io.file
+
+import std.io as io
+import sys.file as sysfile
+
+# ByteReader and ByteWriter own their native handles and explicit positions.
+# Protocol operations borrow those owners, perform one positional platform
+# operation, and advance only by the successful byte count.
+public struct ByteReader {
+    file: sysfile.File
+    offset: UInt64
+}
+
+public struct ByteWriter {
+    file: sysfile.FileWriter
+    offset: UInt64
+}
+
+public byteReader file: move sysfile.File -> ByteReader {
+    ByteReader { file: file, offset: 0 }
+}
+
+public byteWriter file: move sysfile.FileWriter -> ByteWriter {
+    ByteWriter { file: file, offset: 0 }
+}
+
+impl ByteReader {
+    public position: self -> UInt64 => self.offset
+
+    public intoFile: move self -> sysfile.File {
+        self.file => file
+        file
+    }
+}
+
+impl ByteWriter {
+    public position: self -> UInt64 => self.offset
+
+    public intoFileWriter: move self -> sysfile.FileWriter {
+        self.file => file
+        file
+    }
+}
+
+impl io.Reader for ByteReader {
+    type Failure = Text
+
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Text> uses File {
+        self.file -> readIntoAt(output, self.offset)? => count
+        self.offset + UInt64(count) => self.offset
+        Result<Int, Text>.Ok(Int(count))
+    }
+}
+
+impl io.Writer for ByteWriter {
+    type Failure = Text
+
+    public writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, Text> uses File {
+        self.file -> writeRangeAt(input, offset, length, self.offset)? => count
+        self.offset + UInt64(count) => self.offset
+        Result<Int, Text>.Ok(Int(count))
+    }
+}

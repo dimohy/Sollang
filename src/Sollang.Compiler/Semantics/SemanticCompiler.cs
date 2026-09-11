@@ -3064,6 +3064,8 @@ internal sealed partial class SemanticCompiler
                 isAsync: true),
             "sys.file.sync" => RequireOwnedFileSyncSignature(function, inputType, returnType),
             "sys.file.atomicReplace" => RequireAtomicReplaceSignature(function, inputType, returnType),
+            "sys.file.File.readIntoAt" => RequireFileReadIntoAtSignature(function, inputType, returnType),
+            "sys.file.FileWriter.writeRangeAt" => RequireFileWriteRangeAtSignature(function, inputType, returnType),
             "std.net.socket.Reactor.waitInto" => RequireSocketReactorWaitSignature(function, inputType, returnType),
             "std.net.socket.ListenOptions.listen" => RequireSocketListenSignature(function, inputType, returnType),
             "std.net.socket.TcpListener.accept" => RequireSocketOwnerResultSignature(
@@ -5174,6 +5176,51 @@ internal sealed partial class SemanticCompiler
         calls.Add(first);
         calls.AddRange(pipeline.Calls.Skip(1));
         return pipeline with { Calls = calls };
+    }
+
+    private BoundFunctionKind RequireFileReadIntoAtSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } fileType
+            || !IsNamedStructType(fileType, "sys.file.File")
+            || parameters.Count != 2
+            || parameters[0].TypeName != "[UInt8; ~]"
+            || parameters[0].Ownership != FunctionInputOwnership.MutableBorrow
+            || parameters[1].TypeName != "UInt64"
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.UIntSize
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature File, mut [UInt8; ~], UInt64 -> Result<UIntSize, Text>");
+        }
+        return BoundFunctionKind.RuntimeReadBytesAt;
+    }
+
+    private BoundFunctionKind RequireFileWriteRangeAtSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } writerType
+            || !IsNamedStructType(writerType, "sys.file.FileWriter")
+            || parameters.Count != 4
+            || parameters[0].TypeName != "ref [UInt8; ~]"
+            || parameters[1].TypeName != "UIntSize"
+            || parameters[2].TypeName != "UIntSize"
+            || parameters[3].TypeName != "UInt64"
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.UIntSize
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature FileWriter, ref [UInt8; ~], UIntSize, UIntSize, UInt64 -> Result<UIntSize, Text>");
+        }
+        return BoundFunctionKind.RuntimeWriteBytesAt;
     }
     private void BindBlockFunctionCall(
         BlockFunctionCallStatement call,
@@ -9957,6 +10004,8 @@ internal sealed partial class SemanticCompiler
                         BoundFunctionKind.User
                         or BoundFunctionKind.Native
                         or BoundFunctionKind.RuntimeMouseEvents
+                        or BoundFunctionKind.RuntimeReadBytesAt
+                        or BoundFunctionKind.RuntimeWriteBytesAt
                         or BoundFunctionKind.RuntimeSocketReceive
                         or BoundFunctionKind.RuntimeSocketReceiveAppend
                         or BoundFunctionKind.RuntimeSocketReceiveVectored
@@ -10166,6 +10215,8 @@ internal sealed partial class SemanticCompiler
                         currentType = function.ReturnType;
                         continue;
                     case BoundFunctionKind.RuntimeSocketListen:
+                    case BoundFunctionKind.RuntimeReadBytesAt:
+                    case BoundFunctionKind.RuntimeWriteBytesAt:
                     case BoundFunctionKind.RuntimeSocketAccept:
                     case BoundFunctionKind.RuntimeSocketConnect:
                     case BoundFunctionKind.RuntimeSocketReceive:
@@ -11774,6 +11825,8 @@ internal sealed partial class SemanticCompiler
                 return InferGenericCallExpression(
                     expression, function, functions, bindings, allowReadIntCall);
             case BoundFunctionKind.RuntimeSocketListen:
+            case BoundFunctionKind.RuntimeReadBytesAt:
+            case BoundFunctionKind.RuntimeWriteBytesAt:
             case BoundFunctionKind.RuntimeSocketAccept:
             case BoundFunctionKind.RuntimeSocketConnect:
             case BoundFunctionKind.RuntimeSocketReceive:
@@ -13459,6 +13512,8 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeOpenWriteFileAsync
                 or BoundFunctionKind.RuntimeWriteScalarAt
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
+                or BoundFunctionKind.RuntimeReadBytesAt
+                or BoundFunctionKind.RuntimeWriteBytesAt
                 or BoundFunctionKind.RuntimeSyncFileAsync
                 or BoundFunctionKind.RuntimeSyncFile
                 or BoundFunctionKind.RuntimeAtomicReplaceFile

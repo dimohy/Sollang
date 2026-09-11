@@ -281,6 +281,11 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i64 -1
             }
 
+            define internal i32 @sollang_platform_sync_owned_file(i64 %handle) #0 {
+            entry:
+              ret i32 0
+            }
+
             define internal %sollang.file_count_result @sollang_platform_read_owned_file_at(i64 %handle, ptr %data, i64 %len, i64 %offset) #0 {
             entry:
               %fail0 = insertvalue %sollang.file_count_result poison, i64 0, 0

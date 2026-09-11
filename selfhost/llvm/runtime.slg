@@ -1609,7 +1609,11 @@ public emitWindowsOwnedFile: -> Unit uses Console {
       %started = call i32 @ReadFile(ptr %handle, ptr %data, i32 %length32, ptr null, ptr %overlapped)
       %completed = call i32 @GetOverlappedResult(ptr %handle, ptr %overlapped, ptr %count_slot, i32 1)
       %ok = icmp ne i32 %completed, 0
-      br i1 %ok, label %success, label %failure
+      br i1 %ok, label %success, label %classify_failure
+    classify_failure:
+      %error = call i32 @GetLastError()
+      %eof = icmp eq i32 %error, 38
+      br i1 %eof, label %success, label %failure
     success:
       %count32 = load i32, ptr %count_slot, align 4
       %count = zext i32 %count32 to i64
@@ -1852,6 +1856,61 @@ public emitLinuxOwnedFile emitOpenCloseDeclarations: Bool -> Unit uses Console {
       %result = zext i1 %ok to i32
       ret i32 %result
     failure:
+      ret i32 0
+    }
+    """ -> println
+}
+
+# Browser builds retain the file ABI as an explicit unavailable capability.
+# Every fallible operation reports failure and ownership cleanup is a no-op;
+# no native path is silently simulated in linear memory.
+public emitWasmOwnedFile: -> Unit uses Console {
+    """
+    define internal %sollang.file_handle_result @sollang_platform_open_owned_read_file(ptr %path, i64 %length) {
+    entry:
+      %failure0 = insertvalue %sollang.file_handle_result poison, i64 -1, 0
+      %failure1 = insertvalue %sollang.file_handle_result %failure0, i32 0, 1
+      ret %sollang.file_handle_result %failure1
+    }
+
+    define internal %sollang.file_handle_result @sollang_platform_open_owned_write_file(ptr %path, i64 %length) {
+    entry:
+      %failure0 = insertvalue %sollang.file_handle_result poison, i64 -1, 0
+      %failure1 = insertvalue %sollang.file_handle_result %failure0, i32 0, 1
+      ret %sollang.file_handle_result %failure1
+    }
+
+    define internal i64 @sollang_platform_duplicate_owned_file(i64 %source) {
+    entry:
+      ret i64 -1
+    }
+
+    define internal %sollang.file_count_result @sollang_platform_read_owned_file_at(i64 %handle, ptr %data, i64 %length, i64 %offset) {
+    entry:
+      %failure0 = insertvalue %sollang.file_count_result poison, i64 0, 0
+      %failure1 = insertvalue %sollang.file_count_result %failure0, i32 0, 1
+      ret %sollang.file_count_result %failure1
+    }
+
+    define internal %sollang.file_count_result @sollang_platform_write_owned_file_at(i64 %handle, ptr %data, i64 %length, i64 %offset) {
+    entry:
+      %failure0 = insertvalue %sollang.file_count_result poison, i64 0, 0
+      %failure1 = insertvalue %sollang.file_count_result %failure0, i32 0, 1
+      ret %sollang.file_count_result %failure1
+    }
+
+    define internal i32 @sollang_platform_sync_owned_file(i64 %handle) {
+    entry:
+      ret i32 0
+    }
+
+    define internal void @sollang_platform_close_owned_file(i64 %handle) {
+    entry:
+      ret void
+    }
+
+    define internal i32 @sollang_platform_atomic_replace_file(ptr %temporary, i64 %temporary_length, ptr %destination, i64 %destination_length) {
+    entry:
       ret i32 0
     }
     """ -> println

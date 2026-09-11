@@ -364,6 +364,14 @@ as an error, and distinguishes source end from reaching the caller's limit.
 Keep this protocol synchronous; use a separate task-returning protocol when the
 underlying file or socket operation actually suspends.
 
+For files, wrap the affine native owner rather than introducing an ambient
+cursor. Keep the position in the adapter, call a position-independent bulk
+primitive, and advance only after `Ok(count)`. Read into the caller's existing
+visible buffer length; do not resize it or allocate an intermediate payload.
+Validate a writer's `(offset, length)` range before the first file effect, and
+provide a consuming recovery method when callers must regain the native owner
+for sync or another ownership-preserving operation.
+
 Associated types may occur inside input or result storage: for example,
 `[Item; ~]`, `[Item; 2]`, and `{Text: Item}` retain their declared shape when
 an implementation binds `Item` to `Int`. Keep the associated-type equality

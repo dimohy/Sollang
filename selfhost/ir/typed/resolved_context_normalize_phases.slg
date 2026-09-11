@@ -1541,6 +1541,8 @@ normalizeResolvedFileRuntime nodes: mut [TypedIrNode; ~], prepared: ref semantic
     -1 => fileOpenWriteSymbol!
     -1 => fileSyncSymbol!
     -1 => fileAtomicReplaceSymbol!
+    -1 => fileReadIntoAtSymbol!
+    -1 => fileWriteRangeAtSymbol!
     -1 => fileOwnedSymbol!
     -1 => fileWriterSymbol!
     fileModuleSource! >= 0 -> if {
@@ -1559,7 +1561,12 @@ normalizeResolvedFileRuntime nodes: mut [TypedIrNode; ~], prepared: ref semantic
                 fileAnyNameToken.span.length == 10 -> if {
                     (fileSource -> byte(fileAnyNameToken.span.start)) == 70 and (fileSource -> byte(fileAnyNameToken.span.start + 1)) == 105 and (fileSource -> byte(fileAnyNameToken.span.start + 2)) == 108 and (fileSource -> byte(fileAnyNameToken.span.start + 3)) == 101 and (fileSource -> byte(fileAnyNameToken.span.start + 4)) == 87 and (fileSource -> byte(fileAnyNameToken.span.start + 5)) == 114 and (fileSource -> byte(fileAnyNameToken.span.start + 6)) == 105 and (fileSource -> byte(fileAnyNameToken.span.start + 7)) == 116 and (fileSource -> byte(fileAnyNameToken.span.start + 8)) == 101 and (fileSource -> byte(fileAnyNameToken.span.start + 9)) == 114
                         -> if { fileSymbolSearch! => fileWriterSymbol! }
+                    fileSymbol.kind == 31 and (fileSource -> sourceMatches(fileAnyNameToken.span.start, fileAnyNameToken.span.length, "readIntoAt"))
+                        -> if { fileSymbolSearch! => fileReadIntoAtSymbol! }
                 }
+                fileAnyNameToken.span.length == 12 and fileSymbol.kind == 31
+                    and (fileSource -> sourceMatches(fileAnyNameToken.span.start, fileAnyNameToken.span.length, "writeRangeAt"))
+                    -> if { fileSymbolSearch! => fileWriteRangeAtSymbol! }
                 fileSymbol.kind == 7 and fileSymbol.parent < 0
                     -> if {
                         prepared.package.tokens[fileSourceRange.tokenStart + fileSymbol.nameToken] => fileNameToken
@@ -1618,6 +1625,8 @@ normalizeResolvedFileRuntime nodes: mut [TypedIrNode; ~], prepared: ref semantic
                     fileCall!.symbol == fileSyncSymbol! -> if { -218 => fileCall!.opcode }
                     fileCall!.symbol == fileAtomicReplaceSymbol!
                         -> if { -219 => fileCall!.opcode }
+                    fileCall!.symbol == fileReadIntoAtSymbol! -> if { -304 => fileCall!.opcode }
+                    fileCall!.symbol == fileWriteRangeAtSymbol! -> if { -305 => fileCall!.opcode }
                     fileCall!.symbol == fileOpenReadSymbol! -> if { fileOpenReadResultType! => fileCall!.typeId }
                     fileCall!.symbol == fileOpenWriteSymbol! -> if { fileOpenWriteResultType! => fileCall!.typeId }
                     fileCall!.typeId < 0 and fileCall!.symbol >= 0

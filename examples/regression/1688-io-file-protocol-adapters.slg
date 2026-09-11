@@ -1,0 +1,85 @@
+import std.io as io
+import std.io.file as fileio
+import sys.file as file
+
+public struct ReadSummary {
+    public first: Int
+    public second: Int
+    public position: UInt64
+    public firstByte: UInt8
+    public lastByte: UInt8
+    public tailA: UInt8
+    public tailB: UInt8
+}
+
+# The writer owns the native handle, validates the source range before I/O,
+# and returns the handle to ordinary affine scope cleanup exactly once.
+writeFixture path: Text -> Result<UInt64, Text> uses File {
+    file.openWrite(path)? => fileWriter
+    fileWriter -> fileio.byteWriter => writer!
+    [UInt8; ~] => bytes!
+    bytes! -> push(9)
+    bytes! -> push(10)
+    bytes! -> push(20)
+    bytes! -> push(30)
+    bytes! -> push(40)
+    bytes! -> push(8)
+    writer! -> io.Writer.writeRange(bytes!, 1, 4)? => written
+    written == 4 -> unless { Result<UInt64, Text>.Err("short-write") -> return }
+
+    # An invalid range must not reach the platform or advance the adapter.
+    writer! -> io.Writer.writeRange(bytes!, 5, 4) -> when {
+        Ok(count) { Result<UInt64, Text>.Err("range-accepted") -> return }
+        Err(message) {
+            message == "range" -> unless { Result<UInt64, Text>.Err(message) -> return }
+        }
+    }
+    writer! -> position => position
+    writer! -> intoFileWriter => rawWriter
+    file.sync(rawWriter) -> unless { Result<UInt64, Text>.Err("sync") -> return }
+    Result<UInt64, Text>.Ok(position)
+}
+
+# Reads land directly in the caller-sized buffer. Only the returned prefix is
+# authoritative, so the untouched sentinel tail proves there was no resize or
+# intermediate replacement allocation.
+readFixture path: Text -> Result<ReadSummary, Text> uses File {
+    file.openRead(path)? => inputFile
+    inputFile -> fileio.byteReader => reader!
+    [UInt8; ~] => output!
+    output! -> push(99)
+    output! -> push(99)
+    output! -> push(99)
+    output! -> push(99)
+    output! -> push(99)
+    output! -> push(99)
+    reader! -> io.Reader.readInto(output!)? => first
+    reader! -> io.Reader.readInto(output!)? => second
+    reader! -> position => position
+    ReadSummary {
+        first: first
+        second: second
+        position: position
+        firstByte: output![0]
+        lastByte: output![3]
+        tailA: output![4]
+        tailB: output![5]
+    } => summary
+    reader! -> intoFile => rawFile
+    Result<ReadSummary, Text>.Ok(summary)
+}
+
+run: -> Result<Bool, Text> uses File, Console {
+    "1688-io-file-protocol-adapters.bin" => path
+    writeFixture(path)? => writePosition
+    readFixture(path)? => read
+    "file-protocol=$writePosition,$(read.first),$(read.firstByte),$(read.lastByte),$(read.tailA),$(read.tailB),$(read.second),$(read.position)" -> println
+    Result<Bool, Text>.Ok(true)
+}
+
+main {
+    run() -> when {
+        Ok(value) { }
+        Err(message) { "file-error=$message" -> println }
+    }
+}

@@ -239,6 +239,8 @@ internal enum BoundFunctionKind
     RuntimeCreateDirectory,
     RuntimeWriteScalarAt,
     RuntimeWriteScalarAtAsync,
+    RuntimeReadBytesAt,
+    RuntimeWriteBytesAt,
     RuntimeSyncFileAsync,
     RuntimeSyncFile,
     RuntimeAtomicReplaceFile,

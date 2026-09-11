@@ -15,6 +15,8 @@ param(
     [string]$BrowserCandidateCompiler = "",
     [string]$BrowserFocusedFixture = "",
     [string]$IncrementalFixture = "",
+    [ValidateSet("windows", "linux")]
+    [string]$IncrementalTarget = "windows",
     [ValidateSet("Pass", "Fail", "Wait")]
     [string]$ProbeOutcome = "Fail",
     [switch]$Supervisor
@@ -121,7 +123,8 @@ if (-not $Supervisor) {
     }
     if ($IncrementalFixture -ne "") {
         $argumentList += @(
-            "-IncrementalFixture", (ConvertTo-ProcessArgument $IncrementalFixture)
+            "-IncrementalFixture", (ConvertTo-ProcessArgument $IncrementalFixture),
+            "-IncrementalTarget", $IncrementalTarget
         )
     }
     if ($ResumeCandidate) {
@@ -243,6 +246,7 @@ try {
         "Incremental" {
             $targetArguments += @(
                 "-Fixture", (ConvertTo-ProcessArgument $IncrementalFixture),
+                "-Target", $IncrementalTarget,
                 "-SeedMode", $SeedMode,
                 "-CompareStage2:`$false"
             )

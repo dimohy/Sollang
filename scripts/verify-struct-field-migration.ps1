@@ -96,6 +96,8 @@ $expectedPrivateFields = [ordered]@{
     'stdlib/std/crypto/hmac_sha256.slg' = 2
     # Replay storage, scratch, cursor, and ceilings remain adapter-owned.
     'stdlib/std/io.slg' = 5
+    # File adapters encapsulate their affine handles and explicit positions.
+    'stdlib/std/io/file.slg' = 4
     # Cross-module method-owner fixtures construct and inspect state through methods.
     'examples/regression/fixtures/1501-method-owner-leaf.slg' = 1
     'examples/regression/fixtures/1501-method-owner-wrapper.slg' = 2

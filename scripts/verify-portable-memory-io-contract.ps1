@@ -72,6 +72,88 @@ foreach ($required in @(
         throw "Portable socket I/O adapter is missing: $required"
     }
 }
+$fileSource = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/io/file.slg'))
+foreach ($required in @(
+    'public struct ByteReader',
+    'file: sysfile.File',
+    'offset: UInt64',
+    'public byteReader file: move sysfile.File -> ByteReader',
+    'impl io.Reader for ByteReader',
+    'type Failure = Text',
+    'public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Text> uses File',
+    'self.file -> readIntoAt(output, self.offset)? => count',
+    'public intoFile: move self -> sysfile.File',
+    'public struct ByteWriter',
+    'file: sysfile.FileWriter',
+    'public byteWriter file: move sysfile.FileWriter -> ByteWriter',
+    'impl io.Writer for ByteWriter',
+    'public writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, Text> uses File',
+    'self.file -> writeRangeAt(input, offset, length, self.offset)? => count',
+    'public intoFileWriter: move self -> sysfile.FileWriter'
+)) {
+    if (-not $fileSource.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable file I/O adapter is missing: $required"
+    }
+}
+if ([regex]::Matches($fileSource, 'self\.offset \+ UInt64\(count\) => self\.offset').Count -ne 2) {
+    throw 'Portable file adapters must advance each explicit position exactly once after successful progress'
+}
+$sysFileSource = [IO.File]::ReadAllText((Join-Path $root 'stdlib/sys/file.slg'))
+foreach ($required in @(
+    'public readIntoAt: self, output: mut [UInt8; ~], offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic',
+    'public writeRangeAt: self, input: ref [UInt8; ~], inputOffset: UIntSize, length: UIntSize, offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic'
+)) {
+    if (-not $sysFileSource.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable file I/O intrinsic surface is missing: $required"
+    }
+}
+$managedSemantic = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs'))
+$managedEmitter = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeIntrinsics.cs'))
+$selfhostTyped = [IO.File]::ReadAllText((Join-Path $root 'selfhost/ir/typed.slg'))
+$selfhostEmitter = [IO.File]::ReadAllText((Join-Path $root 'selfhost/llvm/text/platform_io.slg'))
+$selfhostRuntime = [IO.File]::ReadAllText((Join-Path $root 'selfhost/llvm/runtime.slg'))
+$selfhostContext = [IO.File]::ReadAllText((Join-Path $root 'selfhost/llvm/text/context_prepare.slg'))
+foreach ($check in @(
+    @{ Text = $managedSemantic; Needle = '"sys.file.File.readIntoAt" => RequireFileReadIntoAtSignature' },
+    @{ Text = $managedSemantic; Needle = '"sys.file.FileWriter.writeRangeAt" => RequireFileWriteRangeAtSignature' },
+    @{ Text = $managedEmitter; Needle = 'EmitRuntimeReadBytesAt(function, file, arguments)' },
+    @{ Text = $managedEmitter; Needle = 'EmitRuntimeWriteBytesAt(function, file, arguments)' },
+    @{ Text = $managedEmitter; Needle = 'EmitUIntSizeFromI64(count)' },
+    @{ Text = $selfhostTyped; Needle = '-> if { -304 => opcode! }' },
+    @{ Text = $selfhostTyped; Needle = '-> if { -305 => opcode! }' },
+    @{ Text = $selfhostEmitter; Needle = 'call.opcode == -304 or call.opcode == -305' },
+    @{ Text = $selfhostEmitter; Needle = '@sollang_platform_read_owned_file_at' },
+    @{ Text = $selfhostEmitter; Needle = '@sollang_platform_write_owned_file_at' },
+    @{ Text = $selfhostEmitter; Needle = '@sollang_file_error_range' },
+    @{ Text = $selfhostEmitter; Needle = '_file_buffer_count32 = trunc i64' },
+    @{ Text = $selfhostRuntime; Needle = 'public emitWasmOwnedFile:' },
+    @{ Text = $selfhostContext; Needle = 'needsOwnedFileRuntime -> if { llvmRuntime.emitWasmOwnedFile() }' }
+)) {
+    if (-not $check.Text.Contains($check.Needle, [StringComparison]::Ordinal)) {
+        throw "Portable file I/O managed/self-host lowering is missing: $($check.Needle)"
+    }
+}
+$windowsRuntime = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs'))
+$linuxRuntime = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs'))
+$browserRuntime = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/WasmBrowserLlvmRuntimePlatform.cs'))
+if (-not $windowsRuntime.Contains('%eof = icmp eq i32 %error, 38', [StringComparison]::Ordinal)) {
+    throw 'Windows positional file reads must classify ERROR_HANDLE_EOF as successful zero progress'
+}
+foreach ($required in @('call i64 @pread(', 'call i64 @pwrite(')) {
+    if (-not $linuxRuntime.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Linux positional file I/O lowering is missing: $required"
+    }
+}
+foreach ($required in @(
+    'define internal i32 @sollang_platform_sync_owned_file',
+    'define internal %sollang.file_count_result @sollang_platform_read_owned_file_at',
+    'define internal %sollang.file_count_result @sollang_platform_write_owned_file_at',
+    '%fail1 = insertvalue %sollang.file_count_result %fail0, i32 0, 1'
+)) {
+    if (-not $browserRuntime.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Browser file I/O must retain an explicit unavailable result: $required"
+    }
+}
 if ([regex]::Matches($source, '(?m)^public trait Reader \{').Count -ne 1 -or
     [regex]::Matches($source, '(?m)^public trait Writer \{').Count -ne 1) {
     throw 'Portable memory I/O must declare exactly one public Reader and Writer protocol'
@@ -132,6 +214,25 @@ foreach ($required in @(
         throw "Portable socket I/O fixture no longer proves: $required"
     }
 }
+$fileFixture = [IO.File]::ReadAllText((Join-Path $root 'examples/regression/1688-io-file-protocol-adapters.slg'))
+foreach ($required in @(
+    'writer! -> io.Writer.writeRange(bytes!, 1, 4)? => written',
+    'writer! -> io.Writer.writeRange(bytes!, 5, 4)',
+    'reader! -> io.Reader.readInto(output!)? => first',
+    'reader! -> io.Reader.readInto(output!)? => second',
+    'writer! -> intoFileWriter => rawWriter',
+    'reader! -> intoFile => rawFile',
+    'file-protocol=$writePosition,$(read.first),$(read.firstByte),$(read.lastByte),$(read.tailA),$(read.tailB),$(read.second),$(read.position)'
+)) {
+    if (-not $fileFixture.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable file I/O fixture no longer proves: $required"
+    }
+}
+$fileBrowserExpected = [IO.File]::ReadAllText(
+    (Join-Path $root 'examples/regression/expected/1688-io-file-protocol-adapters.browser.stdout.txt')).Trim()
+if ($fileBrowserExpected -cne 'file-error=io') {
+    throw 'Portable file I/O browser expectation must expose the unavailable native capability as io'
+}
 
 $spec = [IO.File]::ReadAllText((Join-Path $root 'docs/SPEC.md'))
 $evolution = [IO.File]::ReadAllText((Join-Path $root 'docs/STDLIB_EVOLUTION.md'))
@@ -152,6 +253,10 @@ foreach ($fixtureName in $contract.fixtures) {
     if (-not $nativeBatch.Contains($fixtureName, [StringComparison]::Ordinal)) {
         throw "native exact batch does not retain $fixtureName"
     }
+}
+$browserBatch = [IO.File]::ReadAllText((Join-Path $root 'scripts/build-stage2-browser.ps1'))
+if (-not $browserBatch.Contains('1688-io-file-protocol-adapters.browser.stdout.txt', [StringComparison]::Ordinal)) {
+    throw 'browser Stage2 regression list does not retain the explicit file-capability failure fixture'
 }
 foreach ($gateName in @(
     'verify-selfhost-stage2.ps1',

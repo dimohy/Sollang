@@ -139,6 +139,8 @@ internal sealed partial class LlvmEmitter
                         BoundFunctionKind.User
                         or BoundFunctionKind.Native
                         or BoundFunctionKind.RuntimeMouseEvents
+                        or BoundFunctionKind.RuntimeReadBytesAt
+                        or BoundFunctionKind.RuntimeWriteBytesAt
                         or BoundFunctionKind.RuntimeSocketReceive
                         or BoundFunctionKind.RuntimeSocketReceiveAppend
                         or BoundFunctionKind.RuntimeSocketReceiveVectored
@@ -322,6 +324,8 @@ internal sealed partial class LlvmEmitter
                             path);
                         continue;
                     case BoundFunctionKind.RuntimeSocketListen:
+                    case BoundFunctionKind.RuntimeReadBytesAt:
+                    case BoundFunctionKind.RuntimeWriteBytesAt:
                     case BoundFunctionKind.RuntimeSocketAccept:
                     case BoundFunctionKind.RuntimeSocketConnect:
                     case BoundFunctionKind.RuntimeSocketReceive:
@@ -488,7 +492,7 @@ internal sealed partial class LlvmEmitter
                     throw new SollangException("used does not accept arguments");
                 }
                 result = new RuntimeFlowResult(
-                    new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(usedArena.UsedName)),
+                    new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(usedArena.UsedName)),
                     null,
                     _mainOk);
                 return true;
@@ -579,7 +583,7 @@ internal sealed partial class LlvmEmitter
                 result = current switch
                 {
                     RuntimeText text => new RuntimeFlowResult(
-                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(text.LengthName)), null, _mainOk),
+                        new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(text.LengthName)), null, _mainOk),
                     RuntimeIntSlice slice => new RuntimeFlowResult(EmitSizeAsInt(slice.LengthName, "slice_len_value"), null, _mainOk),
                     RuntimeInlineSlice slice => new RuntimeFlowResult(EmitSizeAsInt(slice.LengthName, "slice_len_value"), null, _mainOk),
                     RuntimeStaticIntArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
@@ -591,11 +595,11 @@ internal sealed partial class LlvmEmitter
                     RuntimeIntDictionary intDictionary => new RuntimeFlowResult(EmitSizeAsInt(intDictionary.LengthName, "dict_len_value"), null, _mainOk),
                     RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(EmitSizeAsInt(inlineMap.LengthName, "dict_len_value"), null, _mainOk),
                     RuntimeMappedBytes mapped => new RuntimeFlowResult(
-                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(mapped.LengthName)), null, _mainOk),
+                        new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(mapped.LengthName)), null, _mainOk),
                     RuntimeSourceText sourceText => new RuntimeFlowResult(
-                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(sourceText.LengthName)), null, _mainOk),
+                        new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(sourceText.LengthName)), null, _mainOk),
                     RuntimeArguments arguments => new RuntimeFlowResult(
-                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(arguments.LengthName)), null, _mainOk),
+                        new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(arguments.LengthName)), null, _mainOk),
                     RuntimeBitSet bitSet => new RuntimeFlowResult(
                         new RuntimeInt(_program.Types.GetBitSet(bitSet.Type).BitCount.ToString(CultureInfo.InvariantCulture)),
                         null, _mainOk),
@@ -730,7 +734,7 @@ internal sealed partial class LlvmEmitter
                         null,
                         _mainOk),
                     RuntimeArena arena => new RuntimeFlowResult(
-                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(arena.CapacityName)), null, _mainOk),
+                        new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(arena.CapacityName)), null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;

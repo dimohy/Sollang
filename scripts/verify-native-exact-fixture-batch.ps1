@@ -375,6 +375,7 @@ param(
         "1683-io-bounded-transfer-policy",
         "1684-io-bounded-transactional-replay",
         "1685-io-socket-protocol-adapters",
+        "1688-io-file-protocol-adapters",
         "1686-selfhost-trait-associated-result",
         "1687-selfhost-chained-call-local-precedence",
         "1682-selfhost-retained-array-branch-moves"

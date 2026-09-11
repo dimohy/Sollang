@@ -57,6 +57,24 @@ public isSocketResultOpcode opcode: Int -> Bool {
         or (opcode <= -297 and opcode >= -302)
 }
 
+# File opcodes include the established scalar/open operations and the two
+# caller-buffer positional operations. Keep them explicit because -222 onward
+# belongs to unrelated runtime and container families.
+public isFileRuntimeOpcode opcode: Int -> Bool {
+    (opcode <= -216 and opcode >= -221)
+        or opcode == -304
+        or opcode == -305
+}
+
+public isFileResultOpcode opcode: Int -> Bool {
+    opcode == -216
+        or opcode == -217
+        or opcode == -220
+        or opcode == -221
+        or opcode == -304
+        or opcode == -305
+}
+
 # Pure sys.process domain projections are intrinsic instance methods whose
 # self-host lowering is an aggregate field extraction, never a wrapper call.
 public isProcessProjectionOpcode opcode: Int -> Bool => opcode == -285 or opcode == -286
@@ -286,6 +304,10 @@ public replaceNode nodes: mut [TypedIrNode; ~], index: Int, node: ref TypedIrNod
 
 intrinsicOpcode request: IntrinsicNameRequest -> Int {
     -1 => opcode!
+    request.source -> sourceMatches(request.token.span.start, request.token.span.length, "readIntoAt")
+        -> if { -304 => opcode! }
+    request.source -> sourceMatches(request.token.span.start, request.token.span.length, "writeRangeAt")
+        -> if { -305 => opcode! }
     request.source -> sourceMatches(request.token.span.start, request.token.span.length, "putIfAbsent")
         -> if { -303 => opcode! }
     request.token.span.length == 3 -> if {
