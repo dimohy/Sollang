@@ -172,6 +172,16 @@ while (-not (Test-Path -LiteralPath $passCompletionRecordPath -PathType Leaf)) {
 $passResult = Get-Content -LiteralPath $passCompletionRecordPath -Raw | ConvertFrom-Json
 $passResultJson = Get-Content -LiteralPath $passCompletionRecordPath -Raw
 if (-not ($passResultJson | Test-Json -SchemaFile $resultSchemaPath)) { throw "successful result does not match its schema" }
+$incrementalSuccess = $passResultJson | ConvertFrom-Json
+$incrementalSuccess.verification = "Incremental"
+if (-not (($incrementalSuccess | ConvertTo-Json -Depth 8) | Test-Json -SchemaFile $resultSchemaPath)) {
+    throw "incremental result does not match its schema"
+}
+$unknownVerification = $passResultJson | ConvertFrom-Json
+$unknownVerification.verification = "Unknown"
+if (($unknownVerification | ConvertTo-Json -Depth 8) | Test-Json -SchemaFile $resultSchemaPath -ErrorAction SilentlyContinue) {
+    throw "result schema accepted an unknown verification kind"
+}
 if ($passResult.exitCode -ne 0 -or $passResult.status -cne "passed") {
     throw "successful detached probe outcome was not preserved"
 }
@@ -201,7 +211,7 @@ if ($passedProgress.status -cne "passed" -or $passedProgress.completed -ne 1 -or
     throw "successful detached progress state is incorrect"
 }
 
-Write-Host "[detached selfhost verification] PASS successful termination preserved exit code 0 with 0 failure IDs and 0 orphans."
+Write-Host "[detached selfhost verification] PASS successful termination, Incremental schema coverage, exit code 0, 0 failure IDs, and 0 orphans."
 
 $spacedRoot = Join-Path $scratchRoot "$runId path with spaces"
 $spacedLogPath = Join-Path $spacedRoot "probe output.log"

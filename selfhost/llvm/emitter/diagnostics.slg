@@ -2668,6 +2668,36 @@ signatureNominalIdentity source: Int, typeAst: Int, context: ref emitterContext.
                 }
             }
     }
+    # Intrinsic generic constructors are represented as origin-4 semantic
+    # types rather than ordinary nominal resolutions.  A declaration whose
+    # argument is an unresolved associated type therefore has no whole-type
+    # id yet, but its outer constructor still has a stable identity.  Preserve
+    # that identity so signature matching can recurse and substitute the
+    # associated child instead of rejecting the outer application early.
+    result! == -1 -> if {
+        source -> signatureTypeTerm(typeAst, context) => termIndex
+        termIndex >= 0 -> if {
+            context.typeTerms[termIndex] => term
+            term.kind == 7 and term.nameToken >= 0 -> if {
+                source -> sourceTokenIs(term.nameToken, "Option", context)
+                    -> if { -100 => result! }
+                source -> sourceTokenIs(term.nameToken, "Result", context)
+                    -> if { -101 => result! }
+                source -> sourceTokenIs(term.nameToken, "Task", context)
+                    -> if { -102 => result! }
+                source -> sourceTokenIs(term.nameToken, "Stream", context)
+                    -> if { -103 => result! }
+                source -> sourceTokenIs(term.nameToken, "EventStream", context)
+                    -> if { -104 => result! }
+                source -> sourceTokenIs(term.nameToken, "Set", context)
+                    -> if { -105 => result! }
+                source -> sourceTokenIs(term.nameToken, "Deque", context)
+                    -> if { -106 => result! }
+                source -> sourceTokenIs(term.nameToken, "BinaryHeap", context)
+                    -> if { -107 => result! }
+            }
+        }
+    }
     result!
 }
 

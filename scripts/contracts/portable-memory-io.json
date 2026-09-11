@@ -1,20 +1,24 @@
 {
   "$schema": "portable-memory-io.schema.json",
-  "version": 3,
+  "version": 4,
   "module": "std.io",
   "sources": [
-    "stdlib/std/io.slg"
+    "stdlib/std/io.slg",
+    "stdlib/std/net/socket.slg"
   ],
   "fixtures": [
     "1094-io-memory-reader-writer",
     "1188-io-memory-reader-caller-buffer",
     "1680-io-shared-caller-buffer-traits",
     "1683-io-bounded-transfer-policy",
-    "1684-io-bounded-transactional-replay"
+    "1684-io-bounded-transactional-replay",
+    "1685-io-socket-protocol-adapters"
   ],
   "surfaces": [
     "Reader.readInto",
+    "Reader.Failure",
     "Writer.writeRange",
+    "Writer.Failure",
     "MemoryReader.readInto",
     "MemoryReader.readExactInto",
     "MemoryWriter.write",
@@ -24,17 +28,19 @@
     "CopyOutcome.reachedEnd",
     "ReplayBuffer.position",
     "ReplayBuffer.bufferedBytes",
-    "ReplayBuffer.readExactFrom"
+    "ReplayBuffer.readExactFrom",
+    "TcpStream.Reader.readInto",
+    "TcpStream.Writer.writeRange"
   ],
   "invariants": [
     "reader and writer protocols each expose one caller-buffer partial-transfer primitive",
-    "protocol operations return one portable Result<Int, Error> progress contract",
-    "MemoryReader implements Reader with the portable result contract",
-    "MemoryWriter implements Writer with the portable result contract",
+    "protocol operations return exact progress while preserving an associated typed failure",
+    "MemoryReader binds Reader Failure to the portable Error type",
+    "MemoryWriter binds Writer Failure to the portable Error type",
     "existing inherent MemoryReader and MemoryWriter methods remain source compatible",
     "concrete protocol calls use imported qualified static dispatch",
     "reader output storage is borrowed mutably and never retained",
-    "writer input storage is borrowed read-only and never retained",
+    "writer growable input storage is borrowed read-only and never retained",
     "partial transfer reports an exact count without a payload allocation",
     "exact memory reads validate limits and complete availability before mutation",
     "allocating read and readExact remain bounded convenience methods",
@@ -51,10 +57,14 @@
     "replay success advances a logical cursor without claiming that the underlying source cursor rolled back",
     "replay scratch length bounds each source read to the exact remaining request",
     "replay storage is compacted without allocating another payload buffer",
+    "TcpStream implements Reader and Writer without a wrapper owner or payload copy",
+    "socket protocol calls preserve SocketError instead of erasing platform failure details",
+    "socket protocol implementations retain the explicit Network effect",
+    "socket Writer forwards the exact borrowed range to sendRange",
     "unbounded readAll copy and implicit buffering are absent"
   ],
   "unsupported": [
-    "file socket and reactor protocol implementations",
+    "file and reactor protocol implementations",
     "asynchronous buffering and backpressure"
   ]
 }

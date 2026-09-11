@@ -2,6 +2,7 @@ namespace std.net.socket
 
 import std.net as net
 import std.net.socket as model
+import std.io as io
 
 public struct ListenOptions {
     public endpoint: net.Endpoint
@@ -207,6 +208,24 @@ impl TcpStream {
             offset! + sent => offset!
         }
         Result<Unit, SocketError>.Ok
+    }
+}
+
+impl io.Reader for TcpStream {
+    type Failure = SocketError
+
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, SocketError> uses Network {
+        self -> receiveInto(output)? => count
+        Result<Int, SocketError>.Ok(Int(count))
+    }
+}
+
+impl io.Writer for TcpStream {
+    type Failure = SocketError
+
+    public writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, SocketError> uses Network {
+        self -> sendRange(input, offset, length)? => count
+        Result<Int, SocketError>.Ok(Int(count))
     }
 }
 

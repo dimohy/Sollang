@@ -1,0 +1,43 @@
+import std.io as io
+import std.net as net
+import std.net.socket as socket
+
+# The generic I/O protocols preserve the socket's typed failure and call the
+# existing caller-buffer intrinsics without a wrapper allocation or byte copy.
+send endpoint: net.Endpoint -> Result<UIntSize, socket.SocketError> uses Network {
+    endpoint -> connect? => stream!
+    [UInt8; ~] => bytes!
+    bytes! -> push(120)
+    bytes! -> push(120)
+    bytes! -> push(112)
+    bytes! -> push(105)
+    bytes! -> push(110)
+    bytes! -> push(103)
+    stream! -> io.Writer.writeRange(bytes!, 2, 4)? => count
+    stream! -> close
+    Result<UIntSize, socket.SocketError>.Ok(UIntSize(count))
+}
+
+run: -> Result<Bool, socket.SocketError> uses Network, Console {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localPort? => port
+    net.loopback(port) -> unified -> send? => sent
+    listener -> accept? => stream!
+    [UInt8; 8~] => received!
+    stream! -> io.Reader.readInto(received!)? => count
+    stream! -> close
+    listener -> close
+    "protocol=$sent,$count,$(received! -> len),$(received![0]),$(received![3])" -> println
+    Result<Bool, socket.SocketError>.Ok(true)
+}
+
+main {
+    run() -> when {
+        Ok(value) { }
+        Err(failure) { "socket-error=$(failure.code)" -> println }
+    }
+}

@@ -97,6 +97,12 @@ from parsing alone, and do not replace the intended API with global
 helpers to hide that boundary. An empty struct literal is valid for a fieldless
 struct; a nonempty struct still requires its declared fields.
 
+Keep receiver dispatch exact across chained flows. The result of the immediate
+preceding call determines which inherent methods are eligible, and only the
+nominal type written in an `impl` header owns those methods. A qualified type
+mentioned inside an impl method signature is not an owner and must not shadow a
+matching lexical function.
+
 ### What makes code beautiful
 
 | Criterion | What a reviewer should be able to see |
@@ -338,16 +344,20 @@ caller-owned output buffers explicit through a generic mutable borrow:
 
 ```sollang
 trait Reader {
-    readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>
+    type Failure
+    readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Failure>
 }
 
-read<T> reader: mut T, output: mut [UInt8; ~] -> Result<Int, Error> where T: Reader {
+read<T> reader: mut T, output: mut [UInt8; ~] -> Result<Int, Error> where T: Reader, T.Failure == Error {
     reader -> Reader.readInto(output)
 }
 ```
 
-For partial output, put the unwritten range in the protocol instead of copying
-or deleting a written prefix: `Writer.writeRange(input, offset, length)`. A
+Bind the associated failure to the concrete domain error instead of erasing a
+socket or file failure. Generic policies that require the portable error state
+that equality explicitly. For partial output, borrow the caller's growable byte
+owner and put the unwritten range in the protocol instead of copying or deleting
+a written prefix: `Writer.writeRange(input, offset, length)`. A
 bounded transfer policy should be an instance that owns its byte and reusable
 buffer ceilings, retries exact partial ranges, treats successful zero progress
 as an error, and distinguishes source end from reaching the caller's limit.

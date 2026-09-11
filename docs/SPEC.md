@@ -1486,17 +1486,21 @@ must not introduce a reverse `sys -> std` dependency or leave two public path
 types after the replacement is verified.
 
 `std.io.Reader` and `std.io.Writer` are public static protocols over one
-caller-buffer partial-transfer primitive. Both operations return the fixed
-`Result<Int, Error>` progress contract without a wrapper object, payload
-allocation, or dynamic dispatch. `Reader.readInto` borrows a mutable
-growable-byte destination. `Writer.writeRange` borrows a read-only byte input
+caller-buffer partial-transfer primitive. Both operations return exact `Int`
+progress and preserve an associated failure type without a wrapper object,
+payload allocation, error erasure, or dynamic dispatch. The memory
+implementations bind that failure to `std.io.Error`; effectful implementations
+retain their domain error. `Reader.readInto` borrows a mutable growable-byte
+destination. `Writer.writeRange` borrows a read-only growable-byte owner
 and receives an exact offset and length so a generic caller can retry a partial
 write without copying or removing the written prefix. Implementations validate
 the range before mutation and may not retain either caller buffer. `MemoryReader` and
 `MemoryWriter` implement these protocols while preserving their existing
 inherent methods. A concrete `MemoryWriter` therefore keeps its source-compatible
 partial `write` returning `Int`, while `writeRange` returns the same exact
-progress as `Result<Int, Error>`.
+progress as `Result<Int, Error>`. `std.net.socket.TcpStream` implements both
+protocols by forwarding directly to `receiveInto` and `sendRange`; its methods
+retain `uses Network` and `SocketError`, and add no wrapper owner or payload copy.
 
 `TransferPolicy` is an immutable instance owning a maximum transfer count and a
 positive reusable-buffer size. Its generic `copy` method statically dispatches
@@ -2209,6 +2213,12 @@ calls and recursive calls preserve concrete integer and Text specializations
 and reuse identical instantiations. Other recursive type shapes
 require further target verification.
 Parsing alone does not establish target support.
+
+Flow-call method lookup uses the exact nominal type of the immediate receiver,
+including the result of a preceding call in the same chain. An imported
+inherent method is eligible only when its `impl` header names that receiver
+type. Qualified types mentioned inside method parameters or results do not
+change the `impl` owner and cannot override an otherwise valid lexical function.
 
 Postfix `?` applies only to `Result<T, E>`. On `Ok`, its expression value is the
 success payload. On `Err`, it returns `Result<U, E>.Err(error)` from the nearest

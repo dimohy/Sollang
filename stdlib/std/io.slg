@@ -24,14 +24,16 @@ public enum Read {
 }
 
 # Portable byte streams expose exactly one caller-buffer primitive per
-# direction. The result is fixed so portable callers share one exact error and
-# progress contract without a wrapper object or dynamic dispatch.
+# direction. The progress shape is fixed while the associated failure preserves
+# each domain's exact error without a wrapper object or dynamic dispatch.
 public trait Reader {
-    readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>
+    type Failure
+    readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Failure>
 }
 
 public trait Writer {
-    writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error>
+    type Failure
+    writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, Failure>
 }
 
 public enum CopyCompletion {
@@ -242,6 +244,8 @@ impl MemoryReader {
 }
 
 impl Reader for MemoryReader {
+    type Failure = Error
+
     public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error> {
         (output -> len) <= self.maxReadBytes -> unless {
             Result<Int, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
@@ -301,7 +305,9 @@ impl MemoryWriter {
 }
 
 impl Writer for MemoryWriter {
-    public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error> {
+    type Failure = Error
+
+    public writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, Error> {
         UIntSize(input -> len) => inputLength
         offset <= inputLength and length <= inputLength - offset
             -> unless {
@@ -327,7 +333,7 @@ impl TransferPolicy {
     # Copies through one reusable caller-owned buffer. The source is never read
     # beyond maxBytes, so Limit is observable without consuming a probe byte.
     # A writer that reports successful zero progress fails deterministically.
-    public copy<R, W>: self, reader: mut R, writer: mut W -> Result<CopyOutcome, Error> where R: Reader, W: Writer {
+    public copy<R, W>: self, reader: mut R, writer: mut W -> Result<CopyOutcome, Error> where R: Reader, R.Failure == Error, W: Writer, W.Failure == Error {
         [UInt8; ~] => buffer!
         0 => initialized!
         initialized! < self.bufferBytes -> while {
@@ -390,7 +396,7 @@ impl ReplayBuffer {
     # A short read keeps its prefix inside the adapter for the next logical
     # read. output and logicalOffset change only after the complete request is
     # available. The source cursor itself is intentionally not rolled back.
-    public readExactFrom<R>: mut self, reader: mut R, output: mut [UInt8; ~] -> Result<Int, Error> where R: Reader {
+    public readExactFrom<R>: mut self, reader: mut R, output: mut [UInt8; ~] -> Result<Int, Error> where R: Reader, R.Failure == Error {
         output -> len => requested
         requested <= self.maxReplayBytes -> unless {
             Result<Int, Error>.Err(

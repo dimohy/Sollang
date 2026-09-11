@@ -1527,6 +1527,12 @@ Assert-Contains $calls 'receiverToken.span.start < receiverStart!' "projected re
 Assert-Contains $calls 'and not receiverInsideCallArgument!' "direct call arguments cannot become lexical receiver roots"
 Assert-Contains $calls 'and directReceiverResult.callAst != local.callAst' "direct receiver producer scan excludes the current outer call"
 Assert-Contains $calls 'and not (directReceiverCall.firstToken <= receiverCallNameToken!' "direct receiver producer scan excludes same-start wrappers that contain the method token"
+Assert-NotContains $calls 'openCandidateImpl.astNode => openOwnerQualifiedAncestor!' "imported method owner excludes qualified types nested in impl bodies"
+Assert-Contains $calls 'openOwnerReference.typeAst == openCandidateImpl.typeNode' "direct impl owner references remain confined to the impl header type"
+Assert-MatchCount $calls 'package\.nodes\[openTargetRange\.astStart \+ openOwnerQualified\.pathAst\]\.parent == openCandidateImpl\.astNode' 1 "qualified impl owner has one exact direct declaration edge"
+Assert-NotContains $calls 'openOwnerQualifiedAncestor!' "qualified impl owner never scans impl descendants"
+Assert-NotContains $calls 'openImplQualifiedAncestor!' "qualified impl owner does not retain the former broad ancestor walk"
+Assert-NotContains $calls 'openImplQualifiedIndex!' "qualified impl owner has one canonical exact-edge scan"
 Assert-MatchCount $calls 'semantic\.types\[receiverTypeId!\]\.kind == 8' 2 "projected receiver root and field reference unwrapping"
 Assert-MatchCount $foundation 'eachContainerTypeId! -> writeArrayViewType' 2 "shared each canonical collection view type for data and length"
 Assert-Contains $text 'entryExpressionIndex -> emitDirectEachStart(' "entry each uses shared loop and role emission"
@@ -2360,6 +2366,9 @@ foreach ($nativeExactFixture in @(
     "1303-quic-reassembly-account-loop",
     "1304-zstd-literal-only-compressed-block",
     "1305-selfhost-interpolation-numeric-separator",
+    "1685-io-socket-protocol-adapters",
+    "1686-selfhost-trait-associated-result",
+    "1687-selfhost-chained-call-local-precedence",
     "945-quic-flow-control-frames"
 )) {
     Assert-Contains $nativeExactFixtureBatchVerifier "`"$nativeExactFixture`"" "native exact batch fixture $nativeExactFixture"
@@ -3168,6 +3177,7 @@ Assert-Contains $detachedVerification '$failureIds.Add("CANCELLATION_REQUESTED")
 Assert-Contains $detachedProgress '"browserstage2" { "browser" }' "detached browser progress stage mapping"
 Assert-Contains $detachedProgress '"browserstage2" { 4 }' "detached browser progress total"
 Assert-Contains $detachedResultSchema '"BrowserStage2"' "detached browser result schema"
+Assert-Contains $detachedResultSchema '"Incremental"' "detached incremental result schema"
 Assert-Contains $detachedCancellation 'The recorded supervisor PID does not identify the expected run' "cancellation request binds to the recorded supervisor identity"
 Assert-Contains $detachedCancellation '@($result.orphanProcessIds).Count -ne 0' "cancellation request rejects orphan processes"
 Assert-Contains $detachedVerificationContract '$observer.Id -eq $result.supervisorPid' "observer and supervisor process separation check"

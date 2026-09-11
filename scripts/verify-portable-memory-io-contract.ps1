@@ -32,10 +32,11 @@ foreach ($fixture in $contract.fixtures) {
 $source = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/io.slg'))
 foreach ($required in @(
     'public trait Reader',
-    'readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>',
+    'readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Failure>',
     'public trait Writer',
-    'writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error>',
+    'writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, Failure>',
     'impl Reader for MemoryReader',
+    'type Failure = Error',
     'public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error>',
     'impl Writer for MemoryWriter',
     'public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error>',
@@ -43,10 +44,10 @@ foreach ($required in @(
     'public writeAll: mut self, input: [UInt8] -> Result<Int, Error>',
     'public struct TransferPolicy',
     'public copy<R, W>: self, reader: mut R, writer: mut W -> Result<CopyOutcome, Error>',
-    'where R: Reader, W: Writer',
+    'where R: Reader, R.Failure == Error, W: Writer, W.Failure == Error',
     'public struct ReplayBuffer',
     'public replayBuffer maxReplayBytes: Int -> Result<ReplayBuffer, Error>',
-    'public readExactFrom<R>: mut self, reader: mut R, output: mut [UInt8; ~] -> Result<Int, Error> where R: Reader',
+    'public readExactFrom<R>: mut self, reader: mut R, output: mut [UInt8; ~] -> Result<Int, Error> where R: Reader, R.Failure == Error',
     'compactPrefix(self.bytes, self.start)',
     'reader -> model.Reader.readInto(self.scratch)',
     'model.ErrorKind.WriteZero',
@@ -54,6 +55,21 @@ foreach ($required in @(
 )) {
     if (-not $source.Contains($required, [StringComparison]::Ordinal)) {
         throw "Portable memory I/O implementation is missing: $required"
+    }
+}
+$socketSource = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/net/socket.slg'))
+foreach ($required in @(
+    'import std.io as io',
+    'impl io.Reader for TcpStream',
+    'impl io.Writer for TcpStream',
+    'type Failure = SocketError',
+    'public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, SocketError> uses Network',
+    'self -> receiveInto(output)',
+    'public writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, SocketError> uses Network',
+    'self -> sendRange(input, offset, length)'
+)) {
+    if (-not $socketSource.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable socket I/O adapter is missing: $required"
     }
 }
 if ([regex]::Matches($source, '(?m)^public trait Reader \{').Count -ne 1 -or
@@ -105,6 +121,17 @@ foreach ($required in @(
         throw "Portable memory I/O replay fixture no longer proves: $required"
     }
 }
+$socketFixture = [IO.File]::ReadAllText((Join-Path $root 'examples/regression/1685-io-socket-protocol-adapters.slg'))
+foreach ($required in @(
+    'stream! -> io.Writer.writeRange(bytes!, 2, 4)',
+    'stream! -> io.Reader.readInto(received!)',
+    'Result<UIntSize, socket.SocketError>',
+    'Result<Bool, socket.SocketError>'
+)) {
+    if (-not $socketFixture.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable socket I/O fixture no longer proves: $required"
+    }
+}
 
 $spec = [IO.File]::ReadAllText((Join-Path $root 'docs/SPEC.md'))
 $evolution = [IO.File]::ReadAllText((Join-Path $root 'docs/STDLIB_EVOLUTION.md'))
@@ -113,8 +140,8 @@ foreach ($required in @('`std.io.Reader`', '`std.io.Writer`')) {
         throw "Sollang specification is missing portable memory I/O contract: $required"
     }
 }
-if ($spec -notmatch 'fixed\s+`Result<Int, Error>`') {
-    throw 'Sollang specification is missing the fixed portable result contract'
+if ($spec -notmatch 'associated\s+failure') {
+    throw 'Sollang specification is missing the associated portable failure contract'
 }
 if ($evolution -notmatch 'shared\s+`Reader` and `Writer`\s+protocols') {
     throw 'stdlib evolution backlog is missing shared portable memory I/O protocol status'
