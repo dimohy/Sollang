@@ -69,6 +69,8 @@ $cases = @(
     @{name='1539-branch-fixed-owned-elements';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1539-branch-fixed-owned-elements.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=4},
     @{name='1540-branch-fixed-mutable-local';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1540-branch-fixed-mutable-local.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=4},
     @{name='1541-branch-fixed-return';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1541-branch-fixed-return.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
+    @{name='1543-fixed-int-branch-result';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1543-fixed-int-branch-result.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
+    @{name='1544-fixed-text-branch-result';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1544-fixed-text-branch-result.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
     @{name='1542-entry-branch-lifetime';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1542-entry-branch-lifetime.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
     @{name='1545-fixed-field-copy-independence';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1545-fixed-field-copy-independence.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1},
     @{name='1554-borrowed-fixed-field-copy-independence';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1554-borrowed-fixed-field-copy-independence.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
