@@ -172,6 +172,7 @@ $nativeReleasePackagePath = Join-Path $RepositoryRoot "scripts/native-release-pa
 $nativeReleasePackageContractPath = Join-Path $RepositoryRoot "scripts/verify-native-release-package-contract.ps1"
 $browserStage2Path = Join-Path $RepositoryRoot "scripts/build-stage2-browser.ps1"
 $browserStage2FingerprintPath = Join-Path $RepositoryRoot "scripts/browser-stage2-input-fingerprint.ps1"
+$browserOutputScopePath = Join-Path $RepositoryRoot "scripts/browser-output-scope.ps1"
 $browserStage2ArtifactVerifierPath = Join-Path $RepositoryRoot "scripts/verify-browser-stage2-artifacts.ps1"
 $browserStage2RunnerPath = Join-Path $RepositoryRoot "scripts/verify-browser-stage2.mjs"
 $browserProgramRunnerPath = Join-Path $RepositoryRoot "scripts/verify-browser-program.mjs"
@@ -533,6 +534,7 @@ $nativeReleasePackage = [IO.File]::ReadAllText($nativeReleasePackagePath)
 $nativeReleasePackageContract = [IO.File]::ReadAllText($nativeReleasePackageContractPath)
 $browserStage2 = [IO.File]::ReadAllText($browserStage2Path)
 $browserStage2Fingerprint = [IO.File]::ReadAllText($browserStage2FingerprintPath)
+$browserOutputScope = [IO.File]::ReadAllText($browserOutputScopePath)
 $browserStage2ArtifactVerifier = [IO.File]::ReadAllText($browserStage2ArtifactVerifierPath)
 $browserStage2Runner = [IO.File]::ReadAllText($browserStage2RunnerPath)
 $browserProgramRunner = [IO.File]::ReadAllText($browserProgramRunnerPath)
@@ -2594,7 +2596,11 @@ Assert-Contains $browserStage2 '(@("format", "--check") + $browserSources)' "bro
 Assert-Contains $browserStage2 'verify-selfhost-stage3-artifacts.ps1' "browser compiler current native fixed-point preflight"
 Assert-Contains $browserStage2 '-Platform windows' "browser compiler Windows fixed-point platform"
 Assert-Contains $browserStage2 '$AllowUnpromotedCandidate -ne $focusedMode' "focused browser candidate requires an explicit single-fixture mode"
-Assert-Contains $browserStage2 'browser compiler output must remain under $artifactRoot' "focused browser outputs remain inside artifacts"
+Assert-Contains $browserStage2 'Assert-BrowserCompilerOutputRoot' "browser compiler uses the shared output-scope boundary"
+Assert-Contains $browserOutputScope '$candidate.Equals($root' "browser output scope accepts the artifact root itself"
+Assert-Contains $browserOutputScope '$candidate.StartsWith(' "browser output scope accepts artifact descendants"
+Assert-Contains $browserOutputScope 'browser compiler output must remain under $root' "browser output scope rejects paths outside artifacts"
+Assert-Contains $control '(arm.kind == 19 and armSource.kind == 58) => conditionalArm' "boolean when distinguishes conditional arms from a region-backed else arm"
 Assert-Contains $browserStage2 'focused browser fixture is not registered exactly once' "focused browser fixture selection is exact and fail-fast"
 Assert-Contains $browserStage2 'if (-not $focusedMode)' "focused browser candidate skips the unrelated diagnostic suite"
 Assert-Contains $browserStage2 'Retain the verified focused candidate under artifacts without publication' "focused browser candidate cannot publish the public compiler"
