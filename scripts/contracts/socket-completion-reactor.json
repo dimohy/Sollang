@@ -1,0 +1,81 @@
+{
+  "$schema": "socket-completion-reactor.schema.json",
+  "schemaVersion": 1,
+  "module": "std.net.socket",
+  "capacity": {
+    "fields": ["registrations", "pendingOperations", "completionBatch"],
+    "minimum": 1,
+    "maximum": 1024,
+    "relations": [
+      "completionBatch <= pendingOperations",
+      "pendingOperations <= registrations"
+    ],
+    "failure": "InvalidArgument before network effects or allocation"
+  },
+  "states": ["Vacant", "Pending", "Completed", "Cancelled"],
+  "transitions": [
+    { "from": "Vacant", "to": "Pending", "cause": "successful submission" },
+    { "from": "Vacant", "to": "Completed", "cause": "synchronous completion" },
+    { "from": "Pending", "to": "Completed", "cause": "one native completion wins" },
+    { "from": "Pending", "to": "Cancelled", "cause": "one cancellation wins" },
+    { "from": "Completed", "to": "Vacant", "cause": "caller reclaims completion" },
+    { "from": "Cancelled", "to": "Vacant", "cause": "caller reclaims cancellation" }
+  ],
+  "ownership": [
+    "one affine slot owns one application key and one native operation identity",
+    "one affine slot owns the socket operation direction and exact byte range",
+    "one affine slot owns its caller-provided byte buffer while submitted",
+    "submission consumes a Vacant slot and rejects double submission",
+    "completion returns the original slot and buffer without payload copying",
+    "reclaim consumes one terminal slot and rejects double reclaim"
+  ],
+  "completion": [
+    "synchronous completion returns directly without recording a wake target",
+    "only a genuinely pending operation records its Task wake target",
+    "completion preserves the exact transferred byte count or SocketError",
+    "completion and cancellation race through one atomic terminal-state winner",
+    "callbacks schedule ready Tasks and never execute user continuations"
+  ],
+  "platforms": {
+    "windows-x64": {
+      "capability": "completion",
+      "primitive": "IOCP with GetQueuedCompletionStatusEx",
+      "semantics": [
+        "one OVERLAPPED identity per reusable slot",
+        "bounded batched dequeue",
+        "exact transferred byte count and native error"
+      ]
+    },
+    "linux-x64": {
+      "capability": "readiness",
+      "primitive": "epoll with nonblocking sockets",
+      "semantics": [
+        "bounded event batch",
+        "perform the requested operation until completion or EAGAIN",
+        "acknowledge only the direction that reached EAGAIN"
+      ]
+    },
+    "wasm32-browser": {
+      "capability": "unsupported",
+      "primitive": "actionable target diagnostic",
+      "semantics": ["raw socket Reactor creation is rejected without fallback"]
+    }
+  },
+  "forbidden": [
+    "blocking worker thread presented as socket async",
+    "busy-loop or repeated zero-timeout polling",
+    "unbounded registration, operation, or completion queues",
+    "per-operation payload allocation or copy",
+    "unconditional Linux readiness clearing",
+    "global mutable callback registry",
+    "browser transport substitution"
+  ],
+  "milestones": [
+    { "id": "configuration", "status": "contracted", "evidence": ["scripts/contracts/socket-completion-reactor.json"] },
+    { "id": "slot", "status": "contracted", "evidence": ["examples/regression/1692-async-owned-array-cancellation.slg"] },
+    { "id": "submission", "status": "planned", "evidence": [] },
+    { "id": "completion", "status": "planned", "evidence": [] },
+    { "id": "cancellation", "status": "planned", "evidence": [] },
+    { "id": "platformExecution", "status": "planned", "evidence": [] }
+  ]
+}

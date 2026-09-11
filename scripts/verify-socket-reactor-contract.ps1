@@ -29,6 +29,12 @@ $selfhostEmitter = Read-Authority "selfhost/llvm/text/platform_io.slg"
 $selfhostRuntime = Read-Authority "selfhost/llvm/emitter/socket_runtime.slg"
 $nativeExactBatch = Read-Authority "scripts/verify-native-exact-fixture-batch.ps1"
 $fixture = Read-Authority "examples/regression/1378-socket-reactor-wait-into.slg"
+$completionContractText = Read-Authority "scripts/contracts/socket-completion-reactor.json"
+$completionContractSchema = Join-Path $RepositoryRoot "scripts/contracts/socket-completion-reactor.schema.json"
+if (-not (Test-Json -Json $completionContractText -SchemaFile $completionContractSchema)) {
+    throw "socket completion reactor contract does not satisfy its schema"
+}
+$completionContract = $completionContractText | ConvertFrom-Json
 
 Require $publicSocket "public struct Reactor {" "instance reactor owner"
 Require $publicSocket "interests: [Interest; ~]" "reactor registration storage"
@@ -47,6 +53,46 @@ Require $fixture "reactor! -> registerStream(firstServer, 101, socket.InterestMo
 Require $fixture "reactor! -> registerStream(secondServer, 202, socket.InterestMode.Read)?" "second keyed registration"
 Require $fixture "reactor! -> clear" "registered-borrow release before close"
 Require $nativeExactBatch '"1378-socket-reactor-wait-into"' "Stage2/Stage3 native promotion fixture"
+
+if (@($completionContract.states) -join ',' -cne 'Vacant,Pending,Completed,Cancelled') {
+    throw "socket completion reactor states must retain their exact affine order"
+}
+$expectedTransitions = @(
+    'Vacant>Pending',
+    'Vacant>Completed',
+    'Pending>Completed',
+    'Pending>Cancelled',
+    'Completed>Vacant',
+    'Cancelled>Vacant'
+)
+$actualTransitions = @($completionContract.transitions | ForEach-Object { "$($_.from)>$($_.to)" })
+if ($actualTransitions.Count -ne $expectedTransitions.Count -or
+    @(Compare-Object $expectedTransitions $actualTransitions).Count -ne 0) {
+    throw "socket completion reactor transition set is incomplete or ambiguous"
+}
+if (@($completionContract.capacity.fields) -join ',' -cne 'registrations,pendingOperations,completionBatch' -or
+    @($completionContract.capacity.relations) -join ',' -cne 'completionBatch <= pendingOperations,pendingOperations <= registrations') {
+    throw "socket completion reactor bounded-capacity relations are incomplete"
+}
+if ($completionContract.platforms.'windows-x64'.primitive -cne 'IOCP with GetQueuedCompletionStatusEx' -or
+    $completionContract.platforms.'linux-x64'.primitive -cne 'epoll with nonblocking sockets' -or
+    $completionContract.platforms.'wasm32-browser'.capability -cne 'unsupported') {
+    throw "socket completion reactor platform specialization is incomplete"
+}
+$milestones = @($completionContract.milestones)
+if ($milestones.Count -ne 6 -or @($milestones.id | Sort-Object -Unique).Count -ne 6) {
+    throw "socket completion reactor must track six distinct implementation milestones"
+}
+foreach ($forbidden in @(
+    'blocking worker thread presented as socket async',
+    'busy-loop or repeated zero-timeout polling',
+    'per-operation payload allocation or copy',
+    'global mutable callback registry'
+)) {
+    if ($completionContract.forbidden -cnotcontains $forbidden) {
+        throw "socket completion reactor contract lost forbidden shortcut: $forbidden"
+    }
+}
 
 if ([regex]::Matches($windowsRuntime, 'define internal %sollang\.socket_result @sollang_platform_socket_reactor_wait').Count -ne 1) {
     throw "managed Windows runtime must define reactor_wait exactly once"

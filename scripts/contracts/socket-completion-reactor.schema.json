@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "module",
+    "capacity",
+    "states",
+    "transitions",
+    "ownership",
+    "completion",
+    "platforms",
+    "forbidden",
+    "milestones"
+  ],
+  "properties": {
+    "$schema": { "const": "socket-completion-reactor.schema.json" },
+    "schemaVersion": { "const": 1 },
+    "module": { "const": "std.net.socket" },
+    "capacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields", "minimum", "maximum", "relations", "failure"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": { "enum": ["registrations", "pendingOperations", "completionBatch"] },
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "minimum": { "const": 1 },
+        "maximum": { "const": 1024 },
+        "relations": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 } },
+        "failure": { "type": "string", "minLength": 1 }
+      }
+    },
+    "states": {
+      "type": "array",
+      "items": { "enum": ["Vacant", "Pending", "Completed", "Cancelled"] },
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true
+    },
+    "transitions": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "cause"],
+        "properties": {
+          "from": { "enum": ["Vacant", "Pending", "Completed", "Cancelled"] },
+          "to": { "enum": ["Pending", "Completed", "Cancelled", "Vacant"] },
+          "cause": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "ownership": { "type": "array", "minItems": 6, "items": { "type": "string", "minLength": 1 } },
+    "completion": { "type": "array", "minItems": 5, "items": { "type": "string", "minLength": 1 } },
+    "platforms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["windows-x64", "linux-x64", "wasm32-browser"],
+      "properties": {
+        "windows-x64": { "$ref": "#/definitions/platform" },
+        "linux-x64": { "$ref": "#/definitions/platform" },
+        "wasm32-browser": { "$ref": "#/definitions/platform" }
+      }
+    },
+    "forbidden": { "type": "array", "minItems": 6, "items": { "type": "string", "minLength": 1 } },
+    "milestones": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "evidence"],
+        "properties": {
+          "id": { "enum": ["configuration", "slot", "submission", "completion", "cancellation", "platformExecution"] },
+          "status": { "enum": ["planned", "contracted", "implemented", "verified"] },
+          "evidence": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "primitive", "semantics"],
+      "properties": {
+        "capability": { "enum": ["completion", "readiness", "unsupported"] },
+        "primitive": { "type": "string", "minLength": 1 },
+        "semantics": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  }
+}
