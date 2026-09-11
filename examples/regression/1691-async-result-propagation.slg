@@ -1,0 +1,25 @@
+# Result propagation inside an async function must store the complete Result
+# only at function completion; its readiness worker itself returns Bool.
+parse value: Int -> Result<Int, Text> {
+    value >= 0 -> if {
+        Result<Int, Text>.Ok(value)
+    } else {
+        Result<Int, Text>.Err("negative")
+    }
+}
+
+increment value: Int -> async Result<Int, Text> {
+    value -> parse? => parsed
+    Result<Int, Text>.Ok(parsed + 1)
+}
+
+main {
+    41 -> increment -> await -> when {
+        Ok(value) { "async-result=$value" -> println }
+        Err(error) { "unexpected=$error" -> println }
+    }
+    -1 -> increment -> await -> when {
+        Ok(value) { "unexpected=$value" -> println }
+        Err(error) { "async-error=$error" -> println }
+    }
+}

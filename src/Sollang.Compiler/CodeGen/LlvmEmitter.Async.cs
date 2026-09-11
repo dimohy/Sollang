@@ -818,6 +818,19 @@ internal sealed partial class LlvmEmitter
         EmitStore(result.TypeName, result.ValueName, resultAddress, RuntimeAlignment(function.ReturnType));
     }
 
+    private void EmitPropagatedResultReturn(BoundFunction function, RuntimeValue value)
+    {
+        if (function.IsAsync)
+        {
+            StoreAsyncResult(function, value);
+            EmitRet("i1", "true");
+            return;
+        }
+
+        var materialized = MaterializeAggregateValue(value);
+        EmitRet(materialized.TypeName, materialized.ValueName);
+    }
+
     private bool TryGetCfgSuspendPlan(BoundFunction function, out AsyncCfgPlan? plan)
     {
         plan = null;

@@ -559,8 +559,7 @@ internal sealed partial class LlvmEmitter
         var errorVariant = outerDefinition.Variants.First(variant => variant.Name == "Err");
         var propagated = EmitEnumValue(function.ReturnType, errorVariant, errorPayload);
         DropOwnedLocals();
-        var materialized = MaterializeAggregateValue(propagated);
-        EmitRet(materialized.TypeName, materialized.ValueName);
+        EmitPropagatedResultReturn(function, propagated);
 
         EmitLabel(okLabel);
         _currentBlockLabel = okLabel;

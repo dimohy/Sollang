@@ -925,6 +925,16 @@ spinning -> cancel
 finiteTask -> await => result
 ```
 
+Fallible async helpers use ordinary postfix propagation. An error completes
+the Task with `Err`; it does not escape through the readiness worker itself:
+
+```sollang
+load id: Int -> async Result<Record, Error> {
+    id -> fetch? => record
+    Result<Record, Error>.Ok(record)
+}
+```
+
 Do not create a task and immediately await it when independent work could have
 started first. Do not detach tasks, hide unbounded task creation, hold a mutable
 borrow across overlap, or assume `async` grants `File`, `Clock`, or `Process`.

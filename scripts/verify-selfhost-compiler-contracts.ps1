@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 & (Join-Path $PSScriptRoot "verify-ai-slg-best-practices.ps1") -RepositoryRoot $RepositoryRoot
+& (Join-Path $PSScriptRoot "verify-async-result-propagation-contract.ps1") -RepositoryRoot $RepositoryRoot
 & (Join-Path $PSScriptRoot "verify-portable-memory-io-contract.ps1") -RepositoryRoot $RepositoryRoot
 & (Join-Path $PSScriptRoot "verify-project-progress.ps1") -RepositoryRoot $RepositoryRoot
 & (Join-Path $PSScriptRoot "verify-native-exact-source-closure-contract.ps1")

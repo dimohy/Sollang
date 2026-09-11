@@ -406,10 +406,13 @@ the default, so the change does not silently reinterpret existing stdlib data
 contracts. An optional `opaque` safety mode is rejected because correctness must
 not depend on each developer remembering to opt in.
 
-Compiler follow-up exposed by the time foundation: postfix `?` inside a user
-async function that returns `Result` currently tries to return the enum directly
-from the internal `i1` readiness worker. Repair that worker result-store edge
-before presenting async fallible wrappers as supported. Fixture 1062 protects
+Compiler follow-up exposed by the time foundation: the managed backend now
+stores a propagated `Err` in the async Task result slot and completes the
+internal `i1` readiness worker through its Boolean ABI. Fixture 1691 executes
+both the successful and propagated-error paths. The self-host LLVM backend still
+does not own the equivalent structured-async scheduler; synchronous output
+equivalence is not async parity and cannot promote async fallible wrappers.
+Fixture 1062 protects
 the self-host value and instance-resolution foundation. Fixture 1066 executes
 the non-blocking `Duration.sleep` instance intrinsic through the managed task
 runtime; it must join the Stage3 LLVM inventory only after the self-host backend

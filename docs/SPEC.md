@@ -1063,6 +1063,14 @@ completes immediately; a negative duration cannot be constructed. Canceling a sl
 timer queue and destroys its context exactly once. File-descriptor readiness,
 task groups, closure-capture analysis, and failure propagation follow.
 
+Postfix `?` inside an `async Result<T, E>` function completes the affine Task
+with the fully constructed `Err(E)`. The internal readiness worker stores that
+Result in the Task context and returns `true`; it never returns the enum through
+the worker's Boolean readiness ABI. The managed Windows/Linux backend
+implements this contract; the browser target rejects async functions. The self-host LLVM backend still
+lacks the equivalent structured-async scheduler and must not claim parity
+merely because a synchronous lowering happens to print the same output.
+
 ## Local Functions
 
 Functions may declare local helper functions before their final body expression:
