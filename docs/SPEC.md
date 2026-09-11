@@ -1066,8 +1066,12 @@ remaining time reaches zero when due instead of becoming negative.
 `FixedClock` is a pure injected UTC source. `OffsetClock` applies an explicit
 signed millisecond offset to the system wall clock and reports `Overflow`
 rather than wrapping. Neither value is a monotonic elapsed-time source. Clock
-capability reporting, affine periodic timers, and network/process deadline
-consumers remain separate unfinished slices.
+capabilities expose whole-millisecond `resolution`, bounded `maximumDelay`, and
+a typed `SuspendPolicy`. The compiled Windows monotonic clock reports
+`IncludesSystemSuspend`, Linux reports `ExcludesSystemSuspend`, and browser
+builds report `Unspecified` instead of inventing host timing guarantees. Affine
+periodic timers and network/process deadline consumers remain separate
+unfinished slices.
 
 `sleep` registers its Task in the executor's deadline-ordered timer queue. It
 does not allocate an OS thread and does not remain in the runnable queue. When

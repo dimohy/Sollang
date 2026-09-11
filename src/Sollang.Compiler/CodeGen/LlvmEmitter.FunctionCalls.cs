@@ -118,16 +118,21 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeFlushStandardOutputIntrinsic();
         }
 
-        if (function.Kind is BoundFunctionKind.RuntimeNowMillis or BoundFunctionKind.RuntimeUtcNowMillis)
+        if (function.Kind is BoundFunctionKind.RuntimeNowMillis
+            or BoundFunctionKind.RuntimeUtcNowMillis
+            or BoundFunctionKind.RuntimeMonotonicSuspendPolicy)
         {
             if (expression.Arguments.Count != 0)
             {
                 throw new SollangException($"{path} does not accept arguments");
             }
 
-            return function.Kind == BoundFunctionKind.RuntimeUtcNowMillis
-                ? EmitRuntimeUtcNowMillisIntrinsic(path)
-                : EmitRuntimeNowMillisIntrinsic(path);
+            return function.Kind switch
+            {
+                BoundFunctionKind.RuntimeUtcNowMillis => EmitRuntimeUtcNowMillisIntrinsic(path),
+                BoundFunctionKind.RuntimeMonotonicSuspendPolicy => EmitRuntimeMonotonicSuspendPolicyIntrinsic(path),
+                _ => EmitRuntimeNowMillisIntrinsic(path)
+            };
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeRangeStream)
@@ -1272,16 +1277,21 @@ internal sealed partial class LlvmEmitter
             return EmitReadIntPrompt(argument);
         }
 
-        if (function.Kind is BoundFunctionKind.RuntimeNowMillis or BoundFunctionKind.RuntimeUtcNowMillis)
+        if (function.Kind is BoundFunctionKind.RuntimeNowMillis
+            or BoundFunctionKind.RuntimeUtcNowMillis
+            or BoundFunctionKind.RuntimeMonotonicSuspendPolicy)
         {
             if (argument is not null)
             {
                 throw new SollangException($"{function.Name} does not accept an argument");
             }
 
-            return function.Kind == BoundFunctionKind.RuntimeUtcNowMillis
-                ? EmitRuntimeUtcNowMillisIntrinsic(function.Name)
-                : EmitRuntimeNowMillisIntrinsic(function.Name);
+            return function.Kind switch
+            {
+                BoundFunctionKind.RuntimeUtcNowMillis => EmitRuntimeUtcNowMillisIntrinsic(function.Name),
+                BoundFunctionKind.RuntimeMonotonicSuspendPolicy => EmitRuntimeMonotonicSuspendPolicyIntrinsic(function.Name),
+                _ => EmitRuntimeNowMillisIntrinsic(function.Name)
+            };
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeRangeStream)

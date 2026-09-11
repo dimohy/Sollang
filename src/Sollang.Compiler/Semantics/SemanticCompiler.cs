@@ -2888,6 +2888,13 @@ internal sealed partial class SemanticCompiler
                 expectedInputType: null,
                 BoundType.Int64,
                 BoundFunctionKind.RuntimeUtcNowMillis),
+            "sys.runtime.monotonicSuspendPolicy" => RequireIntrinsicSignature(
+                function,
+                inputType,
+                returnType,
+                expectedInputType: null,
+                BoundType.UInt8,
+                BoundFunctionKind.RuntimeMonotonicSuspendPolicy),
             "sys.runtime.parallel" => RequireParallelIntrinsicSignature(function),
             "sys.runtime.tryParallel" => RequireTryParallelIntrinsicSignature(function),
             "sys.runtime.limitParallelWorkers" => RequireIntrinsicSignature(
@@ -11751,6 +11758,7 @@ internal sealed partial class SemanticCompiler
                 return BoundType.Unit;
             case BoundFunctionKind.RuntimeNowMillis:
             case BoundFunctionKind.RuntimeUtcNowMillis:
+            case BoundFunctionKind.RuntimeMonotonicSuspendPolicy:
             case BoundFunctionKind.RuntimePathStyle:
             case BoundFunctionKind.RuntimeParallelWorkers:
             case BoundFunctionKind.RuntimeParallelPeakWorkers:

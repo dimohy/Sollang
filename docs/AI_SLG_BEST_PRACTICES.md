@@ -930,6 +930,11 @@ the source instance, compare them only with a reading from that source, and
 propagate the typed different-clock error. Fixed and offset wall clocks do not
 replace a monotonic source for elapsed time or scheduling.
 
+Inspect `clock -> capabilities` when behavior depends on resolution, maximum
+delay, or whether monotonic time includes system suspend. Match every
+`SuspendPolicy` case explicitly; `Unspecified` is a real target boundary, not a
+reason to assume either native policy.
+
 Fallible async helpers use ordinary postfix propagation. An error completes
 the Task with `Err`; it does not escape through the readiness worker itself:
 

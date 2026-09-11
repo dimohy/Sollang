@@ -12,9 +12,15 @@ $schemaPath = Join-Path $root "scripts\contracts\time-api.schema.json"
 $publicPath = Join-Path $root "stdlib\std\time.slg"
 $runtimeTimePath = Join-Path $root "stdlib\sys\runtime\time.slg"
 $runtimeClockPath = Join-Path $root "stdlib\sys\runtime\clock.slg"
+$boundProgramPath = Join-Path $root "src\Sollang.Compiler\Semantics\BoundProgram.cs"
+$semanticCompilerPath = Join-Path $root "src\Sollang.Compiler\Semantics\SemanticCompiler.cs"
+$runtimeIntrinsicsPath = Join-Path $root "src\Sollang.Compiler\CodeGen\LlvmEmitter.RuntimeIntrinsics.cs"
+$functionCallsPath = Join-Path $root "src\Sollang.Compiler\CodeGen\LlvmEmitter.FunctionCalls.cs"
+$selfhostRuntimePath = Join-Path $root "selfhost\llvm\runtime.slg"
+$selfhostRuntimeResolutionPath = Join-Path $root "selfhost\llvm\text\runtime_resolution.slg"
 $fixturePath = Join-Path $root "examples\regression\1694-time-source-deadline-clocks.slg"
 $nativeExactBatchPath = Join-Path $root "scripts\verify-native-exact-fixture-batch.ps1"
-foreach ($path in @($contractPath, $schemaPath, $publicPath, $runtimeTimePath, $runtimeClockPath, $fixturePath, $nativeExactBatchPath)) {
+foreach ($path in @($contractPath, $schemaPath, $publicPath, $runtimeTimePath, $runtimeClockPath, $boundProgramPath, $semanticCompilerPath, $runtimeIntrinsicsPath, $functionCallsPath, $selfhostRuntimePath, $selfhostRuntimeResolutionPath, $fixturePath, $nativeExactBatchPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "time API contract input is missing: $path"
     }
@@ -29,14 +35,14 @@ if ($contract.version -ne 1 -or
     $contract.module -cne "std.time" -or
     $contract.runtimeModule -cne "sys.runtime" -or
     $contract.officialReferences.Count -ne 4 -or
-    $contract.implementedSurfaces.Count -ne 23 -or
+    $contract.implementedSurfaces.Count -ne 28 -or
     $contract.invariants.Count -ne 10 -or
     $contract.orderedSlices.Count -ne 6) {
     throw "time API contract dimensions drifted"
 }
 
 $expectedSliceIds = @("T1", "T2", "T3", "T4", "T5", "T6")
-$expectedSliceStatuses = @("pending", "in-progress", "in-progress", "pending", "in-progress", "pending")
+$expectedSliceStatuses = @("complete", "in-progress", "in-progress", "pending", "in-progress", "pending")
 for ($index = 0; $index -lt $expectedSliceIds.Count; $index += 1) {
     $slice = $contract.orderedSlices[$index]
     if ($slice.id -cne $expectedSliceIds[$index] -or $slice.status -cne $expectedSliceStatuses[$index]) {
@@ -61,6 +67,8 @@ foreach ($required in @(
     "public struct Deadline",
     "public struct FixedClock",
     "public struct OffsetClock",
+    "public enum SuspendPolicy",
+    "public struct ClockCapabilities",
     "public checkedAdd: self",
     "public checkedSub: self",
     "public checkedMultiply: self",
@@ -70,6 +78,7 @@ foreach ($required in @(
     "public sourceIdentity: self -> UInt64",
     "public sameSource: self, other: MonotonicInstant -> Bool",
     "public deadlineAfter: self, duration: Duration -> Result<Deadline, Error>",
+    "public capabilities: self -> ClockCapabilities",
     "public remaining: self, now: MonotonicInstant -> Result<Duration, Error>",
     "public isDue: self, now: MonotonicInstant -> Result<Bool, Error>",
     "public now: self -> Result<UtcInstant, Error> uses Clock",
@@ -79,6 +88,23 @@ foreach ($required in @(
     "public set: mut self")) {
     if (-not $publicSource.Contains($required, [System.StringComparison]::Ordinal)) {
         throw "time API implementation is missing: $required"
+    }
+}
+$selfhostRuntime = [System.IO.File]::ReadAllText($selfhostRuntimePath)
+$selfhostRuntimeResolution = [System.IO.File]::ReadAllText($selfhostRuntimeResolutionPath)
+foreach ($required in @(
+    "public monotonicSuspendPolicyRef: RuntimeFunctionRef",
+    "ret i8 0",
+    "ret i8 1")) {
+    if (-not $selfhostRuntime.Contains($required, [System.StringComparison]::Ordinal)) {
+        throw "self-host time capability lowering is missing: $required"
+    }
+}
+foreach ($required in @(
+    'monotonicSuspendPolicyRef: runtimeModule -> runtimeFunctionRef("monotonicSuspendPolicy", context)',
+    'if { "monotonicSuspendPolicy" -> return }')) {
+    if (-not $selfhostRuntimeResolution.Contains($required, [System.StringComparison]::Ordinal)) {
+        throw "self-host time capability resolution is missing: $required"
     }
 }
 foreach ($forbidden in @(
@@ -98,9 +124,38 @@ $runtimeClock = [System.IO.File]::ReadAllText($runtimeClockPath)
 foreach ($required in @(
     "namespace sys.runtime",
     "public nowMillis: -> Long = intrinsic",
-    "public utcNowMillis: -> Long = intrinsic")) {
+    "public utcNowMillis: -> Long = intrinsic",
+    "public monotonicSuspendPolicy: -> UInt8 = intrinsic")) {
     if (-not $runtimeClock.Contains($required, [System.StringComparison]::Ordinal)) {
         throw "time runtime boundary is missing: $required"
+    }
+}
+$boundProgram = [System.IO.File]::ReadAllText($boundProgramPath)
+$semanticCompiler = [System.IO.File]::ReadAllText($semanticCompilerPath)
+$runtimeIntrinsics = [System.IO.File]::ReadAllText($runtimeIntrinsicsPath)
+$functionCalls = [System.IO.File]::ReadAllText($functionCallsPath)
+foreach ($required in @(
+    "RuntimeMonotonicSuspendPolicy")) {
+    if (-not $boundProgram.Contains($required, [System.StringComparison]::Ordinal) -or
+        -not $semanticCompiler.Contains($required, [System.StringComparison]::Ordinal) -or
+        -not $functionCalls.Contains($required, [System.StringComparison]::Ordinal)) {
+        throw "managed compiler time intrinsic identity is missing: $required"
+    }
+}
+foreach ($required in @(
+    '"sys.runtime.monotonicSuspendPolicy"',
+    "BoundType.UInt8")) {
+    if (-not $semanticCompiler.Contains($required, [System.StringComparison]::Ordinal)) {
+        throw "managed compiler time intrinsic signature is missing: $required"
+    }
+}
+foreach ($required in @(
+    "EmitRuntimeMonotonicSuspendPolicyIntrinsic",
+    'WindowsLlvmRuntimePlatform => "0"',
+    'LinuxLlvmRuntimePlatform => "1"',
+    '_ => "2"')) {
+    if (-not $runtimeIntrinsics.Contains($required, [System.StringComparison]::Ordinal)) {
+        throw "managed compiler time capability lowering is missing: $required"
     }
 }
 if (Test-Path -LiteralPath (Join-Path $root "stdlib\sys\time.slg")) {
@@ -110,6 +165,11 @@ if (Test-Path -LiteralPath (Join-Path $root "stdlib\sys\time.slg")) {
 $fixture = [System.IO.File]::ReadAllText($fixturePath)
 $nativeExactBatch = [System.IO.File]::ReadAllText($nativeExactBatchPath)
 foreach ($required in @(
+    "time.monotonicClock() -> capabilities",
+    "time.wallClock() -> capabilities",
+    "IncludesSystemSuspend",
+    "ExcludesSystemSuspend",
+    "Unspecified",
     "time.manualClock(7, 1_000)",
     "deadline -> remaining(start)",
     "deadline -> isDue(clock! -> now)",
@@ -123,4 +183,4 @@ if (-not $nativeExactBatch.Contains('"1694-time-source-deadline-clocks"', [Syste
     throw "time source/deadline fixture is missing from native exact promotion"
 }
 
-Write-Host "[time API contract] PASS $($contract.implementedSurfaces.Count) implemented surfaces, $($contract.invariants.Count) invariants, 3/6 active slices, and 3 target policies."
+Write-Host "[time API contract] PASS $($contract.implementedSurfaces.Count) implemented surfaces, $($contract.invariants.Count) invariants, T1 complete, 3 additional active slices, and 3 target policies."

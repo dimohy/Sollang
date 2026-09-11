@@ -58,6 +58,18 @@ public struct OffsetClock {
     offsetMillis: Long
 }
 
+public enum SuspendPolicy {
+    IncludesSystemSuspend
+    ExcludesSystemSuspend
+    Unspecified
+}
+
+public struct ClockCapabilities {
+    public resolution: Duration
+    public suspendPolicy: SuspendPolicy
+    public maximumDelay: Duration
+}
+
 public enum ErrorKind {
     NegativeDuration
     NegativeResult
@@ -220,6 +232,19 @@ impl MonotonicClock {
         self -> now -> checkedAdd(duration)? => instant
         Result<Deadline, Error>.Ok(Deadline { instant: instant })
     }
+
+    public capabilities: self -> ClockCapabilities {
+        runtime.monotonicSuspendPolicy() -> when {
+            == 0 { model.SuspendPolicy.IncludesSystemSuspend }
+            == 1 { model.SuspendPolicy.ExcludesSystemSuspend }
+            else { model.SuspendPolicy.Unspecified }
+        } => suspendPolicy
+        ClockCapabilities {
+            resolution: Duration { millis: 1 }
+            suspendPolicy: suspendPolicy
+            maximumDelay: Duration { millis: 9_223_372_036_854_775_807 }
+        }
+    }
 }
 
 impl UtcInstant {
@@ -264,6 +289,12 @@ impl UtcInstant {
 impl WallClock {
     public now: self -> UtcInstant uses Clock => UtcInstant {
         unixMillis: runtime.utcNowMillis()
+    }
+
+    public capabilities: self -> ClockCapabilities => ClockCapabilities {
+        resolution: Duration { millis: 1 }
+        suspendPolicy: model.SuspendPolicy.IncludesSystemSuspend
+        maximumDelay: Duration { millis: 9_223_372_036_854_775_807 }
     }
 }
 

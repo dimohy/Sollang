@@ -203,6 +203,7 @@ internal enum BoundFunctionKind
     RuntimeCloseIntReader,
     RuntimeNowMillis,
     RuntimeUtcNowMillis,
+    RuntimeMonotonicSuspendPolicy,
     RuntimeSleep,
     RuntimeArguments,
     RuntimeEnvironment,

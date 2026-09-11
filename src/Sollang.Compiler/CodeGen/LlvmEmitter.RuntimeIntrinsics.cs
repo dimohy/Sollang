@@ -76,6 +76,18 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(BoundType.Int64, value);
     }
 
+    private RuntimeInt EmitRuntimeMonotonicSuspendPolicyIntrinsic(string path)
+    {
+        _ = path;
+        var value = _platform switch
+        {
+            WindowsLlvmRuntimePlatform => "0",
+            LinuxLlvmRuntimePlatform => "1",
+            _ => "2"
+        };
+        return new RuntimeInt(BoundType.UInt8, value);
+    }
+
     private RuntimeProducerStream EmitRuntimeRangeStream(
         BoundFunction function,
         RuntimeValue argument,

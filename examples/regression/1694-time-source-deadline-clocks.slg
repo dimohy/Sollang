@@ -1,6 +1,20 @@
 import std.time as time
 
 run: -> Result<Unit, time.Error> uses Console, Clock {
+    time.monotonicClock() -> capabilities => monotonicCapabilities
+    monotonicCapabilities.suspendPolicy -> when {
+        IncludesSystemSuspend { true }
+        ExcludesSystemSuspend { true }
+        Unspecified { false }
+    } => knownSuspendPolicy
+    "monotonic-capabilities=$(monotonicCapabilities.resolution -> asMilliseconds),$knownSuspendPolicy,$(monotonicCapabilities.maximumDelay -> asMilliseconds)" -> println
+    time.wallClock() -> capabilities => wallCapabilities
+    wallCapabilities.suspendPolicy -> when {
+        IncludesSystemSuspend { true }
+        else { false }
+    } => wallIncludesSuspend
+    "wall-capabilities=$(wallCapabilities.resolution -> asMilliseconds),$wallIncludesSuspend" -> println
+
     time.manualClock(7, 1_000)? => clock!
     250 -> time.milliseconds? => delay
     clock! -> deadlineAfter(delay)? => deadline
