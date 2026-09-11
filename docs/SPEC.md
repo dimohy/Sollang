@@ -1509,10 +1509,15 @@ a trait object or runtime dispatch.
 
 `MemoryReader.readExactInto` remains transactional: it validates the configured
 limit and complete source range before changing its cursor or the destination.
-This guarantee does not extend automatically to an effectful stream. A future
-generic exact helper requires either a checkpoint capability or an explicitly
-bounded replay adapter that stages bytes privately and retains a failed partial
-prefix. Bounded transactional `readAll`, file/socket protocol implementations,
+This guarantee does not extend automatically to an effectful stream.
+`ReplayBuffer` supplies the explicit bounded alternative. Its generic
+`readExactFrom` validates the complete request before source access, reads only
+the still-required byte count into reusable adapter-owned scratch, and publishes
+to the caller destination only after the entire request is present. A failed
+short read retains its prefix for the next logical read. The adapter advances a
+logical published cursor and never claims that the underlying file or socket
+cursor moved backward. Checkpoint-capable sources may provide a separate exact
+path later. Bounded transactional `readAll`, file/socket protocol implementations,
 and async buffering remain unpublished; no unbounded aggregate helper or
 implicit buffer is part of the portable protocol. This synchronous protocol
 must not hide a blocking operation behind an async-looking API; future file and

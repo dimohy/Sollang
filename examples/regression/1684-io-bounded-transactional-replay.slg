@@ -1,0 +1,96 @@
+import std.io as io
+
+# A chunked source proves exact reads retain partial progress without changing
+# caller output or pretending that the source cursor rolled back.
+struct ChunkReader {
+    bytes: [UInt8; ~]
+    offset: Int
+    maximumRead: Int
+    calls: Int
+}
+
+struct InvalidReader {
+    calls: Int
+}
+
+impl io.Reader for ChunkReader {
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, io.Error> {
+        self.calls + 1 => self.calls
+        (self.bytes -> len) - self.offset => available
+        (output -> len) < available -> if { output -> len } else { available } => count!
+        count! < self.maximumRead -> unless { self.maximumRead => count! }
+        0 => index!
+        index! < count! -> while {
+            self.bytes[self.offset + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.offset + count! => self.offset
+        Result<Int, io.Error>.Ok(count!)
+    }
+}
+
+impl io.Reader for InvalidReader {
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, io.Error> {
+        self.calls + 1 => self.calls
+        Result<Int, io.Error>.Ok((output -> len) + 1)
+    }
+}
+
+filledBytes value: UInt8, count: Int -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < count -> while {
+        bytes! -> push(value)
+        index! + 1 => index!
+    }
+    bytes!
+}
+
+run: -> Result<Bool, io.Error> uses Console {
+    io.replayBuffer(4)? => replay!
+    ChunkReader { bytes: [1, 2, 3], offset: 0, maximumRead: 2, calls: 0 } => source!
+
+    9 -> filledBytes(5) => oversized!
+    replay! -> readExactFrom(source!, oversized!) -> when {
+        Ok(count) { "unexpected-limit=$count" -> println }
+        Err(failure) {
+            "invalid@$(failure -> errorOffset),calls=$(source!.calls),out=$(oversized![0])" -> println
+        }
+    }
+
+    8 -> filledBytes(4) => short!
+    replay! -> readExactFrom(source!, short!) -> when {
+        Ok(count) { "unexpected-short=$count" -> println }
+        Err(failure) {
+            "short@$(failure -> errorOffset),source=$(source!.offset),buffered=$(replay! -> bufferedBytes),out=$(short![0])" -> println
+        }
+    }
+
+    0 -> filledBytes(2) => retained!
+    replay! -> readExactFrom(source!, retained!)? => retainedCount
+    "replay=$retainedCount,$(retained![0]),$(retained![1]),pos=$(replay! -> position),buffered=$(replay! -> bufferedBytes),calls=$(source!.calls)" -> println
+
+    io.replayBuffer(4)? => bounded!
+    ChunkReader { bytes: [4, 5, 6], offset: 0, maximumRead: 3, calls: 0 } => boundedSource!
+    0 -> filledBytes(2) => exact!
+    bounded! -> readExactFrom(boundedSource!, exact!)? => exactCount
+    "bounded=$exactCount,$(exact![0]),$(exact![1]),source=$(boundedSource!.offset),calls=$(boundedSource!.calls)" -> println
+
+    io.replayBuffer(2)? => invalid!
+    InvalidReader { calls: 0 } => invalidSource!
+    7 -> filledBytes(2) => invalidOutput!
+    invalid! -> readExactFrom(invalidSource!, invalidOutput!) -> when {
+        Ok(count) { "unexpected-progress=$count" -> println }
+        Err(failure) {
+            "progress@$(failure -> errorOffset),calls=$(invalidSource!.calls),out=$(invalidOutput![0])" -> println
+        }
+    }
+    Result<Bool, io.Error>.Ok(true)
+}
+
+main {
+    run() -> when {
+        Ok(value) { }
+        Err(failure) { "unexpected-error@$(failure -> errorOffset)" -> println }
+    }
+}

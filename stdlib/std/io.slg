@@ -52,6 +52,17 @@ public struct TransferPolicy {
     public bufferBytes: Int
 }
 
+# ReplayBuffer makes exact reads transactional at the caller boundary without
+# claiming that the underlying stream cursor can move backward. Storage and
+# scratch capacity are allocated once and bounded by maxReplayBytes.
+public struct ReplayBuffer {
+    bytes: [UInt8; ~]
+    start: Int
+    scratch: [UInt8; ~]
+    maxReplayBytes: Int
+    logicalOffset: Int
+}
+
 # MemoryReader owns its backing bytes. Reads advance an explicit cursor and
 # never perform an unbounded read. readExact is transactional on failure.
 public struct MemoryReader {
@@ -77,6 +88,18 @@ appendRange source: [UInt8], start: Int, count: Int, output: mut [UInt8; ~] -> U
     index! < count -> while {
         output -> push(source[start + index!])
         index! + 1 => index!
+    }
+}
+
+compactPrefix bytes: mut [UInt8; ~], start: Int -> Unit {
+    (bytes -> len) - start => retained
+    0 => index!
+    index! < retained -> while {
+        bytes[start + index!] => bytes[index!]
+        index! + 1 => index!
+    }
+    (bytes -> len) > retained -> while {
+        bytes -> take((bytes -> len) - 1) => discarded
     }
 }
 
@@ -108,6 +131,23 @@ public transferPolicy maxBytes: Int, bufferBytes: Int -> Result<TransferPolicy, 
     Result<TransferPolicy, Error>.Ok(TransferPolicy {
         maxBytes: maxBytes
         bufferBytes: bufferBytes
+    })
+}
+
+public replayBuffer maxReplayBytes: Int -> Result<ReplayBuffer, Error> {
+    maxReplayBytes >= 0 -> unless {
+        Result<ReplayBuffer, Error>.Err(error(model.ErrorKind.InvalidLimit, 0)) -> return
+    }
+    [UInt8; ~] => bytes!
+    [UInt8; ~] => scratch!
+    bytes! -> reserve(maxReplayBytes)
+    scratch! -> reserve(maxReplayBytes)
+    Result<ReplayBuffer, Error>.Ok(ReplayBuffer {
+        bytes: bytes!
+        start: 0
+        scratch: scratch!
+        maxReplayBytes: maxReplayBytes
+        logicalOffset: 0
     })
 }
 
@@ -339,5 +379,61 @@ impl TransferPolicy {
             bytes: transferred!
             completion: completion
         })
+    }
+}
+
+impl ReplayBuffer {
+    public position: self -> UIntSize => UIntSize(self.logicalOffset)
+
+    public bufferedBytes: self -> Int => (self.bytes -> len) - self.start
+
+    # A short read keeps its prefix inside the adapter for the next logical
+    # read. output and logicalOffset change only after the complete request is
+    # available. The source cursor itself is intentionally not rolled back.
+    public readExactFrom<R>: mut self, reader: mut R, output: mut [UInt8; ~] -> Result<Int, Error> where R: Reader {
+        output -> len => requested
+        requested <= self.maxReplayBytes -> unless {
+            Result<Int, Error>.Err(
+            error(model.ErrorKind.InvalidLimit, UIntSize(self.logicalOffset))) -> return
+        }
+
+        # Reclaim consumed prefix storage before any source read. This keeps
+        # the physical replay buffer within the configured ceiling.
+        self.start > 0 -> if {
+            compactPrefix(self.bytes, self.start)
+            0 => self.start
+        }
+
+        (self -> bufferedBytes) < requested -> while {
+            requested - (self -> bufferedBytes) => needed
+            (self.scratch -> len) > needed -> while {
+                self.scratch -> take((self.scratch -> len) - 1) => discarded
+            }
+            (self.scratch -> len) < needed -> while {
+                self.scratch -> push(0)
+            }
+
+            reader -> model.Reader.readInto(self.scratch)? => readCount
+            readCount >= 0 and readCount <= needed -> unless {
+                Result<Int, Error>.Err(error(
+                model.ErrorKind.InvalidProgress,
+                UIntSize(self.logicalOffset + (self -> bufferedBytes)))) -> return
+            }
+            readCount > 0 -> unless {
+                Result<Int, Error>.Err(error(
+                model.ErrorKind.UnexpectedEnd,
+                UIntSize(self.logicalOffset + (self -> bufferedBytes)))) -> return
+            }
+            appendRange(self.scratch, 0, readCount, self.bytes)
+        }
+
+        0 => index!
+        index! < requested -> while {
+            self.bytes[self.start + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.start + requested => self.start
+        self.logicalOffset + requested => self.logicalOffset
+        Result<Int, Error>.Ok(requested)
     }
 }

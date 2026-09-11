@@ -44,6 +44,11 @@ foreach ($required in @(
     'public struct TransferPolicy',
     'public copy<R, W>: self, reader: mut R, writer: mut W -> Result<CopyOutcome, Error>',
     'where R: Reader, W: Writer',
+    'public struct ReplayBuffer',
+    'public replayBuffer maxReplayBytes: Int -> Result<ReplayBuffer, Error>',
+    'public readExactFrom<R>: mut self, reader: mut R, output: mut [UInt8; ~] -> Result<Int, Error> where R: Reader',
+    'compactPrefix(self.bytes, self.start)',
+    'reader -> model.Reader.readInto(self.scratch)',
     'model.ErrorKind.WriteZero',
     'model.CopyCompletion.Limit'
 )) {
@@ -83,6 +88,21 @@ foreach ($required in @(
 )) {
     if (-not $copyFixture.Contains($required, [StringComparison]::Ordinal)) {
         throw "Portable memory I/O copy fixture no longer proves: $required"
+    }
+}
+$replayFixture = [IO.File]::ReadAllText((Join-Path $root 'examples/regression/1684-io-bounded-transactional-replay.slg'))
+foreach ($required in @(
+    'impl io.Reader for ChunkReader',
+    'impl io.Reader for InvalidReader',
+    'io.replayBuffer(4)',
+    'replay! -> readExactFrom(source!, oversized!)',
+    'replay! -> readExactFrom(source!, short!)',
+    'replay! -> readExactFrom(source!, retained!)',
+    'bounded! -> readExactFrom(boundedSource!, exact!)',
+    'invalid! -> readExactFrom(invalidSource!, invalidOutput!)'
+)) {
+    if (-not $replayFixture.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable memory I/O replay fixture no longer proves: $required"
     }
 }
 

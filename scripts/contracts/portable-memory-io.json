@@ -1,6 +1,6 @@
 {
   "$schema": "portable-memory-io.schema.json",
-  "version": 2,
+  "version": 3,
   "module": "std.io",
   "sources": [
     "stdlib/std/io.slg"
@@ -9,7 +9,8 @@
     "1094-io-memory-reader-writer",
     "1188-io-memory-reader-caller-buffer",
     "1680-io-shared-caller-buffer-traits",
-    "1683-io-bounded-transfer-policy"
+    "1683-io-bounded-transfer-policy",
+    "1684-io-bounded-transactional-replay"
   ],
   "surfaces": [
     "Reader.readInto",
@@ -20,7 +21,10 @@
     "MemoryWriter.writeRange",
     "MemoryWriter.writeAll",
     "TransferPolicy.copy",
-    "CopyOutcome.reachedEnd"
+    "CopyOutcome.reachedEnd",
+    "ReplayBuffer.position",
+    "ReplayBuffer.bufferedBytes",
+    "ReplayBuffer.readExactFrom"
   ],
   "invariants": [
     "reader and writer protocols each expose one caller-buffer partial-transfer primitive",
@@ -41,10 +45,15 @@
     "successful zero write progress is a typed WriteZero error",
     "CopyOutcome distinguishes observed source end from policy limit",
     "consumer-defined imported Reader and Writer implementations are monomorphized without dynamic dispatch",
+    "ReplayBuffer validates requested length against its ceiling before source access",
+    "ReplayBuffer stages source progress in adapter-owned storage and publishes caller output only on exact success",
+    "failed exact reads retain their partial prefix for the next logical read",
+    "replay success advances a logical cursor without claiming that the underlying source cursor rolled back",
+    "replay scratch length bounds each source read to the exact remaining request",
+    "replay storage is compacted without allocating another payload buffer",
     "unbounded readAll copy and implicit buffering are absent"
   ],
   "unsupported": [
-    "generic transactional exact reads without checkpoint or bounded replay",
     "file socket and reactor protocol implementations",
     "asynchronous buffering and backpressure"
   ]
