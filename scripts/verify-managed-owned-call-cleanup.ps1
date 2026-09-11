@@ -3,7 +3,8 @@ param(
     [string]$CompilerAssembly = '',
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$FixtureRoot = '',
-    [string]$LlvmRoot = ''
+    [string]$LlvmRoot = '',
+    [string[]]$Fixture = @()
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -59,12 +60,22 @@ $cases = @(
     @{name='1580-borrowed-array-literal-cleanup';allocations=1},
     @{name='1581-borrowed-enum-literal-cleanup';allocations=1}
 )
+if ($Fixture.Count -gt 0) {
+    $unknown = @($Fixture | Where-Object { $_ -notin $cases.name })
+    if ($unknown.Count -gt 0) { throw "Unknown cleanup fixture: $($unknown -join ', ')" }
+    $cases = @($cases | Where-Object { $_.name -in $Fixture })
+}
 foreach ($case in $cases) {
     $case.source = (Resolve-Path -LiteralPath (Join-Path $fixtures "$($case.name).slg")).Path
     $case.expected = (Resolve-Path -LiteralPath (Join-Path $fixtures "expected/$($case.name).stdout.txt")).Path
 }
 $compilerHash = (Get-FileHash -LiteralPath $compiler).Hash
 $output = Join-Path $repoRoot "artifacts/managed-owned-call-cleanup/$compilerHash"
+if ($Fixture.Count -gt 0) {
+    $selection = [Text.Encoding]::UTF8.GetBytes(($cases.name -join "`n"))
+    $selectionHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($selection))
+    $output = Join-Path $output "selected-$selectionHash"
+}
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 function Invoke-CheckedCleanupProcess {
     param([string]$Program, [string[]]$Arguments, [string]$Description)
