@@ -32,6 +32,7 @@ $cases = @(
     @{name='1630-boxed-nested-cleanup';allocations=2},
     @{name='1499-projected-owned-call-lifetime';allocations=12},
     @{name='1500-readonly-call-temporary-lifetime';allocations=10},
+    @{name='1527-projected-table-push-loop';allocations=5},
     @{name='1529-fixed-field-named';allocations=2},
     @{name='1538-branch-fixed-outer-reuse';allocations=4},
     @{name='1543-fixed-int-branch-result';allocations=2},
