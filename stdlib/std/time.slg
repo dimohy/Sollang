@@ -14,7 +14,8 @@ public struct Duration {
 # same monotonic source. It is deliberately distinct from future UTC/calendar
 # values and exposes no Unix timestamp conversion.
 public struct MonotonicInstant {
-    public ticksMillis: Long
+    ticksMillis: Long
+    source: UInt64
 }
 
 # UtcInstant is Unix epoch time in whole milliseconds. It is never used for
@@ -26,7 +27,7 @@ public struct UtcInstant {
 # The system monotonic source has no mutable state in user space. Querying it is
 # still an explicit Clock effect.
 public struct MonotonicClock {
-    public marker: UInt8
+    marker: UInt8
 }
 
 public struct WallClock {
@@ -37,11 +38,24 @@ public struct WallClock {
 # It has no ambient Clock effect; advancing it requires an explicit mutable
 # borrow and a validated Duration.
 public struct ManualClock {
-    public ticksMillis: Long
+    ticksMillis: Long
+    source: UInt64
 }
 
 public struct ManualWallClock {
     public unixMillis: Long
+}
+
+public struct Deadline {
+    instant: MonotonicInstant
+}
+
+public struct FixedClock {
+    instant: UtcInstant
+}
+
+public struct OffsetClock {
+    offsetMillis: Long
 }
 
 public enum ErrorKind {
@@ -50,6 +64,8 @@ public enum ErrorKind {
     DivisionByZero
     Overflow
     ReversedInstant
+    DifferentClock
+    InvalidSource
 }
 
 public struct Error {
@@ -79,16 +95,23 @@ public monotonicClock: -> MonotonicClock => MonotonicClock { marker: 0 }
 
 public wallClock: -> WallClock => WallClock { marker: 0 }
 
-public manualClock ticksMillis: Long -> Result<ManualClock, Error> => ticksMillis < 0
+public manualClock source: UInt64, ticksMillis: Long -> Result<ManualClock, Error> => source == 0
+    -> if {
+        Error { kind: model.ErrorKind.InvalidSource } -> Result<ManualClock, Error>.Err
+    } else { ticksMillis < 0
     -> if {
         Error { kind: model.ErrorKind.NegativeDuration } -> Result<ManualClock, Error>.Err
     } else {
-        ManualClock { ticksMillis: ticksMillis } -> Result<ManualClock, Error>.Ok
-    }
+        ManualClock { ticksMillis: ticksMillis, source: source } -> Result<ManualClock, Error>.Ok
+    } }
 
 public manualWallClock unixMillis: Long -> ManualWallClock => ManualWallClock {
     unixMillis: unixMillis
 }
+
+public fixedClock instant: UtcInstant -> FixedClock => FixedClock { instant: instant }
+
+public offsetClock offsetMillis: Long -> OffsetClock => OffsetClock { offsetMillis: offsetMillis }
 
 impl Duration {
     public asMilliseconds: self -> Long => self.millis
@@ -152,6 +175,9 @@ impl Duration {
 
 impl MonotonicInstant {
     public durationSince: self, earlier: MonotonicInstant -> Result<Duration, Error> {
+        self.source == earlier.source -> unless {
+            Error { kind: model.ErrorKind.DifferentClock } -> Result<Duration, Error>.Err -> return
+        }
         self.ticksMillis < earlier.ticksMillis -> if {
             Error { kind: model.ErrorKind.ReversedInstant } -> Result<Duration, Error>.Err
         } else {
@@ -165,7 +191,7 @@ impl MonotonicInstant {
             -> if {
                 Error { kind: model.ErrorKind.Overflow } -> Result<MonotonicInstant, Error>.Err
             } else {
-                MonotonicInstant { ticksMillis: self.ticksMillis + duration.millis }
+                MonotonicInstant { ticksMillis: self.ticksMillis + duration.millis, source: self.source }
                     -> Result<MonotonicInstant, Error>.Ok
             }
     }
@@ -174,15 +200,25 @@ impl MonotonicInstant {
         self.ticksMillis < duration.millis -> if {
             Error { kind: model.ErrorKind.ReversedInstant } -> Result<MonotonicInstant, Error>.Err
         } else {
-            MonotonicInstant { ticksMillis: self.ticksMillis - duration.millis }
+            MonotonicInstant { ticksMillis: self.ticksMillis - duration.millis, source: self.source }
                 -> Result<MonotonicInstant, Error>.Ok
         }
     }
+
+    public sourceIdentity: self -> UInt64 => self.source
+
+    public sameSource: self, other: MonotonicInstant -> Bool => self.source == other.source
 }
 
 impl MonotonicClock {
     public now: self -> MonotonicInstant uses Clock => MonotonicInstant {
         ticksMillis: runtime.nowMillis()
+        source: 0
+    }
+
+    public deadlineAfter: self, duration: Duration -> Result<Deadline, Error> uses Clock {
+        self -> now -> checkedAdd(duration)? => instant
+        Result<Deadline, Error>.Ok(Deadline { instant: instant })
     }
 }
 
@@ -234,6 +270,7 @@ impl WallClock {
 impl ManualClock {
     public now: self -> MonotonicInstant => MonotonicInstant {
         ticksMillis: self.ticksMillis
+        source: self.source
     }
 
     public advance: mut self, duration: Duration -> Result<Unit, Error> {
@@ -245,6 +282,11 @@ impl ManualClock {
                 Result<Unit, Error>.Ok
             }
     }
+
+    public deadlineAfter: self, duration: Duration -> Result<Deadline, Error> {
+        self -> now -> checkedAdd(duration)? => instant
+        Result<Deadline, Error>.Ok(Deadline { instant: instant })
+    }
 }
 
 impl ManualWallClock {
@@ -252,5 +294,44 @@ impl ManualWallClock {
 
     public set: mut self, instant: UtcInstant -> Unit {
         instant.unixMillis => self.unixMillis
+    }
+}
+
+impl Deadline {
+    public remaining: self, now: MonotonicInstant -> Result<Duration, Error> {
+        self.instant.source == now.source -> unless {
+            Error { kind: model.ErrorKind.DifferentClock } -> Result<Duration, Error>.Err -> return
+        }
+        now.ticksMillis >= self.instant.ticksMillis -> if {
+            Result<Duration, Error>.Ok(Duration { millis: 0 })
+        } else {
+            Result<Duration, Error>.Ok(Duration { millis: self.instant.ticksMillis - now.ticksMillis })
+        }
+    }
+
+    public isDue: self, now: MonotonicInstant -> Result<Bool, Error> {
+        self.instant.source == now.source -> unless {
+            Error { kind: model.ErrorKind.DifferentClock } -> Result<Bool, Error>.Err -> return
+        }
+        Result<Bool, Error>.Ok(now.ticksMillis >= self.instant.ticksMillis)
+    }
+}
+
+impl FixedClock {
+    public now: self -> UtcInstant => self.instant
+}
+
+impl OffsetClock {
+    public now: self -> Result<UtcInstant, Error> uses Clock {
+        runtime.utcNowMillis() => current
+        self.offsetMillis > 0 and current > 9_223_372_036_854_775_807 - self.offsetMillis
+            -> if {
+                Result<UtcInstant, Error>.Err(Error { kind: model.ErrorKind.Overflow }) -> return
+            }
+        self.offsetMillis < 0 and current < (-9_223_372_036_854_775_807 - Long(1)) - self.offsetMillis
+            -> if {
+                Result<UtcInstant, Error>.Err(Error { kind: model.ErrorKind.Overflow }) -> return
+            }
+        Result<UtcInstant, Error>.Ok(UtcInstant { unixMillis: current + self.offsetMillis })
     }
 }

@@ -101,6 +101,8 @@ $expectedPrivateFields = [ordered]@{
     # Completion slots expose observations and consuming buffer recovery only;
     # the socket runtime exclusively owns native identity and state transitions.
     'stdlib/std/net/socket.slg' = 9
+    # Monotonic source identity and derived clock state cannot be fabricated.
+    'stdlib/std/time.slg' = 8
     # Cross-module method-owner fixtures construct and inspect state through methods.
     'examples/regression/fixtures/1501-method-owner-leaf.slg' = 1
     'examples/regression/fixtures/1501-method-owner-wrapper.slg' = 2

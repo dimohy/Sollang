@@ -378,6 +378,7 @@ param(
         "1688-io-file-protocol-adapters",
         "1689-io-bounded-transactional-read-all",
         "1693-socket-completion-slot-contract",
+        "1694-time-source-deadline-clocks",
         "1690-selfhost-associated-type-specialization-isolation",
         "1686-selfhost-trait-associated-result",
         "1687-selfhost-chained-call-local-precedence",

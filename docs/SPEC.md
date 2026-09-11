@@ -1055,6 +1055,20 @@ a zero divisor; `absoluteDifference` always returns a non-negative value.
 checked instance addition/subtraction, and compute elapsed durations through
 `later -> durationSince(earlier)`.
 
+Every `MonotonicInstant` carries its source identity. The system
+`MonotonicClock` uses the reserved source zero; `manualClock(source,
+ticksMillis)` requires a nonzero caller-selected identity. `durationSince`,
+`Deadline.remaining`, and `Deadline.isDue` return `DifferentClock` before
+comparing readings from distinct sources. `MonotonicClock.deadlineAfter` and
+`ManualClock.deadlineAfter` bind a checked target instant to the same source;
+remaining time reaches zero when due instead of becoming negative.
+
+`FixedClock` is a pure injected UTC source. `OffsetClock` applies an explicit
+signed millisecond offset to the system wall clock and reports `Overflow`
+rather than wrapping. Neither value is a monotonic elapsed-time source. Clock
+capability reporting, affine periodic timers, and network/process deadline
+consumers remain separate unfinished slices.
+
 `sleep` registers its Task in the executor's deadline-ordered timer queue. It
 does not allocate an OS thread and does not remain in the runnable queue. When
 there is no ready work, the executor waits only until the nearest monotonic

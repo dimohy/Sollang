@@ -1,0 +1,59 @@
+import std.time as time
+
+run: -> Result<Unit, time.Error> uses Console, Clock {
+    time.manualClock(7, 1_000)? => clock!
+    250 -> time.milliseconds? => delay
+    clock! -> deadlineAfter(delay)? => deadline
+    clock! -> now => start
+    deadline -> remaining(start)? -> asMilliseconds -> println
+    deadline -> isDue(start)? -> println
+    clock! -> advance(delay)?
+    deadline -> isDue(clock! -> now)? -> println
+
+    time.manualClock(8, 1_250)? => other
+    deadline -> remaining(other -> now) -> when {
+        Err(error) {
+            error.kind -> when {
+                DifferentClock { true }
+                else { false }
+            } => different
+            "different=$different" -> println
+        }
+        Ok(value) { "unexpected=$(value -> asMilliseconds)" -> println }
+    }
+
+    time.manualClock(0, 0) -> when {
+        Err(error) {
+            error.kind -> when {
+                InvalidSource { true }
+                else { false }
+            } => invalidSource
+            "source=$invalidSource" -> println
+        }
+        Ok(_) { "source=false" -> println }
+    }
+
+    time.UtcInstant { unixMillis: -500 } -> time.fixedClock -> now -> asUnixMilliseconds -> println
+    time.offsetClock(0) -> now -> when {
+        Err(_) { "offset=false" -> println }
+        Ok(instant) { "offset=$((instant -> asUnixMilliseconds) > 0)" -> println }
+    }
+    time.offsetClock(9_223_372_036_854_775_807) -> now -> when {
+        Err(error) {
+            error.kind -> when {
+                Overflow { true }
+                else { false }
+            } => overflow
+            "overflow=$overflow" -> println
+        }
+        Ok(_) { "overflow=false" -> println }
+    }
+    Result<Unit, time.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Err(_) { "failed" -> println }
+        Ok(_) { }
+    }
+}

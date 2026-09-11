@@ -925,6 +925,11 @@ spinning -> cancel
 finiteTask -> await => result
 ```
 
+Keep monotonic readings bound to their clock source. Build deadlines through
+the source instance, compare them only with a reading from that source, and
+propagate the typed different-clock error. Fixed and offset wall clocks do not
+replace a monotonic source for elapsed time or scheduling.
+
 Fallible async helpers use ordinary postfix propagation. An error completes
 the Task with `Err`; it does not escape through the readiness worker itself:
 
