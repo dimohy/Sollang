@@ -1,0 +1,48 @@
+import std.log as log
+
+struct CountingSink {
+    calls: Int
+    fields: Int
+}
+
+impl log.Sink for CountingSink {
+    public write: mut self, level: log.Level, message: Text, fields: [log.Field] -> Result<Unit, log.Error> {
+        self.calls + 1 => self.calls
+        self.fields + (fields -> len) => self.fields
+        message == "fail" -> if {
+            Result<Unit, log.Error>.Err(log.Error { message: "sink-failed" })
+        } else {
+            Result<Unit, log.Error>.Ok
+        }
+    }
+}
+
+main {
+    log.logger(log.Level.Info) => logger
+    CountingSink { calls: 0, fields: 0 } => sink!
+    logger -> record(log.Level.Debug, "filtered") -> when {
+        None { "filtered=true" -> println }
+        Some(record) { "filtered=false" -> println }
+    }
+    logger -> record(log.Level.Info, "accepted") -> when {
+        Some(record) {
+            [log.Field { name: "request.id", value: "42" }] => fields
+            sink! -> log.Sink.write(record.level, record.message, fields) -> when {
+                Ok(_) { "written=true" -> println }
+                Err(error) { "written=false" -> println }
+            }
+        }
+        None { "written=false" -> println }
+    }
+    logger -> record(log.Level.Error, "fail") -> when {
+        Some(record) {
+            [log.Field { name: "request.id", value: "42" }] => fields
+            sink! -> log.Sink.write(record.level, record.message, fields) -> when {
+                Err(error) { "error=$(error.message)" -> println }
+                Ok(_) { "error=missing" -> println }
+            }
+        }
+        None { "error=filtered" -> println }
+    }
+    "calls=$(sink!.calls),fields=$(sink!.fields)" -> println
+}

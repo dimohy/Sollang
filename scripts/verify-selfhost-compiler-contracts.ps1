@@ -240,6 +240,7 @@ $artifactReceiptContractPath = Join-Path $RepositoryRoot "scripts/verify-stage2-
 $artifactReceiptConcurrencyPath = Join-Path $RepositoryRoot "scripts/verify-stage2-artifact-receipt-concurrency.ps1"
 $nativeExactReceiptContractPath = Join-Path $RepositoryRoot "scripts/verify-native-exact-fixture-receipt.ps1"
 $timeApiContractPath = Join-Path $RepositoryRoot "scripts/verify-time-api-contract.ps1"
+$structuredLoggingContractPath = Join-Path $RepositoryRoot "scripts/verify-structured-logging-contract.ps1"
 $browserTimeDomainContractPath = Join-Path $RepositoryRoot "scripts/verify-browser-time-domain-contract.ps1"
 $stage3ArtifactVerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-stage3-artifacts.ps1"
 $stage3ArtifactContractPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-stage3-artifact-contract.ps1"
@@ -1949,6 +1950,7 @@ Assert-Matches $stage3Verifier '(?s)verify-emit-context-constructor-closure\.ps1
 & $artifactReceiptConcurrencyPath
 & $nativeExactReceiptContractPath
 & $timeApiContractPath -RepositoryRoot $RepositoryRoot
+& $structuredLoggingContractPath -RepositoryRoot $RepositoryRoot
 & $browserTimeDomainContractPath -RepositoryRoot $RepositoryRoot
 & $stage3ArtifactContractPath
 & $releaseOutputScopeContractPath

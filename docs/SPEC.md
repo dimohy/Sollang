@@ -1680,6 +1680,19 @@ Brotli follows as a separate bounded codec/encoder/decoder contract over
 caller-owned buffers or portable `std.io` streams; neither format adds ambient
 file APIs or unbounded allocating globals.
 
+`std.log` provides explicit structured logging policy without an ambient
+mutable logger, global sink, implicit formatter, or hidden destination effect.
+`logger(minimumLevel)` creates an immutable `Logger`. `Logger.record` applies
+the level filter and returns `None` before the caller constructs structured
+fields or invokes a sink; an accepted message returns `Some(Record)` containing
+only its typed level and message. The caller then constructs caller-owned
+`[Field]` input and invokes a concrete implementation of `Sink.write` through
+static trait dispatch. A sink owns serialization and destination effects and
+returns `Result<Unit, std.log.Error>`, so failures remain typed and are never
+replaced by a fallback destination. This split keeps disabled logging free of
+field construction and sink calls while leaving allocation, I/O, buffering,
+retry, and backpressure policy explicit in the selected sink.
+
 `std.uri.parse(text, maxInputBytes)` parses an RFC 3986 URI-reference without
 performing DNS, IDNA conversion, file access, or scheme-specific network I/O.
 The result retains raw percent-encoded component spans over one `SourceText`

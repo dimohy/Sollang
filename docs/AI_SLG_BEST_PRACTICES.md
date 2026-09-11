@@ -956,6 +956,14 @@ Do not create a task and immediately await it when independent work could have
 started first. Do not detach tasks, hide unbounded task creation, hold a mutable
 borrow across overlap, or assume `async` grants `File`, `Clock`, or `Process`.
 
+For structured logging, let `std.log.Logger.record` filter before constructing
+fields. Match the returned `Option<Record>`; only the `Some` branch should
+build caller-owned fields and call an explicitly chosen concrete
+`std.log.Sink`. Keep formatting, buffering, and destination effects in that
+sink, and propagate its typed `std.log.Error`. Do not add an ambient logger,
+default sink, hidden fallback, or a generic forwarding wrapper that obscures
+the concrete sink ABI.
+
 ## 17. Design stdlib surfaces as contracts
 
 For every new module, write down before implementation:
