@@ -19,8 +19,10 @@ $functionCallsPath = Join-Path $root "src\Sollang.Compiler\CodeGen\LlvmEmitter.F
 $selfhostRuntimePath = Join-Path $root "selfhost\llvm\runtime.slg"
 $selfhostRuntimeResolutionPath = Join-Path $root "selfhost\llvm\text\runtime_resolution.slg"
 $fixturePath = Join-Path $root "examples\regression\1694-time-source-deadline-clocks.slg"
+$timerFixturePath = Join-Path $root "examples\regression\1695-time-affine-periodic-timer.slg"
+$timerOwnershipDiagnosticPath = Join-Path $root "examples\regression\diagnostics\1695-time-timer-use-after-wait.slg"
 $nativeExactBatchPath = Join-Path $root "scripts\verify-native-exact-fixture-batch.ps1"
-foreach ($path in @($contractPath, $schemaPath, $publicPath, $runtimeTimePath, $runtimeClockPath, $boundProgramPath, $semanticCompilerPath, $runtimeIntrinsicsPath, $functionCallsPath, $selfhostRuntimePath, $selfhostRuntimeResolutionPath, $fixturePath, $nativeExactBatchPath)) {
+foreach ($path in @($contractPath, $schemaPath, $publicPath, $runtimeTimePath, $runtimeClockPath, $boundProgramPath, $semanticCompilerPath, $runtimeIntrinsicsPath, $functionCallsPath, $selfhostRuntimePath, $selfhostRuntimeResolutionPath, $fixturePath, $timerFixturePath, $timerOwnershipDiagnosticPath, $nativeExactBatchPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "time API contract input is missing: $path"
     }
@@ -35,14 +37,14 @@ if ($contract.version -ne 1 -or
     $contract.module -cne "std.time" -or
     $contract.runtimeModule -cne "sys.runtime" -or
     $contract.officialReferences.Count -ne 4 -or
-    $contract.implementedSurfaces.Count -ne 28 -or
+    $contract.implementedSurfaces.Count -ne 33 -or
     $contract.invariants.Count -ne 10 -or
     $contract.orderedSlices.Count -ne 6) {
     throw "time API contract dimensions drifted"
 }
 
 $expectedSliceIds = @("T1", "T2", "T3", "T4", "T5", "T6")
-$expectedSliceStatuses = @("complete", "in-progress", "in-progress", "pending", "in-progress", "pending")
+$expectedSliceStatuses = @("complete", "complete", "complete", "in-progress", "complete", "pending")
 for ($index = 0; $index -lt $expectedSliceIds.Count; $index += 1) {
     $slice = $contract.orderedSlices[$index]
     if ($slice.id -cne $expectedSliceIds[$index] -or $slice.status -cne $expectedSliceStatuses[$index]) {
@@ -69,6 +71,9 @@ foreach ($required in @(
     "public struct OffsetClock",
     "public enum SuspendPolicy",
     "public struct ClockCapabilities",
+    "public enum MissedTickPolicy",
+    "public struct Timer",
+    "public struct TimerTick",
     "public checkedAdd: self",
     "public checkedSub: self",
     "public checkedMultiply: self",
@@ -79,6 +84,11 @@ foreach ($required in @(
     "public sameSource: self, other: MonotonicInstant -> Bool",
     "public deadlineAfter: self, duration: Duration -> Result<Deadline, Error>",
     "public capabilities: self -> ClockCapabilities",
+    "public timer: self, period: Duration, policy: MissedTickPolicy -> Result<Timer, Error> uses Clock",
+    "public wait: move self -> async Result<TimerTick, Error> uses Clock",
+    "public cancel: move self -> Unit",
+    "public close: move self -> Unit",
+    "public intoTimer: move self -> Timer",
     "public remaining: self, now: MonotonicInstant -> Result<Duration, Error>",
     "public isDue: self, now: MonotonicInstant -> Result<Bool, Error>",
     "public now: self -> Result<UtcInstant, Error> uses Clock",
@@ -134,6 +144,12 @@ $boundProgram = [System.IO.File]::ReadAllText($boundProgramPath)
 $semanticCompiler = [System.IO.File]::ReadAllText($semanticCompilerPath)
 $runtimeIntrinsics = [System.IO.File]::ReadAllText($runtimeIntrinsicsPath)
 $functionCalls = [System.IO.File]::ReadAllText($functionCallsPath)
+if ($semanticCompiler.Contains("(function.IsStandardLibrary && !isAsyncRuntimeIntrinsic)", [System.StringComparison]::Ordinal)) {
+    throw "managed compiler still rejects non-intrinsic standard-library async functions"
+}
+if (-not $semanticCompiler.Contains("or BoundFunctionKind.RuntimeNowMillis", [System.StringComparison]::Ordinal)) {
+    throw "managed compiler async monotonic observation support is missing"
+}
 foreach ($required in @(
     "RuntimeMonotonicSuspendPolicy")) {
     if (-not $boundProgram.Contains($required, [System.StringComparison]::Ordinal) -or
@@ -182,5 +198,25 @@ foreach ($required in @(
 if (-not $nativeExactBatch.Contains('"1694-time-source-deadline-clocks"', [System.StringComparison]::Ordinal)) {
     throw "time source/deadline fixture is missing from native exact promotion"
 }
+$timerFixture = [System.IO.File]::ReadAllText($timerFixturePath)
+foreach ($required in @(
+    "timer -> wait -> await",
+    "tick -> intoTimer",
+    "nextTimer -> close",
+    "time.MissedTickPolicy.Delay",
+    '"zero=rejected"')) {
+    if (-not $timerFixture.Contains($required, [System.StringComparison]::Ordinal)) {
+        throw "time affine timer fixture is missing: $required"
+    }
+}
+$timerOwnershipDiagnostic = [System.IO.File]::ReadAllText($timerOwnershipDiagnosticPath)
+foreach ($required in @(
+    "timer -> wait => pending",
+    "timer -> close",
+    "pending -> cancel")) {
+    if (-not $timerOwnershipDiagnostic.Contains($required, [System.StringComparison]::Ordinal)) {
+        throw "time affine timer ownership diagnostic is missing: $required"
+    }
+}
 
-Write-Host "[time API contract] PASS $($contract.implementedSurfaces.Count) implemented surfaces, $($contract.invariants.Count) invariants, T1 complete, 3 additional active slices, and 3 target policies."
+Write-Host "[time API contract] PASS $($contract.implementedSurfaces.Count) implemented surfaces, $($contract.invariants.Count) invariants, T1/T2/T3/T5 complete, T4 managed in progress, and 3 target policies."

@@ -1,0 +1,45 @@
+import std.time as time
+
+main {
+    time.monotonicClock() => clock
+    1 -> time.milliseconds -> when {
+        Ok(period) {
+            clock -> timer(period, time.MissedTickPolicy.Delay) -> when {
+                Ok(timer) {
+                    timer -> wait -> await -> when {
+                        Ok(tick) {
+                            tick -> observed -> durationSince(tick -> scheduled) -> when {
+                                Ok(lateness) {
+                                    lateness.millis >= 0 -> if {
+                                        "timer=async-affine" -> println
+                                    } else {
+                                        "timer=invalid" -> println
+                                    }
+                                }
+                                Err(error) { "timer=clock-error" -> println }
+                            }
+                            tick -> intoTimer => nextTimer
+                            nextTimer -> close
+                        }
+                        Err(error) { "timer=wait-error" -> println }
+                    }
+                }
+                Err(error) { "timer=create-error" -> println }
+            }
+        }
+        Err(error) { "timer=period-error" -> println }
+    }
+
+    0 -> time.milliseconds -> when {
+        Ok(zero) {
+            clock -> timer(zero, time.MissedTickPolicy.Skip) -> when {
+                Ok(timer) {
+                    timer -> cancel
+                    "zero=invalid" -> println
+                }
+                Err(error) { "zero=rejected" -> println }
+            }
+        }
+        Err(error) { "zero=constructor-error" -> println }
+    }
+}

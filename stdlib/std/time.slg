@@ -70,6 +70,29 @@ public struct ClockCapabilities {
     public maximumDelay: Duration
 }
 
+public enum MissedTickPolicy {
+    Burst
+    Skip
+    Delay
+}
+
+# Timer is affine because its private cancellation token has a single owner. Waiting
+# consumes the timer into an async Task and returns the next owner in TimerTick;
+# no mutable borrow crosses a suspension point.
+public struct Timer {
+    token: [UInt8; ~]
+    period: Duration
+    nextTicks: Long
+    policy: MissedTickPolicy
+}
+
+public struct TimerTick {
+    timer: Timer
+    scheduledInstant: MonotonicInstant
+    observedInstant: MonotonicInstant
+    public missed: UInt64
+}
+
 public enum ErrorKind {
     NegativeDuration
     NegativeResult
@@ -78,6 +101,7 @@ public enum ErrorKind {
     ReversedInstant
     DifferentClock
     InvalidSource
+    InvalidPeriod
 }
 
 public struct Error {
@@ -93,6 +117,13 @@ scaledDuration value: Long, scale: Long -> Result<Duration, Error> => value < 0
         } else {
             Duration { millis: value * scale } -> Result<Duration, Error>.Ok
         }
+    }
+
+checkedTimerNext base: Long, delta: Long -> Result<Long, Error> => base > 9_223_372_036_854_775_807 - delta
+    -> if {
+        Result<Long, Error>.Err(Error { kind: model.ErrorKind.Overflow })
+    } else {
+        Result<Long, Error>.Ok(base + delta)
     }
 
 public milliseconds value: Long -> Result<Duration, Error> => value -> scaledDuration(1)
@@ -245,6 +276,23 @@ impl MonotonicClock {
             maximumDelay: Duration { millis: 9_223_372_036_854_775_807 }
         }
     }
+
+    public timer: self, period: Duration, policy: MissedTickPolicy -> Result<Timer, Error> uses Clock {
+        period.millis == 0 -> if {
+            Result<Timer, Error>.Err(Error { kind: model.ErrorKind.InvalidPeriod }) -> return
+        }
+        runtime.nowMillis() => current
+        current > 9_223_372_036_854_775_807 - period.millis
+            -> if {
+            Result<Timer, Error>.Err(Error { kind: model.ErrorKind.Overflow }) -> return
+        }
+        Result<Timer, Error>.Ok(Timer {
+            token: [0; ~]
+            period: period
+            nextTicks: current + period.millis
+            policy: policy
+        })
+    }
 }
 
 impl UtcInstant {
@@ -364,5 +412,62 @@ impl OffsetClock {
                 Result<UtcInstant, Error>.Err(Error { kind: model.ErrorKind.Overflow }) -> return
             }
         Result<UtcInstant, Error>.Ok(UtcInstant { unixMillis: current + self.offsetMillis })
+    }
+}
+
+impl Timer {
+    public wait: move self -> async Result<TimerTick, Error> uses Clock {
+        runtime.nowMillis() => beforeWait
+        beforeWait < self.nextTicks -> if {
+            Duration { millis: self.nextTicks - beforeWait } -> sleep -> await
+        }
+        runtime.nowMillis() => observedTicks
+        self.nextTicks => scheduledTicks
+        Long(0) => missedMillis!
+        observedTicks > scheduledTicks -> if {
+            (observedTicks - scheduledTicks) / self.period.millis => missedMillis!
+        }
+        scheduledTicks => nextTicks!
+        self.policy -> when {
+            Burst {
+                checkedTimerNext(scheduledTicks, self.period.millis)? => nextTicks!
+                0 => missedMillis!
+            }
+            Skip {
+                (observedTicks - scheduledTicks) % self.period.millis => remainder
+                self.period.millis - remainder => untilNext
+                checkedTimerNext(observedTicks, untilNext)? => nextTicks!
+            }
+            Delay {
+                checkedTimerNext(observedTicks, self.period.millis)? => nextTicks!
+            }
+        }
+        Timer {
+            token: self.token
+            period: self.period
+            nextTicks: nextTicks!
+            policy: self.policy
+        } => nextTimer
+        Result<TimerTick, Error>.Ok(TimerTick {
+            timer: nextTimer
+            scheduledInstant: MonotonicInstant { ticksMillis: scheduledTicks, source: 0 }
+            observedInstant: MonotonicInstant { ticksMillis: observedTicks, source: 0 }
+            missed: UInt64(missedMillis!)
+        })
+    }
+
+    public cancel: move self -> Unit { }
+
+    public close: move self -> Unit { }
+}
+
+impl TimerTick {
+    public scheduled: self -> MonotonicInstant => self.scheduledInstant
+
+    public observed: self -> MonotonicInstant => self.observedInstant
+
+    public intoTimer: move self -> Timer {
+        self.timer => timer
+        timer
     }
 }

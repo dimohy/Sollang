@@ -1091,7 +1091,6 @@ internal sealed partial class SemanticCompiler
                 || (!isAsyncRuntimeIntrinsic && additionalParameters.Any(parameter =>
                     !IsAsyncInputTypeSupported(parameter.Type, parameter.Ownership)))
                 || isLocal
-                || (function.IsStandardLibrary && !isAsyncRuntimeIntrinsic)
                 || (function.IsIntrinsic && !isAsyncRuntimeIntrinsic)))
         {
             throw Error(
@@ -13442,6 +13441,7 @@ internal sealed partial class SemanticCompiler
 
         if (function.Kind == BoundFunctionKind.User
             || function.Kind is BoundFunctionKind.RuntimeSleep
+                or BoundFunctionKind.RuntimeNowMillis
                 or BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeOpenFile
                 or BoundFunctionKind.RuntimeOpenWriteFile

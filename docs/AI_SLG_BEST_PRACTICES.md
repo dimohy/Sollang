@@ -935,6 +935,13 @@ delay, or whether monotonic time includes system suspend. Match every
 `SuspendPolicy` case explicitly; `Unspecified` is a real target boundary, not a
 reason to assume either native policy.
 
+Treat periodic timers as affine schedules. Move a `Timer` into `wait`, await the
+Task, inspect the returned `TimerTick`, then recover the next owner with
+`intoTimer`. Use `Burst` only when every overdue tick must remain observable,
+`Skip` for aligned schedules that may discard missed ticks, and `Delay` when the
+next period begins at the actual wake time. Cancel the Task for an in-flight
+wait; consume an idle timer through `cancel` or `close`.
+
 Fallible async helpers use ordinary postfix propagation. An error completes
 the Task with `Err`; it does not escape through the readiness worker itself:
 

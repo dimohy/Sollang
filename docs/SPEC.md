@@ -1070,8 +1070,14 @@ capabilities expose whole-millisecond `resolution`, bounded `maximumDelay`, and
 a typed `SuspendPolicy`. The compiled Windows monotonic clock reports
 `IncludesSystemSuspend`, Linux reports `ExcludesSystemSuspend`, and browser
 builds report `Unspecified` instead of inventing host timing guarantees. Affine
-periodic timers and network/process deadline consumers remain separate
-unfinished slices.
+periodic `Timer` values own an explicit cancellation token. `wait(move self)`
+moves that owner into a real asynchronous Task and returns the next owner in a
+`TimerTick`; no mutable borrow crosses suspension. `Burst` preserves overdue
+ticks, `Skip` advances to the next aligned tick, and `Delay` schedules from the
+observed wake time. `cancel(move self)` and `close(move self)` explicitly end an
+idle schedule, while cancellation of an in-flight wait consumes its Task.
+Browser targets reject this async surface rather than blocking. Self-host async
+parity and network/process deadline consumers remain unfinished slices.
 
 `sleep` registers its Task in the executor's deadline-ordered timer queue. It
 does not allocate an OS thread and does not remain in the runnable queue. When
