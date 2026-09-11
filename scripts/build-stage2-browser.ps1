@@ -194,6 +194,7 @@ $regressionCases = @(
     @("examples\regression\1321-parallel-additional-borrow-result.slg", "browser-stage2-parallel-additional-borrow-result.ll", "examples\regression\expected\1321-parallel-additional-borrow-result.stdout.txt"),
     @("examples\regression\1681-function-boolean-when-result.slg", "browser-stage2-function-boolean-when-result.ll", "examples\regression\expected\1681-function-boolean-when-result.stdout.txt"),
     @("examples\regression\1688-io-file-protocol-adapters.slg", "browser-stage2-file-protocol-adapters.ll", "examples\regression\expected\1688-io-file-protocol-adapters.browser.stdout.txt"),
+    @("examples\regression\1689-io-bounded-transactional-read-all.slg", "browser-stage2-bounded-transactional-read-all.ll", "examples\regression\expected\1689-io-bounded-transactional-read-all.stdout.txt"),
     @("examples\regression\575-multiplication-table.slg", "browser-stage2-println-call-order.ll", "examples\regression\expected\575-multiplication-table.stdout.txt"),
     @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.slg",

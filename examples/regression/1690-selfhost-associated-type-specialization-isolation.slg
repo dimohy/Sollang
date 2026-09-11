@@ -1,0 +1,34 @@
+# A generic equality constraint may specialize the trait declaration's
+# associated-type AST. Signature validation must still substitute each exact
+# implementation binding instead of reusing that provisional shared type id.
+import std.io as io
+
+trait Source {
+    type Failure
+    read: mut self -> Result<Int, Failure>
+}
+
+struct Value {
+    count: Int
+}
+
+impl Source for Value {
+    type Failure = io.Error
+
+    read: mut self -> Result<Int, io.Error> {
+        self.count + 1 => self.count
+        Result<Int, io.Error>.Ok(self.count)
+    }
+}
+
+specialize<R> source: mut R -> Result<[UInt8; ~], io.Error> where R: Source, R.Failure == io.Error {
+    Result<[UInt8; ~], io.Error>.Ok([1; ~])
+}
+
+main {
+    Value { count: 0 } => source!
+    source! -> specialize -> when {
+        Ok(bytes) { "associated=$(bytes[0]),count=$(source!.count)" -> println }
+        Err(error) { "unexpected" -> println }
+    }
+}

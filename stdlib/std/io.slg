@@ -386,6 +386,69 @@ impl TransferPolicy {
             completion: completion
         })
     }
+
+    # Reads through reusable scratch owned by replay and publishes one owned
+    # aggregate only after end is observed. replay must have room for the
+    # configured maximum plus one probe byte. An over-limit probe stays in the
+    # replay buffer, so a later call with a larger policy loses no source data.
+    public readAll<R>: self, replay: mut ReplayBuffer, reader: mut R -> Result<[UInt8; ~], Error> where R: Reader, R.Failure == Error {
+        self.maxBytes >= 0
+            and self.bufferBytes > 0
+            and self.maxBytes < replay.maxReplayBytes
+            -> unless {
+                Result<[UInt8; ~], Error>.Err(
+                error(model.ErrorKind.InvalidLimit, UIntSize(replay.logicalOffset))) -> return
+            }
+
+        replay.start > 0 -> if {
+            compactPrefix(replay.bytes, replay.start)
+            0 => replay.start
+        }
+        (replay -> bufferedBytes) > self.maxBytes -> if {
+            Result<[UInt8; ~], Error>.Err(error(
+            model.ErrorKind.OutputLimitExceeded,
+            UIntSize(replay.logicalOffset + self.maxBytes))) -> return
+        }
+
+        false => ended!
+        (replay -> bufferedBytes) <= self.maxBytes and not ended!
+            -> while {
+                (self.maxBytes + 1) - (replay -> bufferedBytes) => remaining
+                self.bufferBytes < remaining -> if { self.bufferBytes } else { remaining } => requested
+                (replay.scratch -> len) > requested -> while {
+                    replay.scratch -> take((replay.scratch -> len) - 1) => discarded
+                }
+                (replay.scratch -> len) < requested -> while {
+                    replay.scratch -> push(0)
+                }
+
+                reader -> model.Reader.readInto(replay.scratch)? => readCount
+                readCount >= 0 and readCount <= requested -> unless {
+                    Result<[UInt8; ~], Error>.Err(error(
+                    model.ErrorKind.InvalidProgress,
+                    UIntSize(replay.logicalOffset + (replay -> bufferedBytes)))) -> return
+                }
+                readCount == 0 -> if {
+                    true => ended!
+                } else {
+                    appendRange(replay.scratch, 0, readCount, replay.bytes)
+                }
+            }
+
+        (replay -> bufferedBytes) > self.maxBytes -> if {
+            Result<[UInt8; ~], Error>.Err(error(
+            model.ErrorKind.OutputLimitExceeded,
+            UIntSize(replay.logicalOffset + self.maxBytes))) -> return
+        }
+
+        replay -> bufferedBytes => count
+        [UInt8; ~] => output!
+        output! -> reserve(count)
+        appendRange(replay.bytes, replay.start, count, output!)
+        replay.start + count => replay.start
+        replay.logicalOffset + count => replay.logicalOffset
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
 }
 
 impl ReplayBuffer {

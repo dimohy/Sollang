@@ -48,6 +48,10 @@ foreach ($required in @(
     'public struct ReplayBuffer',
     'public replayBuffer maxReplayBytes: Int -> Result<ReplayBuffer, Error>',
     'public readExactFrom<R>: mut self, reader: mut R, output: mut [UInt8; ~] -> Result<Int, Error> where R: Reader, R.Failure == Error',
+    'public readAll<R>: self, replay: mut ReplayBuffer, reader: mut R -> Result<[UInt8; ~], Error> where R: Reader, R.Failure == Error',
+    'self.maxBytes < replay.maxReplayBytes',
+    '(self.maxBytes + 1) - (replay -> bufferedBytes)',
+    'model.ErrorKind.OutputLimitExceeded',
     'compactPrefix(self.bytes, self.start)',
     'reader -> model.Reader.readInto(self.scratch)',
     'model.ErrorKind.WriteZero',
@@ -158,7 +162,7 @@ if ([regex]::Matches($source, '(?m)^public trait Reader \{').Count -ne 1 -or
     [regex]::Matches($source, '(?m)^public trait Writer \{').Count -ne 1) {
     throw 'Portable memory I/O must declare exactly one public Reader and Writer protocol'
 }
-foreach ($forbidden in @('public readAll:', 'ReplayReader', 'BufferedReader', 'BufferedWriter')) {
+foreach ($forbidden in @('public readAll: ', 'ReplayReader', 'BufferedReader', 'BufferedWriter')) {
     if ($source.Contains($forbidden, [StringComparison]::Ordinal)) {
         throw "Portable memory I/O published an unsupported unbounded or buffered surface: $forbidden"
     }
@@ -201,6 +205,18 @@ foreach ($required in @(
 )) {
     if (-not $replayFixture.Contains($required, [StringComparison]::Ordinal)) {
         throw "Portable memory I/O replay fixture no longer proves: $required"
+    }
+}
+$readAllFixture = [IO.File]::ReadAllText((Join-Path $root 'examples/regression/1689-io-bounded-transactional-read-all.slg'))
+foreach ($required in @(
+    'narrow -> readAll(replay!, source!)',
+    'complete -> readAll(replay!, source!)',
+    'OutputLimitExceeded',
+    'invalidPolicy -> readAll(invalidReplay!, untouched!)',
+    'emptyPolicy -> readAll(emptyReplay!, emptySource!)'
+)) {
+    if (-not $readAllFixture.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable bounded read-all fixture no longer proves: $required"
     }
 }
 $socketFixture = [IO.File]::ReadAllText((Join-Path $root 'examples/regression/1685-io-socket-protocol-adapters.slg'))
@@ -257,6 +273,9 @@ foreach ($fixtureName in $contract.fixtures) {
 $browserBatch = [IO.File]::ReadAllText((Join-Path $root 'scripts/build-stage2-browser.ps1'))
 if (-not $browserBatch.Contains('1688-io-file-protocol-adapters.browser.stdout.txt', [StringComparison]::Ordinal)) {
     throw 'browser Stage2 regression list does not retain the explicit file-capability failure fixture'
+}
+if (-not $browserBatch.Contains('1689-io-bounded-transactional-read-all.stdout.txt', [StringComparison]::Ordinal)) {
+    throw 'browser Stage2 regression list does not retain bounded transactional read-all'
 }
 foreach ($gateName in @(
     'verify-selfhost-stage2.ps1',

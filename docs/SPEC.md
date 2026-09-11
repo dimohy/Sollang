@@ -1530,9 +1530,13 @@ to the caller destination only after the entire request is present. A failed
 short read retains its prefix for the next logical read. The adapter advances a
 logical published cursor and never claims that the underlying file or socket
 cursor moved backward. Checkpoint-capable sources may provide a separate exact
-path later. Bounded transactional `readAll`, reactor protocol implementations,
-and async buffering remain unpublished; no unbounded aggregate helper or
-implicit buffer is part of the portable protocol. This synchronous protocol
+path later. `TransferPolicy.readAll` composes that replay owner with the
+policy's explicit maximum and reusable chunk size. It publishes an owned
+aggregate only after observing end, retains one over-limit probe for a lossless
+larger-limit retry, and rejects replay capacity that cannot hold `maxBytes + 1`
+before source access. Reactor protocol implementations and async buffering
+remain unpublished; no unbounded aggregate helper or implicit buffer is part
+of the portable protocol. This synchronous protocol
 must not hide a blocking operation behind an async-looking API; future
 task-returning adapters expose real suspension separately.
 

@@ -1,0 +1,74 @@
+import std.io as io
+
+struct ChunkReader {
+    bytes: [UInt8; ~]
+    offset: Int
+    maximumRead: Int
+    calls: Int
+}
+
+impl io.Reader for ChunkReader {
+    type Failure = io.Error
+
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, io.Error> {
+        self.calls + 1 => self.calls
+        (self.bytes -> len) - self.offset => available
+        (output -> len) < available -> if { output -> len } else { available } => count!
+        count! < self.maximumRead -> unless { self.maximumRead => count! }
+        0 => index!
+        index! < count! -> while {
+            self.bytes[self.offset + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.offset + count! => self.offset
+        Result<Int, io.Error>.Ok(count!)
+    }
+}
+
+run: -> Result<Bool, io.Error> uses Console {
+    io.replayBuffer(8)? => replay!
+    ChunkReader { bytes: [10, 20, 30, 40, 50], offset: 0, maximumRead: 2, calls: 0 } => source!
+    io.transferPolicy(3, 2)? => narrow
+    narrow -> readAll(replay!, source!) -> when {
+        Ok(bytes) { "unexpected-limit=$(bytes -> len)" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                OutputLimitExceeded {
+                    "limited@$(failure -> errorOffset),source=$(source!.offset),buffered=$(replay! -> bufferedBytes),calls=$(source!.calls)" -> println
+                }
+                else { "wrong-limit-error" -> println }
+            }
+        }
+    }
+
+    io.transferPolicy(5, 2)? => complete
+    complete -> readAll(replay!, source!)? => bytes
+    "complete=$(bytes -> len),$(bytes[0]),$(bytes[4]),source=$(source!.offset),buffered=$(replay! -> bufferedBytes),pos=$(replay! -> position),calls=$(source!.calls)" -> println
+
+    io.replayBuffer(3)? => invalidReplay!
+    ChunkReader { bytes: [1], offset: 0, maximumRead: 1, calls: 0 } => untouched!
+    io.transferPolicy(3, 1)? => invalidPolicy
+    invalidPolicy -> readAll(invalidReplay!, untouched!) -> when {
+        Ok(value) { "unexpected-capacity=$(value -> len)" -> println }
+        Err(failure) {
+            failure -> errorKind -> when {
+                InvalidLimit { "invalid-capacity,calls=$(untouched!.calls)" -> println }
+                else { "wrong-capacity-error" -> println }
+            }
+        }
+    }
+
+    io.replayBuffer(1)? => emptyReplay!
+    ChunkReader { bytes: [UInt8; ~], offset: 0, maximumRead: 1, calls: 0 } => emptySource!
+    io.transferPolicy(0, 1)? => emptyPolicy
+    emptyPolicy -> readAll(emptyReplay!, emptySource!)? => empty
+    "empty=$(empty -> len),calls=$(emptySource!.calls)" -> println
+    Result<Bool, io.Error>.Ok(true)
+}
+
+main {
+    run() -> when {
+        Ok(value) { }
+        Err(failure) { "unexpected-error@$(failure -> errorOffset)" -> println }
+    }
+}

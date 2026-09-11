@@ -2636,10 +2636,18 @@ emitPrivateFieldOperationDiagnostics context: ref emitterContext.EmitContext -> 
 
 signatureTypeId source: Int, typeAst: Int, context: ref emitterContext.EmitContext -> Int {
     -1 => result!
+    false => ambiguous!
     context.typeReferences -> each reference {
         reference.sourceModule == source and reference.typeAst == typeAst and reference.status == 0
-            -> if { reference.typeId => result! }
+            -> if {
+                result! < 0 -> if {
+                    reference.typeId => result!
+                } else {
+                    result! != reference.typeId -> if { true => ambiguous! }
+                }
+            }
     }
+    ambiguous! -> if { -1 -> return }
     result!
 }
 
@@ -2656,6 +2664,28 @@ signatureTypeTerm source: Int, typeAst: Int, context: ref emitterContext.EmitCon
 }
 
 signatureNominalIdentity source: Int, typeAst: Int, context: ref emitterContext.EmitContext -> Int {
+    source -> signatureTypeTerm(typeAst, context) => termIndex
+    termIndex >= 0 -> if {
+        context.typeTerms[termIndex] => term
+        term.kind == 7 and term.nameToken >= 0 -> if {
+            source -> sourceTokenIs(term.nameToken, "Option", context)
+                -> if { -100 -> return }
+            source -> sourceTokenIs(term.nameToken, "Result", context)
+                -> if { -101 -> return }
+            source -> sourceTokenIs(term.nameToken, "Task", context)
+                -> if { -102 -> return }
+            source -> sourceTokenIs(term.nameToken, "Stream", context)
+                -> if { -103 -> return }
+            source -> sourceTokenIs(term.nameToken, "EventStream", context)
+                -> if { -104 -> return }
+            source -> sourceTokenIs(term.nameToken, "Set", context)
+                -> if { -105 -> return }
+            source -> sourceTokenIs(term.nameToken, "Deque", context)
+                -> if { -106 -> return }
+            source -> sourceTokenIs(term.nameToken, "BinaryHeap", context)
+                -> if { -107 -> return }
+        }
+    }
     -1 => result!
     context.nominal -> each nominal {
         nominal.sourceModule == source and nominal.typeAst == typeAst and nominal.status == 0
@@ -2668,70 +2698,46 @@ signatureNominalIdentity source: Int, typeAst: Int, context: ref emitterContext.
                 }
             }
     }
-    # Intrinsic generic constructors are represented as origin-4 semantic
-    # types rather than ordinary nominal resolutions.  A declaration whose
-    # argument is an unresolved associated type therefore has no whole-type
-    # id yet, but its outer constructor still has a stable identity.  Preserve
-    # that identity so signature matching can recurse and substitute the
-    # associated child instead of rejecting the outer application early.
-    result! == -1 -> if {
-        source -> signatureTypeTerm(typeAst, context) => termIndex
-        termIndex >= 0 -> if {
-            context.typeTerms[termIndex] => term
-            term.kind == 7 and term.nameToken >= 0 -> if {
-                source -> sourceTokenIs(term.nameToken, "Option", context)
-                    -> if { -100 => result! }
-                source -> sourceTokenIs(term.nameToken, "Result", context)
-                    -> if { -101 => result! }
-                source -> sourceTokenIs(term.nameToken, "Task", context)
-                    -> if { -102 => result! }
-                source -> sourceTokenIs(term.nameToken, "Stream", context)
-                    -> if { -103 => result! }
-                source -> sourceTokenIs(term.nameToken, "EventStream", context)
-                    -> if { -104 => result! }
-                source -> sourceTokenIs(term.nameToken, "Set", context)
-                    -> if { -105 => result! }
-                source -> sourceTokenIs(term.nameToken, "Deque", context)
-                    -> if { -106 => result! }
-                source -> sourceTokenIs(term.nameToken, "BinaryHeap", context)
-                    -> if { -107 => result! }
-            }
-        }
-    }
     result!
 }
 
 signatureTypeMatches leftSource: Int, leftAst: Int, rightSource: Int, rightAst: Int, implSymbol: Int, context: ref emitterContext.EmitContext -> Bool {
     leftAst < 0 or rightAst < 0 -> if { false -> return }
-    leftSource -> signatureTypeId(leftAst, context) => leftId!
-    rightSource -> signatureTypeId(rightAst, context) => rightId
-    # An associated type in the declaration is bound by this exact implementationIndex.
-    leftId! < 0 -> if {
-        context.ranges[leftSource] => leftRange
-        context.nodes[leftRange.astStart + leftAst] => annotation
-        -1 => nameToken!
-        0 => names!
-        annotation.firstToken => tokenIndex!
-        tokenIndex! < annotation.firstToken + annotation.tokenCount
+    # An associated declaration type belongs to this exact implementation even
+    # when an earlier generic specialization left a provisional positive type
+    # id on the shared declaration AST. Resolve the binding before consulting
+    # cached ids so another specialization cannot decide this signature.
+    context.ranges[leftSource] => annotationRange
+    context.nodes[annotationRange.astStart + leftAst] => annotation
+    -1 => nameToken!
+    0 => names!
+    annotation.firstToken => tokenIndex!
+    tokenIndex! < annotation.firstToken + annotation.tokenCount
+        -> while {
+            context.tokens[annotationRange.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
+                -> if {
+                    tokenIndex! => nameToken!
+                    names! + 1 => names!
+                }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    names! == 1 -> if {
+        context.ranges[rightSource] => implementationRange
+        0 => symbolIndex!
+        symbolIndex! < implementationRange.symbolCount
             -> while {
-                context.tokens[leftRange.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
-                    -> if { tokenIndex! => nameToken!
-                        names! + 1 => names! }
-                tokenIndex! + 1 => tokenIndex!
-            }
-        names! == 1 -> if {
-            context.ranges[rightSource] => rightRange
-            0 => symbolIndex!
-            symbolIndex! < rightRange.symbolCount -> while {
-                context.symbols[rightRange.symbolStart + symbolIndex!] => associated
+                context.symbols[implementationRange.symbolStart + symbolIndex!] => associated
                 associated.kind == 30 and associated.parent == implSymbol and associated.nameToken >= 0
                     and (leftSource -> sourceTokensEqual(nameToken!, rightSource, associated.nameToken, context))
-                    -> if { rightSource -> signatureTypeId(associated.typeNode, context) => leftId! }
+                    -> if {
+                        rightSource -> signatureTypeMatches(associated.typeNode, rightSource, rightAst, implSymbol, context) -> return
+                    }
                 symbolIndex! + 1 => symbolIndex!
             }
-        }
     }
-    leftId! >= 0 and leftId! == rightId -> if { true -> return }
+    leftSource -> signatureTypeId(leftAst, context) => leftId
+    rightSource -> signatureTypeId(rightAst, context) => rightId
+    leftId >= 0 and leftId == rightId -> if { true -> return }
     leftSource -> signatureTypeTerm(leftAst, context) => leftTermIndex
     rightSource -> signatureTypeTerm(rightAst, context) => rightTermIndex
     leftTermIndex < 0 or rightTermIndex < 0 -> if { false -> return }

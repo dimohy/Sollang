@@ -1613,6 +1613,10 @@ Assert-Contains $nonProcessCollectFixture "Collector { value: 42 } -> collect =>
 Assert-NotContains $emitterDiagnostics "context.symbols[reachableCandidateGlobalSymbol].kind == 31" "unconditional instance-method reachability root"
 Assert-Contains $emitterDiagnostics "use.kind == 6 or use.kind == 9" "ordinary and materialized call-graph edges"
 Assert-Contains $emitterDiagnostics "public traitMethodSymbol" "canonical implicit trait-method resolver"
+Assert-Contains $emitterDiagnostics 'result! != reference.typeId -> if { true => ambiguous! }' "trait signature rejects conflicting specialization ids for one declaration AST"
+Assert-Contains $emitterDiagnostics 'ambiguous! -> if { -1 -> return }' "trait signature routes ambiguous specialization ids through structural substitution"
+Assert-Matches $emitterDiagnostics '(?s)signatureNominalIdentity.*?source -> sourceTokenIs\(term.nameToken, "Result", context\).*?context.nominal -> each nominal' "trait signature gives intrinsic constructors precedence over provisional nominal ids"
+Assert-Contains $emitterDiagnostics 'rightSource -> signatureTypeMatches(associated.typeNode, rightSource, rightAst, implSymbol, context) -> return' "trait signature resolves the exact implementation associated binding before cached type ids"
 Assert-Contains $emitterDiagnostics "use -> typedIr.isSetIntrinsicCall" "reachable Set implicit trait-call edge"
 Assert-Contains $emitterDiagnostics 'traitMethodSymbol("Hash", "hash", context)' "reachable Set Hash edge"
 Assert-Contains $emitterDiagnostics 'traitMethodSymbol("Eq", "eq", context)' "reachable Set Eq edge"
@@ -2369,6 +2373,7 @@ foreach ($nativeExactFixture in @(
     "1685-io-socket-protocol-adapters",
     "1686-selfhost-trait-associated-result",
     "1687-selfhost-chained-call-local-precedence",
+    "1690-selfhost-associated-type-specialization-isolation",
     "945-quic-flow-control-frames"
 )) {
     Assert-Contains $nativeExactFixtureBatchVerifier "`"$nativeExactFixture`"" "native exact batch fixture $nativeExactFixture"

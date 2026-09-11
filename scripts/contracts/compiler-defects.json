@@ -6203,18 +6203,19 @@
       "classification": "latent-defect",
       "state": "candidate-fixed",
       "owner": "selfhost/llvm/emitter/diagnostics.slg intrinsic generic trait signature matching",
-      "rootCause": "When a trait result such as Result<Int, Failure> contained an unresolved associated type, the complete semantic type ID was unavailable. The fallback matcher then required an ordinary nominal resolution for the outer intrinsic Result constructor before recursing, so it rejected the valid implementation Result<Int, Text> before substituting Failure = Text.",
-      "focusedFixture": "1686-selfhost-trait-associated-result requires Result<Int, Failure> to match Result<Int, Text> after the implementation binds Failure = Text; the frozen SLG compiler fails before the repair while managed and fresh current-source self-host compilation, link, and exact execution produce 1.",
-      "closureGate": "Give intrinsic generic constructors a stable fallback identity when their whole type ID is unavailable, recurse into their arguments for exact associated substitution, retain ordinary nominal identity checks, pass fixture 1686 under managed and current-source self-host exact execution, and include the repair in the final accumulated Stage2/Stage3 promotion.",
+      "rootCause": "Trait signature matching consulted cached semantic type and nominal IDs before the exact implementation's associated-type binding. A simple unresolved Result<Int, Failure> had no whole ID and exposed the first defect, while generic equality specialization could leave provisional positive IDs on the shared declaration AST and distinct nominal IDs on the intrinsic Result constructor. The matcher then rejected a valid Result<Int, Error> before substituting Failure = Error.",
+      "focusedFixture": "1686-selfhost-trait-associated-result preserves the unresolved associated-result case. 1690-selfhost-associated-type-specialization-isolation adds a generic equality specialization before validating an exact Failure = io.Error implementation. Consumer fixture 1689-io-bounded-transactional-read-all exercises the same shape through the public Reader protocol and bounded aggregate helper.",
+      "closureGate": "Reject ambiguous cached IDs for one declaration AST, give recognized intrinsic generic constructors their stable syntax identity before provisional nominal IDs, resolve the exact implementation associated binding before cached IDs, retain ordinary nominal identity checks, pass fixtures 1686 and 1690 plus consumer 1689 under current-source self-host exact execution, pass 1689 on Windows, Linux, and browser, and include the repair in the final accumulated Stage2/Stage3 promotion.",
       "closedEvidence": [
         "The frozen self-host compiler rejects fixture 1686 with category-5 result mismatch while the managed compiler accepts the same frozen input.",
-        "The matcher now gives only recognized intrinsic generic constructors a stable fallback identity and then recursively compares their child annotations.",
-        "Detached run c379-associated-result-v2 generated a fresh self-host compiler, passed direct-call closure, compiled, linked, and exactly executed fixture 1686, matched the managed oracle, exited zero, and recorded no failure IDs or orphan processes.",
+        "The matcher now rejects conflicting specialization IDs, gives only recognized intrinsic generic constructors stable syntax identity before nominal caches, and resolves the exact implementation associated binding before comparing cached IDs.",
+        "Detached run 20260912-025803-30af4162 generated the final current-source self-host compiler and exactly executed specialization-isolation fixture 1690 with managed differential, exit zero, no failure IDs, and no orphan processes.",
+        "Detached runs 20260912-030044-3c2d33ee and 20260912-030215-898c72fe exactly executed read-all consumer fixture 1689 on Windows and Linux; browser run 20260912-030425-32b55824 compiled and executed the same registered fixture through the focused unpromoted candidate. All three exited zero with no failure IDs or orphan processes.",
         "Final accumulated Stage2/Stage3 promotion remains pending, so C379 is candidate-fixed rather than closed."
       ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-11-379/as-us-001.json",
-        "inputFingerprint": "FFD27970695F329EF33E8C9488425E4FDF4A9E7F679389C9B20BAD8738590C00",
+        "inputFingerprint": "7AA755303E2F62FFC8B7D8D4C834F57A27EB263AFA8750FF7FDE37A014ABD8CE",
         "baselineReceipt": "scripts/contracts/evidence/C2026-09-11-379/baseline.json",
         "candidateReceipt": "scripts/contracts/evidence/C2026-09-11-379/candidate.json"
       }

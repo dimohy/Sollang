@@ -361,6 +361,10 @@ a written prefix: `Writer.writeRange(input, offset, length)`. A
 bounded transfer policy should be an instance that owns its byte and reusable
 buffer ceilings, retries exact partial ranges, treats successful zero progress
 as an error, and distinguishes source end from reaching the caller's limit.
+For a bounded aggregate read, compose that policy with `ReplayBuffer`: reserve
+space for `maxBytes + 1`, publish the owned aggregate only after observing end,
+and retain the one-byte over-limit probe so a larger-limit retry loses no
+source data. Reject insufficient replay capacity before the first source read.
 Keep this protocol synchronous; use a separate task-returning protocol when the
 underlying file or socket operation actually suspends.
 
