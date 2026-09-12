@@ -86,7 +86,7 @@ try {
         '%async_arg_address = getelementptr i8, ptr %async_context',
         '%async_arg = load ',
         ' %arg, ptr %async_arg_address',
-        '_async_body(' 
+        '_async_body('
     )) {
         Require-Text $functions $fragment 'wrapper-store and worker-load authority'
     }
