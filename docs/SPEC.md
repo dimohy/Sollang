@@ -1261,6 +1261,23 @@ time. The current LLVM backends lower `each` directly to basic blocks with an
 SSA phi value for the item binding, with no heap allocation, function pointer,
 closure object, or dynamic block dispatch.
 
+When one `tryParallel` branch fails, the runtime still cancels and joins the
+remaining work before destroying results. Every initialized result payload that
+completed but was not selected is destroyed exactly once according to the
+payload's actual ownership representation. In particular, a `SourceText`
+payload with borrowed storage performs no terminal cleanup, heap storage is
+freed, and mapped storage is unmapped through the target runtime. Lowering must
+delegate the intact `SourceText` aggregate to that representation-aware cleanup;
+extracting its owner pointer and treating every non-array payload as heap
+storage is invalid.
+
+Normal drop lowering may elide `SourceText` cleanup only when the complete value
+is proven to come directly from a borrowing intrinsic, possibly through
+immutable binding/read aliases that preserve the same representation. Mutable
+storage, control merges, tap values, parameters, aggregate fields, opaque calls,
+and owned producers retain representation-aware runtime cleanup. This proof is
+fail-closed: an unknown or cyclic provenance path is never treated as borrowed.
+
 ## Static Trait Method Contracts
 
 A trait method declares `self`, optionally preceded by `mut` or `move`, then
@@ -1645,6 +1662,23 @@ separators and a trailing separator produce no empty or phantom component.
 The precise prefix, error precedence, and byte-span contract is
 `scripts/contracts/path-components.json`; this API performs no normalization,
 confinement, symlink lookup, allocation, source copy, or asynchronous work.
+
+`std.text.glob.pattern(text, limits)` creates an immutable bounded matcher that
+borrows validated UTF-8 input. `Pattern.matches(input)` performs a
+case-sensitive whole-text match without filesystem access or normalization.
+`*` matches zero or more Unicode scalar values, `?` matches exactly one scalar,
+and only `\*`, `\?`, and `\\` are escapes. Separators, leading dots, newlines,
+NUL, brackets, and braces otherwise remain ordinary text; this is not a POSIX
+or shell expansion API.
+
+All glob limits are nonnegative and zero is a real ceiling. Construction checks
+`InvalidLimits`, pattern bytes, then escape validity. Matching checks input bytes
+before spending work and consumes one bounded step per state transition,
+including its terminal decision. Work exhaustion reports the byte offsets of
+the next transition it could not perform without mutating either input. The
+iterative last-star algorithm uses constant auxiliary storage; it does not build
+an AST, enumerate paths, or allocate hidden match state. The exact profile,
+precedence, cases, and offsets are fixed by `scripts/contracts/text-glob.json`.
 
 `std.io.Reader` and `std.io.Writer` are public static protocols over one
 caller-buffer partial-transfer primitive. Both operations return exact `Int`

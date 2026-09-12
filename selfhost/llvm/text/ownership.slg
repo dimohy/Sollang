@@ -776,6 +776,54 @@ emitPromotedFixedBackingDrop callIndex: Int, edgeIndex: Int -> Unit uses Console
     "  %fixedbacking$(edgeIndex)_$(callIndex) = extractvalue { ptr, i64 } %v$(callIndex), 0" -> println
     "  call void @free(ptr %fixedbacking$(edgeIndex)_$(callIndex))" -> println
 }
+
+# Only the two borrowing intrinsics construct SourceText with a literal null
+# owner. Follow direct immutable aliases, but stop at mutable, control, tap,
+# parameter, field and opaque values so their dynamic cleanup remains intact.
+knownBorrowedSourceTextDrop request: DropGlueRequest, context: ref emitterContext.EmitContext -> Bool {
+    false => sourceTextRequest!
+    request.typeId >= 0 and request.typeId < (context.types -> len)
+        -> if {
+            context.types[request.typeId] => requestType
+            requestType.kind == 1 and requestType.origin == 1 and requestType.symbol == 24
+                => sourceTextRequest!
+        } else {
+            request.typeId < 0 and request.typeOrigin == 1 and request.typeSymbol == 24
+                => sourceTextRequest!
+        }
+    not sourceTextRequest! or request.valueKind != 0
+        or request.valueIndex < 0 or request.valueIndex >= (context.ir -> len)
+        -> if { false -> return }
+
+    request.valueIndex => candidateIndex!
+    0 => hop!
+    hop! < (context.ir -> len) -> while {
+        context.ir[candidateIndex!] => candidate
+        candidate -> typeQueries.isSourceText => candidateIsSourceText
+        candidateIsSourceText and (candidate.kind == 6 or candidate.kind == 9)
+            and (candidate.opcode == -206 or candidate.opcode == -232)
+            -> if { true -> return }
+
+        -1 => nextIndex!
+        candidateIsSourceText and candidate.kind == 17 and candidate.flags != 1
+            and candidate.operand0 >= 0 and candidate.operand0 < (context.ir -> len)
+            -> if { candidate.operand0 => nextIndex! }
+        candidateIsSourceText and candidate.kind == 5
+            and candidate.operand0 >= 0 and candidate.operand0 < (context.ir -> len)
+            -> if {
+                context.ir[candidate.operand0] => binding
+                binding.kind == 17 and binding.flags != 1
+                    and (binding -> typeQueries.isSourceText)
+                    and binding.operand0 >= 0 and binding.operand0 < (context.ir -> len)
+                    -> if { binding.operand0 => nextIndex! }
+            }
+        nextIndex! < 0 -> if { false -> return }
+        nextIndex! => candidateIndex!
+        hop! + 1 => hop!
+    }
+    false
+}
+
 emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     [request,; ~] => dropTasks!
     0 => dropTaskIndex!
@@ -896,7 +944,7 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
                         dropGlueMoveIndex! + 1 => dropGlueMoveIndex!
                     }
             }
-        not dropTaskMoved! and dropTask.typeId >= 0 and (not dropTask.hasPartialMoves or (dropTask.fieldOrdinal >= 0 and context.types[dropTask.typeId].kind != 1)) and (dropTask.typeId -> semanticTypeOwns(context, state))
+        not dropTaskMoved! and dropTask.typeId >= 0 and (not dropTask.hasPartialMoves or (dropTask.fieldOrdinal >= 0 and context.types[dropTask.typeId].kind != 1)) and (dropTask.typeId -> semanticTypeOwns(context, state)) and not (dropTask -> knownBorrowedSourceTextDrop(context))
             -> if {
                 false => dropTaskNeedsFixedReload!
                 false => dropTaskHasInlineArrayAbi!
@@ -1652,8 +1700,7 @@ emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext
         -> if {
             "  %enumdrop$(request.nameRoot)_payload = load %sollang.source_text, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
             context.typeAligns[request.payloadTypeId] -> writeDecimalLine
-            "  %enumdrop$(request.nameRoot)_owner = extractvalue %sollang.source_text %enumdrop$(request.nameRoot)_payload, 2" -> println
-            "  call void @free(ptr %enumdrop$(request.nameRoot)_owner)" -> println
+            "  call void @sollang_runtime_unmap_text(%sollang.source_text %enumdrop$(request.nameRoot)_payload)" -> println
         }
     payloadType.kind == 1 and payloadType.origin == 1 and (payloadType.symbol == 17 or payloadType.symbol == 18)
         -> if {

@@ -1,0 +1,132 @@
+import std.text.glob as glob
+import sys.file as file
+
+bounds pattern: Int, input: Int, steps: Int -> glob.Limits => glob.Limits {
+    maxPatternBytes: pattern
+    maxInputBytes: input
+    maxSteps: steps
+}
+
+errorName kind: glob.ErrorKind -> Text => kind -> when {
+    InvalidLimits => "InvalidLimits"
+    PatternLimit => "PatternLimit"
+    InputLimit => "InputLimit"
+    InvalidEscape => "InvalidEscape"
+    WorkLimit => "WorkLimit"
+}
+
+rejectCreation label: Text, pattern: Text, limits: glob.Limits -> Unit uses Console {
+    glob.pattern(pattern, limits) -> when {
+        Ok(matcher) { "unexpected-created-$label" -> println }
+        Err(error) { "$label=$(errorName(error.kind))@$(error.patternOffset),$(error.inputOffset)" -> println }
+    }
+}
+
+rejectMatch label: Text, pattern: Text, input: Text, limits: glob.Limits -> Result<Unit, glob.Error> uses Console {
+    glob.pattern(pattern, limits)? => matcher
+    0..<2 -> each attempt {
+        matcher -> matches(input) -> when {
+            Ok(matched) { "unexpected-match-$label=$matched" -> println }
+            Err(error) { "$label-$attempt=$(errorName(error.kind))@$(error.patternOffset),$(error.inputOffset)" -> println }
+        }
+    }
+    Result<Unit, glob.Error>.Ok
+}
+
+showBounded label: Text, pattern: Text, input: Text, limits: glob.Limits -> Result<Unit, glob.Error> uses Console {
+    glob.pattern(pattern, limits)? => matcher
+    matcher -> matches(input)? => matched
+    "$label=$matched" -> println
+    Result<Unit, glob.Error>.Ok
+}
+
+appendByte output: mut [UInt8; ~], value: UInt8 -> Unit { output -> push(value) }
+
+matchLocalInput matcher: ref glob.Pattern -> Result<Bool, glob.Error> {
+    [UInt8; ~] => bytes!
+    appendByte(bytes!, 97)
+    bytes! -> file.borrowBytes => source
+    source -> slice(0, source -> len) => text
+    matcher -> matches(text)
+}
+
+show label: Text, pattern: Text, input: Text -> Result<Unit, glob.Error> uses Console {
+    glob.pattern(pattern, glob.Limits { maxPatternBytes: 256, maxInputBytes: 256, maxSteps: 4096 })? => matcher
+    matcher -> matches(input)? => matched
+    "$label=$matched" -> println
+    Result<Unit, glob.Error>.Ok
+}
+
+run: -> Result<Unit, glob.Error> uses Console {
+    show("empty", "", "")?
+    show("literal", "sollang", "sollang")?
+    show("star", "s*g", "sollang")?
+    show("question", "a?c", "abc")?
+    show("escape", """a\*b""", "a*b")?
+    show("unicode", "?한*", "🙂한글")?
+    show("empty-pattern", "", "x")?
+    show("empty-input", "x", "")?
+    show("star-empty", "*", "")?
+    show("stars-empty", "***", "")?
+    show("question-empty", "?", "")?
+    show("korean", "?", "한")?
+    show("emoji", "?", "🙂")?
+    show("combining-one", "?", "é")?
+    show("combining-two", "??", "é")?
+    show("case-sensitive", "A", "a")?
+    show("anchored", "sol", "sollang")?
+    show("brackets-literal", "[a]", "[a]")?
+    show("not-character-class", "[a]", "a")?
+    show("slash", "*", "a/b")?
+    show("newline", "?", "\n")?
+    show("backslash", "a\\\\b", "a\\b")?
+    show("escaped-question", "a\\?b", "a?b")?
+    show("retry", "*ab", "aaab")?
+    show("retry-miss", "*aaaab", "aaaaaaaaac")?
+    show("unicode-retry", "*🙂?", "한🙂끝")?
+    show("leading-dot", "*", ".hidden")?
+    show("braces-literal", "{a,b}", "{a,b}")?
+    [UInt8; ~] => bytes!
+    appendByte(bytes!, 97)
+    appendByte(bytes!, 0)
+    appendByte(bytes!, 98)
+    bytes! -> file.borrowBytes => source
+    source -> slice(0, source -> len) => nulText
+    show("nul", "a?b", nulText)?
+
+    rejectCreation("negative-pattern", "", bounds(-1, 0, 0))
+    rejectCreation("negative-input", "", bounds(0, -1, 0))
+    rejectCreation("negative-work", "", bounds(0, 0, -1))
+    rejectCreation("pattern-limit", "한", bounds(2, 3, 3))
+    rejectCreation("pattern-before-escape", "\\", bounds(0, 0, 0))
+    rejectCreation("trailing-escape", "\\", bounds(1, 0, 1))
+    rejectCreation("unknown-escape", "a\\q", bounds(3, 0, 1))
+    rejectCreation("unicode-escape", "\\한", bounds(4, 0, 1))
+    rejectMatch("input-limit", "?", "한", bounds(1, 2, 4))?
+    rejectMatch("input-before-work", "?", "한", bounds(1, 2, 0))?
+    rejectMatch("zero-work", "", "", bounds(0, 0, 0))?
+    rejectMatch("literal-work", "a", "a", bounds(1, 1, 1))?
+    rejectMatch("unicode-work", "한", "한", bounds(3, 3, 1))?
+    rejectMatch("retry-work", "*a", "ba", bounds(2, 2, 3))?
+    showBounded("empty-exact", "", "", bounds(0, 0, 1))?
+    showBounded("unicode-exact", "한", "한", bounds(3, 3, 2))?
+    showBounded("retry-exact", "*a", "ba", bounds(2, 2, 4))?
+
+    glob.pattern("a", bounds(1, 1, 2))? => reusable
+    reusable -> matches("a")? => first
+    reusable -> matches("b")? => second
+    reusable -> matches("a")? => third
+    "reuse-true=$first" -> println
+    "reuse-false=$second" -> println
+    "reuse-again=$third" -> println
+    matchLocalInput(reusable)? => local
+    "local-input=$local" -> println
+    Result<Unit, glob.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected-error@$(error.patternOffset),$(error.inputOffset)" -> println }
+    }
+}

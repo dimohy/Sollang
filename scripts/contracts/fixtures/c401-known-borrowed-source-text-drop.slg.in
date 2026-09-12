@@ -1,0 +1,132 @@
+struct SemanticType {
+    kind: Int
+    origin: Int
+    symbol: Int
+}
+
+struct Node {
+    kind: Int
+    typeId: Int
+    typeKind: Int
+    typeOrigin: Int
+    typeSymbol: Int
+    opcode: Int
+    operand0: Int
+    flags: Int
+}
+
+struct DropGlueRequest {
+    typeId: Int
+    typeOrigin: Int
+    typeSymbol: Int
+    valueKind: Int
+    valueIndex: Int
+}
+
+struct EmitContext {
+    types: [SemanticType; ~]
+    ir: [Node; ~]
+}
+
+isSourceText node: Node -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol == 24
+    } else {
+        node.typeOrigin == 1 and node.typeSymbol == 24
+    }
+}
+
+appendType values: mut [SemanticType; ~], value: SemanticType -> Unit {
+    values -> push(value)
+}
+
+appendNode values: mut [Node; ~], value: Node -> Unit {
+    values -> push(value)
+}
+
+sourceNode kind: Int, opcode: Int, operand0: Int, flags: Int -> Node => Node {
+    kind: kind
+    typeId: 0
+    typeKind: 1
+    typeOrigin: 1
+    typeSymbol: 24
+    opcode: opcode
+    operand0: operand0
+    flags: flags
+}
+
+sourceRequest valueKind: Int, valueIndex: Int -> DropGlueRequest => DropGlueRequest {
+    typeId: 0
+    typeOrigin: 1
+    typeSymbol: 24
+    valueKind: valueKind
+    valueIndex: valueIndex
+}
+
+check label: Text, expected: Bool, request: DropGlueRequest, context: ref EmitContext -> Bool uses Console {
+    request -> knownBorrowedSourceTextDrop(context) => actual
+    (actual and expected) or (not actual and not expected) => passed
+    "$label=$actual" -> println
+    passed
+}
+
+__PRODUCTION_HELPER__
+
+main {
+    [SemanticType; ~] => types!
+    types! -> appendType(SemanticType { kind: 1, origin: 1, symbol: 24 })
+    [Node; ~] => nodes!
+    nodes! -> appendNode(sourceNode(6, -206, -1, 0))
+    nodes! -> appendNode(sourceNode(9, -232, -1, 0))
+    nodes! -> appendNode(sourceNode(17, -1, 0, 0))
+    nodes! -> appendNode(sourceNode(5, -1, 2, 0))
+    nodes! -> appendNode(sourceNode(17, -1, 3, 0))
+    nodes! -> appendNode(sourceNode(5, -1, 4, 0))
+    nodes! -> appendNode(sourceNode(17, -1, 0, 1))
+    nodes! -> appendNode(sourceNode(5, -1, 6, 0))
+    nodes! -> appendNode(sourceNode(9, -1, 0, 0))
+    nodes! -> appendNode(sourceNode(36, -1, 0, 0))
+    nodes! -> appendNode(sourceNode(6, -1, -1, 0))
+    nodes! -> appendNode(sourceNode(6, -205, -1, 0))
+    nodes! -> appendNode(sourceNode(6, -231, -1, 0))
+    nodes! -> appendNode(sourceNode(6, -234, -1, 0))
+    nodes! -> appendNode(sourceNode(17, -1, -1, 0))
+    nodes! -> appendNode(sourceNode(5, -1, 14, 0))
+    nodes! -> appendNode(sourceNode(17, -1, 17, 0))
+    nodes! -> appendNode(sourceNode(5, -1, 16, 0))
+    EmitContext { types: types!, ir: nodes! } => context
+
+    true => passed!
+    check("direct-borrow-text", true, sourceRequest(0, 0), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("direct-borrow-bytes", true, sourceRequest(0, 1), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("immutable-binding", true, sourceRequest(0, 2), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("immutable-read", true, sourceRequest(0, 3), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("immutable-two-hop", true, sourceRequest(0, 5), context) => casePassed!
+    passed! and casePassed! => passed!
+
+    check("mutable-read", false, sourceRequest(0, 7), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("control-wrapper", false, sourceRequest(0, 8), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("tap-wrapper", false, sourceRequest(0, 9), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("opaque-call", false, sourceRequest(0, 10), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("owned-map", false, sourceRequest(0, 11), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("owned-stdin", false, sourceRequest(0, 12), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("owned-chunk", false, sourceRequest(0, 13), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("parameter-read", false, sourceRequest(0, 15), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("field-value-kind", false, sourceRequest(2, 0), context) => casePassed!
+    passed! and casePassed! => passed!
+    check("alias-cycle", false, sourceRequest(0, 17), context) => casePassed!
+    passed! and casePassed! => passed!
+    "C401 known borrowed SourceText drop=$(passed!): 15/15" -> println
+}

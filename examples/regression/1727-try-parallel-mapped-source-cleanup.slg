@@ -1,0 +1,39 @@
+import sys.file as file
+
+# Index zero cannot be cancelled by the only failure at index one. The join
+# completes its callback before collecting the initialized, unselected Ok slot.
+mapUnlessFailure index: Int -> Result<file.SourceText, Text> uses File {
+    index == 0 -> if {
+        Result<file.SourceText, Text>.Ok(
+        "examples/regression/1727-try-parallel-mapped-source-cleanup.slg"
+            -> file.mapText
+        )
+    } else {
+        Result<file.SourceText, Text>.Err("expected failure")
+    }
+}
+
+verifySuccess: -> Unit uses File, Console {
+    [0; ~] -> tryParallel index {
+        index -> mapUnlessFailure
+    } => result
+    result -> when {
+        Ok(sources) => "success=$(sources -> len)" -> println
+        Err(error) => "unexpected=$error" -> println
+    }
+}
+
+verifyFailure: -> Unit uses File, Console {
+    [0, 1; ~] -> tryParallel index {
+        index -> mapUnlessFailure
+    } => result
+    result -> when {
+        Ok(sources) => "unexpected=$(sources -> len)" -> println
+        Err(error) => "failure=$error" -> println
+    }
+}
+
+main {
+    verifySuccess()
+    verifyFailure()
+}

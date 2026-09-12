@@ -69,6 +69,10 @@ if ($IsWindows) {
     Invoke-CheckedContract -Name "verify-borrowed-source-text-return-carriers.ps1" -Parameters $repositoryParameters
     Invoke-CheckedContract -Name "verify-deferred-text-storage.ps1" -Parameters $repositoryParameters
     Invoke-CheckedContract -Name "verify-source-text-borrowed-drop.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-c401-known-borrowed-source-text-drop.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-parallel-source-text-cleanup.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-parallel-mapped-source-consumer.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-text-glob-focused.ps1" -Parameters $repositoryParameters
 }
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)

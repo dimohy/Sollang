@@ -1,0 +1,148 @@
+namespace std.text.glob
+
+import sys.file as file
+
+# A pure whole-Text wildcard profile, not filesystem or shell expansion.
+public struct Limits {
+    public maxPatternBytes: Int
+    public maxInputBytes: Int
+    public maxSteps: Int
+}
+
+public enum ErrorKind {
+    InvalidLimits
+    PatternLimit
+    InputLimit
+    InvalidEscape
+    WorkLimit
+}
+
+public struct Error {
+    public kind: ErrorKind
+    public patternOffset: UIntSize
+    public inputOffset: UIntSize
+}
+
+public struct Pattern {
+    source: file.SourceText
+    length: UIntSize
+    maxInputBytes: Int
+    maxSteps: Int
+}
+
+failure kind: ErrorKind, patternOffset: UIntSize, inputOffset: UIntSize -> Error => Error {
+    kind: kind
+    patternOffset: patternOffset
+    inputOffset: inputOffset
+}
+
+# Both sources originate in validated Text. This advances across its existing
+# UTF-8 scalar boundary; it is not another decoder or validation policy.
+scalarEnd source: file.SourceText, start: UIntSize -> UIntSize {
+    source -> len => length
+    start + 1 => end!
+    end! < length and source -> byte(end!) >= 128 and source -> byte(end!) <= 191
+        -> while { end! + 1 => end! }
+    end!
+}
+
+sameScalar left: file.SourceText, leftStart: UIntSize, right: file.SourceText, rightStart: UIntSize -> Bool {
+    scalarEnd(left, leftStart) - leftStart => length
+    scalarEnd(right, rightStart) - rightStart == length
+        -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < length -> while {
+        left -> byte(leftStart + index!) => leftByte
+        right -> byte(rightStart + index!) => rightByte
+        leftByte == rightByte -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+# The backing owner must outlive Pattern. Construction validates only escapes
+# and limits, without copying input or building a token array.
+public pattern value: Text, limits: Limits -> Result<Pattern, Error> {
+    limits.maxPatternBytes >= 0 and limits.maxInputBytes >= 0 and limits.maxSteps >= 0
+        -> unless { Result<Pattern, Error>.Err(failure(ErrorKind.InvalidLimits, 0, 0)) -> return }
+    value -> len => length
+    length <= UIntSize(limits.maxPatternBytes)
+        -> unless { Result<Pattern, Error>.Err(failure(ErrorKind.PatternLimit, 0, 0)) -> return }
+    value -> file.borrowText => source
+    UIntSize(0) => index!
+    index! < length -> while {
+        source -> byte(index!) == 92 -> if {
+            index! + 1 < length -> unless {
+                Result<Pattern, Error>.Err(failure(ErrorKind.InvalidEscape, index!, 0)) -> return
+            }
+            source -> byte(index! + 1) => escaped
+            escaped == 42 or escaped == 63 or escaped == 92
+                -> unless {
+                    Result<Pattern, Error>.Err(failure(ErrorKind.InvalidEscape, index!, 0)) -> return
+                }
+            index! + 2 => index!
+        } else {
+            index! + 1 => index!
+        }
+    }
+    Result<Pattern, Error>.Ok(Pattern {
+        source: source
+        length: length
+        maxInputBytes: limits.maxInputBytes
+        maxSteps: limits.maxSteps
+    })
+}
+
+impl Pattern {
+    # Each loop transition, including termination, consumes one step. Literal
+    # comparison and retry advance at most one Unicode scalar (four UTF-8 bytes).
+    # The last-star algorithm uses constant space, with explicit bounded work.
+    public matches: self, input: Text -> Result<Bool, Error> {
+        input -> len => inputLength
+        inputLength <= UIntSize(self.maxInputBytes)
+            -> unless { Result<Bool, Error>.Err(failure(ErrorKind.InputLimit, 0, 0)) -> return }
+        input -> file.borrowText => source
+        UIntSize(0) => patternIndex!
+        UIntSize(0) => inputIndex!
+        UIntSize(0) => starPattern!
+        UIntSize(0) => starInput!
+        false => hasStar!
+        0 => steps!
+        steps! < self.maxSteps -> while {
+            steps! + 1 => steps!
+            false => advanced!
+            patternIndex! < self.length -> if {
+                self.source -> byte(patternIndex!) => token
+                token == 42 -> if {
+                    patternIndex! + 1 => patternIndex!
+                    patternIndex! => starPattern!
+                    inputIndex! => starInput!
+                    true => hasStar!
+                    true => advanced!
+                } else {
+                    inputIndex! < inputLength -> if {
+                        token == 92 -> if { patternIndex! + 1 } else { patternIndex! } => literalStart
+                        token == 63 or sameScalar(self.source, literalStart, source, inputIndex!)
+                            -> if {
+                                scalarEnd(self.source, literalStart) => patternIndex!
+                                scalarEnd(source, inputIndex!) => inputIndex!
+                                true => advanced!
+                            }
+                    }
+                }
+            } else {
+                inputIndex! == inputLength -> if { Result<Bool, Error>.Ok(true) -> return }
+            }
+            not advanced! -> if {
+                hasStar! and starInput! < inputLength -> if {
+                    scalarEnd(source, starInput!) => starInput!
+                    starInput! => inputIndex!
+                    starPattern! => patternIndex!
+                } else {
+                    Result<Bool, Error>.Ok(false) -> return
+                }
+            }
+        }
+        Result<Bool, Error>.Err(failure(ErrorKind.WorkLimit, patternIndex!, inputIndex!))
+    }
+}

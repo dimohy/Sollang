@@ -1,0 +1,24 @@
+import std.text.glob as glob
+import sys.file as file
+
+appendByte output: mut [UInt8; ~], value: UInt8 -> Unit { output -> push(value) }
+
+escape: -> Result<glob.Pattern, glob.Error> {
+    [UInt8; ~] => bytes!
+    appendByte(bytes!, 42)
+    bytes! -> file.borrowBytes => source
+    source -> slice(0, source -> len) => text
+    glob.pattern(text, glob.Limits { maxPatternBytes: 1, maxInputBytes: 8, maxSteps: 32 })
+}
+
+main {
+    escape() -> when {
+        Ok(matcher) {
+            matcher -> matches("value") -> when {
+                Ok(value) { value -> println }
+                Err(error) { error.inputOffset -> println }
+            }
+        }
+        Err(error) { error.patternOffset -> println }
+    }
+}
