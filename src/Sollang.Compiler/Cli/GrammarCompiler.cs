@@ -90,6 +90,7 @@ internal static class GrammarCompiler
             "number" => 4,
             "newline" => 5,
             "end" => 6,
+            "character_literal" => 8,
             _ => throw SpecError(path, line, $"unknown lexer pattern '{pattern}'")
         };
         return new LexerRuleInput(name, tokenId, kind, null);
@@ -315,7 +316,8 @@ internal static class GrammarCompiler
         builder.AppendLine("# Opcodes: 0 return, 1 token, 2 keyword, 3 call, 4 choice,");
         builder.AppendLine("# 5 commit, 6 jump, 7 token lookahead, 8 reject keyword.");
         builder.AppendLine("# Lexer kinds: 0 whitespace, 1 line comment, 2 identifier,");
-        builder.AppendLine("# 3 quoted string, 4 number, 5 newline, 6 end, 7 literal.");
+        builder.AppendLine("# 3 quoted string, 4 number, 5 newline, 6 end, 7 literal,");
+        builder.AppendLine("# 8 character literal.");
         builder.AppendLine();
         EmitTextArrayFunction(builder, "tokenNames", grammar.TokenNames);
         for (var tokenId = 0; tokenId < grammar.TokenNames.Count; tokenId++)

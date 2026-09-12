@@ -88,9 +88,9 @@ setIpv6Part address: mut Ipv6Address, index: Int, value: UInt16 -> Unit {
 }
 
 hexValue byte: UInt8 -> Int {
-    byte >= 48 and byte <= 57 -> if { Int(byte - 48) -> return }
-    byte >= 65 and byte <= 70 -> if { Int(byte - 65) + 10 -> return }
-    byte >= 97 and byte <= 102 -> if { Int(byte - 97) + 10 -> return }
+    byte >= '0' and byte <= '9' -> if { Int(byte - '0') -> return }
+    byte >= 'A' and byte <= 'F' -> if { Int(byte - 'A') + 10 -> return }
+    byte >= 'a' and byte <= 'f' -> if { Int(byte - 'a') + 10 -> return }
     -1
 }
 
@@ -119,7 +119,7 @@ public parseIpv4 text: Text -> Result<Ipv4Address, ParseError> {
     index! <= (text -> len) -> while {
         index! == (text -> len) => end
         false => separator!
-        end -> unless { (text -> byte(index!)) == 46 => separator! }
+        end -> unless { (text -> byte(index!)) == '.' => separator! }
         end or separator! -> if {
             hasDigit! -> unless {
                 parseError(errors.Kind.InvalidPart, index!) -> return
@@ -137,10 +137,10 @@ public parseIpv4 text: Text -> Result<Ipv4Address, ParseError> {
             index! + 1 => partStart!
         } else {
             text -> byte(index!) => digit
-            digit >= 48 and digit <= 57 -> unless {
+            digit >= '0' and digit <= '9' -> unless {
                 parseError(errors.Kind.InvalidCharacter, index!) -> return
             }
-            value! * 10 + Int(digit - 48) => value!
+            value! * 10 + Int(digit - '0') => value!
             true => hasDigit!
         }
         index! + 1 => index!
@@ -163,7 +163,7 @@ parseIpv6Body text: Text, indexStart: UIntSize, compressedStart: Int -> Result<I
         0 => value!
         0 => digits!
 
-        index! < length and (text -> byte(index!)) != 58
+        index! < length and (text -> byte(index!)) != ':'
             -> while {
                 text -> byte(index!) -> hexValue => digit
                 digit >= 0 -> unless {
@@ -188,7 +188,7 @@ parseIpv6Body text: Text, indexStart: UIntSize, compressedStart: Int -> Result<I
         index! == length -> if {
             parseIpv6Error(errors.Kind.InvalidPart, index! - 1) -> return
         }
-        (text -> byte(index!)) == 58 -> if {
+        (text -> byte(index!)) == ':' -> if {
             compressedAt! < 0 -> unless {
                 parseIpv6Error(errors.Kind.InvalidPart, index!) -> return
             }
@@ -229,8 +229,8 @@ parseIpv6Body text: Text, indexStart: UIntSize, compressedStart: Int -> Result<I
 public parseIpv6 text: Text -> Result<Ipv6Address, ParseError> {
     text -> len => length
     length > 0 -> unless { parseIpv6Error(errors.Kind.WrongPartCount, 0) -> return }
-    (text -> byte(0)) == 58 -> if {
-        length >= 2 and (text -> byte(1)) == 58 -> unless {
+    (text -> byte(0)) == ':' -> if {
+        length >= 2 and (text -> byte(1)) == ':' -> unless {
             parseIpv6Error(errors.Kind.InvalidPart, 0) -> return
         }
         parseIpv6Body(text, 2, 0) -> return

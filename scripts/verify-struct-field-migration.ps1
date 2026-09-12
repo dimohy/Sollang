@@ -107,6 +107,19 @@ $expectedPrivateFields = [ordered]@{
     'stdlib/std/log.slg' = 1
     # Original authority spelling is retained only by the validated URI parser.
     'stdlib/std/uri.slg' = 1
+    # Path iteration retains its borrowed source, cursor, bounds, style, limits,
+    # and parsed header; callers observe components only through instance APIs.
+    'stdlib/std/path.slg' = 7
+    # CSV reader/writer cursors, budgets, and format state are advanced only by
+    # their checked instance APIs; callers receive public Field/Error values.
+    'stdlib/std/text/csv.slg' = 13
+    # Compiled text matchers retain borrowed source and validated work limits;
+    # their representation is not a public construction or mutation surface.
+    'stdlib/std/text/glob.slg' = 4
+    'stdlib/std/text/regex.slg' = 9
+    # Child owns the affine OS token and cached terminal observation. Callers
+    # use processId/tryWait/wait rather than fabricating lifecycle state.
+    'stdlib/sys/process.slg' = 4
     # Cross-module method-owner fixtures construct and inspect state through methods.
     'examples/regression/fixtures/1501-method-owner-leaf.slg' = 1
     'examples/regression/fixtures/1501-method-owner-wrapper.slg' = 2
@@ -130,10 +143,11 @@ foreach ($expected in $expectedPrivateFields.GetEnumerator()) {
         throw "expected $($expected.Value) reviewed private field(s) in '$($expected.Key)'"
     }
 }
-foreach ($actual in $actualPrivateFields.GetEnumerator()) {
-    if (-not $expectedPrivateFields.Contains($actual.Key)) {
-        throw "unreviewed private-by-default field found in public struct: $($actual.Key) ($($actual.Value))"
-    }
+$unreviewedPrivateFields = @($actualPrivateFields.GetEnumerator() |
+    Where-Object { -not $expectedPrivateFields.Contains($_.Key) } |
+    ForEach-Object { "$($_.Key) ($($_.Value))" })
+if ($unreviewedPrivateFields.Count -ne 0) {
+    throw "unreviewed private-by-default fields found in public structs: $($unreviewedPrivateFields -join ', ')"
 }
 
 $privateFieldCount = ($actualPrivateFields.Values | Measure-Object -Sum).Sum

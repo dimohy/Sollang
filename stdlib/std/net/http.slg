@@ -97,31 +97,31 @@ span start: UIntSize, end: UIntSize -> Span => Span {
 }
 
 isTchar byte: UInt8 -> Bool {
-    (byte >= 48 and byte <= 57)
-        or (byte >= 65 and byte <= 90)
-        or (byte >= 97 and byte <= 122)
-        or byte == 33
-        or byte == 35
-        or byte == 36
-        or byte == 37
-        or byte == 38
-        or byte == 39
-        or byte == 42
-        or byte == 43
-        or byte == 45
-        or byte == 46
-        or byte == 94
-        or byte == 95
-        or byte == 96
-        or byte == 124
-        or byte == 126
+    (byte >= '0' and byte <= '9')
+        or (byte >= 'A' and byte <= 'Z')
+        or (byte >= 'a' and byte <= 'z')
+        or byte == '!'
+        or byte == '#'
+        or byte == '$'
+        or byte == '%'
+        or byte == '&'
+        or byte == '\''
+        or byte == '*'
+        or byte == '+'
+        or byte == '-'
+        or byte == '.'
+        or byte == '^'
+        or byte == '_'
+        or byte == '`'
+        or byte == '|'
+        or byte == '~'
 }
 
 isFieldValueByte byte: UInt8 -> Bool {
-    byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+    byte == '\t' or byte == ' ' or (byte >= '!' and byte <= '~') or byte >= 128
 }
 
-isReasonByte byte: UInt8 -> Bool => byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+isReasonByte byte: UInt8 -> Bool => byte == '\t' or byte == ' ' or (byte >= '!' and byte <= '~') or byte >= 128
 
 asciiEqualAt source: ref file.SourceText, start: UIntSize, expected: Text -> Bool {
     start + (expected -> len) <= (source -> len) -> unless { false -> return }
@@ -140,8 +140,8 @@ asciiEqualIgnoreCase source: ref file.SourceText, value: Span, expected: Text ->
     index! < value.length -> while {
         source -> byte(value.start + index!) => left!
         expected -> byte(index!) => right!
-        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
-        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! >= 'A' and left! <= 'Z' -> if { left! + UInt8('a' - 'A') => left! }
+        right! >= 'A' and right! <= 'Z' -> if { right! + UInt8('a' - 'A') => right! }
         left! == right! -> unless { false -> return }
         index! + 1 => index!
     }
@@ -156,7 +156,7 @@ listValueHasToken source: ref file.SourceText, value: Span, expected: Text -> Re
     false => matched!
     index! < value.length -> while {
         index! < value.length
-            and ((source -> byte(value.start + index!)) == 32 or (source -> byte(value.start + index!)) == 9)
+            and ((source -> byte(value.start + index!)) == ' ' or (source -> byte(value.start + index!)) == '\t')
             -> while { index! + 1 => index! }
         index! < value.length -> unless {
             errorBool(errors.Kind.InvalidFieldValue, value.start + index!) -> return
@@ -173,12 +173,13 @@ listValueHasToken source: ref file.SourceText, value: Span, expected: Text -> Re
             length: tokenEnd - tokenStart
         }, expected) -> if { true => matched! }
         index! < value.length
-            and ((source -> byte(value.start + index!)) == 32 or (source -> byte(value.start + index!)) == 9)
+            and ((source -> byte(value.start + index!)) == ' ' or (source -> byte(value.start + index!)) == '\t')
             -> while { index! + 1 => index! }
         index! < value.length -> if {
-            (source -> byte(value.start + index!)) == 44 -> unless {
-                errorBool(errors.Kind.InvalidFieldValue, value.start + index!) -> return
-            }
+            (source -> byte(value.start + index!)) == ','
+                -> unless {
+                    errorBool(errors.Kind.InvalidFieldValue, value.start + index!) -> return
+                }
             index! + 1 => index!
             index! < value.length -> unless {
                 errorBool(errors.Kind.InvalidFieldValue, value.start + index!) -> return
@@ -192,12 +193,12 @@ lineEnd source: ref file.SourceText, start: UIntSize, headEnd: UIntSize -> Resul
     start => index!
     index! < headEnd -> while {
         source -> byte(index!) => byte
-        byte == 13 -> if {
-            index! + 1 < headEnd and (source -> byte(index! + 1)) == 10
+        byte == '\r' -> if {
+            index! + 1 < headEnd and (source -> byte(index! + 1)) == '\n'
                 -> if { Result<UIntSize, Error>.Ok(index!) -> return }
             errorOffset(errors.Kind.BareCarriageReturn, index!) -> return
         }
-        byte == 10 -> if { errorOffset(errors.Kind.BareLineFeed, index!) -> return }
+        byte == '\n' -> if { errorOffset(errors.Kind.BareLineFeed, index!) -> return }
         index! + 1 => index!
     }
     headEnd < (source -> len) -> if {
@@ -231,14 +232,14 @@ parseFields source: ref file.SourceText, start: UIntSize, headEnd: UIntSize, lim
                 bodyStart: end + 2
             }) -> return
         }
-        (source -> byte(lineStart!)) == 32 or (source -> byte(lineStart!)) == 9
+        (source -> byte(lineStart!)) == ' ' or (source -> byte(lineStart!)) == '\t'
             -> if { errorFields(errors.Kind.ObsoleteLineFolding, lineStart!) -> return }
         (fields! -> len) < limits.maxFieldCount -> unless {
             errorFields(errors.Kind.FieldCountLimitExceeded, lineStart!) -> return
         }
 
         lineStart! => colon!
-        colon! < end and (source -> byte(colon!)) != 58
+        colon! < end and (source -> byte(colon!)) != ':'
             -> while {
                 (source -> byte(colon!)) -> isTchar -> unless {
                     errorFields(errors.Kind.InvalidFieldName, colon!) -> return
@@ -255,11 +256,11 @@ parseFields source: ref file.SourceText, start: UIntSize, headEnd: UIntSize, lim
 
         colon! + 1 => valueStart!
         valueStart! < end
-            and ((source -> byte(valueStart!)) == 32 or (source -> byte(valueStart!)) == 9)
+            and ((source -> byte(valueStart!)) == ' ' or (source -> byte(valueStart!)) == '\t')
             -> while { valueStart! + 1 => valueStart! }
         end => valueEnd!
         valueEnd! > valueStart!
-            and ((source -> byte(valueEnd! - 1)) == 32 or (source -> byte(valueEnd! - 1)) == 9)
+            and ((source -> byte(valueEnd! - 1)) == ' ' or (source -> byte(valueEnd! - 1)) == '\t')
             -> while { valueEnd! - 1 => valueEnd! }
         Int(valueEnd! - valueStart!) <= limits.maxFieldValueBytes
             -> unless {
@@ -325,7 +326,7 @@ parseRequestSource parser: Parser, source: move file.SourceText -> Result<Reques
         }
 
     UIntSize(0) => firstSpace!
-    firstSpace! < startLineEnd and (source -> byte(firstSpace!)) != 32
+    firstSpace! < startLineEnd and (source -> byte(firstSpace!)) != ' '
         -> while {
             (source -> byte(firstSpace!)) -> isTchar -> unless {
                 errorRequest(errors.Kind.InvalidMethod, firstSpace!) -> return
@@ -337,10 +338,10 @@ parseRequestSource parser: Parser, source: move file.SourceText -> Result<Reques
             errorRequest(errors.Kind.InvalidMethod, firstSpace!) -> return
         }
     firstSpace! + 1 => secondSpace!
-    secondSpace! < startLineEnd and (source -> byte(secondSpace!)) != 32
+    secondSpace! < startLineEnd and (source -> byte(secondSpace!)) != ' '
         -> while {
             source -> byte(secondSpace!) => byte
-            byte > 32 and byte != 127 -> unless {
+            byte > ' ' and byte != 127 -> unless {
                 errorRequest(errors.Kind.InvalidTarget, secondSpace!) -> return
             }
             secondSpace! + 1 => secondSpace!
@@ -374,7 +375,7 @@ parseResponseSource parser: Parser, source: move file.SourceText -> Result<Respo
         -> unless {
             errorResponse(errors.Kind.StartLineLimitExceeded, startLineEnd) -> return
         }
-    startLineEnd >= 12 and (source -> byte(8)) == 32
+    startLineEnd >= 12 and (source -> byte(8)) == ' '
         -> unless {
             errorResponse(errors.Kind.InvalidStatus, 0) -> return
         }
@@ -382,11 +383,11 @@ parseResponseSource parser: Parser, source: move file.SourceText -> Result<Respo
     source -> byte(9) => hundreds
     source -> byte(10) => tens
     source -> byte(11) => ones
-    hundreds >= 48 and hundreds <= 57
-        and tens >= 48 and tens <= 57
-        and ones >= 48 and ones <= 57
+    hundreds >= '0' and hundreds <= '9'
+        and tens >= '0' and tens <= '9'
+        and ones >= '0' and ones <= '9'
         -> unless { errorResponse(errors.Kind.InvalidStatus, 9) -> return }
-    startLineEnd == 12 or (source -> byte(12)) == 32
+    startLineEnd == 12 or (source -> byte(12)) == ' '
         -> unless {
             errorResponse(errors.Kind.InvalidStatus, 12) -> return
         }
@@ -403,7 +404,7 @@ parseResponseSource parser: Parser, source: move file.SourceText -> Result<Respo
     Result<ResponseHead, Error>.Ok(ResponseHead {
         source: source
         version: version
-        status: Int(hundreds - 48) * 100 + Int(tens - 48) * 10 + Int(ones - 48)
+        status: Int(hundreds - '0') * 100 + Int(tens - '0') * 10 + Int(ones - '0')
         reason: span(reasonStart, startLineEnd)
         fields: parsed.fields
         bodyStart: parsed.bodyStart

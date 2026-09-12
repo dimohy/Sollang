@@ -872,7 +872,13 @@ internal sealed partial class LlvmEmitter
         };
         if (!RequiresHeapAllocation(value) && !isInlineBoundedContainer)
         {
-            if (value is not (RuntimeInt or RuntimeFloat or RuntimeBool or RuntimeText))
+            // Copyable enums are mutable values too. Keeping only their initial
+            // SSA value loses rebindings when branch/loop scopes are restored.
+            // Owned enums retain their separate transfer/drop policy.
+            var isCopyableEnum = value is RuntimeEnum
+                && !_program.Types.ContainsOwnedStorage(value.Type);
+            if (value is not (RuntimeInt or RuntimeFloat or RuntimeBool or RuntimeText)
+                && !isCopyableEnum)
             {
                 return;
             }

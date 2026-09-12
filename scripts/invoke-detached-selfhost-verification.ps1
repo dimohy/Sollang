@@ -16,10 +16,13 @@ param(
     [string]$BrowserFocusedFixture = "",
     [string]$IncrementalFixture = "",
     [string]$ExpressionBatchCompiler = "",
-    [string]$ExpressionBatchFixture = "",
+    [string[]]$ExpressionBatchFixture = @(),
+    [string]$ExpressionBatchManifest = "",
+    [string]$ExpressionBatchManifestSha256 = "",
+    [switch]$ValidateInputsOnly,
     [ValidateSet("windows", "linux")]
     [string]$IncrementalTarget = "windows",
-    [ValidateSet("Pass", "Fail", "Wait")]
+    [ValidateSet("Pass", "Fail", "Wait", "ChildPass", "ChildOrphan")]
     [string]$ProbeOutcome = "Fail",
     [switch]$Supervisor
 )
@@ -42,8 +45,19 @@ if (($Verification -eq "Incremental") -ne (-not [string]::IsNullOrWhiteSpace($In
 if (($Verification -eq "ExpressionBatch") -ne (-not [string]::IsNullOrWhiteSpace($ExpressionBatchCompiler))) {
     throw "ExpressionBatchCompiler is required only for Verification ExpressionBatch"
 }
-if ($Verification -ne "ExpressionBatch" -and -not [string]::IsNullOrWhiteSpace($ExpressionBatchFixture)) {
-    throw "ExpressionBatchFixture requires Verification ExpressionBatch"
+if ($Verification -ne "ExpressionBatch" -and
+    ($ExpressionBatchFixture.Count -gt 0 -or $ExpressionBatchManifest -ne "" -or
+        $ExpressionBatchManifestSha256 -ne "" -or $ValidateInputsOnly)) {
+    throw "Expression batch selection and input validation require Verification ExpressionBatch"
+}
+$selectedFixtures = @()
+if ($Verification -eq "ExpressionBatch") {
+    . (Join-Path $PSScriptRoot 'expression-batch-selection.ps1')
+    $defaults = @( (Get-Content (Join-Path $PSScriptRoot 'contracts/expression-lowering-parity.json') -Raw | ConvertFrom-Json).representativeFixtures )
+    $selectedFixtures = @(Get-ExpressionBatchFixtureSelection -Fixture $ExpressionBatchFixture `
+        -ManifestPath $ExpressionBatchManifest -ManifestSha256 $ExpressionBatchManifestSha256 `
+        -DefaultFixture $defaults)
+    if ($selectedFixtures.Count -eq 0) { throw 'Expression batch fixture selection is empty' }
 }
 if ($Verification -eq "Incremental") {
     $incrementalFixturePath = [IO.Path]::GetFullPath((Join-Path $repositoryRoot $IncrementalFixture))
@@ -146,14 +160,16 @@ if (-not $Supervisor) {
         )
     }
     if ($ExpressionBatchCompiler -ne "") {
+        $selectionPath = "$CompletionRecordPath.fixtures.json"
+        if (Test-Path -LiteralPath $selectionPath) { throw "Fixture selection snapshot already exists: $selectionPath" }
+        Write-JsonAtomically -Path $selectionPath -Value ([ordered]@{ schemaVersion = 1; fixtures = $selectedFixtures })
+        $selectionHash = (Get-FileHash -LiteralPath $selectionPath -Algorithm SHA256).Hash
         $argumentList += @(
-            "-ExpressionBatchCompiler", (ConvertTo-ProcessArgument $ExpressionBatchCompiler)
+            "-ExpressionBatchCompiler", (ConvertTo-ProcessArgument $ExpressionBatchCompiler),
+            "-ExpressionBatchManifest", (ConvertTo-ProcessArgument $selectionPath),
+            "-ExpressionBatchManifestSha256", $selectionHash
         )
-        if ($ExpressionBatchFixture -ne "") {
-            $argumentList += @(
-                "-ExpressionBatchFixture", (ConvertTo-ProcessArgument $ExpressionBatchFixture)
-            )
-        }
+        if ($ValidateInputsOnly) { $argumentList += '-ValidateInputsOnly' }
     }
     if ($ResumeCandidate) {
         $argumentList += "-ResumeCandidate"
@@ -175,6 +191,7 @@ if (-not $Supervisor) {
         supervisorPid = $supervisorProcess.Id
         observerPid = $PID
         survivesObserverDisconnect = $true
+        selectedFixtures = $selectedFixtures
         logPath = $LogPath
         completionRecordPath = $CompletionRecordPath
         cancellationRequestPath = $CancellationRequestPath
@@ -197,28 +214,64 @@ $exitCode = 255
 $failureIds = [Collections.Generic.List[string]]::new()
 $cancelled = $false
 $targetProcessId = $null
+$targetExitCode = $null
 $orphanProcessIds = [Collections.Generic.List[int]]::new()
 $standardErrorPath = "$LogPath.stderr"
+$observedProcesses = [Collections.Generic.Dictionary[string, object]]::new()
+$processSnapshotCount = 0
+$processAuditCompleted = $false
 
-function Get-DescendantProcessIds {
-    param(
-        [Parameter(Mandatory)][int]$RootProcessId,
-        [Parameter(Mandatory)][datetime]$CreatedAfter
-    )
-    $records = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate)
-    $pending = [Collections.Generic.Queue[int]]::new()
-    $found = [Collections.Generic.HashSet[int]]::new()
-    $pending.Enqueue($RootProcessId)
+function Update-ObservedProcessTree {
+    # CIM dates have microsecond precision. Match both PID and creation time;
+    # a recycled PID never inherits the old process's completion obligation.
+    $records = @(Get-CimInstance Win32_Process -ErrorAction Stop |
+        Select-Object ProcessId, ParentProcessId, CreationDate)
+    $script:processSnapshotCount++
+    $byId = @{}
+    foreach ($record in $records) { $byId[[int]$record.ProcessId] = $record }
+    $pending = [Collections.Generic.Queue[string]]::new()
+    $found = [Collections.Generic.HashSet[string]]::new()
+    foreach ($identity in @($observedProcesses.Keys)) { $pending.Enqueue($identity) }
     while ($pending.Count -gt 0) {
-        $parent = $pending.Dequeue()
+        $identity = $pending.Dequeue()
+        if (-not $found.Add($identity)) { continue }
+        $parent = $observedProcesses[$identity].ProcessId
+        $parentCreated = $observedProcesses[$identity].CreatedTicks
+        # An absent parent is not an ancestry authority: its PID may have been
+        # recycled by a process that was itself gone before this snapshot.
+        # Already observed children keep their own completion obligations.
+        if (-not $byId.ContainsKey($parent) -or
+            $byId[$parent].CreationDate.ToUniversalTime().Ticks -ne $parentCreated) { continue }
         foreach ($record in $records) {
             if ([int]$record.ParentProcessId -ne $parent) { continue }
-            if ([datetime]$record.CreationDate -lt $CreatedAfter) { continue }
+            $created = $record.CreationDate.ToUniversalTime().Ticks
+            if ($created -lt $parentCreated) { continue }
             $child = [int]$record.ProcessId
-            if ($found.Add($child)) { $pending.Enqueue($child) }
+            $childIdentity = "${child}:$created"
+            if (-not $observedProcesses.ContainsKey($childIdentity)) {
+                $observedProcesses.Add($childIdentity, [pscustomobject]@{ ProcessId = $child; CreatedTicks = $created })
+                $pending.Enqueue($childIdentity)
+            }
         }
     }
-    return @($found)
+    foreach ($observed in @($observedProcesses.Values)) {
+        $processId = $observed.ProcessId
+        if ($byId.ContainsKey($processId) -and
+            $byId[$processId].CreationDate.ToUniversalTime().Ticks -eq $observed.CreatedTicks) {
+            $processId
+        }
+    }
+}
+
+function Complete-ObservedProcessAudit {
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+    do {
+        $remaining = @(Update-ObservedProcessTree)
+        if ($remaining.Count -eq 0 -or [DateTimeOffset]::UtcNow -ge $deadline) { break }
+        Start-Sleep -Milliseconds 100
+    } while ($true)
+    foreach ($processId in $remaining) { $orphanProcessIds.Add($processId) }
+    $script:processAuditCompleted = $true
 }
 
 function Read-CancellationRequest {
@@ -287,14 +340,16 @@ try {
                 "-RunId", $RunId,
                 "-Jobs", $Jobs.ToString()
             )
-            if ($ExpressionBatchFixture -ne "") {
+            if ($ExpressionBatchManifest -ne "") {
                 $targetArguments += @(
-                    "-Fixture", (ConvertTo-ProcessArgument $ExpressionBatchFixture)
+                    "-FixtureManifest", (ConvertTo-ProcessArgument $ExpressionBatchManifest),
+                    "-FixtureManifestSha256", $ExpressionBatchManifestSha256
                 )
             }
+            if ($ValidateInputsOnly) { $targetArguments += '-ValidateInputsOnly' }
         }
         "ManagedHost" { $targetArguments += @("-RunId", (ConvertTo-ProcessArgument $RunId)) }
-        "Probe" { $targetArguments += @("-Outcome", $ProbeOutcome) }
+        "Probe" { $targetArguments += @("-Outcome", $ProbeOutcome, '-EvidencePath', (ConvertTo-ProcessArgument "$CompletionRecordPath.probe-child.json")) }
     }
 
     $targetProcess = Start-Process `
@@ -306,13 +361,18 @@ try {
         -WindowStyle Hidden `
         -PassThru
     $targetProcessId = $targetProcess.Id
+    $startTicks = $targetProcess.StartTime.ToUniversalTime().Ticks
+    $startTicks -= $startTicks % 10
+    $observedProcesses.Add("$($targetProcess.Id):$startTicks", [pscustomobject]@{
+        ProcessId = $targetProcess.Id; CreatedTicks = $startTicks
+    })
+    Update-ObservedProcessTree | Out-Null
     while (-not $targetProcess.WaitForExit(1000)) {
+        Update-ObservedProcessTree | Out-Null
         $request = Read-CancellationRequest
         if ($null -eq $request) { continue }
 
-        $capturedProcessIds = @($targetProcess.Id) + @(Get-DescendantProcessIds `
-            -RootProcessId $targetProcess.Id `
-            -CreatedAfter $targetProcess.StartTime)
+        Update-ObservedProcessTree | Out-Null
         try {
             $targetProcess.Kill($true)
         }
@@ -322,12 +382,8 @@ try {
         if (-not $targetProcess.WaitForExit(10000)) {
             throw "Cancellation did not stop the supervised process within 10 seconds"
         }
-        Start-Sleep -Milliseconds 100
-        foreach ($processId in $capturedProcessIds | Select-Object -Unique) {
-            if ($null -ne (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
-                $orphanProcessIds.Add($processId)
-            }
-        }
+        $targetExitCode = $targetProcess.ExitCode
+        Complete-ObservedProcessAudit
         if ($orphanProcessIds.Count -ne 0) {
             throw "Cancellation left $($orphanProcessIds.Count) captured process(es) running"
         }
@@ -337,7 +393,13 @@ try {
         break
     }
     if (-not $cancelled) {
-        $exitCode = $targetProcess.ExitCode
+        $targetExitCode = $targetProcess.ExitCode
+        $exitCode = $targetExitCode
+        Complete-ObservedProcessAudit
+        if ($orphanProcessIds.Count -ne 0) {
+            if ($exitCode -eq 0) { $exitCode = 1 }
+            $failureIds.Add('ORPHAN_PROCESSES_REMAIN')
+        }
     }
 }
 catch {
@@ -368,7 +430,7 @@ finally {
 
     $completedAt = [DateTimeOffset]::UtcNow
     Write-JsonAtomically -Path $CompletionRecordPath -Value ([ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         runId = $RunId
         verification = $Verification
         executionMode = "detached-supervisor"
@@ -383,7 +445,14 @@ finally {
         standardErrorPath = $standardErrorPath
         cancellationRequestPath = $CancellationRequestPath
         targetProcessId = $targetProcessId
+        targetExitCode = $targetExitCode
         orphanProcessIds = @($orphanProcessIds)
+        processAudit = [ordered]@{
+            method = 'observed-pid-creation-time-snapshots'
+            completed = $processAuditCompleted
+            snapshotCount = $processSnapshotCount
+            observedProcessIds = @($observedProcesses.Values | ForEach-Object { $_.ProcessId } | Sort-Object -Unique)
+        }
     })
 }
 

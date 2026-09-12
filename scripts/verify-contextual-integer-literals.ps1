@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$CandidateCompiler
+    [string]$CandidateCompiler,
+    [switch]$RequireCandidateSealed
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,6 +10,9 @@ $repo = [IO.Path]::GetFullPath($RepositoryRoot)
 $output = Join-Path $repo ('artifacts/scratch/contextual-integer-literals/' + [guid]::NewGuid().ToString('N'))
 $compiler = Join-Path $repo 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
+if ($RequireCandidateSealed -and [string]::IsNullOrWhiteSpace($CandidateCompiler)) {
+    throw '-RequireCandidateSealed requires -CandidateCompiler.'
+}
 
 function Read-Declaration([string]$Path, [string]$Name) {
     $source = Get-Content -LiteralPath (Join-Path $repo $Path) -Raw
@@ -103,6 +107,11 @@ if ($CandidateCompiler) {
     $sources[-1].Text = "import sollang.compiler.ir.typed as probe`nmain {`n    probe.run()`n    probe.runNativeCandidateProbe()`n}`n"
     $sources += @{ Name = '1715-native-candidate-context.slg'; Text = $nativeBody -join "`n" }
     $nativeExpected = 'native-source-context=21,21,21,21'
+    $candidateContextMismatchCount = @($contextNodes | Where-Object {
+        $row = $nativeRows[$_]
+        $row.typeId -ne 21 -or $row.typeKind -ne 1 -or $row.typeOrigin -ne 1 `
+            -or $row.typeModule -ne -1 -or $row.typeSymbol -ne 21 -or $row.typeFlags -ne 0
+    }).Count
     $nativeTopology = [ordered]@{
         fixture = 'scripts/contracts/fixtures/1715-native-negative-float-context.slg'
         fixtureSha256 = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash
@@ -110,8 +119,12 @@ if ($CandidateCompiler) {
         scope = 'source-only-candidate-ir-replayed-through-current-native-context-helper'
         carrierOperand = 0
         contextNodeIndices = $contextNodes
-        candidateUnsealedNodeCount = @($contextNodes | Where-Object { $nativeRows[$_].typeId -ne 21 }).Count
+        candidateUnsealedNodeCount = $candidateContextMismatchCount
         currentHelperExpectedTypeIds = @(21, 21, 21, 21)
+        requiredCandidateContext = 'typeId=21 kind=1 origin=1 module=-1 symbol=21 flags=0'
+    }
+    if ($RequireCandidateSealed -and $nativeTopology.candidateUnsealedNodeCount -ne 0) {
+        throw "candidate compiler left $($nativeTopology.candidateUnsealedNodeCount) native Float carrier/leaf nodes outside their declared context"
     }
 }
 $paths = @()
@@ -168,7 +181,8 @@ $evidence = [ordered]@{
     nativeHelperSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($nativeHelper)))
     binaryPassSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($binaryPass)))
     stdout = $actual
-    selfhostCandidateExecution = 'pending-accumulated-compiler-verification'
+    selfhostCandidateExecution = if ($RequireCandidateSealed) { 'actual-candidate-native-context-sealed' } else { 'pending-accumulated-compiler-verification' }
+    candidateSealingRequired = [bool]$RequireCandidateSealed
     signedAndRangeDiagnostics = 'pending-source-semantic-integration-including-negative-zero'
     sourceDecimalClassification = 'not-proven-by-metadata-probe-initial-semantic-seed-uses-int-for-number-ast'
     nativeFloatTopology = 'integer-and-float-share-canonical-operand0-leaf-carrier-context'

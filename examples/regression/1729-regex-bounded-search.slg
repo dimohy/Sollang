@@ -1,0 +1,212 @@
+import std.text.regex as regex
+import sys.file as file
+
+appendByte output: mut [UInt8; ~], value: UInt8 -> Unit { output -> push(value) }
+
+bounds pattern: Int, atoms: Int, input: Int, steps: Int -> regex.Limits => regex.Limits {
+    maxPatternBytes: pattern
+    maxAtoms: atoms
+    maxInputBytes: input
+    maxSteps: steps
+}
+
+errorName kind: regex.ErrorKind -> Text => kind -> when {
+    InvalidLimits => "InvalidLimits"
+    PatternLimit => "PatternLimit"
+    AtomLimit => "AtomLimit"
+    InvalidEscape => "InvalidEscape"
+    InvalidClass => "InvalidClass"
+    InvalidRange => "InvalidRange"
+    InvalidQuantifier => "InvalidQuantifier"
+    UnsupportedConstruct => "UnsupportedConstruct"
+    InputLimit => "InputLimit"
+    ScratchTooSmall => "ScratchTooSmall"
+    WorkLimit => "WorkLimit"
+}
+
+rejectCreation label: Text, pattern: Text, limits: regex.Limits -> Unit uses Console {
+    regex.pattern(pattern, limits) -> when {
+        Ok(matcher) { "unexpected-created-$label" -> println }
+        Err(error) { "$label=$(errorName(error.kind))@$(error.patternOffset),$(error.inputOffset),$(error.requiredCells)" -> println }
+    }
+}
+
+rejectFind label: Text, pattern: Text, input: Text, limits: regex.Limits, count: Int -> Result<Unit, regex.Error> uses Console {
+    regex.pattern(pattern, limits)? => matcher
+    [UIntSize; ~] => scratch!
+    0..<count -> each index { scratch! -> push(777) }
+    scratch! -> capacity => capacity
+    0..<2 -> each attempt {
+        matcher -> find(input, scratch!) -> when {
+            Ok(found) { "unexpected-find-$label" -> println }
+            Err(error) {
+                true => unchanged!
+                0..<count -> each index {
+                    scratch![index] == 777 -> unless { false => unchanged! }
+                }
+                scratch! -> len == count and scratch! -> capacity == capacity => storage
+                true => tail!
+                Int(matcher -> scratchCells)..<count -> each index {
+                    scratch![index] == 777 -> unless { false => tail! }
+                }
+                "$label-$attempt=$(errorName(error.kind))@$(error.patternOffset),$(error.inputOffset),$(error.requiredCells) unchanged=$(unchanged!) storage=$storage tail=$(tail!)" -> println
+            }
+        }
+    }
+    Result<Unit, regex.Error>.Ok
+}
+
+shortRetry: -> Result<Unit, regex.Error> uses Console {
+    regex.pattern(".", bounds(1, 1, 4, 10))? => matcher
+    [UIntSize; ~] => scratch!
+    0..<3 -> each index { scratch! -> push(777) }
+    matcher -> find("🙂", scratch!) -> when {
+        Ok(found) { "unexpected-short" -> println }
+        Err(error) { "retry-short=$(errorName(error.kind)) required=$(error.requiredCells)" -> println }
+    }
+    0..<3 -> each index { scratch! -> push(777) }
+    scratch! -> capacity => capacity
+    matcher -> find("🙂", scratch!)? -> when {
+        Some(found) {
+            scratch![4] == 777 and scratch![5] == 777 => tail
+            scratch! -> len == 6 and scratch! -> capacity == capacity => storage
+            "retry=$(found.offset),$(found.length) cells=$(matcher -> scratchCells) tail=$tail storage=$storage" -> println
+        }
+        None { "unexpected-retry-none" -> println }
+    }
+    matcher -> find("a", scratch!)? -> when {
+        Some(found) { "reuse=$(found.offset),$(found.length)" -> println }
+        None { "unexpected-reuse-none" -> println }
+    }
+    Result<Unit, regex.Error>.Ok
+}
+
+showBounded label: Text, pattern: Text, input: Text, limits: regex.Limits -> Result<Unit, regex.Error> uses Console {
+    regex.pattern(pattern, limits)? => matcher
+    [UIntSize; ~] => scratch!
+    0..<8 -> each index { scratch! -> push(777) }
+    matcher -> find(input, scratch!)? -> when {
+        Some(found) { "$label=$(found.offset),$(found.length) cells=$(matcher -> scratchCells)" -> println }
+        None { "$label=none cells=$(matcher -> scratchCells)" -> println }
+    }
+    Result<Unit, regex.Error>.Ok
+}
+
+localInput matcher: ref regex.Pattern -> Result<Option<regex.Match>, regex.Error> {
+    [UInt8; ~] => bytes!
+    appendByte(bytes!, 97)
+    bytes! -> file.borrowBytes => source
+    source -> slice(0, 1) => input
+    [UIntSize; ~] => scratch!
+    0..<4 -> each index { scratch! -> push(777) }
+    matcher -> find(input, scratch!)
+}
+
+show label: Text, pattern: Text, input: Text -> Result<Unit, regex.Error> uses Console {
+    regex.pattern(pattern, regex.Limits { maxPatternBytes: 256, maxAtoms: 64, maxInputBytes: 256, maxSteps: 65536 })? => matcher
+    [UIntSize; ~] => scratch!
+    0..<130 -> each index { scratch! -> push(777) }
+    matcher -> find(input, scratch!)? -> when {
+        Some(found) { "$label=$(found.offset),$(found.length)" -> println }
+        None { "$label=none" -> println }
+    }
+    Result<Unit, regex.Error>.Ok
+}
+
+run: -> Result<Unit, regex.Error> uses Console {
+    show("identifier", "^[a-z_][a-z_0-9]*$", "hello_42")?
+    show("digits", "[0-9]+", "a123b45")?
+    show("negated", "[^a-z]+", "abc12한def")?
+    show("optional", "colou?r", "a colour color")?
+    show("repeat", "ab*c", "zzabbbc")?
+    show("unicode", "한.+", "앞한🙂끝")?
+    show("empty", "", "")?
+    show("empty-input", "", "hello")?
+    show("empty-anchors", """^$""", "")?
+    show("empty-anchors-miss", """^$""", "x")?
+    show("star-longest", """a*""", "aaa")?
+    show("earliest-empty", """a*""", "baaa")?
+    show("plus-miss", """a+""", "bbb")?
+    show("optional-empty", """a?""", "b")?
+    show("optional-longest", """aa?""", "aaa")?
+    show("optional-chain", """a?a?a?b""", "aaab")?
+    show("star-chain", """a*a*""", "aaa")?
+    show("star-follow", """a*ab""", "aaab")?
+    show("plus-follow", """a+ab""", "aaab")?
+    show("anchor-start", """^a+""", "baaa")?
+    show("anchor-end", """a+$""", "baaa")?
+    show("dollar-absolute", """a$""", "a\n")?
+    show("dot-newline", """.""", "\n")?
+    show("dot-carriage", """.""", "\r")?
+    show("dot-emoji", """.""", "🙂")?
+    show("two-scalars", """..""", "é")?
+    show("class-range", """[a-cx-z]+""", "0abcyz4")?
+    show("negated-unicode", """[^a]""", "한")?
+    show("class-escape", """[\]\-\\]+""", """]-\""")?
+    show("escaped-dot", """a\.b""", "xa.by")?
+    show("escaped-dollar", """\$""", """a$b""")?
+    show("escaped-anchor", """\^a""", "^a")?
+    show("escaped-quantifiers", """\*\+\?""", "*+?")?
+    show("literal-braces", """\{x\}""", "{x}")?
+    show("case-sensitive", """A""", "a")?
+    [UInt8; ~] => nulBytes!
+    appendByte(nulBytes!, 97)
+    appendByte(nulBytes!, 0)
+    appendByte(nulBytes!, 98)
+    nulBytes! -> file.borrowBytes => nulSource
+    nulSource -> slice(1, 1) => nulPattern
+    nulSource -> slice(0, 3) => nulInput
+    show("nul-literal", nulPattern, nulInput)?
+    show("newline-literal", "[\n]+", "a\n\nb")?
+    show("no-normalization", """é""", "é")?
+    show("utf8-offset", """끝$""", "한🙂끝")?
+    show("adversarial", """a*a*a*a*a*a*a*a*b""", "aaaaaaaaaaaaaaaaaaaaac")?
+    show("star-then-literal", "a*b", "aaab")?
+    rejectCreation("negative-pattern", "", bounds(-1, 0, 0, 0))
+    rejectCreation("negative-atoms", "", bounds(0, -1, 0, 0))
+    rejectCreation("negative-input", "", bounds(0, 0, -1, 0))
+    rejectCreation("negative-steps", "", bounds(0, 0, 0, -1))
+    rejectCreation("cells-overflow", "", bounds(0, 1_073_741_823, 0, 0))
+    rejectCreation("pattern-limit", "a", bounds(0, 1, 1, 20))
+    rejectCreation("atom-limit", "ab", bounds(2, 1, 2, 30))
+    rejectCreation("atom-zero", "a", bounds(1, 0, 1, 20))
+    rejectCreation("escape-end", """\""", bounds(4, 4, 4, 50))
+    rejectCreation("escape-unknown", """\d""", bounds(4, 4, 4, 50))
+    rejectCreation("class-empty", "[]", bounds(4, 4, 4, 50))
+    rejectCreation("class-negated-empty", "[^]", bounds(4, 4, 4, 50))
+    rejectCreation("class-unclosed", "[a", bounds(4, 4, 4, 50))
+    rejectCreation("range-reversed", "[z-a]", bounds(8, 4, 4, 50))
+    rejectCreation("range-end", "[a-]", bounds(8, 4, 4, 50))
+    rejectCreation("quantifier-first", "*a", bounds(4, 4, 4, 50))
+    rejectCreation("quantifier-lazy", "a*?", bounds(4, 4, 4, 50))
+    rejectCreation("quantifier-repeat", "a++", bounds(4, 4, 4, 50))
+    rejectCreation("group", "(a)", bounds(4, 4, 4, 50))
+    rejectCreation("alternation", "a|b", bounds(4, 4, 4, 50))
+    rejectCreation("bounded-repeat", "a{2}", bounds(4, 4, 4, 50))
+    rejectCreation("unicode-class", "[한]", bounds(8, 4, 4, 50))
+    rejectCreation("anchor-middle", "a^b", bounds(4, 4, 4, 50))
+    rejectFind("input-limit", "a", "aa", bounds(1, 1, 1, 100), 4)?
+    rejectFind("scratch-short", "abc", "abc", bounds(3, 3, 3, 100), 7)?
+    rejectFind("work-zero", "", "", bounds(0, 0, 0, 0), 2)?
+    rejectFind("work-terminal", "a", "a", bounds(1, 1, 1, 9), 6)?
+    rejectFind("work-class", "[abc]", "a", bounds(5, 1, 1, 8), 6)?
+    rejectFind("work-adversarial", "a*a*a*a*b", "aaaaaaaaac", bounds(9, 5, 10, 30), 14)?
+    showBounded("empty-exact", "", "", bounds(0, 0, 0, 3))?
+    showBounded("literal-exact", "a", "a", bounds(1, 1, 1, 10))?
+    showBounded("literal-empty", "a", "", bounds(1, 1, 0, 6))?
+    showBounded("maximum-cells-limit", "", "", bounds(0, 1_073_741_822, 0, 3))?
+    shortRetry()?
+    regex.pattern("a", bounds(1, 1, 1, 10))? => localMatcher
+    localInput(localMatcher)? -> when {
+        Some(found) { "local-input=$(found.offset),$(found.length)" -> println }
+        None { "unexpected-local-none" -> println }
+    }
+    Result<Unit, regex.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected-error@$(error.patternOffset),$(error.inputOffset)" -> println }
+    }
+}

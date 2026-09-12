@@ -16,14 +16,16 @@ if ($contract.runtimeStates.running -ne 0 -or $contract.runtimeStates.exited -ne
 function Assert-Contains([string]$RelativePath, [string]$Expected, [string]$Label) {
     $path = Join-Path $root $RelativePath
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "missing $Label authority: $RelativePath" }
-    $source = [IO.File]::ReadAllText($path)
-    if (-not $source.Contains($Expected)) { throw "$Label drifted in $RelativePath" }
+    $source = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+    $normalizedExpected = $Expected.Replace("`r`n", "`n")
+    if (-not $source.Contains($normalizedExpected)) { throw "$Label drifted in $RelativePath" }
 }
 
 function Assert-NotContains([string]$RelativePath, [string]$Forbidden, [string]$Label) {
     $path = Join-Path $root $RelativePath
-    $source = [IO.File]::ReadAllText($path)
-    if ($source.Contains($Forbidden)) { throw "$Label drifted in $RelativePath" }
+    $source = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+    $normalizedForbidden = $Forbidden.Replace("`r`n", "`n")
+    if ($source.Contains($normalizedForbidden)) { throw "$Label drifted in $RelativePath" }
 }
 
 Assert-Contains 'stdlib/sys/process.slg' 'completionState: Int' 'Child cached completion discriminator'
@@ -45,7 +47,7 @@ Assert-Contains 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs' 'br
 Assert-Contains 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs' '@waitpid(i32 %pid, ptr %status_slot, i32 1)' 'Linux WNOHANG poll'
 Assert-Contains 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs' '%interrupted = icmp eq i32 %errno, 4' 'Linux EINTR retry'
 Assert-Contains 'selfhost/ir/typed.slg' 'opcode == -308' 'selfhost process poll opcode'
-Assert-Contains 'selfhost/ir/typed/resolved_context_normalize_phases.slg' 'processCall!.symbol == processPollChildSymbol! -> if { -308 => processCall!.opcode }' 'selfhost poll binding'
+Assert-Contains 'selfhost/ir/typed/resolved_context_normalize_phases.slg' "processCall!.symbol == processPollChildSymbol!`n                        -> if { -308 => processCall!.opcode }" 'selfhost poll binding'
 Assert-Contains 'selfhost/llvm/text/platform_io.slg' '@sollang_poll_process' 'selfhost poll lowering'
 
 foreach ($fixture in $contract.fixtures) {

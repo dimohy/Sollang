@@ -40,9 +40,9 @@ errorUuid kind: errors.Kind, offset: UIntSize -> Result<Uuid, Error> {
 }
 
 hexValue value: UInt8 -> Int {
-    value >= 48 and value <= 57 -> if { Int(value - 48) -> return }
-    value >= 65 and value <= 70 -> if { Int(value - 65) + 10 -> return }
-    value >= 97 and value <= 102 -> if { Int(value - 97) + 10 -> return }
+    value >= '0' and value <= '9' -> if { Int(value - '0') -> return }
+    value >= 'A' and value <= 'F' -> if { Int(value - 'A') + 10 -> return }
+    value >= 'a' and value <= 'f' -> if { Int(value - 'a') + 10 -> return }
     -1
 }
 
@@ -70,19 +70,19 @@ separatorAt offset: UIntSize -> Bool => offset == 8
     or offset == 18
     or offset == 23
 
-asciiLower value: UInt8 -> UInt8 => value >= 65 and value <= 90
-    -> if { value + 32 } else { value }
+asciiLower value: UInt8 -> UInt8 => value >= 'A' and value <= 'Z'
+    -> if { value + UInt8('a' - 'A') } else { value }
 
 urnPrefixValid text: Text -> Bool {
-    ((text -> byte(0)) -> asciiLower) == 117
-        and ((text -> byte(1)) -> asciiLower) == 114
-        and ((text -> byte(2)) -> asciiLower) == 110
-        and (text -> byte(3)) == 58
-        and ((text -> byte(4)) -> asciiLower) == 117
-        and ((text -> byte(5)) -> asciiLower) == 117
+    ((text -> byte(0)) -> asciiLower) == 'u'
+        and ((text -> byte(1)) -> asciiLower) == 'r'
+        and ((text -> byte(2)) -> asciiLower) == 'n'
+        and (text -> byte(3)) == ':'
+        and ((text -> byte(4)) -> asciiLower) == 'u'
+        and ((text -> byte(5)) -> asciiLower) == 'u'
         and ((text -> byte(6)) -> asciiLower) == 105
         and ((text -> byte(7)) -> asciiLower) == 100
-        and (text -> byte(8)) == 58
+        and (text -> byte(8)) == ':'
 }
 
 public codec: -> Codec => Codec { marker: 0 }
@@ -175,7 +175,7 @@ impl Codec {
         0 => byteOffset!
         textOffset! < 36 -> while {
             textOffset! -> separatorAt -> if {
-                (text -> byte(textOffset!)) == 45 -> unless {
+                (text -> byte(textOffset!)) == '-' -> unless {
                     errorUuid(errors.Kind.InvalidSeparator, textOffset!) -> return
                 }
                 textOffset! + 1 => textOffset!
@@ -202,10 +202,10 @@ impl Codec {
         (text -> len) == 38 -> unless {
             errorUuid(errors.Kind.InvalidLength, text -> len) -> return
         }
-        (text -> byte(0)) == 123 -> unless {
-            errorUuid(errors.Kind.InvalidSeparator, 0) -> return
-        }
-        (text -> byte(37)) == 125 -> unless {
+        (text -> byte(0)) == '{' -> unless {
+                errorUuid(errors.Kind.InvalidSeparator, 0) -> return
+            }
+            (text -> byte(37)) == '}' -> unless {
             errorUuid(errors.Kind.InvalidSeparator, 37) -> return
         }
         text -> slice(UIntSize(1), UIntSize(36)) => canonical

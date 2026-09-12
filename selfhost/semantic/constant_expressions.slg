@@ -49,6 +49,14 @@ failure kind: ErrorKind, node: ast.AstNode -> Error {
 }
 
 integer source: Text, node: ast.AstNode -> Result<Long, Error> {
+    node.length >= 3 and (source -> byte(node.start)) == 39
+        -> if {
+            syntax.SourceSpan { fileId: 0, start: node.start, length: node.length } => span
+            source -> syntax.decodeCharacterLiteral(span) -> when {
+                Some(value) { Long(value) -> Result<Long, Error>.Ok -> return }
+                None { ErrorKind.NonConstant -> failure(node) -> Result<Long, Error>.Err -> return }
+            }
+        }
     Long(0) => value!
     UIntSize(0) => offset!
     node.length == 0 -> if {

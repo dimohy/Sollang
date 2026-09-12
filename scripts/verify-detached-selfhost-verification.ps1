@@ -12,6 +12,21 @@ $launcherPath = Join-Path $RepositoryRoot "scripts\invoke-detached-selfhost-veri
 $cancellationRequesterPath = Join-Path $RepositoryRoot "scripts\request-detached-selfhost-cancellation.ps1"
 $progressReaderPath = Join-Path $RepositoryRoot "scripts\read-detached-selfhost-progress.ps1"
 $resultSchemaPath = Join-Path $RepositoryRoot "scripts\contracts\detached-selfhost-verification-result.schema.json"
+$contractStarted = [DateTimeOffset]::UtcNow
+$contractChecks = [Collections.Generic.List[string]]::new()
+$contractStatus = 'failed'
+$contractError = ''
+$contractPaths = @(
+    $PSCommandPath, $launcherPath, $resultSchemaPath,
+    (Join-Path $PSScriptRoot 'expression-batch-selection.ps1'),
+    (Join-Path $PSScriptRoot 'verify-expression-lowering-focused-batch.ps1'),
+    (Join-Path $PSScriptRoot 'contracts/expression-batch-selection.schema.json'),
+    (Join-Path $PSScriptRoot 'contracts/fixtures/detached-verification-probe.ps1')
+)
+$inputHashes = @($contractPaths | ForEach-Object { Get-FileHash -LiteralPath $_ -Algorithm SHA256 } |
+    Select-Object Path, Hash)
+Start-Transcript -LiteralPath (Join-Path $scratchRoot "$runId.contract.log") | Out-Null
+try {
 
 $outsideArtifactPath = Join-Path $RepositoryRoot "$runId.outside.log"
 try {
@@ -105,6 +120,7 @@ foreach ($linuxProgressCase in @(
 }
 
 Write-Host "[detached selfhost verification] PASS Linux Stage2/Stage3 progress mappings."
+$contractChecks.Add('legacy-path-and-progress-contracts')
 
 $observer = Start-Process `
     -FilePath (Get-Process -Id $PID).Path `
@@ -155,6 +171,7 @@ if ($failedProgress.status -cne "failed" -or $failedProgress.exitCode -ne 7) {
 }
 
 Write-Host "[detached selfhost verification] PASS observer exited independently; exit code 7 and 5/5 failure IDs preserved."
+$contractChecks.Add('legacy-failure-identities-and-detachment')
 
 $passRunId = "$runId-pass"
 $passLogPath = Join-Path $scratchRoot "$passRunId.log"
@@ -217,6 +234,7 @@ if ($passedProgress.status -cne "passed" -or $passedProgress.completed -ne 1 -or
 }
 
 Write-Host "[detached selfhost verification] PASS successful termination, Incremental schema coverage, exit code 0, 0 failure IDs, and 0 orphans."
+$contractChecks.Add('legacy-success-and-schema-controls')
 
 $spacedRoot = Join-Path $scratchRoot "$runId path with spaces"
 $spacedLogPath = Join-Path $spacedRoot "probe output.log"
@@ -240,6 +258,7 @@ if ($spacedResult.exitCode -ne 0 -or $spacedResult.logPath -cne $spacedLogPath) 
 }
 
 Write-Host "[detached selfhost verification] PASS paths containing spaces preserve execution and evidence identity."
+$contractChecks.Add('legacy-spaced-evidence-paths')
 
 $cancelRunId = "$runId-cancel"
 $cancelLogPath = Join-Path $scratchRoot "$cancelRunId.log"
@@ -286,3 +305,200 @@ if ($cancelProgress.status -cne "cancelled" -or $cancelProgress.exitCode -eq 0) 
 }
 
 Write-Host "[detached selfhost verification] PASS supported cancellation preserved cancelled, non-zero exit, CANCELLATION_REQUESTED, and zero orphans."
+$contractChecks.Add('legacy-cancellation')
+
+function Wait-ContractResult {
+    param([string]$Path)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(25)
+    while (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        if ([DateTimeOffset]::UtcNow -ge $deadline) { throw "No detached result: $Path" }
+        Start-Sleep -Milliseconds 100
+    }
+    $json = [IO.File]::ReadAllText($Path)
+    if (-not ($json | Test-Json -SchemaFile $resultSchemaPath)) { throw "Invalid detached result: $Path" }
+    return $json | ConvertFrom-Json
+}
+
+foreach ($outcome in @('ChildPass', 'ChildOrphan')) {
+    $childResultPath = Join-Path $scratchRoot "$runId-$outcome.result.json"
+    try {
+        & $launcherPath -Verification Probe -ProbeOutcome $outcome -RunId "$runId-$outcome" `
+            -CompletionRecordPath $childResultPath | Out-Null
+        $childResult = Wait-ContractResult $childResultPath
+        $childEvidence = Get-Content "$childResultPath.probe-child.json" -Raw | ConvertFrom-Json
+        if ($childResult.targetExitCode -ne 0 -or -not $childResult.processAudit.completed -or $childResult.processAudit.snapshotCount -lt 2 -or
+            @($childResult.processAudit.observedProcessIds) -notcontains $childEvidence.processId -or
+            @($childResult.processAudit.observedProcessIds) -notcontains $childResult.targetProcessId) {
+            throw "$outcome did not audit the actual target and child identities"
+        }
+        if ($outcome -eq 'ChildPass') {
+            if ($childResult.status -cne 'passed' -or $childResult.exitCode -ne 0 -or
+                @($childResult.orphanProcessIds).Count -ne 0 -or
+                $null -ne (Get-Process -Id $childEvidence.processId -ErrorAction SilentlyContinue)) {
+                throw 'A completed observed child did not produce verified success'
+            }
+        } else {
+            # Windows may also create a console-host descendant for the child.
+            # Require the exact live observed set, not an invented one-PID tree.
+            $liveObserved = @($childResult.processAudit.observedProcessIds | Where-Object {
+                $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue)
+            } | Sort-Object)
+            if ($childResult.status -cne 'failed' -or $childResult.exitCode -eq 0 -or
+                @($childResult.failureIds).Count -ne 1 -or $childResult.failureIds[0] -cne 'ORPHAN_PROCESSES_REMAIN' -or
+                @($childResult.orphanProcessIds) -notcontains $childEvidence.processId -or
+                (($childResult.orphanProcessIds | Sort-Object) -join ',') -cne ($liveObserved -join ',')) {
+                throw 'Live observed child identities did not match the failed audit record'
+            }
+        }
+        $contractChecks.Add("observed-descendant-$outcome")
+        Write-Host "[detached selfhost verification] PASS $outcome actual target/child completion audit."
+    } finally {
+        if (Test-Path -LiteralPath "$childResultPath.probe-child.json") {
+            $childEvidence = Get-Content "$childResultPath.probe-child.json" -Raw | ConvertFrom-Json
+            # The test-owned child supports a cooperative release marker. Never
+            # terminate a PID merely because it once appeared in a probe result.
+            New-Item -ItemType File -Path $childEvidence.releasePath -Force | Out-Null
+            $releaseDeadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+            $cleanupIds = @($childEvidence.processId)
+            if ($null -ne $childResult) { $cleanupIds += @($childResult.orphanProcessIds) }
+            while (@($cleanupIds | Where-Object { $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue) }).Count -gt 0) {
+                if ([DateTimeOffset]::UtcNow -ge $releaseDeadline) { throw 'Probe child did not acknowledge its release marker' }
+                Start-Sleep -Milliseconds 100
+            }
+        }
+    }
+}
+
+if ($passResult.schemaVersion -ne 2 -or -not $passResult.processAudit.completed -or
+    $passResult.processAudit.snapshotCount -lt 1) { throw 'New successful result is missing an actual process audit' }
+foreach ($invalidAudit in @('missing', 'incomplete', 'unobserved')) {
+    $invalid = $passResultJson | ConvertFrom-Json
+    switch ($invalidAudit) {
+        'missing' { $invalid.PSObject.Properties.Remove('processAudit') }
+        'incomplete' { $invalid.processAudit.completed = $false }
+        'unobserved' { $invalid.processAudit.observedProcessIds = @() }
+    }
+    if (($invalid | ConvertTo-Json -Depth 8) | Test-Json -SchemaFile $resultSchemaPath -ErrorAction SilentlyContinue) {
+        throw "Schema accepted $invalidAudit audit as v2 success"
+    }
+}
+$legacy = $passResultJson | ConvertFrom-Json
+$legacy.schemaVersion = 1
+$legacy.PSObject.Properties.Remove('processAudit')
+$legacy.PSObject.Properties.Remove('targetExitCode')
+if (-not (($legacy | ConvertTo-Json -Depth 8) | Test-Json -SchemaFile $resultSchemaPath)) {
+    throw 'Historical v1 results lost schema compatibility'
+}
+$launcherAst = [Management.Automation.Language.Parser]::ParseFile($launcherPath, [ref]$null, [ref]$null)
+$observerFunction = $launcherAst.Find({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Update-ObservedProcessTree'
+}, $true)
+& {
+    param($productionFunction)
+    . ([scriptblock]::Create($productionFunction))
+    function Get-CimInstance { param($ClassName, $ErrorAction) return $script:identityRecords }
+    function Record($id, $parent, $tick) {
+        [pscustomobject]@{ ProcessId = $id; ParentProcessId = $parent; CreationDate = [datetime]::new($tick, [DateTimeKind]::Utc) }
+    }
+    $script:processSnapshotCount = 0
+    $observedProcesses = [Collections.Generic.Dictionary[string, object]]::new()
+    $observedProcesses.Add('100:1000', [pscustomobject]@{ ProcessId = 100; CreatedTicks = 1000L })
+    $script:identityRecords = @((Record 100 1 1000), (Record 200 100 2000), (Record 201 200 3000), (Record 199 100 500))
+    if (((@(Update-ObservedProcessTree) | Sort-Object) -join ',') -cne '100,200,201') {
+        throw 'Observed tree missed nested children or accepted a pre-parent identity'
+    }
+    $script:identityRecords = @((Record 100 1 1000), (Record 200 999 4000), (Record 201 200 3000), (Record 202 200 5000))
+    if (((@(Update-ObservedProcessTree) | Sort-Object) -join ',') -cne '100,201') {
+        throw 'Recycled unrelated PID inherited the old child identity'
+    }
+    $script:identityRecords = @((Record 100 1 1000), (Record 200 100 6000), (Record 203 200 7000))
+    if (((@(Update-ObservedProcessTree) | Sort-Object) -join ',') -cne '100,200,203' -or $observedProcesses.Count -ne 5) {
+        throw 'A later legitimate child reusing a PID was not independently tracked'
+    }
+    $script:identityRecords = @((Record 100 1 1000))
+    if (((@(Update-ObservedProcessTree) | Sort-Object) -join ',') -cne '100') {
+        throw 'Exited descendant identities remained alive'
+    }
+    # A different process reused PID 200 and exited between snapshots. Its
+    # orphan is not a descendant of the former observed identity 200:6000.
+    $script:identityRecords = @((Record 100 1 1000), (Record 300 200 8000))
+    if (((@(Update-ObservedProcessTree) | Sort-Object) -join ',') -cne '100' -or $observedProcesses.Count -ne 5) {
+        throw 'An absent recycled parent attached an unrelated late child'
+    }
+} $observerFunction.Extent.Text
+$contractChecks.Add('v2-audit-required-v1-history-preserved')
+
+. (Join-Path $PSScriptRoot 'expression-batch-selection.ps1')
+$uriFixtures = @('1697-uri-normalization-policy', '1698-uri-resolution-boundaries', '1031-uri-percent-codec', '1032-uri-reference-authority')
+$manifestPath = Join-Path $scratchRoot "$runId selection with spaces.json"
+[ordered]@{ schemaVersion = 1; fixtures = $uriFixtures } | ConvertTo-Json |
+    Set-Content -LiteralPath $manifestPath -Encoding utf8
+$defaults = @((Get-Content (Join-Path $PSScriptRoot 'contracts/expression-lowering-parity.json') -Raw | ConvertFrom-Json).representativeFixtures)
+$defaultSelection = @(Get-ExpressionBatchFixtureSelection -DefaultFixture $defaults)
+if (($defaultSelection -join '|') -cne ($defaults -join '|')) { throw 'Default fixture inventory changed' }
+foreach ($invalidSelection in @('duplicate', 'path', 'mixed', 'hash', 'empty')) {
+    $rejected = $false
+    try {
+        switch ($invalidSelection) {
+            'duplicate' { Get-ExpressionBatchFixtureSelection -Fixture @($uriFixtures[0], $uriFixtures[0]) }
+            'path' { Get-ExpressionBatchFixtureSelection -Fixture @('../1697-uri-normalization-policy') }
+            'mixed' { Get-ExpressionBatchFixtureSelection -Fixture @($uriFixtures[0]) -ManifestPath $manifestPath }
+            'hash' { Get-ExpressionBatchFixtureSelection -ManifestPath $manifestPath -ManifestSha256 ('0' * 64) }
+            'empty' {
+                $emptyManifest = Join-Path $scratchRoot "$runId-empty-selection.json"
+                '{"schemaVersion":1,"fixtures":[]}' | Set-Content -LiteralPath $emptyManifest -Encoding utf8
+                Get-ExpressionBatchFixtureSelection -ManifestPath $emptyManifest
+            }
+        }
+    } catch { $rejected = $true }
+    if (-not $rejected) { throw "Invalid selection $invalidSelection was accepted" }
+}
+$contractChecks.Add('selection-default-and-negative-controls')
+
+foreach ($selectionMode in @('array', 'manifest', 'singleton')) {
+    $selected = @(if ($selectionMode -eq 'singleton') { $uriFixtures[0] } else { $uriFixtures })
+    $selectionResultPath = Join-Path $scratchRoot "$runId-$selectionMode.result.json"
+    $selectionArguments = @{
+        Verification = 'ExpressionBatch'; ExpressionBatchCompiler = $launcherPath
+        ValidateInputsOnly = $true; RunId = "$runId-$selectionMode"
+        CompletionRecordPath = $selectionResultPath
+    }
+    if ($selectionMode -eq 'manifest') { $selectionArguments.ExpressionBatchManifest = $manifestPath }
+    else { $selectionArguments.ExpressionBatchFixture = $selected }
+    & $launcherPath @selectionArguments | Out-Null
+    $selectionResult = Wait-ContractResult $selectionResultPath
+    $selectionLaunch = Get-Content "$selectionResultPath.launch.json" -Raw | ConvertFrom-Json
+    $snapshot = Get-Content "$selectionResultPath.fixtures.json" -Raw | ConvertFrom-Json
+    if ($selectionResult.status -cne 'passed' -or
+        ($selectionLaunch.selectedFixtures -join '|') -cne ($selected -join '|') -or
+        ($snapshot.fixtures -join '|') -cne ($selected -join '|') -or
+        [IO.File]::ReadAllText($selectionResult.logPath) -notlike "*PASS $($selected.Count) fixture inputs*") {
+        throw "$selectionMode selection failed to cross both detached process boundaries exactly"
+    }
+    # The deliberately non-executable Compiler path proves this exercised only
+    # real input validation/dispatch, not native compiler or Stage execution.
+    $contractChecks.Add("detached-selection-$selectionMode")
+    Write-Host "[detached selfhost verification] PASS $selectionMode selected $($selected.Count) exact fixtures; compiler launches 0."
+}
+foreach ($entry in $inputHashes) {
+    if ((Get-FileHash -LiteralPath $entry.Path -Algorithm SHA256).Hash -cne $entry.Hash) {
+        throw "Harness source changed during its contract test: $($entry.Path)"
+    }
+}
+if ($contractChecks.Count -ne 12) { throw "Incomplete harness groups: $($contractChecks.Count)/12" }
+$contractStatus = 'passed'
+} catch {
+    $contractError = $_.Exception.Message
+    throw
+} finally {
+    [ordered]@{
+        schemaVersion = 1; state = $contractStatus; runId = $runId
+        passed = $contractChecks.Count; total = 12; groups = @($contractChecks)
+        error = $contractError; inputHashes = $inputHashes
+        durationMilliseconds = [math]::Round(([DateTimeOffset]::UtcNow - $contractStarted).TotalMilliseconds)
+        scope = 'Detached harness and input dispatch only; no compiler build or Stage execution'
+    } | ConvertTo-Json -Depth 6 |
+        Set-Content -LiteralPath (Join-Path $scratchRoot "$runId.contract-result.json") -Encoding utf8
+    Stop-Transcript | Out-Null
+}
+Write-Host "[detached selfhost verification] PASS 12/12 groups: $(Join-Path $scratchRoot "$runId.contract-result.json")"

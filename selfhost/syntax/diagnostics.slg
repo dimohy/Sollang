@@ -13,7 +13,9 @@ public struct SyntaxDiagnostic {
 }
 
 # Code 1 is an invalid source byte. Code 2 is an unexpected token at the
-# furthest point reached by any parser alternative.
+# furthest point reached by any parser alternative. Code 3 is an unterminated
+# string literal, code 4 is an invalid character literal, and code 5 is an
+# unterminated character literal.
 public analyze source: Text -> [SyntaxDiagnostic; ~] {
     source -> lexer.lex => tokens
     source -> parser.parseEvents => events
@@ -35,7 +37,15 @@ public analyze source: Text -> [SyntaxDiagnostic; ~] {
         foundKind! == grammar.tokenIdInvalid() -> if {
             failureSpan!.length > 0
                 and (source -> byte(failureSpan!.start)) == 34
-                -> if { 3 } else { 1 }
+                -> if { 3 } else {
+                    failureSpan!.length > 0
+                        and (source -> byte(failureSpan!.start)) == 39
+                        -> if {
+                            failureSpan!.length > 1
+                                and (source -> byte(failureSpan!.start + failureSpan!.length - 1)) == 39
+                                -> if { 4 } else { 5 }
+                        } else { 1 }
+                }
         } else { 2 } => code
         SyntaxDiagnostic {
             code: code

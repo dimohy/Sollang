@@ -1,0 +1,73 @@
+enum Choice { First, Second, Third }
+enum Payload { Empty, Number(Int) }
+struct Value { kind: Choice }
+struct PayloadValue { value: Payload }
+
+impl Choice {
+    number: self -> Int => self -> when {
+        First => 1
+        Second => 2
+        Third => 3
+    }
+}
+
+impl Payload {
+    number: self -> Int => self -> when {
+        Empty => -1
+        Number(value) => value
+    }
+}
+
+make enabled: Bool -> Value {
+    Choice.First => kind!
+    enabled -> if { Choice.Second => kind! }
+    Value { kind: kind! }
+}
+
+makeElse enabled: Bool -> Value {
+    Choice.First => kind!
+    enabled -> if { Choice.Second => kind! } else { Choice.Third => kind! }
+    Value { kind: kind! }
+}
+
+makeLoop count: Int -> Choice {
+    Choice.First => kind!
+    0 => index!
+    index! < count -> while {
+        kind! -> when {
+            First { Choice.Second => kind! }
+            Second { Choice.Third => kind! }
+            Third { Choice.First => kind! }
+        }
+        index! + 1 => index!
+    }
+    kind!
+}
+
+makePayload enabled: Bool -> PayloadValue {
+    Payload.Number(3) => value!
+    enabled -> if { Payload.Number(9) => value! } else { Payload.Empty => value! }
+    PayloadValue { value: value! }
+}
+
+makeDirect enabled: Bool -> Value => Value {
+    kind: enabled -> if { Choice.Second } else { Choice.First }
+}
+
+main {
+    make(true) => selected
+    make(false) => unchanged
+    makeElse(true) => thenValue
+    makeElse(false) => elseValue
+    makePayload(true) => payload
+    makePayload(false) => empty
+    makeDirect(true) => direct
+    "branch=$(selected.kind -> number),$(unchanged.kind -> number)" -> println
+    "else=$(thenValue.kind -> number),$(elseValue.kind -> number)" -> println
+    "loop=$(makeLoop(0) -> number),$(makeLoop(1) -> number),$(makeLoop(2) -> number),$(makeLoop(3) -> number)" -> println
+    "payload=$(payload.value -> number),$(empty.value -> number)" -> println
+    "direct=$(direct.kind -> number)" -> println
+    Choice.First => entry!
+    true -> if { Choice.Third => entry! }
+    "entry=$(entry! -> number)" -> println
+}

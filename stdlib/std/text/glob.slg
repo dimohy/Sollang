@@ -71,12 +71,12 @@ public pattern value: Text, limits: Limits -> Result<Pattern, Error> {
     value -> file.borrowText => source
     UIntSize(0) => index!
     index! < length -> while {
-        source -> byte(index!) == 92 -> if {
+        source -> byte(index!) == '\\' -> if {
             index! + 1 < length -> unless {
                 Result<Pattern, Error>.Err(failure(ErrorKind.InvalidEscape, index!, 0)) -> return
             }
             source -> byte(index! + 1) => escaped
-            escaped == 42 or escaped == 63 or escaped == 92
+            escaped == '*' or escaped == '?' or escaped == '\\'
                 -> unless {
                     Result<Pattern, Error>.Err(failure(ErrorKind.InvalidEscape, index!, 0)) -> return
                 }
@@ -113,7 +113,7 @@ impl Pattern {
             false => advanced!
             patternIndex! < self.length -> if {
                 self.source -> byte(patternIndex!) => token
-                token == 42 -> if {
+                token == '*' -> if {
                     patternIndex! + 1 => patternIndex!
                     patternIndex! => starPattern!
                     inputIndex! => starInput!
@@ -121,8 +121,8 @@ impl Pattern {
                     true => advanced!
                 } else {
                     inputIndex! < inputLength -> if {
-                        token == 92 -> if { patternIndex! + 1 } else { patternIndex! } => literalStart
-                        token == 63 or sameScalar(self.source, literalStart, source, inputIndex!)
+                        token == '\\' -> if { patternIndex! + 1 } else { patternIndex! } => literalStart
+                        token == '?' or sameScalar(self.source, literalStart, source, inputIndex!)
                             -> if {
                                 scalarEnd(self.source, literalStart) => patternIndex!
                                 scalarEnd(source, inputIndex!) => inputIndex!

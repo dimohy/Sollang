@@ -90,17 +90,17 @@ pushOutput output: mut [UInt8; ~], value: UInt8, maximum: Int, offset: UIntSize 
 }
 
 hexValue byte: UInt8 -> UInt8 {
-    byte >= 48 and byte <= 57 -> if { byte - 48 } else {
-        byte >= 65 and byte <= 70 -> if { byte - 55 } else { byte - 87 }
+    byte >= '0' and byte <= '9' -> if { byte - '0' } else {
+        byte >= 'A' and byte <= 'F' -> if { byte - 'A' + 10 } else { byte - 'a' + 10 }
     }
 }
 
 uppercaseHex value: UInt8 -> UInt8 {
-    value < 10 -> if { value + 48 } else { value + 55 }
+    value < 10 -> if { value + '0' } else { value - 10 + 'A' }
 }
 
 lowerAscii byte: UInt8 -> UInt8 {
-    byte >= 65 and byte <= 90 -> if { byte + 32 } else { byte }
+    byte >= 'A' and byte <= 'Z' -> if { byte + UInt8('a' - 'A') } else { byte }
 }
 
 appendNormalizedSpan source: ref file.SourceText, span: Span, lowercase: Bool, policy: NormalizationPolicy, output: mut [UInt8; ~], maximum: Int -> Result<Unit, Error> {
@@ -108,7 +108,7 @@ appendNormalizedSpan source: ref file.SourceText, span: Span, lowercase: Bool, p
     span.start + span.length => end
     index! < end -> while {
         source -> byte(index!) => byte
-        byte == 37 -> if {
+        byte == '%' -> if {
             source -> byte(index! + 1) -> hexValue => high
             source -> byte(index! + 2) -> hexValue => low
             UInt8(high * 16 + low) => decoded
@@ -118,7 +118,7 @@ appendNormalizedSpan source: ref file.SourceText, span: Span, lowercase: Bool, p
                         => normalized
                     output -> pushOutput(normalized, maximum, index!)?
                 } else {
-                    output -> pushOutput(37, maximum, index!)?
+                    output -> pushOutput('%', maximum, index!)?
                     policy.uppercasePercentHex -> if {
                         output -> pushOutput(high -> uppercaseHex, maximum, index! + 1)?
                         output -> pushOutput(low -> uppercaseHex, maximum, index! + 2)?
@@ -139,7 +139,7 @@ appendNormalizedSpan source: ref file.SourceText, span: Span, lowercase: Bool, p
 
 removeLastPathSegment output: mut [UInt8; ~] -> Unit {
     output -> len => remaining!
-    remaining! > 0 and output[remaining! - 1] != 47
+    remaining! > 0 and output[remaining! - 1] != '/'
         -> while {
             output -> take(remaining! - 1) => discardedSegment
             remaining! - 1 => remaining!
@@ -153,72 +153,73 @@ removeDotSegments input: move [UInt8; ~], maximum: Int -> Result<[UInt8; ~], Err
     [UInt8; ~] => output!
     0 => index!
     input -> len => length
-    length > 0 and input[0] == 47 => absolute
+    length > 0 and input[0] == '/' => absolute
     index! < length -> while {
         index! + 2 < length
-            and input[index!] == 46
-            and input[index! + 1] == 46
-            and input[index! + 2] == 47
+            and input[index!] == '.'
+            and input[index! + 1] == '.'
+            and input[index! + 2] == '/'
             -> if {
                 index! + 3 => index!
             } else {
                 index! + 1 < length
-                    and input[index!] == 46
-                    and input[index! + 1] == 47
+                    and input[index!] == '.'
+                    and input[index! + 1] == '/'
                     -> if {
                         index! + 2 => index!
                     } else {
                         index! + 2 < length
-                            and input[index!] == 47
-                            and input[index! + 1] == 46
-                            and input[index! + 2] == 47
+                            and input[index!] == '/'
+                            and input[index! + 1] == '.'
+                            and input[index! + 2] == '/'
                             -> if {
                                 index! + 2 => index!
                             } else {
                                 index! + 2 == length
-                                    and input[index!] == 47
-                                    and input[index! + 1] == 46
+                                    and input[index!] == '/'
+                                    and input[index! + 1] == '.'
                                     -> if {
-                                        output! -> pushOutput(47, maximum, UIntSize(index!))?
+                                        output! -> pushOutput('/', maximum, UIntSize(index!))?
                                         length => index!
                                     } else {
                                         index! + 3 < length
-                                            and input[index!] == 47
-                                            and input[index! + 1] == 46
-                                            and input[index! + 2] == 46
-                                            and input[index! + 3] == 47
+                                            and input[index!] == '/'
+                                            and input[index! + 1] == '.'
+                                            and input[index! + 2] == '.'
+                                            and input[index! + 3] == '/'
                                             -> if {
                                                 output! -> removeLastPathSegment
                                                 index! + 3 => index!
                                             } else {
                                                 index! + 3 == length
-                                                    and input[index!] == 47
-                                                    and input[index! + 1] == 46
-                                                    and input[index! + 2] == 46
+                                                    and input[index!] == '/'
+                                                    and input[index! + 1] == '.'
+                                                    and input[index! + 2] == '.'
                                                     -> if {
                                                         output! -> removeLastPathSegment
-                                                        output! -> pushOutput(47, maximum, UIntSize(index!))?
+                                                        output! -> pushOutput('/', maximum, UIntSize(index!))?
                                                         length => index!
                                                     } else {
-                                                        index! + 1 == length and input[index!] == 46 -> if {
-                                                            length => index!
-                                                        } else {
-                                                            index! + 2 == length
-                                                                and input[index!] == 46
-                                                                and input[index! + 1] == 46
-                                                                -> if {
-                                                                    length => index!
-                                                                } else {
-                                                                    input[index!] == 47 -> if {
-                                                                        output! -> pushOutput(47, maximum, UIntSize(index!))?
-                                                                        index! + 1 => index!
+                                                        index! + 1 == length and input[index!] == '.'
+                                                            -> if {
+                                                                length => index!
+                                                            } else {
+                                                                index! + 2 == length
+                                                                    and input[index!] == '.'
+                                                                    and input[index! + 1] == '.'
+                                                                    -> if {
+                                                                        length => index!
+                                                                    } else {
+                                                                        input[index!] == '/' -> if {
+                                                                            output! -> pushOutput('/', maximum, UIntSize(index!))?
+                                                                            index! + 1 => index!
+                                                                        }
+                                                                        index! < length and input[index!] != '/' -> while {
+                                                                            output! -> pushOutput(input[index!], maximum, UIntSize(index!))?
+                                                                            index! + 1 => index!
+                                                                        }
                                                                     }
-                                                                    index! < length and input[index!] != 47 -> while {
-                                                                        output! -> pushOutput(input[index!], maximum, UIntSize(index!))?
-                                                                        index! + 1 => index!
-                                                                    }
-                                                                }
-                                                        }
+                                                            }
                                                     }
                                             }
                                     }
@@ -226,7 +227,7 @@ removeDotSegments input: move [UInt8; ~], maximum: Int -> Result<[UInt8; ~], Err
                     }
             }
     }
-    not absolute and (output! -> len) > 0 and output![0] == 47
+    not absolute and (output! -> len) > 0 and output![0] == '/'
         -> if {
             output! -> take(0) => discardedRelativeSeparator
         }
@@ -298,46 +299,46 @@ absentAuthority: -> AuthorityComponent => model.AuthorityComponent.Absent
 presentAuthority value: Authority -> AuthorityComponent => model.AuthorityComponent.Present(value)
 
 isAlpha byte: UInt8 -> Bool {
-    (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122)
+    (byte >= 'A' and byte <= 'Z') or (byte >= 'a' and byte <= 'z')
 }
 
 isAlphaNumeric byte: UInt8 -> Bool {
-    (byte -> isAlpha) or (byte >= 48 and byte <= 57)
+    (byte -> isAlpha) or (byte >= '0' and byte <= '9')
 }
 
 isUnreserved byte: UInt8 -> Bool {
     ((byte -> isAlphaNumeric)
-        or byte == 45
-        or byte == 46
-        or byte == 95
-        or byte == 126)
+        or byte == '-'
+        or byte == '.'
+        or byte == '_'
+        or byte == '~')
 }
 
 isSubDelimiter byte: UInt8 -> Bool {
-    byte == 33
-        or byte == 36
-        or byte == 38
-        or byte == 39
-        or byte == 40
-        or byte == 41
-        or byte == 42
-        or byte == 43
-        or byte == 44
-        or byte == 59
-        or byte == 61
+    byte == '!'
+        or byte == '$'
+        or byte == '&'
+        or byte == '\''
+        or byte == '('
+        or byte == ')'
+        or byte == '*'
+        or byte == '+'
+        or byte == ','
+        or byte == ';'
+        or byte == '='
 }
 
 isHex byte: UInt8 -> Bool {
-    (byte >= 48 and byte <= 57)
-        or (byte >= 65 and byte <= 70)
-        or (byte >= 97 and byte <= 102)
+    (byte >= '0' and byte <= '9')
+        or (byte >= 'A' and byte <= 'F')
+        or (byte >= 'a' and byte <= 'f')
 }
 
 validateComponent text: Text, start: UIntSize, end: UIntSize, component: Int -> Result<Unit, Error> {
     start => index!
     index! < end -> while {
         text -> byte(index!) => byte
-        byte == 37 -> if {
+        byte == '%' -> if {
             index! + 2 < end -> unless {
                 errorUnit(errors.Kind.InvalidPercentEncoding, index!) -> return
             }
@@ -349,11 +350,11 @@ validateComponent text: Text, start: UIntSize, end: UIntSize, component: Int -> 
             index! + 3 => index!
         } else {
             (byte -> isUnreserved) or (byte -> isSubDelimiter) => allowed!
-            component == 0 and byte == 58 -> if { true => allowed! }
-            component == 2 and (byte == 58 or byte == 64 or byte == 47)
+            component == 0 and byte == ':' -> if { true => allowed! }
+            component == 2 and (byte == ':' or byte == '@' or byte == '/')
                 -> if { true => allowed! }
             (component == 3 or component == 4)
-                and (byte == 58 or byte == 64 or byte == 47 or byte == 63)
+                and (byte == ':' or byte == '@' or byte == '/' or byte == '?')
                 -> if { true => allowed! }
             allowed! -> unless {
                 errorUnit(errors.Kind.InvalidCharacter, index!) -> return
@@ -374,7 +375,7 @@ validateScheme text: Text, start: UIntSize, end: UIntSize -> Result<Unit, Error>
     start + 1 => index!
     index! < end -> while {
         text -> byte(index!) => byte
-        (byte -> isAlphaNumeric) or byte == 43 or byte == 45 or byte == 46
+        (byte -> isAlphaNumeric) or byte == '+' or byte == '-' or byte == '.'
             -> unless {
                 errorUnit(errors.Kind.InvalidScheme, index!) -> return
             }
@@ -388,8 +389,8 @@ looksNumericIpv4 text: Text, start: UIntSize, end: UIntSize -> Bool {
     start => index!
     index! < end -> while {
         text -> byte(index!) => byte
-        byte == 46 -> if { true => hasDot! } else {
-            byte >= 48 and byte <= 57 -> unless { false -> return }
+        byte == '.' -> if { true => hasDot! } else {
+            byte >= '0' and byte <= '9' -> unless { false -> return }
         }
         index! + 1 => index!
     }
@@ -407,19 +408,19 @@ parsePort text: Text, start: UIntSize, end: UIntSize -> Result<PortComponent, Er
     start => index!
     index! < end -> while {
         text -> byte(index!) => byte
-        byte >= 48 and byte <= 57 -> unless {
+        byte >= '0' and byte <= '9' -> unless {
             Result<PortComponent, Error>.Err(Error {
                 kind: errors.Kind.InvalidPort
                 offset: index!
             }) -> return
         }
-        value! <= (65_535 - Int(byte - 48)) / 10 -> unless {
+        value! <= (65_535 - Int(byte - '0')) / 10 -> unless {
             Result<PortComponent, Error>.Err(Error {
                 kind: errors.Kind.InvalidPort
                 offset: start
             }) -> return
         }
-        value! * 10 + Int(byte - 48) => value!
+        value! * 10 + Int(byte - '0') => value!
         index! + 1 => index!
     }
     Result<PortComponent, Error>.Ok(model.PortComponent.Present(UInt16(value!)))
@@ -431,7 +432,7 @@ parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, E
     start => scan!
     false => foundAt!
     scan! < end -> while {
-        (text -> byte(scan!)) == 64 -> if {
+        (text -> byte(scan!)) == '@' -> if {
             foundAt! -> if {
                 errorAuthority(errors.Kind.InvalidAuthority, scan!) -> return
             }
@@ -444,10 +445,10 @@ parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, E
     }
 
     hostStart! < end
-        and (text -> byte(hostStart!)) == 91
+        and (text -> byte(hostStart!)) == '['
         -> if {
             hostStart! + 1 => close!
-            close! < end and (text -> byte(close!)) != 93
+            close! < end and (text -> byte(close!)) != ']'
                 -> while {
                     close! + 1 => close!
                 }
@@ -468,7 +469,7 @@ parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, E
                             raw: presentSpan(start, end - start)
                         }) -> return
                     }
-                    (text -> byte(close! + 1)) == 58 -> unless {
+                    (text -> byte(close! + 1)) == ':' -> unless {
                         errorAuthority(errors.Kind.InvalidAuthority, close! + 1) -> return
                     }
                     parsePort(text, close! + 2, end)? => port
@@ -490,7 +491,7 @@ parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, E
     false => hasPort!
     hostStart! => colonScan!
     colonScan! < end -> while {
-        (text -> byte(colonScan!)) == 58 -> if {
+        (text -> byte(colonScan!)) == ':' -> if {
             hasPort! -> if {
                 errorAuthority(errors.Kind.InvalidHost, colonScan!) -> return
             }
@@ -539,87 +540,87 @@ public parse text: Text, maxInputBytes: Int -> Result<Reference, Error> {
     length => fragmentStart!
     UIntSize(0) => scan!
     scan! < length -> while {
-        (text -> byte(scan!)) == 35 -> if {
-            scan! => fragmentStart!
-            length => scan!
-        } else { scan! + 1 => scan! }
-    }
-    fragmentStart! < length -> if {
-        text -> validateComponent(fragmentStart! + 1, length, 4)?
-        presentSpan(fragmentStart! + 1, length - fragmentStart! - 1)
-    } else { absentSpan() } => fragment
+        (text -> byte(scan!)) == '#' -> if {
+        scan! => fragmentStart!
+        length => scan!
+    } else { scan! + 1 => scan! }
+}
+fragmentStart! < length -> if {
+    text -> validateComponent(fragmentStart! + 1, length, 4)?
+    presentSpan(fragmentStart! + 1, length - fragmentStart! - 1)
+} else { absentSpan() } => fragment
 
-    fragmentStart! => queryStart!
-    UIntSize(0) => queryScan!
-    queryScan! < fragmentStart! -> while {
-        (text -> byte(queryScan!)) == 63 -> if {
-            queryScan! => queryStart!
-            fragmentStart! => queryScan!
-        } else { queryScan! + 1 => queryScan! }
-    }
-    queryStart! < fragmentStart! -> if {
-        text -> validateComponent(queryStart! + 1, fragmentStart!, 3)?
-        presentSpan(queryStart! + 1, fragmentStart! - queryStart! - 1)
-    } else { absentSpan() } => query
+fragmentStart! => queryStart!
+UIntSize(0) => queryScan!
+queryScan! < fragmentStart! -> while {
+    (text -> byte(queryScan!)) == '?' -> if {
+        queryScan! => queryStart!
+        fragmentStart! => queryScan!
+    } else { queryScan! + 1 => queryScan! }
+}
+queryStart! < fragmentStart! -> if {
+    text -> validateComponent(queryStart! + 1, fragmentStart!, 3)?
+    presentSpan(queryStart! + 1, fragmentStart! - queryStart! - 1)
+} else { absentSpan() } => query
 
-    absentSpan() => scheme!
-    UIntSize(0) => hierarchicalStart!
-    UIntSize(0) => schemeScan!
-    false => schemeDone!
-    schemeScan! < queryStart!
-        and not schemeDone!
-        -> while {
-            text -> byte(schemeScan!) => byte
-            byte == 58 -> if {
-                text -> validateScheme(0, schemeScan!)?
-                presentSpan(0, schemeScan!) => scheme!
-                schemeScan! + 1 => hierarchicalStart!
-                true => schemeDone!
-            }
-            byte == 47 -> if { true => schemeDone! }
-            schemeScan! + 1 => schemeScan!
+absentSpan() => scheme!
+UIntSize(0) => hierarchicalStart!
+UIntSize(0) => schemeScan!
+false => schemeDone!
+schemeScan! < queryStart!
+    and not schemeDone!
+    -> while {
+        text -> byte(schemeScan!) => byte
+        byte == ':' -> if {
+            text -> validateScheme(0, schemeScan!)?
+            presentSpan(0, schemeScan!) => scheme!
+            schemeScan! + 1 => hierarchicalStart!
+            true => schemeDone!
         }
+        byte == '/' -> if { true => schemeDone! }
+        schemeScan! + 1 => schemeScan!
+    }
 
-    hierarchicalStart! + 1 < queryStart!
-        and (text -> byte(hierarchicalStart!)) == 47
-        and (text -> byte(hierarchicalStart! + 1)) == 47
-        => hasAuthorityPrefix
-    hasAuthorityPrefix -> if {
-        hierarchicalStart! + 2 => authorityStart
-        authorityStart => authorityEnd!
-        authorityEnd! < queryStart! and (text -> byte(authorityEnd!)) != 47
-            -> while { authorityEnd! + 1 => authorityEnd! }
-        text -> parseAuthority(authorityStart, authorityEnd!)? => parsedAuthority
-        authorityEnd! => hierarchicalStart!
-        presentAuthority(parsedAuthority)
-    } else { absentAuthority() } => authority
+hierarchicalStart! + 1 < queryStart!
+    and (text -> byte(hierarchicalStart!)) == '/'
+    and (text -> byte(hierarchicalStart! + 1)) == '/'
+    => hasAuthorityPrefix
+hasAuthorityPrefix -> if {
+    hierarchicalStart! + 2 => authorityStart
+    authorityStart => authorityEnd!
+    authorityEnd! < queryStart! and (text -> byte(authorityEnd!)) != '/'
+        -> while { authorityEnd! + 1 => authorityEnd! }
+    text -> parseAuthority(authorityStart, authorityEnd!)? => parsedAuthority
+    authorityEnd! => hierarchicalStart!
+    presentAuthority(parsedAuthority)
+} else { absentAuthority() } => authority
 
-    text -> validateComponent(hierarchicalStart!, queryStart!, 2)?
-    scheme!.present -> unless {
-        authority -> when {
-            Present(value) { }
-            Absent {
-                hierarchicalStart! => firstSegment!
-                firstSegment! < queryStart!
-                    and (text -> byte(firstSegment!)) != 47
-                    -> while {
-                        (text -> byte(firstSegment!)) == 58 -> if {
-                            errorReference(errors.Kind.RelativeFirstSegmentColon, firstSegment!) -> return
-                        }
-                        firstSegment! + 1 => firstSegment!
+text -> validateComponent(hierarchicalStart!, queryStart!, 2)?
+scheme!.present -> unless {
+    authority -> when {
+        Present(value) { }
+        Absent {
+            hierarchicalStart! => firstSegment!
+            firstSegment! < queryStart!
+                and (text -> byte(firstSegment!)) != '/'
+                -> while {
+                    (text -> byte(firstSegment!)) == ':' -> if {
+                        errorReference(errors.Kind.RelativeFirstSegmentColon, firstSegment!) -> return
                     }
-            }
+                    firstSegment! + 1 => firstSegment!
+                }
         }
     }
-    text -> file.borrowText => source
-    Result<Reference, Error>.Ok(Reference {
-        source: source
-        scheme: scheme!
-        authority: authority
-        path: presentSpan(hierarchicalStart!, queryStart! - hierarchicalStart!)
-        query: query
-        fragment: fragment
-    })
+}
+text -> file.borrowText => source
+Result<Reference, Error>.Ok(Reference {
+    source: source
+    scheme: scheme!
+    authority: authority
+    path: presentSpan(hierarchicalStart!, queryStart! - hierarchicalStart!)
+    query: query
+    fragment: fragment
+})
 }
 
 impl Reference {
@@ -640,12 +641,12 @@ impl Reference {
             policy,
             output!,
             maxOutputBytes)?
-            output! -> pushOutput(58, maxOutputBytes, self.scheme.start + self.scheme.length)?
+            output! -> pushOutput(':', maxOutputBytes, self.scheme.start + self.scheme.length)?
         }
         self.authority -> when {
             Present(authority) {
-                output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
-                output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
                 self.source -> appendAuthority(authority, policy, output!, maxOutputBytes)?
             }
             Absent { }
@@ -653,7 +654,7 @@ impl Reference {
         self.source -> normalizedPath(self.path, policy, maxOutputBytes)? => path
         path -> appendBytes(output!, maxOutputBytes)?
         self.query.present -> if {
-            output! -> pushOutput(63, maxOutputBytes, self.query.start)?
+            output! -> pushOutput('?', maxOutputBytes, self.query.start)?
             self.source -> appendNormalizedSpan(
             self.query,
             false,
@@ -662,7 +663,7 @@ impl Reference {
             maxOutputBytes)?
         }
         self.fragment.present -> if {
-            output! -> pushOutput(35, maxOutputBytes, self.fragment.start)?
+            output! -> pushOutput('#', maxOutputBytes, self.fragment.start)?
             self.source -> appendNormalizedSpan(
             self.fragment,
             false,
@@ -700,12 +701,12 @@ impl Reference {
         policy,
         output!,
         maxOutputBytes)?
-        output! -> pushOutput(58, maxOutputBytes, self.scheme.start + self.scheme.length)?
+        output! -> pushOutput(':', maxOutputBytes, self.scheme.start + self.scheme.length)?
 
         reference.authority -> when {
             Present(authority) {
-                output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
-                output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
                 reference.source -> appendAuthority(
                 authority,
                 policy,
@@ -717,7 +718,7 @@ impl Reference {
                 maxOutputBytes)? => authorityPath
                 authorityPath -> appendBytes(output!, maxOutputBytes)?
                 reference.query.present -> if {
-                    output! -> pushOutput(63, maxOutputBytes, reference.query.start)?
+                    output! -> pushOutput('?', maxOutputBytes, reference.query.start)?
                     reference.source -> appendNormalizedSpan(
                     reference.query,
                     false,
@@ -729,8 +730,8 @@ impl Reference {
             Absent {
                 self.authority -> when {
                     Present(authority) {
-                        output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
-                        output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                        output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                        output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
                         self.source -> appendAuthority(
                         authority,
                         policy,
@@ -747,7 +748,7 @@ impl Reference {
                     maxOutputBytes)? => inheritedPath
                     inheritedPath -> appendBytes(output!, maxOutputBytes)?
                     reference.query.present -> if {
-                        output! -> pushOutput(63, maxOutputBytes, reference.query.start)?
+                        output! -> pushOutput('?', maxOutputBytes, reference.query.start)?
                         reference.source -> appendNormalizedSpan(
                         reference.query,
                         false,
@@ -756,7 +757,7 @@ impl Reference {
                         maxOutputBytes)?
                     } else {
                         self.query.present -> if {
-                            output! -> pushOutput(63, maxOutputBytes, self.query.start)?
+                            output! -> pushOutput('?', maxOutputBytes, self.query.start)?
                             self.source -> appendNormalizedSpan(
                             self.query,
                             false,
@@ -766,7 +767,7 @@ impl Reference {
                         }
                     }
                 } else {
-                    (reference.source -> byte(reference.path.start)) == 47
+                    (reference.source -> byte(reference.path.start)) == '/'
                         -> if {
                             reference.source -> normalizedPath(
                             reference.path,
@@ -778,7 +779,7 @@ impl Reference {
                             self.authority -> when {
                                 Present(authority) {
                                     self.path.length == 0 -> if {
-                                        merged! -> pushOutput(47, maxOutputBytes, self.path.start)?
+                                        merged! -> pushOutput('/', maxOutputBytes, self.path.start)?
                                     }
                                 }
                                 Absent { }
@@ -786,7 +787,7 @@ impl Reference {
                             self.path.length > 0 -> if {
                                 self.path.start + self.path.length => prefixEnd!
                                 prefixEnd! > self.path.start
-                                    and (self.source -> byte(prefixEnd! - 1)) != 47
+                                    and (self.source -> byte(prefixEnd! - 1)) != '/'
                                     -> while { prefixEnd! - 1 => prefixEnd! }
                                 self.source -> appendNormalizedSpan(
                                 presentSpan(self.path.start, prefixEnd! - self.path.start),
@@ -809,7 +810,7 @@ impl Reference {
                             }
                         }
                     reference.query.present -> if {
-                        output! -> pushOutput(63, maxOutputBytes, reference.query.start)?
+                        output! -> pushOutput('?', maxOutputBytes, reference.query.start)?
                         reference.source -> appendNormalizedSpan(
                         reference.query,
                         false,
@@ -822,7 +823,7 @@ impl Reference {
         }
 
         reference.fragment.present -> if {
-            output! -> pushOutput(35, maxOutputBytes, reference.fragment.start)?
+            output! -> pushOutput('#', maxOutputBytes, reference.fragment.start)?
             reference.source -> appendNormalizedSpan(
             reference.fragment,
             false,

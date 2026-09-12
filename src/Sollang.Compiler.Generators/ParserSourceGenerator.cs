@@ -111,6 +111,7 @@ internal sealed record GrammarSpec(
         "Path",
         "TypeName",
         "StringExpression",
+        "CharacterExpression",
         "NumberExpression",
         "NameExpression",
         "GuardLoopControlStatement",
@@ -2571,7 +2572,7 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    private Expression ParseAtomExpression()");
         builder.AppendLine("    {");
-        builder.AppendLine("        // AtomExpression = WhenExpression | CallExpression | ArrayExpression | DictionaryExpression | StringExpression | NumberExpression | NameExpression | LeftParen Expression RightParen");
+        builder.AppendLine("        // AtomExpression includes text, character, numeric, and name literals.");
         builder.AppendLine("        if (CheckIdentifier(\"when\"))");
         builder.AppendLine("        {");
         builder.AppendLine("            return ParseWhenExpression();");
@@ -2643,6 +2644,11 @@ internal static class ParserEmitter
         builder.AppendLine("        if (Match(TokenKind.Number, out var numberToken))");
         builder.AppendLine("        {");
         builder.AppendLine("            return new NumberExpression(numberToken.Text, numberToken.Line, numberToken.Column);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        if (Match(TokenKind.Character, out var characterToken))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            return new NumberExpression(characterToken.Text, characterToken.Line, characterToken.Column);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        if (Match(TokenKind.Identifier, out var identifier))");

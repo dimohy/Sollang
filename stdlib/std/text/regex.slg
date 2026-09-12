@@ -1,0 +1,430 @@
+namespace std.text.regex
+
+import sys.file as file
+
+# A bounded scalar regular-expression profile, not a general regex engine.
+public struct Limits {
+    public maxPatternBytes: Int
+    public maxAtoms: Int
+    public maxInputBytes: Int
+    public maxSteps: Int
+}
+
+public enum ErrorKind {
+    InvalidLimits
+    PatternLimit
+    AtomLimit
+    InvalidEscape
+    InvalidClass
+    InvalidRange
+    InvalidQuantifier
+    UnsupportedConstruct
+    InputLimit
+    ScratchTooSmall
+    WorkLimit
+}
+
+public struct Error {
+    public kind: ErrorKind
+    public patternOffset: UIntSize
+    public inputOffset: UIntSize
+    public requiredCells: UIntSize
+}
+
+public struct Match {
+    public offset: UIntSize
+    public length: UIntSize
+}
+
+public struct Pattern {
+    source: file.SourceText
+    start: UIntSize
+    end: UIntSize
+    atoms: Int
+    cells: Int
+    anchoredStart: Bool
+    anchoredEnd: Bool
+    maxInputBytes: Int
+    maxSteps: Int
+}
+
+enum AtomKind { Literal, Any, Class }
+enum Repetition { Once, Optional, ZeroMany, OneMany }
+impl Repetition {
+    allowsEmpty: self -> Bool => self -> when {
+        Once => false
+        Optional => true
+        ZeroMany => true
+        OneMany => false
+    }
+}
+struct Atom {
+    kind: AtomKind
+    literalStart: UIntSize
+    classStart: UIntSize
+    classEnd: UIntSize
+    negated: Bool
+    repetition: Repetition
+    next: UIntSize
+}
+struct ClassUnit { value: UInt8, next: UIntSize }
+struct Work { remaining: Int }
+
+failure kind: ErrorKind, patternOffset: UIntSize, inputOffset: UIntSize -> Error => Error {
+    kind: kind
+    patternOffset: patternOffset
+    inputOffset: inputOffset
+    requiredCells: 0
+}
+
+spend work: mut Work, patternOffset: UIntSize, inputOffset: UIntSize -> Result<Unit, Error> {
+    work.remaining > 0 -> unless {
+        Result<Unit, Error>.Err(failure(ErrorKind.WorkLimit, patternOffset, inputOffset)) -> return
+    }
+    work.remaining - 1 => work.remaining
+    Result<Unit, Error>.Ok
+}
+
+# Text already guarantees valid UTF-8. Only advance over its scalar boundaries.
+scalarEnd source: file.SourceText, start: UIntSize -> UIntSize {
+    source -> len => length
+    start + 1 => end!
+    end! < length and source -> byte(end!) >= 128 and source -> byte(end!) <= 191
+        -> while { end! + 1 => end! }
+    end!
+}
+
+sameScalar left: file.SourceText, leftStart: UIntSize, right: file.SourceText, rightStart: UIntSize -> Bool {
+    scalarEnd(left, leftStart) - leftStart => length
+    scalarEnd(right, rightStart) - rightStart == length
+        -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < length -> while {
+        left -> byte(leftStart + index!) => leftByte
+        right -> byte(rightStart + index!) => rightByte
+        leftByte == rightByte -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+escapable value: UInt8 -> Bool => value -> when {
+    == '.' => true
+    == '^' => true
+    == '$' => true
+    == '[' => true
+    == ']' => true
+    == '*' => true
+    == '+' => true
+    == '?' => true
+    == '\\' => true
+    == '(' => true
+    == ')' => true
+    == '{' => true
+        == '}' => true
+    == '|' => true
+    == '-' => true
+    else => false
+}
+
+classUnit source: file.SourceText, start: UIntSize, end: UIntSize, inputOffset: UIntSize -> Result<ClassUnit, Error> {
+    start < end -> unless {
+        Result<ClassUnit, Error>.Err(failure(ErrorKind.InvalidClass, start, inputOffset)) -> return
+    }
+    source -> byte(start) => value
+    value < 128 -> unless {
+        Result<ClassUnit, Error>.Err(failure(ErrorKind.UnsupportedConstruct, start, inputOffset)) -> return
+    }
+    value == '\\' -> if {
+        start + 1 < end -> unless {
+            Result<ClassUnit, Error>.Err(failure(ErrorKind.InvalidEscape, start, inputOffset)) -> return
+        }
+        source -> byte(start + 1) => escaped
+        escapable(escaped) -> unless {
+            Result<ClassUnit, Error>.Err(failure(ErrorKind.InvalidEscape, start, inputOffset)) -> return
+        }
+        Result<ClassUnit, Error>.Ok(ClassUnit { value: escaped, next: start + 2 }) -> return
+    }
+    value != ']' and value != '[' and value != '-'
+        -> unless {
+            Result<ClassUnit, Error>.Err(failure(ErrorKind.InvalidClass, start, inputOffset)) -> return
+        }
+    Result<ClassUnit, Error>.Ok(ClassUnit { value: value, next: start + 1 })
+}
+
+readAtom source: file.SourceText, start: UIntSize, end: UIntSize, work: mut Work, inputOffset: UIntSize -> Result<Atom, Error> {
+    spend(work, start, inputOffset)?
+    source -> byte(start) => value
+    AtomKind.Literal => kind!
+    start => literalStart!
+    UIntSize(0) => classStart!
+    UIntSize(0) => classEnd!
+    false => negated!
+    start + 1 => next!
+    value == '[' -> if {
+        AtomKind.Class => kind!
+        next! < end and source -> byte(next!) == '^' -> if {
+            true => negated!
+            next! + 1 => next!
+        }
+        next! => classStart!
+        false => hasEntry!
+        next! < end and source -> byte(next!) != ']' -> while {
+            spend(work, next!, inputOffset)?
+            classUnit(source, next!, end, inputOffset)? => first
+            first.next => next!
+            next! < end and source -> byte(next!) == '-' -> if {
+                next! => dash
+                next! + 1 < end and source -> byte(next! + 1) != ']'
+                    -> unless {
+                        Result<Atom, Error>.Err(failure(ErrorKind.InvalidRange, dash, inputOffset)) -> return
+                    }
+                classUnit(source, next! + 1, end, inputOffset)? => last
+                first.value <= last.value -> unless {
+                    Result<Atom, Error>.Err(failure(ErrorKind.InvalidRange, dash, inputOffset)) -> return
+                }
+                last.next => next!
+            }
+            true => hasEntry!
+        }
+        hasEntry! and next! < end -> unless {
+            Result<Atom, Error>.Err(failure(ErrorKind.InvalidClass, start, inputOffset)) -> return
+        }
+        next! => classEnd!
+        next! + 1 => next!
+    } else {
+        value == '\\' -> if {
+            next! < end -> unless {
+                Result<Atom, Error>.Err(failure(ErrorKind.InvalidEscape, start, inputOffset)) -> return
+            }
+            source -> byte(next!) => escaped
+            escapable(escaped) -> unless {
+                Result<Atom, Error>.Err(failure(ErrorKind.InvalidEscape, start, inputOffset)) -> return
+            }
+            next! => literalStart!
+            next! + 1 => next!
+        } else {
+            value == '*' or value == '+' or value == '?' -> if {
+                Result<Atom, Error>.Err(failure(ErrorKind.InvalidQuantifier, start, inputOffset)) -> return
+            }
+            value == '(' or value == ')' or value == '{' or value == '}' or value == '|'
+                or value == '^' or value == '$' or value == ']'
+                -> if {
+                    Result<Atom, Error>.Err(failure(ErrorKind.UnsupportedConstruct, start, inputOffset)) -> return
+                }
+            value == '.' -> if { AtomKind.Any => kind! }
+            scalarEnd(source, start) => next!
+        }
+    }
+    Repetition.Once => repetition!
+    next! < end -> if {
+        source -> byte(next!) => suffix
+        suffix -> when {
+            == '*' {
+                Repetition.ZeroMany => repetition!
+                next! + 1 => next!
+            }
+            == '+' {
+                Repetition.OneMany => repetition!
+                next! + 1 => next!
+            }
+            == '?' {
+                Repetition.Optional => repetition!
+                next! + 1 => next!
+            }
+            else { }
+        }
+    }
+    Result<Atom, Error>.Ok(Atom {
+        kind: kind!
+        literalStart: literalStart!
+        classStart: classStart!
+        classEnd: classEnd!
+        negated: negated!
+        repetition: repetition!
+        next: next!
+    })
+}
+
+classMatches pattern: file.SourceText, atom: Atom, input: file.SourceText, inputOffset: UIntSize, work: mut Work -> Result<Bool, Error> {
+    input -> byte(inputOffset) => value
+    value < 128 -> unless { Result<Bool, Error>.Ok(atom.negated) -> return }
+    atom.classStart => index!
+    index! < atom.classEnd -> while {
+        spend(work, index!, inputOffset)?
+        classUnit(pattern, index!, atom.classEnd, inputOffset)? => first
+        first.next => index!
+        first.value => lastValue!
+        index! < atom.classEnd and pattern -> byte(index!) == '-'
+            -> if {
+                classUnit(pattern, index! + 1, atom.classEnd, inputOffset)? => last
+                last.value => lastValue!
+                last.next => index!
+            }
+        value >= first.value and value <= lastValue! -> if {
+            Result<Bool, Error>.Ok(not atom.negated) -> return
+        }
+    }
+    Result<Bool, Error>.Ok(atom.negated)
+}
+
+atomMatches pattern: file.SourceText, atom: Atom, input: file.SourceText, inputOffset: UIntSize, work: mut Work -> Result<Bool, Error> => atom.kind -> when {
+    Literal => Result<Bool, Error>.Ok(sameScalar(pattern, atom.literalStart, input, inputOffset))
+    Any => Result<Bool, Error>.Ok(input -> byte(inputOffset) != '\n')
+    Class => classMatches(pattern, atom, input, inputOffset, work)
+}
+
+putEarlier scratch: mut [UIntSize; ~], index: Int, tag: UIntSize -> Unit {
+    tag > 0 and (scratch[index] == 0 or tag < scratch[index])
+        -> if { tag => scratch[index] }
+}
+
+# Construction is bounded by pattern bytes; no token array or input copy exists.
+public pattern value: Text, limits: Limits -> Result<Pattern, Error> {
+    # Two Int-indexed banks must fit before computing atoms + 1 or doubling it.
+    limits.maxPatternBytes >= 0 and limits.maxAtoms >= 0 and limits.maxAtoms <= 1_073_741_822
+        and limits.maxInputBytes >= 0 and limits.maxSteps >= 0
+        -> unless {
+            Result<Pattern, Error>.Err(failure(ErrorKind.InvalidLimits, 0, 0)) -> return
+        }
+    value -> len => length
+    length <= UIntSize(limits.maxPatternBytes) -> unless {
+        Result<Pattern, Error>.Err(failure(ErrorKind.PatternLimit, 0, 0)) -> return
+    }
+    value -> file.borrowText => source
+    UIntSize(0) => start!
+    false => anchoredStart!
+    length > 0 and source -> byte(0) == '^' -> if {
+        true => anchoredStart!
+        1 => start!
+    }
+    start! => index!
+    length => end!
+    false => anchoredEnd!
+    0 => atoms!
+    Work { remaining: limits.maxPatternBytes } => work!
+    index! < length -> while {
+        source -> byte(index!) == '$' and index! + 1 == length
+            -> if {
+                true => anchoredEnd!
+                index! => end!
+                length => index!
+            } else {
+                readAtom(source, index!, length, work!, 0)? => atom
+                atoms! < limits.maxAtoms -> unless {
+                    Result<Pattern, Error>.Err(failure(ErrorKind.AtomLimit, index!, 0)) -> return
+                }
+                atoms! + 1 => atoms!
+                atom.next => index!
+            }
+    }
+    Result<Pattern, Error>.Ok(Pattern {
+        source: source
+        start: start!
+        end: end!
+        atoms: atoms!
+        cells: (atoms! + 1) * 2
+        anchoredStart: anchoredStart!
+        anchoredEnd: anchoredEnd!
+        maxInputBytes: limits.maxInputBytes
+        maxSteps: limits.maxSteps
+    })
+}
+
+impl Pattern {
+    public scratchCells: self -> UIntSize => UIntSize(self.cells)
+
+    # Scratch is workspace, not output. Preflight failures preserve it; WorkLimit
+    # may change its prefix. Every call reinitializes that prefix, never its tail.
+    public find: self, input: Text, scratch: mut [UIntSize; ~] -> Result<Option<Match>, Error> {
+        input -> len => length
+        length <= UIntSize(self.maxInputBytes) -> unless {
+            Result<Option<Match>, Error>.Err(failure(ErrorKind.InputLimit, 0, 0)) -> return
+        }
+        scratch -> len >= self.cells -> unless {
+            Result<Option<Match>, Error>.Err(Error {
+                kind: ErrorKind.ScratchTooSmall
+                patternOffset: 0
+                inputOffset: 0
+                requiredCells: UIntSize(self.cells)
+            }) -> return
+        }
+        input -> file.borrowText => source
+        Work { remaining: self.maxSteps } => work!
+        self.atoms + 1 => bankSize
+        0 => cell!
+        cell! < bankSize -> while {
+            spend(work!, self.start, 0)?
+            0 => scratch[cell!]
+            cell! + 1 => cell!
+        }
+        0 => current!
+        bankSize => next!
+        UIntSize(0) => inputOffset!
+        false => found!
+        UIntSize(0) => bestStart!
+        UIntSize(0) => bestEnd!
+        true => scanning!
+        scanning! -> while {
+            spend(work!, self.start, inputOffset!)?
+            0 => cell!
+            cell! < bankSize -> while {
+                spend(work!, self.start, inputOffset!)?
+                0 => scratch[next! + cell!]
+                cell! + 1 => cell!
+            }
+            not self.anchoredStart or inputOffset! == 0 -> if {
+                putEarlier(scratch, current!, inputOffset! + 1)
+            }
+            self.start => patternOffset!
+            0 => atomIndex!
+            atomIndex! < self.atoms -> while {
+                readAtom(self.source, patternOffset!, self.end, work!, inputOffset!)? => atom
+                scratch[current! + atomIndex!] => tag
+                atom.repetition -> allowsEmpty -> if {
+                    putEarlier(scratch, current! + atomIndex! + 1, tag)
+                }
+                tag > 0 and inputOffset! < length -> if {
+                    atomMatches(self.source, atom, source, inputOffset!, work!)? => matched
+                    matched -> if {
+                        atom.repetition -> when {
+                            Once { putEarlier(scratch, next! + atomIndex! + 1, tag) }
+                            Optional { putEarlier(scratch, next! + atomIndex! + 1, tag) }
+                            ZeroMany { putEarlier(scratch, next! + atomIndex!, tag) }
+                            OneMany {
+                                putEarlier(scratch, next! + atomIndex!, tag)
+                                putEarlier(scratch, next! + atomIndex! + 1, tag)
+                            }
+                        }
+                    }
+                }
+                atom.next => patternOffset!
+                atomIndex! + 1 => atomIndex!
+            }
+            scratch[current! + self.atoms] => accepted
+            accepted > 0 and (not self.anchoredEnd or inputOffset! == length)
+                -> if {
+                    accepted - 1 => candidateStart
+                    not found! or candidateStart < bestStart! or (candidateStart == bestStart! and inputOffset! > bestEnd!)
+                        -> if {
+                            true => found!
+                            candidateStart => bestStart!
+                            inputOffset! => bestEnd!
+                        }
+                }
+            inputOffset! == length -> if {
+                false => scanning!
+            } else {
+                scalarEnd(source, inputOffset!) => inputOffset!
+                current! => previous
+                next! => current!
+                previous => next!
+            }
+        }
+        found! -> if {
+            Result<Option<Match>, Error>.Ok(Option<Match>.Some(Match { offset: bestStart!, length: bestEnd! - bestStart! }))
+        } else {
+            Result<Option<Match>, Error>.Ok(Option<Match>.None)
+        }
+    }
+}

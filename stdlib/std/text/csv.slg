@@ -130,8 +130,8 @@ impl Reader {
     public offset: self -> UIntSize => self.index
 
     checkedLength: self, length: Int, byte: UInt8, offset: UIntSize, quoted: Bool -> Result<Int, Error> {
-        byte < 32 or byte == 127 -> if {
-            quoted and (byte == 13 or byte == 10) -> unless {
+        byte < ' ' or byte == 127 -> if {
+            quoted and (byte == '\r' or byte == '\n') -> unless {
                 Result<Int, Error>.Err(failure(Kind.InvalidControl, offset)) -> return
             }
         }
@@ -144,16 +144,16 @@ impl Reader {
     afterLineEnding: self, index: UIntSize -> Result<UIntSize, Error> {
         self.source -> byte(index) => byte
         self.format.lineEndings -> when {
-            CrLf => byte == 13
-            Lf => byte == 10
+            CrLf => byte == '\r'
+            Lf => byte == '\n'
             Either => true
         } => allowed
         allowed -> unless {
             Result<UIntSize, Error>.Err(failure(Kind.InvalidLineEnding, index)) -> return
         }
-        byte == 13 -> if {
+        byte == '\r' -> if {
             index + 1 < self.end
-                and self.source -> byte(index + 1) == 10
+                and self.source -> byte(index + 1) == '\n'
                 -> unless { Result<UIntSize, Error>.Err(failure(Kind.InvalidLineEnding, index)) -> return }
             Result<UIntSize, Error>.Ok(index + 2)
         } else {
@@ -164,7 +164,7 @@ impl Reader {
     scan: self -> Result<ScannedField, Error> {
         self.index => cursor!
         false => quoted!
-        cursor! < self.end and self.source -> byte(cursor!) == 34
+        cursor! < self.end and self.source -> byte(cursor!) == '"'
             -> if {
                 true => quoted!
                 cursor! + 1 => cursor!
@@ -175,106 +175,106 @@ impl Reader {
             false => closed!
             cursor! < self.end and not closed! -> while {
                 self.source -> byte(cursor!) => byte
-                byte == 34 -> if {
-                    cursor! + 1 < self.end and self.source -> byte(cursor! + 1) == 34
-                        -> if {
-                            self -> checkedLength(length!, byte, cursor!, true)? => length!
-                            cursor! + 2 => cursor!
-                        } else { true => closed! }
-                } else {
-                    self -> checkedLength(length!, byte, cursor!, true)? => length!
-                    cursor! + 1 => cursor!
-                }
-            }
-            closed! -> unless {
-                Result<ScannedField, Error>.Err(failure(Kind.UnterminatedQuote, self.end)) -> return
-            }
-        } else {
-            cursor! < self.end -> while {
-                self.source -> byte(cursor!) => byte
-                byte == 44 or byte == 13 or byte == 10 -> if { break }
-                byte == 34 -> if {
-                    Result<ScannedField, Error>.Err(failure(Kind.UnexpectedQuote, cursor!)) -> return
-                }
-                self -> checkedLength(length!, byte, cursor!, false)? => length!
+                byte == '"' -> if {
+                cursor! + 1 < self.end and self.source -> byte(cursor! + 1) == '"'
+                    -> if {
+                        self -> checkedLength(length!, byte, cursor!, true)? => length!
+                        cursor! + 2 => cursor!
+                    } else { true => closed! }
+            } else {
+                self -> checkedLength(length!, byte, cursor!, true)? => length!
                 cursor! + 1 => cursor!
             }
         }
-        cursor! => contentEnd
-        quoted! -> if { cursor! + 1 => cursor! }
-        true => endOfRecord!
-        cursor! < self.end -> if {
-            self.source -> byte(cursor!) => delimiter
-            delimiter -> when {
-                == 44 {
-                    false => endOfRecord!
-                    cursor! + 1 => cursor!
-                }
-                == 13 { self -> afterLineEnding(cursor!)? => cursor! }
-                == 10 { self -> afterLineEnding(cursor!)? => cursor! }
-                else {
-                    Result<ScannedField, Error>.Err(failure(Kind.TrailingAfterQuote, cursor!)) -> return
-                }
-            }
+        closed! -> unless {
+            Result<ScannedField, Error>.Err(failure(Kind.UnterminatedQuote, self.end)) -> return
         }
-        Result<ScannedField, Error>.Ok(ScannedField {
-            contentStart: contentStart
-            contentEnd: contentEnd
-            nextIndex: cursor!
-            length: length!
-            endOfRecord: endOfRecord!
-            quoted: quoted!
-        })
-    }
-
-    # Field-level transaction: errors leave the entire buffer and cursor intact.
-    # Previously returned fields are not rolled back by a later field's error.
-    # Only output[0..length] is written; no resize, copy of storage, or allocation.
-    public next: mut self, output: mut [UInt8; ~] -> Result<Option<Field>, Error> {
-        self.done -> if { Result<Option<Field>, Error>.Ok(Option<Field>.None) -> return }
-        self.recordIndex < self.limits.maxRecords -> unless {
-            Result<Option<Field>, Error>.Err(failure(Kind.RecordLimit, self.index)) -> return
-        }
-        self.format.expectedColumns > 0 and self.fieldIndex >= self.format.expectedColumns
-            -> if { Result<Option<Field>, Error>.Err(failure(Kind.ColumnCountMismatch, self.index)) -> return }
-        self.fieldIndex < self.limits.maxFieldsPerRecord
-            -> unless {
-                Result<Option<Field>, Error>.Err(failure(Kind.FieldCountLimit, self.index)) -> return
-            }
-        self -> scan? => scanned
-        scanned.endOfRecord and self.format.expectedColumns > 0
-            and self.fieldIndex + 1 != self.format.expectedColumns
-            -> if { Result<Option<Field>, Error>.Err(failure(Kind.ColumnCountMismatch, self.index)) -> return }
-        scanned.length <= (output -> len) -> unless {
-            Result<Option<Field>, Error>.Err(Error {
-                kind: Kind.OutputTooSmall
-                offset: self.index
-                requiredBytes: scanned.length
-            }) -> return
-        }
-        scanned.contentStart => cursor!
-        0 => written!
-        cursor! < scanned.contentEnd -> while {
+    } else {
+        cursor! < self.end -> while {
             self.source -> byte(cursor!) => byte
-            byte => output[written!]
-            written! + 1 => written!
-            cursor! + 1 => cursor!
-            scanned.quoted and byte == 34 -> if { cursor! + 1 => cursor! }
+            byte == ',' or byte == '\r' or byte == '\n' -> if { break }
+            byte == '"' -> if {
+            Result<ScannedField, Error>.Err(failure(Kind.UnexpectedQuote, cursor!)) -> return
         }
-        Field {
-            recordIndex: self.recordIndex
-            fieldIndex: self.fieldIndex
-            length: scanned.length
-            endOfRecord: scanned.endOfRecord
-        } => field
-        scanned.nextIndex => self.index
-        scanned.endOfRecord -> if {
-            self.recordIndex + 1 => self.recordIndex
-            0 => self.fieldIndex
-            self.index == self.end => self.done
-        } else { self.fieldIndex + 1 => self.fieldIndex }
-        Result<Option<Field>, Error>.Ok(Option<Field>.Some(field))
+        self -> checkedLength(length!, byte, cursor!, false)? => length!
+        cursor! + 1 => cursor!
     }
+}
+cursor! => contentEnd
+quoted! -> if { cursor! + 1 => cursor! }
+true => endOfRecord!
+cursor! < self.end -> if {
+    self.source -> byte(cursor!) => delimiter
+    delimiter -> when {
+        == ',' {
+            false => endOfRecord!
+            cursor! + 1 => cursor!
+        }
+        == '\r' { self -> afterLineEnding(cursor!)? => cursor! }
+        == '\n' { self -> afterLineEnding(cursor!)? => cursor! }
+        else {
+            Result<ScannedField, Error>.Err(failure(Kind.TrailingAfterQuote, cursor!)) -> return
+        }
+    }
+}
+Result<ScannedField, Error>.Ok(ScannedField {
+    contentStart: contentStart
+    contentEnd: contentEnd
+    nextIndex: cursor!
+    length: length!
+    endOfRecord: endOfRecord!
+    quoted: quoted!
+})
+}
+
+# Field-level transaction: errors leave the entire buffer and cursor intact.
+# Previously returned fields are not rolled back by a later field's error.
+# Only output[0..length] is written; no resize, copy of storage, or allocation.
+public next: mut self, output: mut [UInt8; ~] -> Result<Option<Field>, Error> {
+    self.done -> if { Result<Option<Field>, Error>.Ok(Option<Field>.None) -> return }
+    self.recordIndex < self.limits.maxRecords -> unless {
+        Result<Option<Field>, Error>.Err(failure(Kind.RecordLimit, self.index)) -> return
+    }
+    self.format.expectedColumns > 0 and self.fieldIndex >= self.format.expectedColumns
+        -> if { Result<Option<Field>, Error>.Err(failure(Kind.ColumnCountMismatch, self.index)) -> return }
+    self.fieldIndex < self.limits.maxFieldsPerRecord
+        -> unless {
+            Result<Option<Field>, Error>.Err(failure(Kind.FieldCountLimit, self.index)) -> return
+        }
+    self -> scan? => scanned
+    scanned.endOfRecord and self.format.expectedColumns > 0
+        and self.fieldIndex + 1 != self.format.expectedColumns
+        -> if { Result<Option<Field>, Error>.Err(failure(Kind.ColumnCountMismatch, self.index)) -> return }
+    scanned.length <= (output -> len) -> unless {
+        Result<Option<Field>, Error>.Err(Error {
+            kind: Kind.OutputTooSmall
+            offset: self.index
+            requiredBytes: scanned.length
+        }) -> return
+    }
+    scanned.contentStart => cursor!
+    0 => written!
+    cursor! < scanned.contentEnd -> while {
+        self.source -> byte(cursor!) => byte
+        byte => output[written!]
+        written! + 1 => written!
+        cursor! + 1 => cursor!
+        scanned.quoted and byte == '"' -> if { cursor! + 1 => cursor! }
+    }
+    Field {
+        recordIndex: self.recordIndex
+        fieldIndex: self.fieldIndex
+        length: scanned.length
+        endOfRecord: scanned.endOfRecord
+    } => field
+    scanned.nextIndex => self.index
+    scanned.endOfRecord -> if {
+        self.recordIndex + 1 => self.recordIndex
+        0 => self.fieldIndex
+        self.index == self.end => self.done
+    } else { self.fieldIndex + 1 => self.fieldIndex }
+    Result<Option<Field>, Error>.Ok(Option<Field>.Some(field))
+}
 }
 
 fieldNeedsQuotes text: Text, length: UIntSize -> Bool {
@@ -282,7 +282,7 @@ fieldNeedsQuotes text: Text, length: UIntSize -> Bool {
     UIntSize(0) => cursor!
     cursor! < length -> while {
         text -> byte(cursor!) => byte
-        byte == 44 or byte == 34 or byte == 13 or byte == 10
+        byte == ',' or byte == '"' or byte == '\r' or byte == '\n'
             -> if { true -> return }
         cursor! + 1 => cursor!
     }
@@ -304,17 +304,17 @@ writeField text: Text, output: mut [UInt8; ~], offset: Int -> Int {
         text -> byte(cursor!) => byte
         byte => output[written!]
         written! + 1 => written!
-        byte == 34 -> if {
-            byte => output[written!]
-            written! + 1 => written!
-        }
-        cursor! + 1 => cursor!
-    }
-    quoted -> if {
-        34 => output[written!]
+        byte == '"' -> if {
+        byte => output[written!]
         written! + 1 => written!
     }
-    written!
+    cursor! + 1 => cursor!
+}
+quoted -> if {
+    34 => output[written!]
+    written! + 1 => written!
+}
+written!
 }
 
 impl Writer {
@@ -334,79 +334,79 @@ impl Writer {
         UIntSize(0) => cursor!
         cursor! < length -> while {
             text -> byte(cursor!) => byte
-            (byte < 32 and byte != 13 and byte != 10) or byte == 127
+            (byte < ' ' and byte != '\r' and byte != '\n') or byte == 127
                 -> if { Result<Int, Error>.Err(failure(Kind.InvalidControl, offset)) -> return }
-            byte == 44 or byte == 34 or byte == 13 or byte == 10
+            byte == ',' or byte == '"' or byte == '\r' or byte == '\n'
                 -> if { true => quoted! }
-            byte == 34 -> if {
-                encoded! < remaining
-                    -> unless { Result<Int, Error>.Err(failure(Kind.OutputLimit, offset)) -> return }
-                encoded! + 1 => encoded!
-            }
-            cursor! + 1 => cursor!
-        }
-        quoted! -> if {
-            remaining - encoded! >= 2
+            byte == '"' -> if {
+            encoded! < remaining
                 -> unless { Result<Int, Error>.Err(failure(Kind.OutputLimit, offset)) -> return }
-            encoded! + 2 => encoded!
+            encoded! + 1 => encoded!
         }
-        Result<Int, Error>.Ok(encoded!)
+        cursor! + 1 => cursor!
+    }
+    quoted! -> if {
+        remaining - encoded! >= 2
+            -> unless { Result<Int, Error>.Err(failure(Kind.OutputLimit, offset)) -> return }
+        encoded! + 2 => encoded!
+    }
+    Result<Int, Error>.Ok(encoded!)
+}
+
+# Record transaction: validate and size the entire row before any output
+# write. The output's visible length is the writable span; no resize occurs.
+public writeRecord: mut self, fields: [Text], output: mut [UInt8; ~] -> Result<Int, Error> {
+    UIntSize(self.encodedBytes) => offset
+    fields -> len => fieldCount
+    fieldCount > 0
+        -> unless { Result<Int, Error>.Err(failure(Kind.InvalidRecord, offset)) -> return }
+    self.records < self.limits.maxRecords
+        -> unless { Result<Int, Error>.Err(failure(Kind.RecordLimit, offset)) -> return }
+    fieldCount <= self.limits.maxFieldsPerRecord
+        -> unless { Result<Int, Error>.Err(failure(Kind.FieldCountLimit, offset)) -> return }
+    self.expectedColumns > 0 and fieldCount != self.expectedColumns
+        -> if { Result<Int, Error>.Err(failure(Kind.ColumnCountMismatch, offset)) -> return }
+
+    self.limits.maxOutputBytes - self.encodedBytes => remaining
+    self.lineEndingBytes <= remaining
+        -> unless { Result<Int, Error>.Err(failure(Kind.OutputLimit, offset)) -> return }
+    self.lineEndingBytes => recordLength!
+    0 => fieldIndex!
+    fieldIndex! < fieldCount -> while {
+        fieldIndex! > 0 -> if {
+            recordLength! < remaining
+                -> unless { Result<Int, Error>.Err(failure(Kind.OutputLimit, offset)) -> return }
+            recordLength! + 1 => recordLength!
+        }
+        self -> encodedFieldLength(fields[fieldIndex!], remaining - recordLength!)? => fieldLength
+        recordLength! + fieldLength => recordLength!
+        fieldIndex! + 1 => fieldIndex!
+    }
+    recordLength! <= (output -> len) -> unless {
+        Result<Int, Error>.Err(Error {
+            kind: Kind.OutputTooSmall
+            offset: offset
+            requiredBytes: recordLength!
+        }) -> return
     }
 
-    # Record transaction: validate and size the entire row before any output
-    # write. The output's visible length is the writable span; no resize occurs.
-    public writeRecord: mut self, fields: [Text], output: mut [UInt8; ~] -> Result<Int, Error> {
-        UIntSize(self.encodedBytes) => offset
-        fields -> len => fieldCount
-        fieldCount > 0
-            -> unless { Result<Int, Error>.Err(failure(Kind.InvalidRecord, offset)) -> return }
-        self.records < self.limits.maxRecords
-            -> unless { Result<Int, Error>.Err(failure(Kind.RecordLimit, offset)) -> return }
-        fieldCount <= self.limits.maxFieldsPerRecord
-            -> unless { Result<Int, Error>.Err(failure(Kind.FieldCountLimit, offset)) -> return }
-        self.expectedColumns > 0 and fieldCount != self.expectedColumns
-            -> if { Result<Int, Error>.Err(failure(Kind.ColumnCountMismatch, offset)) -> return }
-
-        self.limits.maxOutputBytes - self.encodedBytes => remaining
-        self.lineEndingBytes <= remaining
-            -> unless { Result<Int, Error>.Err(failure(Kind.OutputLimit, offset)) -> return }
-        self.lineEndingBytes => recordLength!
-        0 => fieldIndex!
-        fieldIndex! < fieldCount -> while {
-            fieldIndex! > 0 -> if {
-                recordLength! < remaining
-                    -> unless { Result<Int, Error>.Err(failure(Kind.OutputLimit, offset)) -> return }
-                recordLength! + 1 => recordLength!
-            }
-            self -> encodedFieldLength(fields[fieldIndex!], remaining - recordLength!)? => fieldLength
-            recordLength! + fieldLength => recordLength!
-            fieldIndex! + 1 => fieldIndex!
-        }
-        recordLength! <= (output -> len) -> unless {
-            Result<Int, Error>.Err(Error {
-                kind: Kind.OutputTooSmall
-                offset: offset
-                requiredBytes: recordLength!
-            }) -> return
-        }
-
-        0 => written!
-        0 => fieldIndex!
-        fieldIndex! < fieldCount -> while {
-            fieldIndex! > 0 -> if {
-                44 => output[written!]
-                written! + 1 => written!
-            }
-            writeField(fields[fieldIndex!], output, written!) => written!
-            fieldIndex! + 1 => fieldIndex!
-        }
-        self.lineEndingBytes == 2 -> if {
-            13 => output[written!]
+    0 => written!
+    0 => fieldIndex!
+    fieldIndex! < fieldCount -> while {
+        fieldIndex! > 0 -> if {
+            44 => output[written!]
             written! + 1 => written!
         }
-        10 => output[written!]
-        self.encodedBytes + recordLength! => self.encodedBytes
-        self.records + 1 => self.records
-        Result<Int, Error>.Ok(recordLength!)
+        writeField(fields[fieldIndex!], output, written!) => written!
+        fieldIndex! + 1 => fieldIndex!
     }
+    self.lineEndingBytes == 2 -> if {
+        13 => output[written!]
+        written! + 1 => written!
+    }
+    10 => output[written!]
+    self.encodedBytes + recordLength! => self.encodedBytes
+    self.records + 1 => self.records
+    Result<Int, Error>.Ok(recordLength!)
+}
 }

@@ -54,13 +54,13 @@ public struct Components {
 
 failure kind: ErrorKind, offset: UIntSize -> Error => Error { kind: kind, offset: offset }
 
-isSeparator byte: UInt8, windows: Bool -> Bool => byte == 47 or windows and byte == 92
+isSeparator byte: UInt8, windows: Bool -> Bool => byte == '/' or windows and byte == '\\'
 
-isDriveLetter byte: UInt8 -> Bool => byte >= 65 and byte <= 90 or byte >= 97 and byte <= 122
+isDriveLetter byte: UInt8 -> Bool => byte >= 'A' and byte <= 'Z' or byte >= 'a' and byte <= 'z'
 
 isDotPart source: file.SourceText, start: UIntSize, length: UIntSize -> Bool {
-    length == 1 and source -> byte(start) == 46
-        or length == 2 and source -> byte(start) == 46 and source -> byte(start + 1) == 46
+    length == 1 and source -> byte(start) == '.'
+        or length == 2 and source -> byte(start) == '.' and source -> byte(start + 1) == '.'
 }
 
 readHeader source: file.SourceText, length: UIntSize, windows: Bool -> Result<Header, Error> {
@@ -68,7 +68,7 @@ readHeader source: file.SourceText, length: UIntSize, windows: Bool -> Result<He
         Result<Header, Error>.Ok(Header { kind: Kind.Normal, length: 0, hasDriveRoot: false }) -> return
     }
     not windows -> if {
-        source -> byte(0) == 47 -> if {
+        source -> byte(0) == '/' -> if {
             Result<Header, Error>.Ok(Header { kind: Kind.PosixRoot, length: 1, hasDriveRoot: false }) -> return
         }
         Result<Header, Error>.Ok(Header { kind: Kind.Normal, length: 0, hasDriveRoot: false }) -> return
@@ -78,19 +78,19 @@ readHeader source: file.SourceText, length: UIntSize, windows: Bool -> Result<He
     length >= 4 and isSeparator(source -> byte(0), true)
         -> if {
             isSeparator(source -> byte(1), true)
-                and (source -> byte(2) == 63 or source -> byte(2) == 46)
+                and (source -> byte(2) == '?' or source -> byte(2) == '.')
                 and isSeparator(source -> byte(3), true)
                 -> if {
                     Result<Header, Error>.Err(failure(ErrorKind.UnsupportedNamespace, 0)) -> return
                 }
-            source -> byte(1) == 63 and source -> byte(2) == 63
+            source -> byte(1) == '?' and source -> byte(2) == '?'
                 and isSeparator(source -> byte(3), true)
                 -> if {
                     Result<Header, Error>.Err(failure(ErrorKind.UnsupportedNamespace, 0)) -> return
                 }
         }
 
-    length >= 2 and source -> byte(1) == 58 -> if {
+    length >= 2 and source -> byte(1) == ':' -> if {
         isDriveLetter(source -> byte(0)) -> unless {
             Result<Header, Error>.Err(failure(ErrorKind.InvalidPrefix, 0)) -> return
         }
@@ -174,11 +174,11 @@ impl Components {
         cursor! < self.end and not isSeparator(self.source -> byte(cursor!), self.windows)
             -> while { cursor! + 1 => cursor! }
         cursor! - start => length
-        length == 1 and self.source -> byte(start) == 46
+        length == 1 and self.source -> byte(start) == '.'
             -> if {
                 Kind.CurrentDirectory
             } else {
-                length == 2 and self.source -> byte(start) == 46 and self.source -> byte(start + 1) == 46
+                length == 2 and self.source -> byte(start) == '.' and self.source -> byte(start + 1) == '.'
                     -> if { Kind.ParentDirectory } else { Kind.Normal }
             } => kind
         Option<Component>.Some(Component { kind: kind, offset: start, length: length })

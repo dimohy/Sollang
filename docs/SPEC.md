@@ -21,7 +21,8 @@ The implemented language includes:
 
 - expression-first bindings, fluent calls, functions, local functions,
   structured control flow, block roles, compile-time ranges, and interpolation;
-- fixed-width and target-sized numerics, strict UTF-8 `Text`, raw strings,
+- fixed-width and target-sized numerics, contextual Unicode-scalar character
+  literals, strict UTF-8 `Text`, raw strings,
   nominal structs/enums/traits, associated types, type/value generics, `box`,
   static trait dispatch, and explicit owned `dyn<Trait>` dispatch;
 - generic fixed/growable arrays and Swiss-table dictionaries, checked places,
@@ -371,11 +372,12 @@ type_name    := identifier
 type_annotation := type_name | "[" type_name ";" "~" "]" | "{" type_name ":" type_name "}"
 primary      := atom postfix_suffix*
 postfix_suffix := ("!"? "[" expression "]") | ("." identifier) | "?"
-atom         := when_expression | call | array_literal | dictionary_literal | "(" expression ")" | bool_literal | string_literal | number_literal | identifier
+atom         := when_expression | call | array_literal | dictionary_literal | "(" expression ")" | bool_literal | string_literal | character_literal | number_literal | identifier
 array_literal := "[" type_name ";" ("~" | number_literal "~") "]" | "[" expression ("," expression)* ","? ";" "~" "]" | "[" expression ("," expression)* "]" | "[" expression ";" number_literal "]"
 dictionary_literal := "{" type_name ":" type_name (";" number_literal "~")? "}" | "{" dictionary_entry ("," dictionary_entry)* ","? "}"
 dictionary_entry := expression ":" expression
 bool_literal := "true" | "false"
+character_literal := "'" (unicode_scalar | "\\" ("0" | "b" | "f" | "n" | "r" | "t" | "\\" | "'" | "\"")) "'"
 number_literal := decimal_digit+
 string_literal := "\"" string_part* "\"" | "\"\"\"" raw_string_text* "\"\"\""
 string_part  := string_text | interpolation
@@ -387,6 +389,11 @@ Notes:
 - `raw_string_text` is always literal text. `$name` and `$(expression)` are
   interpolation only inside an ordinary quoted string; raw strings preserve
   those bytes unchanged and never perform binding or expression resolution.
+- A single-quoted character literal contains exactly one Unicode scalar or one
+  supported escape. It is a contextual integer literal: it defaults to `Int`
+  and adopts an integer destination such as `UInt8` or `CodePoint` when its
+  scalar value fits. Empty, multi-scalar, malformed UTF-8, surrogate, and
+  unsupported-escape forms are lexical errors.
 - Newline is a statement separator, not an indentation rule.
 - Parenthesized call arguments may start on the following line and continue as
   comma-separated lines; newlines inside the parentheses do not end the call.
@@ -495,6 +502,10 @@ Notes:
 - `1..9 -> each i { ... }` iterates an inclusive integer range and introduces
   `i` only inside the loop body.
 - `1..9 -> each { ... }` uses `it` as the default loop item binding.
+- The complete expression immediately before `-> each` determines the role's
+  element type. In `receiver -> make(argument) -> each item { ... }`, `item`
+  has the element type of `make`'s result; neither the receiver nor an
+  additional argument may replace that source because of AST traversal order.
 - Function declarations are currently expression bodies with either no input or
   one primary input plus explicitly typed additional inputs. A one-input
   function uses `it` when no input name is supplied, and uses the supplied name
@@ -1679,6 +1690,27 @@ the next transition it could not perform without mutating either input. The
 iterative last-star algorithm uses constant auxiliary storage; it does not build
 an AST, enumerate paths, or allocate hidden match state. The exact profile,
 precedence, cases, and offsets are fixed by `scripts/contracts/text-glob.json`.
+
+`std.text.regex.pattern(text, limits)` creates an immutable bounded matcher
+that borrows its validated UTF-8 pattern source. The supported profile is
+literal scalars, `.`, concatenation, ASCII classes and non-reversed ranges,
+negated ASCII classes, `?`, `*`, `+`, an initial `^`, and a terminal `$`.
+Matching is case-sensitive and uses absolute-input anchors; dot excludes LF,
+while NUL and CR remain ordinary input. Groups, alternation, bounded or lazy
+repetition, lookaround, backreferences, named classes, and Unicode properties
+are rejected rather than silently interpreted as literals.
+
+`Pattern.scratchCells()` reports the exact caller-owned `[UIntSize; ~]`
+workspace required by `find(input, scratch!)`. `find` uses two state banks,
+returns the earliest byte start and then the longest byte span for that start,
+and retains neither its input nor its scratch. Pattern, atom, input-byte, and
+work limits are explicit; input and scratch preflight failures preserve all
+scratch bytes, while work exhaustion may alter only the required prefix and a
+retry reinitializes that prefix. The implementation performs no recursion,
+backtracking, hidden allocation, source copy, normalization, or locale lookup.
+The exact syntax, error precedence, UTF-8 byte offsets, work accounting,
+ownership, and independent leftmost-longest cases are fixed by
+`scripts/contracts/text-regex.json`.
 
 `std.io.Reader` and `std.io.Writer` are public static protocols over one
 caller-buffer partial-transfer primitive. Both operations return exact `Int`

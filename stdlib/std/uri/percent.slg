@@ -26,56 +26,56 @@ errorBytes kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
 }
 
 isAlphaNumeric byte: UInt8 -> Bool {
-    (byte >= 65 and byte <= 90)
-        or (byte >= 97 and byte <= 122)
-        or (byte >= 48 and byte <= 57)
+    (byte >= 'A' and byte <= 'Z')
+        or (byte >= 'a' and byte <= 'z')
+        or (byte >= '0' and byte <= '9')
 }
 
 isUnreserved byte: UInt8 -> Bool {
     ((byte -> isAlphaNumeric)
-        or byte == 45
-        or byte == 46
-        or byte == 95
-        or byte == 126)
+        or byte == '-'
+        or byte == '.'
+        or byte == '_'
+        or byte == '~')
 }
 
 isSubDelimiter byte: UInt8 -> Bool {
-    byte == 33
-        or byte == 36
-        or byte == 38
-        or byte == 39
-        or byte == 40
-        or byte == 41
-        or byte == 42
-        or byte == 43
-        or byte == 44
-        or byte == 59
-        or byte == 61
+    byte == '!'
+        or byte == '$'
+        or byte == '&'
+        or byte == '\''
+        or byte == '('
+        or byte == ')'
+        or byte == '*'
+        or byte == '+'
+        or byte == ','
+        or byte == ';'
+        or byte == '='
 }
 
 isAllowed codec: Codec, byte: UInt8 -> Bool {
     byte -> isUnreserved -> if { true -> return }
     codec.escapeSet -> when {
         Unreserved { false }
-        UserInfo { (byte -> isSubDelimiter) or byte == 58 }
+        UserInfo { (byte -> isSubDelimiter) or byte == ':' }
         RegisteredName { byte -> isSubDelimiter }
-        PathSegment { (byte -> isSubDelimiter) or byte == 58 or byte == 64 }
-        Path { (byte -> isSubDelimiter) or byte == 58 or byte == 64 or byte == 47 }
-        Query { (byte -> isSubDelimiter) or byte == 58 or byte == 64 or byte == 47 or byte == 63 }
-        Fragment { (byte -> isSubDelimiter) or byte == 58 or byte == 64 or byte == 47 or byte == 63 }
+        PathSegment { (byte -> isSubDelimiter) or byte == ':' or byte == '@' }
+        Path { (byte -> isSubDelimiter) or byte == ':' or byte == '@' or byte == '/' }
+        Query { (byte -> isSubDelimiter) or byte == ':' or byte == '@' or byte == '/' or byte == '?' }
+        Fragment { (byte -> isSubDelimiter) or byte == ':' or byte == '@' or byte == '/' or byte == '?' }
     }
 }
 
 hexValue byte: UInt8 -> Int {
-    byte >= 48 and byte <= 57 -> if { Int(byte - 48) -> return }
-    byte >= 65 and byte <= 70 -> if { Int(byte - 65) + 10 -> return }
-    byte >= 97 and byte <= 102 -> if { Int(byte - 97) + 10 -> return }
+    byte >= '0' and byte <= '9' -> if { Int(byte - '0') -> return }
+    byte >= 'A' and byte <= 'F' -> if { Int(byte - 'A') + 10 -> return }
+    byte >= 'a' and byte <= 'f' -> if { Int(byte - 'a') + 10 -> return }
     -1
 }
 
 hexDigit value: Int -> UInt8 {
-    value < 10 -> if { UInt8(value + 48) -> return }
-    UInt8(value - 10 + 65)
+    value < 10 -> if { UInt8(value + '0') -> return }
+    UInt8(value - 10 + 'A')
 }
 
 public unreserved: -> Codec => Codec { escapeSet: types.EscapeSet.Unreserved }
@@ -117,7 +117,7 @@ impl Codec {
             self -> isAllowed(byte) -> if {
                 output! -> push(byte)
             } else {
-                output! -> push(37)
+                output! -> push('%')
                 output! -> push(Int(byte) / 16 -> hexDigit)
                 output! -> push(Int(byte) % 16 -> hexDigit)
             }
@@ -133,7 +133,7 @@ impl Codec {
         0 => outputLength!
         0 => index!
         index! < (input -> len) -> while {
-            input[index!] == 37 -> if {
+            input[index!] == '%' -> if {
                 index! + 2 < (input -> len) -> unless {
                     errorPlan(errors.Kind.InvalidEscape, UIntSize(index!)) -> return
                 }
@@ -163,7 +163,7 @@ impl Codec {
         0 => index!
         index! < (input -> len) -> while {
             input[index!] => byte
-            byte == 37 -> if {
+            byte == '%' -> if {
                 input[index! + 1] -> hexValue => high
                 input[index! + 2] -> hexValue => low
                 output! -> push(UInt8(high * 16 + low))

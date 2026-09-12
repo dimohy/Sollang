@@ -152,89 +152,124 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                             } => numberToken
                             tokens! -> push(numberToken)
                         } else {
-                            current == 34 -> if {
-                                position! => stringStart
-                                false => rawString!
-                                false => stringClosed!
-                                position! + 2 < sourceLength -> if {
-                                    (source -> byte(position! + 1)) == 34 and (source -> byte(position! + 2)) == 34
-                                        -> if { true => rawString! }
-                                }
-                                rawString! -> if {
-                                    UIntSize(0) => delimiterWidth!
-                                    position! + delimiterWidth! < sourceLength and (source -> byte(position! + delimiterWidth!)) == 34
-                                        -> while {
-                                            delimiterWidth! + 1 => delimiterWidth!
+                            current == 39 -> if {
+                                position! => characterStart
+                                position! + 1 => position!
+                                false => characterClosed!
+                                false => characterStopped!
+                                position! < sourceLength and not characterClosed! and not characterStopped!
+                                    -> while {
+                                        source -> byte(position!) => characterByte
+                                        characterByte == 10 or characterByte == 13 -> if {
+                                            true => characterStopped!
+                                        } else {
+                                            characterByte == 39 -> if {
+                                                position! + 1 => position!
+                                                true => characterClosed!
+                                            } else {
+                                                characterByte == 92 and position! + 1 < sourceLength
+                                                    -> if { position! + 2 => position! } else { position! + 1 => position! }
+                                            }
                                         }
-                                    position! + delimiterWidth! => position!
-                                    false => rawClosed!
-                                    position! < sourceLength and not rawClosed!
-                                        -> while {
-                                            UIntSize(0) => quoteRun!
-                                            position! + quoteRun! < sourceLength and (source -> byte(position! + quoteRun!)) == 34
-                                                -> while {
-                                                    quoteRun! + 1 => quoteRun!
-                                                }
-                                            quoteRun! >= delimiterWidth! -> if { true => rawClosed! }
-                                            not rawClosed! -> if { position! + 1 => position! }
-                                        }
-                                    rawClosed! -> if {
-                                        position! + delimiterWidth! => position!
-                                        true => stringClosed!
                                     }
-                                } else {
-                                    position! + 1 => position!
-                                    position! < sourceLength and (source -> byte(position!)) != 34
-                                        -> while {
-                                            position! + 1 => position!
-                                        }
-                                    position! < sourceLength -> if {
-                                        position! + 1 => position!
-                                        true => stringClosed!
+                                syntax.SourceSpan { fileId: 0, start: characterStart, length: position! - characterStart } => characterSpan
+                                false => characterValid!
+                                characterClosed! -> if {
+                                    source -> syntax.decodeCharacterLiteral(characterSpan) -> when {
+                                        Some(value) { true => characterValid! }
+                                        None { }
                                     }
                                 }
                                 syntax.SyntaxToken {
-                                    kind: stringClosed! -> if { grammar.tokenIdString() } else { grammar.tokenIdInvalid() }
-                                    span: syntax.SourceSpan { fileId: 0, start: stringStart, length: position! - stringStart }
-                                } => stringToken
-                                tokens! -> push(stringToken)
+                                    kind: characterValid! -> if { grammar.tokenIdCharacter() } else { grammar.tokenIdInvalid() }
+                                    span: characterSpan
+                                } => characterToken
+                                tokens! -> push(characterToken)
                             } else {
-                                Int(-1) => kind!
-                                UIntSize(1) => width!
-                                position! + 2 < sourceLength -> if {
-                                    source -> byte(position! + 1) => following
-                                    source -> byte(position! + 2) => third
-                                    current -> tripleKind(following, third) => triple
-                                    triple >= 0 -> if {
-                                        triple => kind!
-                                        3 => width!
+                                current == 34 -> if {
+                                    position! => stringStart
+                                    false => rawString!
+                                    false => stringClosed!
+                                    position! + 2 < sourceLength -> if {
+                                        (source -> byte(position! + 1)) == 34 and (source -> byte(position! + 2)) == 34
+                                            -> if { true => rawString! }
                                     }
-                                }
-                                kind! < 0 and position! + 1 < sourceLength -> if {
-                                    source -> byte(position! + 1) => following
-                                    UInt16(current) * 256 + UInt16(following) -> pairKind => pair
-                                    pair >= 0 -> if {
-                                        pair => kind!
-                                        2 => width!
+                                    rawString! -> if {
+                                        UIntSize(0) => delimiterWidth!
+                                        position! + delimiterWidth! < sourceLength and (source -> byte(position! + delimiterWidth!)) == 34
+                                            -> while {
+                                                delimiterWidth! + 1 => delimiterWidth!
+                                            }
+                                        position! + delimiterWidth! => position!
+                                        false => rawClosed!
+                                        position! < sourceLength and not rawClosed!
+                                            -> while {
+                                                UIntSize(0) => quoteRun!
+                                                position! + quoteRun! < sourceLength and (source -> byte(position! + quoteRun!)) == 34
+                                                    -> while {
+                                                        quoteRun! + 1 => quoteRun!
+                                                    }
+                                                quoteRun! >= delimiterWidth! -> if { true => rawClosed! }
+                                                not rawClosed! -> if { position! + 1 => position! }
+                                            }
+                                        rawClosed! -> if {
+                                            position! + delimiterWidth! => position!
+                                            true => stringClosed!
+                                        }
+                                    } else {
+                                        position! + 1 => position!
+                                        position! < sourceLength and (source -> byte(position!)) != 34
+                                            -> while {
+                                                position! + 1 => position!
+                                            }
+                                        position! < sourceLength -> if {
+                                            position! + 1 => position!
+                                            true => stringClosed!
+                                        }
                                     }
-                                }
-                                kind! < 0 -> if {
-                                    current -> singleKind => kind!
-                                }
-                                kind! >= 0 -> if {
                                     syntax.SyntaxToken {
-                                        kind: kind!
-                                        span: syntax.SourceSpan { fileId: 0, start: position!, length: width! }
-                                    } => punctuationToken
-                                    tokens! -> push(punctuationToken)
+                                        kind: stringClosed! -> if { grammar.tokenIdString() } else { grammar.tokenIdInvalid() }
+                                        span: syntax.SourceSpan { fileId: 0, start: stringStart, length: position! - stringStart }
+                                    } => stringToken
+                                    tokens! -> push(stringToken)
                                 } else {
-                                    syntax.SyntaxToken {
-                                        kind: grammar.tokenIdInvalid()
-                                        span: syntax.SourceSpan { fileId: 0, start: position!, length: width! }
-                                    } => invalidToken
-                                    tokens! -> push(invalidToken)
+                                    Int(-1) => kind!
+                                    UIntSize(1) => width!
+                                    position! + 2 < sourceLength -> if {
+                                        source -> byte(position! + 1) => following
+                                        source -> byte(position! + 2) => third
+                                        current -> tripleKind(following, third) => triple
+                                        triple >= 0 -> if {
+                                            triple => kind!
+                                            3 => width!
+                                        }
+                                    }
+                                    kind! < 0 and position! + 1 < sourceLength -> if {
+                                        source -> byte(position! + 1) => following
+                                        UInt16(current) * 256 + UInt16(following) -> pairKind => pair
+                                        pair >= 0 -> if {
+                                            pair => kind!
+                                            2 => width!
+                                        }
+                                    }
+                                    kind! < 0 -> if {
+                                        current -> singleKind => kind!
+                                    }
+                                    kind! >= 0 -> if {
+                                        syntax.SyntaxToken {
+                                            kind: kind!
+                                            span: syntax.SourceSpan { fileId: 0, start: position!, length: width! }
+                                        } => punctuationToken
+                                        tokens! -> push(punctuationToken)
+                                    } else {
+                                        syntax.SyntaxToken {
+                                            kind: grammar.tokenIdInvalid()
+                                            span: syntax.SourceSpan { fileId: 0, start: position!, length: width! }
+                                        } => invalidToken
+                                        tokens! -> push(invalidToken)
+                                    }
+                                    position! + width! => position!
                                 }
-                                position! + width! => position!
                             }
                         }
                     }

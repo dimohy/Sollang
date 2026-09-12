@@ -101,35 +101,35 @@ usesPadding codec: Codec -> Bool {
 }
 
 alphabetValue codec: Codec, byte: UInt8 -> Int {
-    byte >= 65 and byte <= 90 -> if { Int(byte - 65) -> return }
-    byte >= 97 and byte <= 122 -> if { Int(byte - 97) + 26 -> return }
-    byte >= 48 and byte <= 57 -> if { Int(byte - 48) + 52 -> return }
+    byte >= 'A' and byte <= 'Z' -> if { Int(byte - 'A') -> return }
+    byte >= 'a' and byte <= 'z' -> if { Int(byte - 'a') + 26 -> return }
+    byte >= '0' and byte <= '9' -> if { Int(byte - '0') + 52 -> return }
     codec.alphabet -> when {
         Standard {
-            byte == 43 -> if { 62 -> return }
-            byte == 47 -> if { 63 -> return }
+            byte == '+' -> if { 62 -> return }
+            byte == '/' -> if { 63 -> return }
         }
         UrlSafe {
-            byte == 45 -> if { 62 -> return }
-            byte == 95 -> if { 63 -> return }
+            byte == '-' -> if { 62 -> return }
+            byte == '_' -> if { 63 -> return }
         }
     }
     -1
 }
 
 alphabetDigit codec: Codec, value: Int -> UInt8 {
-    value < 26 -> if { UInt8(value + 65) -> return }
-    value < 52 -> if { UInt8(value - 26 + 97) -> return }
-    value < 62 -> if { UInt8(value - 52 + 48) -> return }
+    value < 26 -> if { UInt8(value + 'A') -> return }
+    value < 52 -> if { UInt8(value - 26 + 'a') -> return }
+    value < 62 -> if { UInt8(value - 52 + '0') -> return }
     value == 62 -> if {
         codec.alphabet -> when {
-            Standard { 43 -> return }
-            UrlSafe { 45 -> return }
+            Standard { '+' -> return }
+            UrlSafe { '-' -> return }
         }
     }
     codec.alphabet -> when {
-        Standard { UInt8(47) }
-        UrlSafe { UInt8(95) }
+        Standard { '/' }
+        UrlSafe { '_' }
     }
 }
 
@@ -227,7 +227,7 @@ validateWrite decoder: ref Decoder, input: [UInt8] -> Result<DecodeWritePlan, Er
         }
         decoder.codec -> alphabetValue(byte) => decodedValue
         -1 => value!
-        byte == 61 -> if {
+        byte == '=' -> if {
             decoder.codec -> usesPadding -> unless {
                 errorDecodeWritePlan(errors.Kind.InvalidPadding, offset) -> return
             }
@@ -453,8 +453,8 @@ impl Encoder {
             output -> push(self.codec -> alphabetDigit(bits / 4))
             output -> push(self.codec -> alphabetDigit((bits % 4) * 16))
             self.codec -> usesPadding -> if {
-                output -> push(61)
-                output -> push(61)
+                output -> push('=')
+                output -> push('=')
             }
         }
         self.pendingLength == 2 -> if {
@@ -462,7 +462,7 @@ impl Encoder {
             output -> push(self.codec -> alphabetDigit(bits / 1_024 % 64))
             output -> push(self.codec -> alphabetDigit(bits / 16 % 64))
             output -> push(self.codec -> alphabetDigit((bits % 16) * 4))
-            self.codec -> usesPadding -> if { output -> push(61) }
+            self.codec -> usesPadding -> if { output -> push('=') }
         }
         Result<Int, Error>.Ok(added!)
     }
@@ -481,7 +481,7 @@ impl Decoder {
         0 => index!
         index! < (input -> len) -> while {
             input[index!] => byte
-            byte == 61 -> if { -2 } else { self.codec -> alphabetValue(byte) } => value
+            byte == '=' -> if { -2 } else { self.codec -> alphabetValue(byte) } => value
             valueLength! -> when {
                 == 0 { value => value0! }
                 == 1 { value => value1! }

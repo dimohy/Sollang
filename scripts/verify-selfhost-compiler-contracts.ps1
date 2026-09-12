@@ -2045,6 +2045,10 @@ Assert-Contains $textOutputRuntime "define internal void @sollang_runtime_eprint
 Assert-Contains $directCallClosure "sollang_runtime_[-a-zA-Z`$._0-9]+" "target-runtime direct-call closure"
 Assert-Contains $incrementalVerifier 'verify-selfhost-compiler-contracts.ps1' "pre-build compiler contract gate"
 Assert-Contains $incrementalVerifier 'format-authoritative-slg.ps1") -Check' "incremental pre-emission authoritative format gate"
+$eachCallResultGateCount = ([regex]::Matches($incrementalVerifier, 'verify-each-call-result-source-selection\.ps1')).Count
+if ($eachCallResultGateCount -ne 2) {
+    throw "incremental each-call-result source-selection gates drifted: expected pre-emission and rebuilt-candidate checks, actual $eachCallResultGateCount"
+}
 Assert-Contains $incrementalVerifier 'verify-llvm-direct-call-closure.ps1' "focused LLVM direct-call closure gate"
 Assert-Contains $incrementalVerifier '. (Join-Path $PSScriptRoot "verification-process.ps1")' "shared bounded verification process helper"
 Assert-Contains $incrementalVerifier '[int]$CompilerTimeoutMilliseconds = 3600000' "measured bounded selfhost compiler emission default"
@@ -2452,6 +2456,9 @@ foreach ($nativeExactFixture in @(
     "1723-owned-match-payload-mutable-binding",
     "1724-csv-bounded-writer",
     "1725-materialized-text-storage-boundaries",
+    "1731-character-literals",
+    "1732-selfhost-character-literal-diagnostics",
+    "1733-selfhost-character-constant-evaluation",
     "945-quic-flow-control-frames"
 )) {
     Assert-Contains $nativeExactFixtureBatchVerifier "`"$nativeExactFixture`"" "native exact batch fixture $nativeExactFixture"
@@ -3251,13 +3258,15 @@ Assert-Contains $detachedVerification 'if ($ResumeCandidate) { $targetArguments 
 Assert-Matches $detachedVerification '(?s)Start-Process.*?-RedirectStandardOutput \$LogPath.*?-PassThru' "supervised process with authoritative exit code"
 Assert-NotMatches $detachedVerification '(?s)Start-Process.*?-RedirectStandardOutput \$LogPath.*?-Wait\b' "no inherited-handle Start-Process wait"
 Assert-Contains $detachedVerification '$targetProcess.WaitForExit(1000)' "exact supervised-process bounded wait sampling"
-Assert-Contains $detachedVerification '$exitCode = $targetProcess.ExitCode' "actual supervised process exit code capture"
+Assert-Contains $detachedVerification '$targetExitCode = $targetProcess.ExitCode' "actual supervised process exit code capture"
 Assert-Contains $detachedVerification 'finally {' "completion record termination guarantee"
 Assert-Contains $detachedVerification 'failureIds = @($failureIds)' "exact failure identifier recording"
 Assert-Matches $detachedVerification '(?s)if \(-not \$cancelled -and \$exitCode -ne 0.*?fail\(\?:ed\|ure\)\?.*?\[regex\]::Matches\(\$line' "failure identifiers require nonzero exit and failure context"
 Assert-Contains $detachedVerification 'Move-Item -LiteralPath $temporaryPath -Destination $Path -Force' "atomic completion record publication"
 Assert-Contains $detachedVerification '$targetProcess.Kill($true)' "supported cancellation terminates the supervised process tree"
-Assert-Matches $detachedVerification '(?s)Get-DescendantProcessIds.*?CreationDate.*?CreationDate -lt \$CreatedAfter.*?-CreatedAfter \$targetProcess\.StartTime' "detached cancellation rejects stale PID-reuse descendants"
+Assert-Matches $detachedVerification '(?s)function Update-ObservedProcessTree.*?CreationDate.*?\$parentCreated.*?\$created -lt \$parentCreated' "detached observation rejects stale PID-reuse descendants"
+Assert-Contains $detachedVerification 'Complete-ObservedProcessAudit' "normal and cancelled exits audit observed descendants"
+Assert-Contains $detachedVerification 'ORPHAN_PROCESSES_REMAIN' "normal exit fails closed when observed children remain"
 Assert-Contains $detachedVerification '$failureIds.Add("CANCELLATION_REQUESTED")' "supported cancellation preserves its exact failure ID"
 Assert-Contains $detachedProgress '"browserstage2" { "browser" }' "detached browser progress stage mapping"
 Assert-Contains $detachedProgress '"browserstage2" { 4 }' "detached browser progress total"
@@ -3266,7 +3275,7 @@ Assert-Contains $detachedResultSchema '"Incremental"' "detached incremental resu
 Assert-Contains $detachedCancellation 'The recorded supervisor PID does not identify the expected run' "cancellation request binds to the recorded supervisor identity"
 Assert-Contains $detachedCancellation '@($result.orphanProcessIds).Count -ne 0' "cancellation request rejects orphan processes"
 Assert-Contains $detachedVerificationContract '$observer.Id -eq $result.supervisorPid' "observer and supervisor process separation check"
-Assert-Contains $detachedVerificationContract 'exit code 7 and 3/3 failure IDs preserved' "detached execution behavior evidence"
+Assert-Contains $detachedVerificationContract 'exit code 7 and 5/5 failure IDs preserved' "detached execution behavior evidence"
 Assert-Contains $detachedProgress '"interrupted-without-result"' "missing completion record interruption classification"
 Assert-Contains $detachedProgress '"stage2linux" { "linux-stage2" }' "detached Linux Stage2 progress prefix"
 Assert-Contains $detachedProgress '"stage3linux" { "linux-stage3" }' "detached Linux Stage3 progress prefix"

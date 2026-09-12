@@ -729,22 +729,34 @@ writeSyntaxDiagnostic source: file.SourceText -> Unit uses Console {
             message! -> appendPositiveInt(position.column)
             message! -> appendText(": unterminated string literal")
         } else {
-            sourceView -> diagnostics.expectedCodes => expected
-            expected[(expected -> len) - 1] => expectedCode
-            message! -> appendText("sollang: parse error at ")
-            message! -> appendPositiveInt(position.line)
-            message! -> appendText(":")
-            message! -> appendPositiveInt(position.column)
-            message! -> appendText(": expected ")
-            expectedCode >= 0 -> if {
-                grammar.tokenNames() => tokenNames
-                message! -> appendText(tokenNames[expectedCode])
+            diagnostic.code == 4 or diagnostic.code == 5 -> if {
+                message! -> appendText("sollang: lex error at ")
+                message! -> appendPositiveInt(position.line)
+                message! -> appendText(":")
+                message! -> appendPositiveInt(position.column)
+                diagnostic.code == 4 -> if {
+                    message! -> appendText(": invalid character literal")
+                } else {
+                    message! -> appendText(": unterminated character literal")
+                }
             } else {
-                grammar.keywordTexts() => keywordTexts
-                0 - expectedCode - 1 => keywordIndex
-                message! -> appendText("'")
-                message! -> appendText(keywordTexts[keywordIndex])
-                message! -> appendText("'")
+                sourceView -> diagnostics.expectedCodes => expected
+                expected[(expected -> len) - 1] => expectedCode
+                message! -> appendText("sollang: parse error at ")
+                message! -> appendPositiveInt(position.line)
+                message! -> appendText(":")
+                message! -> appendPositiveInt(position.column)
+                message! -> appendText(": expected ")
+                expectedCode >= 0 -> if {
+                    grammar.tokenNames() => tokenNames
+                    message! -> appendText(tokenNames[expectedCode])
+                } else {
+                    grammar.keywordTexts() => keywordTexts
+                    0 - expectedCode - 1 => keywordIndex
+                    message! -> appendText("'")
+                    message! -> appendText(keywordTexts[keywordIndex])
+                    message! -> appendText("'")
+                }
             }
         }
     }

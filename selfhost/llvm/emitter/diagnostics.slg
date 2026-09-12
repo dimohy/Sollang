@@ -3186,24 +3186,42 @@ initializerIntegerLiteralFits expectedId: Int, value: typedIr.TypedIrNode, conte
     false => foldedLiteral!
     Long(0) => foldedValue!
     Long(1) => foldedPlace!
+    (source -> byte(literal!.start)) == 39 -> if {
+        syntax.SourceSpan { fileId: 0, start: literal!.start, length: literal!.length } => characterSpan
+        source -> syntax.decodeCharacterLiteral(characterSpan) -> when {
+            Some(character) {
+                true => foldedLiteral!
+                -Long(character) => foldedValue!
+                0 => cursor!
+                1 => end!
+                foldedValue! / foldedPlace! <= -10 -> while {
+                    foldedPlace! * 10 => foldedPlace!
+                    end! + 1 => end!
+                }
+            }
+            None { false -> return }
+        }
+    }
     # Expanded collection numbers retain the selector's source span. Their
     # numeric value lives in the same indexed table used by LLVM emission.
-    context.constantLiterals -> constantLowering.find(range.literalStart, range.literalCount, literalAst!) -> when {
-        Some(folded) {
-            true => foldedLiteral!
-            # Keep the magnitude nonpositive so Long.min never needs negation.
-            folded < 0 -> if {
-                not negative! => negative!
-                folded => foldedValue!
-            } else { -folded => foldedValue! }
-            0 => cursor!
-            1 => end!
-            foldedValue! / foldedPlace! <= -10 -> while {
-                foldedPlace! * 10 => foldedPlace!
-                end! + 1 => end!
+    not foldedLiteral! -> if {
+        context.constantLiterals -> constantLowering.find(range.literalStart, range.literalCount, literalAst!) -> when {
+            Some(folded) {
+                true => foldedLiteral!
+                # Keep the magnitude nonpositive so Long.min never needs negation.
+                folded < 0 -> if {
+                    not negative! => negative!
+                    folded => foldedValue!
+                } else { -folded => foldedValue! }
+                0 => cursor!
+                1 => end!
+                foldedValue! / foldedPlace! <= -10 -> while {
+                    foldedPlace! * 10 => foldedPlace!
+                    end! + 1 => end!
+                }
             }
+            None { }
         }
-        None { }
     }
     expected.symbol == 8 or expected.symbol == 9 or expected.symbol == 10 or expected.symbol == 11 or expected.symbol == 13 or expected.symbol == 14 => unsigned
     "9223372036854775807" => limit!

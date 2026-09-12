@@ -71,6 +71,8 @@ if (-not (Test-Path -LiteralPath $managedFormatterCompiler -PathType Leaf)) {
 & (Join-Path $PSScriptRoot "verify-selfhost-compiler-contracts.ps1") `
     -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "format-authoritative-slg.ps1") -Check
+& (Join-Path $PSScriptRoot "verify-each-call-result-source-selection.ps1") `
+    -RepositoryRoot $repoRoot
 $manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 & (Join-Path $PSScriptRoot "verify-source-manifest-closure.ps1") `
@@ -660,6 +662,12 @@ if (-not $ManagedOracleOnly -and
     Write-Host "[timing] Stage1 feedback compiler build ${stage1BuildMs}ms."
 } elseif (-not $ManagedOracleOnly) {
     Write-Host "[fast 1/5] SLG-first selfhost compiler cache HIT ($SeedMode)."
+}
+
+if (-not $ManagedOracleOnly) {
+    & (Join-Path $PSScriptRoot "verify-each-call-result-source-selection.ps1") `
+        -RepositoryRoot $repoRoot `
+        -CandidateCompiler $stage1Compiler
 }
 
 if ($BootstrapStage2 -and $SeedMode -eq "ManagedRecovery") {

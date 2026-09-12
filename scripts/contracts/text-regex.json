@@ -1,0 +1,312 @@
+{
+  "$schema": "text-regex.schema.json",
+  "schemaVersion": 1,
+  "module": "std.text.regex",
+  "fixture": "1729-regex-bounded-search",
+  "profile": {
+    "unit": "unicode-scalar",
+    "result": "earliest-start-then-longest-byte-span",
+    "syntax": "literal dot ASCII-class negated-ASCII-class concatenation optional star plus initial-caret terminal-dollar",
+    "escapes": ".^$[]*+?\\(){}|-",
+    "dot": "any-scalar-except-LF",
+    "classes": "ASCII units and inclusive non-reversed ASCII ranges; escape bracket dash and backslash; non-ASCII class entries rejected; negated class includes unmatched non-ASCII scalars",
+    "anchors": "absolute-input; no multiline",
+    "unsupported": "groups alternation bounded-repeat lazy-quantifiers lookaround backreference named-character-class Unicode-property",
+    "text": "strict valid UTF-8; case-sensitive; no normalization; NUL and CR are literal data",
+    "empty": "Some offset 0 length 0; distinct from None"
+  },
+  "limits": {
+    "maxPatternBytes": 256,
+    "maxAtoms": 64,
+    "maxInputBytes": 256,
+    "maxSteps": 65536,
+    "maxRepresentableAtoms": 1073741822,
+    "negative": "InvalidLimits",
+    "zero": "real ceiling",
+    "scratch": "2 * (actual atom count + 1) UIntSize cells; zero means inactive, byte-start-plus-one means earliest live start",
+    "step": "one cell initialize/clear, input iteration, atom parse, or class-entry parse/match; Unicode scalar comparison/advance is at most four bytes",
+    "constructor": "linear pattern-byte bound; initial parser fuel=maxPatternBytes, one atom plus one class entry never exceeds consumed pattern bytes",
+    "find": "O((input scalars + 1) * (pattern bytes + atoms + 1)); no recursion or backtracking",
+    "precedence": "InvalidLimits -> PatternLimit -> left-to-right syntax then AtomLimit per atom; find InputLimit -> ScratchTooSmall -> WorkLimit"
+  },
+  "ownership": {
+    "pattern": "borrows source owner through SourceText; immutable and private state",
+    "input": "borrowed only during find; Match retains neither input nor scratch",
+    "scratch": "caller-owned two banks; no allocation/resizing; visible length/capacity and suffix preserved",
+    "errors": "InputLimit and ScratchTooSmall preserve all scratch bytes; WorkLimit may mutate prefix, retry initializes prefix anew; no partial Match on exhaustion",
+    "positions": "UTF-8 byte offsets; requiredCells nonzero only on ScratchTooSmall"
+  },
+  "errorKinds": [
+    "InvalidLimits",
+    "PatternLimit",
+    "AtomLimit",
+    "InvalidEscape",
+    "InvalidClass",
+    "InvalidRange",
+    "InvalidQuantifier",
+    "UnsupportedConstruct",
+    "InputLimit",
+    "ScratchTooSmall",
+    "WorkLimit"
+  ],
+  "referenceCaseCount": 41,
+  "boundaryLineCount": 43,
+  "referenceCases": [
+    {
+      "label": "identifier",
+      "pattern": "^[a-z_][a-z_0-9]*$",
+      "input": "hello_42"
+    },
+    {
+      "label": "digits",
+      "pattern": "[0-9]+",
+      "input": "a123b45"
+    },
+    {
+      "label": "negated",
+      "pattern": "[^a-z]+",
+      "input": "abc12한def"
+    },
+    {
+      "label": "optional",
+      "pattern": "colou?r",
+      "input": "a colour color"
+    },
+    {
+      "label": "repeat",
+      "pattern": "ab*c",
+      "input": "zzabbbc"
+    },
+    {
+      "label": "unicode",
+      "pattern": "한.+",
+      "input": "앞한🙂끝"
+    },
+    {
+      "label": "empty",
+      "pattern": "",
+      "input": ""
+    },
+    {
+      "label": "empty-input",
+      "pattern": "",
+      "input": "hello"
+    },
+    {
+      "label": "empty-anchors",
+      "pattern": "^$",
+      "input": ""
+    },
+    {
+      "label": "empty-anchors-miss",
+      "pattern": "^$",
+      "input": "x"
+    },
+    {
+      "label": "star-longest",
+      "pattern": "a*",
+      "input": "aaa"
+    },
+    {
+      "label": "earliest-empty",
+      "pattern": "a*",
+      "input": "baaa"
+    },
+    {
+      "label": "plus-miss",
+      "pattern": "a+",
+      "input": "bbb"
+    },
+    {
+      "label": "optional-empty",
+      "pattern": "a?",
+      "input": "b"
+    },
+    {
+      "label": "optional-longest",
+      "pattern": "aa?",
+      "input": "aaa"
+    },
+    {
+      "label": "optional-chain",
+      "pattern": "a?a?a?b",
+      "input": "aaab"
+    },
+    {
+      "label": "star-chain",
+      "pattern": "a*a*",
+      "input": "aaa"
+    },
+    {
+      "label": "star-follow",
+      "pattern": "a*ab",
+      "input": "aaab"
+    },
+    {
+      "label": "plus-follow",
+      "pattern": "a+ab",
+      "input": "aaab"
+    },
+    {
+      "label": "anchor-start",
+      "pattern": "^a+",
+      "input": "baaa"
+    },
+    {
+      "label": "anchor-end",
+      "pattern": "a+$",
+      "input": "baaa"
+    },
+    {
+      "label": "dollar-absolute",
+      "pattern": "a$",
+      "input": "a\n"
+    },
+    {
+      "label": "dot-newline",
+      "pattern": ".",
+      "input": "\n"
+    },
+    {
+      "label": "dot-carriage",
+      "pattern": ".",
+      "input": "\r"
+    },
+    {
+      "label": "dot-emoji",
+      "pattern": ".",
+      "input": "🙂"
+    },
+    {
+      "label": "two-scalars",
+      "pattern": "..",
+      "input": "é"
+    },
+    {
+      "label": "class-range",
+      "pattern": "[a-cx-z]+",
+      "input": "0abcyz4"
+    },
+    {
+      "label": "negated-unicode",
+      "pattern": "[^a]",
+      "input": "한"
+    },
+    {
+      "label": "class-escape",
+      "pattern": "[\\]\\-\\\\]+",
+      "input": "]-\\"
+    },
+    {
+      "label": "escaped-dot",
+      "pattern": "a\\.b",
+      "input": "xa.by"
+    },
+    {
+      "label": "escaped-dollar",
+      "pattern": "\\$",
+      "input": "a$b"
+    },
+    {
+      "label": "escaped-anchor",
+      "pattern": "\\^a",
+      "input": "^a"
+    },
+    {
+      "label": "escaped-quantifiers",
+      "pattern": "\\*\\+\\?",
+      "input": "*+?"
+    },
+    {
+      "label": "literal-braces",
+      "pattern": "\\{x\\}",
+      "input": "{x}"
+    },
+    {
+      "label": "case-sensitive",
+      "pattern": "A",
+      "input": "a"
+    },
+    {
+      "label": "nul-literal",
+      "pattern": "\u0000",
+      "input": "a\u0000b"
+    },
+    {
+      "label": "newline-literal",
+      "pattern": "[\n]+",
+      "input": "a\n\nb"
+    },
+    {
+      "label": "no-normalization",
+      "pattern": "é",
+      "input": "é"
+    },
+    {
+      "label": "utf8-offset",
+      "pattern": "끝$",
+      "input": "한🙂끝"
+    },
+    {
+      "label": "adversarial",
+      "pattern": "a*a*a*a*a*a*a*a*b",
+      "input": "aaaaaaaaaaaaaaaaaaaaac"
+    },
+    {
+      "label": "star-then-literal",
+      "pattern": "a*b",
+      "input": "aaab"
+    }
+  ],
+  "boundaryLines": [
+    "negative-pattern=InvalidLimits@0,0,0",
+    "negative-atoms=InvalidLimits@0,0,0",
+    "negative-input=InvalidLimits@0,0,0",
+    "negative-steps=InvalidLimits@0,0,0",
+    "cells-overflow=InvalidLimits@0,0,0",
+    "pattern-limit=PatternLimit@0,0,0",
+    "atom-limit=AtomLimit@1,0,0",
+    "atom-zero=AtomLimit@0,0,0",
+    "escape-end=InvalidEscape@0,0,0",
+    "escape-unknown=InvalidEscape@0,0,0",
+    "class-empty=InvalidClass@0,0,0",
+    "class-negated-empty=InvalidClass@0,0,0",
+    "class-unclosed=InvalidClass@0,0,0",
+    "range-reversed=InvalidRange@2,0,0",
+    "range-end=InvalidRange@2,0,0",
+    "quantifier-first=InvalidQuantifier@0,0,0",
+    "quantifier-lazy=InvalidQuantifier@2,0,0",
+    "quantifier-repeat=InvalidQuantifier@2,0,0",
+    "group=UnsupportedConstruct@0,0,0",
+    "alternation=UnsupportedConstruct@1,0,0",
+    "bounded-repeat=UnsupportedConstruct@1,0,0",
+    "unicode-class=UnsupportedConstruct@1,0,0",
+    "anchor-middle=UnsupportedConstruct@1,0,0",
+    "input-limit-0=InputLimit@0,0,0 unchanged=true storage=true tail=true",
+    "input-limit-1=InputLimit@0,0,0 unchanged=true storage=true tail=true",
+    "scratch-short-0=ScratchTooSmall@0,0,8 unchanged=true storage=true tail=true",
+    "scratch-short-1=ScratchTooSmall@0,0,8 unchanged=true storage=true tail=true",
+    "work-zero-0=WorkLimit@0,0,0 unchanged=true storage=true tail=true",
+    "work-zero-1=WorkLimit@0,0,0 unchanged=true storage=true tail=true",
+    "work-terminal-0=WorkLimit@0,1,0 unchanged=false storage=true tail=true",
+    "work-terminal-1=WorkLimit@0,1,0 unchanged=false storage=true tail=true",
+    "work-class-0=WorkLimit@3,0,0 unchanged=false storage=true tail=true",
+    "work-class-1=WorkLimit@3,0,0 unchanged=false storage=true tail=true",
+    "work-adversarial-0=WorkLimit@0,2,0 unchanged=false storage=true tail=true",
+    "work-adversarial-1=WorkLimit@0,2,0 unchanged=false storage=true tail=true",
+    "empty-exact=0,0 cells=2",
+    "literal-exact=0,1 cells=4",
+    "literal-empty=none cells=4",
+    "maximum-cells-limit=0,0 cells=2",
+    "retry-short=ScratchTooSmall required=4",
+    "retry=0,4 cells=4 tail=true storage=true",
+    "reuse=0,1",
+    "local-input=0,1"
+  ],
+  "acceptance": {
+    "reference": "Go regexp.Compile then Longest then FindStringIndex on valid UTF-8 only",
+    "allocation": "transitive whole-module direct-call closure; no allocator or unresolved callee permitted",
+    "native": "managed Windows exact and official golden; Linux exact separately",
+    "promotion": "selfhost and final Stage deferred"
+  }
+}

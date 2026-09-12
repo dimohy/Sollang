@@ -4601,11 +4601,13 @@ internal sealed partial class SemanticCompiler
                         }
                     }
                     RegisterFixedLengthArrayCandidate(binding, valueType);
-                    var hasBorrowedTextOrigins = TryGetBorrowedTextCallOrigins(
-                        binding.Value,
-                        functions,
-                        bindings,
-                        out var borrowedOrigins);
+                    IReadOnlySet<string> borrowedOrigins = EmptyBorrowOrigins();
+                    var hasBorrowedTextOrigins = TypeCanCarryBorrowedTextOrigin(valueType)
+                        && TryGetBorrowedSourceCallSiteOrigins(
+                            binding.Value,
+                            functions,
+                            bindings,
+                            out borrowedOrigins);
                     if (isMutableRebind)
                     {
                         // Rebinding a view kills its previous loan. If the new
@@ -4878,11 +4880,13 @@ internal sealed partial class SemanticCompiler
                         }
 
                         bindings.Add(bindingEffect.Name, bindingEffect.Type);
-                        if (TryGetBorrowedTextCallOrigins(
+                        IReadOnlySet<string> flowBorrowedOrigins = EmptyBorrowOrigins();
+                        if (TypeCanCarryBorrowedTextOrigin(bindingEffect.Type)
+                            && TryGetBorrowedSourceCallSiteOrigins(
                                 expressionStatement.Expression,
                                 functions,
                                 bindings,
-                                out var flowBorrowedOrigins))
+                                out flowBorrowedOrigins))
                         {
                             _activeBorrowedTextOrigins[bindingEffect.Name] = flowBorrowedOrigins;
                         }

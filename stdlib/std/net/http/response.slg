@@ -70,28 +70,28 @@ headError kind: errors.Kind, offset: UIntSize -> Result<ResponseHead, http.Error
 }
 
 isTokenByte byte: UInt8 -> Bool {
-    (byte >= 48 and byte <= 57)
-        or (byte >= 65 and byte <= 90)
-        or (byte >= 97 and byte <= 122)
-        or byte == 33
-        or byte == 35
-        or byte == 36
-        or byte == 37
-        or byte == 38
-        or byte == 39
-        or byte == 42
-        or byte == 43
-        or byte == 45
-        or byte == 46
-        or byte == 94
-        or byte == 95
-        or byte == 96
-        or byte == 124
-        or byte == 126
+    (byte >= '0' and byte <= '9')
+        or (byte >= 'A' and byte <= 'Z')
+        or (byte >= 'a' and byte <= 'z')
+        or byte == '!'
+        or byte == '#'
+        or byte == '$'
+        or byte == '%'
+        or byte == '&'
+        or byte == '\''
+        or byte == '*'
+        or byte == '+'
+        or byte == '-'
+        or byte == '.'
+        or byte == '^'
+        or byte == '_'
+        or byte == '`'
+        or byte == '|'
+        or byte == '~'
 }
 
 isFieldValueByte byte: UInt8 -> Bool {
-    byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+    byte == '\t' or byte == ' ' or (byte >= '!' and byte <= '~') or byte >= 128
 }
 
 asciiEqualIgnoreCase value: Text, expected: Text -> Bool {
@@ -100,8 +100,8 @@ asciiEqualIgnoreCase value: Text, expected: Text -> Bool {
     index! < (value -> len) -> while {
         value -> byte(index!) => left!
         expected -> byte(index!) => right!
-        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
-        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! >= 'A' and left! <= 'Z' -> if { left! + UInt8('a' - 'A') => left! }
+        right! >= 'A' and right! <= 'Z' -> if { right! + UInt8('a' - 'A') => right! }
         left! == right! -> unless { false -> return }
         index! + 1 => index!
     }
@@ -131,9 +131,9 @@ appendVersion output: mut [UInt8; ~], version: http.Version -> Unit {
 }
 
 appendStatus output: mut [UInt8; ~], status: Int -> Unit {
-    output -> push(UInt8(status / 100) + 48)
-    output -> push(UInt8((status / 10) % 10) + 48)
-    output -> push(UInt8(status % 10) + 48)
+    output -> push(UInt8(status / 100) + '0')
+    output -> push(UInt8((status / 10) % 10) + '0')
+    output -> push(UInt8(status % 10) + '0')
 }
 
 decimalLength value: UIntSize -> Int {
@@ -152,11 +152,11 @@ appendDecimal output: mut [UInt8; ~], value: UIntSize -> Unit {
     value => remaining!
     0 => count!
     remaining! == 0 -> if {
-        output -> push(48)
+        output -> push('0')
         return
     }
     remaining! > 0 -> while {
-        UInt8(remaining! % 10) + 48 => digits![count!]
+        UInt8(remaining! % 10) + '0' => digits![count!]
         remaining! / 10 => remaining!
         count! + 1 => count!
     }
@@ -258,9 +258,9 @@ impl ResponsePolicy {
         }
         [UInt8; ~] => bytes!
         appendVersion(bytes!, version)
-        bytes! -> push(32)
+        bytes! -> push(' ')
         appendStatus(bytes!, status)
-        bytes! -> push(32)
+        bytes! -> push(' ')
         appendText(bytes!, reason)
         appendText(bytes!, "\r\n")
         Result<ResponseWriter, http.Error>.Ok(ResponseWriter {

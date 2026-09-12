@@ -99,8 +99,8 @@ sameStyle left: Style, right: Style -> Bool {
 
 isSeparator value: UInt8, style: Style -> Bool {
     style -> when {
-        Posix { value == 47 }
-        Windows { value == 47 or value == 92 }
+        Posix { value == '/' }
+        Windows { value == '/' or value == '\\' }
     }
 }
 
@@ -155,14 +155,14 @@ impl Path {
     public isAbsolute: self -> Bool {
         self.style -> when {
             Posix {
-                UIntSize(self.bytes -> len) > 0 and self.bytes[0] == 47
+                UIntSize(self.bytes -> len) > 0 and self.bytes[0] == '/'
             }
             Windows {
                 UIntSize(self.bytes -> len) => length
                 false => absolute!
-                length >= 2 and (self.bytes[0] == 47 or self.bytes[0] == 92) and (self.bytes[1] == 47 or self.bytes[1] == 92)
+                length >= 2 and (self.bytes[0] == '/' or self.bytes[0] == '\\') and (self.bytes[1] == '/' or self.bytes[1] == '\\')
                     -> if { true => absolute! }
-                length >= 3 and self.bytes[1] == 58 and (self.bytes[2] == 47 or self.bytes[2] == 92)
+                length >= 3 and self.bytes[1] == ':' and (self.bytes[2] == '/' or self.bytes[2] == '\\')
                     -> if { true => absolute! }
                 absolute!
             }
@@ -174,14 +174,14 @@ impl Path {
         self.style => style
         style -> when {
             Posix {
-                (child -> len) > 0 and (child -> byte(0)) == 47
+                (child -> len) > 0 and (child -> byte(0)) == '/'
             }
             Windows {
                 child -> len => childLength
                 false => absolute!
-                childLength >= 2 and ((child -> byte(UIntSize(0))) == 47 or (child -> byte(UIntSize(0))) == 92) and ((child -> byte(UIntSize(1))) == 47 or (child -> byte(UIntSize(1))) == 92)
+                childLength >= 2 and ((child -> byte(UIntSize(0))) == '/' or (child -> byte(UIntSize(0))) == '\\') and ((child -> byte(UIntSize(1))) == '/' or (child -> byte(UIntSize(1))) == '\\')
                     -> if { true => absolute! }
-                childLength >= 3 and (child -> byte(UIntSize(1))) == 58 and ((child -> byte(UIntSize(2))) == 47 or (child -> byte(UIntSize(2))) == 92)
+                childLength >= 3 and (child -> byte(UIntSize(1))) == ':' and ((child -> byte(UIntSize(2))) == '/' or (child -> byte(UIntSize(2))) == '\\')
                     -> if { true => absolute! }
                 absolute!
             }
@@ -195,15 +195,15 @@ impl Path {
         baseLength > 0 -> if {
             bytes![Int(baseLength - 1)] => lastByte
             style -> when {
-                Posix => lastByte == 47
-                Windows => lastByte == 47 or lastByte == 92
+                Posix => lastByte == '/'
+                Windows => lastByte == '/' or lastByte == '\\'
             } => endsWithSeparator!
         }
         baseLength > 0 and (child -> len) > 0 and not endsWithSeparator!
             -> if {
                 style -> when {
-                    Posix => UInt8(47)
-                    Windows => UInt8(92)
+                    Posix => UInt8('/')
+                    Windows => UInt8('\\')
                 } => separator
                 bytes! -> push(separator)
             }
@@ -233,8 +233,8 @@ impl Path {
         baseLength > 0 and UIntSize(child.bytes -> len) > 0 and not endsWithSeparator!
             -> if {
                 self.style -> when {
-                    Posix => UInt8(47)
-                    Windows => UInt8(92)
+                    Posix => UInt8('/')
+                    Windows => UInt8('\\')
                 } => separator
                 bytes! -> push(separator)
             }
@@ -278,36 +278,36 @@ impl Path {
         UIntSize(0) => protectedComponents!
 
         windows -> if {
-            sourceLength >= 2 and source[1] == 58 -> if {
+            sourceLength >= 2 and source[1] == ':' -> if {
                 output! -> push(source[0])
-                output! -> push(58)
+                output! -> push(':')
                 2 => index!
-                index! < sourceLength and (source[Int(index!)] == 47 or source[Int(index!)] == 92)
+                index! < sourceLength and (source[Int(index!)] == '/' or source[Int(index!)] == '\\')
                     -> if {
-                        output! -> push(92)
+                        output! -> push('\\')
                         true => absolute!
-                        index! < sourceLength and (source[Int(index!)] == 47 or source[Int(index!)] == 92)
+                        index! < sourceLength and (source[Int(index!)] == '/' or source[Int(index!)] == '\\')
                             -> while { index! + 1 => index! }
                     }
             } else {
-                sourceLength >= 2 and (source[0] == 47 or source[0] == 92) and (source[1] == 47 or source[1] == 92)
+                sourceLength >= 2 and (source[0] == '/' or source[0] == '\\') and (source[1] == '/' or source[1] == '\\')
                     -> if {
-                        output! -> push(92)
-                        output! -> push(92)
+                        output! -> push('\\')
+                        output! -> push('\\')
                         true => absolute!
                         true => unc!
                         2 => protectedComponents!
                         2 => index!
-                        index! < sourceLength and (source[Int(index!)] == 47 or source[Int(index!)] == 92)
+                        index! < sourceLength and (source[Int(index!)] == '/' or source[Int(index!)] == '\\')
                             -> while { index! + 1 => index! }
                     }
             }
         } else {
-            sourceLength > 0 and source[0] == 47 -> if {
-                output! -> push(47)
+            sourceLength > 0 and source[0] == '/' -> if {
+                output! -> push('/')
                 true => absolute!
                 1 => index!
-                index! < sourceLength and source[Int(index!)] == 47
+                index! < sourceLength and source[Int(index!)] == '/'
                     -> while { index! + 1 => index! }
             }
         }
@@ -316,24 +316,24 @@ impl Path {
         false => wroteComponent!
         index! < sourceLength and not escaped! -> while {
             index! => componentStart
-            index! < sourceLength and (windows -> if { source[Int(index!)] != 47 and source[Int(index!)] != 92 } else { source[Int(index!)] != 47 })
+            index! < sourceLength and (windows -> if { source[Int(index!)] != '/' and source[Int(index!)] != '\\' } else { source[Int(index!)] != '/' })
                 -> while {
                     index! + 1 => index!
                 }
             index! => componentEnd
             componentEnd - componentStart => componentLength
-            index! < sourceLength and (windows -> if { source[Int(index!)] == 47 or source[Int(index!)] == 92 } else { source[Int(index!)] == 47 })
+            index! < sourceLength and (windows -> if { source[Int(index!)] == '/' or source[Int(index!)] == '\\' } else { source[Int(index!)] == '/' })
                 -> while {
                     index! + 1 => index!
                 }
 
-            componentLength == 1 and source[Int(componentStart)] == 46 => currentDirectory
-            componentLength == 2 and source[Int(componentStart)] == 46 and source[Int(componentStart + 1)] == 46 => parentDirectory
+            componentLength == 1 and source[Int(componentStart)] == '.' => currentDirectory
+            componentLength == 2 and source[Int(componentStart)] == '.' and source[Int(componentStart + 1)] == '.' => parentDirectory
             componentLength > 0 and not currentDirectory and not parentDirectory
                 -> if {
                     UIntSize(output! -> len) => truncateStart
                     wroteComponent! -> if {
-                        windows -> if { output! -> push(92) } else { output! -> push(47) }
+                        windows -> if { output! -> push('\\') } else { output! -> push('/') }
                     }
                     componentStarts! -> push(truncateStart)
                     componentStart => componentByteIndex!
@@ -364,7 +364,7 @@ impl Path {
             -> if {
                 pathError("incomplete UNC path") -> return
             }
-        UIntSize(output! -> len) == 0 -> if { output! -> push(46) }
+        UIntSize(output! -> len) == 0 -> if { output! -> push('.') }
         Path { bytes: output!, style: style } => normalized
         Result<Path, Text>.Ok(normalized)
     }

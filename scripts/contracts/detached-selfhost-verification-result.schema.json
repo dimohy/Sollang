@@ -22,7 +22,7 @@
     "orphanProcessIds"
   ],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "enum": [1, 2] },
     "runId": { "type": "string", "minLength": 1 },
     "verification": { "enum": ["Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "ExpressionBatch", "ManagedHost", "Probe"] },
     "executionMode": { "const": "detached-supervisor" },
@@ -41,6 +41,21 @@
     "standardErrorPath": { "type": "string", "minLength": 1 },
     "cancellationRequestPath": { "type": "string", "minLength": 1 },
     "targetProcessId": { "type": ["integer", "null"], "minimum": 1 },
+    "targetExitCode": { "type": ["integer", "null"] },
+    "processAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "completed", "snapshotCount", "observedProcessIds"],
+      "properties": {
+        "method": { "const": "observed-pid-creation-time-snapshots" },
+        "completed": { "type": "boolean" },
+        "snapshotCount": { "type": "integer", "minimum": 0 },
+        "observedProcessIds": {
+          "type": "array", "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
     "orphanProcessIds": {
       "type": "array",
       "uniqueItems": true,
@@ -48,6 +63,23 @@
     }
   },
   "allOf": [
+    {
+      "if": { "properties": { "schemaVersion": { "const": 2 } } },
+      "then": {
+        "required": ["processAudit", "targetExitCode"],
+        "allOf": [{
+          "if": { "properties": { "status": { "enum": ["passed", "cancelled"] } } },
+          "then": { "properties": { "processAudit": { "properties": {
+            "completed": { "const": true },
+            "snapshotCount": { "minimum": 1 },
+            "observedProcessIds": { "minItems": 1 }
+          } } } }
+        }, {
+          "if": { "properties": { "status": { "const": "passed" } } },
+          "then": { "properties": { "targetExitCode": { "const": 0 } } }
+        }]
+      }
+    },
     {
       "if": { "properties": { "status": { "const": "passed" } } },
       "then": {

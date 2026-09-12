@@ -18,3 +18,74 @@ impl SourceSpan {
         self.start + self.length
     }
 }
+
+# Decode one complete single-quoted Unicode scalar. The lexer, constant
+# evaluator, contextual range checker, and LLVM writer share this authority.
+public decodeCharacterLiteral source: Text, span: SourceSpan -> Option<Int> {
+    continuation value: UInt8 -> Bool => value >= 128 and value <= 191
+
+    span.length < 3 -> if { Option<Int>.None -> return }
+    source -> byte(span.start) => opening
+    source -> byte(span.start + span.length - 1) => closing
+    opening != 39 or closing != 39 -> if { Option<Int>.None -> return }
+    span.start + 1 => content
+    span.length - 2 => contentLength
+    source -> byte(content) => first
+
+    first == 92 -> if {
+        contentLength != 2 -> if { Option<Int>.None -> return }
+        source -> byte(content + 1) => escape
+        -1 => escaped!
+        escape == 48 -> if { 0 => escaped! }
+        escape == 98 -> if { 8 => escaped! }
+        escape == 102 -> if { 12 => escaped! }
+        escape == 110 -> if { 10 => escaped! }
+        escape == 114 -> if { 13 => escaped! }
+        escape == 116 -> if { 9 => escaped! }
+        escape == 92 -> if { 92 => escaped! }
+        escape == 39 -> if { 39 => escaped! }
+        escape == 34 -> if { 34 => escaped! }
+        escaped! < 0 -> if { Option<Int>.None -> return }
+        escaped! -> Option<Int>.Some -> return
+    }
+
+    first < 128 -> if {
+        contentLength != 1 or first == 10 or first == 13 or first == 39
+            -> if { Option<Int>.None -> return }
+        Int(first) -> Option<Int>.Some -> return
+    }
+
+    first >= 194 and first <= 223 -> if {
+        contentLength != 2 -> if { Option<Int>.None -> return }
+        source -> byte(content + 1) => second
+        not (second -> continuation) -> if { Option<Int>.None -> return }
+        (Int(first) - 192) * 64 + Int(second) - 128 -> Option<Int>.Some -> return
+    }
+
+    first >= 224 and first <= 239 -> if {
+        contentLength != 3 -> if { Option<Int>.None -> return }
+        source -> byte(content + 1) => second
+        source -> byte(content + 2) => third
+        not (second -> continuation) or not (third -> continuation)
+            -> if { Option<Int>.None -> return }
+        first == 224 and second < 160 -> if { Option<Int>.None -> return }
+        first == 237 and second >= 160 -> if { Option<Int>.None -> return }
+        (Int(first) - 224) * 4096 + (Int(second) - 128) * 64 + Int(third) - 128 => scalar
+        scalar -> Option<Int>.Some -> return
+    }
+
+    first >= 240 and first <= 244 -> if {
+        contentLength != 4 -> if { Option<Int>.None -> return }
+        source -> byte(content + 1) => second
+        source -> byte(content + 2) => third
+        source -> byte(content + 3) => fourth
+        not (second -> continuation) or not (third -> continuation) or not (fourth -> continuation)
+            -> if { Option<Int>.None -> return }
+        first == 240 and second < 144 -> if { Option<Int>.None -> return }
+        first == 244 and second > 143 -> if { Option<Int>.None -> return }
+        (Int(first) - 240) * 262_144 + (Int(second) - 128) * 4096 + (Int(third) - 128) * 64 + Int(fourth) - 128 => scalar
+        scalar -> Option<Int>.Some -> return
+    }
+
+    Option<Int>.None
+}

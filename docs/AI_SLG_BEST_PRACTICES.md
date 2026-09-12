@@ -277,9 +277,16 @@ array or heap object.
 Core values include `Unit`, `Bool`, signed/unsigned fixed-width and target-sized
 integers, floating-point values, `CodePoint`, and UTF-8 `Text`. Let contextual numeric
 literals adopt the declared field, argument, return, or arm type; redundant
-constructors usually indicate lost type context. Ordinary quoted strings allow
+constructors usually indicate lost type context. Write textual byte and scalar
+comparisons with single-quoted character literals such as `'a'`, `'*'`, and
+`'\n'`, not unexplained ASCII numbers. A character literal contains exactly one
+Unicode scalar or a supported escape and adopts an integer context such as
+`UInt8` or `CodePoint`; otherwise it defaults to `Int`. Ordinary quoted strings allow
 `$name` and `$(expression)` interpolation. Triple-quoted strings are raw and do
 not interpolate.
+
+Keep binary wire values, compression lookup-table boundaries, lengths, and
+state identifiers numeric even when a value happens to equal an ASCII code.
 
 ## 5. Build abstractions with functions, generics, traits, impl, and blocks
 
@@ -529,6 +536,12 @@ For HMAC-SHA256, flow the borrowed key into `hmac.create` to create a
 `std.crypto.hmac_sha256.Hasher`. Call `update` for each message slice and
 consume the hasher with `finish` to obtain all 32 MAC bytes. One-shot input
 uses the same instance API; there is no public `hmac.digest` wrapper.
+
+For bounded text matching, compile the borrowed pattern once into an immutable
+`std.text.glob.Pattern` or `std.text.regex.Pattern`, then call its instance
+method. Keep work ceilings explicit. Regex search also receives its exact
+caller-owned two-bank scratch array; do not replace that visible storage with a
+hidden allocation, recursive backtracking, copied input, or ambient cache.
 
 Instance syntax must not impose an abstraction tax. Keep receiver lowering
 direct, caller-owned buffers visible, and hot paths allocation-free where the
@@ -1195,7 +1208,7 @@ is required by the machine contract:
 | Family | Preferred SLG strength |
 | --- | --- |
 | modules and visibility | `namespace`, `import`, aliases, `public`, split logical modules |
-| scalar and text values | numeric context, `Bool`, `Unit`, `CodePoint`, UTF-8 `Text`, interpolation |
+| scalar and text values | numeric and character-literal context, `Bool`, `Unit`, `CodePoint`, UTF-8 `Text`, interpolation |
 | structs | nominal records, named initialization, field access and assignment |
 | enums and patterns | nominal variants, payloads, exhaustive subject-style `when` |
 | Option and Result | absence, typed failure, enum construction, postfix `?` |

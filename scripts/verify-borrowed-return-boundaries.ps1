@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
-    [ValidateSet('fallthrough', 'explicit-return', 'source-text-pass-through')]
+    [ValidateSet('fallthrough', 'explicit-return', 'source-text-pass-through', 'projection-alias')]
     [string[]]$CaseId
 )
 
@@ -16,7 +16,8 @@ $resultPath = Join-Path $output 'result.json'
 $cases = @(
     @{ id = 'fallthrough'; mode = 'run'; expected = '42' },
     @{ id = 'explicit-return'; mode = 'run'; expected = '42' },
-    @{ id = 'source-text-pass-through'; mode = 'build'; expected = 'while borrowed Text view' }
+    @{ id = 'source-text-pass-through'; mode = 'build'; expected = 'while borrowed Text view' },
+    @{ id = 'projection-alias'; mode = 'run'; expected = 'name' }
 )
 if ($PSBoundParameters.ContainsKey('CaseId')) {
     if (@($CaseId).Count -eq 0 -or @($CaseId | Select-Object -Unique).Count -ne $CaseId.Count) {

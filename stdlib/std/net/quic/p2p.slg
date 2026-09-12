@@ -255,15 +255,15 @@ handshakeTranscript initiatorKey: [UInt8], initiatorNonce: [UInt8], responderKey
 }
 
 authHeader kind: UInt8 -> [UInt8; ~] {
-    [83, 80, 50, 80, 1, kind; ~]
+    ['S', 'P', '2', 'P', 1, kind; ~]
 }
 
 hasAuthHeader bytes: [UInt8], kind: UInt8 -> Bool {
     (bytes -> len) >= 6
-        and bytes[0] == 83
-        and bytes[1] == 80
-        and bytes[2] == 50
-        and bytes[3] == 80
+        and bytes[0] == 'S'
+        and bytes[1] == 'P'
+        and bytes[2] == '2'
+        and bytes[3] == 'P'
         and bytes[4] == 1
         and bytes[5] == kind
 }
@@ -401,7 +401,7 @@ protocolFrame protocol: [UInt8] -> Result<[UInt8; ~], quic.QuicError> {
         -> unless {
             Result<[UInt8; ~], quic.QuicError>.Err(failure(errors.Kind.InvalidArgument, 81_023)) -> return
         }
-    [UInt8(83), 80, 50, 83, 1; ~] => bytes!
+    [UInt8('S'), 'P', '2', 'S', 1; ~] => bytes!
     bytes! -> appendUInt16(UInt16(protocol -> len))
     bytes! -> appendBytes(protocol)
     Result<[UInt8; ~], quic.QuicError>.Ok(bytes!)
@@ -409,10 +409,10 @@ protocolFrame protocol: [UInt8] -> Result<[UInt8; ~], quic.QuicError> {
 
 decodeProtocol bytes: [UInt8] -> Result<[UInt8; ~], quic.QuicError> {
     (bytes -> len) >= 7
-        and bytes[0] == 83
-        and bytes[1] == 80
-        and bytes[2] == 50
-        and bytes[3] == 83
+        and bytes[0] == 'S'
+        and bytes[1] == 'P'
+        and bytes[2] == '2'
+        and bytes[3] == 'S'
         and bytes[4] == 1 -> unless {
             Result<[UInt8; ~], quic.QuicError>.Err(failure(errors.Kind.ProtocolViolation, 81_024)) -> return
         }

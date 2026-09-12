@@ -126,8 +126,8 @@ asciiTextEqualIgnoreCase value: Text, expected: Text -> Bool {
     index! < (value -> len) -> while {
         value -> byte(index!) => left!
         expected -> byte(index!) => right!
-        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
-        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! >= 'A' and left! <= 'Z' -> if { left! + UInt8('a' - 'A') => left! }
+        right! >= 'A' and right! <= 'Z' -> if { right! + UInt8('a' - 'A') => right! }
         left! == right! -> unless { false -> return }
         index! + 1 => index!
     }
@@ -140,8 +140,8 @@ spanEqualIgnoreCase source: ref file.SourceText, start: UIntSize, length: UIntSi
     index! < length -> while {
         source -> byte(start + index!) => left!
         expected -> byte(index!) => right!
-        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
-        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! >= 'A' and left! <= 'Z' -> if { left! + UInt8('a' - 'A') => left! }
+        right! >= 'A' and right! <= 'Z' -> if { right! + UInt8('a' - 'A') => right! }
         left! == right! -> unless { false -> return }
         index! + 1 => index!
     }
@@ -149,28 +149,28 @@ spanEqualIgnoreCase source: ref file.SourceText, start: UIntSize, length: UIntSi
 }
 
 isTokenByte byte: UInt8 -> Bool {
-    (byte >= 48 and byte <= 57)
-        or (byte >= 65 and byte <= 90)
-        or (byte >= 97 and byte <= 122)
-        or byte == 33
-        or byte == 35
-        or byte == 36
-        or byte == 37
-        or byte == 38
-        or byte == 39
-        or byte == 42
-        or byte == 43
-        or byte == 45
-        or byte == 46
-        or byte == 94
-        or byte == 95
-        or byte == 96
-        or byte == 124
-        or byte == 126
+    (byte >= '0' and byte <= '9')
+        or (byte >= 'A' and byte <= 'Z')
+        or (byte >= 'a' and byte <= 'z')
+        or byte == '!'
+        or byte == '#'
+        or byte == '$'
+        or byte == '%'
+        or byte == '&'
+        or byte == '\''
+        or byte == '*'
+        or byte == '+'
+        or byte == '-'
+        or byte == '.'
+        or byte == '^'
+        or byte == '_'
+        or byte == '`'
+        or byte == '|'
+        or byte == '~'
 }
 
 isTrailerValueByte byte: UInt8 -> Bool {
-    byte == 9 or byte == 32 or (byte >= 33 and byte <= 126) or byte >= 128
+    byte == '\t' or byte == ' ' or (byte >= '!' and byte <= '~') or byte >= 128
 }
 
 parseContentLength source: ref file.SourceText, value: http.Span, maximum: UIntSize -> Result<UIntSize, http.Error> {
@@ -181,10 +181,10 @@ parseContentLength source: ref file.SourceText, value: http.Span, maximum: UIntS
     UIntSize(0) => index!
     index! < value.length -> while {
         source -> byte(value.start + index!) => byte
-        byte >= 48 and byte <= 57 -> unless {
+        byte >= '0' and byte <= '9' -> unless {
             Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidContentLength, value.start + index!)) -> return
         }
-        UIntSize(byte - 48) => digit
+        UIntSize(byte - '0') => digit
         digit <= maximum and parsed! <= (maximum - digit) / 10
             -> unless {
                 Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.BodyLimitExceeded, value.start + index!)) -> return
@@ -204,7 +204,7 @@ parseTransferEncoding source: ref file.SourceText, value: http.Span -> Result<Bo
     false => finalChunked!
     index! < value.length -> while {
         index! < value.length
-            and ((source -> byte(value.start + index!)) == 32 or (source -> byte(value.start + index!)) == 9)
+            and ((source -> byte(value.start + index!)) == ' ' or (source -> byte(value.start + index!)) == '\t')
             -> while { index! + 1 => index! }
         index! < value.length -> unless {
             Result<Bool, http.Error>.Err(bodyError(errors.Kind.InvalidTransferEncoding, value.start + index!)) -> return
@@ -219,9 +219,9 @@ parseTransferEncoding source: ref file.SourceText, value: http.Span -> Result<Bo
         }
         index! => tokenEnd
         index! < value.length
-            and ((source -> byte(value.start + index!)) == 32 or (source -> byte(value.start + index!)) == 9)
+            and ((source -> byte(value.start + index!)) == ' ' or (source -> byte(value.start + index!)) == '\t')
             -> while { index! + 1 => index! }
-        index! < value.length and (source -> byte(value.start + index!)) != 44
+        index! < value.length and (source -> byte(value.start + index!)) != ','
             -> if {
                 Result<Bool, http.Error>.Err(bodyError(errors.Kind.InvalidTransferEncoding, value.start + index!)) -> return
             }
@@ -279,9 +279,9 @@ plan framing: BodyFraming, limits: BodyLimits -> BodyPlan => BodyPlan {
 }
 
 hexValue byte: UInt8 -> Int {
-    byte >= 48 and byte <= 57 -> if { Int(byte - 48) -> return }
-    byte >= 65 and byte <= 70 -> if { Int(byte - 65) + 10 -> return }
-    byte >= 97 and byte <= 102 -> if { Int(byte - 97) + 10 -> return }
+    byte >= '0' and byte <= '9' -> if { Int(byte - '0') -> return }
+    byte >= 'A' and byte <= 'F' -> if { Int(byte - 'A') + 10 -> return }
+    byte >= 'a' and byte <= 'f' -> if { Int(byte - 'a') + 10 -> return }
     -1
 }
 
@@ -309,12 +309,12 @@ parseChunkSize decoder: ref BodyDecoder -> Result<UIntSize, http.Error> {
         Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidChunkSize, decoder.encodedBytes)) -> return
     }
     index! < (decoder.line -> len) -> if {
-        decoder.line[index!] == 59 -> unless {
+        decoder.line[index!] == ';' -> unless {
             Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidChunkSize, decoder.encodedBytes)) -> return
         }
         index! + 1 => index!
         index! < (decoder.line -> len) -> while {
-            decoder.line[index!] >= 32 and decoder.line[index!] != 127
+            decoder.line[index!] >= ' ' and decoder.line[index!] != 127
                 -> unless {
                     Result<UIntSize, http.Error>.Err(bodyError(errors.Kind.InvalidChunkSize, decoder.encodedBytes)) -> return
                 }
@@ -334,8 +334,8 @@ lineNameIs line: ref [UInt8; ~], length: Int, expected: Text -> Bool {
     index! < length -> while {
         line[index!] => left!
         expected -> byte(UIntSize(index!)) => right!
-        left! >= 65 and left! <= 90 -> if { left! + 32 => left! }
-        right! >= 65 and right! <= 90 -> if { right! + 32 => right! }
+        left! >= 'A' and left! <= 'Z' -> if { left! + UInt8('a' - 'A') => left! }
+        right! >= 'A' and right! <= 'Z' -> if { right! + UInt8('a' - 'A') => right! }
         left! == right! -> unless { false -> return }
         index! + 1 => index!
     }
@@ -346,12 +346,12 @@ validateTrailer decoder: ref BodyDecoder -> Result<Unit, http.Error> {
     (decoder.line -> len) > 0 -> unless {
         Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
     }
-    decoder.line[0] != 32 and decoder.line[0] != 9
+    decoder.line[0] != ' ' and decoder.line[0] != '\t'
         -> unless {
             Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
         }
     0 => colon!
-    colon! < (decoder.line -> len) and decoder.line[colon!] != 58
+    colon! < (decoder.line -> len) and decoder.line[colon!] != ':'
         -> while {
             decoder.line[colon!] -> isTokenByte -> unless {
                 Result<Unit, http.Error>.Err(bodyError(errors.Kind.InvalidTrailer, decoder.encodedBytes)) -> return
@@ -574,7 +574,7 @@ impl BodyDecoder {
                 self.phase -> when {
                     SizeLine {
                         self.lineSawCarriageReturn -> if {
-                            byte == 10 -> unless {
+                            byte == '\n' -> unless {
                                 progressError(errors.Kind.InvalidChunkSize, self.encodedBytes) -> return
                             }
                             self -> parseChunkSize? => size
@@ -583,10 +583,10 @@ impl BodyDecoder {
                             false => self.lineSawCarriageReturn
                             size == 0 -> if { model.BodyPhase.TrailerLine } else { model.BodyPhase.Data } => self.phase
                         } else {
-                            byte == 13 -> if {
+                            byte == '\r' -> if {
                                 true => self.lineSawCarriageReturn
                             } else {
-                                byte == 10 -> if {
+                                byte == '\n' -> if {
                                     progressError(errors.Kind.InvalidChunkSize, self.encodedBytes) -> return
                                 }
                                 (self.line -> len) < self.limits.maxChunkLineBytes
@@ -604,13 +604,13 @@ impl BodyDecoder {
                         self.chunkRemaining == 0 -> if { model.BodyPhase.DataCarriageReturn => self.phase }
                     }
                     DataCarriageReturn {
-                        byte == 13 -> unless {
+                        byte == '\r' -> unless {
                             progressError(errors.Kind.MissingChunkDataTerminator, self.encodedBytes) -> return
                         }
                         model.BodyPhase.DataLineFeed => self.phase
                     }
                     DataLineFeed {
-                        byte == 10 -> unless {
+                        byte == '\n' -> unless {
                             progressError(errors.Kind.MissingChunkDataTerminator, self.encodedBytes) -> return
                         }
                         model.BodyPhase.SizeLine => self.phase
@@ -622,7 +622,7 @@ impl BodyDecoder {
                             }
                         self.trailerBytes + 1 => self.trailerBytes
                         self.lineSawCarriageReturn -> if {
-                            byte == 10 -> unless {
+                            byte == '\n' -> unless {
                                 progressError(errors.Kind.InvalidTrailer, self.encodedBytes) -> return
                             }
                             (self.line -> len) == 0 -> if {
@@ -638,10 +638,10 @@ impl BodyDecoder {
                             [UInt8; ~] => self.line
                             false => self.lineSawCarriageReturn
                         } else {
-                            byte == 13 -> if {
+                            byte == '\r' -> if {
                                 true => self.lineSawCarriageReturn
                             } else {
-                                byte == 10 -> if {
+                                byte == '\n' -> if {
                                     progressError(errors.Kind.InvalidTrailer, self.encodedBytes) -> return
                                 }
                                 self.line -> push(byte)
