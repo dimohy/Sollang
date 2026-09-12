@@ -1,0 +1,58 @@
+# Windows WAIT_TIMEOUT is 258 and STILL_ACTIVE is 259. Completion is decided
+# only by WaitForSingleObject, so a real process exit code 259 remains data.
+import std.time as time
+import sys.process as process
+
+main {
+    process.arguments() => args
+    args -> len > 1 -> if {
+        process.exit(259)
+    } else {
+        process.command(args[0]) => command!
+        command! -> arg("--child")
+        command! -> spawn -> when {
+            Result<process.Child, Text>.Ok(child) {
+                child => owner!
+                false => completed!
+                0 => observedCode!
+                0 => attempts!
+                not completed! and attempts! < 400 -> while {
+                    owner! -> tryWait -> when {
+                        Result<Option<process.ExitStatus>, Text>.Ok(status) {
+                            status -> when {
+                                Option<process.ExitStatus>.Some(exit) {
+                                    exit -> exitCode => observedCode!
+                                    true => completed!
+                                }
+                                Option<process.ExitStatus>.None {
+                                    time.Duration { millis: 5 } -> sleep -> await
+                                }
+                            }
+                        }
+                        Result<Option<process.ExitStatus>, Text>.Err(error) {
+                            error -> println
+                            true => completed!
+                        }
+                    }
+                    attempts! + 1 => attempts!
+                }
+                owner! -> tryWait -> when {
+                    Result<Option<process.ExitStatus>, Text>.Ok(status) {
+                        status -> when {
+                            Option<process.ExitStatus>.Some(exit) {
+                                "observed=$(observedCode!),repeated=$(exit -> exitCode)" -> println
+                            }
+                            Option<process.ExitStatus>.None { "missing" -> println }
+                        }
+                    }
+                    Result<Option<process.ExitStatus>, Text>.Err(error) { error -> println }
+                }
+                owner! -> wait -> when {
+                    Result<process.ExitStatus, Text>.Ok(status) { "wait=$(status -> exitCode)" -> println }
+                    Result<process.ExitStatus, Text>.Err(error) { error -> println }
+                }
+            }
+            Result<process.Child, Text>.Err(error) { error -> println }
+        }
+    }
+}

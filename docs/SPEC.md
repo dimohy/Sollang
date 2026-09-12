@@ -671,6 +671,68 @@ has no canonical right operand. Both operands must be present and ordered by
 their source AST before LLVM selects comparison or arithmetic instructions.
 Nested-call recovery may use only an exact same-parent predecessor or direct
 continuation edge; it must not guess an operand from a compatible nearby type.
+
+Expression materialization follows one cross-implementation contract:
+syntax shape determines that an expression or control value exists before its
+concrete type is available. Every concrete managed `Expression` subtype has
+exactly one schema-validated mapping to its self-host AST kinds, expected Typed
+IR roles, and materialization policy. The managed compiler preserves the
+corresponding expression object through semantic inference and emission; the
+self-host entry and ordinary-function paths consume the same centralized base,
+contextual, and control-shape policies and seal types and operands in later
+passes. They must not use provisional type-table membership to decide whether
+to create a value or independently maintain AST-to-Typed-IR kind tables.
+S059 is a blocking compiler-integrity diagnostic when a binding has a binary
+initializer AST but no corresponding binary Typed IR producer. Consecutive
+binary AST nodes are transparent wrappers only when their source spans are
+identical: the deepest same-span binary descendant is the canonical producer
+and the first different-span or non-binary ancestor is its owner. This coverage
+rule applies only to nodes that own an operator token. Angle brackets inside an
+exact `TypeAnnotation` span, including the type prefix of a generic enum
+constructor, and the balanced outer clause of a `TypeApplicationExpression`
+are generic delimiters, not comparison operators. The call-argument span begins
+after that outer clause, so comparison operators inside arguments retain ownership.
+Any surrounding comparison grammar envelope with no remaining operator is
+omitted from the self-host AST. The coverage check runs before
+LLVM generation and uses
+source-global linear indexes rather than rescanning the complete AST for each
+binding.
+
+A sequential named branch lowers to a labeled product whose fields are the
+final values of its arms. The flat self-host Typed IR represents each arm with
+a kind-39 value node whose `operand1` is its final stage, followed by the
+kind-37 product node. Entry bodies, ordinary functions, and nested control
+regions must all materialize those two steps through the same emitter
+authority. A context-specific copy may not omit the arm SSA definition or
+substitute the wrapper index for its final value. Parallel branch arms remain
+owned by the compute callback path and are not materialized by this sequential
+authority.
+
+A parallel named branch lowers its kind-38 node through one shared runtime
+materializer after its callback has been prepared. That materializer owns the
+capture environment, compute-group execution, and result-product load for
+entry bodies, ordinary functions, and nested control regions alike. Those
+contexts may not carry independent copies of the compute-group sequence.
+
+Range values use the same kind-31 materializer in entry bodies, ordinary
+functions, and nested control regions. The shared operation owns inclusive and
+exclusive-end normalization and the two-field product construction; an
+emission context may not reconstruct that value independently.
+
+A stream pipeline nested inside a control region uses the same scheduled stream
+body as a top-level entry or ordinary function. The enclosing region emits the
+pipeline source first, then delegates the terminal and deferred callbacks in
+their regional order. Fused stage-call nodes belong to that pipeline and may
+not be emitted again by the outer region. Function mutable slots are allocated
+once by the owning body schedule; nested delegation must not allocate them a
+second time.
+
+Sequential diagnostic Typed IR and production function-parallel Typed IR must
+have identical ordered node inventories for the same prepared source set.
+Compiler verification compares both modes directly; the presence of an
+emitter-only invariant diagnostic is not by itself evidence that parallel
+lowering lost a node.
+
 S016 is a blocking compiler-integrity diagnostic when a conditional node has
 then/else structure but no canonical condition operand. LLVM lowering must not
 silently omit such a conditional. A pipeline condition may be restored only
@@ -821,6 +883,10 @@ the shared canonical integer writer; booleans use `1` and `0`.
 E20 partial-move joins track only bindings live across the branch join or loop
 back-edge. A binding introduced inside an arm/body is dead at region exit and
 does not require artificial field reinitialization.
+Function scopes can own cleanup and participate in complete-move analysis, but
+they are not control regions. A termination query applies only to a nested
+control region; it must not climb through a function owner's `-1` parent as if
+that parent were another function boundary.
 Compile-time value generics used as expressions lower to hidden trailing `Int`
 parameters, and numeric `<...>` call arguments feed those parameters. They are
 function-scoped values in interpolation-based loop and control expressions as
@@ -1054,6 +1120,18 @@ a zero divisor; `absoluteDifference` always returns a non-negative value.
 `MonotonicInstant` and `UtcInstant` likewise accept durations only through
 checked instance addition/subtraction, and compute elapsed durations through
 `later -> durationSince(earlier)`.
+
+`UtcInstant.formatRfc3339(output: mut [UInt8; ~]) -> Result<Int, Error>`
+writes exactly 24 UTF-8 bytes, `YYYY-MM-DDTHH:mm:ss.SSSZ`, to caller-owned
+storage. It returns 24 without changing the buffer length or capacity. The
+calendar is proleptic Gregorian with years 0001 through 9999; instants outside
+Unix milliseconds -62135596800000 through 253402300799999 produce
+`CalendarOutOfRange`. A buffer shorter than 24 bytes produces
+`InsufficientOutput`. Validation precedes all writes, so either error preserves
+the complete buffer. Bytes after the 24-byte result are untouched. Formatting
+is pure: it does not allocate, read clocks, query locale/timezone settings, or
+serialize monotonic readings. Negative epoch values retain floor-based day and
+millisecond decomposition.
 
 Every `MonotonicInstant` carries its source identity. The system
 `MonotonicClock` uses the reserved source zero; `manualClock(source,
@@ -1515,8 +1593,9 @@ Every exception is classified as a factory, receiver-less parser, generic flow
 adapter, pure constant, or explicit migration debt. Adding an unclassified
 global or retaining a stale exception after an instance migration fails
 `scripts/verify-stdlib-instance-policy.ps1`.
-The same gate freezes `sys.path` at its reviewed raw boundaries and a shrinking
-set of ten migration-debt globals; new debt is not permitted.
+The same gate permits only the `sys.path.fromText` factory and
+`sys.path.nativeStyle` raw boundary as public globals. Path operations are
+instance methods; new migration-debt globals are not permitted.
 
 The library layering contract is `std -> sys`. `std` owns portable public APIs,
 domain values, and pure algorithms; `sys` owns only irreducible target and OS
@@ -1702,15 +1781,28 @@ Authority hosts are either a registered-name span, a numeric IPv4 value, or a
 bracketed numeric IPv6 value; an unbracketed colon is reserved for the decimal
 port, whose accepted range is 0 through 65535. Numeric-looking dotted hosts
 must parse as IPv4 and are not silently reclassified as registered names.
+The parser retains the original authority span privately for serialization;
+obtain authority values through `parse` rather than constructing them externally.
 
 `std.uri.percent` provides immutable component-specific `Codec` values for
 unreserved, user-info, registered-name, path-segment, path, query, and fragment
 rules. Planning and encode/decode are instance operations with a required
 maximum output size. Percent triplets are strict hexadecimal byte encodings,
 errors retain the exact input offset, encoding uses uppercase hex, and decode
-does not reinterpret `+` as space. URI normalization, relative-reference
-resolution, form encoding, IDNA, DNS, and scheme-specific behavior are
-separate future contracts rather than hidden parser behavior.
+does not reinterpret `+` as space.
+
+`Reference.normalizeBytes(policy, maxOutputBytes)` returns owned UTF-8 bytes.
+`NormalizationPolicy` independently selects scheme and registered-name case
+folding, unreserved percent decoding, percent-hex uppercasing, and dot-segment
+removal; `canonicalNormalization()` enables all five. Reserved encoded bytes
+remain encoded. The output bound also bounds intermediate path storage, so
+an oversized intermediate path fails even if dot removal would shorten it.
+`Reference.resolveBytes(reference, policy, maxOutputBytes)` uses the receiver
+as the explicit base, inherits absent components, and merges relative paths.
+A reference with its own scheme does not need an absolute base; other
+references require a base scheme. Both operations return typed limit errors
+and perform no DNS or file effects. Form encoding, IDNA, DNS, default-port
+elision, and scheme-specific behavior remain separate contracts.
 
 `std.text.json` provides strict, bounded RFC 8259 token reading and generation. A
 `Reader` owns one retained `SourceText` view and yields ordered `Token` values;
@@ -1721,16 +1813,96 @@ bytes, nesting depth, token count, and decoded string bytes. Comments, trailing
 commas, invalid UTF-8, lone surrogates, `NaN`, and infinities are rejected.
 Repeated object names remain ordered tokens and are never silently collapsed.
 
+`Reader.int64(token)` and `uint64(token)` validate the token kind, source span,
+JSON number grammar, and integer range without advancing the reader. Only the
+integer lexical form is accepted: a decimal point or exponent produces
+`NonIntegerNumber`, even when the mathematical value is integral. Overflow
+produces `NumberOutOfRange`; unsigned conversion also rejects every negative
+form, including `-0`. Signed conversion accepts the exact `Int64` minimum.
+`Reader.boolean(token)` and `nullValue(token)` likewise leave the cursor and
+structural state unchanged. They validate the kind, source bounds, and actual
+`true`, `false`, or `null` source bytes rather than trusting a public token tag.
+
+`Reader.skipValue()` consumes exactly the next scalar, array, or object through
+the same bounded token state machine. After an object name has been read, it
+can discard that member's value while preserving the following member; within
+an array it preserves the following element. Nested values are validated but
+are not decoded into strings, arrays, or an intermediate value tree. Input,
+depth, token, and string limits remain active, including inside skipped values.
+A next token that cannot begin a value yields `WrongTokenKind`. As with token
+reading, parse failure retains consumed progress and does not promise rollback.
+
 A `Writer` instance owns its structural state and growable byte buffer.
 `beginArray`, `endArray`, `beginObject`, `endObject`, `name`, `nullValue`,
 `boolean`, `number`, and `string` mutate that instance. Construction fixes
 maximum output bytes and nesting depth. Each operation validates its complete
 input and planned byte count before changing state or output, so an error is
 transactional. `number` accepts an exact already-formatted JSON number rather
-than choosing floating-point precision or formatting policy. `intoBytes: move
+than choosing floating-point precision or formatting policy. `int64` and
+`uint64` produce exact base-ten integer forms through the same transactional
+number-writing path, including both 64-bit range boundaries. `intoBytes: move
 self` requires one complete document and transfers the existing output buffer
 without copying it. Parsing and generation perform no ambient file, network,
 locale, reflection, or hidden serialization work.
+
+`std.text.csv` provides a bounded UTF-8 field stream over borrowed `Text`.
+`standard()` creates a `Format` with CRLF record delimiters and unconstrained
+column count; call `format -> reader(text, limits)` to create a reader, then
+`reader! -> next(output!)` with caller-owned growable byte storage. The result
+is `Option<Field>` metadata: zero-based record and field indices, decoded byte
+length, and whether the field ends its record. No row array, decoded string,
+output resize, or file operation is implicit. The input backing storage must
+outlive the reader and cannot be mutably aliased by the output.
+
+The quoting model follows [RFC 4180 section 2](https://www.rfc-editor.org/rfc/rfc4180.html#section-2):
+commas and line breaks inside quoted fields are data, and doubled quotes decode
+to one quote. The explicit profile accepts UTF-8, treats a trailing comma as an
+empty final field, treats an empty document as zero records, and does not
+infer headers, trim whitespace, strip a BOM, or add a phantom record after a
+terminal newline. A blank record has one empty field. This is not an
+unqualified strict-RFC conformance claim. `CrLf` accepts only CRLF delimiters,
+`Lf` only LF, and `Either` accepts either independently, including mixed input.
+Bare CR is rejected outside quotes; CR and LF inside quotes are preserved.
+Other ASCII control bytes and DEL are rejected.
+
+`Limits` separately bounds input bytes, records, fields per record, and decoded
+field bytes. Negative limits or column counts are invalid; zero limits permit
+an empty document. A positive expected column count may not exceed the field
+limit. `Reader.next` validates one complete field before writing its decoded
+prefix or advancing its private state. Every failure preserves the cursor and
+the entire output buffer; `OutputTooSmall` reports the required byte count and
+allows retry with another buffer. Success preserves output length, capacity,
+and the unused tail. Transactionality is per field, not per record: a later
+syntax, column-count, or limit failure does not retract earlier returned
+fields. Extra fixed columns fail before scanning the first extra field; too
+few columns fail before publishing the final field. Errors report the relevant
+source byte offset, and `Reader.offset` observes the committed cursor.
+
+`format -> writer(writerLimits)` creates a `Writer` with private cumulative
+byte and record counters. `WriterLimits` bounds total encoded output bytes,
+records, fields per record, and each field's decoded UTF-8 bytes. Limits must
+be nonnegative and a positive `expectedColumns` must fit the field limit.
+Writers require explicit `CrLf` or `Lf`; `Either` is an input policy and is
+rejected with `InvalidOptions`, not silently converted to an output style.
+
+`writer! -> writeRecord(fields, output!)` borrows a readonly `[Text]` and emits
+one complete record, including its final line ending, into caller-owned byte
+storage. It returns the exact encoded prefix length. Empty fields are quoted;
+nonempty fields are quoted only when they contain comma, quote, CR, or LF.
+Quotes are doubled, UTF-8 and spaces are preserved, and other ASCII controls
+or DEL are rejected. Zero fields is `InvalidRecord`, not a blank record.
+
+The writer checks the complete row before modifying any output byte. Size
+arithmetic is bounded by the remaining encoded-byte budget, including commas,
+quotes, escaping and line endings. `OutputLimit` denotes that cumulative
+budget; `OutputTooSmall` reports the exact complete-record size and permits
+retry with another buffer. Every failure preserves the entire output and both
+counters. Success changes only the output prefix, preserving length, capacity
+and tail, then advances `bytesWritten` and `recordsWritten`. Writer error
+offsets are the committed byte count; `requiredBytes` is zero except for
+`OutputTooSmall`. Input fields may not borrow the mutable output. No row plan,
+payload allocation, output resize, filesystem access, or asynchronous work is
+implicit in this pure formatter.
 
 `std.net.http` provides a pure, bounded HTTP/1.0 and HTTP/1.1 message-head parser.
 Create a `Parser` from explicit limits, then call `parser -> parseRequest(text)`
@@ -1858,6 +2030,33 @@ STUN address discovery, relay, NAT hole punching, simultaneous connect, or
 NAT keepalive support. Those require concurrent endpoint driving and explicit
 rendezvous/relay contracts and must remain separate layers instead of being
 simulated by a direct-connect fallback.
+
+General algorithms live in `std.algorithm` and require an explicit import.
+An `Ordering { direction: Ascending | Descending }` value owns the ordering
+policy; its `sort`, `binarySearch`, `min`, `max`, and `clamp` methods accept a
+`Comparison` implementation whose associated `Item` matches the element type.
+`Comparison.compare` borrows both inputs and returns a negative, zero, or positive
+`Int`. It must define a pure, deterministic strict weak ordering. Only the sign
+is significant: descending order reverses the sign test, never the integer
+itself, so an `Int.min` comparison result remains valid.
+
+`Ordering.sort` mutably borrows a caller-owned growable array and performs
+unstable heapsort with worst-case O(n log n) comparisons and O(1) additional
+storage. It preserves the owner, length, capacity, and element multiset without
+allocating a collection or copying the whole storage. The current permutation
+operations require inline-copyable elements; ordinary ownership checking rejects
+owned element types instead of cloning or silently materializing them.
+`binarySearch` borrows an existing growable array already sorted by the same
+direction and comparator. In O(log n) comparisons it returns a `SearchResult`
+containing the first equal index and `found: true`, or the insertion index and
+`found: false` when absent. It does not sort or copy the input.
+
+`min` and `max` return copyable values and preserve the first input on an
+equivalent comparison. `clamp` interprets its lower and upper bounds using the
+same direction and comparator, accepts equal bounds, and returns
+`Error.ReversedBounds` for reversed bounds rather than swapping them. These
+library operations do not allocate storage; their cost excludes work explicitly
+performed by a user-supplied comparator.
 
 General-purpose sequence operations live in `std.sequence` and require an
 explicit import. `range(start, endInclusive)` returns a first-class `Range`
@@ -2309,6 +2508,11 @@ An enum-pattern payload containing owned storage is a borrow unless the match
 subject itself is a named owner or a fresh owned temporary. Re-wrapping a
 borrowed payload in an owned aggregate, or passing it to a `move` input, is a
 semantic error rather than an implicit pointer copy.
+The transferable case also permits `Ok(payload) { payload => owner!; ... }`:
+this creates a new mutable owner by one explicit move, not a copy or a wholesale
+replacement of an existing mutable container. The old payload and consumed
+subject cannot subsequently be reused. A borrowed subject grants no such
+transfer authority, including through a nested match or shadowed binding.
 
 The same transfer rule applies when an aggregate containing a borrowed owned
 value enters owned container storage through `push`, `put`, heap insertion, or
@@ -2727,6 +2931,11 @@ syntax! -> reset
 - Immediate sinks consume deferred interpolation directly and do not
   materialize. The explicit boundary is for storage, return, indexing, or code
   that intentionally fixes allocation timing and lifetime.
+- Storage includes array elements, product and struct fields, dictionary keys
+  and values, and collection insertion or assignment. An unmaterialized
+  interpolation in those positions is a semantic error before LLVM emission;
+  the compiler must not allocate hidden backing storage. Materialize once into
+  an explicitly owned arena, then store the resulting borrowed `Text` view.
 - The native targets currently support arenas. Browser wasm remains blocked by
   its existing no-heap runtime boundary.
 
@@ -2737,7 +2946,7 @@ Native Sollang programs can map a file directly as an owned byte view:
 ```sollang
 map read "huge.dat" at 4_000_000_000 for 64_000_000 => data
 map write "index.dat" size 10_000_000 => output!
-output![0] = UInt8(42)
+42 => output![0]
 output! -> flush
 ```
 
@@ -2754,6 +2963,15 @@ output! -> flush
   synchronous writeback.
 - A mapped view is affine. Leaving its owning scope unmaps the underlying view
   exactly once; copying a mapped owner is not allowed.
+- The compiler represents a map expression as one value producer whose path is
+  the first operand. Present clauses follow it in source order. `at ... for ...`
+  is an inseparable pair; `size` is accepted only by `map write`. A map binding
+  must retain that exact producer and its `MappedBytes` or `MutableMappedBytes`
+  identity. Compiler validation rejects a missing producer, a path value used as
+  the owner, a mismatched clause chain, or a mismatched mapped type before LLVM
+  emission. Mapped `flush` retains its runtime identity only for a
+  `MutableMappedBytes` receiver; a lexically declared function named `flush`
+  remains an ordinary user function.
 - Windows x64 and Linux x64 use their native mapping APIs. Browser wasm rejects
   `map` because it has no corresponding host-file mapping primitive.
 

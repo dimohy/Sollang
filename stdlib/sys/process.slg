@@ -71,12 +71,22 @@ public struct ProcessId {
     public value: UInt64
 }
 
-# A running child is an affine operating-system resource. Its private token
-# cannot be copied or constructed by user code. `wait(move)` consumes and reaps
-# it; abandoning the owner kills and reaps the attached process.
+# A child is an affine operating-system resource. Its private token and cached
+# completion cannot be forged by user code. `tryWait(mut)` preserves a running
+# owner and caches one terminal observation; `wait(move)` consumes that state.
+# Abandoning a live owner kills and reaps the attached process.
 public struct Child {
-    public token: UInt64
-    public processId: ProcessId
+    token: UInt64
+    processId: ProcessId
+    completionState: Int
+    exitCode: Int
+}
+
+# Private compiler/runtime boundary for one nonblocking operating-system poll.
+# state is 0 running, 1 exited, 2 OS failure, or 3 terminal signal.
+struct ChildPoll {
+    state: Int
+    exitCode: Int
 }
 
 # Creates one literal command without invoking a shell. Configuration belongs

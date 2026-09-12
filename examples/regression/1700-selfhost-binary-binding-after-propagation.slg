@@ -1,0 +1,51 @@
+struct Span {
+    start: UIntSize
+    length: UIntSize
+}
+
+enum Host {
+    Registered(Span)
+    Numeric
+}
+
+struct Authority {
+    host: Host
+    raw: Span
+}
+
+span start: UIntSize, length: UIntSize -> Span => Span {
+    start: start
+    length: length
+}
+
+observe value: Span -> Result<UIntSize, Int> {
+    Result<UIntSize, Int>.Ok(value.start)
+}
+
+# Preserve the complete arithmetic initializer after fallible arm-local calls.
+finish authority: Authority -> Result<UIntSize, Int> {
+    authority.host -> when {
+        Registered(host) {
+            observe(span(authority.raw.start, host.start - authority.raw.start))?
+                => prefix
+            observe(host)? => current
+            host.start + host.length => suffixStart
+            observe(span(
+                suffixStart,
+                authority.raw.start + authority.raw.length - suffixStart))?
+                => suffix
+            Result<UIntSize, Int>.Ok(suffix)
+        }
+        Numeric { Result<UIntSize, Int>.Err(1) }
+    }
+}
+
+main {
+    finish(Authority {
+        host: Host.Registered(Span { start: 7, length: 11 })
+        raw: Span { start: 7, length: 11 }
+    }) -> when {
+        Ok(value) { "end=$value" -> println }
+        Err(error) { "error=$error" -> println }
+    }
+}

@@ -44,91 +44,14 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
             contextualBinary.kind == 8
                 and contextualBinaryNumericOperands
                 and contextualBinary.operand0 >= 0
-                and contextualBinary.operand1 >= 0 -> if {
-                    nodes[contextualBinary.operand0] => contextualBinaryLeft!
-                    nodes[contextualBinary.operand1] => contextualBinaryRight!
-                    contextualBinaryLeft!.kind == 3
-                        and contextualBinaryRight!.typeKind == 1
-                        and contextualBinaryRight!.typeOrigin == 1
-                        and contextualBinaryRight!.typeSymbol >= 2
-                        and contextualBinaryRight!.typeSymbol <= 14
-                        -> if {
-                            contextualBinaryRight!.typeId => contextualBinaryLeft!.typeId
-                            contextualBinaryRight!.typeKind => contextualBinaryLeft!.typeKind
-                            contextualBinaryRight!.typeOrigin => contextualBinaryLeft!.typeOrigin
-                            contextualBinaryRight!.typeModule => contextualBinaryLeft!.typeModule
-                            contextualBinaryRight!.typeSymbol => contextualBinaryLeft!.typeSymbol
-                            contextualBinaryRight!.typeFlags => contextualBinaryLeft!.typeFlags
-                            contextualBinaryLeft! => nodes[contextualBinary.operand0]
-                        }
-                    contextualBinaryRight!.kind == 3
-                        and contextualBinaryLeft!.typeKind == 1
-                        and contextualBinaryLeft!.typeOrigin == 1
-                        and contextualBinaryLeft!.typeSymbol >= 2
-                        and contextualBinaryLeft!.typeSymbol <= 14 -> if {
-                            contextualBinaryLeft!.typeId => contextualBinaryRight!.typeId
-                            contextualBinaryLeft!.typeKind => contextualBinaryRight!.typeKind
-                            contextualBinaryLeft!.typeOrigin => contextualBinaryRight!.typeOrigin
-                            contextualBinaryLeft!.typeModule => contextualBinaryRight!.typeModule
-                            contextualBinaryLeft!.typeSymbol => contextualBinaryRight!.typeSymbol
-                            contextualBinaryLeft!.typeFlags => contextualBinaryRight!.typeFlags
-                            contextualBinaryRight! => nodes[contextualBinary.operand1]
-                        }
-                    # A negated literal is an operator node around the literal,
-                    # so contextualize both nodes from the independently typed
-                    # peer. Otherwise `-9_223_372_036_854_775_807 - Long(1)`
-                    # lowers the first subtraction as i32 before the outer
-                    # arithmetic widens to Long.
-                    contextualBinaryLeft!.kind == 7
-                        and contextualBinaryLeft!.opcode == grammar.tokenIdMinus()
-                        and contextualBinaryLeft!.operand0 >= 0
-                        and nodes[contextualBinaryLeft!.operand0].kind == 3
-                        and contextualBinaryRight!.typeKind == 1
-                        and contextualBinaryRight!.typeOrigin == 1
-                        and contextualBinaryRight!.typeSymbol >= 2
-                        and contextualBinaryRight!.typeSymbol <= 14
-                        -> if {
-                            nodes[contextualBinaryLeft!.operand0] => contextualBinaryLeftLiteral!
-                            contextualBinaryRight!.typeId => contextualBinaryLeftLiteral!.typeId
-                            contextualBinaryRight!.typeKind => contextualBinaryLeftLiteral!.typeKind
-                            contextualBinaryRight!.typeOrigin => contextualBinaryLeftLiteral!.typeOrigin
-                            contextualBinaryRight!.typeModule => contextualBinaryLeftLiteral!.typeModule
-                            contextualBinaryRight!.typeSymbol => contextualBinaryLeftLiteral!.typeSymbol
-                            contextualBinaryRight!.typeFlags => contextualBinaryLeftLiteral!.typeFlags
-                            contextualBinaryLeftLiteral! => nodes[contextualBinaryLeft!.operand0]
-                            contextualBinaryRight!.typeId => contextualBinaryLeft!.typeId
-                            contextualBinaryRight!.typeKind => contextualBinaryLeft!.typeKind
-                            contextualBinaryRight!.typeOrigin => contextualBinaryLeft!.typeOrigin
-                            contextualBinaryRight!.typeModule => contextualBinaryLeft!.typeModule
-                            contextualBinaryRight!.typeSymbol => contextualBinaryLeft!.typeSymbol
-                            contextualBinaryRight!.typeFlags => contextualBinaryLeft!.typeFlags
-                            contextualBinaryLeft! => nodes[contextualBinary.operand0]
-                        }
-                    contextualBinaryRight!.kind == 7
-                        and contextualBinaryRight!.opcode == grammar.tokenIdMinus()
-                        and contextualBinaryRight!.operand0 >= 0
-                        and nodes[contextualBinaryRight!.operand0].kind == 3
-                        and contextualBinaryLeft!.typeKind == 1
-                        and contextualBinaryLeft!.typeOrigin == 1
-                        and contextualBinaryLeft!.typeSymbol >= 2
-                        and contextualBinaryLeft!.typeSymbol <= 14
-                        -> if {
-                            nodes[contextualBinaryRight!.operand0] => contextualBinaryRightLiteral!
-                            contextualBinaryLeft!.typeId => contextualBinaryRightLiteral!.typeId
-                            contextualBinaryLeft!.typeKind => contextualBinaryRightLiteral!.typeKind
-                            contextualBinaryLeft!.typeOrigin => contextualBinaryRightLiteral!.typeOrigin
-                            contextualBinaryLeft!.typeModule => contextualBinaryRightLiteral!.typeModule
-                            contextualBinaryLeft!.typeSymbol => contextualBinaryRightLiteral!.typeSymbol
-                            contextualBinaryLeft!.typeFlags => contextualBinaryRightLiteral!.typeFlags
-                            contextualBinaryRightLiteral! => nodes[contextualBinaryRight!.operand0]
-                            contextualBinaryLeft!.typeId => contextualBinaryRight!.typeId
-                            contextualBinaryLeft!.typeKind => contextualBinaryRight!.typeKind
-                            contextualBinaryLeft!.typeOrigin => contextualBinaryRight!.typeOrigin
-                            contextualBinaryLeft!.typeModule => contextualBinaryRight!.typeModule
-                            contextualBinaryLeft!.typeSymbol => contextualBinaryRight!.typeSymbol
-                            contextualBinaryLeft!.typeFlags => contextualBinaryRight!.typeFlags
-                            contextualBinaryRight! => nodes[contextualBinary.operand1]
-                        }
+                and contextualBinary.operand0 < (nodes -> len)
+                and contextualBinary.operand1 >= 0
+                and contextualBinary.operand1 < (nodes -> len)
+                -> if {
+                    nodes[contextualBinary.operand1] => contextualBinaryRight
+                    nodes -> sealIntegerLiteralPeerContext(contextualBinary.operand0, contextualBinaryRight)
+                    nodes[contextualBinary.operand0] => contextualBinaryLeft
+                    nodes -> sealIntegerLiteralPeerContext(contextualBinary.operand1, contextualBinaryLeft)
                     nodes[contextualBinary.operand0] => contextualBinaryCanonicalLeft
                     nodes[contextualBinary.operand1] => contextualBinaryCanonicalRight
                     contextualBinaryArithmetic
@@ -921,10 +844,19 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                         contextualCallLiteral.operand0 => contextualCallArgumentIndex!
                         nodes[contextualCallFunctionIndex!].operand1 => contextualCallParameterIndex!
                         true => contextualCallPrimaryParameter!
-                        contextualCallArgumentIndex! >= 0 and contextualCallParameterIndex! >= 0
+                        contextualCallArgumentIndex! >= 0 and contextualCallArgumentIndex! < (nodes -> len)
+                            and contextualCallParameterIndex! >= 0 and contextualCallParameterIndex! < (nodes -> len)
                             -> while {
                                 nodes[contextualCallArgumentIndex!] => contextualCallArgument!
                                 nodes[contextualCallParameterIndex!] => contextualCallParameter
+                                contextualCallParameter.typeId >= 0
+                                    and contextualCallParameter.typeId < (frozenRecursiveSemanticTypes -> len)
+                                    -> if {
+                                        nodes -> sealIntegerLiteralContext(contextualCallArgumentIndex!,
+                                        contextualCallParameter.typeId,
+                                        frozenRecursiveSemanticTypes[contextualCallParameter.typeId],
+                                        contextualCallParameter.typeFlags)
+                                    }
                                 contextualCallArgument!.kind == 14
                                     and ((contextualCallParameter.typeKind == 2
                                     or contextualCallParameter.typeKind == 3
@@ -1052,33 +984,13 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                     contextualNativeCall.operand0 => contextualNativeArgumentIndex!
                     contextualNativeFunction.operand1 => contextualNativeParameterIndex!
                     true => contextualNativePrimaryParameter!
-                    contextualNativeArgumentIndex! >= 0 and contextualNativeParameterIndex! >= 0
+                    contextualNativeArgumentIndex! >= 0 and contextualNativeArgumentIndex! < (nodes -> len)
+                        and contextualNativeParameterIndex! >= 0 and contextualNativeParameterIndex! < (nodes -> len)
                         -> while {
-                            nodes[contextualNativeArgumentIndex!] => contextualNativeArgument!
+                            nodes[contextualNativeArgumentIndex!] => contextualNativeArgument
                             nodes[contextualNativeParameterIndex!] => contextualNativeParameter
-                            contextualNativeArgumentIndex! => contextualNativeLiteralIndex!
-                            contextualNativeArgument!.kind == 7 and contextualNativeArgument!.operand1 >= 0 and nodes[contextualNativeArgument!.operand1].kind == 3
-                                -> if {
-                                    contextualNativeArgument!.operand1 => contextualNativeLiteralIndex!
-                                    contextualNativeParameter.typeOrigin => contextualNativeArgument!.typeOrigin
-                                    contextualNativeParameter.typeModule => contextualNativeArgument!.typeModule
-                                    contextualNativeParameter.typeSymbol => contextualNativeArgument!.typeSymbol
-                                    contextualNativeParameter.typeId => contextualNativeArgument!.typeId
-                                    contextualNativeParameter.typeKind => contextualNativeArgument!.typeKind
-                                    contextualNativeParameter.typeFlags => contextualNativeArgument!.typeFlags
-                                    contextualNativeArgument! => nodes[contextualNativeArgumentIndex!]
-                                }
-                            nodes[contextualNativeLiteralIndex!] => contextualNativeLiteral!
-                            contextualNativeLiteral!.kind == 3 -> if {
-                                contextualNativeParameter.typeOrigin => contextualNativeLiteral!.typeOrigin
-                                contextualNativeParameter.typeModule => contextualNativeLiteral!.typeModule
-                                contextualNativeParameter.typeSymbol => contextualNativeLiteral!.typeSymbol
-                                contextualNativeParameter.typeId => contextualNativeLiteral!.typeId
-                                contextualNativeParameter.typeKind => contextualNativeLiteral!.typeKind
-                                contextualNativeParameter.typeFlags => contextualNativeLiteral!.typeFlags
-                                contextualNativeLiteral! => nodes[contextualNativeLiteralIndex!]
-                            }
-                            contextualNativeArgument!.nextOperand => contextualNativeArgumentIndex!
+                            nodes -> sealNativeNumericLiteralContext(contextualNativeArgumentIndex!, contextualNativeParameter)
+                            contextualNativeArgument.nextOperand => contextualNativeArgumentIndex!
                             contextualNativePrimaryParameter! -> if {
                                 contextualNativeFunction.nextOperand => contextualNativeParameterIndex!
                                 false => contextualNativePrimaryParameter!

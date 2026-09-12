@@ -1,0 +1,50 @@
+import std.uri as uri
+import sys.file as file
+
+view bytes: ref [UInt8; ~] -> Text uses File {
+    bytes -> file.borrowBytes => source
+    source -> slice(UIntSize(0), source -> len)
+}
+
+run: -> Result<Unit, uri.Error> uses Console, File {
+    uri.canonicalNormalization() => policy
+
+    uri.parse("HTTP://EXAMPLE.com/%7euser/./a/../b?x=%2f#%7e", 128)?
+        => reference
+    reference -> normalizeBytes(policy, 128)? => normalized
+    "normalized=$(normalized -> view)" -> println
+
+    uri.parse("a/b/../../c/.", 64)? => relative
+    relative -> normalizeBytes(policy, 64)? => relativeNormalized
+    "relative=$(relativeNormalized -> view)" -> println
+
+    uri.parse("http://a/b/c/d;p?q", 64)? => base
+    uri.parse("g", 8)? => child
+    base -> resolveBytes(child, policy, 64)? => childResolved
+    "child=$(childResolved -> view)" -> println
+
+    uri.parse("../g", 8)? => parent
+    base -> resolveBytes(parent, policy, 64)? => parentResolved
+    "parent=$(parentResolved -> view)" -> println
+
+    uri.parse("?y", 8)? => query
+    base -> resolveBytes(query, policy, 64)? => queryResolved
+    "query=$(queryResolved -> view)" -> println
+
+    uri.parse("//G/x", 16)? => authority
+    base -> resolveBytes(authority, policy, 64)? => authorityResolved
+    "authority=$(authorityResolved -> view)" -> println
+
+    reference -> normalizeBytes(policy, 4) -> when {
+        Err(error) { "bounded=$(error.offset)" -> println }
+        Ok(value) { "bounded=missing" -> println }
+    }
+    Result<Unit, uri.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected=$(error.offset)" -> println }
+    }
+}

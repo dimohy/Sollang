@@ -100,17 +100,53 @@ emitProcessProjectionCall request: ProcessCallRequest, context: ref emitterConte
 }
 emitProcessCall request: ProcessCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[request.callIndex] => call
+    call.opcode == -308 -> if {
+        call.operand0 -> aggregateValueIndex(context, state) => tokenValueIndex
+        "  %v$(request.callIndex)_process_poll_raw = call %sollang.process_poll_result @sollang_poll_process(i64 " -> print
+        tokenValueIndex -> writeValue(request.ownerIndex, context, state)
+        ")" -> println
+        "  %v$(request.callIndex)_process_poll_code = extractvalue %sollang.process_poll_result %v$(request.callIndex)_process_poll_raw, 0" -> println
+        "  %v$(request.callIndex)_process_poll_state = extractvalue %sollang.process_poll_result %v$(request.callIndex)_process_poll_raw, 1" -> println
+        "  %v$(request.callIndex)_process_poll0 = insertvalue " -> print
+        call -> writeIrType(context, state)
+        " poison, i32 %v$(request.callIndex)_process_poll_state, 0" -> println
+        "  %v$(request.callIndex) = insertvalue " -> print
+        call -> writeIrType(context, state)
+        " %v$(request.callIndex)_process_poll0, i32 %v$(request.callIndex)_process_poll_code, 1" -> println
+        return
+    }
     call.opcode == -278 -> if {
         call.operand0 -> aggregateValueIndex(context, state) => childValueIndex
         context.ir[childValueIndex] => childValue
+        "  %v$(request.callIndex)_process_completion_state = extractvalue " -> print
+        childValue -> writeIrType(context, state)
+        " " -> print
+        childValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 2" -> println
+        "  %v$(request.callIndex)_process_cached = icmp ne i32 %v$(request.callIndex)_process_completion_state, 0" -> println
+        "  %v$(request.callIndex)_process_cached_code = extractvalue " -> print
+        childValue -> writeIrType(context, state)
+        " " -> print
+        childValueIndex -> writeValue(request.ownerIndex, context, state)
+        ", 3" -> println
+        "  br i1 %v$(request.callIndex)_process_cached, label %process$(request.callIndex)_cached, label %process$(request.callIndex)_wait" -> println
+        "process$(request.callIndex)_cached:" -> println
+        "  %v$(request.callIndex)_process_cached_is_exit = icmp eq i32 %v$(request.callIndex)_process_completion_state, 1" -> println
+        "  %v$(request.callIndex)_process_cached_error = select i1 %v$(request.callIndex)_process_cached_is_exit, i32 0, i32 3" -> println
+        "  br label %process$(request.callIndex)_wait_merge" -> println
+        "process$(request.callIndex)_wait:" -> println
         "  %v$(request.callIndex)_process_child = extractvalue " -> print
         childValue -> writeIrType(context, state)
         " " -> print
         childValueIndex -> writeValue(request.ownerIndex, context, state)
         ", 0" -> println
         "  %v$(request.callIndex)_process_raw = call %sollang.process_result @sollang_wait_process(i64 %v$(request.callIndex)_process_child)" -> println
-        "  %v$(request.callIndex)_process_value = extractvalue %sollang.process_result %v$(request.callIndex)_process_raw, 0" -> println
-        "  %v$(request.callIndex)_process_error = extractvalue %sollang.process_result %v$(request.callIndex)_process_raw, 1" -> println
+        "  %v$(request.callIndex)_process_wait_value = extractvalue %sollang.process_result %v$(request.callIndex)_process_raw, 0" -> println
+        "  %v$(request.callIndex)_process_wait_error = extractvalue %sollang.process_result %v$(request.callIndex)_process_raw, 1" -> println
+        "  br label %process$(request.callIndex)_wait_merge" -> println
+        "process$(request.callIndex)_wait_merge:" -> println
+        "  %v$(request.callIndex)_process_value = phi i32 [ %v$(request.callIndex)_process_cached_code, %process$(request.callIndex)_cached ], [ %v$(request.callIndex)_process_wait_value, %process$(request.callIndex)_wait ]" -> println
+        "  %v$(request.callIndex)_process_error = phi i32 [ %v$(request.callIndex)_process_cached_error, %process$(request.callIndex)_cached ], [ %v$(request.callIndex)_process_wait_error, %process$(request.callIndex)_wait ]" -> println
     } else {
         call.operand0 => commandArgumentIndex
         commandArgumentIndex -> aggregateValueIndex(context, state) => commandValueIndex
@@ -2483,6 +2519,21 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
     node.typeId >= 0 -> if {
         node.typeId => arrayTypeId!
         context.types[arrayTypeId!].kind == 8 -> if { context.types[arrayTypeId!].first => arrayTypeId! }
+        context.types[arrayTypeId!].kind == 1
+            and context.types[arrayTypeId!].origin == 1
+            and (context.types[arrayTypeId!].symbol == 1 or context.types[arrayTypeId!].symbol == 17 or context.types[arrayTypeId!].symbol == 18)
+            -> if {
+                8 => builtinElementSymbol!
+                context.types[arrayTypeId!].symbol == 1 -> if { 14 => builtinElementSymbol! }
+                0 => mappedByteTypeSearch!
+                mappedByteTypeSearch! < (context.types -> len) and elementTypeId! < 0
+                    -> while {
+                        context.types[mappedByteTypeSearch!] => mappedByteType
+                        mappedByteType.kind == 1 and mappedByteType.origin == 1 and mappedByteType.symbol == builtinElementSymbol!
+                            -> if { mappedByteTypeSearch! => elementTypeId! }
+                        mappedByteTypeSearch! + 1 => mappedByteTypeSearch!
+                    }
+            }
         context.types[arrayTypeId!].kind == 2
             or context.types[arrayTypeId!].kind == 3
             or context.types[arrayTypeId!].kind == 4
@@ -2598,12 +2649,20 @@ writeArrayElementType node: typedIr.TypedIrNode, context: ref emitterContext.Emi
 
 writeArrayViewType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.types[typeId] => arrayType
-    arrayType.kind == 3
-        or arrayType.kind == 12
-        or (arrayType.kind == 7
-        and arrayType.origin == 4
-        and (arrayType.symbol == 6 or arrayType.symbol == 7))
-        -> if { "%sollang.array.i32" -> print } else { "{ ptr, i64 }" -> print }
+    arrayType.kind == 1 and arrayType.origin == 1 and arrayType.symbol == 1
+        -> if {
+            "%sollang.text" -> print
+            return
+        }
+    arrayType.kind == 1 and arrayType.origin == 1 and (arrayType.symbol == 17 or arrayType.symbol == 18)
+        -> if { "%sollang.mapped_bytes" -> print } else {
+            arrayType.kind == 3
+                or arrayType.kind == 12
+                or (arrayType.kind == 7
+                and arrayType.origin == 4
+                and (arrayType.symbol == 6 or arrayType.symbol == 7))
+                -> if { "%sollang.array.i32" -> print } else { "{ ptr, i64 }" -> print }
+        }
 }
 emitTextLiteralConstant request: TextLiteralRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context -> literalEmitConstant(request.sourceModule, request.token)

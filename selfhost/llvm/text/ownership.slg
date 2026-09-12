@@ -316,10 +316,15 @@ matchArmBindingValueIndex armIndex: Int, context: ref emitterContext.EmitContext
 regionFullyMovesBinding regionIndex: Int, sourceModule: Int, symbol: Int, afterStart: UIntSize, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     regionIndex >= 0 and regionIndex < (context.ir -> len)
         -> unless { false -> return }
-    # A terminating region has already discharged its cleanup and contributes
-    # no ownership obligation to the caller's continuing merge.
-    regionIndex -> regionReturns(context, state)
-        -> if { true -> return }
+    # A terminating control region has already discharged its cleanup and
+    # contributes no ownership obligation to the caller's continuing merge.
+    # Function owners have parent -1 and are scopes, not control regions.
+    context.ir[regionIndex] => region
+    region.kind != 0 and region.kind != 11
+        -> if {
+            regionIndex -> regionReturns(context, state)
+                -> if { true -> return }
+        }
     false => moved!
     0 => moveIndex!
     moveIndex! < (context.moves -> len) and not moved!
@@ -1219,7 +1224,7 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
         dropType.kind == 3 or dropType.kind == 4 or dropType.kind == 5 or dropType.kind == 6 or dropType.kind == 12 or dropType.kind == 13
             -> if { true => supported! }
         dropType.kind == 9 -> if { true => supported! }
-        dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24
+        dropType.kind == 1 and dropType.origin == 1 and (dropType.symbol == 17 or dropType.symbol == 18 or dropType.symbol == 24)
             -> if { true => supported! }
         (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) or dropType.kind == 10
             -> if { true => supported! }
@@ -1468,6 +1473,18 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                         "  call void @sollang_runtime_unmap_text(%sollang.source_text %value)" -> println
                         "  ret void" -> println
                     }
+                dropType.kind == 1 and dropType.origin == 1 and (dropType.symbol == 17 or dropType.symbol == 18)
+                    -> if {
+                        "  %base = extractvalue %sollang.mapped_bytes %value, 2" -> println
+                        "  %mapped_length = extractvalue %sollang.mapped_bytes %value, 3" -> println
+                        "  %present = icmp ne ptr %base, null" -> println
+                        "  br i1 %present, label %unmap, label %done" -> println
+                        "unmap:" -> println
+                        "  call void @sollang_mapped_unmap(ptr %base, i64 %mapped_length)" -> println
+                        "  br label %done" -> println
+                        "done:" -> println
+                        "  ret void" -> println
+                    }
                 (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2) and not (dropTypeIndex! -> isNominalEnumType(context, state))) or dropType.kind == 10
                     -> if {
                         dropType.kind == 1 and (dropTypeIndex! -> isOwnedSocketType(context, state))
@@ -1637,6 +1654,13 @@ emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext
             context.typeAligns[request.payloadTypeId] -> writeDecimalLine
             "  %enumdrop$(request.nameRoot)_owner = extractvalue %sollang.source_text %enumdrop$(request.nameRoot)_payload, 2" -> println
             "  call void @free(ptr %enumdrop$(request.nameRoot)_owner)" -> println
+        }
+    payloadType.kind == 1 and payloadType.origin == 1 and (payloadType.symbol == 17 or payloadType.symbol == 18)
+        -> if {
+            "  %enumdrop$(request.nameRoot)_payload = load %sollang.mapped_bytes, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align 8" -> println
+            "  %enumdrop$(request.nameRoot)_base = extractvalue %sollang.mapped_bytes %enumdrop$(request.nameRoot)_payload, 2" -> println
+            "  %enumdrop$(request.nameRoot)_mapped_length = extractvalue %sollang.mapped_bytes %enumdrop$(request.nameRoot)_payload, 3" -> println
+            "  call void @sollang_mapped_unmap(ptr %enumdrop$(request.nameRoot)_base, i64 %enumdrop$(request.nameRoot)_mapped_length)" -> println
         }
     payloadType.kind == 1 and (payloadType.origin == 0 or payloadType.origin == 2)
         -> if {
@@ -1834,6 +1858,7 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
                     current.symbol == 0 -> if { "void" -> print }
                     current.symbol == 1 -> if { "%sollang.text" -> print }
                     current.symbol == 15 -> if { "%sollang.array.i32" -> print }
+                    current.symbol == 17 or current.symbol == 18 -> if { "%sollang.mapped_bytes" -> print }
                     current.symbol == 2 or current.symbol == 5 or current.symbol == 10 or current.symbol == 14
                         -> if { "i32" -> print }
                     current.symbol == 3 or current.symbol == 8 -> if { "i8" -> print }
@@ -1907,6 +1932,7 @@ llvmType symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEm
     symbol == 1 -> if { "%sollang.text" => result! }
     symbol == 15 -> if { "%sollang.array.i32" => result! }
     symbol == 16 -> if { "i64" => result! }
+    symbol == 17 or symbol == 18 -> if { "%sollang.mapped_bytes" => result! }
     symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14
         -> if { "i32" => result! }
     symbol == 3 or symbol == 8 -> if { "i8" => result! }
@@ -1926,6 +1952,7 @@ storageSize symbol: Int, context: ref emitterContext.EmitContext, state: ref Cor
     symbol == 1 -> if { 16 => result! }
     symbol == 15 -> if { 24 => result! }
     symbol == 16 -> if { 8 => result! }
+    symbol == 17 or symbol == 18 -> if { 40 => result! }
     symbol == 3 or symbol == 8 or symbol == 23 -> if { 1 => result! }
     # %sollang.source_text is { ptr, i64, ptr, i64 }. The i64 members keep
     # 8-byte alignment on wasm32, so both wasm32 and x64 use 32 bytes.
@@ -2276,7 +2303,8 @@ integerRemainderOperation expression: typedIr.TypedIrNode, context: ref emitterC
 }
 legacyStorageAlign symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     4 => result!
-    symbol == 1 or symbol == 16 -> if { 8 => result! }
+    symbol == 1 or symbol == 16 or symbol == 17 or symbol == 18
+        -> if { 8 => result! }
     symbol == 3 or symbol == 8 or symbol == 23 -> if { 1 => result! }
     # SourceText contains i64 length fields and therefore keeps 8-byte ABI
     # alignment even when the target pointer width is 32 bits.

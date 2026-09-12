@@ -395,6 +395,22 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                     recursiveEntryExpressionType.second >= 0 -> if { frozenRecursiveSemanticTypes[recursiveEntryExpressionType.second].symbol => entryExpressionTypeSymbol! }
                                 }
                             }
+                            -1 => entryMapExpressionOpcode!
+                            entryExpression.kind == 49 -> if {
+                                expressionTypeIds.mapExpressionOpcode(source, prepared.package.tokens, sourceRange.tokenStart, entryExpression) => entryMapExpressionOpcode!
+                            }
+                            entryExpression.kind == 49 and (entryMapExpressionOpcode! == -306 or entryMapExpressionOpcode! == -307)
+                                -> if {
+                                    1 => entryExpressionTypeOrigin!
+                                    -1 => entryExpressionTypeModule!
+                                    entryMapExpressionOpcode! == -306 -> if {
+                                        17 => entryExpressionTypeSymbol!
+                                        17 => recursiveEntryExpressionTypeId!
+                                    } else {
+                                        18 => entryExpressionTypeSymbol!
+                                        18 => recursiveEntryExpressionTypeId!
+                                    }
+                                }
                             false => knownEntryLocalBindingReference!
                             entryExpression.kind == 15 -> if {
                                 entryResolvedSymbolByAst![entryExpressionAst!] => entryResolvedSymbol
@@ -672,12 +688,15 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                 0 => entryExpressionTypeSymbol!
                             }
                             false => knownEntryNumericExpression!
-                            entryExpression.kind == 20 or entryExpression.kind == 21
+                            entryExpression.kind -> isNumericBinaryAstKind
                                 -> if {
+                                    # Keep every binary syntax node even when
+                                    # its semantic type converges only in the
+                                    # final Typed IR passes.
+                                    true => knownEntryNumericExpression!
                                     frozenNearestLegacyIndexByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryNumericIndex
                                     knownEntryNumericIndex >= 0 -> if {
                                         inferred[knownEntryNumericIndex] => knownEntryNumericCandidate
-                                        true => knownEntryNumericExpression!
                                         knownEntryNumericCandidate.origin => entryExpressionTypeOrigin!
                                         knownEntryNumericCandidate.targetModule => entryExpressionTypeModule!
                                         knownEntryNumericCandidate.targetSymbol => entryExpressionTypeSymbol!
@@ -1158,19 +1177,11 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                 23 => recursiveEntryExpressionTypeId!
                             }
                             entryExpressionBelongs! -> if {
-                                entryExpression.kind == 42 or entryExpression.kind == 43 or entryExpression.kind == 44 or entryExpression.kind == 45 or entryExpression.kind == 46 or entryExpression.kind == 47 or entryExpression.kind == 58 or entryExpression.kind == 62 or entryExpression.kind == 82
+                                entryExpression.kind -> controlIrKindForAstKind => entryControlKind
+                                entryControlKind >= 0
                                     -> if {
                                         results! -> len => entryControlIr
                                         entryControlIr => entryAstToIr![entryExpressionAst!]
-                                        18 => entryControlKind!
-                                        entryExpression.kind == 43 -> if { 19 => entryControlKind! }
-                                        entryExpression.kind == 44 -> if { 20 => entryControlKind! }
-                                        entryExpression.kind == 45 -> if { 21 => entryControlKind! }
-                                        entryExpression.kind == 46 -> if { 22 => entryControlKind! }
-                                        entryExpression.kind == 47 -> if { 23 => entryControlKind! }
-                                        entryExpression.kind == 58 -> if { 19 => entryControlKind! }
-                                        entryExpression.kind == 62 or entryExpression.kind == 82
-                                            -> if { 30 => entryControlKind! }
                                         -1 => entryControlOpcode!
                                         entryExpression.kind == 42 -> if { entryExpression.operatorKind => entryControlOpcode! }
                                         entryExpression.kind == 45 -> if {
@@ -1205,7 +1216,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                             inferredEntryControlType.targetSymbol => entryControlTypeSymbol!
                                         }
                                         results! -> push(TypedIrNode {
-                                            kind: entryControlKind!
+                                            kind: entryControlKind
                                             parent: entryIr
                                             sourceModule: sourceIndex
                                             astNode: entryExpressionAst!
@@ -1366,63 +1377,29 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                         # contextual intrinsic with the same spelling.
                                         knownEntryCallExpression! -> if { -1 => entryFlowEmissionOpcode! }
                                         prepared.controlProducerWrapperByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryControlProducerWrapperExpression
-                                        (not resolvedEntryQualifiedLeaf! or knownEntryCallResultMemberExpression! or knownEntryPartitionItem! or entryFlowEmissionOpcode! == -213 or knownEntryControlProducerWrapperExpression) and (contextualEntryNullaryOption! or entryExpressionTypeIndex >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryLocalBindingReference! or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling! or entryFlowEmissionOpcode! == -213 or knownEntryControlProducerWrapperExpression or entryExpression.kind == 22 or knownEntryLocalMemberExpression! or knownEntryIndexedMemberExpression! or knownEntryCallResultMemberExpression! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or entryExpression.kind == 59 or entryExpression.kind == 71 or entryExpression.kind == 73 or entryExpression.kind == 74 or entryExpression.kind == 75 or entryExpression.kind == 76 or entryExpression.kind == 78 or entryExpression.kind == 79 or entryExpression.kind == 80 or entryExpression.kind == 81 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryTakeExpression! or knownEntryPutExpression! or knownEntryCapacityExpression! or knownEntryReserveExpression! or knownEntryBitSetExpression! or knownEntryDequeExpression! or knownEntryHeapExpression! or knownEntrySetExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryMaterializeExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment or knownEntryMemberAssignment)
+                                        (not resolvedEntryQualifiedLeaf! or knownEntryCallResultMemberExpression! or knownEntryPartitionItem! or entryFlowEmissionOpcode! == -213 or knownEntryControlProducerWrapperExpression) and (contextualEntryNullaryOption! or entryExpressionTypeIndex >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryLocalBindingReference! or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling! or entryFlowEmissionOpcode! == -213 or knownEntryControlProducerWrapperExpression or entryMapExpressionOpcode! == -306 or entryMapExpressionOpcode! == -307 or entryExpression.kind == 22 or knownEntryLocalMemberExpression! or knownEntryIndexedMemberExpression! or knownEntryCallResultMemberExpression! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or entryExpression.kind == 59 or entryExpression.kind == 71 or entryExpression.kind == 73 or entryExpression.kind == 74 or entryExpression.kind == 75 or entryExpression.kind == 76 or entryExpression.kind == 78 or entryExpression.kind == 79 or entryExpression.kind == 80 or entryExpression.kind == 81 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryTakeExpression! or knownEntryPutExpression! or knownEntryCapacityExpression! or knownEntryReserveExpression! or knownEntryBitSetExpression! or knownEntryDequeExpression! or knownEntryHeapExpression! or knownEntrySetExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryMaterializeExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment or knownEntryMemberAssignment)
                                             -> if {
-                                                9 => entryExpressionKind!
-                                                entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
-                                                entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
-                                                entryExpression.kind == 15 -> if {
-                                                    5 => entryExpressionKind!
-                                                    entryExpressionTypeOrigin! == 1 and entryExpressionTypeSymbol! == 23
-                                                        -> if {
-                                                            true => entryExpressionIsBoolLiteral!
-                                                            0 => entryBoolNameSearch!
-                                                            entryBoolNameSearch! < (resolvedNames! -> len)
-                                                                -> while {
-                                                                    resolvedNames![entryBoolNameSearch!].astNode == entryExpressionAst!
-                                                                        -> if { false => entryExpressionIsBoolLiteral! }
-                                                                    entryBoolNameSearch! + 1 => entryBoolNameSearch!
-                                                                }
-                                                            entryExpressionIsBoolLiteral! -> if { 4 => entryExpressionKind! }
-                                                        }
-                                                }
-                                                entryExpression.kind == 11 or entryExpression.kind == 48 or (entryExpression.kind == 10 and (unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling!))
-                                                    -> if { 6 => entryExpressionKind! }
-                                                contextualEntryNullaryOption! -> if { 26 => entryExpressionKind! }
-                                                entryExpression.kind == 22 -> if { 7 => entryExpressionKind! }
-                                                entryExpression.kind >= 18 and entryExpression.kind <= 21
-                                                    -> if { 8 => entryExpressionKind! }
-                                                entryExpression.kind == 24 or entryExpression.kind == 25
-                                                    -> if { 8 => entryExpressionKind! }
-                                                entryExpression.kind == 70 -> if { 8 => entryExpressionKind! }
-                                                entryExpression.kind == 39 -> if { 12 => entryExpressionKind! }
-                                                entryExpression.kind == 36 -> if { 13 => entryExpressionKind! }
-                                                entryExpression.kind == 37 -> if { 14 => entryExpressionKind! }
-                                                entryExpression.kind == 38 -> if { 16 => entryExpressionKind! }
-                                                entryExpression.kind == 41 -> if { 15 => entryExpressionKind! }
-                                                entryExpression.kind == 53 -> if { 24 => entryExpressionKind! }
-                                                entryExpression.kind == 54 -> if { 25 => entryExpressionKind! }
-                                                entryExpression.kind == 55 -> if { 26 => entryExpressionKind! }
-                                                entryExpression.kind == 56 -> if { 27 => entryExpressionKind! }
-                                                entryExpression.kind == 59 -> if { 29 => entryExpressionKind! }
-                                                entryExpression.kind == 63 -> if { 31 => entryExpressionKind! }
-                                                entryExpression.kind == 64 -> if { 32 => entryExpressionKind! }
-                                                entryExpression.kind == 57 -> if { 33 => entryExpressionKind! }
-                                                entryExpression.kind == 71 -> if { 35 => entryExpressionKind! }
-                                                entryExpression.kind == 73 -> if { 37 => entryExpressionKind! }
-                                                entryExpression.kind == 74 -> if { 38 => entryExpressionKind! }
-                                                entryExpression.kind == 75 -> if { 39 => entryExpressionKind! }
-                                                entryExpression.kind == 76 -> if { 36 => entryExpressionKind! }
-                                                entryExpression.kind == 78 -> if { 40 => entryExpressionKind! }
-                                                entryExpression.kind == 79 -> if { 41 => entryExpressionKind! }
-                                                entryExpression.kind == 80 -> if { 42 => entryExpressionKind! }
-                                                entryExpression.kind == 81 -> if { 43 => entryExpressionKind! }
+                                                false => entryExpressionIsBoolLiteral!
+                                                entryExpression.kind == 15 and entryExpressionTypeOrigin! == 1 and entryExpressionTypeSymbol! == 23
+                                                    -> if {
+                                                        true => entryExpressionIsBoolLiteral!
+                                                        0 => entryBoolNameSearch!
+                                                        entryBoolNameSearch! < (resolvedNames! -> len)
+                                                            -> while {
+                                                                resolvedNames![entryBoolNameSearch!].astNode == entryExpressionAst!
+                                                                    -> if { false => entryExpressionIsBoolLiteral! }
+                                                                entryBoolNameSearch! + 1 => entryBoolNameSearch!
+                                                            }
+                                                    }
+                                                entryExpression.kind == 11 or entryExpression.kind == 48 or (entryExpression.kind == 10 and (unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling!)) => entryExpressionIsCallLike
+                                                false => entryExpressionIsPropertyCall!
                                                 prepared.callIndexByAst[sourceRange.astStart + entryExpressionAst!] => entryPropertyCallIndex
                                                 entryPropertyCallIndex >= 0 -> if {
                                                     prepared.calls[entryPropertyCallIndex] => entryPropertyCall
                                                     entryPropertyCall.sourceModule == sourceIndex and entryPropertyCall.callAst == entryExpressionAst! and entryPropertyCall.status == 0
-                                                        -> if { 6 => entryExpressionKind! }
+                                                        -> if { true => entryExpressionIsPropertyCall! }
                                                 }
+                                                resolvedExpressionIrKindForAstKind(entryExpression.kind, entryExpressionIsBoolLiteral!, entryExpressionIsCallLike, contextualEntryNullaryOption!, entryExpressionIsPropertyCall!) => entryExpressionKind!
                                                 false => transparentEntryExpression!
                                                 entryExpression.kind >= 18 and entryExpression.kind <= 21
                                                     -> if {
@@ -1489,6 +1466,10 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                     -1 => entryExpressionTargetModule!
                                                     entryExpression.flags => entryExpressionFlags!
                                                     entryExpression.operatorKind => entryExpressionOpcode!
+                                                    entryExpression.kind == 49 -> if {
+                                                        entryMapExpressionOpcode! => entryExpressionOpcode!
+                                                        -1 => entryExpressionFlags!
+                                                    }
                                                     entryExpressionKind! == 16 -> if {
                                                         source -> dictionaryCapacityHint(entryExpression) => entryExpressionOpcode!
                                                     }

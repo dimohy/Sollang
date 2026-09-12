@@ -423,8 +423,19 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     false => usesBitSetCount!
     false => usesMutableContainer!
     0 => arrayTypeSearch!
+    false => usesMappedBytes!
+    false => usesTextEach!
     arrayTypeSearch! < (context.ir -> len) -> while {
         context.ir[arrayTypeSearch!] => allocationNode
+        allocationNode.kind == 6 and allocationNode.opcode == -208 and allocationNode.operand0 >= 0
+            -> if {
+                context.ir[allocationNode.operand0] -> isDirectTextEachSource(context)
+                    -> if { true => usesTextEach! }
+            }
+        allocationNode.typeOrigin == 1 and (allocationNode.typeSymbol == 17 or allocationNode.typeSymbol == 18)
+            -> if { true => usesMappedBytes! }
+        allocationNode.kind == 9 and (allocationNode.opcode == -306 or allocationNode.opcode == -307)
+            -> if { true => usesMappedBytes! }
         allocationNode -> isDynamicArrayType -> if {
             true => usesDynamicArray!
             true => usesArrayAllocation!
@@ -496,6 +507,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     # independently of the dynamic-array value layout.
     usesMutableContainer! -> if { "%sollang.mutable_container = type { ptr, ptr, ptr }" -> println }
     usesDynamicArray! -> if { "%sollang.array.i32 = type { ptr, i64, i64 }" -> println }
+    usesMappedBytes! -> if { "%sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }" -> println }
     usesArrayAllocation! or usesArrayReallocation! or usesArenaAllocation! or usesTextMaterialize! or usesSourceText or usesComputePool or intrinsicRuntimeModule >= 0 or usesOwnedDropRuntime or usesDirectoryTraversal or usesDynTrait! or context.usesConcurrentStreamJoins
         -> if {
             context.pointerBitWidth == 32 -> if {
@@ -601,7 +613,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             -> if { true => usesComInterop! }
         nativeInteropSearch! + 1 => nativeInteropSearch!
     }
-    usesCollectionCapacityTrap! or usesDictionary! or usesEnumMatch! or usesSourceText or hasNativeDeclarations! or usesComInterop!
+    usesCollectionCapacityTrap! or usesDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes! or usesTextEach! or hasNativeDeclarations! or usesComInterop!
         -> if { "declare void @llvm.trap()" -> println }
     usesBitSetCount! -> if { "declare i64 @llvm.ctpop.i64(i64)" -> println }
     hasNativeDeclarations! -> if {
@@ -621,6 +633,20 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         context.expectedPathStyle == 1 -> if { "declare dllimport void @ExitProcess(i32)" -> println } else { "declare void @exit(i32)" -> println }
     }
     usesText and not requiresEarlyTextType -> if { "%sollang.text = type { ptr, i64 }" -> println }
+    usesMappedBytes! and context.pointerBitWidth != 32
+        -> if {
+            context.expectedPathStyle == 1 -> if {
+                not (intrinsicRuntimeModule >= 0 or usesSourceText or (context -> diagnostics.usesOwnedFileRuntime) or (context -> diagnostics.usesProcessRuntime)) => declareMappedCreateFile
+                not (intrinsicRuntimeModule >= 0 or usesSourceText or (context -> diagnostics.usesOwnedFileRuntime) or (context -> diagnostics.usesDirectoryRuntime) or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesProcessCapture) or (context -> diagnostics.usesMouseEventsRuntime) or context.usesConcurrentStreamJoins) => declareMappedCloseHandle
+                intrinsicRuntimeModule < 0 and not usesSourceText => declareMappedMapping
+                llvmRuntime.emitWindowsMappedBytes(declareMappedCreateFile, declareMappedCloseHandle, declareMappedMapping)
+            } else {
+                not (usesSourceText or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedOpen
+                not (usesSourceText or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesSocketRuntime) or (context -> diagnostics.usesMouseEventsRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedClose
+                not usesSourceText => declareMappedPosixMapping
+                llvmRuntime.emitLinuxMappedBytes(declareMappedOpen, declareMappedClose, declareMappedPosixMapping)
+            }
+        }
     context.pointerBitWidth == 32 and usesSourceText
         -> if {
             """
@@ -638,6 +664,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     context -> usesDirectTextEqualityRuntime => usesTextEqualityRuntime!
     usesTextDictionaryKeys! -> if { true => usesTextEqualityRuntime! }
     usesTextEqualityRuntime! -> if { llvmRuntime.emitTextEqualityHelper() }
+    usesTextEach! -> if { llvmRuntime.emitUtf8DecodeHelper() }
     usesText -> if {
         0 => textGlobalIndex!
         textGlobalIndex! < (context.ir -> len) -> while {

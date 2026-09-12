@@ -1,0 +1,116 @@
+namespace std.algorithm
+
+# Comparisons are pure and must define one consistent strict weak ordering.
+# Only the sign matters; reversing an order never negates the comparison value.
+public trait Comparison {
+    type Item
+    compare: self, left: ref Item, right: ref Item -> Int
+}
+
+public enum Direction {
+    Ascending
+    Descending
+}
+
+public struct Ordering {
+    public direction: Direction
+}
+
+public struct SearchResult {
+    public index: Int
+    public found: Bool
+}
+
+public enum Error {
+    ReversedBounds
+}
+
+impl Ordering {
+    # Equivalent values retain the first input. Like sort, these value-returning
+    # operations require values that permit inline copying from readonly inputs.
+    public min<T, C>: self, left: T, right: T, comparison: C -> T where C: Comparison, C.Item == T {
+        self -> before(right, left, comparison) -> if { right } else { left }
+    }
+
+    public max<T, C>: self, left: T, right: T, comparison: C -> T where C: Comparison, C.Item == T {
+        self -> before(left, right, comparison) -> if { right } else { left }
+    }
+
+    public clamp<T, C>: self, value: T, lower: T, upper: T, comparison: C -> Result<T, Error> where C: Comparison, C.Item == T {
+        self -> before(upper, lower, comparison)
+            -> if { Result<T, Error>.Err(Error.ReversedBounds) -> return }
+        self -> before(value, lower, comparison)
+            -> if { Result<T, Error>.Ok(lower) -> return }
+        self -> before(upper, value, comparison)
+            -> if { Result<T, Error>.Ok(upper) -> return }
+        Result<T, Error>.Ok(value)
+    }
+
+    before<T, C>: self, left: T, right: T, comparison: C -> Bool where C: Comparison, C.Item == T {
+        comparison -> Comparison.compare(left, right) => order
+        self.direction -> when {
+            Ascending { order < 0 }
+            Descending { order > 0 }
+        }
+    }
+
+    exchange<T>: self, values: mut [T; ~], left: Int, right: Int -> Unit {
+        values[left] => previous
+        values[right] => values[left]
+        previous => values[right]
+    }
+
+    siftDown<T, C>: self, values: mut [T; ~], start: Int, count: Int, comparison: C -> Unit where C: Comparison, C.Item == T {
+        start => root!
+        root! < count / 2 -> while {
+            root! * 2 + 1 => child!
+            child! + 1 < count
+                and self -> before(values[child!], values[child! + 1], comparison)
+                -> if { child! + 1 => child! }
+            self -> before(values[root!], values[child!], comparison)
+                -> unless { return }
+            self -> exchange(values, root!, child!)
+            child! => root!
+        }
+    }
+
+    # Unstable heapsort: worst-case O(n log n) comparisons, O(1) extra storage.
+    # The caller retains its array, length, and capacity. Elements must permit
+    # inline copying; owned elements are rejected by the ordinary ownership rules.
+    public sort<T, C>: self, values: mut [T; ~], comparison: C -> Unit where C: Comparison, C.Item == T {
+        values -> len => count
+        count / 2 => parent!
+        parent! > 0 -> while {
+            parent! - 1 => parent!
+            self -> siftDown(values, parent!, count, comparison)
+        }
+        count => remaining!
+        remaining! > 1 -> while {
+            remaining! - 1 => remaining!
+            self -> exchange(values, 0, remaining!)
+            self -> siftDown(values, 0, remaining!, comparison)
+        }
+    }
+
+    # The array must already be sorted by this direction and comparator.
+    # Return the first equal position, or the insertion position when absent.
+    # This borrows the existing growable storage without copying its elements.
+    public binarySearch<T, C>: self, values: [T; ~], needle: T, comparison: C -> SearchResult where C: Comparison, C.Item == T {
+        0 => lower!
+        values -> len => upper!
+        lower! < upper! -> while {
+            lower! + (upper! - lower!) / 2 => middle
+            self -> before(values[middle], needle, comparison)
+                -> if {
+                    middle + 1 => lower!
+                } else {
+                    middle => upper!
+                }
+        }
+        false => found!
+        lower! < (values -> len) -> if {
+            comparison -> Comparison.compare(values[lower!], needle) == 0 => found!
+        }
+        SearchResult { index: lower!, found: found! }
+    }
+}

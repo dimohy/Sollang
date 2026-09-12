@@ -60,6 +60,7 @@ internal sealed partial class SemanticCompiler
     private string? _currentTypeScopeName;
     private BoundType? _currentFunctionReturnType;
     private IReadOnlySet<string> _currentMoveInputNames = new HashSet<string>(StringComparer.Ordinal);
+    private IReadOnlySet<string> _currentTransferableEnumPayloadNames = new HashSet<string>(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, BoundType>? _currentFunctionOuterBindings;
     private bool _currentFunctionAllowsEarlyReturn;
     private bool _currentFunctionIsAsync;
@@ -2218,6 +2219,8 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        var previousTransferablePayloadNames = _currentTransferableEnumPayloadNames;
+        _currentTransferableEnumPayloadNames = new HashSet<string>(StringComparer.Ordinal);
         var previousDeclarations = _currentMutableDeclarations;
         var previousDeclarationsByName = _currentMutableDeclarationsByName;
         var previousFixedLengthCandidates = _currentFixedLengthArrayCandidates;
@@ -2234,6 +2237,7 @@ internal sealed partial class SemanticCompiler
         }
         finally
         {
+            _currentTransferableEnumPayloadNames = previousTransferablePayloadNames;
             _currentMutableDeclarations = previousDeclarations;
             _currentMutableDeclarationsByName = previousDeclarationsByName;
             _currentFixedLengthArrayCandidates = previousFixedLengthCandidates;
@@ -2488,6 +2492,15 @@ internal sealed partial class SemanticCompiler
                 function.Line,
                 function.Column,
                 $"function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
+        }
+        if (function.Body is not null && FunctionControlFlowFacts.MayReachContinuation(function))
+        {
+            RejectLocalBorrowedTextReturnEscape(
+                function.Body,
+                function.ReturnType,
+                scopedFunctions,
+                bodyBindings,
+                returnOuterBindings);
         }
         if (function.ReturnType == BoundType.Text
             && function.Body is not null
@@ -2968,6 +2981,10 @@ internal sealed partial class SemanticCompiler
                 inputType,
                 returnType),
             "sys.process.Child.wait" => RequireProcessWaitIntrinsicSignature(
+                function,
+                inputType,
+                returnType),
+            "sys.process.pollChild" => RequireProcessPollChildIntrinsicSignature(
                 function,
                 inputType,
                 returnType),
@@ -4083,6 +4100,22 @@ internal sealed partial class SemanticCompiler
         return BoundFunctionKind.RuntimeWaitProcess;
     }
 
+    private BoundFunctionKind RequireProcessPollChildIntrinsicSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType != BoundType.UInt64
+            || function.InputOwnership != FunctionInputOwnership.Default
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || !IsNamedStructType(returnType, "sys.process.ChildPoll"))
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature UInt64 -> ChildPoll");
+        }
+        return BoundFunctionKind.RuntimePollChildProcess;
+    }
+
     private BoundFunctionKind RequireProcessChildIdIntrinsicSignature(
         FunctionDeclaration function,
         BoundType? inputType,
@@ -4243,6 +4276,8 @@ internal sealed partial class SemanticCompiler
 
     private IReadOnlyDictionary<string, BoundType> BindMain(IReadOnlyDictionary<string, BoundFunction> functions)
     {
+        var previousTransferablePayloadNames = _currentTransferableEnumPayloadNames;
+        _currentTransferableEnumPayloadNames = new HashSet<string>(StringComparer.Ordinal);
         var previousDeclarations = _currentMutableDeclarations;
         var previousDeclarationsByName = _currentMutableDeclarationsByName;
         var previousFixedLengthCandidates = _currentFixedLengthArrayCandidates;
@@ -4260,6 +4295,7 @@ internal sealed partial class SemanticCompiler
         }
         finally
         {
+            _currentTransferableEnumPayloadNames = previousTransferablePayloadNames;
             _currentMutableDeclarations = previousDeclarations;
             _currentMutableDeclarationsByName = previousDeclarationsByName;
             _currentFixedLengthArrayCandidates = previousFixedLengthCandidates;
@@ -4414,9 +4450,7 @@ internal sealed partial class SemanticCompiler
                         MarkMutableBindingMutation(binding.Name);
                     }
                     var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value, functions)
-                        ?? (binding.Value is NameExpression
-                            ? MoveInputNameForExpression(binding.Value)
-                            : null);
+                        ?? DirectOwnedBindingSourceName(binding.Value, bindings);
                     var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(
                         binding.Value,
                         bindings,
@@ -4467,13 +4501,7 @@ internal sealed partial class SemanticCompiler
                     {
                         throw Error(binding.Line, binding.Column, "cannot bind a unit value");
                     }
-                    if (valueType == BoundType.Text && IsUnmaterializedDeferredText(binding.Value))
-                    {
-                        throw Error(
-                            binding.Value.Line,
-                            binding.Value.Column,
-                            "deferred interpolation cannot be stored directly; materialize it into an explicit Arena owner");
-                    }
+                    RejectDeferredTextStorage(binding.Value, valueType, "directly");
                     var aggregateLiteralSourceNames = GetOwnedAggregateLiteralSourceNames(
                         binding.Value,
                         bindings,
@@ -4764,6 +4792,13 @@ internal sealed partial class SemanticCompiler
 
                     if (returnStatement.Value is not null)
                     {
+                        RejectLocalBorrowedTextReturnEscape(
+                            returnStatement.Value,
+                            _currentFunctionReturnType.Value,
+                            functions,
+                            bindings,
+                            _currentFunctionOuterBindings
+                                ?? throw new SollangException("missing function return borrow scope"));
                         ValidateOwnedParameterConsumptionExpression(returnStatement.Value, functions, bindings);
                         if (!_types.IsReference(_currentFunctionReturnType.Value)
                             && _types.ContainsOwnedStorage(returnType))
@@ -4953,6 +4988,7 @@ internal sealed partial class SemanticCompiler
             mutableBindings: mutableBindings,
             yieldInputType: yieldInputType,
             allowedOwnedOuterResultName: MoveInputNameForExpression(assignment.Value));
+        RejectDeferredTextStorage(assignment.Value, valueType, "in struct fields");
         if (valueType != field.Type)
         {
             throw Error(
@@ -5067,6 +5103,7 @@ internal sealed partial class SemanticCompiler
             functions,
             bindings,
             allowReadIntCall: true);
+        RejectDeferredTextStorage(assignment.Value, valueType, "in indexed elements");
         if (valueType != expectedValueType)
         {
             throw Error(assignment.Value.Line, assignment.Value.Column,
@@ -5148,6 +5185,10 @@ internal sealed partial class SemanticCompiler
         {
             throw Error(assignment.Index.Line, assignment.Index.Column,
                 $"indexed assignment index must be {FormatType(expectedIndexType)}");
+        }
+        if (isGenericDictionary)
+        {
+            RejectDeferredTextStorage(assignment.Index, indexType, "in dictionary keys");
         }
     }
 
@@ -6662,6 +6703,13 @@ internal sealed partial class SemanticCompiler
             AssignInferredGenericType(typeTemplate, actualType, inferredTypes, line, column);
             return;
         }
+        if (TryGetBorrowedGenericElement(typeTemplate, actualType, line, column,
+                out var borrowedTemplate, out var borrowedType))
+        {
+            InferGenericArgumentsFromTypeTemplate(
+                borrowedTemplate, borrowedType, function, inferredTypes, line, column);
+            return;
+        }
         if (typeTemplate.StartsWith('[', StringComparison.Ordinal)
             && typeTemplate.EndsWith("; ~]", StringComparison.Ordinal))
         {
@@ -6743,6 +6791,14 @@ internal sealed partial class SemanticCompiler
         if (typeTemplate == function.TertiaryGenericParameterName)
         {
             AssignInferredGenericType(function.TertiaryGenericParameterName!, actualType, ref tertiaryType, line, column);
+            return;
+        }
+        if (TryGetBorrowedGenericElement(typeTemplate, actualType, line, column,
+                out var borrowedTemplate, out var borrowedType))
+        {
+            InferGenericArgumentsFromTypeTemplate(
+                borrowedTemplate, borrowedType, function,
+                ref primaryType, ref secondaryType, ref tertiaryType, line, column);
             return;
         }
         if (typeTemplate.StartsWith('[', StringComparison.Ordinal)
@@ -7175,6 +7231,7 @@ internal sealed partial class SemanticCompiler
             {
                 throw Error(element.Line, element.Column, "product fields must produce values");
             }
+            RejectDeferredTextStorage(element.Value, type, "in product fields");
             fields.Add((element.Label, type));
         }
 
@@ -7686,6 +7743,7 @@ internal sealed partial class SemanticCompiler
                         allowPrintCall: false,
                         allowReadIntCall,
                         allowFlowBindingTarget: false);
+            RejectDeferredTextStorage(element, elementType, "in array elements");
             var unsupportedElement = expression.IsDynamic
                 ? IsUnsupportedGrowableArrayElementType(elementType)
                 : elementType == BoundType.Unit
@@ -7846,6 +7904,7 @@ internal sealed partial class SemanticCompiler
                         allowPrintCall: false,
                         allowReadIntCall,
                         allowFlowBindingTarget: false);
+            RejectDeferredTextStorage(entry.Key, keyType, "in dictionary keys");
             if (!IsSupportedDictionaryKeyType(keyType))
             {
                 throw Error(entry.Key.Line, entry.Key.Column,
@@ -7878,6 +7937,7 @@ internal sealed partial class SemanticCompiler
             {
                 throw Error(entry.Value.Line, entry.Value.Column, "dictionary values cannot be Unit");
             }
+            RejectDeferredTextStorage(entry.Value, valueType, "in dictionary values");
             if (inferredValueType is { } expectedValue && valueType != expectedValue)
             {
                 throw Error(entry.Value.Line, entry.Value.Column,
@@ -8189,12 +8249,14 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall)
     {
-        return InferContextualValue(
+        var actualType = InferContextualValue(
             value,
             expectedType,
             functions,
             bindings,
             allowReadIntCall);
+        RejectDeferredTextStorage(value, actualType, "in struct fields");
+        return actualType;
     }
 
     private BoundType InferContextualValue(
@@ -9312,6 +9374,11 @@ internal sealed partial class SemanticCompiler
     {
         foreach (var statement in body.Statements)
         {
+            if (statement is BindingStatement { Value: NameExpression boundName }
+                && string.Equals(boundName.Name, name, StringComparison.Ordinal))
+            {
+                return true;
+            }
             if (statement is ReturnStatement { Value: NameExpression returnedName }
                 && string.Equals(returnedName.Name, name, StringComparison.Ordinal))
             {
@@ -9434,9 +9501,25 @@ internal sealed partial class SemanticCompiler
 
             var armReachesJoin = BorrowBlockMayReachContinuation(arm.Body);
             var previousContinuation = _borrowedTextContinuationNames;
+            var previousTransferablePayloadNames = _currentTransferableEnumPayloadNames;
             BoundType armType;
             try
             {
+                // A pattern shadows outer names even when this subject only
+                // borrows its payload. Keep transfer authority local to the arm.
+                var armTransferablePayloadNames = new HashSet<string>(
+                    previousTransferablePayloadNames, StringComparer.Ordinal);
+                if (pattern.BindingName is { } payloadName)
+                {
+                    armTransferablePayloadNames.Remove(payloadName);
+                    if (variant.PayloadType is { } transferableType
+                        && _types.ContainsOwnedStorage(transferableType)
+                        && CanTransferOwnedEnumPayload(expression.Subject, bindings))
+                    {
+                        armTransferablePayloadNames.Add(payloadName);
+                    }
+                }
+                _currentTransferableEnumPayloadNames = armTransferablePayloadNames;
                 _borrowedTextContinuationNames = armReachesJoin
                     ? outerBorrowedContinuation
                     : new HashSet<string>(StringComparer.Ordinal);
@@ -9478,6 +9561,7 @@ internal sealed partial class SemanticCompiler
             finally
             {
                 RemoveReadonlyReferencePatternOrigins(patternReferenceBindings);
+                _currentTransferableEnumPayloadNames = previousTransferablePayloadNames;
                 _borrowedTextContinuationNames = previousContinuation;
             }
             if (armReachesJoin)
@@ -10185,6 +10269,7 @@ internal sealed partial class SemanticCompiler
                     case BoundFunctionKind.RuntimeCollectProcess:
                     case BoundFunctionKind.RuntimeSpawnProcess:
                     case BoundFunctionKind.RuntimeWaitProcess:
+                    case BoundFunctionKind.RuntimePollChildProcess:
                     case BoundFunctionKind.RuntimeChildProcessId:
                     case BoundFunctionKind.RuntimeProcessIdValue:
                     case BoundFunctionKind.RuntimeReadDirectory:
@@ -11124,6 +11209,7 @@ internal sealed partial class SemanticCompiler
                     functions,
                     bindings,
                     allowReadIntCall);
+                RejectDeferredTextStorage(pushedArgument, pushedType, "in array elements");
                 if (pushedType != expectedPushedType)
                 {
                     throw Error(
@@ -11168,6 +11254,7 @@ internal sealed partial class SemanticCompiler
                     functions,
                     bindings,
                     allowReadIntCall);
+                RejectDeferredTextStorage(target.Arguments[0], dequeArgumentType, "in deque elements");
                 if (dequeArgumentType != dequeElementType)
                 {
                     throw Error(target.Arguments[0].Line, target.Arguments[0].Column,
@@ -11357,6 +11444,10 @@ internal sealed partial class SemanticCompiler
                         throw Error(argument.Line, argument.Column,
                             $"{path} expects {FormatType(putKeyType)} key and {FormatType(putValueType)} value arguments");
                     }
+                    RejectDeferredTextStorage(
+                        argument,
+                        argumentType,
+                        argumentIndex == 0 ? "in dictionary keys" : "in dictionary values");
                 }
 
                 result = new FlowResult(path == "putIfAbsent" ? BoundType.Bool : BoundType.Unit, FlowEffect.None);
@@ -11466,6 +11557,10 @@ internal sealed partial class SemanticCompiler
             {
                 throw Error(argument.Line, argument.Column,
                     $"Set element must be {FormatType(expected)}, got {FormatType(actual)}");
+            }
+            if (setTarget.Path.Count == 1 && setTarget.Path[0] == "insert")
+            {
+                RejectDeferredTextStorage(argument, actual, "in set elements");
             }
         }
     }
@@ -11685,6 +11780,7 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeCollectProcess:
             case BoundFunctionKind.RuntimeSpawnProcess:
             case BoundFunctionKind.RuntimeWaitProcess:
+            case BoundFunctionKind.RuntimePollChildProcess:
             case BoundFunctionKind.RuntimeChildProcessId:
             case BoundFunctionKind.RuntimeProcessIdValue:
             case BoundFunctionKind.RuntimeSyncFile:
@@ -12730,7 +12826,7 @@ internal sealed partial class SemanticCompiler
 
     private static string FixedArrayElementTypeSyntax(string inputTypeTemplate)
     {
-        var separator = inputTypeTemplate.LastIndexOf(';');
+        var separator = FindEnclosedTypeSeparator(inputTypeTemplate, ';');
         if (inputTypeTemplate.Length < 4 || inputTypeTemplate[0] != '[' || separator <= 1)
         {
             throw new InvalidOperationException($"invalid fixed-array input template '{inputTypeTemplate}'");
@@ -13502,7 +13598,8 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeRunProcess
                 or BoundFunctionKind.RuntimeCollectProcess
                 or BoundFunctionKind.RuntimeSpawnProcess
-                or BoundFunctionKind.RuntimeWaitProcess => ["Process"],
+                or BoundFunctionKind.RuntimeWaitProcess
+                or BoundFunctionKind.RuntimePollChildProcess => ["Process"],
             BoundFunctionKind.RuntimeRunProcessToFile => ["Process", "File"],
             BoundFunctionKind.RuntimeEnvironment => ["Environment"],
             BoundFunctionKind.RuntimeOpenIntWriter
@@ -14059,11 +14156,11 @@ internal sealed partial class SemanticCompiler
             out TypeId type)
         {
             type = default;
-            var separator = typeName.LastIndexOf(';');
+            var separator = FindEnclosedTypeSeparator(typeName, ';');
             if (!typeName.StartsWith('[', StringComparison.Ordinal)
                 || !typeName.EndsWith(']')
                 || separator <= 1
-                || typeName.Contains("; <=", StringComparison.Ordinal)
+                || FindBoundedTypeSeparator(typeName) >= 0
                 || typeName.EndsWith("; ~]", StringComparison.Ordinal))
             {
                 return false;
@@ -14129,7 +14226,7 @@ internal sealed partial class SemanticCompiler
         bool TryResolveDefinitionBoundedArray(string typeName, int line, int column, out TypeId type)
         {
             type = default;
-            var separator = typeName.LastIndexOf("; <=", StringComparison.Ordinal);
+            var separator = FindBoundedTypeSeparator(typeName);
             if (!typeName.StartsWith('[', StringComparison.Ordinal)
                 || !typeName.EndsWith(']')
                 || separator <= 1)
@@ -14137,7 +14234,7 @@ internal sealed partial class SemanticCompiler
                 return false;
             }
             var elementName = typeName[1..separator].Trim();
-            var capacityText = typeName[(separator + 4)..^1].Trim();
+            var capacityText = typeName[(separator + 1)..^1].Trim()[2..].Trim();
             if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
             {
                 throw Error(line, column, "bounded array capacity must be a positive integer literal");
@@ -14166,15 +14263,15 @@ internal sealed partial class SemanticCompiler
             {
                 return false;
             }
-            var keySeparator = typeName.IndexOf(':', StringComparison.Ordinal);
-            var capacitySeparator = typeName.LastIndexOf("; <=", StringComparison.Ordinal);
+            var keySeparator = FindEnclosedTypeSeparator(typeName, ':');
+            var capacitySeparator = FindBoundedTypeSeparator(typeName);
             if (keySeparator <= 1 || capacitySeparator <= keySeparator)
             {
                 return false;
             }
             var keyName = typeName[1..keySeparator].Trim();
             var valueName = typeName[(keySeparator + 1)..capacitySeparator].Trim();
-            var capacityText = typeName[(capacitySeparator + 4)..^1].Trim();
+            var capacityText = typeName[(capacitySeparator + 1)..^1].Trim()[2..].Trim();
             if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
             {
                 throw Error(line, column, "bounded dictionary capacity must be a positive integer literal");
@@ -14544,9 +14641,9 @@ internal sealed partial class SemanticCompiler
         }
         if (typeName.StartsWith('[', StringComparison.Ordinal)
             && typeName.EndsWith(']')
-            && typeName.LastIndexOf(';') is var fixedSeparator
+            && FindEnclosedTypeSeparator(typeName, ';') is var fixedSeparator
             && fixedSeparator > 1
-            && !typeName.Contains("; <=", StringComparison.Ordinal))
+            && FindBoundedTypeSeparator(typeName) < 0)
         {
             var elementName = typeName[1..fixedSeparator].Trim();
             var lengthText = typeName[(fixedSeparator + 1)..^1].Trim();
@@ -14563,7 +14660,7 @@ internal sealed partial class SemanticCompiler
         }
         if (typeName.StartsWith('[', StringComparison.Ordinal)
             && typeName.EndsWith(']')
-            && !typeName.Contains(';', StringComparison.Ordinal))
+            && FindEnclosedTypeSeparator(typeName, ';') < 0)
         {
             var elementName = typeName[1..^1].Trim();
             var elementType = ParseType(elementName, line, column);
@@ -14575,11 +14672,11 @@ internal sealed partial class SemanticCompiler
         }
         if (typeName.StartsWith('[', StringComparison.Ordinal)
             && typeName.EndsWith(']')
-            && typeName.LastIndexOf("; <=", StringComparison.Ordinal) is var boundedSeparator
+            && FindBoundedTypeSeparator(typeName) is var boundedSeparator
             && boundedSeparator > 1)
         {
             var elementName = typeName[1..boundedSeparator].Trim();
-            var capacityText = typeName[(boundedSeparator + 4)..^1].Trim();
+            var capacityText = typeName[(boundedSeparator + 1)..^1].Trim()[2..].Trim();
             if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
             {
                 throw Error(line, column, "bounded array capacity must be a positive integer literal");
@@ -14593,11 +14690,11 @@ internal sealed partial class SemanticCompiler
         }
         if (typeName.Length >= 5 && typeName[0] == '{' && typeName[^1] == '}')
         {
-            var separator = typeName.IndexOf(':', StringComparison.Ordinal);
+            var separator = FindEnclosedTypeSeparator(typeName, ':');
             if (separator > 1)
             {
                 var keyName = typeName[1..separator].Trim();
-                var dictionaryBoundedSeparator = typeName.LastIndexOf("; <=", StringComparison.Ordinal);
+                var dictionaryBoundedSeparator = FindBoundedTypeSeparator(typeName);
                 var valueEnd = dictionaryBoundedSeparator > separator ? dictionaryBoundedSeparator : typeName.Length - 1;
                 var valueName = typeName[(separator + 1)..valueEnd].Trim();
                 var keyType = ParseType(keyName, line, column);
@@ -14609,7 +14706,7 @@ internal sealed partial class SemanticCompiler
                 }
                 if (dictionaryBoundedSeparator > separator)
                 {
-                    var capacityText = typeName[(dictionaryBoundedSeparator + 4)..^1].Trim();
+                    var capacityText = typeName[(dictionaryBoundedSeparator + 1)..^1].Trim()[2..].Trim();
                     if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
                     {
                         throw Error(line, column, "bounded dictionary capacity must be a positive integer literal");
@@ -14711,60 +14808,13 @@ internal sealed partial class SemanticCompiler
         int line,
         int column)
     {
-        typeName = typeName.Trim();
-        if (specializedTypes.TryGetValue(typeName, out var specialized))
-        {
-            return specialized;
-        }
-        if (typeName.StartsWith('(') && typeName.EndsWith(')'))
-        {
-            return ParseProductType(
-                typeName,
-                field => ParseSpecializedFunctionType(field, specializedTypes, line, column),
-                line,
-                column);
-        }
-        if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
-        {
-            var value = ParseSpecializedFunctionType(typeName[7..^1], specializedTypes, line, column);
-            return _types.GetOrAddOption(value, $"Option<{FormatType(value)}>");
-        }
-        if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
-        {
-            var arguments = typeName[7..^1];
-            var separator = FindTopLevelTypeComma(arguments);
-            if (separator < 0) throw Error(line, column, "Result requires success and error types");
-            var ok = ParseSpecializedFunctionType(arguments[..separator], specializedTypes, line, column);
-            var error = ParseSpecializedFunctionType(arguments[(separator + 1)..], specializedTypes, line, column);
-            return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
-        }
-        if (typeName.StartsWith('[', StringComparison.Ordinal)
-            && typeName.EndsWith("; ~]", StringComparison.Ordinal))
-        {
-            var element = ParseSpecializedFunctionType(typeName[1..^4], specializedTypes, line, column);
-            if (IsUnsupportedGrowableArrayElementType(element))
-                throw Error(line, column, "growable array elements must have a supported inline value layout");
-            return element == BoundType.Int
-                ? BoundType.DynamicIntArray
-                : _types.GetOrAddDynamicArray(element);
-        }
-        if (typeName.Length >= 5 && typeName[0] == '{' && typeName[^1] == '}')
-        {
-            var contents = typeName[1..^1];
-            var separator = FindTopLevelTypeColon(contents);
-            if (separator >= 0)
-            {
-                var key = ParseSpecializedFunctionType(contents[..separator], specializedTypes, line, column);
-                var value = ParseSpecializedFunctionType(contents[(separator + 1)..], specializedTypes, line, column);
-                if (!IsSupportedDictionaryKeyType(key))
-                    throw Error(line, column,
-                        $"dictionary key type {FormatType(key)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
-                return key == BoundType.Int && value == BoundType.Int
-                    ? BoundType.IntDictionary
-                    : _types.GetOrAddDictionary(key, value);
-            }
-        }
-        return ParseType(typeName, line, column);
+        // The canonical parser owns every type constructor. Keep the generic
+        // environment installed throughout its recursive descent instead of
+        // duplicating a partial wrapper grammar and losing T at the fallback.
+        var context = new Dictionary<string, BoundType>(_activeGenericTypeArguments, StringComparer.Ordinal);
+        foreach (var (name, type) in specializedTypes)
+            context[name] = type;
+        return ParseAssociatedType(typeName.Trim(), context, line, column);
     }
 
     private BoundType ParseSpecializedFunctionType(
@@ -14778,102 +14828,24 @@ internal sealed partial class SemanticCompiler
         int line,
         int column)
     {
-        typeName = typeName.Trim();
-        if (genericParameterName is not null && typeName == genericParameterName)
+        var specializedTypes = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        if (genericParameterName is not null)
+            specializedTypes[genericParameterName] = primaryType;
+        if (secondaryGenericParameterName is not null)
         {
-            return primaryType;
+            if (secondaryType is { } second)
+                specializedTypes[secondaryGenericParameterName] = second;
+            else if (TypeSyntaxReferencesParameter(typeName, secondaryGenericParameterName))
+                throw Error(line, column, $"cannot infer type parameter '{secondaryGenericParameterName}'");
         }
-        if (secondaryGenericParameterName is not null && typeName == secondaryGenericParameterName)
+        if (tertiaryGenericParameterName is not null)
         {
-            return secondaryType ?? throw Error(
-                line,
-                column,
-                $"cannot infer type parameter '{secondaryGenericParameterName}'");
+            if (tertiaryType is { } third)
+                specializedTypes[tertiaryGenericParameterName] = third;
+            else if (TypeSyntaxReferencesParameter(typeName, tertiaryGenericParameterName))
+                throw Error(line, column, $"cannot infer type parameter '{tertiaryGenericParameterName}'");
         }
-        if (tertiaryGenericParameterName is not null && typeName == tertiaryGenericParameterName)
-        {
-            return tertiaryType ?? throw Error(
-                line,
-                column,
-                $"cannot infer type parameter '{tertiaryGenericParameterName}'");
-        }
-        if (typeName.StartsWith('(') && typeName.EndsWith(')'))
-        {
-            return ParseProductType(
-                typeName,
-                field => ParseSpecializedFunctionType(
-                    field, genericParameterName, primaryType,
-                    secondaryGenericParameterName, secondaryType,
-                    tertiaryGenericParameterName, tertiaryType, line, column),
-                line,
-                column);
-        }
-        if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
-        {
-            var value = ParseSpecializedFunctionType(
-                typeName[7..^1], genericParameterName, primaryType,
-                secondaryGenericParameterName, secondaryType,
-                tertiaryGenericParameterName, tertiaryType, line, column);
-            return _types.GetOrAddOption(value, $"Option<{FormatType(value)}>");
-        }
-        if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
-        {
-            var arguments = typeName[7..^1];
-            var separator = FindTopLevelTypeComma(arguments);
-            if (separator < 0)
-            {
-                throw Error(line, column, "Result requires success and error types");
-            }
-            var ok = ParseSpecializedFunctionType(
-                arguments[..separator], genericParameterName, primaryType,
-                secondaryGenericParameterName, secondaryType,
-                tertiaryGenericParameterName, tertiaryType, line, column);
-            var error = ParseSpecializedFunctionType(
-                arguments[(separator + 1)..], genericParameterName, primaryType,
-                secondaryGenericParameterName, secondaryType,
-                tertiaryGenericParameterName, tertiaryType, line, column);
-            return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
-        }
-        if (typeName.StartsWith('[', StringComparison.Ordinal)
-            && typeName.EndsWith("; ~]", StringComparison.Ordinal))
-        {
-            var element = ParseSpecializedFunctionType(
-                typeName[1..^4], genericParameterName, primaryType,
-                secondaryGenericParameterName, secondaryType,
-                tertiaryGenericParameterName, tertiaryType, line, column);
-            if (IsUnsupportedGrowableArrayElementType(element))
-            {
-                throw Error(line, column, "growable array elements must have a supported inline value layout");
-            }
-            return element == BoundType.Int
-                ? BoundType.DynamicIntArray
-                : _types.GetOrAddDynamicArray(element);
-        }
-        if (typeName.Length >= 5 && typeName[0] == '{' && typeName[^1] == '}')
-        {
-            var separator = FindTopLevelTypeColon(typeName.AsSpan(1, typeName.Length - 2));
-            if (separator >= 0)
-            {
-                var contents = typeName[1..^1];
-                var key = ParseSpecializedFunctionType(
-                    contents[..separator], genericParameterName, primaryType,
-                    secondaryGenericParameterName, secondaryType,
-                    tertiaryGenericParameterName, tertiaryType, line, column);
-                var value = ParseSpecializedFunctionType(
-                    contents[(separator + 1)..], genericParameterName, primaryType,
-                    secondaryGenericParameterName, secondaryType,
-                    tertiaryGenericParameterName, tertiaryType, line, column);
-                if (!IsSupportedDictionaryKeyType(key))
-                {
-                    throw Error(line, column,
-                        $"dictionary key type {FormatType(key)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
-                }
-                return key == BoundType.Int && value == BoundType.Int
-                    ? BoundType.IntDictionary
-                    : _types.GetOrAddDictionary(key, value);
-            }
-        }
-        return ParseType(typeName, line, column);
+        return ParseSpecializedFunctionType(typeName, specializedTypes, line, column);
     }
 
     private BoundType ParseProductType(
@@ -14917,53 +14889,12 @@ internal sealed partial class SemanticCompiler
 
     private static IReadOnlyList<string> SplitTopLevelProductFields(string text)
     {
-        var fields = new List<string>();
-        var start = 0;
-        var angleDepth = 0;
-        var squareDepth = 0;
-        var braceDepth = 0;
-        var parenDepth = 0;
-        for (var index = 0; index < text.Length; index++)
-        {
-            switch (text[index])
-            {
-                case '<': angleDepth++; break;
-                case '>': angleDepth--; break;
-                case '[': squareDepth++; break;
-                case ']': squareDepth--; break;
-                case '{': braceDepth++; break;
-                case '}': braceDepth--; break;
-                case '(': parenDepth++; break;
-                case ')': parenDepth--; break;
-                case ',' when angleDepth == 0 && squareDepth == 0 && braceDepth == 0 && parenDepth == 0:
-                    var field = text[start..index].Trim();
-                    if (field.Length != 0) fields.Add(field);
-                    start = index + 1;
-                    break;
-            }
-        }
-        var last = text[start..].Trim();
-        if (last.Length != 0) fields.Add(last);
-        return fields;
+        return SplitTopLevelTypeFields(text).Where(static field => field.Length != 0).ToArray();
     }
 
     private static int FindTopLevelTypeColon(ReadOnlySpan<char> text)
     {
-        var depth = 0;
-        for (var index = 0; index < text.Length; index++)
-        {
-            depth += text[index] switch
-            {
-                '[' or '{' or '<' => 1,
-                ']' or '}' or '>' => -1,
-                _ => 0
-            };
-            if (text[index] == ':' && depth == 0)
-            {
-                return index;
-            }
-        }
-        return -1;
+        return FindTopLevelTypeSeparator(text, ':');
     }
 
     private static bool TypeSyntaxReferencesParameter(string typeName, string? parameterName)
@@ -14998,21 +14929,7 @@ internal sealed partial class SemanticCompiler
 
     private static int FindTopLevelTypeComma(string text)
     {
-        var depth = 0;
-        for (var index = 0; index < text.Length; index++)
-        {
-            depth += text[index] switch
-            {
-                '[' or '{' or '<' => 1,
-                ']' or '}' or '>' => -1,
-                _ => 0
-            };
-            if (text[index] == ',' && depth == 0)
-            {
-                return index;
-            }
-        }
-        return -1;
+        return FindTopLevelTypeSeparator(text, ',');
     }
 
     private string FormatType(BoundType type)
@@ -17284,6 +17201,15 @@ internal sealed partial class SemanticCompiler
             || (body.Value is not null && ContainsSliceFlow(body.Value));
     }
 
+    private void RejectDeferredTextStorage(Expression expression, BoundType type, string destination)
+    {
+        if (type == BoundType.Text && IsUnmaterializedDeferredText(expression))
+        {
+            throw Error(expression.Line, expression.Column,
+                $"deferred interpolation cannot be stored {destination}; materialize it into an explicit Arena owner");
+        }
+    }
+
     private static bool IsUnmaterializedDeferredText(Expression expression)
     {
         return expression switch
@@ -17411,6 +17337,19 @@ internal sealed partial class SemanticCompiler
                 && parameter.Type == function.ReturnType)
             .Select(parameter => parameter.Name)
             .FirstOrDefault();
+    }
+
+    private string? DirectOwnedBindingSourceName(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        return expression is NameExpression name
+            && bindings.TryGetValue(name.Name, out var type)
+            && _types.ContainsOwnedStorage(type)
+            && (_currentMoveInputNames.Contains(name.Name)
+                || _currentTransferableEnumPayloadNames.Contains(name.Name))
+                ? name.Name
+                : null;
     }
 
     private string? MoveInputNameForExpression(Expression? expression)

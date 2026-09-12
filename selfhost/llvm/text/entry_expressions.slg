@@ -818,6 +818,7 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
         functionIndex: functionIndex
         order: entryOrder!
         scheduled: entryScheduled!
+        emitMutableSlots: true
         failureNode: failureNode!
         failureTerminal: failureTerminal!
     }
@@ -1180,36 +1181,8 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
         entryExpression.operand0 -> writeValue(functionIndex, context, state)
         "" -> println
     }
-    entryExpression.kind == 37 -> if {
-        entryExpression.operand0 => entryBranchArmValueIndex!
-        0 => entryBranchArmPosition!
-        entryBranchArmValueIndex! >= 0 -> while {
-            context.ir[entryBranchArmValueIndex!] => entryBranchArmValue
-            "  " -> print
-            entryBranchArmValue.nextOperand < 0 -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_f$(entryBranchArmPosition!)" -> print }
-            " = insertvalue " -> print
-            entryExpression -> writeIrType(context, state)
-            " " -> print
-            entryBranchArmPosition! == 0 -> if { "poison" -> print } else {
-                "%v$(entryExpressionIndex)_f" -> print
-                entryBranchArmPosition! - 1 -> writeDecimal
-            }
-            ", " -> print
-            entryBranchArmValue -> writeIrType(context, state)
-            " " -> print
-            entryBranchArmValueIndex! -> writeValue(functionIndex, context, state)
-            ", $(entryBranchArmPosition!)" -> println
-            entryBranchArmValue.nextOperand => entryBranchArmValueIndex!
-            entryBranchArmPosition! + 1 => entryBranchArmPosition!
-        }
-    }
-    entryExpression.kind == 39 -> if {
-        "  %v$(entryExpressionIndex) = freeze " -> print
-        entryExpression -> writeIrType(context, state)
-        " " -> print
-        entryExpression.operand1 -> writeValue(functionIndex, context, state)
-        "" -> println
-    }
+    entryExpression.kind == 37 -> if { entryExpressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
+    entryExpression.kind == 39 -> if { entryExpressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
     entryExpression.kind == 43 -> if {
         entryExpressionIndex -> plannedStreamJunction(context, state) => entryJunctionIndex
         entryJunctionIndex >= 0 and context.streamPlan.junctions[entryJunctionIndex].kind == 2
@@ -1227,101 +1200,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
             }
     }
     entryExpression.kind == 38 and context.supportsComputePool
-        -> if {
-            context.ir[entryExpression.operand1] => entryParallelBranchSource
-            entryExpressionIndex -> parallelBranchCaptures(context, state) => entryParallelBranchCaptures
-            0 => entryParallelBranchArmCount!
-            entryExpression.operand0 => entryParallelBranchArmCountIndex!
-            entryParallelBranchArmCountIndex! >= 0 -> while {
-                entryParallelBranchArmCount! + 1 => entryParallelBranchArmCount!
-                context.ir[entryParallelBranchArmCountIndex!].nextOperand => entryParallelBranchArmCountIndex!
-            }
-            "  %v$(entryExpressionIndex)_environment = alloca " -> print
-            entryExpressionIndex -> writeParallelBranchEnvironmentType(entryParallelBranchCaptures, context, state)
-            ", align 8" -> println
-            "  %v$(entryExpressionIndex)_source_address = getelementptr " -> print
-            entryExpressionIndex -> writeParallelBranchEnvironmentType(entryParallelBranchCaptures, context, state)
-            ", ptr %v$(entryExpressionIndex)_environment, i32 0, i32 0" -> println
-            "  store " -> print
-            entryParallelBranchSource -> writeIrType(context, state)
-            " " -> print
-            entryExpression.operand1 -> writeValue(functionIndex, context, state)
-            ", ptr %v$(entryExpressionIndex)_source_address, align " -> print
-            entryParallelBranchSource -> storageAlign(context, state) -> writeDecimalLine
-            0 => entryParallelBranchCaptureIndex!
-            entryParallelBranchCaptureIndex! < (entryParallelBranchCaptures -> len)
-                -> while {
-                    "  %v$(entryExpressionIndex)_capture_address_$(entryParallelBranchCaptureIndex!) = getelementptr " -> print
-                    entryExpressionIndex -> writeParallelBranchEnvironmentType(entryParallelBranchCaptures, context, state)
-                    ", ptr %v$(entryExpressionIndex)_environment, i32 0, i32 " -> print
-                    entryParallelBranchCaptureIndex! + 1 -> writeDecimalLine
-                    context.ir[entryParallelBranchCaptures[entryParallelBranchCaptureIndex!]] => entryParallelBranchCapture
-                    "  store " -> print
-                    entryParallelBranchCapture -> ownsType -> if {
-                        "ptr " -> print
-                        CaptureValueRequest { callerIndex: functionIndex, callIndex: entryExpressionIndex, bindingIndex: entryParallelBranchCaptures[entryParallelBranchCaptureIndex!], captureIndex: entryParallelBranchCaptureIndex! } -> emitCapturePointer(context, state)
-                    } else {
-                        entryParallelBranchCapture -> writeIrType(context, state)
-                        " " -> print
-                        CaptureValueRequest { callerIndex: functionIndex, callIndex: entryExpressionIndex, bindingIndex: entryParallelBranchCaptures[entryParallelBranchCaptureIndex!], captureIndex: entryParallelBranchCaptureIndex! } -> emitCaptureValue(context, state)
-                    }
-                    ", ptr %v$(entryExpressionIndex)_capture_address_$(entryParallelBranchCaptureIndex!), align " -> print
-                    entryParallelBranchCapture -> ownsType -> if { "8" -> println } else { entryParallelBranchCapture -> storageAlign(context, state) -> writeDecimalLine }
-                    entryParallelBranchCaptureIndex! + 1 => entryParallelBranchCaptureIndex!
-                }
-            entryExpressionIndex -> parallelBranchArguments(context) => entryParallelBranchArguments
-            0 => entryParallelBranchArgumentIndex!
-            entryParallelBranchArgumentIndex! < (entryParallelBranchArguments -> len)
-                -> while {
-                    entryParallelBranchArguments[entryParallelBranchArgumentIndex!] => entryParallelBranchArgument
-                    context.ir[entryParallelBranchArgument].parent => entryParallelBranchArgumentCall
-                    entryParallelBranchArgument -> parallelBranchArgumentOrdinal(context) => entryParallelBranchArgumentOrdinal
-                    entryParallelBranchArgumentCall -> callTargetParameter(entryParallelBranchArgumentOrdinal, context, state) => entryParallelBranchArgumentParameter
-                    "  %v$(entryExpressionIndex)_argument_address_$(entryParallelBranchArgumentIndex!) = getelementptr " -> print
-                    entryExpressionIndex -> writeParallelBranchEnvironmentType(entryParallelBranchCaptures, context, state)
-                    ", ptr %v$(entryExpressionIndex)_environment, i32 0, i32 " -> print
-                    1 + (entryParallelBranchCaptures -> len) + entryParallelBranchArgumentIndex! -> writeDecimalLine
-                    "  store " -> print
-                    entryParallelBranchArgument -> writeCallArgument(entryParallelBranchArgumentCall, functionIndex, entryParallelBranchArgumentOrdinal, context, state)
-                    ", ptr %v$(entryExpressionIndex)_argument_address_$(entryParallelBranchArgumentIndex!), align " -> print
-                    entryParallelBranchArgumentParameter >= 0 -> if { context.ir[entryParallelBranchArgumentParameter] -> storageAlign(context, state) -> writeDecimalLine } else { context.ir[entryParallelBranchArgument] -> storageAlign(context, state) -> writeDecimalLine }
-                    entryParallelBranchArgumentIndex! + 1 => entryParallelBranchArgumentIndex!
-                }
-            "  %v$(entryExpressionIndex)_output = alloca " -> print
-            entryExpression -> writeIrType(context, state)
-            ", align " -> print
-            entryExpression -> storageAlign(context, state) -> writeDecimalLine
-            "  %v$(entryExpressionIndex)_group = alloca %sollang.compute_group, align 8" -> println
-            "  %v$(entryExpressionIndex)_callback_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 0" -> println
-            "  store ptr @sollang_parallel_branch_$(entryExpressionIndex), ptr %v$(entryExpressionIndex)_callback_slot, align 8" -> println
-            "  %v$(entryExpressionIndex)_input_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 1" -> println
-            "  store ptr null, ptr %v$(entryExpressionIndex)_input_slot, align 8" -> println
-            "  %v$(entryExpressionIndex)_output_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 2" -> println
-            "  store ptr %v$(entryExpressionIndex)_output, ptr %v$(entryExpressionIndex)_output_slot, align 8" -> println
-            "  %v$(entryExpressionIndex)_count_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 3" -> println
-            "  store i64 $(entryParallelBranchArmCount!), ptr %v$(entryExpressionIndex)_count_slot, align 8" -> println
-            "  %v$(entryExpressionIndex)_environment_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 4" -> println
-            "  store ptr %v$(entryExpressionIndex)_environment, ptr %v$(entryExpressionIndex)_environment_slot, align 8" -> println
-            "  %v$(entryExpressionIndex)_sinks = call ptr @malloc(i64 $(entryParallelBranchArmCount! * 24))" -> println
-            "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex)_sinks, i8 0, i64 $(entryParallelBranchArmCount! * 24), i1 false)" -> println
-            "  %v$(entryExpressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 5" -> println
-            "  store ptr %v$(entryExpressionIndex)_sinks, ptr %v$(entryExpressionIndex)_sinks_slot, align 8" -> println
-            6 => entryParallelBranchRuntimeField!
-            entryParallelBranchRuntimeField! <= 10 -> while {
-                "  %v$(entryExpressionIndex)_runtime_slot_$(entryParallelBranchRuntimeField!) = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 $(entryParallelBranchRuntimeField!)" -> println
-                "  store ptr null, ptr %v$(entryExpressionIndex)_runtime_slot_$(entryParallelBranchRuntimeField!), align 8" -> println
-                entryParallelBranchRuntimeField! + 1 => entryParallelBranchRuntimeField!
-            }
-            "  %v$(entryExpressionIndex)_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 11" -> println
-            "  store atomic i64 $(entryParallelBranchArmCount!), ptr %v$(entryExpressionIndex)_failure_limit_slot release, align 8" -> println
-            "  %v$(entryExpressionIndex)_initialized_slot = getelementptr %sollang.compute_group, ptr %v$(entryExpressionIndex)_group, i32 0, i32 12" -> println
-            "  store ptr null, ptr %v$(entryExpressionIndex)_initialized_slot, align 8" -> println
-            "  call void @sollang_compute_execute(ptr %v$(entryExpressionIndex)_group)" -> println
-            "  %v$(entryExpressionIndex) = load " -> print
-            entryExpression -> writeIrType(context, state)
-            ", ptr %v$(entryExpressionIndex)_output, align " -> print
-            entryExpression -> storageAlign(context, state) -> writeDecimalLine
-        }
+        -> if { entryExpressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
     entryExpression.kind == 12 or entryExpression.kind == 35
         -> if {
             entryExpression.operand0 < 0 -> if {
@@ -1437,21 +1316,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
             }
             entryExpressionIndex -> emitCompletedPatternBindingTransferMarks(context, state)
         }
-    entryExpression.kind == 31 -> if {
-        "  %v$(entryExpressionIndex)_start = insertvalue { i32, i32 } poison, i32 " -> print
-        entryExpression.operand0 -> writeValue(functionIndex, context, state)
-        ", 0" -> println
-        entryExpression.opcode == grammar.tokenIdRangeUntil()
-            -> if {
-                "  %v$(entryExpressionIndex)_end_inclusive = sub i32 " -> print
-                entryExpression.operand1 -> writeValue(functionIndex, context, state)
-                ", 1" -> println
-            }
-        "  %v$(entryExpressionIndex) = insertvalue { i32, i32 } %v$(entryExpressionIndex)_start, i32 " -> print
-        entryExpression.opcode == grammar.tokenIdRangeUntil()
-            -> if { "%v$(entryExpressionIndex)_end_inclusive" -> print } else { entryExpression.operand1 -> writeValue(functionIndex, context, state) }
-        ", 1" -> println
-    }
+    entryExpression.kind == 31 -> if { entryExpressionIndex -> emitRangeValue(functionIndex, context, state) }
     entryExpression.kind == 13 -> if {
         context.ir[entryExpression.operand0] => entrySyntheticProductBase
         entrySyntheticProductBase.typeKind == 10 and entrySyntheticProductBase.typeId >= (context.types -> len) and entryExpression.symbol >= 0
@@ -1691,6 +1556,10 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
 
 emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd: Int, entryPointerAlignment: Int, entryOrder: ref [Int; ~], entryActiveEach: mut [Int; ~], activeEachSize: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
     context.ir[entryExpressionIndex] => entryExpression
+    entryExpression.kind == 9 and (entryExpression.opcode == -306 or entryExpression.opcode == -307) and entryExpression.operand0 >= 0
+        -> if { entryExpressionIndex -> emitMappedBytesExpression(functionIndex, context, state) }
+    entryExpression -> isMappedBytesFlush(context)
+        -> if { entryExpressionIndex -> emitMappedBytesFlush(functionIndex, context, state) }
     context.ir[functionIndex] => function
     activeEachSize => entryActiveEachSize!
     entryExpressionIndex -> emitArgumentsIntrinsic(context)
@@ -2949,7 +2818,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
         -> if {
             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: 0 } -> emitTextMaterialize(context, state)
         }
-    (entryExpression.kind == 6 or (entryExpression -> typedIr.isConsoleRuntimeCall)) and not (entryExpression -> typedIr.isSetIntrinsicCall) and (entryExpressionIndex -> plannedStreamStage(context, state)) < 0 and entryExpression.symbol != -103 and entryExpression.symbol != -115 and not (entryExpression.symbol == -102 and entryExpression.operand0 < 0) and not (entryExpression -> typedIr.isArenaConstructorCall) and entryExpression.opcode != -205 and entryExpression.opcode != -206 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and not (entryExpression.opcode -> typedIr.isProcessExecutionOpcode) and entryExpression.opcode != -212 and entryExpression.opcode != -215 and entryExpression.opcode != -222 and entryExpression.opcode != -229 and entryExpression.opcode != -233 and entryExpression.opcode != -235 and not (entryExpression.opcode -> typedIr.isProcessProjectionOpcode) and (entryExpression.opcode > -237 or entryExpression.opcode < -240) and not (entryExpression -> isSourceTextFileIntrinsic) and not (entryExpression.opcode -> typedIr.isFileRuntimeOpcode) and not (entryExpression.opcode -> typedIr.isSocketRuntimeOpcode) and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex)
+    (entryExpression.kind == 6 or (entryExpression -> typedIr.isConsoleRuntimeCall)) and not (entryExpression -> isMappedBytesFlush(context)) and not (entryExpression -> typedIr.isSetIntrinsicCall) and (entryExpressionIndex -> plannedStreamStage(context, state)) < 0 and entryExpression.symbol != -103 and entryExpression.symbol != -115 and not (entryExpression.symbol == -102 and entryExpression.operand0 < 0) and not (entryExpression -> typedIr.isArenaConstructorCall) and entryExpression.opcode != -205 and entryExpression.opcode != -206 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and not (entryExpression.opcode -> typedIr.isProcessExecutionOpcode) and entryExpression.opcode != -212 and entryExpression.opcode != -215 and entryExpression.opcode != -222 and entryExpression.opcode != -229 and entryExpression.opcode != -233 and entryExpression.opcode != -235 and not (entryExpression.opcode -> typedIr.isProcessProjectionOpcode) and (entryExpression.opcode > -237 or entryExpression.opcode < -240) and not (entryExpression -> isSourceTextFileIntrinsic) and not (entryExpression.opcode -> typedIr.isFileRuntimeOpcode) and not (entryExpression.opcode -> typedIr.isSocketRuntimeOpcode) and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex)
         -> if {
             entryExpression.symbol == -101 or entryExpression.symbol == -102 or entryExpression.symbol == -116
                 -> if {
@@ -4210,7 +4079,9 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
 
 # Shared ordered body emission for entry and ordinary stream consumers.
 emitScheduledStreamBody plan: ref BodySchedulePlan, functionIndex: Int, entryEnd: Int, entryPointerAlignment: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    functionIndex -> emitScheduledMutableSlots(entryEnd, context, state)
+    plan.emitMutableSlots -> if {
+        functionIndex -> emitScheduledMutableSlots(entryEnd, context, state)
+    }
     [Int; ~] => entryActiveEach!
     0 => entryActiveEachSize!
     [Int; ~] => entryActiveStreams!

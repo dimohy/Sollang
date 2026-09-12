@@ -30,6 +30,162 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
+# Sequential named branches have one materialized value per arm in the flat
+# self-host IR.  Keep that representation detail in one emitter shared by
+# entry, ordinary-function, and nested control-region paths so a new emission
+# context cannot silently omit the arm SSA definition.
+emitSequentialBranchArmValue armIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[armIndex] => arm
+    arm.parent >= 0 and context.ir[arm.parent].kind == 37
+        -> if {
+            "  %v$(armIndex) = freeze " -> print
+            arm -> writeIrType(context, state)
+            " " -> print
+            arm.operand1 -> writeValue(ownerIndex, context, state)
+            "" -> println
+        }
+}
+
+emitSequentialBranchAggregate branchIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[branchIndex] => branch
+    branch.operand0 => armIndex!
+    0 => armPosition!
+    armIndex! >= 0 -> while {
+        context.ir[armIndex!] => arm
+        "  " -> print
+        arm.nextOperand < 0 -> if { "%v$(branchIndex)" -> print } else { "%v$(branchIndex)_f$(armPosition!)" -> print }
+        " = insertvalue " -> print
+        branch -> writeIrType(context, state)
+        " " -> print
+        armPosition! == 0 -> if { "poison" -> print } else {
+            "%v$(branchIndex)_f" -> print
+            armPosition! - 1 -> writeDecimal
+        }
+        ", " -> print
+        arm -> writeIrType(context, state)
+        " " -> print
+        armIndex! -> writeValue(ownerIndex, context, state)
+        ", $(armPosition!)" -> println
+        arm.nextOperand => armIndex!
+        armPosition! + 1 => armPosition!
+    }
+}
+
+# Parallel named branches have the same runtime materialization in every
+# emission context.  The callback body is prepared separately; this helper
+# owns the compute-group invocation and the resulting product value.
+emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[branchIndex] => branch
+    context.ir[branch.operand1] => branchSource
+    branchIndex -> parallelBranchCaptures(context, state) => branchCaptures
+    0 => branchArmCount!
+    branch.operand0 => branchArmCountIndex!
+    branchArmCountIndex! >= 0 -> while {
+        branchArmCount! + 1 => branchArmCount!
+        context.ir[branchArmCountIndex!].nextOperand => branchArmCountIndex!
+    }
+    "  %v$(branchIndex)_environment = alloca " -> print
+    branchIndex -> writeParallelBranchEnvironmentType(branchCaptures, context, state)
+    ", align 8" -> println
+    "  %v$(branchIndex)_source_address = getelementptr " -> print
+    branchIndex -> writeParallelBranchEnvironmentType(branchCaptures, context, state)
+    ", ptr %v$(branchIndex)_environment, i32 0, i32 0" -> println
+    "  store " -> print
+    branchSource -> writeIrType(context, state)
+    " " -> print
+    branch.operand1 -> writeValue(ownerIndex, context, state)
+    ", ptr %v$(branchIndex)_source_address, align " -> print
+    branchSource -> storageAlign(context, state) -> writeDecimalLine
+    0 => branchCaptureIndex!
+    branchCaptureIndex! < (branchCaptures -> len)
+        -> while {
+            "  %v$(branchIndex)_capture_address_$(branchCaptureIndex!) = getelementptr " -> print
+            branchIndex -> writeParallelBranchEnvironmentType(branchCaptures, context, state)
+            ", ptr %v$(branchIndex)_environment, i32 0, i32 " -> print
+            branchCaptureIndex! + 1 -> writeDecimalLine
+            context.ir[branchCaptures[branchCaptureIndex!]] => branchCapture
+            "  store " -> print
+            branchCapture -> ownsType -> if {
+                "ptr " -> print
+                CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> emitCapturePointer(context, state)
+            } else {
+                branchCapture -> writeIrType(context, state)
+                " " -> print
+                CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> emitCaptureValue(context, state)
+            }
+            ", ptr %v$(branchIndex)_capture_address_$(branchCaptureIndex!), align " -> print
+            branchCapture -> ownsType -> if { "8" -> println } else { branchCapture -> storageAlign(context, state) -> writeDecimalLine }
+            branchCaptureIndex! + 1 => branchCaptureIndex!
+        }
+    branchIndex -> parallelBranchArguments(context) => branchArguments
+    0 => branchArgumentIndex!
+    branchArgumentIndex! < (branchArguments -> len)
+        -> while {
+            branchArguments[branchArgumentIndex!] => branchArgument
+            context.ir[branchArgument].parent => branchArgumentCall
+            branchArgument -> parallelBranchArgumentOrdinal(context) => branchArgumentOrdinal
+            branchArgumentCall -> callTargetParameter(branchArgumentOrdinal, context, state) => branchArgumentParameter
+            "  %v$(branchIndex)_argument_address_$(branchArgumentIndex!) = getelementptr " -> print
+            branchIndex -> writeParallelBranchEnvironmentType(branchCaptures, context, state)
+            ", ptr %v$(branchIndex)_environment, i32 0, i32 " -> print
+            1 + (branchCaptures -> len) + branchArgumentIndex! -> writeDecimalLine
+            "  store " -> print
+            branchArgument -> writeCallArgument(branchArgumentCall, ownerIndex, branchArgumentOrdinal, context, state)
+            ", ptr %v$(branchIndex)_argument_address_$(branchArgumentIndex!), align " -> print
+            branchArgumentParameter >= 0 -> if { context.ir[branchArgumentParameter] -> storageAlign(context, state) -> writeDecimalLine } else { context.ir[branchArgument] -> storageAlign(context, state) -> writeDecimalLine }
+            branchArgumentIndex! + 1 => branchArgumentIndex!
+        }
+    "  %v$(branchIndex)_output = alloca " -> print
+    branch -> writeIrType(context, state)
+    ", align " -> print
+    branch -> storageAlign(context, state) -> writeDecimalLine
+    "  %v$(branchIndex)_group = alloca %sollang.compute_group, align 8" -> println
+    "  %v$(branchIndex)_callback_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 0" -> println
+    "  store ptr @sollang_parallel_branch_$(branchIndex), ptr %v$(branchIndex)_callback_slot, align 8" -> println
+    "  %v$(branchIndex)_input_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 1" -> println
+    "  store ptr null, ptr %v$(branchIndex)_input_slot, align 8" -> println
+    "  %v$(branchIndex)_output_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 2" -> println
+    "  store ptr %v$(branchIndex)_output, ptr %v$(branchIndex)_output_slot, align 8" -> println
+    "  %v$(branchIndex)_count_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 3" -> println
+    "  store i64 $(branchArmCount!), ptr %v$(branchIndex)_count_slot, align 8" -> println
+    "  %v$(branchIndex)_environment_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 4" -> println
+    "  store ptr %v$(branchIndex)_environment, ptr %v$(branchIndex)_environment_slot, align 8" -> println
+    "  %v$(branchIndex)_sinks = call ptr @malloc(i64 $(branchArmCount! * 24))" -> println
+    "  call void @llvm.memset.p0.i64(ptr %v$(branchIndex)_sinks, i8 0, i64 $(branchArmCount! * 24), i1 false)" -> println
+    "  %v$(branchIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 5" -> println
+    "  store ptr %v$(branchIndex)_sinks, ptr %v$(branchIndex)_sinks_slot, align 8" -> println
+    6 => branchRuntimeField!
+    branchRuntimeField! <= 10 -> while {
+        "  %v$(branchIndex)_runtime_slot_$(branchRuntimeField!) = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 $(branchRuntimeField!)" -> println
+        "  store ptr null, ptr %v$(branchIndex)_runtime_slot_$(branchRuntimeField!), align 8" -> println
+        branchRuntimeField! + 1 => branchRuntimeField!
+    }
+    "  %v$(branchIndex)_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 11" -> println
+    "  store atomic i64 $(branchArmCount!), ptr %v$(branchIndex)_failure_limit_slot release, align 8" -> println
+    "  %v$(branchIndex)_initialized_slot = getelementptr %sollang.compute_group, ptr %v$(branchIndex)_group, i32 0, i32 12" -> println
+    "  store ptr null, ptr %v$(branchIndex)_initialized_slot, align 8" -> println
+    "  call void @sollang_compute_execute(ptr %v$(branchIndex)_group)" -> println
+    "  %v$(branchIndex) = load " -> print
+    branch -> writeIrType(context, state)
+    ", ptr %v$(branchIndex)_output, align " -> print
+    branch -> storageAlign(context, state) -> writeDecimalLine
+}
+
+emitRangeValue rangeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[rangeIndex] => range
+    "  %v$(rangeIndex)_start = insertvalue { i32, i32 } poison, i32 " -> print
+    range.operand0 -> writeValue(ownerIndex, context, state)
+    ", 0" -> println
+    range.opcode == grammar.tokenIdRangeUntil() -> if {
+        "  %v$(rangeIndex)_end_inclusive = sub i32 " -> print
+        range.operand1 -> writeValue(ownerIndex, context, state)
+        ", 1" -> println
+    }
+    "  %v$(rangeIndex) = insertvalue { i32, i32 } %v$(rangeIndex)_start, i32 " -> print
+    range.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(rangeIndex)_end_inclusive" -> print } else { range.operand1 -> writeValue(ownerIndex, context, state) }
+    ", 1" -> println
+}
+
 # Per-node region emission responsibilities extracted from emitRegionOrder.
 # Helpers borrow the canonical emitter state and preserve caller-owned order.
 
@@ -199,29 +355,11 @@ emitRegionBindingExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrde
         regionNode.operand0 -> writeValue(ownerIndex, context, state)
         "" -> println
     }
-    regionNode.kind == 37 -> if {
-        regionNode.operand0 => regionBranchArmValueIndex!
-        0 => regionBranchArmPosition!
-        regionBranchArmValueIndex! >= 0 -> while {
-            context.ir[regionBranchArmValueIndex!] => regionBranchArmValue
-            "  " -> print
-            regionBranchArmValue.nextOperand < 0 -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_f$(regionBranchArmPosition!)" -> print }
-            " = insertvalue " -> print
-            regionNode -> writeIrType(context, state)
-            " " -> print
-            regionBranchArmPosition! == 0 -> if { "poison" -> print } else {
-                "%v$(regionNodeIndex)_f" -> print
-                regionBranchArmPosition! - 1 -> writeDecimal
-            }
-            ", " -> print
-            regionBranchArmValue -> writeIrType(context, state)
-            " " -> print
-            regionBranchArmValueIndex! -> writeValue(ownerIndex, context, state)
-            ", $(regionBranchArmPosition!)" -> println
-            regionBranchArmValue.nextOperand => regionBranchArmValueIndex!
-            regionBranchArmPosition! + 1 => regionBranchArmPosition!
-        }
-    }
+    regionNode.kind == 37 -> if { regionNodeIndex -> emitSequentialBranchAggregate(ownerIndex, context, state) }
+    regionNode.kind == 39 -> if { regionNodeIndex -> emitSequentialBranchArmValue(ownerIndex, context, state) }
+    regionNode.kind == 38 and context.supportsComputePool
+        -> if { regionNodeIndex -> emitParallelBranchValue(ownerIndex, context, state) }
+    regionNode.kind == 31 -> if { regionNodeIndex -> emitRangeValue(ownerIndex, context, state) }
 }
 
 emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -698,6 +836,10 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
 emitRegionIntrinsicExpressions regionNodeIndex: Int, ownerIndex: Int, regionPointerAlignment: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[regionNodeIndex] => regionNode
     regionNodeIndex -> emitArgumentsIntrinsic(context)
+    regionNode.kind == 9 and (regionNode.opcode == -306 or regionNode.opcode == -307) and regionNode.operand0 >= 0
+        -> if { regionNodeIndex -> emitMappedBytesExpression(ownerIndex, context, state) }
+    regionNode -> isMappedBytesFlush(context)
+        -> if { regionNodeIndex -> emitMappedBytesFlush(ownerIndex, context, state) }
     regionNode.kind == 9 and regionNode.opcode == -224 and regionNode.operand0 >= 0
         -> if {
             context.ir[regionNode.operand0] => regionDynConcrete
@@ -1997,7 +2139,7 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
 
 emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[regionNodeIndex] => regionNode
-    (regionNode.kind == 6 or (regionNode -> typedIr.isConsoleRuntimeCall)) and not (regionNode -> typedIr.isSetIntrinsicCall) and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and not (regionNode -> typedIr.isArenaConstructorCall) and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and not (regionNode.opcode -> typedIr.isProcessExecutionOpcode) and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and regionNode.opcode != -229 and regionNode.opcode != -230 and regionNode.opcode != -233 and regionNode.opcode != -235 and not (regionNode.opcode -> typedIr.isProcessProjectionOpcode) and (regionNode.opcode > -237 or regionNode.opcode < -240) and not (regionNode -> isSourceTextFileIntrinsic) and not (regionNode.opcode -> typedIr.isFileRuntimeOpcode) and not (regionNode.opcode -> typedIr.isSocketRuntimeOpcode) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex)
+    (regionNode.kind == 6 or (regionNode -> typedIr.isConsoleRuntimeCall)) and not (regionNode -> isMappedBytesFlush(context)) and not (regionNode -> typedIr.isSetIntrinsicCall) and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and not (regionNode -> typedIr.isArenaConstructorCall) and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and not (regionNode.opcode -> typedIr.isProcessExecutionOpcode) and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and regionNode.opcode != -229 and regionNode.opcode != -230 and regionNode.opcode != -233 and regionNode.opcode != -235 and not (regionNode.opcode -> typedIr.isProcessProjectionOpcode) and (regionNode.opcode > -237 or regionNode.opcode < -240) and not (regionNode -> isSourceTextFileIntrinsic) and not (regionNode.opcode -> typedIr.isFileRuntimeOpcode) and not (regionNode.opcode -> typedIr.isSocketRuntimeOpcode) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex)
         -> if {
             regionNode.symbol == -101 or regionNode.symbol == -102 or regionNode.symbol == -116
                 -> if {

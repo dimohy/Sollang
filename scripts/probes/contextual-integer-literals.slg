@@ -1,0 +1,203 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.semantic.type_ids as typeIds
+import syntax.generated.slg as grammar
+
+node kind: Int, opcode: Int, operand: Int -> TypedIrNode {
+    TypedIrNode {
+        kind: kind
+        parent: -1
+        sourceModule: 0
+        astNode: 0
+        symbol: -1
+        targetModule: -1
+        typeOrigin: 1
+        typeModule: -1
+        typeSymbol: 2
+        typeId: 2
+        typeKind: 1
+        typeFlags: 0
+        payloadToken: -1
+        opcode: opcode
+        operand0: operand
+        operand1: -1
+        nextOperand: -1
+        flags: 0
+    }
+}
+
+public run: -> Unit uses Console {
+    typeIds.SemanticType {
+        kind: 1
+        origin: 1
+        module: -1
+        symbol: 6
+        first: -1
+        second: -1
+        length: -1
+        lengthHash: 0
+        containsParameter: false
+        status: 0
+    } => target!
+    [TypedIrNode; ~] => nodes!
+    nodes! -> push(node(3, -1, -1))
+    nodes! -> push(node(7, grammar.tokenIdMinus(), 0))
+    nodes! -> push(node(5, -1, 0))
+    nodes! -> push(node(7, 999, 0))
+    nodes! -> push(node(7, grammar.tokenIdMinus(), 2))
+    nodes! -> push(node(3, -1, -1))
+    # The actual production helper updates the negative carrier and leaf.
+    nodes! -> sealIntegerLiteralContext(1, 6, target!, 7)
+    "negative=$(nodes![0].typeId),$(nodes![1].typeId),$(nodes![1].typeFlags)" -> println
+    # Typed names and unrelated unary expressions never acquire literal context.
+    nodes! -> sealIntegerLiteralContext(2, 6, target!, 7)
+    nodes! -> sealIntegerLiteralContext(3, 6, target!, 7)
+    nodes! -> sealIntegerLiteralContext(4, 6, target!, 7)
+    "nonliteral=$(nodes![2].typeId),$(nodes![3].typeId),$(nodes![4].typeId)" -> println
+    nodes! -> sealIntegerLiteralContext(-1, 6, target!, 7)
+    nodes! -> sealIntegerLiteralContext(6, 6, target!, 7)
+    nodes! -> sealIntegerLiteralContext(5, -1, target!, 7)
+    0 => target!.origin
+    nodes! -> sealIntegerLiteralContext(5, 6, target!, 7)
+    "invalid=$(nodes![5].typeId)" -> println
+    1 => target!.origin
+    11 => target!.symbol
+    nodes! -> sealIntegerLiteralContext(5, 11, target!, 0)
+    "unsigned=$(nodes![5].typeId),$(nodes![5].typeSymbol)" -> println
+
+    # Explicit conversions are calls, even when their operand is a literal.
+    node(9, -1, 5) => cast!
+    11 => cast!.typeId
+    11 => cast!.typeSymbol
+    nodes! -> push(cast!)
+    nodes! -> push(node(7, grammar.tokenIdMinus(), 6))
+    6 => target!.symbol
+    nodes! -> sealIntegerLiteralContext(6, 6, target!, 0)
+    nodes! -> sealIntegerLiteralContext(7, 6, target!, 0)
+    "casts=$(nodes![5].typeId),$(nodes![6].typeId),$(nodes![7].typeId)" -> println
+
+    nodes! -> push(node(7, grammar.tokenIdMinus(), 999))
+    node(3, -1, -1) => decimal!
+    21 => decimal!.typeId
+    21 => decimal!.typeSymbol
+    nodes! -> push(decimal!)
+    nodes! -> push(node(7, grammar.tokenIdMinus(), 9))
+    node(3, -1, -1) => nominal!
+    0 => nominal!.typeOrigin
+    nodes! -> push(nominal!)
+    20 => decimal!.typeId
+    20 => decimal!.typeSymbol
+    nodes! -> push(decimal!)
+    nodes! -> push(node(7, grammar.tokenIdMinus(), 13))
+    nodes! -> sealIntegerLiteralContext(8, 6, target!, 0)
+    nodes! -> sealIntegerLiteralContext(9, 6, target!, 0)
+    nodes! -> sealIntegerLiteralContext(10, 6, target!, 0)
+    nodes! -> sealIntegerLiteralContext(11, 6, target!, 0)
+    nodes! -> sealIntegerLiteralContext(12, 6, target!, 0)
+    nodes! -> sealIntegerLiteralContext(13, 6, target!, 0)
+    "leaf-guards=$(nodes![8].typeId),$(nodes![9].typeId),$(nodes![10].typeId),$(nodes![11].typeOrigin),$(nodes![12].typeId),$(nodes![13].typeId)" -> println
+
+    nodes! -> push(node(3, -1, -1))
+    1 => target!.module
+    nodes! -> sealIntegerLiteralContext(14, 6, target!, 0)
+    -1 => target!.module
+    2 => target!.status
+    nodes! -> sealIntegerLiteralContext(14, 6, target!, 0)
+    0 => target!.status
+    8 => target!.kind
+    nodes! -> sealIntegerLiteralContext(14, 6, target!, 0)
+    1 => target!.kind
+    21 => target!.symbol
+    nodes! -> sealIntegerLiteralContext(14, 21, target!, 0)
+    -1 => target!.symbol
+    nodes! -> sealIntegerLiteralContext(14, 6, target!, 0)
+    999 => target!.symbol
+    nodes! -> sealIntegerLiteralContext(14, 6, target!, 0)
+    "target-guards=$(nodes![14].typeId)" -> println
+
+    # This is type-context propagation only, not acceptance of a negative
+    # value for UInt64. Source-level signed/range diagnostics are a separate
+    # required integration check (including the valid special case -0).
+    nodes! -> push(node(3, -1, -1))
+    nodes! -> push(node(7, grammar.tokenIdMinus(), 15))
+    11 => target!.symbol
+    nodes! -> sealIntegerLiteralContext(16, 11, target!, 0)
+    "unsigned-negative-context=$(nodes![15].typeId),$(nodes![16].typeId)" -> println
+
+    # Execute the actual final binary pass used by fixture 1120, not a copy.
+    node(5, -1, -1) => longPeer!
+    6 => longPeer!.typeId
+    6 => longPeer!.typeSymbol
+    nodes! -> push(longPeer!)
+    node(8, grammar.tokenIdMinus(), 1) => binary!
+    17 => binary!.operand1
+    nodes! -> push(binary!)
+    node(8, grammar.tokenIdLessEqual(), 17) => comparison!
+    1 => comparison!.operand1
+    23 => comparison!.typeId
+    23 => comparison!.typeSymbol
+    nodes! -> push(comparison!)
+    nodes! -> push(node(8, grammar.tokenIdMinus(), 999))
+    2 => target!.symbol
+    nodes! -> sealIntegerLiteralContext(1, 2, target!, 0)
+    nodes! -> sealFinalContextualNumericLiterals
+    "binary=$(nodes![0].typeId),$(nodes![1].typeId),$(nodes![18].typeId),$(nodes![19].typeId),$(nodes![20].typeId)" -> println
+    "identity=$(nodes![0].typeKind),$(nodes![0].typeOrigin),$(nodes![0].typeModule),$(nodes![0].typeSymbol),$(nodes![0].typeFlags)" -> println
+
+    # The production native-call consumer selects integer or Float handling.
+    # Integer and Float unary carriers both use the actual operand0 topology.
+    [TypedIrNode; ~] => nativeNodes!
+    nativeNodes! -> push(node(3, -1, -1))
+    nativeNodes! -> push(node(7, grammar.tokenIdMinus(), 0))
+    21 => decimal!.typeId
+    21 => decimal!.typeSymbol
+    nativeNodes! -> push(decimal!)
+    node(9, -1, 0) => nativeCast!
+    11 => nativeCast!.typeId
+    11 => nativeCast!.typeSymbol
+    nativeNodes! -> push(nativeCast!)
+    nativeNodes! -> push(node(7, grammar.tokenIdMinus(), 3))
+    nativeNodes! -> push(node(3, -1, -1))
+    nativeNodes! -> push(node(3, -1, -1))
+    node(7, grammar.tokenIdMinus(), 6) => floatCarrier!
+    nativeNodes! -> push(floatCarrier!)
+    nativeNodes! -> push(node(7, grammar.tokenIdMinus(), 9))
+    nativeNodes! -> push(node(3, -1, -1))
+    nativeNodes! -> push(node(9, -1, 9))
+    999 => floatCarrier!.operand0
+    nativeNodes! -> push(floatCarrier!)
+    nativeNodes! -> push(node(3, -1, -1))
+    nativeNodes! -> push(node(3, -1, -1))
+    nativeNodes! -> push(node(3, -1, -1))
+    7 => longPeer!.typeFlags
+    nativeNodes! -> sealNativeNumericLiteralContext(1, longPeer!)
+    "native-integer=$(nativeNodes![0].typeId),$(nativeNodes![1].typeId),$(nativeNodes![1].typeFlags)" -> println
+    nativeNodes! -> sealNativeNumericLiteralContext(2, longPeer!)
+    nativeNodes! -> sealNativeNumericLiteralContext(3, longPeer!)
+    nativeNodes! -> sealNativeNumericLiteralContext(4, longPeer!)
+    "native-integer-guards=$(nativeNodes![2].typeId),$(nativeNodes![3].typeId),$(nativeNodes![4].typeId)" -> println
+    20 => longPeer!.typeId
+    20 => longPeer!.typeSymbol
+    nativeNodes! -> sealNativeNumericLiteralContext(5, longPeer!)
+    21 => longPeer!.typeId
+    21 => longPeer!.typeSymbol
+    nativeNodes! -> sealNativeNumericLiteralContext(7, longPeer!)
+    "native-float=$(nativeNodes![5].typeId),$(nativeNodes![6].typeId),$(nativeNodes![7].typeId),$(nativeNodes![7].typeFlags)" -> println
+    nativeNodes! -> sealNativeNumericLiteralContext(8, longPeer!)
+    nativeNodes! -> sealNativeNumericLiteralContext(10, longPeer!)
+    "native-float-unary=$(nativeNodes![8].typeId),$(nativeNodes![9].typeId),$(nativeNodes![10].typeId)" -> println
+    nativeNodes! -> sealNativeNumericLiteralContext(-1, longPeer!)
+    nativeNodes! -> sealNativeNumericLiteralContext(15, longPeer!)
+    nativeNodes! -> sealNativeNumericLiteralContext(11, longPeer!)
+    23 => longPeer!.typeId
+    23 => longPeer!.typeSymbol
+    nativeNodes! -> sealNativeNumericLiteralContext(12, longPeer!)
+    "native-boundary=$(nativeNodes![11].typeId),$(nativeNodes![12].typeId)" -> println
+    19 => longPeer!.typeId
+    19 => longPeer!.typeSymbol
+    nativeNodes! -> sealNativeNumericLiteralContext(13, longPeer!)
+    22 => longPeer!.typeId
+    22 => longPeer!.typeSymbol
+    nativeNodes! -> sealNativeNumericLiteralContext(14, longPeer!)
+    "native-float-alias=$(nativeNodes![13].typeId),$(nativeNodes![14].typeId)" -> println
+}

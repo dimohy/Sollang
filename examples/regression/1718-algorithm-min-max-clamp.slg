@@ -1,0 +1,73 @@
+import std.algorithm as algorithm
+
+struct IntegerComparison { }
+impl algorithm.Comparison for IntegerComparison {
+    type Item = Int
+    public compare: self, left: ref Int, right: ref Int -> Int {
+        left < right -> if { -2_147_483_648 } else {
+            left > right -> if { 2_147_483_647 } else { 0 }
+        }
+    }
+}
+
+struct Ranked { rank: Int, id: Int }
+struct RankComparison { }
+impl algorithm.Comparison for RankComparison {
+    type Item = Ranked
+    public compare: self, left: ref Ranked, right: ref Ranked -> Int {
+        left.rank < right.rank -> if { -1 } else {
+            left.rank > right.rank -> if { 1 } else { 0 }
+        }
+    }
+}
+
+struct ClampCase { value: Int, lower: Int, upper: Int }
+printCases cases: [ClampCase], ordering: algorithm.Ordering -> Unit uses Console {
+    IntegerComparison { } => comparison
+    cases -> each item {
+        ordering -> clamp(item.value, item.lower, item.upper, comparison) -> when {
+            Ok(value) { "clamp=$value" -> println }
+            Err(error) {
+                error -> when {
+                    ReversedBounds { "clamp=reversed" -> println }
+                }
+            }
+        }
+    }
+}
+
+main {
+    algorithm.Ordering { direction: algorithm.Direction.Ascending } => ascending
+    algorithm.Ordering { direction: algorithm.Direction.Descending } => descending
+    IntegerComparison { } => comparison
+    ascending -> min(-2_147_483_648, 2_147_483_647, comparison) -> println
+    ascending -> max(-2_147_483_648, 2_147_483_647, comparison) -> println
+    descending -> min(-2_147_483_648, 2_147_483_647, comparison) -> println
+    descending -> max(-2_147_483_648, 2_147_483_647, comparison) -> println
+    Ranked { rank: 7, id: 1 } => first
+    Ranked { rank: 7, id: 2 } => second
+    RankComparison { } => rankComparison
+    ascending -> min(first, second, rankComparison) => minimum
+    ascending -> max(first, second, rankComparison) => maximum
+    "ties=$(minimum.id),$(maximum.id),$(first.id),$(second.id)" -> println
+    [ClampCase;
+        { value: -20, lower: -10, upper: 10 },
+        { value: 0, lower: -10, upper: 10 },
+        { value: 20, lower: -10, upper: 10 },
+        { value: 99, lower: 7, upper: 7 },
+        { value: -2_147_483_648, lower: -2_147_483_648, upper: 2_147_483_647 },
+        { value: 2_147_483_647, lower: -2_147_483_648, upper: 2_147_483_647 },
+        { value: 0, lower: 10, upper: -10 }
+    ] => ascendingCases
+    ascendingCases -> printCases(ascending)
+    [ClampCase;
+        { value: -20, lower: 10, upper: -10 },
+        { value: 0, lower: 10, upper: -10 },
+        { value: 20, lower: 10, upper: -10 },
+        { value: 99, lower: 7, upper: 7 },
+        { value: -2_147_483_648, lower: 2_147_483_647, upper: -2_147_483_648 },
+        { value: 2_147_483_647, lower: 2_147_483_647, upper: -2_147_483_648 },
+        { value: 0, lower: -10, upper: 10 }
+    ] => descendingCases
+    descendingCases -> printCases(descending)
+}

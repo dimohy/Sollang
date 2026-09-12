@@ -1,0 +1,88 @@
+import std.time as time
+import sys.file as file
+
+sentinelBuffer length: Int -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < length -> while {
+        bytes! -> push(165)
+        index! + 1 => index!
+    }
+    bytes!
+}
+
+preservesSentinel bytes: [UInt8; ~], start: Int -> Bool {
+    start => index!
+    index! < (bytes -> len) -> while {
+        bytes[index!] != 165 -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+emit instant: time.UtcInstant -> Result<Unit, time.Error> uses Console, File {
+    sentinelBuffer(24) => owned!
+    instant -> formatRfc3339(owned!)? => written
+    owned! -> file.borrowBytes => source
+    source -> slice(UIntSize(0), UIntSize(written)) -> println
+    Result<Unit, time.Error>.Ok
+}
+
+isRangeError instant: time.UtcInstant -> Bool {
+    sentinelBuffer(24) => output!
+    instant -> formatRfc3339(output!) -> when {
+        Ok(_) { false }
+        Err(error) {
+            error.kind -> when {
+                CalendarOutOfRange { output! -> preservesSentinel(0) }
+                else { false }
+            }
+        }
+    }
+}
+
+rejectsShortOutput: -> Bool {
+    sentinelBuffer(23) => output!
+    time.UtcInstant { unixMillis: 0 } -> formatRfc3339(output!) -> when {
+        Ok(_) { false }
+        Err(error) {
+            error.kind -> when {
+                InsufficientOutput { output! -> preservesSentinel(0) }
+                else { false }
+            }
+        }
+    }
+}
+
+preservesStorage: -> Result<Bool, time.Error> {
+    sentinelBuffer(28) => output!
+    output! -> capacity => capacity
+    time.UtcInstant { unixMillis: 0 } -> formatRfc3339(output!)? => written
+    Result<Bool, time.Error>.Ok(written == 24
+        and (output! -> len) == 28
+        and (output! -> capacity) == capacity
+        and output! -> preservesSentinel(24))
+}
+
+run: -> Result<Unit, time.Error> uses Console, File {
+    time.UtcInstant { unixMillis: -62_135_596_800_000 } -> emit?
+    time.UtcInstant { unixMillis: -1 } -> emit?
+    time.UtcInstant { unixMillis: 0 } -> emit?
+    time.UtcInstant { unixMillis: -2_203_891_200_000 } -> emit?
+    time.UtcInstant { unixMillis: 951_827_696_789 } -> emit?
+    time.UtcInstant { unixMillis: 1_709_186_828_009 } -> emit?
+    time.UtcInstant { unixMillis: 253_402_300_799_999 } -> emit?
+
+    time.UtcInstant { unixMillis: -62_135_596_800_001 } -> isRangeError => lowerRejected
+    time.UtcInstant { unixMillis: 253_402_300_800_000 } -> isRangeError => upperRejected
+    "range=$(lowerRejected and upperRejected),short=$(rejectsShortOutput())" -> println
+    preservesStorage()? -> unless { "unexpected-storage-mutation" -> println }
+    Result<Unit, time.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) { }
+        Err(_) { "failed" -> println }
+    }
+}

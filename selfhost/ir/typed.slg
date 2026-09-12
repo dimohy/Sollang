@@ -75,11 +75,106 @@ public isFileResultOpcode opcode: Int -> Bool {
         or opcode == -305
 }
 
+# Syntax shape, not provisional semantic availability, decides whether
+# operators exist in Typed IR. Both entry and ordinary-function lowering use
+# this single policy so their materialization rules cannot drift independently.
+public isNumericBinaryAstKind kind: Int -> Bool => kind == 20 or kind == 21
+
+public isBooleanBinaryAstKind kind: Int -> Bool {
+    kind == 18 or kind == 19 or kind == 24 or kind == 25 or kind == 70
+}
+
+public isBinaryValueAstKind kind: Int -> Bool {
+    (kind -> isNumericBinaryAstKind) or (kind -> isBooleanBinaryAstKind)
+}
+
+# AST identity selects the stable Typed IR shape before any contextual type or
+# call information is attached. Call, Bool-name, and nullary-enum refinements
+# deliberately override this base result after semantic resolution.
+public defaultExpressionIrKindForAstKind kind: Int -> Int {
+    9 => irKind!
+    kind == 13 -> if { 2 => irKind! }
+    kind == 14 -> if { 3 => irKind! }
+    kind == 15 -> if { 5 => irKind! }
+    kind == 22 -> if { 7 => irKind! }
+    kind == 23 or kind == 49 -> if { 9 => irKind! }
+    kind -> isBinaryValueAstKind -> if { 8 => irKind! }
+    kind == 39 -> if { 12 => irKind! }
+    kind == 36 -> if { 13 => irKind! }
+    kind == 37 -> if { 14 => irKind! }
+    kind == 41 -> if { 15 => irKind! }
+    kind == 38 -> if { 16 => irKind! }
+    kind == 53 -> if { 24 => irKind! }
+    kind == 54 -> if { 25 => irKind! }
+    kind == 55 -> if { 26 => irKind! }
+    kind == 56 -> if { 27 => irKind! }
+    kind == 59 -> if { 29 => irKind! }
+    kind == 63 -> if { 31 => irKind! }
+    kind == 64 -> if { 32 => irKind! }
+    kind == 57 -> if { 33 => irKind! }
+    kind == 71 -> if { 35 => irKind! }
+    kind == 76 -> if { 36 => irKind! }
+    kind == 73 -> if { 37 => irKind! }
+    kind == 74 -> if { 38 => irKind! }
+    kind == 75 -> if { 39 => irKind! }
+    kind == 78 -> if { 40 => irKind! }
+    kind == 79 -> if { 41 => irKind! }
+    kind == 80 -> if { 42 => irKind! }
+    kind == 81 -> if { 43 => irKind! }
+    irKind!
+}
+
+# Semantic resolution supplies only the contextual facts; the final shape
+# precedence remains shared. This prevents entry and ordinary functions from
+# independently deciding whether Bool names, calls, flows, and type
+# applications become value, call, or enum-constructor nodes.
+public resolvedExpressionIrKindForAstKind kind: Int, isBoolLiteral: Bool, isCallLike: Bool, isNullaryEnum: Bool, isPropertyCall: Bool -> Int {
+    kind -> defaultExpressionIrKindForAstKind => irKind!
+    isBoolLiteral -> if { 4 => irKind! }
+    isCallLike -> if { 6 => irKind! }
+    isNullaryEnum -> if { 26 => irKind! }
+    isPropertyCall -> if { 6 => irKind! }
+    irKind!
+}
+
+# Entry and ordinary functions share control materialization as well as value
+# materialization. A negative result means the AST node is not a control node.
+public controlIrKindForAstKind kind: Int -> Int {
+    -1 => irKind!
+    kind == 42 -> if { 18 => irKind! }
+    kind == 43 or kind == 58 -> if { 19 => irKind! }
+    kind == 44 -> if { 20 => irKind! }
+    kind == 45 -> if { 21 => irKind! }
+    kind == 46 -> if { 22 => irKind! }
+    kind == 47 -> if { 23 => irKind! }
+    kind == 62 or kind == 82 -> if { 30 => irKind! }
+    irKind!
+}
+
+# MapExpression has no placeholder operands. The linked operand count is the
+# canonical clause-presence contract: bit 0 = `at` offset, bit 1 = `for`
+# length, bit 2 = `size` file size. Invalid opcode/count combinations remain
+# unresolved instead of acquiring an arbitrary clause shape.
+public mapExpressionClauseFlags opcode: Int, operandCount: Int -> Int {
+    -1 => flags!
+    opcode == -306 -> if {
+        operandCount == 1 -> if { 0 => flags! }
+        operandCount == 3 -> if { 3 => flags! }
+    }
+    opcode == -307 -> if {
+        operandCount == 1 -> if { 0 => flags! }
+        operandCount == 2 -> if { 4 => flags! }
+        operandCount == 3 -> if { 3 => flags! }
+        operandCount == 4 -> if { 7 => flags! }
+    }
+    flags!
+}
+
 # Pure sys.process domain projections are intrinsic instance methods whose
 # self-host lowering is an aggregate field extraction, never a wrapper call.
 public isProcessProjectionOpcode opcode: Int -> Bool => opcode == -285 or opcode == -286
 
-public isProcessExecutionOpcode opcode: Int -> Bool => opcode == -210 or opcode == -211 or opcode == -277 or opcode == -278 or opcode == -288
+public isProcessExecutionOpcode opcode: Int -> Bool => opcode == -210 or opcode == -211 or opcode == -277 or opcode == -278 or opcode == -288 or opcode == -308
 
 integerTypeRank symbol: Int -> Int {
     0 => rank!
@@ -983,6 +1078,15 @@ public profileResolvedContextFunctionPrefix prepared: semanticContext.SemanticSn
 public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; ~] {
     prepared -> expressionTypeIds.resolveContext => recursiveTypes
     prepared -> lowerResolvedContext(recursiveTypes) => result
+    result
+}
+
+# Diagnostic counterpart to lowerContext that preserves the production native
+# function-parallel lowering mode. Differential probes use the same prepared
+# snapshot so any node-set drift is attributable to the lowering mode itself.
+public lowerContextParallel prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; ~] {
+    prepared -> expressionTypeIds.resolveContext => recursiveTypes
+    prepared -> lowerResolvedContextParallel(recursiveTypes) => result
     result
 }
 

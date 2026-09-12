@@ -1,0 +1,163 @@
+import std.text.csv as csv
+
+bounds: -> csv.WriterLimits => csv.WriterLimits {
+    maxOutputBytes: 512
+    maxRecords: 8
+    maxFieldsPerRecord: 8
+    maxFieldBytes: 64
+}
+
+filled count: Int -> [UInt8; ~] {
+    [UInt8; ~] => output!
+    output! -> reserve(count)
+    0..<count -> each index { output! -> push(170) }
+    output!
+}
+
+tailIntact output: [UInt8; ~], start: Int -> Bool {
+    true => same!
+    start..<(output -> len) -> each index {
+        output[index] != 170 -> if { false => same! }
+    }
+    same!
+}
+
+kindName kind: csv.Kind -> Text {
+    kind -> when {
+        InvalidLimits => "InvalidLimits"
+        InvalidOptions => "InvalidOptions"
+        InputLimit => "InputLimit"
+        RecordLimit => "RecordLimit"
+        FieldCountLimit => "FieldCountLimit"
+        FieldSizeLimit => "FieldSizeLimit"
+        ColumnCountMismatch => "ColumnCountMismatch"
+        UnexpectedQuote => "UnexpectedQuote"
+        UnterminatedQuote => "UnterminatedQuote"
+        TrailingAfterQuote => "TrailingAfterQuote"
+        InvalidLineEnding => "InvalidLineEnding"
+        InvalidControl => "InvalidControl"
+        OutputTooSmall => "OutputTooSmall"
+        InvalidRecord => "InvalidRecord"
+        OutputLimit => "OutputLimit"
+    }
+}
+
+show label: Text, fields: [Text], format: csv.Format -> Result<Unit, csv.Error> uses Console {
+    format -> writer(bounds())? => writer!
+    filled(64) => output!
+    output! -> capacity => capacity
+    writer! -> writeRecord(fields, output!)? => length
+    "$label=$length:" -> print
+    0..<length -> each index { "$(output![index])," -> print }
+    "" -> println
+    "$label-state=$(writer! -> bytesWritten),$(writer! -> recordsWritten),len=$(output! -> len),capacity=$(output! -> capacity == capacity),tail=$(tailIntact(output!, length))" -> println
+    Result<Unit, csv.Error>.Ok
+}
+
+rejectCreation label: Text, format: csv.Format, limits: csv.WriterLimits -> Unit uses Console {
+    format -> writer(limits) -> when {
+        Err(error) { "$label=$(kindName(error.kind))@$(error.offset)/$(error.requiredBytes),unchanged=true" -> println }
+        Ok(writer) { "unexpected-created-$label" -> println }
+    }
+}
+
+reject label: Text, fields: [Text], format: csv.Format, limits: csv.WriterLimits -> Result<Unit, csv.Error> uses Console {
+    format -> writer(limits)? => writer!
+    filled(64) => output!
+    output! -> capacity => capacity
+    0..<2 -> each attempt {
+        writer! -> writeRecord(fields, output!) -> when {
+            Err(error) {
+                writer! -> bytesWritten == 0 and writer! -> recordsWritten == 0
+                    and output! -> len == 64 and output! -> capacity == capacity
+                    and tailIntact(output!, 0) => same
+                "$label-$attempt=$(kindName(error.kind))@$(error.offset)/$(error.requiredBytes),unchanged=$same" -> println
+            }
+            Ok(length) { "unexpected-accepted-$label" -> println }
+        }
+    }
+    Result<Unit, csv.Error>.Ok
+}
+
+retry: -> Result<Unit, csv.Error> uses Console {
+    csv.standard() -> writer(csv.WriterLimits { maxOutputBytes: 10, maxRecords: 2, maxFieldsPerRecord: 2, maxFieldBytes: 3 })? => writer!
+    ["한", "x"] => fields
+    filled(6) => short!
+    short! -> capacity => shortCapacity
+    writer! -> writeRecord(fields, short!) -> when {
+        Err(error) {
+            writer! -> bytesWritten == 0 and writer! -> recordsWritten == 0
+                and short! -> len == 6 and short! -> capacity == shortCapacity
+                and tailIntact(short!, 0) => same
+            "retry=$(kindName(error.kind))@$(error.offset)/$(error.requiredBytes),unchanged=$same" -> println
+        }
+        Ok(length) { "unexpected-short-success" -> println }
+    }
+    filled(12) => output!
+    output! -> capacity => capacity
+    writer! -> writeRecord(fields, output!)? => first
+    "retried=$first,bytes=$(writer! -> bytesWritten),records=$(writer! -> recordsWritten),tail=$(tailIntact(output!, first)),len=$(output! -> len),capacity=$(output! -> capacity == capacity)" -> println
+    0..<12 -> each index { 170 => output![index] }
+    ["a"] => single
+    writer! -> writeRecord(single, output!)? => second
+    "second=$second,bytes=$(writer! -> bytesWritten),records=$(writer! -> recordsWritten),tail=$(tailIntact(output!, second))" -> println
+    0..<12 -> each index { 170 => output![index] }
+    writer! -> writeRecord(single, output!) -> when {
+        Err(error) {
+            writer! -> bytesWritten == 10 and writer! -> recordsWritten == 2
+                and tailIntact(output!, 0) => same
+            "record-budget=$(kindName(error.kind))@$(error.offset)/$(error.requiredBytes),unchanged=$same" -> println
+        }
+        Ok(length) { "unexpected-third-record" -> println }
+    }
+    Result<Unit, csv.Error>.Ok
+}
+
+run: -> Result<Unit, csv.Error> uses Console {
+    """"
+    c"d
+    """" => quotedField
+    csv.standard() => format
+    csv.Format { lineEndings: csv.LineEndings.Lf, expectedColumns: 0 } => lf
+    ["a", "b"] => ascii
+    ["a,b", quotedField] => quoted
+    ["한글", "é", "🙂"] => utf8
+    [" a ", " b "] => spaces
+    ["", ""] => empty
+    ["a\r\nb", "a\rb", "a\nb"] => breaks
+    ["x", ""] => lfFields
+    show("ascii", ascii, format)?
+    show("quoted", quoted, format)?
+    show("utf8", utf8, format)?
+    show("spaces", spaces, format)?
+    show("empty", empty, format)?
+    show("breaks", breaks, format)?
+    show("lf", lfFields, lf)?
+    rejectCreation("negative-output", format, csv.WriterLimits { maxOutputBytes: -1, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 1 })
+    rejectCreation("negative-records", format, csv.WriterLimits { maxOutputBytes: 1, maxRecords: -1, maxFieldsPerRecord: 1, maxFieldBytes: 1 })
+    rejectCreation("negative-fields", format, csv.WriterLimits { maxOutputBytes: 1, maxRecords: 1, maxFieldsPerRecord: -1, maxFieldBytes: 1 })
+    rejectCreation("negative-bytes", format, csv.WriterLimits { maxOutputBytes: 1, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: -1 })
+    rejectCreation("either", csv.Format { lineEndings: csv.LineEndings.Either, expectedColumns: 0 }, bounds())
+    rejectCreation("negative-columns", csv.Format { lineEndings: csv.LineEndings.CrLf, expectedColumns: -1 }, bounds())
+    rejectCreation("columns-over-limit", csv.Format { lineEndings: csv.LineEndings.CrLf, expectedColumns: 9 }, bounds())
+    [Text; ~] => noFields
+    reject("empty-record", noFields, format, bounds())?
+    reject("too-many-fields", ascii, format, csv.WriterLimits { maxOutputBytes: 64, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 8 })?
+    reject("columns", ascii, csv.Format { lineEndings: csv.LineEndings.CrLf, expectedColumns: 3 }, bounds())?
+    reject("output-budget", quoted, format, csv.WriterLimits { maxOutputBytes: 12, maxRecords: 1, maxFieldsPerRecord: 2, maxFieldBytes: 8 })?
+    reject("field-bytes", utf8, format, csv.WriterLimits { maxOutputBytes: 64, maxRecords: 1, maxFieldsPerRecord: 3, maxFieldBytes: 5 })?
+    ["ok", "bad\t"] => control
+    reject("later-control", control, format, bounds())?
+    [""] => blank
+    reject("zero-output", blank, format, csv.WriterLimits { maxOutputBytes: 0, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 0 })?
+    reject("zero-records", blank, format, csv.WriterLimits { maxOutputBytes: 4, maxRecords: 0, maxFieldsPerRecord: 1, maxFieldBytes: 0 })?
+    retry()?
+    Result<Unit, csv.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected@$(error.offset)" -> println }
+    }
+}

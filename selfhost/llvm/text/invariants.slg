@@ -1925,6 +1925,299 @@ unresolvedGenericAbiNode context: ref emitterContext.EmitContext -> Int {
     invalid!
 }
 
+missingBinaryBindingIr context: ref emitterContext.EmitContext -> Int {
+    # Build source-global indexes once. A binding whose initializer is binary
+    # syntax must retain the canonical binary Typed IR producer even when its
+    # type becomes concrete only during final convergence. Grammar layers can
+    # retain same-span binary wrappers; only the deepest same-span descendant
+    # is materialized, while a smaller nested binary remains a distinct value.
+    [Int; ~] => binaryChildByParentAst!
+    [Int; ~] => binaryOwnerByAst!
+    [Int; ~] => binaryIrByAst!
+    0 => astInit!
+    astInit! < (context.nodes -> len) -> while {
+        binaryChildByParentAst! -> push(-1)
+        binaryOwnerByAst! -> push(-1)
+        binaryIrByAst! -> push(-1)
+        astInit! + 1 => astInit!
+    }
+    0 => sourceIndex!
+    sourceIndex! < (context.ranges -> len) -> while {
+        context.ranges[sourceIndex!] => sourceRange
+        0 => astIndex!
+        astIndex! < sourceRange.astCount -> while {
+            context.nodes[sourceRange.astStart + astIndex!] => candidate
+            candidate.kind -> typedIr.isBinaryValueAstKind
+                and candidate.parent >= 0
+                and candidate.parent < sourceRange.astCount
+                -> if {
+                    candidate.parent => binaryOwnerAst!
+                    context.nodes[sourceRange.astStart + candidate.parent] => binaryParent
+                    binaryParent.kind -> typedIr.isBinaryValueAstKind
+                        and binaryParent.start == candidate.start
+                        and binaryParent.length == candidate.length
+                        and binaryOwnerByAst![sourceRange.astStart + candidate.parent] >= 0
+                        -> if {
+                            binaryOwnerByAst![sourceRange.astStart + candidate.parent] => binaryOwnerAst!
+                        }
+                    binaryOwnerAst! >= 0 and binaryOwnerAst! < sourceRange.astCount
+                        -> if {
+                            sourceRange.astStart + astIndex! => binaryGlobalAst
+                            binaryOwnerAst! => binaryOwnerByAst![binaryGlobalAst]
+                            binaryGlobalAst => binaryChildByParentAst![sourceRange.astStart + binaryOwnerAst!]
+                        }
+                }
+            astIndex! + 1 => astIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        context.ir[irIndex!] => candidate
+        candidate.kind == 8
+            and candidate.sourceModule >= 0
+            and candidate.sourceModule < (context.ranges -> len)
+            -> if {
+                context.ranges[candidate.sourceModule] => sourceRange
+                candidate.astNode >= 0 and candidate.astNode < sourceRange.astCount
+                    -> if {
+                        irIndex! => binaryIrByAst![sourceRange.astStart + candidate.astNode]
+                    }
+            }
+        irIndex! + 1 => irIndex!
+    }
+    -1 => missing!
+    0 => bindingIndex!
+    bindingIndex! < (context.ir -> len) and missing! < 0
+        -> while {
+            context.ir[bindingIndex!] => binding
+            binding.kind == 17
+                and binding.sourceModule >= 0
+                and binding.sourceModule < (context.ranges -> len)
+                -> if {
+                    context.ranges[binding.sourceModule] => sourceRange
+                    binding.astNode >= 0 and binding.astNode < sourceRange.astCount
+                        -> if {
+                            binaryChildByParentAst![sourceRange.astStart + binding.astNode] => binaryAst
+                            binaryAst >= 0 and binaryIrByAst![binaryAst] < 0
+                                -> if { bindingIndex! => missing! }
+                        }
+                }
+            bindingIndex! + 1 => bindingIndex!
+        }
+    missing!
+}
+
+# `map read` and `map write` are syntax-owned producers rather than resolved
+# calls. Keep their AST identity authoritative until Typed IR has materialized
+# the exact producer and binding edge; otherwise a path Text child can be
+# mistaken for the mapped owner and only fail later as malformed LLVM.
+mapAstOpcode context: ref emitterContext.EmitContext, sourceModule: Int, astNode: Int -> Int {
+    -1 => opcode!
+    sourceModule >= 0 and sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[sourceModule] => sourceRange
+            astNode >= 0 and astNode < sourceRange.astCount
+                -> if {
+                    context.nodes[sourceRange.astStart + astNode] => mapAst
+                    mapAst.firstToken => tokenIndex!
+                    tokenIndex! < mapAst.firstToken + mapAst.tokenCount and opcode! < 0
+                        -> while {
+                            context.tokens[sourceRange.tokenStart + tokenIndex!] => token
+                            token.kind == grammar.tokenIdIdentifier() and token.span.length == 4
+                                -> if {
+                                    context.sources[sourceModule] -> byte(token.span.start) => byte0
+                                    context.sources[sourceModule] -> byte(token.span.start + 1) => byte1
+                                    context.sources[sourceModule] -> byte(token.span.start + 2) => byte2
+                                    context.sources[sourceModule] -> byte(token.span.start + 3) => byte3
+                                    byte0 == 114 and byte1 == 101 and byte2 == 97 and byte3 == 100
+                                        -> if { -306 => opcode! }
+                                }
+                            token.kind == grammar.tokenIdIdentifier() and token.span.length == 5
+                                -> if {
+                                    context.sources[sourceModule] -> byte(token.span.start) => byte0
+                                    context.sources[sourceModule] -> byte(token.span.start + 1) => byte1
+                                    context.sources[sourceModule] -> byte(token.span.start + 2) => byte2
+                                    context.sources[sourceModule] -> byte(token.span.start + 3) => byte3
+                                    context.sources[sourceModule] -> byte(token.span.start + 4) => byte4
+                                    byte0 == 119 and byte1 == 114 and byte2 == 105 and byte3 == 116 and byte4 == 101
+                                        -> if { -307 => opcode! }
+                                }
+                            tokenIndex! + 1 => tokenIndex!
+                        }
+                }
+        }
+    opcode!
+}
+
+mapAstForBinding context: ref emitterContext.EmitContext, bindingIndex: Int -> Int {
+    -1 => mapAst!
+    bindingIndex >= 0 and bindingIndex < (context.ir -> len)
+        -> if {
+            context.ir[bindingIndex] => binding
+            binding.sourceModule >= 0 and binding.sourceModule < (context.ranges -> len)
+                -> if {
+                    context.ranges[binding.sourceModule] => sourceRange
+                    0 => astIndex!
+                    astIndex! < sourceRange.astCount and mapAst! < 0
+                        -> while {
+                            context.nodes[sourceRange.astStart + astIndex!] => candidate
+                            candidate.kind == 49 and candidate.parent == binding.astNode
+                                -> if { astIndex! => mapAst! }
+                            astIndex! + 1 => astIndex!
+                        }
+                }
+        }
+    mapAst!
+}
+
+irNodeHasBuiltinType node: typedIr.TypedIrNode, builtinSymbol: Int, context: ref emitterContext.EmitContext -> Bool {
+    false => matches!
+    node.typeOrigin == 1 and node.typeSymbol == builtinSymbol
+        and node.typeId >= 0 and node.typeId < (context.types -> len)
+        -> if {
+            context.types[node.typeId] => canonical
+            canonical.kind == 1 and canonical.origin == 1 and canonical.symbol == builtinSymbol
+                -> if { true => matches! }
+        }
+    matches!
+}
+
+mapProducerContractValid context: ref emitterContext.EmitContext, producerIndex: Int, expectedOpcode: Int, expectedSymbol: Int -> Bool {
+    false => valid!
+    producerIndex >= 0 and producerIndex < (context.ir -> len)
+        -> if {
+            context.ir[producerIndex] => producer
+            producer.kind == 9
+                and producer.opcode == expectedOpcode
+                and (producer -> irNodeHasBuiltinType(expectedSymbol, context))
+                and producer.flags >= 0 and producer.flags <= 7
+                and producer.operand0 >= 0 and producer.operand0 < (context.ir -> len)
+                -> if {
+                    producer.flags % 2 == 1 => hasOffset
+                    producer.flags / 2 % 2 == 1 => hasLength
+                    producer.flags / 4 % 2 == 1 => hasFileSize
+                    ((hasOffset and hasLength) or (not hasOffset and not hasLength))
+                        and not (expectedOpcode == -306 and hasFileSize)
+                        -> if {
+                            context.ir[producer.operand0] => pathOperand
+                            pathOperand.parent == producerIndex
+                                and (pathOperand -> irNodeHasBuiltinType(1, context))
+                                -> if {
+                                    producer.operand0 => operandIndex!
+                                    0 => optionOrdinal!
+                                    true => chainValid!
+                                    operandIndex! >= 0 and optionOrdinal! < 4 and chainValid!
+                                        -> while {
+                                            context.ir[operandIndex!].nextOperand => operandIndex!
+                                            operandIndex! >= 0 -> if {
+                                                operandIndex! >= (context.ir -> len) -> if {
+                                                    false => chainValid!
+                                                } else {
+                                                    context.ir[operandIndex!] => optionOperand
+                                                    optionOperand.parent != producerIndex -> if { false => chainValid! }
+                                                    -1 => expectedOptionSymbol!
+                                                    hasOffset and optionOrdinal! == 0 -> if { 11 => expectedOptionSymbol! }
+                                                    hasLength and optionOrdinal! == 1 -> if { 13 => expectedOptionSymbol! }
+                                                    hasFileSize and ((hasLength and optionOrdinal! == 2) or (not hasLength and optionOrdinal! == 0))
+                                                        -> if { 11 => expectedOptionSymbol! }
+                                                    expectedOptionSymbol! < 0
+                                                        or not (optionOperand -> irNodeHasBuiltinType(expectedOptionSymbol!, context))
+                                                        -> if { false => chainValid! }
+                                                    optionOrdinal! + 1 => optionOrdinal!
+                                                }
+                                            }
+                                        }
+                                    0 => expectedOptionCount!
+                                    hasOffset -> if { expectedOptionCount! + 1 => expectedOptionCount! }
+                                    hasLength -> if { expectedOptionCount! + 1 => expectedOptionCount! }
+                                    hasFileSize -> if { expectedOptionCount! + 1 => expectedOptionCount! }
+                                    chainValid! and optionOrdinal! == expectedOptionCount!
+                                        -> if { true => valid! }
+                                }
+                        }
+                }
+        }
+    valid!
+}
+
+invalidMapBindingIr context: ref emitterContext.EmitContext -> Int {
+    [Int; ~] => mapIrByAst!
+    [Int; ~] => mapIrCountByAst!
+    0 => astInit!
+    astInit! < (context.nodes -> len) -> while {
+        mapIrByAst! -> push(-1)
+        mapIrCountByAst! -> push(0)
+        astInit! + 1 => astInit!
+    }
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        context.ir[irIndex!] => candidate
+        candidate.sourceModule >= 0 and candidate.sourceModule < (context.ranges -> len)
+            -> if {
+                context.ranges[candidate.sourceModule] => sourceRange
+                candidate.astNode >= 0 and candidate.astNode < sourceRange.astCount
+                    and context.nodes[sourceRange.astStart + candidate.astNode].kind == 49
+                    -> if {
+                        sourceRange.astStart + candidate.astNode => globalAst
+                        mapIrByAst![globalAst] < 0 -> if { irIndex! => mapIrByAst![globalAst] }
+                        mapIrCountByAst![globalAst] + 1 => mapIrCountByAst![globalAst]
+                    }
+            }
+        irIndex! + 1 => irIndex!
+    }
+    -1 => invalid!
+    0 => bindingIndex!
+    bindingIndex! < (context.ir -> len) and invalid! < 0
+        -> while {
+            context.ir[bindingIndex!] => binding
+            binding.kind == 17
+                and binding.sourceModule >= 0
+                and binding.sourceModule < (context.ranges -> len)
+                -> if {
+                    context -> mapAstForBinding(bindingIndex!) => mapAst
+                    mapAst >= 0 -> if {
+                        context.ranges[binding.sourceModule] => sourceRange
+                        sourceRange.astStart + mapAst => globalMapAst
+                        context -> mapAstOpcode(binding.sourceModule, mapAst) => expectedOpcode
+                        -1 => expectedSymbol!
+                        expectedOpcode == -306 -> if { 17 => expectedSymbol! }
+                        expectedOpcode == -307 -> if { 18 => expectedSymbol! }
+                        mapIrByAst![globalMapAst] => producerIndex
+                        producerIndex < 0 or mapIrCountByAst![globalMapAst] != 1
+                            -> if { bindingIndex! => invalid! } else {
+                                context.ir[producerIndex] => producer
+                                (expectedOpcode != -306 and expectedOpcode != -307)
+                                    or not (context -> mapProducerContractValid(producerIndex, expectedOpcode, expectedSymbol!))
+                                    or binding.operand0 != producerIndex
+                                    -> if { bindingIndex! => invalid! }
+                            }
+                    }
+                }
+            bindingIndex! + 1 => bindingIndex!
+        }
+    invalid!
+}
+
+invalidMappedFlushIr context: ref emitterContext.EmitContext -> Int {
+    -1 => invalid!
+    0 => irIndex!
+    irIndex! < (context.ir -> len) and invalid! < 0
+        -> while {
+            context.ir[irIndex!] => candidate
+            candidate.symbol == -114 -> if {
+                candidate.operand0 < 0 or candidate.operand0 >= (context.ir -> len)
+                    -> if { irIndex! => invalid! } else {
+                        context.ir[candidate.operand0] => receiver
+                        not (receiver -> irNodeHasBuiltinType(18, context))
+                            -> if { irIndex! => invalid! }
+                    }
+            }
+            irIndex! + 1 => irIndex!
+        }
+    invalid!
+}
+
 invalidValueLayoutType context: ref emitterContext.EmitContext -> Int {
     -1 => invalid!
     0 => index!
@@ -1954,5 +2247,8 @@ irInvariantDiagnosticCount context: ref emitterContext.EmitContext -> Int {
         -> if { count! + 1 => count! }
     count! + (context -> runtimeAbiDiagnosticCount) => count!
     (context -> unresolvedGenericAbiNode) >= 0 -> if { count! + 1 => count! }
+    (context -> missingBinaryBindingIr) >= 0 -> if { count! + 1 => count! }
+    (context -> invalidMapBindingIr) >= 0 -> if { count! + 1 => count! }
+    (context -> invalidMappedFlushIr) >= 0 -> if { count! + 1 => count! }
     count!
 }

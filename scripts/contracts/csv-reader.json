@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "module": "stdlib/std/text/csv.slg",
+  "scope": "bounded-utf8-field-stream-over-borrowed-text",
+  "reference": "https://www.rfc-editor.org/rfc/rfc4180.html#section-2",
+  "surfaces": ["Format", "standard", "Format.reader", "Reader.next", "Reader.offset"],
+  "lineEndings": {
+    "CrLf": "CRLF only outside quoted fields",
+    "Lf": "LF only outside quoted fields",
+    "Either": "CRLF or LF independently per record, including mixed records",
+    "bareCr": "rejected outside quoted fields",
+    "quoted": "preserve CR and LF bytes verbatim"
+  },
+  "defaults": { "lineEndings": "CrLf", "expectedColumns": 0 },
+  "profile": {
+    "encoding": "valid UTF-8 Text; byte preserving, no BOM stripping or whitespace trimming",
+    "emptyDocument": "zero records",
+    "blankRecord": "one empty field",
+    "trailingComma": "an empty final field",
+    "terminalNewline": "no phantom following record",
+    "header": "ordinary data; never inferred or removed",
+    "controls": "reject ASCII 0..31 and 127 except CR/LF inside quoted fields",
+    "claim": "explicit UTF-8 profile; not unqualified strict RFC 4180 conformance"
+  },
+  "limits": ["maxInputBytes", "maxRecords", "maxFieldsPerRecord", "maxFieldBytes"],
+  "invariants": [
+    "negative limits and negative expectedColumns fail before reading input",
+    "all zero limits remain valid for an empty document",
+    "a positive expectedColumns cannot exceed maxFieldsPerRecord",
+    "limits count input UTF-8 bytes, records, fields per record, and decoded field bytes",
+    "extra fixed columns fail before scanning the first extra field; missing columns fail before committing the final field",
+    "quote doubling is decoded by the same bounded field parser",
+    "every failed next call preserves its cursor and the complete caller output buffer",
+    "short output reports the exact decoded byte count and supports retry with another caller buffer",
+    "successful next changes only the decoded output prefix; owner, length, capacity, and tail remain unchanged",
+    "transactionality is per field; already returned fields of a later-invalid record are not rolled back",
+    "reader identity, cursor, and parser state are private",
+    "no implicit file/network effect, row materialization, output resize, or payload allocation"
+  ],
+  "errors": [
+    "InvalidLimits", "InvalidOptions", "InputLimit", "RecordLimit", "FieldCountLimit",
+    "FieldSizeLimit", "ColumnCountMismatch", "UnexpectedQuote", "UnterminatedQuote",
+    "TrailingAfterQuote", "InvalidLineEnding", "InvalidControl", "OutputTooSmall"
+  ],
+  "fixture": "1721-csv-bounded-reader",
+  "negativeFixtures": ["csv-source-escape-negative", "csv-output-alias-negative"],
+  "allowedWindowsExternals": ["GetStdHandle", "WriteFile", "llvm.trap"],
+  "referenceCases": [
+    { "label": "ascii", "input": "a,b\r\nc,d", "expectedColumns": 2 },
+    { "label": "quoted", "input": "\"a,b\",\"c\"\"d\"\r\n\"line\r\nbreak\",plain", "expectedColumns": 2 },
+    { "label": "utf8", "input": "한글,é\r\n끝,🙂", "expectedColumns": 2 },
+    { "label": "spaces", "input": " a ,\" b \"\r\nc,d", "expectedColumns": 2 }
+  ],
+  "acceptance": "focused managed execution, ownership/effect diagnostics, source-cost audit, selfhost differential, and required target closure remain separate gates"
+}

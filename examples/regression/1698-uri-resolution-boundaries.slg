@@ -1,0 +1,117 @@
+import std.uri as uri
+import sys.file as file
+
+# RFC 3986 section 5.4: component boundaries survive path resolution.
+check base: ref uri.Reference, text: Text, expected: Text -> Result<Unit, uri.Error> uses Console, File {
+    uri.parse(text, 128)? => child
+    base -> resolveBytes(child, uri.canonicalNormalization(), 128)? => bytes
+    bytes -> file.borrowBytes => source
+    source -> slice(UIntSize(0), source -> len) => actual
+    actual == expected -> unless {
+        "mismatch=$text actual=$actual" -> println
+    }
+    Result<Unit, uri.Error>.Ok
+}
+
+checkNormalization reference: ref uri.Reference, policy: uri.NormalizationPolicy, expected: Text -> Result<Unit, uri.Error> uses Console, File {
+    reference -> normalizeBytes(policy, 128)? => bytes
+    bytes -> file.borrowBytes => source
+    source -> slice(UIntSize(0), source -> len) => actual
+    actual == expected -> unless { "normalization-mismatch=$actual" -> println }
+    Result<Unit, uri.Error>.Ok
+}
+
+run: -> Result<Unit, uri.Error> uses Console, File {
+    uri.parse("http://a/b/c/d;p?q", 128)? => base
+    base -> check("", "http://a/b/c/d;p?q")?
+    base -> check("?", "http://a/b/c/d;p?")?
+    base -> check("#", "http://a/b/c/d;p?q#")?
+    base -> check("../../../g", "http://a/g")?
+    base -> check("/../g", "http://a/g")?
+    base -> check("g/../h", "http://a/b/c/h")?
+    base -> check("g?y/../x", "http://a/b/c/g?y/../x")?
+    base -> check("g#s/../x", "http://a/b/c/g#s/../x")?
+    base -> check("http:g", "http:g")?
+    base -> check("//g", "http://g")?
+    # Complete the RFC 3986 section 5.4 normal and abnormal path families.
+    base -> check("g:h", "g:h")?
+    base -> check("g", "http://a/b/c/g")?
+    base -> check("./g", "http://a/b/c/g")?
+    base -> check("g/", "http://a/b/c/g/")?
+    base -> check("/g", "http://a/g")?
+    base -> check("?y", "http://a/b/c/d;p?y")?
+    base -> check("g?y", "http://a/b/c/g?y")?
+    base -> check("#s", "http://a/b/c/d;p?q#s")?
+    base -> check("g#s", "http://a/b/c/g#s")?
+    base -> check("g?y#s", "http://a/b/c/g?y#s")?
+    base -> check(";x", "http://a/b/c/;x")?
+    base -> check("g;x", "http://a/b/c/g;x")?
+    base -> check("g;x?y#s", "http://a/b/c/g;x?y#s")?
+    base -> check(".", "http://a/b/c/")?
+    base -> check("./", "http://a/b/c/")?
+    base -> check("..", "http://a/b/")?
+    base -> check("../", "http://a/b/")?
+    base -> check("../g", "http://a/b/g")?
+    base -> check("../..", "http://a/")?
+    base -> check("../../", "http://a/")?
+    base -> check("../../g", "http://a/g")?
+    base -> check("../../../../g", "http://a/g")?
+    base -> check("/./g", "http://a/g")?
+    base -> check("g.", "http://a/b/c/g.")?
+    base -> check(".g", "http://a/b/c/.g")?
+    base -> check("g..", "http://a/b/c/g..")?
+    base -> check("..g", "http://a/b/c/..g")?
+    base -> check("./../g", "http://a/b/g")?
+    base -> check("./g/.", "http://a/b/c/g/")?
+    base -> check("g/./h", "http://a/b/c/g/h")?
+    base -> check("g;x=1/./y", "http://a/b/c/g;x=1/y")?
+    base -> check("g;x=1/../y", "http://a/b/c/y")?
+    base -> check("g?y/./x", "http://a/b/c/g?y/./x")?
+    base -> check("g#s/./x", "http://a/b/c/g#s/./x")?
+    uri.NormalizationPolicy {
+        lowercaseScheme: false
+        lowercaseRegisteredName: false
+        decodeUnreserved: false
+        uppercasePercentHex: false
+        removeDotSegments: false
+    } => preserve
+    uri.parse("HTTP://EXAMPLE.com/%7e/./x", 128)? => original
+    original -> normalizeBytes(preserve, 128)? => preservedBytes
+    preservedBytes -> file.borrowBytes => preservedSource
+    preservedSource -> slice(UIntSize(0), preservedSource -> len) => preserved
+    preserved == "HTTP://EXAMPLE.com/%7e/./x" -> unless {
+        "policy-mismatch=$preserved" -> println
+    }
+    original -> normalizeBytes(preserve, -1) -> when {
+        Err(error) { }
+        Ok(bytes) { "negative-bound-accepted" -> println }
+    }
+    uri.parse("", 0)? => empty
+    empty -> normalizeBytes(preserve, 0)? => emptyBytes
+    emptyBytes -> len == 0 -> unless { "empty-mismatch" -> println }
+    # Each policy switch changes only its selected normalization step.
+    preserve => policy!
+    true => policy!.lowercaseScheme
+    original -> checkNormalization(policy!, "http://EXAMPLE.com/%7e/./x")?
+    false => policy!.lowercaseScheme
+    true => policy!.lowercaseRegisteredName
+    original -> checkNormalization(policy!, "HTTP://example.com/%7e/./x")?
+    false => policy!.lowercaseRegisteredName
+    true => policy!.decodeUnreserved
+    original -> checkNormalization(policy!, "HTTP://EXAMPLE.com/~/./x")?
+    false => policy!.decodeUnreserved
+    true => policy!.uppercasePercentHex
+    original -> checkNormalization(policy!, "HTTP://EXAMPLE.com/%7E/./x")?
+    false => policy!.uppercasePercentHex
+    true => policy!.removeDotSegments
+    original -> checkNormalization(policy!, "HTTP://EXAMPLE.com/%7e/x")?
+    "boundaries=44" -> println
+    Result<Unit, uri.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected=$(error.offset)" -> println }
+    }
+}

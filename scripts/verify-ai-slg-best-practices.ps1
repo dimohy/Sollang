@@ -89,6 +89,7 @@ foreach ($required in @(
     "Beautiful SLG is not ornamental formatting",
     "N001 reports",
     "N002 reports",
+    "scripts/format-authoritative-slg.ps1 -Check",
     "Do not repeatedly run the full compiler gate"
 )) {
     if (-not $practice.Contains($required, [System.StringComparison]::Ordinal)) {

@@ -450,7 +450,8 @@ internal sealed partial class LlvmEmitter
             or BoundFunctionKind.RuntimeSocketSetNonblocking
             or BoundFunctionKind.RuntimeSocketPoll
             or BoundFunctionKind.RuntimeSocketReactorWait
-            or BoundFunctionKind.RuntimeDnsLookup))
+            or BoundFunctionKind.RuntimeDnsLookup
+            or BoundFunctionKind.RuntimePollChildProcess))
         {
             throw new SollangException($"unsupported runtime function kind '{function.Kind}'");
         }
@@ -1431,6 +1432,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeWaitProcessIntrinsic(function, child);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimePollChildProcess)
+        {
+            if (argument is not RuntimeInt token || additionalArguments is { Count: > 0 })
+            {
+                throw new SollangException($"{function.Name} expects one UInt64 token");
+            }
+            return EmitRuntimePollChildProcessIntrinsic(function, token);
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeChildProcessId)
         {
             if (argument is not RuntimeStruct child || additionalArguments is { Count: > 0 })
@@ -2067,17 +2077,9 @@ internal sealed partial class LlvmEmitter
         string functionName)
     {
         var expectedElement = _program.Types.GetSliceElement(expectedType);
-        var (pointer, length, actualElement) = argument switch
-        {
-            RuntimeIntSlice slice => (slice.PointerName, slice.LengthName, BoundType.Int),
-            RuntimeInlineSlice slice => (slice.PointerName, slice.LengthName, slice.ElementType),
-            RuntimeStaticIntArray array => (array.PointerName, array.LengthName, BoundType.Int),
-            RuntimeStaticInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
-            RuntimeDynamicIntArray array => (array.PointerName, array.LengthName, BoundType.Int),
-            RuntimeDynamicInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
-            _ => throw new SollangException(
-                $"function '{functionName}' expects a readonly array view but received {argument.Type}")
-        };
+        var (pointer, length, actualElement) = TryGetRuntimeArrayView(argument)
+            ?? throw new SollangException(
+                $"function '{functionName}' expects a readonly array view but received {argument.Type}");
         if (actualElement != expectedElement)
         {
             throw new SollangException(
@@ -2465,6 +2467,21 @@ internal sealed partial class LlvmEmitter
         return new RuntimeIntSlice(pointer, array.LengthName);
     }
 
+    // One runtime-shape authority for argument validation, direct-call ABI, and
+    // flow/inlined view construction. A view always reuses the owner's storage.
+    private static (string Pointer, string Length, BoundType Element)? TryGetRuntimeArrayView(RuntimeValue value) =>
+        value switch
+        {
+            RuntimeIntSlice slice => (slice.PointerName, slice.LengthName, BoundType.Int),
+            RuntimeInlineSlice slice => (slice.PointerName, slice.LengthName, slice.ElementType),
+            RuntimeStaticIntArray array => (array.PointerName, array.LengthName, BoundType.Int),
+            RuntimeStaticTextArray array => (array.PointerName, array.LengthName, BoundType.Text),
+            RuntimeStaticInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
+            RuntimeDynamicIntArray array => (array.PointerName, array.LengthName, BoundType.Int),
+            RuntimeDynamicInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
+            _ => null
+        };
+
     private RuntimeValue CreateRuntimeSlice(BoundType sliceType, RuntimeValue value)
     {
         if (sliceType == BoundType.IntSlice)
@@ -2472,13 +2489,8 @@ internal sealed partial class LlvmEmitter
             return CreateRuntimeIntSlice(value);
         }
         var elementType = _program.Types.GetSliceElement(sliceType);
-        var (pointer, length, actualElement) = value switch
-        {
-            RuntimeInlineSlice slice => (slice.PointerName, slice.LengthName, slice.ElementType),
-            RuntimeStaticInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
-            RuntimeDynamicInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
-            _ => throw new SollangException("readonly array view requires an array value")
-        };
+        var (pointer, length, actualElement) = TryGetRuntimeArrayView(value)
+            ?? throw new SollangException("readonly array view requires an array value");
         if (actualElement != elementType)
         {
             throw new SollangException("readonly array view element type mismatch");
@@ -2684,16 +2696,7 @@ internal sealed partial class LlvmEmitter
         if (_program.Types.IsSlice(expected))
         {
             var expectedElement = _program.Types.GetSliceElement(expected);
-            var actualElement = value switch
-            {
-                RuntimeIntSlice => BoundType.Int,
-                RuntimeInlineSlice slice => slice.ElementType,
-                RuntimeStaticIntArray => BoundType.Int,
-                RuntimeStaticInlineArray array => array.ElementType,
-                RuntimeDynamicIntArray => BoundType.Int,
-                RuntimeDynamicInlineArray array => array.ElementType,
-                _ => (BoundType?)null
-            };
+            var actualElement = TryGetRuntimeArrayView(value)?.Element;
             if (actualElement == expectedElement)
             {
                 return;

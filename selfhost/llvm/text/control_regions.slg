@@ -30,6 +30,28 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
+emitRegionStreamPipeline pipelineIndex: Int, ownerIndex: Int, ownerEnd: Int, regionOrder: ref [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    [Int; ~] => streamOrder!
+    streamOrder! -> push(pipeline.terminalIr)
+    regionOrder -> each candidateIndex {
+        candidateIndex != pipeline.terminalIr -> if {
+            candidateIndex -> streamPipelineOwnsCallback(pipelineIndex, context, state) => callbackOwned
+            callbackOwned -> if { streamOrder! -> push(candidateIndex) }
+        }
+    }
+    [Bool; ~] => scheduled
+    BodySchedulePlan {
+        functionIndex: ownerIndex
+        order: streamOrder!
+        scheduled: scheduled
+        emitMutableSlots: false
+        failureNode: -1
+        failureTerminal: -1
+    } => streamPlan
+    streamPlan -> emitScheduledStreamBody(ownerIndex, ownerEnd, context.pointerBitWidth / 8, context, state)
+}
+
 # Responsibility fragment extracted from emitCore. State is passed by readonly
 # reference, preserving the original direct-call and allocation behavior.
 emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [Int; ~], regionOrder: ref [Int; ~], ifActive: mut [Bool; ~], ifThenReachesMerge: mut [Bool; ~], loopActive: mut [Bool; ~], initialRegionTerminated: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -43,6 +65,13 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
     initialRegionTerminated => regionTerminated!
     [Int; ~] => activeEach!
     0 => activeEachSize!
+    [Bool; ~] => emittedStreamPipelines!
+    0 => emittedStreamPipelineIndex!
+    emittedStreamPipelineIndex! < (context.streamPlan.pipelines -> len)
+        -> while {
+            emittedStreamPipelines! -> push(false)
+            emittedStreamPipelineIndex! + 1 => emittedStreamPipelineIndex!
+        }
     0 => regionOrderIndex!
     regionOrderIndex! < (regionOrder -> len) -> while {
         regionOrder[regionOrderIndex!] => regionNodeIndex
@@ -284,24 +313,36 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                 }
                 regionNode.kind != 21 and regionNode.kind != 22 and regionNode.kind != 23
                     -> if {
-                        regionNode.kind == 6 and regionNode.opcode == -208
-                            and regionNode.operand0 >= 0 and regionNode.operand1 >= 0
-                            and (regionNodeIndex -> plannedStreamPipeline(context, state)) < 0
-                            -> if {
-                                regionNodeIndex -> emitDirectEachStart(ownerIndex!, regionLocalStart, regionLocalEnd, context, state)
-                                activeEachSize! == (activeEach! -> len)
-                                    -> if { activeEach! -> push(regionNodeIndex) } else {
-                                        regionNodeIndex => activeEach![activeEachSize!]
-                                    }
-                                activeEachSize! + 1 => activeEachSize!
-                            }
-                        regionNodeIndex -> emitRegionBindingExpressions(ownerIndex!, emissionOrder, context, state)
-                        regionNodeIndex -> emitRegionControlExpressions(ownerIndex!, context, state)
-                        regionNodeIndex -> emitRegionIntrinsicExpressions(ownerIndex!, regionPointerAlignment, context, state)
-                        regionNodeIndex -> emitRegionArrayExpressions(ownerIndex!, context, state)
-                        regionNodeIndex -> emitRegionMemberExpressions(ownerIndex!, context, state)
-                        regionNodeIndex -> emitRegionOperatorExpressions(ownerIndex!, emissionOrder, context, state)
-                        regionNodeIndex -> emitRegionCallExpressions(ownerIndex!, emissionOrder, context, state)
+                        -1 => regionStreamPipeline!
+                        ownerIndex! >= 0 -> if {
+                            regionNodeIndex -> regionOwnedStreamPipeline(context, state) => regionStreamPipeline!
+                        }
+                        regionStreamPipeline! >= 0 -> if {
+                            not emittedStreamPipelines![regionStreamPipeline!]
+                                -> if {
+                                    regionStreamPipeline! -> emitRegionStreamPipeline(ownerIndex!, regionLocalEnd, regionOrder, context, state)
+                                    true => emittedStreamPipelines![regionStreamPipeline!]
+                                }
+                        } else {
+                            regionNode.kind == 6 and regionNode.opcode == -208
+                                and regionNode.operand0 >= 0 and regionNode.operand1 >= 0
+                                and (regionNodeIndex -> plannedStreamPipeline(context, state)) < 0
+                                -> if {
+                                    regionNodeIndex -> emitDirectEachStart(ownerIndex!, regionLocalStart, regionLocalEnd, context, state)
+                                    activeEachSize! == (activeEach! -> len)
+                                        -> if { activeEach! -> push(regionNodeIndex) } else {
+                                            regionNodeIndex => activeEach![activeEachSize!]
+                                        }
+                                    activeEachSize! + 1 => activeEachSize!
+                                }
+                            regionNodeIndex -> emitRegionBindingExpressions(ownerIndex!, emissionOrder, context, state)
+                            regionNodeIndex -> emitRegionControlExpressions(ownerIndex!, context, state)
+                            regionNodeIndex -> emitRegionIntrinsicExpressions(ownerIndex!, regionPointerAlignment, context, state)
+                            regionNodeIndex -> emitRegionArrayExpressions(ownerIndex!, context, state)
+                            regionNodeIndex -> emitRegionMemberExpressions(ownerIndex!, context, state)
+                            regionNodeIndex -> emitRegionOperatorExpressions(ownerIndex!, emissionOrder, context, state)
+                            regionNodeIndex -> emitRegionCallExpressions(ownerIndex!, emissionOrder, context, state)
+                        }
                     }
             }
         }

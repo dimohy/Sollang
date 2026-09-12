@@ -418,6 +418,18 @@ runTypedIrNodes: -> Unit uses Console, File, Process {
     }
 }
 
+runTypedIrNodesParallel: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths
+    paths -> semanticContext.prepareFiles => snapshot
+    snapshot -> typedIr.lowerContextParallel => ir
+    0 => nodeIndex!
+    nodeIndex! < (ir -> len) -> while {
+        ir[nodeIndex!] => node
+        "node $(nodeIndex!) kind $(node.kind) parent $(node.parent) source $(node.sourceModule) ast $(node.astNode) symbol $(node.symbol) target $(node.targetModule) type $(node.typeId)/$(node.typeKind)/$(node.typeOrigin)/$(node.typeModule)/$(node.typeSymbol)/$(node.typeFlags) payload $(node.payloadToken) opcode $(node.opcode) operands $(node.operand0)/$(node.operand1)/$(node.nextOperand) flags $(node.flags)" -> println
+        nodeIndex! + 1 => nodeIndex!
+    }
+}
+
 runAstNodes: -> Unit uses Console, File, Process {
     UIntSize(2) -> collectPaths => paths
     paths -> semanticContext.prepareFiles => snapshot
@@ -1487,6 +1499,11 @@ runInternalCompilerCommand command: Text, pathStart: UIntSize -> Bool uses Conso
     }
     command -> textEquals("typed-ir-nodes") -> if {
         runTypedIrNodes()
+        true -> return
+    }
+    command -> textEquals("typed-ir-nodes-parallel")
+        -> if {
+        runTypedIrNodesParallel()
         true -> return
     }
     command -> textEquals("ast-nodes") -> if {

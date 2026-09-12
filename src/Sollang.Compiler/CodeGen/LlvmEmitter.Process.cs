@@ -163,6 +163,8 @@ internal sealed partial class LlvmEmitter
         var childDefinition = _program.Types.GetStruct(resultTypes.Ok);
         var tokenField = childDefinition.GetField("token");
         var processIdField = childDefinition.GetField("processId");
+        var completionStateField = childDefinition.GetField("completionState");
+        var exitCodeField = childDefinition.GetField("exitCode");
         var processIdDefinition = _program.Types.GetStruct(processIdField.Type);
         if (!string.Equals(processIdDefinition.Name, "sys.process.ProcessId", StringComparison.Ordinal))
         {
@@ -175,9 +177,15 @@ internal sealed partial class LlvmEmitter
         var childWithToken = NextTemp("process_child_token");
         EmitAssign(childWithToken,
             $"insertvalue {LlvmStructType(resultTypes.Ok)} poison, i64 {handle}, {tokenField.Index}");
+        var childWithProcessId = NextTemp("process_child_id");
+        EmitAssign(childWithProcessId,
+            $"insertvalue {LlvmStructType(resultTypes.Ok)} {childWithToken}, {LlvmStructType(processIdField.Type)} {processIdAggregate}, {processIdField.Index}");
+        var childWithoutExitStatus = NextTemp("process_child_status");
+        EmitAssign(childWithoutExitStatus,
+            $"insertvalue {LlvmStructType(resultTypes.Ok)} {childWithProcessId}, i32 0, {completionStateField.Index}");
         var childAggregate = NextTemp("process_child");
         EmitAssign(childAggregate,
-            $"insertvalue {LlvmStructType(resultTypes.Ok)} {childWithToken}, {LlvmStructType(processIdField.Type)} {processIdAggregate}, {processIdField.Index}");
+            $"insertvalue {LlvmStructType(resultTypes.Ok)} {childWithoutExitStatus}, i32 0, {exitCodeField.Index}");
         var success = EmitEnumValue(function.ReturnType, okVariant,
             new RuntimeStruct(resultTypes.Ok, childAggregate));
         EmitBranch(endLabel);
@@ -208,12 +216,83 @@ internal sealed partial class LlvmEmitter
             throw new SollangException($"{function.Name} expects a Child receiver");
         }
         var tokenField = childDefinition.GetField("token");
+        var completionStateField = childDefinition.GetField("completionState");
+        var exitCodeField = childDefinition.GetField("exitCode");
+        var completionState = NextTemp("process_wait_completion_state");
+        EmitAssign(completionState,
+            $"extractvalue {LlvmStructType(child.Type)} {child.ValueName}, {completionStateField.Index}");
+        var cached = NextTemp("process_wait_cached");
+        EmitCompare(cached, "ne", "i32", completionState, "0");
+        var cachedLabel = NextLabel("process_wait_cached");
+        var waitLabel = NextLabel("process_wait_os");
+        var endLabel = NextLabel("process_wait_end");
+        EmitConditionalBranch(cached, cachedLabel, waitLabel);
+
+        EmitLabel(cachedLabel);
+        _currentBlockLabel = cachedLabel;
+        var cachedCode = NextTemp("process_wait_cached_code");
+        EmitAssign(cachedCode,
+            $"extractvalue {LlvmStructType(child.Type)} {child.ValueName}, {exitCodeField.Index}");
+        var cachedIsExit = NextTemp("process_wait_cached_is_exit");
+        EmitCompare(cachedIsExit, "eq", "i32", completionState, "1");
+        var cachedError = NextTemp("process_wait_cached_error");
+        EmitAssign(cachedError, $"select i1 {cachedIsExit}, i32 0, i32 3");
+        var cachedRaw0 = NextTemp("process_wait_cached_raw");
+        EmitAssign(cachedRaw0,
+            $"insertvalue %sollang.process_result poison, i32 {cachedCode}, 0");
+        var cachedRaw = NextTemp("process_wait_cached_raw");
+        EmitAssign(cachedRaw,
+            $"insertvalue %sollang.process_result {cachedRaw0}, i32 {cachedError}, 1");
+        var cachedResult = EmitRuntimeProcessResult(function, cachedRaw);
+        EmitBranch(endLabel);
+        var cachedExit = _currentBlockLabel;
+
+        EmitLabel(waitLabel);
+        _currentBlockLabel = waitLabel;
         var handle = NextTemp("process_wait_handle");
         EmitAssign(handle,
             $"extractvalue {LlvmStructType(child.Type)} {child.ValueName}, {tokenField.Index}");
         var raw = NextTemp("process_wait_result");
         EmitCall(raw, "%sollang.process_result", "sollang_wait_process", $"i64 {handle}");
-        return EmitRuntimeProcessResult(function, raw);
+        var waitedResult = EmitRuntimeProcessResult(function, raw);
+        EmitBranch(endLabel);
+        var waitedExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi("process_wait_cached_result", function.ReturnType,
+            [(cachedResult, cachedExit), (waitedResult, waitedExit)]);
+    }
+
+    private RuntimeStruct EmitRuntimePollChildProcessIntrinsic(BoundFunction function, RuntimeInt token)
+    {
+        if (!_platform.SupportsChildProcesses)
+        {
+            throw new SollangException("child processes are unavailable on the current target");
+        }
+        if (token.Type != BoundType.UInt64
+            || !IsRuntimeNamedStruct(function.ReturnType, "sys.process.ChildPoll"))
+        {
+            throw new SollangException($"{function.Name} expects UInt64 -> ChildPoll");
+        }
+
+        var raw = NextTemp("process_poll_result");
+        EmitCall(raw, "%sollang.process_poll_result", "sollang_poll_process", $"i64 {token.ValueName}");
+        var exitCode = NextTemp("process_poll_exit_code");
+        EmitAssign(exitCode, $"extractvalue %sollang.process_poll_result {raw}, 0");
+        var state = NextTemp("process_poll_state");
+        EmitAssign(state, $"extractvalue %sollang.process_poll_result {raw}, 1");
+
+        var definition = _program.Types.GetStruct(function.ReturnType);
+        var stateField = definition.GetField("state");
+        var exitCodeField = definition.GetField("exitCode");
+        var withState = NextTemp("process_poll_value");
+        EmitAssign(withState,
+            $"insertvalue {LlvmStructType(function.ReturnType)} poison, i32 {state}, {stateField.Index}");
+        var value = NextTemp("process_poll_value");
+        EmitAssign(value,
+            $"insertvalue {LlvmStructType(function.ReturnType)} {withState}, i32 {exitCode}, {exitCodeField.Index}");
+        return new RuntimeStruct(function.ReturnType, value);
     }
 
     private RuntimeStruct EmitRuntimeChildProcessIdIntrinsic(

@@ -24,6 +24,12 @@ public struct UtcInstant {
     public unixMillis: Long
 }
 
+struct CalendarDate {
+    year: Long
+    month: Long
+    day: Long
+}
+
 # The system monotonic source has no mutable state in user space. Querying it is
 # still an explicit Clock effect.
 public struct MonotonicClock {
@@ -102,6 +108,8 @@ public enum ErrorKind {
     DifferentClock
     InvalidSource
     InvalidPeriod
+    CalendarOutOfRange
+    InsufficientOutput
 }
 
 public struct Error {
@@ -126,6 +134,42 @@ checkedTimerNext base: Long, delta: Long -> Result<Long, Error> => base > 9_223_
         Result<Long, Error>.Ok(base + delta)
     }
 
+calendarDateFromUnixDays unixDays: Long -> CalendarDate {
+    unixDays + 719_468 => shiftedDays
+    shiftedDays / 146_097 => era
+    shiftedDays - era * 146_097 => dayOfEra
+    (dayOfEra - dayOfEra / 1_460 + dayOfEra / 36_524 - dayOfEra / 146_096) / 365
+        => yearOfEra
+    yearOfEra + era * 400 => year!
+    dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100) => dayOfYear
+    (5 * dayOfYear + 2) / 153 => monthPrime
+    dayOfYear - (153 * monthPrime + 2) / 5 + 1 => day
+    monthPrime + 3 => month!
+    monthPrime >= 10 -> if {
+        month! - 12 => month!
+        year! + 1 => year!
+    }
+    CalendarDate { year: year!, month: month!, day: day }
+}
+
+writeTwoDigits output: mut [UInt8; ~], offset: Int, value: Long -> Unit {
+    UInt8(value / 10 % 10 + 48) => output[offset]
+    UInt8(value % 10 + 48) => output[offset + 1]
+}
+
+writeThreeDigits output: mut [UInt8; ~], offset: Int, value: Long -> Unit {
+    UInt8(value / 100 % 10 + 48) => output[offset]
+    UInt8(value / 10 % 10 + 48) => output[offset + 1]
+    UInt8(value % 10 + 48) => output[offset + 2]
+}
+
+writeFourDigits output: mut [UInt8; ~], offset: Int, value: Long -> Unit {
+    UInt8(value / 1_000 % 10 + 48) => output[offset]
+    UInt8(value / 100 % 10 + 48) => output[offset + 1]
+    UInt8(value / 10 % 10 + 48) => output[offset + 2]
+    UInt8(value % 10 + 48) => output[offset + 3]
+}
+
 public milliseconds value: Long -> Result<Duration, Error> => value -> scaledDuration(1)
 
 public seconds value: Long -> Result<Duration, Error> => value -> scaledDuration(1_000)
@@ -142,11 +186,11 @@ public manualClock source: UInt64, ticksMillis: Long -> Result<ManualClock, Erro
     -> if {
         Error { kind: model.ErrorKind.InvalidSource } -> Result<ManualClock, Error>.Err
     } else { ticksMillis < 0
-    -> if {
-        Error { kind: model.ErrorKind.NegativeDuration } -> Result<ManualClock, Error>.Err
-    } else {
-        ManualClock { ticksMillis: ticksMillis, source: source } -> Result<ManualClock, Error>.Ok
-    } }
+            -> if {
+                Error { kind: model.ErrorKind.NegativeDuration } -> Result<ManualClock, Error>.Err
+            } else {
+                ManualClock { ticksMillis: ticksMillis, source: source } -> Result<ManualClock, Error>.Ok
+        } }
 
 public manualWallClock unixMillis: Long -> ManualWallClock => ManualWallClock {
     unixMillis: unixMillis
@@ -284,8 +328,8 @@ impl MonotonicClock {
         runtime.nowMillis() => current
         current > 9_223_372_036_854_775_807 - period.millis
             -> if {
-            Result<Timer, Error>.Err(Error { kind: model.ErrorKind.Overflow }) -> return
-        }
+                Result<Timer, Error>.Err(Error { kind: model.ErrorKind.Overflow }) -> return
+            }
         Result<Timer, Error>.Ok(Timer {
             token: [0; ~]
             period: period
@@ -297,6 +341,50 @@ impl MonotonicClock {
 
 impl UtcInstant {
     public asUnixMilliseconds: self -> Long => self.unixMillis
+
+    # Produces the canonical UTC millisecond profile of RFC 3339 without
+    # consulting a clock, locale, time-zone database, or heap allocator.
+    public formatRfc3339: self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.unixMillis < -62_135_596_800_000
+            or self.unixMillis > 253_402_300_799_999
+            -> if {
+                Result<Int, Error>.Err(Error {
+                    kind: model.ErrorKind.CalendarOutOfRange
+                }) -> return
+            }
+        (output -> len) >= 24 -> unless {
+            Result<Int, Error>.Err(Error { kind: model.ErrorKind.InsufficientOutput }) -> return
+        }
+
+        self.unixMillis / 86_400_000 => unixDays!
+        self.unixMillis % 86_400_000 => millisOfDay!
+        millisOfDay! < 0 -> if {
+            unixDays! - 1 => unixDays!
+            millisOfDay! + 86_400_000 => millisOfDay!
+        }
+        calendarDateFromUnixDays(unixDays!) => date
+
+        millisOfDay! / 3_600_000 => hour
+        millisOfDay! % 3_600_000 / 60_000 => minute
+        millisOfDay! % 60_000 / 1_000 => second
+        millisOfDay! % 1_000 => millisecond
+
+        writeFourDigits(output, 0, date.year)
+        45 => output[4]
+        writeTwoDigits(output, 5, date.month)
+        45 => output[7]
+        writeTwoDigits(output, 8, date.day)
+        84 => output[10]
+        writeTwoDigits(output, 11, hour)
+        58 => output[13]
+        writeTwoDigits(output, 14, minute)
+        58 => output[16]
+        writeTwoDigits(output, 17, second)
+        46 => output[19]
+        writeThreeDigits(output, 20, millisecond)
+        90 => output[23]
+        Result<Int, Error>.Ok(24)
+    }
 
     public durationSince: self, earlier: UtcInstant -> Result<Duration, Error> {
         self.unixMillis < earlier.unixMillis -> if {

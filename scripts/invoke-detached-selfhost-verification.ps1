@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "Probe")]
+    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "ExpressionBatch", "ManagedHost", "Probe")]
     [string]$Verification,
     [ValidateSet("Slg", "Stage2Bridge", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
@@ -15,6 +15,8 @@ param(
     [string]$BrowserCandidateCompiler = "",
     [string]$BrowserFocusedFixture = "",
     [string]$IncrementalFixture = "",
+    [string]$ExpressionBatchCompiler = "",
+    [string]$ExpressionBatchFixture = "",
     [ValidateSet("windows", "linux")]
     [string]$IncrementalTarget = "windows",
     [ValidateSet("Pass", "Fail", "Wait")]
@@ -36,6 +38,22 @@ if ($Verification -ne "BrowserStage2" -and $BrowserCandidateCompiler -ne "") {
 }
 if (($Verification -eq "Incremental") -ne (-not [string]::IsNullOrWhiteSpace($IncrementalFixture))) {
     throw "IncrementalFixture is required only for Verification Incremental"
+}
+if (($Verification -eq "ExpressionBatch") -ne (-not [string]::IsNullOrWhiteSpace($ExpressionBatchCompiler))) {
+    throw "ExpressionBatchCompiler is required only for Verification ExpressionBatch"
+}
+if ($Verification -ne "ExpressionBatch" -and -not [string]::IsNullOrWhiteSpace($ExpressionBatchFixture)) {
+    throw "ExpressionBatchFixture requires Verification ExpressionBatch"
+}
+if ($Verification -eq "Incremental") {
+    $incrementalFixturePath = [IO.Path]::GetFullPath((Join-Path $repositoryRoot $IncrementalFixture))
+    if (-not $incrementalFixturePath.StartsWith($repositoryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "IncrementalFixture must be under $repositoryRoot"
+    }
+    if (-not (Test-Path -LiteralPath $incrementalFixturePath -PathType Leaf)) {
+        throw "IncrementalFixture does not exist: $incrementalFixturePath"
+    }
+    $IncrementalFixture = [IO.Path]::GetRelativePath($repositoryRoot, $incrementalFixturePath)
 }
 
 function ConvertTo-ProcessArgument {
@@ -127,6 +145,16 @@ if (-not $Supervisor) {
             "-IncrementalTarget", $IncrementalTarget
         )
     }
+    if ($ExpressionBatchCompiler -ne "") {
+        $argumentList += @(
+            "-ExpressionBatchCompiler", (ConvertTo-ProcessArgument $ExpressionBatchCompiler)
+        )
+        if ($ExpressionBatchFixture -ne "") {
+            $argumentList += @(
+                "-ExpressionBatchFixture", (ConvertTo-ProcessArgument $ExpressionBatchFixture)
+            )
+        }
+    }
     if ($ResumeCandidate) {
         $argumentList += "-ResumeCandidate"
     }
@@ -210,6 +238,8 @@ try {
         "Stage3Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage3-linux.ps1" }
         "BrowserStage2" { Join-Path $PSScriptRoot "build-stage2-browser.ps1" }
         "Incremental" { Join-Path $PSScriptRoot "verify-selfhost-incremental.ps1" }
+        "ExpressionBatch" { Join-Path $PSScriptRoot "verify-expression-lowering-focused-batch.ps1" }
+        "ManagedHost" { Join-Path $PSScriptRoot "build-managed-host.ps1" }
         "Probe" { Join-Path $PSScriptRoot "contracts\fixtures\detached-verification-probe.ps1" }
     }
     if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf)) {
@@ -251,6 +281,19 @@ try {
                 "-CompareStage2:`$false"
             )
         }
+        "ExpressionBatch" {
+            $targetArguments += @(
+                "-Compiler", (ConvertTo-ProcessArgument $ExpressionBatchCompiler),
+                "-RunId", $RunId,
+                "-Jobs", $Jobs.ToString()
+            )
+            if ($ExpressionBatchFixture -ne "") {
+                $targetArguments += @(
+                    "-Fixture", (ConvertTo-ProcessArgument $ExpressionBatchFixture)
+                )
+            }
+        }
+        "ManagedHost" { $targetArguments += @("-RunId", (ConvertTo-ProcessArgument $RunId)) }
         "Probe" { $targetArguments += @("-Outcome", $ProbeOutcome) }
     }
 
@@ -315,7 +358,7 @@ finally {
             if ($line -notmatch '(?i)(?<![a-z0-9-])(?:fail(?:ed|ure)?|error|exception|throw|fatal)(?![a-z0-9-])') {
                 continue
             }
-            foreach ($match in [regex]::Matches($line, '(?i)\b(?:[ES]\d+|\d{3,4}-[a-z0-9][a-z0-9-]*|AS-[A-Z]+-\d+(?:-[A-Z0-9-]+)?|SUPERVISOR_EXECUTION_FAILURE)\b')) {
+            foreach ($match in [regex]::Matches($line, '(?i)\b(?:[ES]\d+|(?:CS|MSB|NETSDK)\d+|\d{1,4}-[a-z0-9][a-z0-9-]*|AS-[A-Z]+-\d+(?:-[A-Z0-9-]+)?|MANAGED_HOST_BUILD_FAILED|SUPERVISOR_EXECUTION_FAILURE)\b')) {
                 if (-not $failureIds.Contains($match.Value)) {
                     $failureIds.Add($match.Value)
                 }

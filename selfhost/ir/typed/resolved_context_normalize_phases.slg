@@ -1333,6 +1333,7 @@ normalizeResolvedProcessRuntime nodes: mut [TypedIrNode; ~], prepared: ref seman
     -1 => processCollectSymbol!
     -1 => processSpawnSymbol!
     -1 => processWaitSymbol!
+    -1 => processPollChildSymbol!
     -1 => processChildIdSymbol!
     -1 => processIdValueSymbol!
     -1 => processExitSymbol!
@@ -1358,6 +1359,8 @@ normalizeResolvedProcessRuntime nodes: mut [TypedIrNode; ~], prepared: ref seman
                             -> if { processSymbolSearch! => processSpawnSymbol! }
                         processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "wait")
                             -> if { processSymbolSearch! => processWaitSymbol! }
+                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "pollChild")
+                            -> if { processSymbolSearch! => processPollChildSymbol! }
                         processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "id")
                             -> if { processSymbolSearch! => processChildIdSymbol! }
                         processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "asUInt64")
@@ -1384,6 +1387,7 @@ normalizeResolvedProcessRuntime nodes: mut [TypedIrNode; ~], prepared: ref seman
                     processCall!.symbol == processCollectSymbol! -> if { -288 => processCall!.opcode }
                     processCall!.symbol == processSpawnSymbol! -> if { -277 => processCall!.opcode }
                     processCall!.symbol == processWaitSymbol! -> if { -278 => processCall!.opcode }
+                    processCall!.symbol == processPollChildSymbol! -> if { -308 => processCall!.opcode }
                     processCall!.symbol == processChildIdSymbol! -> if { -285 => processCall!.opcode }
                     processCall!.symbol == processIdValueSymbol! -> if { -286 => processCall!.opcode }
                     processCall!.symbol == processExitSymbol! -> if { -222 => processCall!.opcode }
@@ -1981,48 +1985,57 @@ normalizeResolvedContextualTypes nodes: mut [TypedIrNode; ~], prepared: ref sema
             nodes[contextualEnumCollectionIndex!] => contextualEnumCollection
             contextualEnumCollection.kind == 26
                 and contextualEnumCollection.typeId >= 0
+                and contextualEnumCollection.typeId < (frozenRecursiveSemanticTypes -> len)
                 and contextualEnumCollection.operand0 >= 0
+                and contextualEnumCollection.operand0 < (nodes -> len)
                 -> if {
                     frozenRecursiveSemanticTypes[contextualEnumCollection.typeId] => contextualEnumType
                     contextualEnumType.kind == 7
                         and contextualEnumType.origin == 4
                         and (contextualEnumType.symbol == 0 or contextualEnumType.symbol == 1)
                         and contextualEnumCollection.sourceModule >= 0
+                        and contextualEnumCollection.sourceModule < (prepared.package.ranges -> len)
                         -> if {
                             prepared.package.ranges[contextualEnumCollection.sourceModule] => contextualEnumRange
-                            prepared.package.tokens[contextualEnumRange.tokenStart + contextualEnumCollection.payloadToken] => contextualEnumVariantToken
-                            contextualEnumCollection.sourceModule -> nominalVariantTagForType(contextualEnumType, contextualEnumVariantToken, prepared) => contextualEnumTag
-                            -1 => contextualEnumPayloadTypeId!
-                            contextualEnumType.symbol == 0 and contextualEnumTag == 1
+                            contextualEnumCollection.payloadToken >= 0
+                                and contextualEnumCollection.payloadToken < contextualEnumRange.tokenCount
                                 -> if {
-                                    contextualEnumType.first => contextualEnumPayloadTypeId!
-                                }
-                            contextualEnumType.symbol == 1 -> if {
-                                contextualEnumTag == 0 -> if { contextualEnumType.first => contextualEnumPayloadTypeId! }
-                                contextualEnumTag == 1 -> if { contextualEnumType.second => contextualEnumPayloadTypeId! }
-                            }
-                            contextualEnumPayloadTypeId! >= 0 -> if {
-                                frozenRecursiveSemanticTypes[contextualEnumPayloadTypeId!] => contextualEnumPayloadType
-                                nodes[contextualEnumCollection.operand0] => contextualEnumPayload!
-                                (contextualEnumPayload!.kind == 14
-                                    and contextualEnumPayload!.operand0 < 0
-                                    and (contextualEnumPayloadType.kind == 3
-                                    or contextualEnumPayloadType.kind == 4
-                                    or contextualEnumPayloadType.kind == 12))
-                                    or (contextualEnumPayload!.kind == 3
-                                    and contextualEnumPayloadType.kind == 1
-                                    and contextualEnumPayloadType.origin == 1
-                                    and integerTypeRank(contextualEnumPayloadType.symbol) > 0)
-                                    -> if {
-                                        contextualEnumPayloadTypeId! => contextualEnumPayload!.typeId
-                                        contextualEnumPayloadType.kind => contextualEnumPayload!.typeKind
-                                        contextualEnumPayloadType.origin => contextualEnumPayload!.typeOrigin
-                                        contextualEnumPayloadType.module => contextualEnumPayload!.typeModule
-                                        contextualEnumPayloadType.symbol => contextualEnumPayload!.typeSymbol
-                                        recursiveTypeFlags[contextualEnumPayloadTypeId!] => contextualEnumPayload!.typeFlags
-                                        contextualEnumPayload! => nodes[contextualEnumCollection.operand0]
+                                    prepared.package.tokens[contextualEnumRange.tokenStart + contextualEnumCollection.payloadToken] => contextualEnumVariantToken
+                                    contextualEnumCollection.sourceModule -> nominalVariantTagForType(contextualEnumType, contextualEnumVariantToken, prepared) => contextualEnumTag
+                                    -1 => contextualEnumPayloadTypeId!
+                                    contextualEnumType.symbol == 0 and contextualEnumTag == 1
+                                        -> if {
+                                            contextualEnumType.first => contextualEnumPayloadTypeId!
+                                        }
+                                    contextualEnumType.symbol == 1 -> if {
+                                        contextualEnumTag == 0 -> if { contextualEnumType.first => contextualEnumPayloadTypeId! }
+                                        contextualEnumTag == 1 -> if { contextualEnumType.second => contextualEnumPayloadTypeId! }
                                     }
-                            }
+                                    contextualEnumPayloadTypeId! >= 0
+                                        and contextualEnumPayloadTypeId! < (frozenRecursiveSemanticTypes -> len)
+                                        and contextualEnumPayloadTypeId! < (recursiveTypeFlags -> len)
+                                        -> if {
+                                            frozenRecursiveSemanticTypes[contextualEnumPayloadTypeId!] => contextualEnumPayloadType
+                                            nodes[contextualEnumCollection.operand0] => contextualEnumPayload!
+                                            contextualEnumPayload!.kind == 14
+                                                and contextualEnumPayload!.operand0 < 0
+                                                and (contextualEnumPayloadType.kind == 3
+                                                or contextualEnumPayloadType.kind == 4
+                                                or contextualEnumPayloadType.kind == 12)
+                                                -> if {
+                                                    contextualEnumPayloadTypeId! => contextualEnumPayload!.typeId
+                                                    contextualEnumPayloadType.kind => contextualEnumPayload!.typeKind
+                                                    contextualEnumPayloadType.origin => contextualEnumPayload!.typeOrigin
+                                                    contextualEnumPayloadType.module => contextualEnumPayload!.typeModule
+                                                    contextualEnumPayloadType.symbol => contextualEnumPayload!.typeSymbol
+                                                    recursiveTypeFlags[contextualEnumPayloadTypeId!] => contextualEnumPayload!.typeFlags
+                                                    contextualEnumPayload! => nodes[contextualEnumCollection.operand0]
+                                                }
+                                            nodes -> sealIntegerLiteralContext(contextualEnumCollection.operand0,
+                                            contextualEnumPayloadTypeId!, contextualEnumPayloadType,
+                                            recursiveTypeFlags[contextualEnumPayloadTypeId!])
+                                        }
+                                }
                         }
                 }
             contextualEnumCollectionIndex! + 1 => contextualEnumCollectionIndex!
@@ -2217,32 +2230,28 @@ normalizeResolvedStructuralOperands nodes: mut [TypedIrNode; ~], prepared: ref s
     contextualCollectionFunctionIndex! < (nodes -> len)
         -> while {
             nodes[contextualCollectionFunctionIndex!] => contextualCollectionFunction
-            contextualCollectionFunction.kind == 0 and contextualCollectionFunction.typeId >= 0 and contextualCollectionFunction.operand0 >= 0
+            contextualCollectionFunction.kind == 0 and contextualCollectionFunction.typeId >= 0
+                and contextualCollectionFunction.operand0 >= 0
+                and contextualCollectionFunction.operand0 < (nodes -> len)
                 -> if {
                     nodes[contextualCollectionFunction.operand0] => contextualCollectionReturn
                     contextualCollectionReturn.kind == 1 -> if {
                         contextualCollectionReturn.operand0 => contextualCollectionLiteralIndex
-                        contextualCollectionLiteralIndex >= 0 -> if {
-                            nodes[contextualCollectionLiteralIndex] => contextualCollectionLiteral!
-                            ((contextualCollectionFunction.typeKind == 2 or contextualCollectionFunction.typeKind == 3 or contextualCollectionFunction.typeKind == 4 or contextualCollectionFunction.typeKind == 12) and contextualCollectionLiteral!.kind == 14) or (contextualCollectionFunction.typeKind == 5 and contextualCollectionLiteral!.kind == 16)
-                                or (contextualCollectionFunction.typeKind == 1
-                                and contextualCollectionFunction.typeOrigin == 1
-                                and contextualCollectionFunction.typeSymbol >= 2
-                                and contextualCollectionFunction.typeSymbol <= 14
-                                and contextualCollectionLiteral!.kind == 7
-                                and contextualCollectionLiteral!.opcode == grammar.tokenIdMinus()
-                                and contextualCollectionLiteral!.operand0 >= 0
-                                and nodes[contextualCollectionLiteral!.operand0].kind == 3)
-                                -> if {
-                                    contextualCollectionFunction.typeId => contextualCollectionLiteral!.typeId
-                                    contextualCollectionFunction.typeKind => contextualCollectionLiteral!.typeKind
-                                    contextualCollectionFunction.typeOrigin => contextualCollectionLiteral!.typeOrigin
-                                    contextualCollectionFunction.typeModule => contextualCollectionLiteral!.typeModule
-                                    contextualCollectionFunction.typeSymbol => contextualCollectionLiteral!.typeSymbol
-                                    contextualCollectionFunction.typeFlags => contextualCollectionLiteral!.typeFlags
-                                    contextualCollectionLiteral! => nodes[contextualCollectionLiteralIndex]
-                                }
-                        }
+                        contextualCollectionLiteralIndex >= 0 and contextualCollectionLiteralIndex < (nodes -> len)
+                            -> if {
+                                nodes[contextualCollectionLiteralIndex] => contextualCollectionLiteral!
+                                ((contextualCollectionFunction.typeKind == 2 or contextualCollectionFunction.typeKind == 3 or contextualCollectionFunction.typeKind == 4 or contextualCollectionFunction.typeKind == 12) and contextualCollectionLiteral!.kind == 14) or (contextualCollectionFunction.typeKind == 5 and contextualCollectionLiteral!.kind == 16)
+                                    -> if {
+                                        contextualCollectionFunction.typeId => contextualCollectionLiteral!.typeId
+                                        contextualCollectionFunction.typeKind => contextualCollectionLiteral!.typeKind
+                                        contextualCollectionFunction.typeOrigin => contextualCollectionLiteral!.typeOrigin
+                                        contextualCollectionFunction.typeModule => contextualCollectionLiteral!.typeModule
+                                        contextualCollectionFunction.typeSymbol => contextualCollectionLiteral!.typeSymbol
+                                        contextualCollectionFunction.typeFlags => contextualCollectionLiteral!.typeFlags
+                                        contextualCollectionLiteral! => nodes[contextualCollectionLiteralIndex]
+                                    }
+                                nodes -> sealIntegerLiteralPeerContext(contextualCollectionLiteralIndex, contextualCollectionFunction)
+                            }
                     }
                 }
             contextualCollectionFunctionIndex! + 1 => contextualCollectionFunctionIndex!

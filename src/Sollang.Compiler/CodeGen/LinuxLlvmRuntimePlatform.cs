@@ -1993,6 +1993,58 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %sollang.process_result %signal1
             }
 
+            define internal %sollang.process_poll_result @sollang_poll_process(i64 %token) #0 {
+            entry:
+              %pid = trunc i64 %token to i32
+              %valid = icmp sgt i32 %pid, 0
+              br i1 %valid, label %poll, label %poll_error
+
+            poll:
+              %status_slot = alloca i32, align 4
+              br label %poll_loop
+
+            poll_loop:
+              %waited = call i32 @waitpid(i32 %pid, ptr %status_slot, i32 1)
+              %exited = icmp eq i32 %waited, %pid
+              %running = icmp eq i32 %waited, 0
+              br i1 %exited, label %decode, label %classify_pending
+
+            classify_pending:
+              br i1 %running, label %poll_running, label %poll_failed
+
+            poll_failed:
+              %errno_ptr = call ptr @__errno_location()
+              %errno = load i32, ptr %errno_ptr, align 4
+              %interrupted = icmp eq i32 %errno, 4
+              br i1 %interrupted, label %poll_loop, label %poll_error
+
+            decode:
+              %status = load i32, ptr %status_slot, align 4
+              %term_bits = and i32 %status, 127
+              %stopped = icmp eq i32 %term_bits, 127
+              %terminated_normally = icmp eq i32 %term_bits, 0
+              br i1 %stopped, label %poll_running, label %classify_exit
+
+            classify_exit:
+              br i1 %terminated_normally, label %poll_exited, label %poll_signaled
+
+            poll_exited:
+              %shifted = lshr i32 %status, 8
+              %exit_code = and i32 %shifted, 255
+              %exited0 = insertvalue %sollang.process_poll_result poison, i32 %exit_code, 0
+              %exited1 = insertvalue %sollang.process_poll_result %exited0, i32 1, 1
+              ret %sollang.process_poll_result %exited1
+
+            poll_signaled:
+              ret %sollang.process_poll_result { i32 0, i32 3 }
+
+            poll_running:
+              ret %sollang.process_poll_result { i32 0, i32 0 }
+
+            poll_error:
+              ret %sollang.process_poll_result { i32 0, i32 2 }
+            }
+
             define internal void @sollang_drop_process_child(i64 %token) #0 {
             entry:
               %pid = trunc i64 %token to i32

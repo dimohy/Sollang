@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "scope": "reachable-direct-call-graph-allocation-audit-not-llvm-validation",
+  "rootSymbolPattern": "^root$",
+  "cases": [
+    {
+      "name": "transitive-copy-and-metadata",
+      "llvm": "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\ndefine void @root() {\n  call void @leaf()\n  ret void\n}\ndefine void @leaf() {\n  ; call ptr @malloc(i64 8) is not an instruction.\n  call void @llvm.memcpy.p0.p0.i64(ptr null, ptr null, i64 0, i1 false), !custom !0\n  ret void\n}\n!0 = !{!\"call ptr @malloc(i64 8)\"}\n",
+      "allowed": ["llvm.memcpy.p0.p0.i64"], "reachable": 2, "calls": 2
+    },
+    {
+      "name": "transitive-allocation",
+      "llvm": "declare ptr @malloc(i64)\ndefine void @root() {\n  call void @leaf()\n  ret void\n}\ndefine void @leaf() {\n  %p = call ptr @malloc(i64 8)\n  ret void\n}\n",
+      "allowed": [], "error": "LLVM_NO_ALLOCATION_ALLOCATOR"
+    },
+    {
+      "name": "indirect-call-with-allowed-symbol-argument",
+      "llvm": "declare void @safe()\ndefine void @root(ptr %target) {\n  call void %target(ptr @safe)\n  ret void\n}\n",
+      "allowed": ["safe"], "error": "LLVM_NO_ALLOCATION_INDIRECT_CALL"
+    },
+    {
+      "name": "invoke-allocation",
+      "llvm": "declare ptr @malloc(i64)\ndefine void @root() {\n  %p = invoke ptr @malloc(i64 8) to label %done unwind label %failed\ndone:\n  ret void\nfailed:\n  unreachable\n}\n",
+      "allowed": [], "error": "LLVM_NO_ALLOCATION_ALLOCATOR"
+    },
+    {
+      "name": "invoke-transitive-safe",
+      "llvm": "define void @root() {\n  invoke void @leaf() to label %done unwind label %failed\ndone:\n  ret void\nfailed:\n  unreachable\n}\ndefine void @leaf() {\n  ret void\n}\n",
+      "allowed": [], "reachable": 2, "calls": 1
+    },
+    {
+      "name": "unknown-external",
+      "llvm": "declare void @unknown()\ndefine void @root() {\n  call void @unknown()\n  ret void\n}\n",
+      "allowed": [], "error": "LLVM_NO_ALLOCATION_UNKNOWN_EXTERNAL"
+    },
+    {
+      "name": "empty-roots",
+      "llvm": "define void @other() {\n  ret void\n}\n",
+      "allowed": [], "error": "LLVM_NO_ALLOCATION_NO_ROOTS"
+    },
+    {
+      "name": "duplicate-definition",
+      "llvm": "define void @root() {\n  ret void\n}\ndefine void @root() {\n  ret void\n}\n",
+      "allowed": [], "error": "LLVM_NO_ALLOCATION_DUPLICATE_SYMBOL"
+    },
+    {
+      "name": "recursive-cycle",
+      "llvm": "define void @root() {\n  call void @leaf()\n  ret void\n}\ndefine void @leaf() {\n  call void @root()\n  ret void\n}\n",
+      "allowed": [], "reachable": 2, "calls": 2
+    },
+    {
+      "name": "unparsed-inline-asm",
+      "llvm": "define void @root() {\n  call void asm sideeffect \"\", \"\"()\n  ret void\n}\n",
+      "allowed": [], "error": "LLVM_NO_ALLOCATION_UNPARSED_CALL"
+    },
+    {
+      "name": "multiline-call-fails-closed",
+      "llvm": "declare void @safe()\ndefine void @root() {\n  call void\n    @safe()\n  ret void\n}\n",
+      "allowed": ["safe"], "error": "LLVM_NO_ALLOCATION_UNPARSED_CALL"
+    },
+    {
+      "name": "undeclared-allowlisted-call",
+      "llvm": "define void @root() {\n  call void @safe()\n  ret void\n}\n",
+      "allowed": ["safe"], "error": "LLVM_NO_ALLOCATION_UNRESOLVED_CALL"
+    },
+    {
+      "name": "case-sensitive-symbols",
+      "llvm": "define void @root() {\n  call void @Leaf()\n  ret void\n}\ndefine void @leaf() {\n  ret void\n}\n",
+      "allowed": [], "error": "LLVM_NO_ALLOCATION_UNRESOLVED_CALL"
+    },
+    {
+      "name": "unreachable-allocation-not-claimed-reachable",
+      "llvm": "declare ptr @malloc(i64)\ndefine void @root() {\n  ret void\n}\ndefine void @unused() {\n  %p = call ptr @malloc(i64 8)\n  ret void\n}\n",
+      "allowed": [], "reachable": 1, "calls": 0
+    }
+  ],
+  "additionalCallBoundaryCases": [
+    {
+      "name": "multiple-calls-on-one-line",
+      "llvm": "declare i32 @safe()\ndeclare ptr @malloc(i64)\ndefine void @root() {\n  call ptr @malloc(i64 8) %n = call i32 @safe()\n  ret void\n}\n",
+      "allowed": ["safe"], "error": "LLVM_NO_ALLOCATION_UNPARSED_CALL"
+    },
+    {
+      "name": "call-after-non-call-instruction",
+      "llvm": "declare void @safe()\ndefine void @root() {\n  %n = add i32 1, 2 call void @safe()\n  ret void\n}\n",
+      "allowed": ["safe"], "error": "LLVM_NO_ALLOCATION_UNPARSED_CALL"
+    },
+    {
+      "name": "inline-metadata-call-word",
+      "llvm": "declare void @safe()\ndefine void @root() {\n  call void @safe(), !annotation !{!\"call ptr @malloc(i64 8)\"}\n  ret void\n}\n",
+      "allowed": ["safe"], "reachable": 1, "calls": 1
+    }
+  ],
+  "deniedEvenWhenAllowlisted": [
+    "malloc", "calloc", "realloc", "sollang_alloc", "sollang_realloc",
+    "HeapAlloc", "HeapReAlloc", "LocalAlloc", "VirtualAlloc", "CoTaskMemAlloc"
+  ]
+}

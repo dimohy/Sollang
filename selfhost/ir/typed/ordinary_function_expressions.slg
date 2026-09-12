@@ -94,6 +94,22 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                 recursiveExpressionType.second >= 0 -> if { frozenRecursiveSemanticTypes[recursiveExpressionType.second].symbol => expressionTypeSymbol! }
             }
         }
+        -1 => mapExpressionOpcode!
+        expression.kind == 49 -> if {
+            expressionTypeIds.mapExpressionOpcode(source, prepared.package.tokens, sourceRange.tokenStart, expression) => mapExpressionOpcode!
+        }
+        expression.kind == 49 and (mapExpressionOpcode! == -306 or mapExpressionOpcode! == -307)
+            -> if {
+                1 => expressionTypeOrigin!
+                -1 => expressionTypeModule!
+                mapExpressionOpcode! == -306 -> if {
+                    17 => expressionTypeSymbol!
+                    17 => recursiveExpressionTypeId!
+                } else {
+                    18 => expressionTypeSymbol!
+                    18 => recursiveExpressionTypeId!
+                }
+            }
         false => knownPatternReference!
         -1 => patternTypeAst!
         expression.kind == 59 -> if { expressionAstIndex => patternTypeAst! }
@@ -550,12 +566,16 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
             0 => expressionTypeSymbol!
         }
         false => knownNumericExpression!
-        expression.kind == 20 or expression.kind == 21
+        expression.kind -> isNumericBinaryAstKind
             -> if {
+                # Binary syntax is itself the lowering authority. Its semantic
+                # type may converge only after Result-arm payloads and member
+                # projections are sealed, but omitting the node would lose the
+                # complete initializer before that convergence can happen.
+                true => knownNumericExpression!
                 frozenNearestLegacyIndexByAst[sourceRange.astStart + expressionAstIndex] => knownNumericIndex
                 knownNumericIndex >= 0 -> if {
                     inferred[knownNumericIndex] => knownNumericCandidate
-                    true => knownNumericExpression!
                     knownNumericCandidate.origin => expressionTypeOrigin!
                     knownNumericCandidate.targetModule => expressionTypeModule!
                     knownNumericCandidate.targetSymbol => expressionTypeSymbol!
@@ -1024,19 +1044,11 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
             23 => recursiveExpressionTypeId!
         }
         expressionBelongsToFunction -> if {
-            expression.kind == 42 or expression.kind == 43 or expression.kind == 44 or expression.kind == 45 or expression.kind == 46 or expression.kind == 47 or expression.kind == 58 or expression.kind == 62 or expression.kind == 82
+            expression.kind -> controlIrKindForAstKind => controlKind
+            controlKind >= 0
                 -> if {
                     nodes -> len => controlIr
                     controlIr => astToIr[expressionAstIndex]
-                    18 => controlKind!
-                    expression.kind == 43 -> if { 19 => controlKind! }
-                    expression.kind == 44 -> if { 20 => controlKind! }
-                    expression.kind == 45 -> if { 21 => controlKind! }
-                    expression.kind == 46 -> if { 22 => controlKind! }
-                    expression.kind == 47 -> if { 23 => controlKind! }
-                    expression.kind == 58 -> if { 19 => controlKind! }
-                    expression.kind == 62 or expression.kind == 82
-                        -> if { 30 => controlKind! }
                     -1 => controlOpcode!
                     expression.kind == 42 -> if { expression.operatorKind => controlOpcode! }
                     expression.kind == 45 -> if {
@@ -1071,7 +1083,7 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                         recursiveTypeFlags[recursiveExpressionTypeId!] => controlTypeFlags!
                     }
                     nodes -> push(TypedIrNode {
-                        kind: controlKind!
+                        kind: controlKind
                         parent: returnIr
                         sourceModule: sourceIndex
                         astNode: expressionAstIndex
@@ -1231,58 +1243,24 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                     # spelling-based intrinsic for the same expression.
                     knownCallExpression! -> if { -1 => flowEmissionOpcode! }
                     prepared.controlProducerWrapperByAst[sourceRange.astStart + expressionAstIndex] => knownControlProducerWrapperExpression
-                    (not resolvedQualifiedLeaf! or knownCallResultMemberExpression! or knownPartitionItem! or flowEmissionOpcode! == -213 or knownControlProducerWrapperExpression) and (contextualNullaryOption! or expressionTypeIndex >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownLocalBindingReference! or knownPatternReference! or unresolvedLibraryInvocation! or unresolvedCallExpression! or insertIntrinsicSpelling! or flowEmissionOpcode! == -213 or knownControlProducerWrapperExpression or expression.kind == 22 or knownLocalMemberExpression! or knownIndexedMemberExpression! or knownCallResultMemberExpression! or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or expression.kind == 57 or expression.kind == 59 or expression.kind == 71 or expression.kind == 73 or expression.kind == 74 or expression.kind == 75 or expression.kind == 76 or expression.kind == 78 or expression.kind == 79 or expression.kind == 80 or expression.kind == 81 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownTakeExpression! or knownPutExpression! or knownCapacityExpression! or knownReserveExpression! or knownBitSetExpression! or knownDequeExpression! or knownHeapExpression! or knownSetExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownMaterializeExpression! or knownDynExpression! or knownDynDispatchExpression! or knownStreamFlowExpression! or knownIndexAssignment or knownMemberAssignment)
+                    (not resolvedQualifiedLeaf! or knownCallResultMemberExpression! or knownPartitionItem! or flowEmissionOpcode! == -213 or knownControlProducerWrapperExpression) and (contextualNullaryOption! or expressionTypeIndex >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownLocalBindingReference! or knownPatternReference! or unresolvedLibraryInvocation! or unresolvedCallExpression! or insertIntrinsicSpelling! or flowEmissionOpcode! == -213 or knownControlProducerWrapperExpression or mapExpressionOpcode! == -306 or mapExpressionOpcode! == -307 or expression.kind == 22 or knownLocalMemberExpression! or knownIndexedMemberExpression! or knownCallResultMemberExpression! or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or expression.kind == 57 or expression.kind == 59 or expression.kind == 71 or expression.kind == 73 or expression.kind == 74 or expression.kind == 75 or expression.kind == 76 or expression.kind == 78 or expression.kind == 79 or expression.kind == 80 or expression.kind == 81 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownTakeExpression! or knownPutExpression! or knownCapacityExpression! or knownReserveExpression! or knownBitSetExpression! or knownDequeExpression! or knownHeapExpression! or knownSetExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownMaterializeExpression! or knownDynExpression! or knownDynDispatchExpression! or knownStreamFlowExpression! or knownIndexAssignment or knownMemberAssignment)
                         -> if {
-                            9 => expressionKind!
-                            expression.kind == 13 -> if { 2 => expressionKind! }
-                            expression.kind == 14 -> if { 3 => expressionKind! }
-                            expression.kind == 15 -> if {
-                                5 => expressionKind!
-                                expressionTypeOrigin! == 1 and expressionTypeSymbol! == 23
-                                    -> if {
-                                        true => expressionIsBoolLiteral!
-                                        resolvedSymbolByAst[expressionAstIndex] >= 0
-                                            -> if { false => expressionIsBoolLiteral! }
-                                        expressionIsBoolLiteral! -> if { 4 => expressionKind! }
-                                    }
-                            }
-                            expression.kind == 11 or expression.kind == 48 or (expression.kind == 10 and (unresolvedLibraryInvocation! or unresolvedCallExpression! or insertIntrinsicSpelling!))
-                                -> if { 6 => expressionKind! }
-                            contextualNullaryOption! -> if { 26 => expressionKind! }
-                            expression.kind == 22 -> if { 7 => expressionKind! }
-                            expression.kind >= 18 and expression.kind <= 21
-                                -> if { 8 => expressionKind! }
-                            expression.kind == 24 or expression.kind == 25
-                                -> if { 8 => expressionKind! }
-                            expression.kind == 70 -> if { 8 => expressionKind! }
-                            expression.kind == 39 -> if { 12 => expressionKind! }
-                            expression.kind == 36 -> if { 13 => expressionKind! }
-                            expression.kind == 37 -> if { 14 => expressionKind! }
-                            expression.kind == 38 -> if { 16 => expressionKind! }
-                            expression.kind == 41 -> if { 15 => expressionKind! }
-                            expression.kind == 53 -> if { 24 => expressionKind! }
-                            expression.kind == 54 -> if { 25 => expressionKind! }
-                            expression.kind == 55 -> if { 26 => expressionKind! }
-                            expression.kind == 56 -> if { 27 => expressionKind! }
-                            expression.kind == 59 -> if { 29 => expressionKind! }
-                            expression.kind == 63 -> if { 31 => expressionKind! }
-                            expression.kind == 64 -> if { 32 => expressionKind! }
-                            expression.kind == 57 -> if { 33 => expressionKind! }
-                            expression.kind == 71 -> if { 35 => expressionKind! }
-                            expression.kind == 73 -> if { 37 => expressionKind! }
-                            expression.kind == 74 -> if { 38 => expressionKind! }
-                            expression.kind == 75 -> if { 39 => expressionKind! }
-                            expression.kind == 78 -> if { 40 => expressionKind! }
-                            expression.kind == 79 -> if { 41 => expressionKind! }
-                            expression.kind == 80 -> if { 42 => expressionKind! }
-                            expression.kind == 81 -> if { 43 => expressionKind! }
-                            expression.kind == 76 -> if { 36 => expressionKind! }
+                            false => expressionIsBoolLiteral!
+                            expression.kind == 15 and expressionTypeOrigin! == 1 and expressionTypeSymbol! == 23
+                                -> if {
+                                    true => expressionIsBoolLiteral!
+                                    resolvedSymbolByAst[expressionAstIndex] >= 0
+                                        -> if { false => expressionIsBoolLiteral! }
+                                }
+                            expression.kind == 11 or expression.kind == 48 or (expression.kind == 10 and (unresolvedLibraryInvocation! or unresolvedCallExpression! or insertIntrinsicSpelling!)) => expressionIsCallLike
+                            false => expressionIsPropertyCall!
                             prepared.callIndexByAst[sourceRange.astStart + expressionAstIndex] => propertyCallIndex
                             propertyCallIndex >= 0 -> if {
                                 prepared.calls[propertyCallIndex] => propertyCall
                                 propertyCall.sourceModule == sourceIndex and propertyCall.callAst == expressionAstIndex and propertyCall.status == 0
-                                    -> if { 6 => expressionKind! }
+                                    -> if { true => expressionIsPropertyCall! }
                             }
+                            resolvedExpressionIrKindForAstKind(expression.kind, expressionIsBoolLiteral!, expressionIsCallLike, contextualNullaryOption!, expressionIsPropertyCall!) => expressionKind!
                             false => transparentExpression!
                             expression.kind >= 18 and expression.kind <= 21
                                 -> if {
@@ -1337,6 +1315,10 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                                 -1 => expressionTargetModule!
                                 expression.flags => expressionFlags!
                                 expression.operatorKind => expressionOpcode!
+                                expression.kind == 49 -> if {
+                                    mapExpressionOpcode! => expressionOpcode!
+                                    -1 => expressionFlags!
+                                }
                                 expressionKind! == 16 -> if {
                                     source -> dictionaryCapacityHint(expression) => expressionOpcode!
                                 }

@@ -1813,6 +1813,19 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                             }
                         ownedMoveIndex! + 1 => ownedMoveIndex!
                     }
+                # At a completed region, every continuing nested arm may have
+                # transferred this owner. Early exits must use only moves on
+                # their exact path, never later moves in the same region.
+                request.beforeAst < 0 and not ownedDropMoved!
+                    -> if {
+                        request.regionIndex -> regionFullyMovesBinding(
+                        ownedDropCandidate.sourceModule,
+                        ownedDropCandidate.symbol,
+                        ownedDropCandidate -> sourceStart(context, state),
+                        context,
+                        state)
+                            -> if { true => ownedDropMoved! }
+                    }
                 ownedDropStart => ownedPutMoveIndex!
                 ownedDropOwner! -> functionEnd(context, state) => ownedPutMoveEnd
                 ownedPutMoveIndex! < ownedPutMoveEnd and not ownedDropMoved!

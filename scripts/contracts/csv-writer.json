@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "module": "stdlib/std/text/csv.slg",
+  "fixture": "1724-csv-bounded-writer",
+  "scope": "bounded-transactional-utf8-record-writer-over-caller-output",
+  "reference": "https://www.rfc-editor.org/rfc/rfc4180.html#section-2",
+  "surfaces": ["WriterLimits", "Format.writer", "Writer.writeRecord", "Writer.bytesWritten", "Writer.recordsWritten"],
+  "invariants": [
+    "all limits are nonnegative; expectedColumns is nonnegative and does not exceed maxFieldsPerRecord",
+    "Either is a reader policy and is rejected by writer construction; CRLF and LF are explicit output policies",
+    "each successful call emits one complete record including its final line ending",
+    "zero fields is InvalidRecord; one empty field is quoted and remains a real record",
+    "empty fields and fields containing comma, quote, CR or LF are quoted; quote bytes are doubled",
+    "UTF-8 bytes, spaces and BOM bytes are preserved; ASCII controls except CR and LF are rejected",
+    "maxFieldBytes counts decoded UTF-8 while maxOutputBytes counts cumulative encoded bytes including quoting, commas and line endings",
+    "every size addition is checked against the remaining output budget before arithmetic can overflow",
+    "record and field limits and exact positive expectedColumns are checked before writes",
+    "every failure leaves the entire output, length, capacity, bytesWritten and recordsWritten unchanged",
+    "OutputTooSmall reports the exact required complete-record byte count and permits retry",
+    "error offset is the cumulative committed byte count; requiredBytes is zero except for OutputTooSmall",
+    "success changes only the encoded output prefix; length, capacity and tail are unchanged",
+    "writer state and budget identity are private; the library allocates no storage and has no implicit I/O or async effect"
+  ],
+  "allowedWindowsExternals": ["GetStdHandle", "WriteFile", "llvm.trap"],
+  "referenceCases": [
+    { "label": "ascii", "fields": ["a", "b"], "lineEnding": "\r\n" },
+    { "label": "quoted", "fields": ["a,b", "c\"d"], "lineEnding": "\r\n" },
+    { "label": "utf8", "fields": ["한글", "é", "🙂"], "lineEnding": "\r\n" },
+    { "label": "spaces", "fields": [" a ", " b "], "lineEnding": "\r\n" },
+    { "label": "empty", "fields": ["", ""], "lineEnding": "\r\n" },
+    { "label": "breaks", "fields": ["a\r\nb", "a\rb", "a\nb"], "lineEnding": "\r\n" },
+    { "label": "lf", "fields": ["x", ""], "lineEnding": "\n" }
+  ],
+  "requiredFailureKinds": ["InvalidLimits", "InvalidOptions", "InvalidRecord", "OutputLimit", "RecordLimit", "FieldCountLimit", "FieldSizeLimit", "ColumnCountMismatch", "InvalidControl", "OutputTooSmall"],
+  "negativeFixtures": ["csv-writer-private-state-negative", "csv-writer-output-alias-negative"],
+  "acceptance": "The focused gate requires native exact output, independent encoding and parser roundtrip, zero-allocation LLVM audit, ownership/privacy negatives before LLVM, and verified actual/golden byte equality. Required selfhost/target closure remains separate. This is a defined UTF-8 profile, not an unqualified RFC conformance claim."
+}

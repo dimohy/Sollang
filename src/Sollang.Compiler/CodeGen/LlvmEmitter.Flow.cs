@@ -23,7 +23,8 @@ internal sealed partial class LlvmEmitter
                     or BoundFunctionKind.RuntimeRunProcessToFile
                     or BoundFunctionKind.RuntimeCollectProcess
                     or BoundFunctionKind.RuntimeSpawnProcess
-                    or BoundFunctionKind.RuntimeWaitProcess))
+                    or BoundFunctionKind.RuntimeWaitProcess
+                    or BoundFunctionKind.RuntimePollChildProcess))
         {
             throw new SollangException("child processes are unavailable on the current target");
         }
@@ -177,6 +178,7 @@ internal sealed partial class LlvmEmitter
                         or BoundFunctionKind.RuntimeCollectProcess
                         or BoundFunctionKind.RuntimeSpawnProcess
                         or BoundFunctionKind.RuntimeWaitProcess
+                        or BoundFunctionKind.RuntimePollChildProcess
                         or BoundFunctionKind.RuntimeChildProcessId
                         or BoundFunctionKind.RuntimeProcessIdValue)
                     && target.Arguments.Count != 0)
@@ -365,6 +367,7 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeCollectProcess:
                     case BoundFunctionKind.RuntimeSpawnProcess:
                     case BoundFunctionKind.RuntimeWaitProcess:
+                    case BoundFunctionKind.RuntimePollChildProcess:
                     case BoundFunctionKind.RuntimeChildProcessId:
                     case BoundFunctionKind.RuntimeProcessIdValue:
                         current = EmitFlowFunctionCall(function, current, expression.Source, target.Arguments, i == 0, ownsFlowTemporary);

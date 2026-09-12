@@ -29,6 +29,243 @@ public struct RuntimeFunctionSymbols {
     public flushStandardOutputRef: RuntimeFunctionRef
 }
 
+# Memory-mapped byte storage has one target-independent value ABI. The data
+# view can begin inside the mapped owner, so both pointers and lengths must be
+# retained until the owner is flushed or released.
+public emitWindowsMappedBytes declareCreateFile: Bool, declareCloseHandle: Bool, declareMapping: Bool -> Unit uses Console {
+    declareCreateFile -> if { "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println }
+    declareCloseHandle -> if { "declare dllimport i32 @CloseHandle(ptr)" -> println }
+    declareMapping -> if {
+        """
+        declare dllimport i32 @GetFileSizeEx(ptr, ptr)
+        declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
+        declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
+        declare dllimport i32 @UnmapViewOfFile(ptr)
+        """ -> println
+    }
+    """
+    declare dllimport i32 @SetFilePointerEx(ptr, i64, ptr, i32)
+    declare dllimport i32 @SetEndOfFile(ptr)
+    declare dllimport i32 @FlushViewOfFile(ptr, i64)
+
+    define internal %sollang.mapped_bytes @sollang_map_file(ptr %path, i64 %path_len, i64 %offset, i64 %requested_len, i64 %requested_size, i1 %writable) {
+    entry:
+      %buf = alloca [260 x i8], align 1
+      %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+      %path_fits = icmp ule i64 %path_len, 259
+      br i1 %path_fits, label %copy_path, label %fail
+    copy_path:
+      %path_index = phi i64 [ 0, %entry ], [ %path_next, %copy_byte ]
+      %path_done = icmp eq i64 %path_index, %path_len
+      br i1 %path_done, label %terminate_path, label %copy_byte
+    copy_byte:
+      %path_source = getelementptr i8, ptr %path, i64 %path_index
+      %path_byte = load i8, ptr %path_source, align 1
+      %path_target = getelementptr i8, ptr %buf_ptr, i64 %path_index
+      store i8 %path_byte, ptr %path_target, align 1
+      %path_next = add i64 %path_index, 1
+      br label %copy_path
+    terminate_path:
+      %terminator = getelementptr i8, ptr %buf_ptr, i64 %path_index
+      store i8 0, ptr %terminator, align 1
+      br label %open
+    open:
+      %access = select i1 %writable, i32 -1073741824, i32 -2147483648
+      %creation = select i1 %writable, i32 4, i32 3
+      %file = call ptr @CreateFileA(ptr %buf_ptr, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
+      %file_int = ptrtoint ptr %file to i64
+      %file_ok = icmp ne i64 %file_int, -1
+      br i1 %file_ok, label %resize_check, label %fail
+    resize_check:
+      %has_requested_size = icmp ne i64 %requested_size, 0
+      %resize = and i1 %writable, %has_requested_size
+      br i1 %resize, label %resize_file, label %read_size
+    resize_file:
+      %seek_ok = call i32 @SetFilePointerEx(ptr %file, i64 %requested_size, ptr null, i32 0)
+      %seek_valid = icmp ne i32 %seek_ok, 0
+      br i1 %seek_valid, label %resize_end, label %close_fail
+    resize_end:
+      %end_ok = call i32 @SetEndOfFile(ptr %file)
+      %resize_valid = icmp ne i32 %end_ok, 0
+      br i1 %resize_valid, label %read_size, label %close_fail
+    read_size:
+      %size_slot = alloca i64, align 8
+      %size_ok = call i32 @GetFileSizeEx(ptr %file, ptr %size_slot)
+      %size_valid = icmp ne i32 %size_ok, 0
+      br i1 %size_valid, label %bounds, label %close_fail
+    bounds:
+      %file_size = load i64, ptr %size_slot, align 8
+      %offset_ok = icmp ule i64 %offset, %file_size
+      %remaining = sub i64 %file_size, %offset
+      %whole = icmp eq i64 %requested_len, 0
+      %view_len = select i1 %whole, i64 %remaining, i64 %requested_len
+      %len_nonzero = icmp ne i64 %view_len, 0
+      %len_ok = icmp ule i64 %view_len, %remaining
+      %bounds1 = and i1 %offset_ok, %len_nonzero
+      %bounds_ok = and i1 %bounds1, %len_ok
+      br i1 %bounds_ok, label %mapping, label %close_fail
+    mapping:
+      %protect = select i1 %writable, i32 4, i32 2
+      %mapping_handle = call ptr @CreateFileMappingA(ptr %file, ptr null, i32 %protect, i32 0, i32 0, ptr null)
+      %mapping_ok = icmp ne ptr %mapping_handle, null
+      br i1 %mapping_ok, label %view, label %close_fail
+    view:
+      %aligned = and i64 %offset, -65536
+      %delta = sub i64 %offset, %aligned
+      %mapped_len = add i64 %delta, %view_len
+      %high64 = lshr i64 %aligned, 32
+      %high = trunc i64 %high64 to i32
+      %low = trunc i64 %aligned to i32
+      %desired = select i1 %writable, i32 2, i32 4
+      %base = call ptr @MapViewOfFile(ptr %mapping_handle, i32 %desired, i32 %high, i32 %low, i64 %mapped_len)
+      %base_ok = icmp ne ptr %base, null
+      br i1 %base_ok, label %success, label %mapping_close_fail
+    success:
+      %data = getelementptr i8, ptr %base, i64 %delta
+      %ignored_mapping = call i32 @CloseHandle(ptr %mapping_handle)
+      %ignored_file = call i32 @CloseHandle(ptr %file)
+      %r0 = insertvalue %sollang.mapped_bytes poison, ptr %data, 0
+      %r1 = insertvalue %sollang.mapped_bytes %r0, i64 %view_len, 1
+      %r2 = insertvalue %sollang.mapped_bytes %r1, ptr %base, 2
+      %r3 = insertvalue %sollang.mapped_bytes %r2, i64 %mapped_len, 3
+      %r4 = insertvalue %sollang.mapped_bytes %r3, i1 %writable, 4
+      ret %sollang.mapped_bytes %r4
+    mapping_close_fail:
+      %ignored_mapping_fail = call i32 @CloseHandle(ptr %mapping_handle)
+      br label %close_fail
+    close_fail:
+      %ignored_close = call i32 @CloseHandle(ptr %file)
+      br label %fail
+    fail:
+      %f0 = insertvalue %sollang.mapped_bytes zeroinitializer, i1 %writable, 4
+      ret %sollang.mapped_bytes %f0
+    }
+    define internal i32 @sollang_mapped_flush(ptr %base, i64 %mapped_len) {
+    entry:
+      %ok = call i32 @FlushViewOfFile(ptr %base, i64 %mapped_len)
+      ret i32 %ok
+    }
+    define internal void @sollang_mapped_unmap(ptr %base, i64 %mapped_len) {
+    entry:
+      %present = icmp ne ptr %base, null
+      br i1 %present, label %release, label %done
+    release:
+      %ignored = call i32 @UnmapViewOfFile(ptr %base)
+      br label %done
+    done:
+      ret void
+    }
+    """ -> println
+}
+
+public emitLinuxMappedBytes declareOpen: Bool, declareClose: Bool, declareMapping: Bool -> Unit uses Console {
+    declareOpen -> if { "declare i32 @open(ptr, i32, i32)" -> println }
+    declareClose -> if { "declare i32 @close(i32)" -> println }
+    declareMapping -> if {
+        """
+        declare i64 @lseek(i32, i64, i32)
+        declare ptr @mmap(ptr, i64, i32, i32, i32, i64)
+        declare i32 @munmap(ptr, i64)
+        """ -> println
+    }
+    """
+    declare i32 @ftruncate(i32, i64)
+    declare i32 @msync(ptr, i64, i32)
+
+    define internal %sollang.mapped_bytes @sollang_map_file(ptr %path, i64 %path_len, i64 %offset, i64 %requested_len, i64 %requested_size, i1 %writable) {
+    entry:
+      %buf = alloca [260 x i8], align 1
+      %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+      %path_fits = icmp ule i64 %path_len, 259
+      br i1 %path_fits, label %copy_path, label %fail
+    copy_path:
+      %path_index = phi i64 [ 0, %entry ], [ %path_next, %copy_byte ]
+      %path_done = icmp eq i64 %path_index, %path_len
+      br i1 %path_done, label %terminate_path, label %copy_byte
+    copy_byte:
+      %path_source = getelementptr i8, ptr %path, i64 %path_index
+      %path_byte = load i8, ptr %path_source, align 1
+      %path_target = getelementptr i8, ptr %buf_ptr, i64 %path_index
+      store i8 %path_byte, ptr %path_target, align 1
+      %path_next = add i64 %path_index, 1
+      br label %copy_path
+    terminate_path:
+      %terminator = getelementptr i8, ptr %buf_ptr, i64 %path_index
+      store i8 0, ptr %terminator, align 1
+      br label %open_file
+    open_file:
+      %flags = select i1 %writable, i32 66, i32 0
+      %fd = call i32 @open(ptr %buf_ptr, i32 %flags, i32 420)
+      %fd_ok = icmp sge i32 %fd, 0
+      br i1 %fd_ok, label %resize_check, label %fail
+    resize_check:
+      %has_requested_size = icmp ne i64 %requested_size, 0
+      %resize = and i1 %writable, %has_requested_size
+      br i1 %resize, label %resize_file, label %read_size
+    resize_file:
+      %truncate_result = call i32 @ftruncate(i32 %fd, i64 %requested_size)
+      %truncate_ok = icmp eq i32 %truncate_result, 0
+      br i1 %truncate_ok, label %read_size, label %close_fail
+    read_size:
+      %file_size = call i64 @lseek(i32 %fd, i64 0, i32 2)
+      %size_ok = icmp sge i64 %file_size, 0
+      br i1 %size_ok, label %bounds, label %close_fail
+    bounds:
+      %offset_ok = icmp ule i64 %offset, %file_size
+      %remaining = sub i64 %file_size, %offset
+      %whole = icmp eq i64 %requested_len, 0
+      %view_len = select i1 %whole, i64 %remaining, i64 %requested_len
+      %len_nonzero = icmp ne i64 %view_len, 0
+      %len_ok = icmp ule i64 %view_len, %remaining
+      %bounds1 = and i1 %offset_ok, %len_nonzero
+      %bounds_ok = and i1 %bounds1, %len_ok
+      br i1 %bounds_ok, label %view, label %close_fail
+    view:
+      %aligned = and i64 %offset, -4096
+      %delta = sub i64 %offset, %aligned
+      %mapped_len = add i64 %delta, %view_len
+      %protect_extra = select i1 %writable, i32 2, i32 0
+      %protect = or i32 1, %protect_extra
+      %base = call ptr @mmap(ptr null, i64 %mapped_len, i32 %protect, i32 1, i32 %fd, i64 %aligned)
+      %base_int = ptrtoint ptr %base to i64
+      %base_ok = icmp ne i64 %base_int, -1
+      br i1 %base_ok, label %success, label %close_fail
+    success:
+      %data = getelementptr i8, ptr %base, i64 %delta
+      %ignored_close = call i32 @close(i32 %fd)
+      %r0 = insertvalue %sollang.mapped_bytes poison, ptr %data, 0
+      %r1 = insertvalue %sollang.mapped_bytes %r0, i64 %view_len, 1
+      %r2 = insertvalue %sollang.mapped_bytes %r1, ptr %base, 2
+      %r3 = insertvalue %sollang.mapped_bytes %r2, i64 %mapped_len, 3
+      %r4 = insertvalue %sollang.mapped_bytes %r3, i1 %writable, 4
+      ret %sollang.mapped_bytes %r4
+    close_fail:
+      %ignored_close_fail = call i32 @close(i32 %fd)
+      br label %fail
+    fail:
+      %f0 = insertvalue %sollang.mapped_bytes zeroinitializer, i1 %writable, 4
+      ret %sollang.mapped_bytes %f0
+    }
+    define internal i32 @sollang_mapped_flush(ptr %base, i64 %mapped_len) {
+    entry:
+      %result = call i32 @msync(ptr %base, i64 %mapped_len, i32 4)
+      %ok = icmp eq i32 %result, 0
+      %ok32 = zext i1 %ok to i32
+      ret i32 %ok32
+    }
+    define internal void @sollang_mapped_unmap(ptr %base, i64 %mapped_len) {
+    entry:
+      %present = icmp ne ptr %base, null
+      br i1 %present, label %release, label %done
+    release:
+      %ignored = call i32 @munmap(ptr %base, i64 %mapped_len)
+      br label %done
+    done:
+      ret void
+    }
+    """ -> println
+}
+
 emitSecureRandomFunction functions: RuntimeFunctionSymbols -> Unit uses Console {
     "define %sollang.enum.t$(functions.secureRandomBytesType) @sollang_m$(functions.secureRandomBytesRef.module)_s$(functions.secureRandomBytesRef.symbol)(i64 %arg) {" -> println
     """
@@ -155,6 +392,167 @@ public emitDictionaryTextHashHelper: -> Unit uses Console {
       br label %loop
     done:
       ret i64 %hash
+    }
+    """ -> println
+}
+
+# The packed result contains the Unicode scalar in its low word and the
+# consumed byte width in its high word; -1 rejects malformed UTF-8.
+public emitUtf8DecodeHelper: -> Unit uses Console {
+    """
+    define internal i64 @sollang_utf8_decode(ptr %data, i64 %len, i64 %index) {
+    entry:
+      %has_first = icmp ult i64 %index, %len
+      br i1 %has_first, label %first, label %invalid
+
+    first:
+      %p0 = getelementptr i8, ptr %data, i64 %index
+      %b0raw = load i8, ptr %p0, align 1
+      %b0 = zext i8 %b0raw to i32
+      %ascii = icmp ult i32 %b0, 128
+      br i1 %ascii, label %ascii_result, label %classify
+
+    ascii_result:
+      %ascii_wide = zext i32 %b0 to i64
+      %ascii_packed = or i64 %ascii_wide, 4294967296
+      ret i64 %ascii_packed
+
+    classify:
+      %is2lo = icmp uge i32 %b0, 194
+      %is2hi = icmp ule i32 %b0, 223
+      %is2 = and i1 %is2lo, %is2hi
+      %is3lo = icmp uge i32 %b0, 224
+      %is3hi = icmp ule i32 %b0, 239
+      %is3 = and i1 %is3lo, %is3hi
+      %is4lo = icmp uge i32 %b0, 240
+      %is4hi = icmp ule i32 %b0, 244
+      %is4 = and i1 %is4lo, %is4hi
+      br i1 %is2, label %decode2, label %check3
+
+    check3:
+      br i1 %is3, label %decode3, label %check4
+
+    check4:
+      br i1 %is4, label %decode4, label %invalid
+
+    decode2:
+      %end2 = add i64 %index, 1
+      %has2 = icmp ult i64 %end2, %len
+      br i1 %has2, label %load2, label %invalid
+
+    load2:
+      %p1_2 = getelementptr i8, ptr %data, i64 %end2
+      %b1_2raw = load i8, ptr %p1_2, align 1
+      %b1_2 = zext i8 %b1_2raw to i32
+      %c1_2lo = icmp uge i32 %b1_2, 128
+      %c1_2hi = icmp ule i32 %b1_2, 191
+      %c1_2 = and i1 %c1_2lo, %c1_2hi
+      br i1 %c1_2, label %result2, label %invalid
+
+    result2:
+      %h2 = and i32 %b0, 31
+      %h2s = shl i32 %h2, 6
+      %l2 = and i32 %b1_2, 63
+      %cp2 = or i32 %h2s, %l2
+      %cp2wide = zext i32 %cp2 to i64
+      %packed2 = or i64 %cp2wide, 8589934592
+      ret i64 %packed2
+
+    decode3:
+      %end3 = add i64 %index, 2
+      %has3 = icmp ult i64 %end3, %len
+      br i1 %has3, label %load3, label %invalid
+
+    load3:
+      %i1_3 = add i64 %index, 1
+      %p1_3 = getelementptr i8, ptr %data, i64 %i1_3
+      %p2_3 = getelementptr i8, ptr %data, i64 %end3
+      %b1_3raw = load i8, ptr %p1_3, align 1
+      %b2_3raw = load i8, ptr %p2_3, align 1
+      %b1_3 = zext i8 %b1_3raw to i32
+      %b2_3 = zext i8 %b2_3raw to i32
+      %c1_3lo = icmp uge i32 %b1_3, 128
+      %c1_3hi = icmp ule i32 %b1_3, 191
+      %c1_3 = and i1 %c1_3lo, %c1_3hi
+      %c2_3lo = icmp uge i32 %b2_3, 128
+      %c2_3hi = icmp ule i32 %b2_3, 191
+      %c2_3 = and i1 %c2_3lo, %c2_3hi
+      %cont3 = and i1 %c1_3, %c2_3
+      br i1 %cont3, label %value3, label %invalid
+
+    value3:
+      %h3 = and i32 %b0, 15
+      %h3s = shl i32 %h3, 12
+      %m3 = and i32 %b1_3, 63
+      %m3s = shl i32 %m3, 6
+      %hm3 = or i32 %h3s, %m3s
+      %l3 = and i32 %b2_3, 63
+      %cp3 = or i32 %hm3, %l3
+      %min3 = icmp uge i32 %cp3, 2048
+      %below_surrogate = icmp ult i32 %cp3, 55296
+      %above_surrogate = icmp ugt i32 %cp3, 57343
+      %not_surrogate = or i1 %below_surrogate, %above_surrogate
+      %valid3 = and i1 %min3, %not_surrogate
+      br i1 %valid3, label %result3, label %invalid
+
+    result3:
+      %cp3wide = zext i32 %cp3 to i64
+      %packed3 = or i64 %cp3wide, 12884901888
+      ret i64 %packed3
+
+    decode4:
+      %end4 = add i64 %index, 3
+      %has4 = icmp ult i64 %end4, %len
+      br i1 %has4, label %load4, label %invalid
+
+    load4:
+      %i1_4 = add i64 %index, 1
+      %i2_4 = add i64 %index, 2
+      %p1_4 = getelementptr i8, ptr %data, i64 %i1_4
+      %p2_4 = getelementptr i8, ptr %data, i64 %i2_4
+      %p3_4 = getelementptr i8, ptr %data, i64 %end4
+      %b1_4raw = load i8, ptr %p1_4, align 1
+      %b2_4raw = load i8, ptr %p2_4, align 1
+      %b3_4raw = load i8, ptr %p3_4, align 1
+      %b1_4 = zext i8 %b1_4raw to i32
+      %b2_4 = zext i8 %b2_4raw to i32
+      %b3_4 = zext i8 %b3_4raw to i32
+      %c1_4lo = icmp uge i32 %b1_4, 128
+      %c1_4hi = icmp ule i32 %b1_4, 191
+      %c1_4 = and i1 %c1_4lo, %c1_4hi
+      %c2_4lo = icmp uge i32 %b2_4, 128
+      %c2_4hi = icmp ule i32 %b2_4, 191
+      %c2_4 = and i1 %c2_4lo, %c2_4hi
+      %c3_4lo = icmp uge i32 %b3_4, 128
+      %c3_4hi = icmp ule i32 %b3_4, 191
+      %c3_4 = and i1 %c3_4lo, %c3_4hi
+      %cont12_4 = and i1 %c1_4, %c2_4
+      %cont4 = and i1 %cont12_4, %c3_4
+      br i1 %cont4, label %value4, label %invalid
+
+    value4:
+      %h4 = and i32 %b0, 7
+      %h4s = shl i32 %h4, 18
+      %m1_4 = and i32 %b1_4, 63
+      %m1_4s = shl i32 %m1_4, 12
+      %m2_4 = and i32 %b2_4, 63
+      %m2_4s = shl i32 %m2_4, 6
+      %hm1_4 = or i32 %h4s, %m1_4s
+      %hm2_4 = or i32 %hm1_4, %m2_4s
+      %l4 = and i32 %b3_4, 63
+      %cp4 = or i32 %hm2_4, %l4
+      %min4 = icmp uge i32 %cp4, 65536
+      %max4 = icmp ule i32 %cp4, 1114111
+      %valid4 = and i1 %min4, %max4
+      br i1 %valid4, label %result4, label %invalid
+
+    result4:
+      %cp4wide = zext i32 %cp4 to i64
+      %packed4 = or i64 %cp4wide, 17179869184
+      ret i64 %packed4
+
+    invalid:
+      ret i64 -1
     }
     """ -> println
 }

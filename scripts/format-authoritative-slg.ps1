@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$Check,
-    [string]$Compiler = ""
+    [string]$Compiler = "",
+    [string[]]$Source = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,10 +22,35 @@ $sourceRoots = @(
     (Join-Path $repoRoot "stdlib"),
     (Join-Path $repoRoot "syntax\generated")
 )
-$sources = @($sourceRoots |
-    ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "*.slg" } |
-    Sort-Object -Property FullName -Unique |
-    ForEach-Object { $_.FullName })
+if ($PSBoundParameters.ContainsKey('Source')) {
+    if ($Source.Count -eq 0) { throw 'focused format requires at least one explicit source' }
+    $allowedRoots = @($sourceRoots) + @(
+        (Join-Path $repoRoot 'examples\user'),
+        (Join-Path $repoRoot 'examples\regression'),
+        (Join-Path $repoRoot 'scripts\contracts\fixtures'),
+        (Join-Path $repoRoot 'scripts\probes')
+    )
+    $sources = @($Source | ForEach-Object {
+        $path = [IO.Path]::GetFullPath($_, $repoRoot)
+        $allowed = $false
+        foreach ($root in $allowedRoots) {
+            $prefix = [IO.Path]::GetFullPath($root).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+            if ($path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { $allowed = $true; break }
+        }
+        if (-not $allowed -or [IO.Path]::GetExtension($path) -cne '.slg') {
+            throw "focused format source is outside the permitted SLG roots: $path"
+        }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "focused format source is missing: $path"
+        }
+        $path
+    } | Sort-Object -Unique)
+} else {
+    $sources = @($sourceRoots |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -Filter "*.slg" } |
+        Sort-Object -Property FullName -Unique |
+        ForEach-Object { $_.FullName })
+}
 if ($sources.Count -eq 0) {
     throw "no authoritative Sollang sources were found"
 }

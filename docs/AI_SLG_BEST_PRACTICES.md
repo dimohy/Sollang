@@ -62,6 +62,9 @@ If natural, ownership-correct SLG is rejected or reaches malformed LLVM, do not
 add explicit-type noise, temporary heap owners, cloning, fallback branches, or
 function-name special cases. Locate the parser, semantic, Typed IR, scheduler,
 codegen, or runtime invariant that owns the defect.
+Keep function ownership scopes distinct from nested control regions. Cleanup
+analysis may inspect both, but a control-termination query must never consume a
+function owner's `-1` parent as a function index.
 
 ### Syntax at a glance
 
@@ -464,6 +467,10 @@ Do not use assignment forms imported from other languages. Do not drop `!`
 from a mutable access. Bind an owned container once; choose the producing branch
 first, then bind its single result. Mutate its contents through instance methods
 instead of replacing the complete owner through a second `=> owner!`.
+This does not prohibit a single transfer into a new owner: matching a fresh
+owned Result may use `Ok(payload) { payload => owner!; ... }`. Keep all later
+mutable accesses as `owner!`; neither the transferred payload nor its consumed
+subject remains usable. A borrowed match payload cannot become an owner this way.
 
 ## 8. Make ownership visible and zero-copy by default
 
@@ -579,6 +586,20 @@ Do not silently spill inline storage to the heap. Reserve once when a safe size
 is known. Pass readonly tables by `ref` instead of cloning them. Use caller-owned
 output buffers for streaming and native-style APIs when that makes allocation,
 capacity, and transfer visible.
+
+Keep interpolation deferred for immediate sinks. Before storing it in an
+array, record, or collection, materialize it explicitly; the resulting `Text`
+borrows its arena and must not outlive that owner:
+
+```sollang
+7 => value
+Arena(64) => storage!
+"value=$value" -> materialize(storage!) => text
+["prefix", text] => fields
+```
+
+For constant text containing quotes or backslashes, prefer a raw literal over
+interpolation that would introduce an unnecessary materialization boundary.
 
 ## 11. Express control flow in SLG rhythm
 
@@ -966,6 +987,12 @@ the concrete sink ABI.
 
 ## 17. Design stdlib surfaces as contracts
 
+For URI normalization, parse once and call `Reference.normalizeBytes` with an
+explicit `NormalizationPolicy` and byte ceiling. Resolve a child through the
+base reference's `resolveBytes` method. Keep the returned byte array owned;
+borrow a text view only while that owner remains live. Parser validation does
+not authorize DNS, IDNA, default-port rewriting, or filesystem canonicalization.
+
 For every new module, write down before implementation:
 
 - owner and namespace (`sys` for raw OS/runtime authority, `std` for portable
@@ -1005,7 +1032,11 @@ rules as ordinary files.
 
 Stop at the first failing layer, fix its authority, then continue:
 
-1. format and source-style notes (`N001`/`N002`);
+1. authoritative format and source-style notes (`N001`/`N002`) through
+   `scripts/format-authoritative-slg.ps1 -Check -Source <changed-files>` for a
+   focused change (omit `-Source` for the final full source inventory); do not substitute an ad-hoc
+   Debug/Release compiler invocation whose formatter binary may differ from the
+   repository gate;
 2. smallest parse and semantic fixture;
 3. ownership/effect diagnostic and actionable repair fixture;
 4. managed exact compile/run;
@@ -1016,6 +1047,63 @@ Stop at the first failing layer, fix its authority, then continue:
 9. Stage2/Stage3 fixed point only when compiler-owned source changed or the
    focused evidence exposes a compiler defect;
 10. affected Windows, Linux, and browser target closure.
+
+Managed/self-host differential output is the last observation, not the first
+place to define semantics. When both compilers implement the same expression
+family differently, keep a schema-validated mapping from managed syntax types
+to self-host AST kinds and make entry and ordinary self-host lowering consume
+shared base, contextual, and control-shape materialization policies. Inventory
+extraction must stop at each declaration boundary so a non-expression helper
+record cannot replace a real expression subtype while preserving the same
+count. Syntax shape decides that a value node exists; provisional type readiness
+only fills its type. Add a pre-LLVM coverage invariant so a missing value
+producer fails before a costly native or Stage run. When grammar lowering keeps
+consecutive binary wrappers with identical source spans, select the deepest
+canonical binary descendant for that owner; never require a Typed IR node for
+a transparent wrapper or treat a genuine smaller nested binary expression as
+that wrapper. A comparison grammar envelope must not claim angles inside an
+exact `TypeAnnotation` span or the balanced outer `<...>` clause of a nested
+type application, but it must preserve real comparison operators inside the
+following call arguments. After excluding only those generic delimiters, omit
+an envelope that owns no comparison operator instead of carrying a numeric
+binary kind into Typed IR policy.
+
+Syntax-owned value producers need the same early coverage even when they are not
+resolved calls. For memory mapping, preserve one kind-49 AST to kind-9 Typed IR
+producer with its read/write opcode, exact mapped builtin type, path operand,
+and only the present `at`/`for`/`size` operands in grammar order. Validate the
+clause bitmask and exact binding edge before LLVM; never let the path `Text`
+child stand in for a missing mapped owner. Keep mapped `flush` on runtime alias
+`-114` only when its receiver is `MutableMappedBytes`, after lexical resolution
+has had the opportunity to select a user function named `flush`.
+
+Do not duplicate value materialization by emission context. In particular, a
+sequential named branch inside `when` has the same `call -> arm value -> labeled
+product` contract as the same branch in entry or an ordinary function. Route
+all three through the shared branch materializer and keep a nested-control
+fixture in the focused differential set. Parallel branch arms belong to their
+compute callback path; a broad kind-39 workaround must not emit them as
+sequential values. The kind-38 runtime materialization itself must likewise
+use one shared helper in entry, ordinary-function, and nested-control paths;
+do not copy the capture environment and compute-group sequence per context.
+Apply the same rule to range values: kind-31 inclusive/exclusive normalization
+and product construction belong to one shared materializer used by all three
+emission contexts.
+
+Nested control-region streams must delegate terminal and callback emission to
+the same scheduled stream body used by entry and ordinary functions. Keep the
+source in the enclosing region, suppress already-fused stage calls from outer
+region emission, and allocate mutable function slots only once. A callback body
+must never be emitted linearly in the outer function or repaired later from
+malformed LLVM.
+
+Diagnostic lowering and production lowering are separate observations. A
+`typed-ir-nodes` result alone does not prove function-parallel production
+identity because checked native builds enable the compute-pool lowering mode
+and emitter invariants. Use the paired `typed-ir-nodes` and
+`typed-ir-nodes-parallel` commands on the same ordered sources and require
+exact node-inventory equality before attributing a failure to parallel result
+generation or merge.
 
 Finish integrating compiler and fixture changes before starting full suites.
 Run the full Windows managed reference suite through

@@ -356,6 +356,7 @@ struct BodySchedulePlan {
     functionIndex: Int
     order: [Int; ~]
     scheduled: [Bool; ~]
+    emitMutableSlots: Bool
     failureNode: Int
     failureTerminal: Int
 }
@@ -2037,6 +2038,12 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                             pointerSize => align!
                             0 => status!
                         }
+                    current.symbol == 17 or current.symbol == 18 -> if {
+                        # %sollang.mapped_bytes is { ptr, i64, ptr, i64, i1 }.
+                        40 => size!
+                        8 => align!
+                        0 => status!
+                    }
                     current.symbol == 24 -> if {
                         # %sollang.source_text is { ptr, i64, ptr, i64 }.
                         32 => size!
@@ -2294,6 +2301,84 @@ writeDecimalLine value: Int -> Unit uses Console {
     "$(value)" -> println
 }
 
+# Map producers have one normalized Typed IR contract in every expression
+# region. flags bits 0/1/2 denote at/for/size respectively; present values are
+# chained from the path operand in source order.
+isMappedBytesFlush expression: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    (expression.kind == 6 or expression.kind == 9)
+        and expression.symbol == -114
+        and expression.operand0 >= 0
+        and context.ir[expression.operand0].typeOrigin == 1
+        and context.ir[expression.operand0].typeSymbol == 18
+}
+
+emitMappedBytesExpression expressionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[expressionIndex] => expression
+    expression.operand0 => pathIndex
+    context.ir[pathIndex].nextOperand => optionIndex!
+    -1 => offsetIndex!
+    -1 => lengthIndex!
+    -1 => sizeIndex!
+    expression.flags % 2 == 1 -> if {
+        optionIndex! => offsetIndex!
+        optionIndex! >= 0 -> if { context.ir[optionIndex!].nextOperand => optionIndex! }
+    }
+    expression.flags / 2 % 2 == 1 -> if {
+        optionIndex! => lengthIndex!
+        optionIndex! >= 0 -> if { context.ir[optionIndex!].nextOperand => optionIndex! }
+    }
+    expression.flags / 4 % 2 == 1 -> if {
+        optionIndex! => sizeIndex!
+    }
+    "  %v$(expressionIndex)_path_data = extractvalue %sollang.text " -> print
+    pathIndex -> writeValue(ownerIndex, context, state)
+    ", 0" -> println
+    "  %v$(expressionIndex)_path_length = extractvalue %sollang.text " -> print
+    pathIndex -> writeValue(ownerIndex, context, state)
+    ", 1" -> println
+    "  %v$(expressionIndex) = call %sollang.mapped_bytes @sollang_map_file(ptr %v$(expressionIndex)_path_data, i64 %v$(expressionIndex)_path_length, i64 " -> print
+    offsetIndex! >= 0 -> if { offsetIndex! -> writeValue(ownerIndex, context, state) } else { "0" -> print }
+    ", i64 " -> print
+    lengthIndex! >= 0 -> if { lengthIndex! -> writeValue(ownerIndex, context, state) } else { "0" -> print }
+    ", i64 " -> print
+    sizeIndex! >= 0 -> if { sizeIndex! -> writeValue(ownerIndex, context, state) } else { "0" -> print }
+    expression.opcode == -307
+        -> if { ", i1 true)" -> println } else { ", i1 false)" -> println }
+    "  %v$(expressionIndex)_mapped_data = extractvalue %sollang.mapped_bytes %v$(expressionIndex), 0" -> println
+    "  %v$(expressionIndex)_mapped_valid = icmp ne ptr %v$(expressionIndex)_mapped_data, null" -> println
+    "  br i1 %v$(expressionIndex)_mapped_valid, label %mapped$(expressionIndex)_open_ok, label %mapped$(expressionIndex)_open_fail" -> println
+    "mapped$(expressionIndex)_open_fail:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "mapped$(expressionIndex)_open_ok:" -> println
+}
+
+emitMappedBytesFlush expressionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[expressionIndex] => expression
+    "  %v$(expressionIndex)_mapped_base = extractvalue %sollang.mapped_bytes " -> print
+    expression.operand0 -> writeValue(ownerIndex, context, state)
+    ", 2" -> println
+    "  %v$(expressionIndex)_mapped_length = extractvalue %sollang.mapped_bytes " -> print
+    expression.operand0 -> writeValue(ownerIndex, context, state)
+    ", 3" -> println
+    "  %v$(expressionIndex)_mapped_flush_ok = call i32 @sollang_mapped_flush(ptr %v$(expressionIndex)_mapped_base, i64 %v$(expressionIndex)_mapped_length)" -> println
+    "  %v$(expressionIndex)_mapped_flush_succeeded = icmp ne i32 %v$(expressionIndex)_mapped_flush_ok, 0" -> println
+    "  br i1 %v$(expressionIndex)_mapped_flush_succeeded, label %mapped$(expressionIndex)_flush_ok, label %mapped$(expressionIndex)_flush_fail" -> println
+    "mapped$(expressionIndex)_flush_fail:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "mapped$(expressionIndex)_flush_ok:" -> println
+}
+
+isDirectTextEachSource source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    source.typeId => typeId!
+    typeId! >= 0 -> if {
+        context.types[typeId!].kind == 8 -> if { context.types[typeId!].first => typeId! }
+        context.types[typeId!] => valueType
+        valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 1
+    } else { false }
+}
+
 emitDirectEachEnd eachIndex: Int, bodyTerminated: Bool, context: ref emitterContext.EmitContext -> Unit uses Console {
     not bodyTerminated -> if {
         "  br label %each$(eachIndex)_continue" -> println
@@ -2304,7 +2389,12 @@ emitDirectEachEnd eachIndex: Int, bodyTerminated: Bool, context: ref emitterCont
             "  %each$(eachIndex)_next = add i32 %each$(eachIndex)_index, 1" -> println
             "  store i32 %each$(eachIndex)_next, ptr %each$(eachIndex)_index_slot, align 4" -> println
         } else {
-            "  %each$(eachIndex)_next = add i64 %each$(eachIndex)_index, 1" -> println
+            context.ir[context.ir[eachIndex].operand0] -> isDirectTextEachSource(context)
+                -> if {
+                    "  %each$(eachIndex)_next = add i64 %each$(eachIndex)_index, %each$(eachIndex)_width" -> println
+                } else {
+                    "  %each$(eachIndex)_next = add i64 %each$(eachIndex)_index, 1" -> println
+                }
             "  store i64 %each$(eachIndex)_next, ptr %each$(eachIndex)_index_slot, align 8" -> println
         }
     "  br label %each$(eachIndex)_header" -> println
@@ -2317,6 +2407,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
     context.ir[ownerIndex] => owner
     context.ir[eachNode.operand0] => eachSource
     eachSource -> isArgumentsType => eachArguments
+    eachSource -> isDirectTextEachSource(context) => eachText
     eachSource.kind == 31 -> if {
         "  %each$(eachIndex)_index_slot = alloca i32, align 4" -> println
         "  store i32 " -> print
@@ -2341,7 +2432,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
         eachContainerTypeId! >= 0 and context.types[eachContainerTypeId!].kind == 8
             -> if {
                 context.types[eachContainerTypeId!].first => eachContainerTypeId!
-                context.types[eachContainerTypeId!].kind == 3
+                context.types[eachContainerTypeId!].kind == 3 or eachText
                     -> if {
                         true => eachReadonlyReference!
                         "  %each$(eachIndex)_source = load " -> print
@@ -2388,7 +2479,9 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
         "  br label %each$(eachIndex)_header" -> println
         "each$(eachIndex)_header:" -> println
         "  %each$(eachIndex)_index = load i64, ptr %each$(eachIndex)_index_slot, align 8" -> println
-        "  %each$(eachIndex)_done = icmp eq i64 %each$(eachIndex)_index, %each$(eachIndex)_length" -> println
+        "  %each$(eachIndex)_done = icmp " -> print
+        eachText -> if { "uge" -> print } else { "eq" -> print }
+        " i64 %each$(eachIndex)_index, %each$(eachIndex)_length" -> println
         eachSet -> if {
             "  br i1 %each$(eachIndex)_done, label %each$(eachIndex)_exit, label %each$(eachIndex)_check" -> println
             "each$(eachIndex)_check:" -> println
@@ -2403,15 +2496,27 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
         eachArguments -> if {
             "  %each$(eachIndex)_item = call %sollang.text @sollang_argument(i64 %each$(eachIndex)_index)" -> println
         } else {
-            "  %each$(eachIndex)_item_ptr = getelementptr " -> print
-            eachSource -> writeArrayElementType(context, state)
-            ", ptr " -> print
-            eachSet -> if { "%each$(eachIndex)_keys" -> print } else { "%each$(eachIndex)_data" -> print }
-            ", i64 %each$(eachIndex)_index" -> println
-            "  %each$(eachIndex)_item = load " -> print
-            eachSource -> writeArrayElementType(context, state)
-            ", ptr %each$(eachIndex)_item_ptr, align " -> print
-            eachSource -> arrayElementAlign(context, state) -> writeDecimalLine
+            eachText -> if {
+                "  %each$(eachIndex)_utf8 = call i64 @sollang_utf8_decode(ptr %each$(eachIndex)_data, i64 %each$(eachIndex)_length, i64 %each$(eachIndex)_index)" -> println
+                "  %each$(eachIndex)_valid = icmp ne i64 %each$(eachIndex)_utf8, -1" -> println
+                "  br i1 %each$(eachIndex)_valid, label %each$(eachIndex)_decoded, label %each$(eachIndex)_invalid" -> println
+                "each$(eachIndex)_invalid:" -> println
+                "  call void @llvm.trap()" -> println
+                "  unreachable" -> println
+                "each$(eachIndex)_decoded:" -> println
+                "  %each$(eachIndex)_item = trunc i64 %each$(eachIndex)_utf8 to i32" -> println
+                "  %each$(eachIndex)_width = lshr i64 %each$(eachIndex)_utf8, 32" -> println
+            } else {
+                "  %each$(eachIndex)_item_ptr = getelementptr " -> print
+                eachSource -> writeArrayElementType(context, state)
+                ", ptr " -> print
+                eachSet -> if { "%each$(eachIndex)_keys" -> print } else { "%each$(eachIndex)_data" -> print }
+                ", i64 %each$(eachIndex)_index" -> println
+                "  %each$(eachIndex)_item = load " -> print
+                eachSource -> writeArrayElementType(context, state)
+                ", ptr %each$(eachIndex)_item_ptr, align " -> print
+                eachSource -> arrayElementAlign(context, state) -> writeDecimalLine
+            }
         }
     }
     eachIndex -> emitDirectEachRoleAliases(eachSource, context, state)

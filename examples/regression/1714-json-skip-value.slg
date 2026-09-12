@@ -1,0 +1,77 @@
+import std.text.json as json
+
+showFailure source: Text, limits: json.Limits -> Result<Unit, json.Error> uses Console {
+    json.reader(source, limits)? => reader!
+    reader! -> skipValue -> when {
+        Ok(done) { "unexpected-success" -> println }
+        Err(error) {
+            error.kind -> when {
+                ExpectedValue { "failure=value" -> println }
+                DepthLimitExceeded { "failure=depth" -> println }
+                TokenLimitExceeded { "failure=tokens" -> println }
+                OutputLimitExceeded { "failure=string" -> println }
+                WrongTokenKind { "failure=kind" -> println }
+                else { "unexpected-failure=$(error.offset)" -> println }
+            }
+        }
+    }
+    Result<Unit, json.Error>.Ok
+}
+
+run: -> Result<Unit, json.Error> uses Console {
+    json.limits(256, 8, 64, 64)? => limits
+
+    json.reader("""[0,{"nested":[1,{"text":"escaped\nvalue"}]},7]""", limits)? => array!
+    array! -> next? => begin
+    array! -> skipValue?
+    array! -> skipValue?
+    array! -> next? => tail
+    "tail=$(array! -> int64(tail)?)" -> println
+    "array-depth=$(array! -> depth)" -> println
+    array! -> finish?
+
+    json.reader("""{"skip":[1,{"x":"y"}],"keep":true}""", limits)? => object!
+    object! -> next? => objectBegin
+    object! -> next? => skippedName
+    object! -> skipValue?
+    object! -> next? => keptName
+    "next-name=$(object! -> rawText(keptName))" -> println
+    object! -> next? => keptValue
+    "next-value=$(object! -> boolean(keptValue)?)" -> println
+    object! -> finish?
+
+    json.reader("""{"a":[null,false,{},[]]}""", limits)? => root!
+    root! -> skipValue?
+    root! -> next? => end
+    end.kind -> when {
+        DocumentEnd { "root=end" -> println }
+        else { "unexpected-root-token" -> println }
+    }
+    root! -> skipValue -> when {
+        Ok(done) { "unexpected-after-end" -> println }
+        Err(error) {
+            error.kind -> when {
+                WrongTokenKind { "after-end=kind" -> println }
+                else { "unexpected-after-end-error" -> println }
+            }
+        }
+    }
+
+    "[1,]" -> showFailure(limits)?
+    json.limits(32, 1, 16, 16)? => shallow
+    "[[]]" -> showFailure(shallow)?
+    json.limits(32, 4, 2, 16)? => fewTokens
+    "[1,2]" -> showFailure(fewTokens)?
+    json.limits(32, 4, 16, 2)? => shortStrings
+    """
+    "abc"
+    """ -> showFailure(shortStrings)?
+    Result<Unit, json.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected-error=$(error.offset)" -> println }
+    }
+}

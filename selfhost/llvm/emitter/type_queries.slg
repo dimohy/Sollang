@@ -55,22 +55,30 @@ public isText node: typedIr.TypedIrNode -> Bool {
     node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol == 1
 }
 
+public isMappedBytes node: typedIr.TypedIrNode -> Bool {
+    node.typeKind == 1 and node.typeOrigin == 1 and (node.typeSymbol == 17 or node.typeSymbol == 18)
+}
+
 public isArguments node: typedIr.TypedIrNode -> Bool {
     (node.typeOrigin == 1 and node.typeSymbol == 16) or ((node.kind == 6 or node.kind == 9) and node.opcode == -212)
 }
 
 public writeTextLike node: typedIr.TypedIrNode -> Unit uses Console {
-    node -> isSourceText -> if { "%sollang.source_text" -> print } else { "%sollang.text" -> print }
+    node -> isSourceText -> if { "%sollang.source_text" -> print } else {
+        node -> isMappedBytes -> if { "%sollang.mapped_bytes" -> print } else { "%sollang.text" -> print }
+    }
 }
 
 public owns node: typedIr.TypedIrNode -> Bool {
-    node.typeOrigin == 13 or node.typeOrigin == 14 or node.typeOrigin == 15 or node.typeOrigin == 16
-        -> if { true } else {
-            node.typeId >= 0 -> if {
-                node.typeFlags % 2 == 1
-            } else {
-                node.typeOrigin == 13 or node.typeOrigin == 15 or node.typeOrigin == 0 or node.typeOrigin == 2
-            }
+    node.typeOrigin == 1 and (node.typeSymbol == 17 or node.typeSymbol == 18)
+        -> if { true } else { node.typeOrigin == 13 or node.typeOrigin == 14 or node.typeOrigin == 15 or node.typeOrigin == 16
+                -> if { true } else {
+                    node.typeId >= 0 -> if {
+                        node.typeFlags % 2 == 1
+                    } else {
+                        node.typeOrigin == 13 or node.typeOrigin == 15 or node.typeOrigin == 0 or node.typeOrigin == 2
+                    }
+                }
         }
 }
 
@@ -100,6 +108,11 @@ public write node: typedIr.TypedIrNode -> Unit uses Console {
         "%sollang.array.i32" -> print
         true => written!
     }
+    not written! and (node.typeSymbol == 17 or node.typeSymbol == 18)
+        -> if {
+            "%sollang.mapped_bytes" -> print
+            true => written!
+        }
     not written! and (node.typeSymbol == 2 or node.typeSymbol == 5 or node.typeSymbol == 10 or node.typeSymbol == 14)
         -> if {
             "i32" -> print

@@ -592,6 +592,40 @@ streamPipelineOwnsCallback nodeIndex: Int, pipelineIndex: Int, context: ref emit
         }
     owned!
 }
+
+# Returns the stream pipeline whose terminal or deferred callback owns a node.
+# Source subtrees stay in the enclosing region because they must be available
+# before the shared stream body opens its loop.
+regionOwnedStreamPipeline nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => found!
+    0 => pipelineIndex!
+    pipelineIndex! < (context.streamPlan.pipelines -> len) and found! < 0
+        -> while {
+            context.streamPlan.pipelines[pipelineIndex!] => pipeline
+            nodeIndex == pipeline.terminalIr -> if { pipelineIndex! => found! } else {
+                nodeIndex -> streamPipelineOwnsCallback(pipelineIndex!, context, state) => owned!
+                pipeline.stageStart => ownedStageIndex!
+                ownedStageIndex! < pipeline.stageStart + pipeline.stageCount and not owned!
+                    -> while {
+                        context.streamPlan.stages[ownedStageIndex!].callIr == nodeIndex
+                            -> if { true => owned! }
+                        ownedStageIndex! + 1 => ownedStageIndex!
+                    }
+                false => insideSource!
+                pipeline.source0 >= 0 -> if {
+                    NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source0 } -> irDescendsFrom(context, state) => insideSource!
+                    nodeIndex == pipeline.source0 -> if { true => insideSource! }
+                }
+                pipeline.source1 >= 0 and not insideSource! -> if {
+                    NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source1 } -> irDescendsFrom(context, state) => insideSource!
+                    nodeIndex == pipeline.source1 -> if { true => insideSource! }
+                }
+                owned! and not insideSource! -> if { pipelineIndex! => found! }
+            }
+            pipelineIndex! + 1 => pipelineIndex!
+        }
+    found!
+}
 plannedStreamPipeline terminalIr: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     -1 => found!
     0 => pipelineIndex!

@@ -65,6 +65,135 @@ public struct Writer {
     public stack: [UInt8; ~]
 }
 
+# Public token spans are validated against the receiving reader before access.
+checkedTokenEnd source: ref file.SourceText, token: Token, invalidKind: errors.Kind -> Result<UIntSize, Error> {
+    source -> len => sourceLength
+    token.start < sourceLength and token.length > 0
+        and token.length <= sourceLength - token.start
+        -> unless {
+            errorOffset(invalidKind, token.start) -> return
+        }
+    Result<UIntSize, Error>.Ok(token.start + token.length)
+}
+
+checkedLiteralToken source: ref file.SourceText, token: Token, expected: Text -> Result<Unit, Error> {
+    source -> checkedTokenEnd(token, errors.Kind.InvalidLiteral)? => end
+    token.length == (expected -> len)
+        and source -> literalMatches(token.start, end, expected)
+        -> unless {
+            errorUnit(errors.Kind.InvalidLiteral, token.start) -> return
+        }
+    Result<Unit, Error>.Ok
+}
+
+# Integer conversion accepts only the integer lexical form. Decimal points and
+# exponents require a separate numeric policy, even when their value is integral.
+integerMagnitude source: ref file.SourceText, token: Token, maximum: UInt64 -> Result<UInt64, Error> {
+    token.kind -> when {
+        Number { }
+        else {
+            Result<UInt64, Error>.Err(Error {
+                kind: errors.Kind.WrongTokenKind
+                offset: token.start
+            }) -> return
+        }
+    }
+    source -> checkedTokenEnd(token, errors.Kind.InvalidNumber)? => end
+    source -> scanNumber(token.start, end)? => scannedEnd
+    scannedEnd == end -> unless {
+        Result<UInt64, Error>.Err(Error {
+            kind: errors.Kind.InvalidNumber
+            offset: scannedEnd
+        }) -> return
+    }
+    token.start => index!
+    source -> byte(index!) == 45 -> if {
+        index! + 1 => index!
+    }
+    index! => firstDigit
+    index! < end -> while {
+        source -> byte(index!) => byte
+        byte -> isDigit -> unless {
+            Result<UInt64, Error>.Err(Error {
+                kind: errors.Kind.NonIntegerNumber
+                offset: index!
+            }) -> return
+        }
+        index! + 1 => index!
+    }
+    firstDigit => index!
+    UInt64(0) => magnitude!
+    index! < end -> while {
+        UInt64((source -> byte(index!)) - 48) => digit
+        magnitude! <= (maximum - digit) / 10 -> unless {
+            Result<UInt64, Error>.Err(Error {
+                kind: errors.Kind.NumberOutOfRange
+                offset: index!
+            }) -> return
+        }
+        magnitude! * 10 + digit => magnitude!
+        index! + 1 => index!
+    }
+    Result<UInt64, Error>.Ok(magnitude!)
+}
+
+impl Reader {
+    public boolean: self, token: Token -> Result<Bool, Error> {
+        token.kind -> when {
+            True {
+                self.source -> checkedLiteralToken(token, "true")?
+                Result<Bool, Error>.Ok(true)
+            }
+            False {
+                self.source -> checkedLiteralToken(token, "false")?
+                Result<Bool, Error>.Ok(false)
+            }
+            else {
+                Result<Bool, Error>.Err(Error {
+                    kind: errors.Kind.WrongTokenKind
+                    offset: token.start
+                })
+            }
+        }
+    }
+
+    public nullValue: self, token: Token -> Result<Unit, Error> {
+        token.kind -> when {
+            Null { self.source -> checkedLiteralToken(token, "null") }
+            else { errorUnit(errors.Kind.WrongTokenKind, token.start) }
+        }
+    }
+
+    public int64: self, token: Token -> Result<Int64, Error> {
+        # Validate the token before inspecting its sign or reading any bytes.
+        self.source -> integerMagnitude(token, 9_223_372_036_854_775_808)? => magnitude
+        self.source -> byte(token.start) == 45 -> if {
+            magnitude == 9_223_372_036_854_775_808 -> if {
+                Result<Int64, Error>.Ok(-9_223_372_036_854_775_808) -> return
+            }
+            Result<Int64, Error>.Ok(-Int64(magnitude)) -> return
+        }
+        magnitude <= 9_223_372_036_854_775_807 -> unless {
+            Result<Int64, Error>.Err(Error {
+                kind: errors.Kind.NumberOutOfRange
+                offset: token.start
+            }) -> return
+        }
+        Result<Int64, Error>.Ok(Int64(magnitude))
+    }
+
+    public uint64: self, token: Token -> Result<UInt64, Error> {
+        self.source -> integerMagnitude(token, 18_446_744_073_709_551_615)? => magnitude
+        self.source -> byte(token.start) == 45 -> if {
+            Result<UInt64, Error>.Err(Error {
+                kind: errors.Kind.NumberOutOfRange
+                offset: token.start
+            }) -> return
+        }
+        Result<UInt64, Error>.Ok(magnitude)
+    }
+}
+
 struct StringScan {
     end: UIntSize
     contentEnd: UIntSize
@@ -831,6 +960,27 @@ impl Reader {
         errorToken(errors.Kind.UnexpectedEnd, self.index)
     }
 
+    # Consume exactly one value using the same bounded token state machine.
+    # Unknown object members can be skipped without decoding or materializing
+    # their strings, arrays, or objects. Parse failures retain consumed progress.
+    public skipValue: mut self -> Result<Unit, Error> {
+        self -> next? => first
+        first.kind -> when {
+            Null { Result<Unit, Error>.Ok -> return }
+            False { Result<Unit, Error>.Ok -> return }
+            True { Result<Unit, Error>.Ok -> return }
+            Number { Result<Unit, Error>.Ok -> return }
+            String { Result<Unit, Error>.Ok -> return }
+            BeginArray { }
+            BeginObject { }
+            else { errorUnit(errors.Kind.WrongTokenKind, first.start) -> return }
+        }
+        (self.stack -> len) > first.depth -> while {
+            self -> next? => token
+        }
+        Result<Unit, Error>.Ok
+    }
+
     public finish: mut self -> Result<Unit, Error> {
         true => reading!
         reading! -> while {
@@ -845,6 +995,14 @@ impl Reader {
 }
 
 impl Writer {
+    public int64: mut self, value: Int64 -> Result<Unit, Error> {
+        self -> number("$value")
+    }
+
+    public uint64: mut self, value: UInt64 -> Result<Unit, Error> {
+        self -> number("$value")
+    }
+
     public byteCount: self -> Int => self.produced
     public depth: self -> Int => self.stack -> len
 

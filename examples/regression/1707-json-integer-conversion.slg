@@ -1,0 +1,114 @@
+import std.text.json as json
+import sys.file as file
+
+signed text: Text, limits: json.Limits -> Result<Unit, json.Error> uses Console {
+    json.reader(text, limits)? => reader!
+    reader! -> next? => token
+    reader! -> int64(token) -> when {
+        Ok(value) { "signed=$value" -> println }
+        Err(error) {
+            error.kind -> when {
+                NonIntegerNumber { "signed=non-integer" -> println }
+                NumberOutOfRange { "signed=range" -> println }
+                WrongTokenKind { "signed=kind" -> println }
+                else { "signed=unexpected" -> println }
+            }
+        }
+    }
+    reader! -> finish?
+    Result<Unit, json.Error>.Ok
+}
+
+unsigned text: Text, limits: json.Limits -> Result<Unit, json.Error> uses Console {
+    json.reader(text, limits)? => reader!
+    reader! -> next? => token
+    reader! -> uint64(token) -> when {
+        Ok(value) { "unsigned=$value" -> println }
+        Err(error) {
+            error.kind -> when {
+                NonIntegerNumber { "unsigned=non-integer" -> println }
+                NumberOutOfRange { "unsigned=range" -> println }
+                else { "unsigned=unexpected" -> println }
+            }
+        }
+    }
+    reader! -> finish?
+    Result<Unit, json.Error>.Ok
+}
+
+invalidSpan limits: json.Limits -> Result<Unit, json.Error> uses Console {
+    json.reader("1", limits)? => reader!
+    reader! -> next? => token!
+    2 => token!.start
+    reader! -> uint64(token!) -> when {
+        Ok(value) { "span=unexpected" -> println }
+        Err(error) {
+            error.kind -> when {
+                InvalidNumber { "span=invalid" -> println }
+                else { "span=unexpected" -> println }
+            }
+        }
+    }
+    0 => token!.start
+    0 => token!.length
+    reader! -> int64(token!) -> when {
+        Ok(value) { "empty=unexpected" -> println }
+        Err(error) {
+            error.kind -> when {
+                InvalidNumber { "empty=invalid" -> println }
+                else { "empty=unexpected" -> println }
+            }
+        }
+    }
+    "reader=$(reader! -> offset),$(reader! -> tokenCount)" -> println
+    Result<Unit, json.Error>.Ok
+}
+
+run: -> Result<Unit, json.Error> uses Console {
+    json.limits(64, 4, 4, 16)? => limits
+    # Both limits are exact; conversion neither rounds nor changes reader state.
+    "9223372036854775807" -> signed(limits)?
+    "-9223372036854775808" -> signed(limits)?
+    "9223372036854775808" -> signed(limits)?
+    "-9223372036854775809" -> signed(limits)?
+    "-0" -> signed(limits)?
+    "1.0" -> signed(limits)?
+    "1e0" -> signed(limits)?
+    "true" -> signed(limits)?
+    "18446744073709551615" -> unsigned(limits)?
+    "18446744073709551616" -> unsigned(limits)?
+    "0" -> unsigned(limits)?
+    "-0" -> unsigned(limits)?
+    "2e1" -> unsigned(limits)?
+    limits -> invalidSpan?
+    # Typed generation uses the same transactional writer path as raw numbers.
+    json.writer(64, 1)? => writer!
+    writer! -> beginArray?
+    writer! -> int64(-9_223_372_036_854_775_808)?
+    writer! -> uint64(18_446_744_073_709_551_615)?
+    writer! -> endArray?
+    writer! -> intoBytes? => bytes
+    bytes -> file.borrowBytes => source
+    source -> slice(0, source -> len) -> println
+    json.writer(1, 1)? => limited!
+    limited! -> int64(-1) -> when {
+        Ok(done) { "limit=unexpected" -> println }
+        Err(error) {
+            error.kind -> when {
+                OutputLimitExceeded { "limit=bounded" -> println }
+                else { "limit=unexpected" -> println }
+            }
+        }
+    }
+    limited! -> uint64(0)?
+    limited! -> intoBytes? => zero
+    "retry=$(zero[0])" -> println
+    Result<Unit, json.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected-error=$(error.offset)" -> println }
+    }
+}

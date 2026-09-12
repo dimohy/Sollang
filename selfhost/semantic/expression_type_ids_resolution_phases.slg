@@ -43,7 +43,16 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                 prepared.package.nodes[sourceRange.astStart + astIndex!] => node
                 -1 => builtinTypeId!
                 node.kind == 13 -> if { 1 => builtinTypeId! }
-                node.kind == 14 -> if { 2 => builtinTypeId! }
+                node.kind == 14 -> if {
+                    2 => builtinTypeId!
+                    node.parent >= 0 -> if {
+                        prepared.package.nodes[sourceRange.astStart + node.parent] => literalParent
+                        literalParent.kind == 49 -> if {
+                            mapLiteralContextType(source, prepared.package.tokens, sourceRange.tokenStart, literalParent, node) => mapLiteralType
+                            mapLiteralType >= 0 -> if { mapLiteralType => builtinTypeId! }
+                        }
+                    }
+                }
                 # Comparisons and logical operators produce Bool independently
                 # of operand types. Result inference must see the operation,
                 # rather than accidentally selecting one of its operands.
@@ -54,6 +63,11 @@ resolveInitialExpressionTypes prepared: ref semanticContext.SemanticSnapshot, ty
                 node.kind == 57 -> if { 0 => builtinTypeId! }
                 node.kind >= 44 and node.kind <= 47 -> if { 0 => builtinTypeId! }
                 node.kind == 53 or node.kind == 54 -> if { 0 => builtinTypeId! }
+                node.kind == 49 -> if {
+                    mapExpressionOpcode(source, prepared.package.tokens, sourceRange.tokenStart, node) => mapOpcode
+                    mapOpcode == -306 -> if { 17 => builtinTypeId! }
+                    mapOpcode == -307 -> if { 18 => builtinTypeId! }
+                }
                 node.kind == 55 -> if {
                     0 => constructorTypeSearch!
                     constructorTypeSearch! < sourceRange.astCount

@@ -6,6 +6,85 @@ import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
+# Every numeric literal has one leaf and an optional unary-minus carrier.
+# Integer and native Float contexts share this operand0 topology and identity
+# transfer. Source lexemes and signed/range diagnostics remain semantic work.
+sealNumericLiteralContext nodes: mut [TypedIrNode; ~], index: Int, typeId: Int, target: typeIds.SemanticType, flags: Int -> Unit {
+    index >= 0 and index < (nodes -> len)
+        and typeId >= 0 and target.kind == 1 and target.origin == 1
+        and target.module == -1 and target.status == 0
+        and (integerTypeRank(target.symbol) > 0 or (target.symbol >= 19 and target.symbol <= 22))
+        -> unless { return }
+    nodes[index] => carrier!
+    index => leafIndex!
+    carrier!.kind == 7
+        and carrier!.opcode == grammar.tokenIdMinus()
+        and carrier!.operand0 >= 0 and carrier!.operand0 < (nodes -> len)
+        -> if { carrier!.operand0 => leafIndex! }
+    nodes[leafIndex!] => leaf!
+    # Kind 3 also represents decimal literals. Integer context never coerces
+    # a known Float leaf; Float context accepts integer and Float literals.
+    # Explicit casts remain call nodes and are deliberately not traversed.
+    leaf!.kind == 3 and leaf!.typeKind == 1 and leaf!.typeOrigin == 1
+        and (integerTypeRank(leaf!.typeSymbol) > 0
+        or (target.symbol >= 19 and target.symbol <= 22
+        and leaf!.typeSymbol >= 19 and leaf!.typeSymbol <= 22))
+        -> unless { return }
+    typeId => leaf!.typeId
+    target.kind => leaf!.typeKind
+    target.origin => leaf!.typeOrigin
+    target.module => leaf!.typeModule
+    target.symbol => leaf!.typeSymbol
+    flags => leaf!.typeFlags
+    leaf! => nodes[leafIndex!]
+    leafIndex! != index -> if {
+        typeId => carrier!.typeId
+        target.kind => carrier!.typeKind
+        target.origin => carrier!.typeOrigin
+        target.module => carrier!.typeModule
+        target.symbol => carrier!.typeSymbol
+        flags => carrier!.typeFlags
+        carrier! => nodes[index]
+    }
+}
+
+sealIntegerLiteralContext nodes: mut [TypedIrNode; ~], index: Int, typeId: Int, target: typeIds.SemanticType, flags: Int -> Unit {
+    integerTypeRank(target.symbol) > 0 -> if {
+        nodes -> sealNumericLiteralContext(index, typeId, target, flags)
+    }
+}
+
+# Binary peers and declared-return nodes already carry a canonical identity.
+# Adapt that identity once, then use the same leaf/carrier rule as enum and
+# ordinary-call parameter contexts.
+sealNumericLiteralPeerContext nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode -> Unit {
+    typeIds.SemanticType {
+        kind: peer.typeKind
+        origin: peer.typeOrigin
+        module: peer.typeModule
+        symbol: peer.typeSymbol
+        first: -1
+        second: -1
+        length: -1
+        lengthHash: 0
+        containsParameter: false
+        status: 0
+    } => target
+    nodes -> sealNumericLiteralContext(index, peer.typeId, target, peer.typeFlags)
+}
+
+sealIntegerLiteralPeerContext nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode -> Unit {
+    integerTypeRank(peer.typeSymbol) > 0 -> if {
+        nodes -> sealNumericLiteralPeerContext(index, peer)
+    }
+}
+
+# Native calls additionally provide Float contexts, using the same numeric
+# leaf/carrier operation rather than a second interpretation of unary edges.
+sealNativeNumericLiteralContext nodes: mut [TypedIrNode; ~], index: Int, parameter: TypedIrNode -> Unit {
+    nodes -> sealNumericLiteralPeerContext(index, parameter)
+}
+
 # Classify only the declared outer array shape. The prepared semantic snapshot
 # is borrowed across this fragment boundary; the query allocates no wrapper or
 # aggregate state and remains a static same-namespace call.

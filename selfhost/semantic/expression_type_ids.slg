@@ -51,6 +51,70 @@ public struct ExpressionTypeIdRequest {
     public analysisNames: [resolution.ResolvedName; ~]
 }
 
+# Map access mode is syntax-owned. Resolve only the exact second identifier in
+# the MapExpression token span; malformed or unknown spellings remain invalid
+# instead of silently becoming a read or write operation.
+public mapExpressionOpcode source: Text, tokens: ref [syntax.SyntaxToken; ~], sourceTokenStart: Int, node: ast.AstNode -> Int {
+    -1 => opcode!
+    false => mapKeyword!
+    0 => identifierOrdinal!
+    node.firstToken => tokenIndex!
+    tokenIndex! < node.firstToken + node.tokenCount
+        -> while {
+            tokens[sourceTokenStart + tokenIndex!] => token
+            token.kind == grammar.tokenIdIdentifier() -> if {
+                identifierOrdinal! == 0 -> if {
+                    token.span.length == 3
+                        and (source -> byte(token.span.start)) == 109
+                        and (source -> byte(token.span.start + 1)) == 97
+                        and (source -> byte(token.span.start + 2)) == 112
+                        -> if { true => mapKeyword! }
+                }
+                identifierOrdinal! == 1 and mapKeyword! -> if {
+                    token.span.length == 4
+                        and (source -> byte(token.span.start)) == 114
+                        and (source -> byte(token.span.start + 1)) == 101
+                        and (source -> byte(token.span.start + 2)) == 97
+                        and (source -> byte(token.span.start + 3)) == 100
+                        -> if { -306 => opcode! }
+                    token.span.length == 5
+                        and (source -> byte(token.span.start)) == 119
+                        and (source -> byte(token.span.start + 1)) == 114
+                        and (source -> byte(token.span.start + 2)) == 105
+                        and (source -> byte(token.span.start + 3)) == 116
+                        and (source -> byte(token.span.start + 4)) == 101
+                        -> if { -307 => opcode! }
+                }
+                identifierOrdinal! + 1 => identifierOrdinal!
+            }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    opcode!
+}
+
+# A map clause supplies literal context before the semantic table is frozen.
+# Read the nearest identifier within the map span, never one inside a string.
+mapLiteralContextType source: Text, tokens: ref [syntax.SyntaxToken; ~], sourceTokenStart: Int, mapNode: ast.AstNode, literal: ast.AstNode -> Int {
+    -1 => contextualType!
+    literal.firstToken - 1 => tokenIndex!
+    false => foundClause!
+    tokenIndex! >= mapNode.firstToken and not foundClause!
+        -> while {
+            tokens[sourceTokenStart + tokenIndex!] => token
+            token.kind == grammar.tokenIdIdentifier() -> if {
+                true => foundClause!
+                TextMatchRequest { source: source, start: token.span.start, length: token.span.length, expected: "at" } -> textMatches
+                    -> if { 11 => contextualType! }
+                TextMatchRequest { source: source, start: token.span.start, length: token.span.length, expected: "for" } -> textMatches
+                    -> if { 13 => contextualType! }
+                TextMatchRequest { source: source, start: token.span.start, length: token.span.length, expected: "size" } -> textMatches
+                    -> if { 11 => contextualType! }
+            }
+            tokenIndex! - 1 => tokenIndex!
+        }
+    contextualType!
+}
+
 resolveLateArrayTypes prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> Bool {
     [lateArrayTypes.Candidate; ~] => candidates!
     0 => candidateIndex!

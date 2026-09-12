@@ -66,6 +66,60 @@ emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
         context.ir[unresolvedAbi] => unresolved
         "; sollang compiler error S047: unresolved generic ABI requires function specialization at ir $unresolvedAbi (source $(unresolved.sourceModule), ast $(unresolved.astNode), type $(unresolved.typeId))" -> println
     }
+    context -> missingBinaryBindingIr => missingBinaryBinding
+    missingBinaryBinding >= 0 -> if {
+        context.ir[missingBinaryBinding] => missingBinding
+        context.ranges[missingBinding.sourceModule] => missingRange
+        context.nodes[missingRange.astStart + missingBinding.astNode] => missingAst
+        "; sollang compiler error S059: binary binding initializer was not materialized in Typed IR (source $(missingBinding.sourceModule), ast $(missingBinding.astNode), byte $(missingAst.start), length $(missingAst.length))" -> println
+    }
+    context -> invalidMapBindingIr => invalidMapBinding
+    invalidMapBinding >= 0 -> if {
+        context.ir[invalidMapBinding] => mapBinding
+        context.ranges[mapBinding.sourceModule] => mapRange
+        context -> mapAstForBinding(invalidMapBinding) => mapAstIndex
+        context.nodes[mapRange.astStart + mapAstIndex] => mapAst
+        context -> mapAstOpcode(mapBinding.sourceModule, mapAstIndex) => expectedMapOpcode
+        -1 => expectedMapSymbol!
+        expectedMapOpcode == -306 -> if { 17 => expectedMapSymbol! }
+        expectedMapOpcode == -307 -> if { 18 => expectedMapSymbol! }
+        -1 => mapInitializerKind!
+        -1 => mapInitializerOpcode!
+        -1 => mapInitializerType!
+        -1 => mapInitializerOrigin!
+        -1 => mapInitializerSymbol!
+        -1 => mapInitializerFlags!
+        mapBinding.operand0 >= 0 and mapBinding.operand0 < (context.ir -> len)
+            -> if {
+                context.ir[mapBinding.operand0] => mapInitializer
+                mapInitializer.kind => mapInitializerKind!
+                mapInitializer.opcode => mapInitializerOpcode!
+                mapInitializer.typeId => mapInitializerType!
+                mapInitializer.typeOrigin => mapInitializerOrigin!
+                mapInitializer.typeSymbol => mapInitializerSymbol!
+                mapInitializer.flags => mapInitializerFlags!
+            }
+        "; sollang compiler error S060: map binding has no exact canonical Typed IR producer (binding $invalidMapBinding, initializer $(mapBinding.operand0), initializerKind $(mapInitializerKind!), initializerOpcode $(mapInitializerOpcode!), initializerType $(mapInitializerType!)/$(mapInitializerOrigin!)/$(mapInitializerSymbol!), initializerFlags $(mapInitializerFlags!), expectedOpcode $expectedMapOpcode, expectedBuiltin $(expectedMapSymbol!), source $(mapBinding.sourceModule), ast $mapAstIndex, byte $(mapAst.start), length $(mapAst.length)); preserve the map expression as one kind-9 producer, link only present at/for/size operands in grammar order, and bind its exact MappedBytes or MutableMappedBytes value before LLVM emission" -> println
+    }
+    context -> invalidMappedFlushIr => invalidMappedFlush
+    invalidMappedFlush >= 0 -> if {
+        context.ir[invalidMappedFlush] => flushCall
+        -1 => flushReceiverKind!
+        -1 => flushReceiverType!
+        -1 => flushReceiverOrigin!
+        -1 => flushReceiverSymbol!
+        flushCall.operand0 >= 0 and flushCall.operand0 < (context.ir -> len)
+            -> if {
+                context.ir[flushCall.operand0] => flushReceiver
+                flushReceiver.kind => flushReceiverKind!
+                flushReceiver.typeId => flushReceiverType!
+                flushReceiver.typeOrigin => flushReceiverOrigin!
+                flushReceiver.typeSymbol => flushReceiverSymbol!
+            }
+        context.ranges[flushCall.sourceModule] => flushRange
+        context.nodes[flushRange.astStart + flushCall.astNode] => flushAst
+        "; sollang compiler error S061: mapped flush runtime alias -114 requires an exact MutableMappedBytes receiver (call $invalidMappedFlush, receiver $(flushCall.operand0), receiverKind $(flushReceiverKind!), receiverType $(flushReceiverType!)/$(flushReceiverOrigin!)/$(flushReceiverSymbol!), source $(flushCall.sourceModule), ast $(flushCall.astNode), byte $(flushAst.start), length $(flushAst.length)); preserve lexical user functions named flush and reserve -114 for the mapped runtime operation" -> println
+    }
     context -> concreteFunctionsBySymbol => functions
     0 => irIndex!
     irIndex! < (context.ir -> len) -> while {

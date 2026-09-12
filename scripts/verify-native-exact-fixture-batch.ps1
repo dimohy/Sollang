@@ -379,7 +379,30 @@ param(
         "1689-io-bounded-transactional-read-all",
         "1693-socket-completion-slot-contract",
         "1694-time-source-deadline-clocks",
+        "1695-time-affine-periodic-timer",
         "1696-structured-logger-explicit-sink",
+        "1697-uri-normalization-policy",
+        "1698-uri-resolution-boundaries",
+        "1699-conditional-consuming-local-cleanup",
+        "1700-selfhost-binary-binding-after-propagation",
+        "1701-expression-context-shape-parity",
+        "1702-selfhost-parallel-comparison-materialization",
+        "1703-selfhost-type-application-angle-ownership",
+        "1704-selfhost-control-region-sequential-branch",
+        "1705-selfhost-control-region-stream",
+        "1707-json-integer-conversion",
+        "1709-contextual-negative-integer-carriers",
+        "1710-json-boolean-null-conversion",
+        "1711-time-rfc3339-calendar-format",
+        "1712-algorithm-in-place-ordering",
+        "1713-algorithm-first-binary-search",
+        "1714-json-skip-value",
+        "1718-algorithm-min-max-clamp",
+        "1716-process-child-try-wait",
+        "1721-csv-bounded-reader",
+        "1723-owned-match-payload-mutable-binding",
+        "1724-csv-bounded-writer",
+        "1725-materialized-text-storage-boundaries",
         "1690-selfhost-associated-type-specialization-isolation",
         "1686-selfhost-trait-associated-result",
         "1687-selfhost-chained-call-local-precedence",
@@ -411,6 +434,10 @@ foreach ($fixtureName in $Fixture) {
     $fixtureSource = Join-Path $RepositoryRoot "examples/regression/$fixtureName.slg"
     if (-not (Test-Path -LiteralPath $fixtureSource -PathType Leaf)) {
         throw "native exact batch fixture input is missing: $fixtureSource"
+    }
+    $fixtureExpected = Join-Path $RepositoryRoot "examples/regression/expected/$fixtureName.stdout.txt"
+    if (-not (Test-Path -LiteralPath $fixtureExpected -PathType Leaf)) {
+        throw "native exact batch fixture expectation is missing: $fixtureExpected"
     }
 }
 . (Join-Path $PSScriptRoot "native-exact-source-closure.ps1")

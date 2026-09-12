@@ -1,0 +1,216 @@
+import std.text.csv as csv
+import sys.file as file
+
+limits: -> csv.Limits => csv.Limits {
+    maxInputBytes: 512
+    maxRecords: 16
+    maxFieldsPerRecord: 8
+    maxFieldBytes: 64
+}
+
+filled count: Int -> [UInt8; ~] {
+    [UInt8; ~] => output!
+    output! -> reserve(count)
+    0..<count -> each index { output! -> push(170) }
+    output!
+}
+
+unchanged output: [UInt8; ~] -> Bool {
+    true => same!
+    0..<(output -> len) -> each index {
+        output[index] != 170 -> if { false => same! }
+    }
+    same!
+}
+
+kindName kind: csv.Kind -> Text {
+    kind -> when {
+        InvalidLimits => "InvalidLimits"
+        InvalidOptions => "InvalidOptions"
+        InputLimit => "InputLimit"
+        RecordLimit => "RecordLimit"
+        FieldCountLimit => "FieldCountLimit"
+        FieldSizeLimit => "FieldSizeLimit"
+        ColumnCountMismatch => "ColumnCountMismatch"
+        UnexpectedQuote => "UnexpectedQuote"
+        UnterminatedQuote => "UnterminatedQuote"
+        TrailingAfterQuote => "TrailingAfterQuote"
+        InvalidLineEnding => "InvalidLineEnding"
+        InvalidControl => "InvalidControl"
+        OutputTooSmall => "OutputTooSmall"
+        InvalidRecord => "InvalidRecord"
+        OutputLimit => "OutputLimit"
+    }
+}
+
+showField label: Text, field: csv.Field, output: [UInt8; ~] -> Unit uses Console {
+    "$label=$(field.recordIndex),$(field.fieldIndex),$(field.length),$(field.endOfRecord):" -> print
+    0..<field.length -> each index { "$(output[index])," -> print }
+    "" -> println
+}
+
+show label: Text, text: Text, format: csv.Format, bounds: csv.Limits -> Result<Unit, csv.Error> uses Console {
+    format -> reader(text, bounds)? => reader!
+    filled(64) => output!
+    true => reading!
+    reading! -> while {
+        reader! -> next(output!)? -> when {
+            Some(field) { showField(label, field, output!) }
+            None {
+                "$label=end@$(reader! -> offset)" -> println
+                false => reading!
+            }
+        }
+    }
+    Result<Unit, csv.Error>.Ok
+}
+
+emit label: Text, text: Text -> Result<Unit, csv.Error> uses Console {
+    show(label, text, csv.Format { lineEndings: csv.LineEndings.CrLf, expectedColumns: 2 }, limits())
+}
+
+rejectCreation label: Text, text: Text, format: csv.Format, bounds: csv.Limits -> Unit uses Console {
+    filled(64) => output
+    format -> reader(text, bounds) -> when {
+        Err(error) {
+            "$label=$(kindName(error.kind))@$(error.offset)/$(error.requiredBytes),unchanged=$(unchanged(output))" -> println
+        }
+        Ok(reader) { "unexpected-created-$label" -> println }
+    }
+}
+
+# Every rejected call is repeated with the same reader and full sentinel buffer.
+reject label: Text, text: Text, format: csv.Format, bounds: csv.Limits, skip: Int -> Result<Unit, csv.Error> uses Console {
+    format -> reader(text, bounds)? => owner!
+    filled(64) => output!
+    0..<skip -> each index {
+        owner! -> next(output!)? -> when {
+            Some(field) { showField("prior", field, output!) }
+            None { "unexpected-skip-end" -> println }
+        }
+    }
+    0..<64 -> each index { 170 => output![index] }
+    owner! -> offset => before
+    0..<2 -> each attempt {
+        owner! -> next(output!) -> when {
+            Ok(field) { "unexpected-accepted-$label" -> println }
+            Err(error) {
+                before == (owner! -> offset) and unchanged(output!) => same
+                "$label-$attempt=$(kindName(error.kind))@$(error.offset)/$(error.requiredBytes),unchanged=$same" -> println
+            }
+        }
+    }
+    Result<Unit, csv.Error>.Ok
+}
+
+retry: -> Result<Unit, csv.Error> uses Console {
+    csv.standard() -> reader("한,b", limits())? => reader!
+    filled(2) => short!
+    reader! -> offset => before
+    reader! -> next(short!) -> when {
+        Ok(field) { "unexpected-short-success" -> println }
+        Err(error) {
+            before == (reader! -> offset) and unchanged(short!) => same
+            "retry=$(kindName(error.kind))@$(error.offset)/$(error.requiredBytes),unchanged=$same" -> println
+        }
+    }
+    filled(4) => output!
+    output! -> capacity => capacity
+    reader! -> next(output!)? -> when {
+        Some(field) { showField("retried", field, output!) }
+        None { "unexpected-retry-end" -> println }
+    }
+    "retry-tail=$(output![3]),len=$(output! -> len),capacity=$(output! -> capacity == capacity),offset=$(reader! -> offset)" -> println
+    reader! -> next(output!)? -> when {
+        Some(field) { showField("retried", field, output!) }
+        None { "unexpected-retry-end" -> println }
+    }
+    filled(0) => empty!
+    csv.standard() -> reader(",", limits())? => blank!
+    0..<2 -> each index {
+        blank! -> next(empty!)? -> when {
+            Some(field) { showField("zero-buffer", field, empty!) }
+            None { "unexpected-zero-end" -> println }
+        }
+    }
+    blank! -> next(empty!)? -> when {
+        None { "zero-buffer=end@$(blank! -> offset)" -> println }
+        Some(field) { "unexpected-phantom" -> println }
+    }
+    Result<Unit, csv.Error>.Ok
+}
+
+run: -> Result<Unit, csv.Error> uses Console {
+    """"
+    "
+    """" => quote
+    emit("ascii", "a,b\r\nc,d")?
+    emit("quoted", "$(quote)a,b$(quote),$(quote)c$(quote)$(quote)d$(quote)\r\n$(quote)line\r\nbreak$(quote),plain")?
+    emit("utf8", "한글,é\r\n끝,🙂")?
+    emit("spaces", " a ,$(quote) b $(quote)\r\nc,d")?
+    csv.standard() => standard
+    csv.Format { lineEndings: csv.LineEndings.Lf, expectedColumns: 0 } => lf
+    csv.Format { lineEndings: csv.LineEndings.Either, expectedColumns: 0 } => either
+    limits() => bounds
+    show("empty", "", standard, bounds)?
+    show("blank", "\r\n", standard, bounds)?
+    show("trailing", "a,", standard, bounds)?
+    show("terminal", "a\r\n", standard, bounds)?
+    show("quoted-breaks", "$(quote)a\r\nb$(quote),$(quote)a\nb$(quote),$(quote)a\rb$(quote)", standard, bounds)?
+    show("lf", "a\nb\n", lf, bounds)?
+    show("mixed", "a\r\nb\nc", either, bounds)?
+    show("doubled", "$(quote)a$(quote)$(quote)b$(quote)", standard, csv.Limits { maxInputBytes: 6, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 3 })?
+    show("zero", "", standard, csv.Limits { maxInputBytes: 0, maxRecords: 0, maxFieldsPerRecord: 0, maxFieldBytes: 0 })?
+    show("empty-limit", "$quote$quote", standard, csv.Limits { maxInputBytes: 2, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 0 })?
+    filled(4) => bom!
+    239 => bom![0]
+    187 => bom![1]
+    191 => bom![2]
+    120 => bom![3]
+    bom! -> file.borrowBytes => bomView
+    show("bom", bomView -> slice(0, 4), standard, bounds)?
+
+    rejectCreation("negative-limit", "", standard, csv.Limits { maxInputBytes: -1, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 1 })
+    rejectCreation("negative-records", "", standard, csv.Limits { maxInputBytes: 1, maxRecords: -1, maxFieldsPerRecord: 1, maxFieldBytes: 1 })
+    rejectCreation("negative-fields", "", standard, csv.Limits { maxInputBytes: 1, maxRecords: 1, maxFieldsPerRecord: -1, maxFieldBytes: 1 })
+    rejectCreation("negative-bytes", "", standard, csv.Limits { maxInputBytes: 1, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: -1 })
+    rejectCreation("negative-columns", "", csv.Format { lineEndings: csv.LineEndings.CrLf, expectedColumns: -1 }, bounds)
+    rejectCreation("columns-over-limit", "", csv.Format { lineEndings: csv.LineEndings.CrLf, expectedColumns: 9 }, bounds)
+    rejectCreation("input", "한", standard, csv.Limits { maxInputBytes: 2, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 3 })
+    rejectCreation("zero-input", "a", standard, csv.Limits { maxInputBytes: 0, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 1 })
+    reject("zero-records", "a", standard, csv.Limits { maxInputBytes: 1, maxRecords: 0, maxFieldsPerRecord: 1, maxFieldBytes: 1 }, 0)?
+    reject("zero-fields", "a", standard, csv.Limits { maxInputBytes: 1, maxRecords: 1, maxFieldsPerRecord: 0, maxFieldBytes: 1 }, 0)?
+    reject("zero-bytes", "a", standard, csv.Limits { maxInputBytes: 1, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 0 }, 0)?
+    reject("records", "a\r\nb", standard, csv.Limits { maxInputBytes: 4, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 1 }, 1)?
+    reject("fields", "a,b", standard, csv.Limits { maxInputBytes: 3, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 1 }, 1)?
+    reject("field-bytes", "한", standard, csv.Limits { maxInputBytes: 3, maxRecords: 1, maxFieldsPerRecord: 1, maxFieldBytes: 2 }, 0)?
+    reject("extra", "a,$(quote)unterminated", csv.Format { lineEndings: csv.LineEndings.CrLf, expectedColumns: 1 }, bounds, 1)?
+    reject("missing", "a,b", csv.Format { lineEndings: csv.LineEndings.CrLf, expectedColumns: 3 }, bounds, 1)?
+    reject("unquoted-quote", "a$(quote)b", standard, bounds, 0)?
+    reject("unterminated", "$(quote)a", standard, bounds, 0)?
+    reject("after-quote", "$(quote)a$(quote) ", standard, bounds, 0)?
+    reject("crlf-bare-lf", "a\n", standard, bounds, 0)?
+    reject("crlf-bare-cr", "a\r", standard, bounds, 0)?
+    reject("lf-crlf", "a\r\n", lf, bounds, 0)?
+    reject("lf-bare-cr", "a\r", lf, bounds, 0)?
+    reject("either-bare-cr", "a\rb", either, bounds, 0)?
+    reject("quoted-tab", "$(quote)a\tb$(quote)", standard, bounds, 0)?
+    filled(1) => control!
+    0 => control![0]
+    control! -> file.borrowBytes => nulView
+    reject("nul", nulView -> slice(0, 1), standard, bounds, 0)?
+    filled(1) => deleted!
+    127 => deleted![0]
+    deleted! -> file.borrowBytes => delView
+    reject("del", delView -> slice(0, 1), standard, bounds, 0)?
+    reject("quoted-del", "$(quote)$(delView -> slice(0, 1))$(quote)", standard, bounds, 0)?
+    retry()?
+    Result<Unit, csv.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected@$(error.offset)" -> println }
+    }
+}

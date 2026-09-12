@@ -1,0 +1,71 @@
+import std.text.json as json
+
+showBoolean reader: ref json.Reader, token: json.Token -> Unit uses Console {
+    reader -> boolean(token) -> when {
+        Ok(value) { "boolean=$value" -> println }
+        Err(error) {
+            error.kind -> when {
+                WrongTokenKind { "boolean=kind" -> println }
+                InvalidLiteral { "boolean=invalid" -> println }
+                else { "boolean=unexpected" -> println }
+            }
+        }
+    }
+}
+
+showNull reader: ref json.Reader, token: json.Token -> Unit uses Console {
+    reader -> nullValue(token) -> when {
+        Ok(done) { "null=ok" -> println }
+        Err(error) {
+            error.kind -> when {
+                WrongTokenKind { "null=kind" -> println }
+                InvalidLiteral { "null=invalid" -> println }
+                else { "null=unexpected" -> println }
+            }
+        }
+    }
+}
+
+run: -> Result<Unit, json.Error> uses Console {
+    json.limits(32, 2, 8, 8)? => limits
+    json.reader("[true,false,null,0]", limits)? => reader!
+    reader! -> next? => begin
+    reader! -> next? => trueToken
+    reader! -> showBoolean(trueToken)
+    reader! -> showNull(trueToken)
+    reader! -> next? => falseToken
+    reader! -> showBoolean(falseToken)
+    reader! -> next? => nullToken
+    reader! -> showNull(nullToken)
+    reader! -> showBoolean(nullToken)
+    reader! -> next? => numberToken
+    reader! -> showBoolean(numberToken)
+    reader! -> showNull(numberToken)
+    "reader=$(reader! -> offset),$(reader! -> tokenCount)" -> println
+    reader! -> finish?
+
+    # Public token metadata must agree with the receiving reader's bytes.
+    json.reader("true", limits)? => truth!
+    truth! -> next? => changed!
+    json.TokenKind.False => changed!.kind
+    truth! -> showBoolean(changed!)
+    json.TokenKind.Null => changed!.kind
+    truth! -> showNull(changed!)
+    json.TokenKind.True => changed!.kind
+    5 => changed!.length
+    truth! -> showBoolean(changed!)
+    0 => changed!.length
+    truth! -> showBoolean(changed!)
+    4 => changed!.length
+    4 => changed!.start
+    truth! -> showBoolean(changed!)
+    "truth=$(truth! -> offset),$(truth! -> tokenCount)" -> println
+    Result<Unit, json.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected-error=$(error.offset)" -> println }
+    }
+}

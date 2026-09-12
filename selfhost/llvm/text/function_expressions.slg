@@ -13,6 +13,10 @@ emitFunctionIntrinsicExpressions expressionIndex: Int, functionIndex: Int, funct
     context.ir[expressionIndex] => expression
     context.ir[functionIndex] => function
     expressionIndex -> emitArgumentsIntrinsic(context)
+    expression.kind == 9 and (expression.opcode == -306 or expression.opcode == -307) and expression.operand0 >= 0
+        -> if { expressionIndex -> emitMappedBytesExpression(functionIndex, context, state) }
+    expression -> isMappedBytesFlush(context)
+        -> if { expressionIndex -> emitMappedBytesFlush(functionIndex, context, state) }
     expression.kind == 5
         -> if {
             expression -> referenceValueTypeId(context, state) => expressionReferenceValueTypeId
@@ -476,21 +480,7 @@ emitFunctionAggregateExpressions expressionIndex: Int, functionIndex: Int, funct
 emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEnd: Int, expressionStart: Int, expressionOrder: ref [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[expressionIndex] => expression
     context.ir[functionIndex] => function
-    expression.kind == 31 -> if {
-        "  %v$(expressionIndex)_start = insertvalue { i32, i32 } poison, i32 " -> print
-        expression.operand0 -> writeValue(functionIndex, context, state)
-        ", 0" -> println
-        expression.opcode == grammar.tokenIdRangeUntil()
-            -> if {
-                "  %v$(expressionIndex)_end_inclusive = sub i32 " -> print
-                expression.operand1 -> writeValue(functionIndex, context, state)
-                ", 1" -> println
-            }
-        "  %v$(expressionIndex) = insertvalue { i32, i32 } %v$(expressionIndex)_start, i32 " -> print
-        expression.opcode == grammar.tokenIdRangeUntil()
-            -> if { "%v$(expressionIndex)_end_inclusive" -> print } else { expression.operand1 -> writeValue(functionIndex, context, state) }
-        ", 1" -> println
-    }
+    expression.kind == 31 -> if { expressionIndex -> emitRangeValue(functionIndex, context, state) }
     expression.kind == 13 -> if {
         context.ir[expression.operand0] => memberDiagnosticBase
         memberDiagnosticBase -> integerNodeWidth(context, state) => memberDiagnosticWidth

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "scope": "sys.process.Child.tryWait",
+  "api": "public tryWait: mut self -> Result<Option<ExitStatus>, Text> uses Process",
+  "runtimeStates": {
+    "running": 0,
+    "exited": 1,
+    "osFailure": 2,
+    "terminalSignal": 3
+  },
+  "invariants": [
+    "running returns Ok(None) without changing the Child owner",
+    "exit closes or reaps exactly once, clears token, and caches ExitStatus",
+    "cached exit is stable across tryWait and a later consuming wait",
+    "OS failure returns Err without discarding the live owner",
+    "Linux signal termination is cached as stable Err(signal) and is never reaped twice",
+    "Linux traced-child stops remain running and retain the live token",
+    "Windows WAIT_TIMEOUT 258 is not confused with exit code 259",
+    "Linux waitpid uses WNOHANG and retries EINTR"
+  ],
+  "fixtures": [
+    "examples/regression/1716-process-child-try-wait.slg",
+    "examples/regression/1717-process-child-exit-259.windows-x64.slg",
+    "examples/regression/diagnostics/process-child-forged-completion.slg",
+    "examples/regression/diagnostics/process-child-forged-token.slg",
+    "scripts/contracts/fixtures/1716-process-child-try-wait-runtime.c",
+    "scripts/contracts/fixtures/1717-process-child-try-wait-linux-runtime.c"
+  ]
+}

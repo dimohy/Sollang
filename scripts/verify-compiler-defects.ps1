@@ -254,7 +254,12 @@ function Assert-ShapingEvidence {
     }
     $evaluation = & node $agenticShapingEvaluator --trace $tracePath 2>&1
 
-    if ($Defect.state -in @('candidate-fixed', 'closed')) {
+    # Ledger state tracks defect closure, while the trace tracks whether a
+    # durable partial repair has already been structured and applied. An open
+    # defect may therefore require candidate evidence without being promoted.
+    $structuredClaim = $trace.decision.claimLevel -in @('structured-and-applied', 'measured-improvement')
+    $requiresCandidateEvidence = $Defect.state -in @('candidate-fixed', 'closed') -or $structuredClaim
+    if ($requiresCandidateEvidence) {
         foreach ($field in @('candidateReceipt')) {
             if ([string]::IsNullOrWhiteSpace($evidence.$field)) {
                 throw "compiler defect '$($Defect.id)' shapingEvidence is missing $field"
@@ -276,7 +281,7 @@ function Assert-ShapingEvidence {
         if ($trace.decision.asset.inputFingerprint -cne $evidence.inputFingerprint) {
             throw "compiler defect '$($Defect.id)' AS-US-001 trace identity does not match the ledger"
         }
-        if ($LASTEXITCODE -ne 0 -or
+        if (-not $structuredClaim -or $LASTEXITCODE -ne 0 -or
             $evaluation -notmatch 'AS-US-001-STRUCTURED-(AND-APPLIED|IMPROVEMENT)') {
             throw "compiler defect '$($Defect.id)' AS-US-001 trace was rejected: $evaluation"
         }

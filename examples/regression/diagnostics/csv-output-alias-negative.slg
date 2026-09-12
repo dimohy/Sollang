@@ -1,0 +1,31 @@
+import std.text.csv as csv
+import sys.file as file
+
+limits: -> csv.Limits => csv.Limits {
+    maxInputBytes: 16
+    maxRecords: 2
+    maxFieldsPerRecord: 2
+    maxFieldBytes: 8
+}
+
+ownedUtf8 value: Text -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    0..<Int(value -> len) -> each index { bytes! -> push(value -> byte(UIntSize(index))) }
+    bytes!
+}
+
+alias: -> Result<Unit, csv.Error> {
+    "a,b" -> ownedUtf8 => bytes!
+    bytes! -> file.borrowBytes => source
+    source -> slice(0, source -> len) => text
+    csv.standard() -> reader(text, limits())? => reader!
+    reader! -> next(bytes!)? => field
+    Result<Unit, csv.Error>.Ok
+}
+
+main {
+    alias() -> when {
+        Ok(unit) => 1 -> println
+        Err(error) => error.offset -> println
+    }
+}

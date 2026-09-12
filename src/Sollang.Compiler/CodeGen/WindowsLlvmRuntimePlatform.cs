@@ -2796,6 +2796,45 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %sollang.process_result %error1
             }
 
+            define internal %sollang.process_poll_result @sollang_poll_process(i64 %token) #0 {
+            entry:
+              %valid = icmp ne i64 %token, 0
+              br i1 %valid, label %poll, label %poll_error
+
+            poll:
+              %process_handle = inttoptr i64 %token to ptr
+              %waited = call i32 @WaitForSingleObject(ptr %process_handle, i32 0)
+              %exited = icmp eq i32 %waited, 0
+              %running = icmp eq i32 %waited, 258
+              br i1 %exited, label %read_exit, label %classify_pending
+
+            classify_pending:
+              br i1 %running, label %poll_running, label %poll_error
+
+            read_exit:
+              %exit_slot = alloca i32, align 4
+              %exit_read = call i32 @GetExitCodeProcess(ptr %process_handle, ptr %exit_slot)
+              %exit_ok = icmp ne i32 %exit_read, 0
+              br i1 %exit_ok, label %close_exit, label %poll_error
+
+            close_exit:
+              %exit_code = load i32, ptr %exit_slot, align 4
+              %closed = call i32 @CloseHandle(ptr %process_handle)
+              %close_ok = icmp ne i32 %closed, 0
+              br i1 %close_ok, label %poll_exited, label %poll_error
+
+            poll_exited:
+              %exited0 = insertvalue %sollang.process_poll_result poison, i32 %exit_code, 0
+              %exited1 = insertvalue %sollang.process_poll_result %exited0, i32 1, 1
+              ret %sollang.process_poll_result %exited1
+
+            poll_running:
+              ret %sollang.process_poll_result { i32 0, i32 0 }
+
+            poll_error:
+              ret %sollang.process_poll_result { i32 0, i32 2 }
+            }
+
             define internal void @sollang_drop_process_child(i64 %token) #0 {
             entry:
               %valid = icmp ne i64 %token, 0
@@ -3683,9 +3722,12 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             resize_file:
               %seek_ok = call i32 @SetFilePointerEx(ptr %file, i64 %requested_size, ptr null, i32 0)
+              %seek_valid = icmp ne i32 %seek_ok, 0
+              br i1 %seek_valid, label %resize_end, label %close_fail
+
+            resize_end:
               %end_ok = call i32 @SetEndOfFile(ptr %file)
-              %resize_ok = and i32 %seek_ok, %end_ok
-              %resize_valid = icmp ne i32 %resize_ok, 0
+              %resize_valid = icmp ne i32 %end_ok, 0
               br i1 %resize_valid, label %read_size, label %close_fail
 
             read_size:

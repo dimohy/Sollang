@@ -271,7 +271,7 @@ internal sealed partial class SemanticCompiler
                 out origins);
         }
         if (expression is CallExpression enumConstructor
-            && TryGetReadonlyReferenceEnumConstructor(
+            && TryGetBorrowCarrierEnumConstructor(
                 enumConstructor,
                 out _,
                 out var enumVariant,
@@ -409,7 +409,7 @@ internal sealed partial class SemanticCompiler
             foreach (var function in candidates)
             {
                 if (_borrowedTextReturnOrigins.ContainsKey(function)
-                    || !TypeContains(function.ReturnType, BoundType.Text)
+                    || !TypeCanCarryBorrowedTextOrigin(function.ReturnType)
                     || !BorrowedTextOriginParameterNames(function).Any())
                 {
                     continue;
@@ -423,6 +423,10 @@ internal sealed partial class SemanticCompiler
             }
         }
     }
+
+    private bool TypeCanCarryBorrowedTextOrigin(BoundType type) =>
+        TypeContains(type, BoundType.Text)
+        || TypeContains(type, BoundType.SourceText);
 
     private static void CollectFunctionTree(
         BoundFunction function,
@@ -441,25 +445,30 @@ internal sealed partial class SemanticCompiler
     private IEnumerable<string> BorrowedTextOriginParameterNames(BoundFunction function)
     {
         if (function.InputType is { } inputType
-            && ((inputType == BoundType.SourceText
-                    && function.InputOwnership == BoundFunctionInputOwnership.Default)
-                || inputType == BoundType.Arena
-                || IsBorrowedTextByteStorage(inputType)
-                || TypeContains(inputType, BoundType.Text)))
+            && CanSupplyBorrowedTextOrigin(inputType, function.InputOwnership))
         {
             yield return function.InputName ?? "it";
         }
         foreach (var parameter in function.AdditionalParameters ?? [])
         {
-            if ((parameter.Type == BoundType.SourceText
-                    && parameter.Ownership == BoundFunctionInputOwnership.Default)
-                || parameter.Type == BoundType.Arena
-                || IsBorrowedTextByteStorage(parameter.Type)
-                || TypeContains(parameter.Type, BoundType.Text))
+            if (CanSupplyBorrowedTextOrigin(parameter.Type, parameter.Ownership))
             {
                 yield return parameter.Name;
             }
         }
+    }
+
+    private bool CanSupplyBorrowedTextOrigin(
+        BoundType type,
+        BoundFunctionInputOwnership ownership)
+    {
+        return (type == BoundType.SourceText
+                && ownership == BoundFunctionInputOwnership.Default)
+            || type == BoundType.Arena
+            || IsBorrowedTextByteStorage(type)
+            || TypeContains(type, BoundType.Text)
+            || (type != BoundType.SourceText
+                && TypeContains(type, BoundType.SourceText));
     }
 
     private bool IsBorrowedTextByteStorage(BoundType type)
@@ -575,6 +584,16 @@ internal sealed partial class SemanticCompiler
                 }
                 CollectBlockBorrowedTextReturnOrigins(match.Else, functions, locals, union);
                 break;
+            case EnumMatchExpression match:
+                foreach (var arm in match.Arms)
+                {
+                    CollectBlockBorrowedTextReturnOrigins(arm.Body, functions, locals, union);
+                }
+                if (match.Else is not null)
+                {
+                    CollectBlockBorrowedTextReturnOrigins(match.Else, functions, locals, union);
+                }
+                break;
             case FoldExpression fold:
                 CollectBlockBorrowedTextReturnOrigins(fold.Body, functions, locals, union);
                 break;
@@ -670,6 +689,15 @@ internal sealed partial class SemanticCompiler
         if (expression is BoxExpression boxed)
         {
             return TryInferBorrowedTextOrigins(boxed.Value, functions, locals, out origins);
+        }
+
+        if (TryGetBorrowedTextEnumPayload(expression, out var enumPayload))
+        {
+            return TryInferBorrowedTextOrigins(
+                enumPayload,
+                functions,
+                locals,
+                out origins);
         }
 
         if (expression is CallExpression call
@@ -788,6 +816,21 @@ internal sealed partial class SemanticCompiler
                 CollectBlockBorrowedTextOrigins(arm.Body, functions, locals, union);
             }
             CollectBlockBorrowedTextOrigins(when.Else, functions, locals, union);
+            origins = union;
+            return union.Count > 0;
+        }
+
+        if (expression is EnumMatchExpression match)
+        {
+            var union = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var arm in match.Arms)
+            {
+                CollectBlockBorrowedTextOrigins(arm.Body, functions, locals, union);
+            }
+            if (match.Else is not null)
+            {
+                CollectBlockBorrowedTextOrigins(match.Else, functions, locals, union);
+            }
             origins = union;
             return union.Count > 0;
         }
@@ -979,15 +1022,24 @@ internal sealed partial class SemanticCompiler
             return TryGetBorrowedTextCallOrigins(boxed.Value, functions, bindings, out origins);
         }
 
+        if (TryGetBorrowedTextEnumPayload(expression, out var enumPayload))
+        {
+            return TryGetBorrowedTextCallOrigins(
+                enumPayload,
+                functions,
+                bindings,
+                out origins);
+        }
+
         if (expression is CallExpression call
-            && TryGetFunction(call.Path, functions, out var called))
+            && TryGetBorrowedCallSiteFunction(call, call.Path, functions, out var called))
         {
             if (called.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
                 or BoundFunctionKind.RuntimeBorrowSourceText)
             {
                 if (call.Arguments.Count > 0)
                 {
-                    return TryGetBorrowedTextCallOrigins(
+                    return TryGetBorrowedSourceCallSiteOrigins(
                         call.Arguments[0], functions, bindings, out origins);
                 }
                 origins = EmptyBorrowOrigins();
@@ -1006,6 +1058,11 @@ internal sealed partial class SemanticCompiler
             for (var targetIndex = 0; targetIndex < flow.Targets.Count; targetIndex++)
             {
                 var target = flow.Targets[targetIndex];
+                var hasTargetFunction = TryGetBorrowedCallSiteFunction(
+                    target,
+                    target.Path,
+                    functions,
+                    out var targetFunction);
                 if (target.Path.Count == 1
                     && target.Path[0] == "materialize"
                     && target.Arguments.Count == 1)
@@ -1029,19 +1086,19 @@ internal sealed partial class SemanticCompiler
                     }
                     continue;
                 }
-                if (TryGetFunction(target.Path, functions, out var borrowedSourceFunction)
-                    && borrowedSourceFunction.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
+                if (hasTargetFunction
+                    && targetFunction.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
                         or BoundFunctionKind.RuntimeBorrowSourceText)
                 {
                     if (targetIndex == flow.Targets.Count - 1)
                     {
-                        return TryGetBorrowedTextCallOrigins(
+                        return TryGetBorrowedSourceCallSiteOrigins(
                             current, functions, bindings, out origins);
                     }
                     continue;
                 }
-                if (TryGetFunction(target.Path, functions, out var flowedFunction)
-                    && _borrowedTextReturnOrigins.TryGetValue(flowedFunction, out var flowedReturnOrigins))
+                if (hasTargetFunction
+                    && _borrowedTextReturnOrigins.TryGetValue(targetFunction, out var flowedReturnOrigins))
                 {
                     if (targetIndex != flow.Targets.Count - 1)
                     {
@@ -1049,10 +1106,40 @@ internal sealed partial class SemanticCompiler
                     }
                     var arguments = new Expression[] { current }.Concat(target.Arguments).ToArray();
                     return TryMapCallSiteBorrowedOrigins(
-                        flowedFunction, flowedReturnOrigins, arguments, functions, bindings, out origins);
+                        targetFunction, flowedReturnOrigins, arguments, functions, bindings, out origins);
                 }
                 break;
             }
+        }
+
+        if (expression is IfExpression conditional && conditional.Else is not null)
+        {
+            return TryUnionBlockCallSiteBorrowedOrigins(
+                new[] { conditional.Then, conditional.Else },
+                functions,
+                bindings,
+                out origins);
+        }
+        if (expression is WhenExpression when)
+        {
+            return TryUnionBlockCallSiteBorrowedOrigins(
+                when.Arms.Select(static arm => arm.Body).Append(when.Else),
+                functions,
+                bindings,
+                out origins);
+        }
+        if (expression is EnumMatchExpression match)
+        {
+            var blocks = match.Arms.Select(static arm => arm.Body);
+            if (match.Else is not null)
+            {
+                blocks = blocks.Append(match.Else);
+            }
+            return TryUnionBlockCallSiteBorrowedOrigins(
+                blocks,
+                functions,
+                bindings,
+                out origins);
         }
 
         origins = EmptyBorrowOrigins();
@@ -1130,7 +1217,7 @@ internal sealed partial class SemanticCompiler
         }
 
         if (expression is CallExpression enumConstructor
-            && TryGetReadonlyReferenceEnumConstructor(
+            && TryGetBorrowCarrierEnumConstructor(
                 enumConstructor,
                 out _,
                 out var enumVariant,
@@ -1259,7 +1346,7 @@ internal sealed partial class SemanticCompiler
 
             if (_types.IsEnum(valueType)
                 && value is CallExpression enumConstructor
-                && TryGetReadonlyReferenceEnumConstructor(
+                && TryGetBorrowCarrierEnumConstructor(
                     enumConstructor,
                     out var enumType,
                     out var enumVariant,
@@ -1307,7 +1394,20 @@ internal sealed partial class SemanticCompiler
         }
     }
 
-    private bool TryGetReadonlyReferenceEnumConstructor(
+    private bool TryGetBorrowedTextEnumPayload(Expression expression, out Expression payload)
+    {
+        payload = null!;
+        return expression is CallExpression enumConstructor
+            && TryGetBorrowCarrierEnumConstructor(
+                enumConstructor,
+                out _,
+                out var variant,
+                out payload)
+            && variant.PayloadType is { } payloadType
+            && TypeCanCarryBorrowedTextOrigin(payloadType);
+    }
+
+    private bool TryGetBorrowCarrierEnumConstructor(
         CallExpression expression,
         out BoundType enumType,
         out BoundEnumVariant variant,
@@ -1678,6 +1778,75 @@ internal sealed partial class SemanticCompiler
         }
         origins = union;
         return union.Count > 0;
+    }
+
+    private bool TryUnionBlockCallSiteBorrowedOrigins(
+        IEnumerable<BlockBody> blocks,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out IReadOnlySet<string> origins)
+    {
+        var union = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var block in blocks)
+        {
+            if (block.Value is not null
+                && TryGetBorrowedTextCallOrigins(block.Value, functions, bindings, out var nested))
+            {
+                union.UnionWith(nested);
+            }
+        }
+        origins = union;
+        return union.Count > 0;
+    }
+
+    private bool TryGetBorrowedSourceCallSiteOrigins(
+        Expression source,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out IReadOnlySet<string> origins)
+    {
+        if (TryGetConcreteBorrowOrigins(source, bindings, out origins))
+        {
+            return true;
+        }
+        return TryGetBorrowedTextCallOrigins(source, functions, bindings, out origins);
+    }
+
+    private bool TryGetBorrowedCallSiteFunction(
+        object callSite,
+        IReadOnlyList<string> path,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        out BoundFunction function)
+    {
+        return _resolvedGenericCalls.TryGetValue(callSite, out function!)
+            || TryGetFunction(path, functions, out function);
+    }
+
+    private void RejectLocalBorrowedTextReturnEscape(
+        Expression value,
+        BoundType returnType,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlyDictionary<string, BoundType> returnOuterBindings)
+    {
+        if (!TypeCanCarryBorrowedTextOrigin(returnType)
+            || !TryGetBorrowedTextCallOrigins(value, functions, bindings, out var origins))
+        {
+            return;
+        }
+
+        foreach (var origin in origins)
+        {
+            var root = SplitBorrowPlace(origin)[0];
+            if (returnOuterBindings.ContainsKey(root))
+            {
+                continue;
+            }
+            throw Error(
+                value.Line,
+                value.Column,
+                $"borrowed origin '{origin}' cannot escape function '{_currentFunctionName}' through its return value");
+        }
     }
 
     private static List<BoundType> FunctionParameterTypes(BoundFunction function)

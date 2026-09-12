@@ -566,66 +566,6 @@ internal sealed partial class SemanticCompiler
         return (isEvent ? "EventStream<" : "Stream<") + element + ">";
     }
 
-    private static IReadOnlyList<string> SplitTopLevelTypeFields(string text)
-    {
-        var fields = new List<string>();
-        var start = 0;
-        var angle = 0;
-        var paren = 0;
-        var bracket = 0;
-        var brace = 0;
-        for (var index = 0; index < text.Length; index++)
-        {
-            switch (text[index])
-            {
-                case '<': angle++; break;
-                case '>': angle--; break;
-                case '(': paren++; break;
-                case ')': paren--; break;
-                case '[': bracket++; break;
-                case ']': bracket--; break;
-                case '{': brace++; break;
-                case '}': brace--; break;
-                case ',' when angle == 0 && paren == 0 && bracket == 0 && brace == 0:
-                    fields.Add(text[start..index].Trim());
-                    start = index + 1;
-                    break;
-            }
-        }
-        fields.Add(text[start..].Trim());
-        return fields;
-    }
-
-    private static int FindTopLevelTypeSeparator(string text, char separator)
-    {
-        var angle = 0;
-        var paren = 0;
-        var bracket = 0;
-        var brace = 0;
-        for (var index = 0; index < text.Length; index++)
-        {
-            switch (text[index])
-            {
-                case '<': angle++; break;
-                case '>': angle--; break;
-                case '(': paren++; break;
-                case ')': paren--; break;
-                case '[': bracket++; break;
-                case ']': bracket--; break;
-                case '{': brace++; break;
-                case '}': brace--; break;
-                default:
-                    if (text[index] == separator
-                        && angle == 0 && paren == 0 && bracket == 0 && brace == 0)
-                    {
-                        return index;
-                    }
-                    break;
-            }
-        }
-        return -1;
-    }
-
     private static void AddBindingType(Dictionary<string, string> environment, string name, string? type)
     {
         if (type is not null)

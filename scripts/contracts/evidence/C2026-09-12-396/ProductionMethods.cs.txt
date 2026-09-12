@@ -1,0 +1,381 @@
+global using BoundType = Sollang.Compiler.Semantics.TypeId;
+namespace Sollang.Compiler.Semantics;
+internal enum TypeId
+{
+    Unit,
+    Text,
+    Int,
+    Bool,
+    Int8,
+    Int16,
+    Int64,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    Size,
+    UIntSize,
+    CodePoint,
+    Arguments,
+    Arena,
+    MappedBytes,
+    MutableMappedBytes,
+    Float32,
+    Float64,
+    IntSlice,
+    StaticIntArray,
+    StaticTextArray,
+    DynamicIntArray,
+    IntDictionaryView,
+    IntDictionary,
+    TaskInt,
+    Duration,
+    BoxDuration,
+    File,
+    FileWriter,
+    SourceText,
+    ProcessCommand,
+    AtomicReplaceRequest,
+    Path,
+    PathStyle,
+    DynamicUInt8Array,
+    DirectoryRaw,
+    DirectoryEntryKind,
+    DirectoryEntry,
+    DynamicDirectoryEntryArray,
+    DirectoryRawResult,
+    DirectoryReadResult,
+    Range,
+    MouseEvent,
+    MouseEventKind,
+    EventOverflowPolicy,
+    FixedUInt8Array12,
+    FixedUInt8Array16,
+    FixedUInt8Array32,
+    GenericParameter = 512,
+    SecondaryGenericParameter = 513,
+    TertiaryGenericParameter = 514,
+    FirstUserDefined = 1024
+}
+internal sealed partial class SemanticCompiler {
+    private BoundType ParseSpecializedFunctionType(
+        string typeName,
+        IReadOnlyDictionary<string, BoundType> specializedTypes,
+        int line,
+        int column)
+    {
+        // The canonical parser owns every type constructor. Keep the generic
+        // environment installed throughout its recursive descent instead of
+        // duplicating a partial wrapper grammar and losing T at the fallback.
+        var context = new Dictionary<string, BoundType>(_activeGenericTypeArguments, StringComparer.Ordinal);
+        foreach (var (name, type) in specializedTypes)
+            context[name] = type;
+        return ParseAssociatedType(typeName.Trim(), context, line, column);
+    }
+
+    private BoundType ParseSpecializedFunctionType(
+        string typeName,
+        string? genericParameterName,
+        BoundType primaryType,
+        string? secondaryGenericParameterName,
+        BoundType? secondaryType,
+        string? tertiaryGenericParameterName,
+        BoundType? tertiaryType,
+        int line,
+        int column)
+    {
+        var specializedTypes = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        if (genericParameterName is not null)
+            specializedTypes[genericParameterName] = primaryType;
+        if (secondaryGenericParameterName is not null)
+        {
+            if (secondaryType is { } second)
+                specializedTypes[secondaryGenericParameterName] = second;
+            else if (TypeSyntaxReferencesParameter(typeName, secondaryGenericParameterName))
+                throw Error(line, column, $"cannot infer type parameter '{secondaryGenericParameterName}'");
+        }
+        if (tertiaryGenericParameterName is not null)
+        {
+            if (tertiaryType is { } third)
+                specializedTypes[tertiaryGenericParameterName] = third;
+            else if (TypeSyntaxReferencesParameter(typeName, tertiaryGenericParameterName))
+                throw Error(line, column, $"cannot infer type parameter '{tertiaryGenericParameterName}'");
+        }
+        return ParseSpecializedFunctionType(typeName, specializedTypes, line, column);
+    }
+    private static bool TypeSyntaxReferencesParameter(string typeName, string? parameterName)
+    {
+        if (parameterName is null)
+        {
+            return false;
+        }
+        for (var index = 0; index <= typeName.Length - parameterName.Length; index++)
+        {
+            if (!typeName.AsSpan(index, parameterName.Length).SequenceEqual(parameterName))
+            {
+                continue;
+            }
+            var startsIdentifier = index > 0
+                && (char.IsLetterOrDigit(typeName[index - 1]) || typeName[index - 1] == '_');
+            var endsIdentifier = index + parameterName.Length < typeName.Length
+                && (char.IsLetterOrDigit(typeName[index + parameterName.Length])
+                    || typeName[index + parameterName.Length] == '_');
+            if (!startsIdentifier && !endsIdentifier)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    private static int FindTopLevelTypeComma(string text)
+    {
+        return FindTopLevelTypeSeparator(text, ',');
+    }
+    private static int FindTopLevelTypeColon(ReadOnlySpan<char> text)
+    {
+        return FindTopLevelTypeSeparator(text, ':');
+    }
+    private static IReadOnlyList<string> SplitTopLevelProductFields(string text)
+    {
+        return SplitTopLevelTypeFields(text).Where(static field => field.Length != 0).ToArray();
+    }
+    private BoundType ParseProductType(
+        string typeName,
+        Func<string, BoundType> parseFieldType,
+        int line,
+        int column)
+    {
+        var contents = typeName[1..^1];
+        var parts = SplitTopLevelProductFields(contents);
+        if (parts.Count < 2)
+        {
+            throw Error(line, column, "product types require at least two fields");
+        }
+
+        var labels = new HashSet<string>(StringComparer.Ordinal);
+        var fields = new List<(string? Label, BoundType Type)>(parts.Count);
+        foreach (var part in parts)
+        {
+            var separator = FindTopLevelTypeColon(part.AsSpan());
+            string? label = null;
+            var fieldText = part;
+            if (separator >= 0)
+            {
+                label = part[..separator].Trim();
+                fieldText = part[(separator + 1)..].Trim();
+                if (label.Length == 0 || !labels.Add(label))
+                {
+                    throw Error(line, column, $"duplicate or empty product field label '{label}'");
+                }
+            }
+            fields.Add((label, parseFieldType(fieldText)));
+        }
+
+        var displayName = "(" + string.Join(", ", fields.Select(field =>
+            field.Label is null
+                ? FormatType(field.Type)
+                : field.Label + ": " + FormatType(field.Type))) + ")";
+        return _types.GetOrAddProduct(fields, displayName, line, column);
+    }
+    private BoundType ParseCandidateType(string typeName, int line, int column)
+    {
+        if (_activeGenericTypeArguments.TryGetValue(typeName, out var specializedType))
+        {
+            return specializedType;
+        }
+        if (typeName.StartsWith('(') && typeName.EndsWith(')'))
+        {
+            return ParseProductType(typeName, field => ParseCandidateType(field, line, column), line, column);
+        }
+        if (typeName.StartsWith("ref ", StringComparison.Ordinal))
+        {
+            var elementType = ParseCandidateType(typeName[4..].Trim(), line, column);
+            if (elementType == BoundType.Unit || _types.IsReference(elementType))
+            {
+                throw Error(line, column, "ref requires a non-reference value type");
+            }
+            var reference = _types.GetOrAddReference(elementType);
+            _types.AddAlias(typeName, reference);
+            return reference;
+        }
+        if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var valueName = typeName[7..^1].Trim();
+            var valueType = ParseCandidateType(valueName, line, column);
+            var option = _types.GetOrAddOption(valueType, $"Option<{FormatType(valueType)}>");
+            _types.AddAlias(typeName, option);
+            return option;
+        }
+        if (typeName.StartsWith("Stream<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var valueName = typeName[7..^1].Trim();
+            var valueType = ParseCandidateType(valueName, line, column);
+            var stream = _types.GetOrAddStream(valueType);
+            _types.AddAlias(typeName, stream);
+            return stream;
+        }
+        if (typeName.StartsWith("EventStream<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var valueName = typeName[12..^1].Trim();
+            var valueType = ParseCandidateType(valueName, line, column);
+            var stream = _types.GetOrAddEventStream(valueType);
+            _types.AddAlias(typeName, stream);
+            return stream;
+        }
+        if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var arguments = typeName[7..^1];
+            var separator = FindTopLevelTypeComma(arguments);
+            if (separator < 0)
+            {
+                throw Error(line, column, "Result requires success and error types");
+            }
+            var okType = ParseCandidateType(arguments[..separator].Trim(), line, column);
+            var errorType = ParseCandidateType(arguments[(separator + 1)..].Trim(), line, column);
+            var result = _types.GetOrAddResult(
+                okType,
+                errorType,
+                $"Result<{FormatType(okType)}, {FormatType(errorType)}>");
+            _types.AddAlias(typeName, result);
+            return result;
+        }
+        if (typeName.StartsWith('[', StringComparison.Ordinal)
+            && typeName.EndsWith("; ~]", StringComparison.Ordinal))
+        {
+            var elementName = typeName[1..^4].Trim();
+            var elementType = ParseCandidateType(elementName, line, column);
+            if (IsUnsupportedGrowableArrayElementType(elementType))
+            {
+                throw Error(line, column, "growable array elements must have a supported inline value layout");
+            }
+            return elementType == BoundType.Int
+                ? BoundType.DynamicIntArray
+                : _types.GetOrAddDynamicArray(elementType);
+        }
+        if (typeName.StartsWith('[', StringComparison.Ordinal)
+            && typeName.EndsWith(']')
+            && FindEnclosedTypeSeparator(typeName, ';') is var fixedSeparator
+            && fixedSeparator > 1
+            && FindBoundedTypeSeparator(typeName) < 0)
+        {
+            var elementName = typeName[1..fixedSeparator].Trim();
+            var lengthText = typeName[(fixedSeparator + 1)..^1].Trim();
+            if (!int.TryParse(lengthText, out var length) || length < 0)
+            {
+                throw Error(line, column, "fixed array length must be a nonnegative integer literal");
+            }
+            var elementType = ParseCandidateType(elementName, line, column);
+            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            {
+                throw Error(line, column, "fixed array elements must be inline scalar or user values");
+            }
+            return _types.GetOrAddFixedStaticArray(elementType, length);
+        }
+        if (typeName.StartsWith('[', StringComparison.Ordinal)
+            && typeName.EndsWith(']')
+            && FindEnclosedTypeSeparator(typeName, ';') < 0)
+        {
+            var elementName = typeName[1..^1].Trim();
+            var elementType = ParseCandidateType(elementName, line, column);
+            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            {
+                throw Error(line, column, "readonly array views require inline scalar or user-value elements");
+            }
+            return _types.GetOrAddSlice(elementType);
+        }
+        if (typeName.StartsWith('[', StringComparison.Ordinal)
+            && typeName.EndsWith(']')
+            && FindBoundedTypeSeparator(typeName) is var boundedSeparator
+            && boundedSeparator > 1)
+        {
+            var elementName = typeName[1..boundedSeparator].Trim();
+            var capacityText = typeName[(boundedSeparator + 1)..^1].Trim()[2..].Trim();
+            if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
+            {
+                throw Error(line, column, "bounded array capacity must be a positive integer literal");
+            }
+            var elementType = ParseCandidateType(elementName, line, column);
+            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            {
+                throw Error(line, column, "bounded array elements must be inline scalar or user values");
+            }
+            return _types.GetOrAddBoundedArray(elementType, capacity);
+        }
+        if (typeName.Length >= 5 && typeName[0] == '{' && typeName[^1] == '}')
+        {
+            var separator = FindEnclosedTypeSeparator(typeName, ':');
+            if (separator > 1)
+            {
+                var keyName = typeName[1..separator].Trim();
+                var dictionaryBoundedSeparator = FindBoundedTypeSeparator(typeName);
+                var valueEnd = dictionaryBoundedSeparator > separator ? dictionaryBoundedSeparator : typeName.Length - 1;
+                var valueName = typeName[(separator + 1)..valueEnd].Trim();
+                var keyType = ParseCandidateType(keyName, line, column);
+                var valueType = ParseCandidateType(valueName, line, column);
+                if (!IsSupportedDictionaryKeyType(keyType))
+                {
+                    throw Error(line, column,
+                        $"dictionary key type {FormatType(keyType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+                }
+                if (dictionaryBoundedSeparator > separator)
+                {
+                    var capacityText = typeName[(dictionaryBoundedSeparator + 1)..^1].Trim()[2..].Trim();
+                    if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
+                    {
+                        throw Error(line, column, "bounded dictionary capacity must be a positive integer literal");
+                    }
+                    return _types.GetOrAddBoundedDictionary(keyType, valueType, capacity);
+                }
+                return keyType == BoundType.Int && valueType == BoundType.Int
+                    ? BoundType.IntDictionary
+                    : _types.GetOrAddDictionary(keyType, valueType);
+            }
+        }
+        if (!_types.TryResolve(typeName, out var type))
+        {
+            throw Error(line, column, $"unknown type '{typeName}'");
+        }
+
+        EnsureTypeVisible(type, line, column);
+        return type;
+    }
+    private static (bool Matched, string Element, int Count) ProbeTryResolveDefinitionFixedStaticArray(string typeName, int line, int column)
+        {
+            
+            var separator = FindEnclosedTypeSeparator(typeName, ';');
+            if (!typeName.StartsWith('[', StringComparison.Ordinal)
+                || !typeName.EndsWith(']')
+                || separator <= 1
+                || FindBoundedTypeSeparator(typeName) >= 0
+                || typeName.EndsWith("; ~]", StringComparison.Ordinal))
+            {
+                return (false, "", 0);
+            }
+
+            var elementName = typeName[1..separator].Trim();
+            var lengthText = typeName[(separator + 1)..^1].Trim();
+            if (!int.TryParse(lengthText, out var length) || length < 0)
+            {
+                throw Error(line, column, "fixed array length must be a nonnegative integer literal");
+            }
+            return (true, elementName, length);
+        }
+    private static (bool Matched, string Element, int Count) ProbeTryResolveDefinitionBoundedArray(string typeName, int line, int column)
+        {
+            
+            var separator = FindBoundedTypeSeparator(typeName);
+            if (!typeName.StartsWith('[', StringComparison.Ordinal)
+                || !typeName.EndsWith(']')
+                || separator <= 1)
+            {
+                return (false, "", 0);
+            }
+            var elementName = typeName[1..separator].Trim();
+            var capacityText = typeName[(separator + 1)..^1].Trim()[2..].Trim();
+            if (!int.TryParse(capacityText, out var capacity) || capacity <= 0)
+            {
+                throw Error(line, column, "bounded array capacity must be a positive integer literal");
+            }
+            return (true, elementName, capacity);
+        }
+}

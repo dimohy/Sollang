@@ -34,6 +34,7 @@ public struct Authority {
     public userInfo: Span
     public host: Host
     public port: PortComponent
+    raw: Span
 }
 
 public enum AuthorityComponent {
@@ -50,6 +51,24 @@ public struct Reference {
     public fragment: Span
 }
 
+# Normalization is pure and policy-owned. Scheme-specific default ports, IDNA,
+# DNS, and filesystem canonicalization are intentionally outside this value.
+public struct NormalizationPolicy {
+    public lowercaseScheme: Bool
+    public lowercaseRegisteredName: Bool
+    public decodeUnreserved: Bool
+    public uppercasePercentHex: Bool
+    public removeDotSegments: Bool
+}
+
+public canonicalNormalization: -> NormalizationPolicy => NormalizationPolicy {
+    lowercaseScheme: true
+    lowercaseRegisteredName: true
+    decodeUnreserved: true
+    uppercasePercentHex: true
+    removeDotSegments: true
+}
+
 errorReference kind: errors.Kind, offset: UIntSize -> Result<Reference, Error> {
     Result<Reference, Error>.Err(Error { kind: kind, offset: offset })
 }
@@ -60,6 +79,210 @@ errorAuthority kind: errors.Kind, offset: UIntSize -> Result<Authority, Error> {
 
 errorUnit kind: errors.Kind, offset: UIntSize -> Result<Unit, Error> {
     Result<Unit, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+pushOutput output: mut [UInt8; ~], value: UInt8, maximum: Int, offset: UIntSize -> Result<Unit, Error> {
+    (output -> len) < maximum -> unless {
+        errorUnit(errors.Kind.InvalidLimit, offset) -> return
+    }
+    output -> push(value)
+    Result<Unit, Error>.Ok
+}
+
+hexValue byte: UInt8 -> UInt8 {
+    byte >= 48 and byte <= 57 -> if { byte - 48 } else {
+        byte >= 65 and byte <= 70 -> if { byte - 55 } else { byte - 87 }
+    }
+}
+
+uppercaseHex value: UInt8 -> UInt8 {
+    value < 10 -> if { value + 48 } else { value + 55 }
+}
+
+lowerAscii byte: UInt8 -> UInt8 {
+    byte >= 65 and byte <= 90 -> if { byte + 32 } else { byte }
+}
+
+appendNormalizedSpan source: ref file.SourceText, span: Span, lowercase: Bool, policy: NormalizationPolicy, output: mut [UInt8; ~], maximum: Int -> Result<Unit, Error> {
+    span.start => index!
+    span.start + span.length => end
+    index! < end -> while {
+        source -> byte(index!) => byte
+        byte == 37 -> if {
+            source -> byte(index! + 1) -> hexValue => high
+            source -> byte(index! + 2) -> hexValue => low
+            UInt8(high * 16 + low) => decoded
+            policy.decodeUnreserved and (decoded -> isUnreserved)
+                -> if {
+                    lowercase -> if { decoded -> lowerAscii } else { decoded }
+                        => normalized
+                    output -> pushOutput(normalized, maximum, index!)?
+                } else {
+                    output -> pushOutput(37, maximum, index!)?
+                    policy.uppercasePercentHex -> if {
+                        output -> pushOutput(high -> uppercaseHex, maximum, index! + 1)?
+                        output -> pushOutput(low -> uppercaseHex, maximum, index! + 2)?
+                    } else {
+                        output -> pushOutput(source -> byte(index! + 1), maximum, index! + 1)?
+                        output -> pushOutput(source -> byte(index! + 2), maximum, index! + 2)?
+                    }
+                }
+            index! + 3 => index!
+        } else {
+            lowercase -> if { byte -> lowerAscii } else { byte } => normalized
+            output -> pushOutput(normalized, maximum, index!)?
+            index! + 1 => index!
+        }
+    }
+    Result<Unit, Error>.Ok
+}
+
+removeLastPathSegment output: mut [UInt8; ~] -> Unit {
+    output -> len => remaining!
+    remaining! > 0 and output[remaining! - 1] != 47
+        -> while {
+            output -> take(remaining! - 1) => discardedSegment
+            remaining! - 1 => remaining!
+        }
+    remaining! > 0 -> if {
+        output -> take(remaining! - 1) => discardedSlash
+    }
+}
+
+removeDotSegments input: move [UInt8; ~], maximum: Int -> Result<[UInt8; ~], Error> {
+    [UInt8; ~] => output!
+    0 => index!
+    input -> len => length
+    length > 0 and input[0] == 47 => absolute
+    index! < length -> while {
+        index! + 2 < length
+            and input[index!] == 46
+            and input[index! + 1] == 46
+            and input[index! + 2] == 47
+            -> if {
+                index! + 3 => index!
+            } else {
+                index! + 1 < length
+                    and input[index!] == 46
+                    and input[index! + 1] == 47
+                    -> if {
+                        index! + 2 => index!
+                    } else {
+                        index! + 2 < length
+                            and input[index!] == 47
+                            and input[index! + 1] == 46
+                            and input[index! + 2] == 47
+                            -> if {
+                                index! + 2 => index!
+                            } else {
+                                index! + 2 == length
+                                    and input[index!] == 47
+                                    and input[index! + 1] == 46
+                                    -> if {
+                                        output! -> pushOutput(47, maximum, UIntSize(index!))?
+                                        length => index!
+                                    } else {
+                                        index! + 3 < length
+                                            and input[index!] == 47
+                                            and input[index! + 1] == 46
+                                            and input[index! + 2] == 46
+                                            and input[index! + 3] == 47
+                                            -> if {
+                                                output! -> removeLastPathSegment
+                                                index! + 3 => index!
+                                            } else {
+                                                index! + 3 == length
+                                                    and input[index!] == 47
+                                                    and input[index! + 1] == 46
+                                                    and input[index! + 2] == 46
+                                                    -> if {
+                                                        output! -> removeLastPathSegment
+                                                        output! -> pushOutput(47, maximum, UIntSize(index!))?
+                                                        length => index!
+                                                    } else {
+                                                        index! + 1 == length and input[index!] == 46 -> if {
+                                                            length => index!
+                                                        } else {
+                                                            index! + 2 == length
+                                                                and input[index!] == 46
+                                                                and input[index! + 1] == 46
+                                                                -> if {
+                                                                    length => index!
+                                                                } else {
+                                                                    input[index!] == 47 -> if {
+                                                                        output! -> pushOutput(47, maximum, UIntSize(index!))?
+                                                                        index! + 1 => index!
+                                                                    }
+                                                                    index! < length and input[index!] != 47 -> while {
+                                                                        output! -> pushOutput(input[index!], maximum, UIntSize(index!))?
+                                                                        index! + 1 => index!
+                                                                    }
+                                                                }
+                                                        }
+                                                    }
+                                            }
+                                    }
+                            }
+                    }
+            }
+    }
+    not absolute and (output! -> len) > 0 and output![0] == 47
+        -> if {
+            output! -> take(0) => discardedRelativeSeparator
+        }
+    Result<[UInt8; ~], Error>.Ok(output!)
+}
+
+appendAuthority source: ref file.SourceText, authority: Authority, policy: NormalizationPolicy, output: mut [UInt8; ~], maximum: Int -> Result<Unit, Error> {
+    authority.host -> when {
+        Registered(host) {
+            source -> appendNormalizedSpan(
+            presentSpan(authority.raw.start, host.start - authority.raw.start),
+            false,
+            policy,
+            output,
+            maximum)?
+            source -> appendNormalizedSpan(
+            host,
+            policy.lowercaseRegisteredName,
+            policy,
+            output,
+            maximum)?
+            host.start + host.length => suffixStart
+            source -> appendNormalizedSpan(
+            presentSpan(suffixStart, authority.raw.start + authority.raw.length - suffixStart),
+            false,
+            policy,
+            output,
+            maximum)?
+        }
+        Ipv4(value) {
+            source -> appendNormalizedSpan(authority.raw, false, policy, output, maximum)?
+        }
+        Ipv6(value) {
+            source -> appendNormalizedSpan(authority.raw, false, policy, output, maximum)?
+        }
+    }
+    Result<Unit, Error>.Ok
+}
+
+normalizedPath source: ref file.SourceText, span: Span, policy: NormalizationPolicy, maximum: Int -> Result<[UInt8; ~], Error> {
+    [UInt8; ~] => path!
+    source -> appendNormalizedSpan(span, false, policy, path!, maximum)?
+    policy.removeDotSegments -> if {
+        path! -> removeDotSegments(maximum)
+    } else {
+        Result<[UInt8; ~], Error>.Ok(path!)
+    }
+}
+
+appendBytes values: move [UInt8; ~], output: mut [UInt8; ~], maximum: Int -> Result<Unit, Error> {
+    0 => index!
+    index! < (values -> len) -> while {
+        output -> pushOutput(values[index!], maximum, UIntSize(index!))?
+        index! + 1 => index!
+    }
+    Result<Unit, Error>.Ok
 }
 
 absentSpan: -> Span => Span { start: 0, length: 0, present: false }
@@ -242,6 +465,7 @@ parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, E
                             userInfo: userInfo!
                             host: model.Host.Ipv6(address)
                             port: model.PortComponent.Absent
+                            raw: presentSpan(start, end - start)
                         }) -> return
                     }
                     (text -> byte(close! + 1)) == 58 -> unless {
@@ -252,6 +476,7 @@ parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, E
                         userInfo: userInfo!
                         host: model.Host.Ipv6(address)
                         port: port
+                        raw: presentSpan(start, end - start)
                     }) -> return
                 }
                 Err(error) {
@@ -296,6 +521,7 @@ parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, E
         userInfo: userInfo!
         host: host
         port: port
+        raw: presentSpan(start, end - start)
     })
 }
 
@@ -397,6 +623,216 @@ public parse text: Text, maxInputBytes: Int -> Result<Reference, Error> {
 }
 
 impl Reference {
+    # Returns caller-owned normalized UTF-8 bytes. The bound is checked before
+    # every append, so no partial result escapes on failure.
+    public normalizeBytes: self, policy: NormalizationPolicy, maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        maxOutputBytes >= 0 -> unless {
+            Result<[UInt8; ~], Error>.Err(Error {
+                kind: errors.Kind.InvalidLimit
+                offset: 0
+            }) -> return
+        }
+        [UInt8; ~] => output!
+        self.scheme.present -> if {
+            self.source -> appendNormalizedSpan(
+            self.scheme,
+            policy.lowercaseScheme,
+            policy,
+            output!,
+            maxOutputBytes)?
+            output! -> pushOutput(58, maxOutputBytes, self.scheme.start + self.scheme.length)?
+        }
+        self.authority -> when {
+            Present(authority) {
+                output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                self.source -> appendAuthority(authority, policy, output!, maxOutputBytes)?
+            }
+            Absent { }
+        }
+        self.source -> normalizedPath(self.path, policy, maxOutputBytes)? => path
+        path -> appendBytes(output!, maxOutputBytes)?
+        self.query.present -> if {
+            output! -> pushOutput(63, maxOutputBytes, self.query.start)?
+            self.source -> appendNormalizedSpan(
+            self.query,
+            false,
+            policy,
+            output!,
+            maxOutputBytes)?
+        }
+        self.fragment.present -> if {
+            output! -> pushOutput(35, maxOutputBytes, self.fragment.start)?
+            self.source -> appendNormalizedSpan(
+            self.fragment,
+            false,
+            policy,
+            output!,
+            maxOutputBytes)?
+        }
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    # Resolves one RFC 3986 reference against this absolute base and returns
+    # caller-owned normalized UTF-8 bytes. No DNS or scheme-specific behavior
+    # is performed.
+    public resolveBytes: self, reference: ref Reference, policy: NormalizationPolicy, maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        maxOutputBytes >= 0 -> unless {
+            Result<[UInt8; ~], Error>.Err(Error {
+                kind: errors.Kind.InvalidLimit
+                offset: 0
+            }) -> return
+        }
+        reference.scheme.present -> if {
+            reference -> normalizeBytes(policy, maxOutputBytes) -> return
+        }
+        self.scheme.present -> unless {
+            Result<[UInt8; ~], Error>.Err(Error {
+                kind: errors.Kind.InvalidScheme
+                offset: 0
+            }) -> return
+        }
+
+        [UInt8; ~] => output!
+        self.source -> appendNormalizedSpan(
+        self.scheme,
+        policy.lowercaseScheme,
+        policy,
+        output!,
+        maxOutputBytes)?
+        output! -> pushOutput(58, maxOutputBytes, self.scheme.start + self.scheme.length)?
+
+        reference.authority -> when {
+            Present(authority) {
+                output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                reference.source -> appendAuthority(
+                authority,
+                policy,
+                output!,
+                maxOutputBytes)?
+                reference.source -> normalizedPath(
+                reference.path,
+                policy,
+                maxOutputBytes)? => authorityPath
+                authorityPath -> appendBytes(output!, maxOutputBytes)?
+                reference.query.present -> if {
+                    output! -> pushOutput(63, maxOutputBytes, reference.query.start)?
+                    reference.source -> appendNormalizedSpan(
+                    reference.query,
+                    false,
+                    policy,
+                    output!,
+                    maxOutputBytes)?
+                }
+            }
+            Absent {
+                self.authority -> when {
+                    Present(authority) {
+                        output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                        output! -> pushOutput(47, maxOutputBytes, authority.raw.start)?
+                        self.source -> appendAuthority(
+                        authority,
+                        policy,
+                        output!,
+                        maxOutputBytes)?
+                    }
+                    Absent { }
+                }
+
+                reference.path.length == 0 -> if {
+                    self.source -> normalizedPath(
+                    self.path,
+                    policy,
+                    maxOutputBytes)? => inheritedPath
+                    inheritedPath -> appendBytes(output!, maxOutputBytes)?
+                    reference.query.present -> if {
+                        output! -> pushOutput(63, maxOutputBytes, reference.query.start)?
+                        reference.source -> appendNormalizedSpan(
+                        reference.query,
+                        false,
+                        policy,
+                        output!,
+                        maxOutputBytes)?
+                    } else {
+                        self.query.present -> if {
+                            output! -> pushOutput(63, maxOutputBytes, self.query.start)?
+                            self.source -> appendNormalizedSpan(
+                            self.query,
+                            false,
+                            policy,
+                            output!,
+                            maxOutputBytes)?
+                        }
+                    }
+                } else {
+                    (reference.source -> byte(reference.path.start)) == 47
+                        -> if {
+                            reference.source -> normalizedPath(
+                            reference.path,
+                            policy,
+                            maxOutputBytes)? => absolutePath
+                            absolutePath -> appendBytes(output!, maxOutputBytes)?
+                        } else {
+                            [UInt8; ~] => merged!
+                            self.authority -> when {
+                                Present(authority) {
+                                    self.path.length == 0 -> if {
+                                        merged! -> pushOutput(47, maxOutputBytes, self.path.start)?
+                                    }
+                                }
+                                Absent { }
+                            }
+                            self.path.length > 0 -> if {
+                                self.path.start + self.path.length => prefixEnd!
+                                prefixEnd! > self.path.start
+                                    and (self.source -> byte(prefixEnd! - 1)) != 47
+                                    -> while { prefixEnd! - 1 => prefixEnd! }
+                                self.source -> appendNormalizedSpan(
+                                presentSpan(self.path.start, prefixEnd! - self.path.start),
+                                false,
+                                policy,
+                                merged!,
+                                maxOutputBytes)?
+                            }
+                            reference.source -> appendNormalizedSpan(
+                            reference.path,
+                            false,
+                            policy,
+                            merged!,
+                            maxOutputBytes)?
+                            policy.removeDotSegments -> if {
+                                merged! -> removeDotSegments(maxOutputBytes)? => resolvedPath
+                                resolvedPath -> appendBytes(output!, maxOutputBytes)?
+                            } else {
+                                merged! -> appendBytes(output!, maxOutputBytes)?
+                            }
+                        }
+                    reference.query.present -> if {
+                        output! -> pushOutput(63, maxOutputBytes, reference.query.start)?
+                        reference.source -> appendNormalizedSpan(
+                        reference.query,
+                        false,
+                        policy,
+                        output!,
+                        maxOutputBytes)?
+                    }
+                }
+            }
+        }
+
+        reference.fragment.present -> if {
+            output! -> pushOutput(35, maxOutputBytes, reference.fragment.start)?
+            reference.source -> appendNormalizedSpan(
+            reference.fragment,
+            false,
+            policy,
+            output!,
+            maxOutputBytes)?
+        }
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
     public isAbsolute: self -> Bool => self.scheme.present
 
     public hasAuthority: self -> Bool => self.authority -> when {

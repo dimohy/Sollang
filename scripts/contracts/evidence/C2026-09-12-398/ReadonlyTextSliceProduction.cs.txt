@@ -1,0 +1,60 @@
+namespace Sollang.Compiler.CodeGen;
+internal sealed partial class LlvmEmitter {
+    private abstract record RuntimeValue(BoundType Type);
+    private sealed record RuntimeInlineSlice(
+        BoundType SliceType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName)
+        : RuntimeValue(SliceType);
+    private sealed record RuntimeStaticTextArray(
+        string PointerName,
+        string LengthName,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap,
+        BoundType? ArrayType = null)
+        : RuntimeValue(ArrayType ?? BoundType.StaticTextArray);
+    private sealed record RuntimeStaticInlineArray(
+        BoundType ArrayType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName,
+        int Length,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(ArrayType);
+    private sealed record RuntimeDynamicInlineArray(
+        BoundType ArrayType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(ArrayType);
+    private enum RuntimeContainerStorage
+    {
+        Heap,
+        Stack
+    }
+    private RuntimeValue CreateRuntimeSlice(BoundType sliceType, RuntimeValue value)
+    {
+        if (sliceType == BoundType.IntSlice)
+        {
+            return CreateRuntimeIntSlice(value);
+        }
+        var elementType = _program.Types.GetSliceElement(sliceType);
+        var (pointer, length, actualElement) = value switch
+        {
+            RuntimeInlineSlice slice => (slice.PointerName, slice.LengthName, slice.ElementType),
+            RuntimeStaticTextArray array => (array.PointerName, array.LengthName, BoundType.Text),
+            RuntimeStaticInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
+            RuntimeDynamicInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
+            _ => throw new SollangException("readonly array view requires an array value")
+        };
+        if (actualElement != elementType)
+        {
+            throw new SollangException("readonly array view element type mismatch");
+        }
+        return new RuntimeInlineSlice(sliceType, elementType, pointer, length);
+    }
+}

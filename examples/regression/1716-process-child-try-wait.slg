@@ -1,0 +1,59 @@
+# Verifies nonblocking Child observation, stable cached status, and wait after
+# observation without a second operating-system reap or handle close.
+import std.time as time
+import sys.process as process
+
+main {
+    process.arguments() => args
+    args -> len > 1 -> if {
+        time.Duration { millis: 100 } -> sleep -> await
+        process.exit(7)
+    } else {
+        process.command(args[0]) => command!
+        command! -> arg("--child")
+        command! -> spawn -> when {
+            Result<process.Child, Text>.Ok(child) {
+                child => owner!
+                false => completed!
+                0 => observedCode!
+                0 => attempts!
+                not completed! and attempts! < 400 -> while {
+                    owner! -> tryWait -> when {
+                        Result<Option<process.ExitStatus>, Text>.Ok(status) {
+                            status -> when {
+                                Option<process.ExitStatus>.Some(exit) {
+                                    exit -> exitCode => observedCode!
+                                    true => completed!
+                                }
+                                Option<process.ExitStatus>.None {
+                                    time.Duration { millis: 5 } -> sleep -> await
+                                }
+                            }
+                        }
+                        Result<Option<process.ExitStatus>, Text>.Err(error) {
+                            error -> println
+                            true => completed!
+                        }
+                    }
+                    attempts! + 1 => attempts!
+                }
+                owner! -> tryWait -> when {
+                    Result<Option<process.ExitStatus>, Text>.Ok(status) {
+                        status -> when {
+                            Option<process.ExitStatus>.Some(exit) {
+                                "observed=$(observedCode!),repeated=$(exit -> exitCode)" -> println
+                            }
+                            Option<process.ExitStatus>.None { "missing" -> println }
+                        }
+                    }
+                    Result<Option<process.ExitStatus>, Text>.Err(error) { error -> println }
+                }
+                owner! -> wait -> when {
+                    Result<process.ExitStatus, Text>.Ok(status) { "wait=$(status -> exitCode)" -> println }
+                    Result<process.ExitStatus, Text>.Err(error) { error -> println }
+                }
+            }
+            Result<process.Child, Text>.Err(error) { error -> println }
+        }
+    }
+}

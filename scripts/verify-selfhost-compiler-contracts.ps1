@@ -6,36 +6,90 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-& (Join-Path $PSScriptRoot "verify-ai-slg-best-practices.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-async-result-propagation-contract.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-async-owned-array-cancellation-contract.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-portable-memory-io-contract.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-project-progress.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-native-exact-source-closure-contract.ps1")
-& (Join-Path $PSScriptRoot "verify-http-server-contract.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-socket-datagram-contract.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-socket-vectored-contract.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-socket-try-clone-contract.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-socket-reactor-contract.ps1") -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-struct-field-migration.ps1") -RepositoryRoot $RepositoryRoot
+function Invoke-CheckedContract {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [hashtable]$Parameters = @{}
+    )
+    $scriptPath = Join-Path $PSScriptRoot $Name
+    & $scriptPath @Parameters
+    $succeeded = $?
+    if (-not $succeeded) {
+        throw "Self-host compiler child contract failed: $Name"
+    }
+}
+
+$childFailureRejected = $false
+try {
+    Invoke-CheckedContract `
+        -Name "contracts\fixtures\detached-verification-probe.ps1" `
+        -Parameters @{ Outcome = "Fail" } *> $null
+} catch {
+    if ($_.Exception.Message -eq "Self-host compiler child contract failed: contracts\fixtures\detached-verification-probe.ps1") {
+        $childFailureRejected = $true
+    } else {
+        throw
+    }
+}
+if (-not $childFailureRejected) {
+    throw "Self-host compiler child contract failure was not propagated"
+}
+
+$repositoryParameters = @{ RepositoryRoot = $RepositoryRoot }
+foreach ($name in @(
+    "verify-ai-slg-best-practices.ps1"
+    "verify-focused-slg-format.ps1"
+    "verify-llvm-no-allocation-audit.ps1"
+    "verify-process-child-try-wait-contract.ps1"
+    "verify-async-result-propagation-contract.ps1"
+    "verify-async-owned-array-cancellation-contract.ps1"
+    "verify-portable-memory-io-contract.ps1"
+    "verify-project-progress.ps1"
+    "verify-http-server-contract.ps1"
+    "verify-socket-datagram-contract.ps1"
+    "verify-socket-vectored-contract.ps1"
+    "verify-socket-try-clone-contract.ps1"
+    "verify-socket-reactor-contract.ps1"
+    "verify-struct-field-migration.ps1"
+    "verify-uri-normalization-contract.ps1"
+    "verify-expression-lowering-parity.ps1"
+)) {
+    Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
+}
+Invoke-CheckedContract -Name "verify-native-exact-source-closure-contract.ps1"
+
+# Execute the small current-source probes before the expensive compiler build.
+# These extract production functions; they never rebuild the compiler itself.
+if ($IsWindows) {
+    Invoke-CheckedContract -Name "verify-mapped-layout-traits.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-mapped-resize-failure.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-utf8-each-runtime.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-contextual-integer-literals.ps1"
+    Invoke-CheckedContract -Name "verify-generic-type-contexts.ps1" -Parameters @{ RepositoryRoot = $RepositoryRoot; TypeDelimiters = $true; ReadonlyTextSlice = $true }
+    Invoke-CheckedContract -Name "verify-borrowed-source-text-return-carriers.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-deferred-text-storage.ps1" -Parameters $repositoryParameters
+}
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
-& (Join-Path $PSScriptRoot "verify-selfhost-fragment-manifests.ps1")
-& (Join-Path $PSScriptRoot "verify-selfhost-source-structure.ps1")
-& (Join-Path $PSScriptRoot "verify-llvm-emitter-modules.ps1")
-& (Join-Path $PSScriptRoot "verify-llvm-emitter-split-abi.ps1")
-& (Join-Path $PSScriptRoot "verify-selfhost-llvm-function-diff.ps1") `
-    -RepositoryRoot $RepositoryRoot
-
-& (Join-Path $PSScriptRoot "verify-input-fingerprint-stability-contract.ps1")
-& (Join-Path $PSScriptRoot "verify-selfhost-stage3-seed-provenance.ps1") `
-    -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-verified-stage3-install-contract.ps1")
-& (Join-Path $PSScriptRoot "verify-quic-stream-api-contract.ps1") `
-    -RepositoryRoot $RepositoryRoot
-& (Join-Path $PSScriptRoot "verify-browser-stage2-input-fingerprint-contract.ps1")
-& (Join-Path $PSScriptRoot "verify-cpu-target-contract.ps1") `
-    -RepositoryRoot $RepositoryRoot
+foreach ($name in @(
+    "verify-selfhost-fragment-manifests.ps1"
+    "verify-selfhost-source-structure.ps1"
+    "verify-llvm-emitter-modules.ps1"
+    "verify-llvm-emitter-split-abi.ps1"
+    "verify-input-fingerprint-stability-contract.ps1"
+    "verify-verified-stage3-install-contract.ps1"
+    "verify-browser-stage2-input-fingerprint-contract.ps1"
+)) {
+    Invoke-CheckedContract -Name $name
+}
+foreach ($name in @(
+    "verify-selfhost-llvm-function-diff.ps1"
+    "verify-selfhost-stage3-seed-provenance.ps1"
+    "verify-quic-stream-api-contract.ps1"
+    "verify-cpu-target-contract.ps1"
+)) {
+    Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
+}
 
 function Assert-Contains {
     param([string]$Text, [string]$Expected, [string]$Description)
@@ -673,6 +727,8 @@ Assert-Contains $selfhostDriver 'command -> textEquals("diagnostic-counts")' "ch
 Assert-Contains $selfhostDriver 'ownership diagnostic code $(diagnostic.code)' "ownership diagnostic type identity telemetry"
 Assert-Contains $selfhostDriver 'command -> textEquals("qualified-resolutions")' "qualified resolution structural diagnostic command"
 Assert-Contains $selfhostDriver 'command -> textEquals("symbols")' "source-local symbol structural diagnostic command"
+Assert-Contains $selfhostDriver 'command -> textEquals("typed-ir-nodes-parallel")' "production-parallel Typed IR differential diagnostic command"
+Assert-Contains $typed 'public lowerContextParallel prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; ~]' "production-parallel Typed IR differential lowering entrypoint"
 Assert-Contains $incrementalVerifier '-Arguments (@("typed-ir-lower") + $fixturePaths)' "expanded-source Typed IR source-lowering profile"
 Assert-Contains $incrementalVerifier '-Arguments (@("typed-ir-index") + $fixturePaths)' "expanded-source Typed IR shared-index profile"
 Assert-Contains $incrementalVerifier '-Arguments (@("typed-ir-prefix", [string]$ProfileSourcePrefix) + $fixturePaths)' "expanded-source Typed IR source-prefix profile"
@@ -1068,6 +1124,12 @@ Assert-Matches $typedFunctionLowering '(?s)sealLateNominalMemberTypes results:.*
 Assert-Matches $typedResolvedContextFinalize '(?s)sealFinalBinaryOperandTopology nodes: mut \[TypedIrNode; ~\].*?candidate\.parent >= 0.*?nodes\[candidate\.parent\]\.kind == 8.*?candidateEnd <= operatorStart.*?candidateAst\.start >= operatorEnd.*?leftByBinary!\[binaryIndex!\] => binary!\.operand0.*?rightByBinary!\[binaryIndex!\] => binary!\.operand1' "final binary operands use one linear exact-parent index after control ownership converges"
 Assert-Matches $typedResolvedContextFinalize 'nodes\[candidate\.parent\]\.opcode >= grammar\.tokenIdPlus\(\)\s+and nodes\[candidate\.parent\]\.opcode <= grammar\.tokenIdPercent\(\)' "final binary topology repair is restricted to arithmetic operators"
 Assert-Contains $typedResolvedContextFinalize 'and not (candidate.kind == 9 and candidate.opcode == -1)' "final binary topology excludes transparent wrapper operands"
+Assert-Matches $typedOrdinaryFunction '(?s)# Binary syntax is itself the lowering authority\..*?true => knownNumericExpression!.*?frozenNearestLegacyIndexByAst' "ordinary binary syntax survives provisional semantic typing"
+Assert-Matches $typedSourceLowering '(?s)# Keep every binary syntax node even when.*?true => knownEntryNumericExpression!.*?frozenNearestLegacyIndexByAst' "entry binary syntax survives provisional semantic typing"
+Assert-Contains $typed 'public isNumericBinaryAstKind kind: Int -> Bool => kind == 20 or kind == 21' "single numeric binary AST materialization policy"
+Assert-Matches $typed '(?s)public isBooleanBinaryAstKind kind: Int -> Bool.*?kind == 18.*?kind == 19.*?kind == 24.*?kind == 25.*?kind == 70' "single Boolean binary AST materialization policy"
+Assert-Contains $typedOrdinaryFunction 'expression.kind -> isNumericBinaryAstKind' "ordinary lowering consumes shared numeric binary policy"
+Assert-Contains $typedSourceLowering 'entryExpression.kind -> isNumericBinaryAstKind' "entry lowering consumes shared numeric binary policy"
 Assert-Matches $typedResolvedContextFinalize '(?s)currentLeftAst\.start >= binaryAst\.start.*?currentLeftAst\.start \+ currentLeftAst\.length <= binaryOperatorStart.*?currentRightAst\.start >= binaryOperatorEnd.*?currentRightAst\.start \+ currentRightAst\.length <= binaryAstEnd' "final binary topology preserves already valid in-span operands"
 Assert-Contains $typedResolvedContextFinalize 'nodes -> sealFinalBinaryOperandTopology(prepared)' "final binary topology seals before contextual numeric literals"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealFinalFunctionReturnAncestors\(prepared\).*?nodes -> sealEachRoleTypes\(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+# Final return convergence.*?nodes -> sealLateNominalMemberTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!\)\s+nodes -> sealFinalBinaryOperandTopology' "final return convergence seals each-role types before nominal fields and arithmetic topology"
@@ -1521,6 +1583,9 @@ Assert-Contains $textContext 'current.kind == 13' "bounded dictionary dependency
 Assert-Contains $invariants 'context.typeLayoutStatuses[index!] == 3' "invalid value-layout admission"
 Assert-Contains $invariants '(context -> invalidValueLayoutType) >= 0 -> if { 1 -> return }' "single pre-LLVM recursive layout diagnostic"
 Assert-Contains $invariantDiagnostics 'compiler error S058: type has a recursive by-value layout' "source-located recursive value diagnostic"
+Assert-Matches $invariants '(?s)missingBinaryBindingIr context: ref emitterContext\.EmitContext.*?binaryChildByParentAst!.*?binaryIrByAst!.*?typedIr\.isBinaryValueAstKind.*?candidate\.kind == 8.*?binding\.kind == 17.*?binaryIrByAst!\[binaryAst\] < 0' "linear binary AST-to-Typed-IR coverage invariant"
+Assert-Contains $invariants '(context -> missingBinaryBindingIr) >= 0 -> if { count! + 1 => count! }' "missing binary binding contributes an invariant diagnostic"
+Assert-Contains $invariantDiagnostics 'compiler error S059: binary binding initializer was not materialized in Typed IR' "source-located missing binary Typed IR diagnostic"
 Assert-Contains $calls 'receiverField.ownerType == receiverTypeId! => receiverFieldOwnerMatches!' "projected receiver exact field owner"
 Assert-Contains $calls 'receiverFieldOwnerType.module == receiverFieldReceiverType.module' "projected receiver canonical nominal field owner module"
 Assert-Contains $calls 'receiverFieldOwnerType.symbol == receiverFieldReceiverType.symbol' "projected receiver canonical nominal field owner symbol"
@@ -2378,6 +2443,10 @@ foreach ($nativeExactFixture in @(
     "1686-selfhost-trait-associated-result",
     "1687-selfhost-chained-call-local-precedence",
     "1690-selfhost-associated-type-specialization-isolation",
+    "1716-process-child-try-wait",
+    "1723-owned-match-payload-mutable-binding",
+    "1724-csv-bounded-writer",
+    "1725-materialized-text-storage-boundaries",
     "945-quic-flow-control-frames"
 )) {
     Assert-Contains $nativeExactFixtureBatchVerifier "`"$nativeExactFixture`"" "native exact batch fixture $nativeExactFixture"
@@ -3121,7 +3190,7 @@ Assert-Contains $coreCalls 'store i1 false, ptr %arg$(transferredParameter)_owne
 Assert-Contains $ownership 'enumMatchOwnsSubject subjectIndex:' "enum payload cleanup has one producer-ownership authority"
 Assert-Contains $ownership 'context.types[producerType].kind == 8' "reference-result enum producers remain borrowed"
 Assert-NotContains $ownership 'producerType -> semanticTypeOwns(context, state)' "fresh enum payload cleanup does not depend on the container ownership trait"
-Assert-Matches $ownership '(?s)regionFullyMovesBinding regionIndex:.*?regionIndex -> regionReturns\(context, state\)\s+-> if \{ true -> return \}' "terminating regions do not retain ownership at a continuing merge"
+Assert-Matches $ownership '(?s)regionFullyMovesBinding regionIndex:.*?context\.ir\[regionIndex\] => region\s+region\.kind != 0 and region\.kind != 11\s+-> if \{\s+regionIndex -> regionReturns\(context, state\)\s+-> if \{ true -> return \}' "only terminating control regions discharge ownership at a continuing merge"
 Assert-Contains $ownership 'armIndex! -> enumMatchArmRegion(context, state) => armRegion' "enum ownership analysis resolves the emitted body region"
 Assert-Contains $control 'enumMatchArmRegion armIndex:' "canonical enum arm body resolver"
 Assert-Contains $control 'armIndex! -> enumMatchArmRegion(context, state) => emittedArmRegion' "enum emission shares the ownership body resolver"
@@ -3163,6 +3232,8 @@ if ($staleRanges) {
 }
 
 Assert-Contains $detachedVerification 'executionMode = "detached-supervisor"' "detached execution mode evidence"
+Assert-Contains $detachedVerification 'IncrementalFixture must be under $repositoryRoot' "detached incremental fixture path scope preflight"
+Assert-Contains $detachedVerification 'IncrementalFixture does not exist:' "detached incremental fixture existence preflight"
 Assert-Matches $detachedVerification '(?s)\$scratchRoot = .*?if \(\$Verification -eq "Stage3" -and \$SeedMode -eq "Stage2Bridge"\)' "Stage3 seed mode fail-fast before launch"
 Assert-Contains $detachedVerification '-WindowStyle Hidden' "hidden detached supervisor launch"
 Assert-Contains $detachedVerification '"Stage2Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage2-linux.ps1" }' "detached Linux Stage2 routing"

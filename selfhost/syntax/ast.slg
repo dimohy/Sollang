@@ -420,6 +420,62 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     [UIntSize; ~] => postfixFixupEnds!
     [Int; ~] => postfixOuterParents!
     [Int; ~] => postfixOuterNodes!
+    # Comparison grammar envelopes also surround generic type syntax. Mark
+    # angles owned by exact TypeAnnotation spans, plus the outer balanced clause
+    # of a TypeApplicationExpression. Its call arguments share that expression
+    # span but retain their own comparison operators.
+    [Int; ~] => typeSyntaxAngleToken!
+    0 => tokenIndex!
+    tokenIndex! < (tokens -> len) -> while {
+        typeSyntaxAngleToken! -> push(0)
+        tokenIndex! + 1 => tokenIndex!
+    }
+    0 => typeAnnotationIndex!
+    typeAnnotationIndex! < (green -> len) -> while {
+        green[typeAnnotationIndex!] => typeAnnotationNode
+        typeAnnotationNode.ruleId == grammar.ruleIdTypeAnnotation()
+            and typeAnnotationNode.firstToken >= 0
+            -> if {
+                typeAnnotationNode.firstToken => typeTokenIndex!
+                typeAnnotationNode.firstToken + typeAnnotationNode.tokenCount => typeTokenEnd
+                typeTokenIndex! < typeTokenEnd -> while {
+                    tokens[typeTokenIndex!].kind == grammar.tokenIdLess()
+                        or tokens[typeTokenIndex!].kind == grammar.tokenIdGreater()
+                        -> if { 1 => typeSyntaxAngleToken![typeTokenIndex!] }
+                    typeTokenIndex! + 1 => typeTokenIndex!
+                }
+            }
+        typeAnnotationIndex! + 1 => typeAnnotationIndex!
+    }
+    0 => typeApplicationIndex!
+    typeApplicationIndex! < (green -> len) -> while {
+        green[typeApplicationIndex!] => typeApplicationNode
+        typeApplicationNode.ruleId == grammar.ruleIdTypeApplicationExpression()
+            and typeApplicationNode.firstToken >= 0
+            -> if {
+                typeApplicationNode.firstToken => typeTokenIndex!
+                typeApplicationNode.firstToken + typeApplicationNode.tokenCount => typeTokenEnd
+                0 => typeAngleDepth!
+                false => foundTypeAngles!
+                typeTokenIndex! < typeTokenEnd -> while {
+                    tokens[typeTokenIndex!].kind == grammar.tokenIdLess()
+                        -> if {
+                            typeAngleDepth! + 1 => typeAngleDepth!
+                            true => foundTypeAngles!
+                            1 => typeSyntaxAngleToken![typeTokenIndex!]
+                        }
+                    foundTypeAngles!
+                        and tokens[typeTokenIndex!].kind == grammar.tokenIdGreater()
+                        -> if {
+                            1 => typeSyntaxAngleToken![typeTokenIndex!]
+                            typeAngleDepth! - 1 => typeAngleDepth!
+                            typeAngleDepth! == 0 -> if { typeTokenEnd => typeTokenIndex! }
+                        }
+                    typeTokenIndex! + 1 => typeTokenIndex!
+                }
+            }
+        typeApplicationIndex! + 1 => typeApplicationIndex!
+    }
     0 => cstIndex!
     0 - 1 => missingNode
 
@@ -479,12 +535,12 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     candidateOperator => operatorKind!
                     operatorTokenIndex! => operatorPayloadToken!
                 }
-            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 19 and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 19 and typeSyntaxAngleToken![operatorTokenIndex!] == 0 and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
                 -> if {
                     candidateOperator => operatorKind!
                     operatorTokenIndex! => operatorPayloadToken!
                 }
-            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdValueFlowComparisonExpression() and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdValueFlowComparisonExpression() and typeSyntaxAngleToken![operatorTokenIndex!] == 0 and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
                 -> if {
                     19 => astKind!
                     candidateOperator => operatorKind!

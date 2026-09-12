@@ -140,7 +140,8 @@ internal sealed partial class LlvmEmitter
                     or BoundFunctionKind.RuntimeRunProcessToFile
                     or BoundFunctionKind.RuntimeCollectProcess
                     or BoundFunctionKind.RuntimeSpawnProcess
-                    or BoundFunctionKind.RuntimeWaitProcess);
+                    or BoundFunctionKind.RuntimeWaitProcess
+                    or BoundFunctionKind.RuntimePollChildProcess);
         _usesProcessCapture = _reachableFunctions.Any(static function =>
                 function.Kind == BoundFunctionKind.RuntimeCollectProcess);
         _usesProcessExit = program.MainStatements.Any(UsesProcessExit)
@@ -260,10 +261,10 @@ internal sealed partial class LlvmEmitter
     private bool UsesChildProcess(Expression expression)
     {
         if (expression is CallExpression call
-                && string.Join('.', call.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait") return true;
+                && string.Join('.', call.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait" or "sys.process.Child.tryWait" or "sys.process.pollChild") return true;
         if (expression is FlowExpression flow
                 && flow.Targets.Any(target =>
-                    string.Join('.', target.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait")) return true;
+                    string.Join('.', target.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait" or "sys.process.Child.tryWait" or "sys.process.pollChild")) return true;
         return expression switch
         {
             StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesChildProcess(x.Expression)),
@@ -770,6 +771,7 @@ internal sealed partial class LlvmEmitter
             %sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
             %sollang.environment_result = type { ptr, i64, i1, i1 }
             %sollang.process_result = type { i32, i32 }
+            %sollang.process_poll_result = type { i32, i32 }
             %sollang.process_spawn_result = type { i64, i64, i32 }
             %sollang.process_capture_result = type { i32, ptr, i64, i64, i1, ptr, i64, i64, i1, i32 }
             %sollang.process_environment_result = type { ptr, i64, i64, i1 }

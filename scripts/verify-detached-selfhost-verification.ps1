@@ -142,8 +142,11 @@ if ($result.status -cne "failed") { throw "probe status was not preserved" }
 if (@($result.failureIds) -notcontains "E999") { throw "diagnostic failure id E999 was not preserved" }
 if (@($result.failureIds) -notcontains "S015") { throw "self-host diagnostic failure id S015 was not preserved" }
 if (@($result.failureIds) -notcontains "9999-detached-supervisor-probe") { throw "fixture failure id was not preserved" }
+if (@($result.failureIds) -notcontains "80-unicode-code-points") { throw "two-digit fixture failure id was not preserved" }
+if (@($result.failureIds) -notcontains "1-short-fixture-id") { throw "one-digit fixture failure id was not preserved" }
 if (@($result.failureIds) -contains "1411-borrowed-receiver-error-reuse") { throw "passing fixture name containing error was misclassified as a failure identifier" }
-if (@($result.failureIds).Count -ne 3) { throw "failed probe reported unexpected failure identifiers" }
+if (@($result.failureIds) -contains "2-error-name-negative-control") { throw "passing short fixture name was misclassified as a failure identifier" }
+if (@($result.failureIds).Count -ne 5) { throw "failed probe reported unexpected failure identifiers" }
 if (-not (Test-Path -LiteralPath $logPath -PathType Leaf)) { throw "durable log is missing" }
 if ($observer.Id -eq $result.supervisorPid) { throw "observer and supervisor must be distinct processes" }
 $failedProgress = & $progressReaderPath -CompletionRecordPath $completionRecordPath | ConvertFrom-Json
@@ -151,7 +154,7 @@ if ($failedProgress.status -cne "failed" -or $failedProgress.exitCode -ne 7) {
     throw "failed detached progress state is incorrect"
 }
 
-Write-Host "[detached selfhost verification] PASS observer exited independently; exit code 7 and 3/3 failure IDs preserved."
+Write-Host "[detached selfhost verification] PASS observer exited independently; exit code 7 and 5/5 failure IDs preserved."
 
 $passRunId = "$runId-pass"
 $passLogPath = Join-Path $scratchRoot "$passRunId.log"
@@ -172,10 +175,12 @@ while (-not (Test-Path -LiteralPath $passCompletionRecordPath -PathType Leaf)) {
 $passResult = Get-Content -LiteralPath $passCompletionRecordPath -Raw | ConvertFrom-Json
 $passResultJson = Get-Content -LiteralPath $passCompletionRecordPath -Raw
 if (-not ($passResultJson | Test-Json -SchemaFile $resultSchemaPath)) { throw "successful result does not match its schema" }
-$incrementalSuccess = $passResultJson | ConvertFrom-Json
-$incrementalSuccess.verification = "Incremental"
-if (-not (($incrementalSuccess | ConvertTo-Json -Depth 8) | Test-Json -SchemaFile $resultSchemaPath)) {
-    throw "incremental result does not match its schema"
+foreach ($kind in @('Incremental', 'ExpressionBatch', 'ManagedHost')) {
+    $incrementalSuccess = $passResultJson | ConvertFrom-Json
+    $incrementalSuccess.verification = $kind
+    if (-not (($incrementalSuccess | ConvertTo-Json -Depth 8) | Test-Json -SchemaFile $resultSchemaPath)) {
+        throw "$kind result does not match its schema"
+    }
 }
 $unknownVerification = $passResultJson | ConvertFrom-Json
 $unknownVerification.verification = "Unknown"

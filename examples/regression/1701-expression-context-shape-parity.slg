@@ -1,0 +1,34 @@
+# Entry and ordinary functions must share Bool, call, flow, and generic enum
+# constructor materialization instead of maintaining parallel kind tables.
+
+identity value: Int -> Int => value
+
+functionCase value: Int -> Result<Int, Text> {
+    true => enabled
+    value -> identity => flowed
+    enabled -> if {
+        Result<Int, Text>.Ok(flowed)
+    } else {
+        Result<Int, Text>.Err("disabled")
+    }
+}
+
+main {
+    true => enabled
+    5 -> identity => flowed
+    Result<Int, Text>.Ok(flowed) => direct
+    direct -> when {
+        Ok(directValue) {
+            functionCase(flowed) -> when {
+                Ok(value) {
+                    enabled -> if {
+                        directValue + value => total
+                        "context=$total" -> println
+                    }
+                }
+                Err(message) { message -> println }
+            }
+        }
+        Err(message) { message -> println }
+    }
+}

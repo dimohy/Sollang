@@ -511,36 +511,8 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                 expression.operand0 -> writeValue(functionIndex, context, state)
                 "" -> println
             }
-            expression.kind == 37 -> if {
-                expression.operand0 => branchArmValueIndex!
-                0 => branchArmPosition!
-                branchArmValueIndex! >= 0 -> while {
-                    context.ir[branchArmValueIndex!] => branchArmValue
-                    "  " -> print
-                    branchArmValue.nextOperand < 0 -> if { "%v$(expressionIndex)" -> print } else { "%v$(expressionIndex)_f$(branchArmPosition!)" -> print }
-                    " = insertvalue " -> print
-                    expression -> writeIrType(context, state)
-                    " " -> print
-                    branchArmPosition! == 0 -> if { "poison" -> print } else {
-                        "%v$(expressionIndex)_f" -> print
-                        branchArmPosition! - 1 -> writeDecimal
-                    }
-                    ", " -> print
-                    branchArmValue -> writeIrType(context, state)
-                    " " -> print
-                    branchArmValueIndex! -> writeValue(functionIndex, context, state)
-                    ", $(branchArmPosition!)" -> println
-                    branchArmValue.nextOperand => branchArmValueIndex!
-                    branchArmPosition! + 1 => branchArmPosition!
-                }
-            }
-            expression.kind == 39 -> if {
-                "  %v$(expressionIndex) = freeze " -> print
-                expression -> writeIrType(context, state)
-                " " -> print
-                expression.operand1 -> writeValue(functionIndex, context, state)
-                "" -> println
-            }
+            expression.kind == 37 -> if { expressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
+            expression.kind == 39 -> if { expressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
             expression.kind == 43 -> if {
                 expressionIndex -> plannedStreamJunction(context, state) => functionJunctionIndex
                 functionJunctionIndex >= 0 and context.streamPlan.junctions[functionJunctionIndex].kind == 2
@@ -558,102 +530,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                     }
             }
             expression.kind == 38 and context.supportsComputePool
-                -> if {
-                    context.ir[expression.operand1] => functionParallelBranchSource
-                    expressionIndex -> parallelBranchCaptures(context, state) => functionParallelBranchCaptures
-                    0 => functionParallelBranchArmCount!
-                    expression.operand0 => functionParallelBranchArmCountIndex!
-                    functionParallelBranchArmCountIndex! >= 0 -> while {
-                        functionParallelBranchArmCount! + 1 => functionParallelBranchArmCount!
-                        context.ir[functionParallelBranchArmCountIndex!].nextOperand => functionParallelBranchArmCountIndex!
-                    }
-                    "  %v$(expressionIndex)_environment = alloca " -> print
-                    expressionIndex -> writeParallelBranchEnvironmentType(functionParallelBranchCaptures, context, state)
-                    ", align 8" -> println
-                    "  %v$(expressionIndex)_source_address = getelementptr " -> print
-                    expressionIndex -> writeParallelBranchEnvironmentType(functionParallelBranchCaptures, context, state)
-                    ", ptr %v$(expressionIndex)_environment, i32 0, i32 0" -> println
-                    "  store " -> print
-                    functionParallelBranchSource -> writeIrType(context, state)
-                    " " -> print
-                    expression.operand1 -> writeValue(functionIndex, context, state)
-                    ", ptr %v$(expressionIndex)_source_address, align " -> print
-                    functionParallelBranchSource -> storageAlign(context, state) -> writeDecimalLine
-                    0 => functionParallelBranchCaptureIndex!
-                    functionParallelBranchCaptureIndex! < (functionParallelBranchCaptures -> len)
-                        -> while {
-                            "  %v$(expressionIndex)_capture_address_$(functionParallelBranchCaptureIndex!) = getelementptr " -> print
-                            expressionIndex -> writeParallelBranchEnvironmentType(functionParallelBranchCaptures, context, state)
-                            ", ptr %v$(expressionIndex)_environment, i32 0, i32 " -> print
-                            functionParallelBranchCaptureIndex! + 1 -> writeDecimalLine
-                            context.ir[functionParallelBranchCaptures[functionParallelBranchCaptureIndex!]] => functionParallelBranchCapture
-                            "  store " -> print
-                            functionParallelBranchCapture -> ownsType -> if {
-                                "ptr " -> print
-                                CaptureValueRequest { callerIndex: functionIndex, callIndex: expressionIndex, bindingIndex: functionParallelBranchCaptures[functionParallelBranchCaptureIndex!], captureIndex: functionParallelBranchCaptureIndex! } -> emitCapturePointer(context, state)
-                            } else {
-                                functionParallelBranchCapture -> writeIrType(context, state)
-                                " " -> print
-                                CaptureValueRequest { callerIndex: functionIndex, callIndex: expressionIndex, bindingIndex: functionParallelBranchCaptures[functionParallelBranchCaptureIndex!], captureIndex: functionParallelBranchCaptureIndex! } -> emitCaptureValue(context, state)
-                            }
-                            ", ptr %v$(expressionIndex)_capture_address_$(functionParallelBranchCaptureIndex!), align " -> print
-                            functionParallelBranchCapture -> ownsType -> if { "8" -> println } else { functionParallelBranchCapture -> storageAlign(context, state) -> writeDecimalLine }
-                            functionParallelBranchCaptureIndex! + 1 => functionParallelBranchCaptureIndex!
-                        }
-                    expressionIndex -> parallelBranchArguments(context) => functionParallelBranchArguments
-                    0 => functionParallelBranchArgumentIndex!
-                    functionParallelBranchArgumentIndex! < (functionParallelBranchArguments -> len)
-                        -> while {
-                            functionParallelBranchArguments[functionParallelBranchArgumentIndex!] => functionParallelBranchArgument
-                            context.ir[functionParallelBranchArgument].parent => functionParallelBranchArgumentCall
-                            functionParallelBranchArgument -> parallelBranchArgumentOrdinal(context) => functionParallelBranchArgumentOrdinal
-                            functionParallelBranchArgumentCall -> callTargetParameter(functionParallelBranchArgumentOrdinal, context, state) => functionParallelBranchArgumentParameter
-                            "  %v$(expressionIndex)_argument_address_$(functionParallelBranchArgumentIndex!) = getelementptr " -> print
-                            expressionIndex -> writeParallelBranchEnvironmentType(functionParallelBranchCaptures, context, state)
-                            ", ptr %v$(expressionIndex)_environment, i32 0, i32 " -> print
-                            1 + (functionParallelBranchCaptures -> len) + functionParallelBranchArgumentIndex! -> writeDecimalLine
-                            "  store " -> print
-                            functionParallelBranchArgument -> writeCallArgument(functionParallelBranchArgumentCall, functionIndex, functionParallelBranchArgumentOrdinal, context, state)
-                            ", ptr %v$(expressionIndex)_argument_address_$(functionParallelBranchArgumentIndex!), align " -> print
-                            functionParallelBranchArgumentParameter >= 0
-                                -> if { context.ir[functionParallelBranchArgumentParameter] -> storageAlign(context, state) -> writeDecimalLine } else { context.ir[functionParallelBranchArgument] -> storageAlign(context, state) -> writeDecimalLine }
-                            functionParallelBranchArgumentIndex! + 1 => functionParallelBranchArgumentIndex!
-                        }
-                    "  %v$(expressionIndex)_output = alloca " -> print
-                    expression -> writeIrType(context, state)
-                    ", align " -> print
-                    expression -> storageAlign(context, state) -> writeDecimalLine
-                    "  %v$(expressionIndex)_group = alloca %sollang.compute_group, align 8" -> println
-                    "  %v$(expressionIndex)_callback_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 0" -> println
-                    "  store ptr @sollang_parallel_branch_$(expressionIndex), ptr %v$(expressionIndex)_callback_slot, align 8" -> println
-                    "  %v$(expressionIndex)_input_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 1" -> println
-                    "  store ptr null, ptr %v$(expressionIndex)_input_slot, align 8" -> println
-                    "  %v$(expressionIndex)_output_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 2" -> println
-                    "  store ptr %v$(expressionIndex)_output, ptr %v$(expressionIndex)_output_slot, align 8" -> println
-                    "  %v$(expressionIndex)_count_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 3" -> println
-                    "  store i64 $(functionParallelBranchArmCount!), ptr %v$(expressionIndex)_count_slot, align 8" -> println
-                    "  %v$(expressionIndex)_environment_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 4" -> println
-                    "  store ptr %v$(expressionIndex)_environment, ptr %v$(expressionIndex)_environment_slot, align 8" -> println
-                    "  %v$(expressionIndex)_sinks = call ptr @malloc(i64 $(functionParallelBranchArmCount! * 24))" -> println
-                    "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex)_sinks, i8 0, i64 $(functionParallelBranchArmCount! * 24), i1 false)" -> println
-                    "  %v$(expressionIndex)_sinks_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 5" -> println
-                    "  store ptr %v$(expressionIndex)_sinks, ptr %v$(expressionIndex)_sinks_slot, align 8" -> println
-                    6 => functionParallelBranchRuntimeField!
-                    functionParallelBranchRuntimeField! <= 10 -> while {
-                        "  %v$(expressionIndex)_runtime_slot_$(functionParallelBranchRuntimeField!) = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 $(functionParallelBranchRuntimeField!)" -> println
-                        "  store ptr null, ptr %v$(expressionIndex)_runtime_slot_$(functionParallelBranchRuntimeField!), align 8" -> println
-                        functionParallelBranchRuntimeField! + 1 => functionParallelBranchRuntimeField!
-                    }
-                    "  %v$(expressionIndex)_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 11" -> println
-                    "  store atomic i64 $(functionParallelBranchArmCount!), ptr %v$(expressionIndex)_failure_limit_slot release, align 8" -> println
-                    "  %v$(expressionIndex)_initialized_slot = getelementptr %sollang.compute_group, ptr %v$(expressionIndex)_group, i32 0, i32 12" -> println
-                    "  store ptr null, ptr %v$(expressionIndex)_initialized_slot, align 8" -> println
-                    "  call void @sollang_compute_execute(ptr %v$(expressionIndex)_group)" -> println
-                    "  %v$(expressionIndex) = load " -> print
-                    expression -> writeIrType(context, state)
-                    ", ptr %v$(expressionIndex)_output, align " -> print
-                    expression -> storageAlign(context, state) -> writeDecimalLine
-                }
+                -> if { expressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
             expressionIndex -> emitFunctionAggregateExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
             expressionIndex -> emitFunctionLoopExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
             expressionIndex -> emitFunctionArrayExpressions(functionIndex, functionEnd!, expressionStart, staticReadonlyArrayIndex, expressionOrder, context, state)
