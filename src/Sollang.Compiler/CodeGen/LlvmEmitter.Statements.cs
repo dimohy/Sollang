@@ -267,6 +267,14 @@ internal sealed partial class LlvmEmitter
         }
 
         var value = EmitFunctionArgumentExpression(statement.Value, function.ReturnType);
+        if (function.ReturnType == BoundType.Unit)
+        {
+            EnsureRuntimeType(value, BoundType.Unit, function.Name);
+            DropOwnedLocals();
+            EmitInstruction("ret void");
+            return;
+        }
+
         value = PrepareBorrowedFixedStorageReturn(statement.Value, value);
         EnsureRuntimeType(value, function.ReturnType, function.Name);
         var transferredOwnerName = IsOwnedContainerRuntimeValue(value)

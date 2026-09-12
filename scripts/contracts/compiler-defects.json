@@ -6747,6 +6747,26 @@
         "baselineReceipt": "scripts/contracts/evidence/C2026-09-12-406/baseline.json",
         "candidateReceipt": "scripts/contracts/evidence/C2026-09-12-406/candidate.json"
       }
+    },
+    {
+      "id": "C2026-09-12-407",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "managed Unit-valued return lowering and selfhost LLVM text consumer closure",
+      "rootCause": "A flow such as value -> println -> return carries an explicit Unit expression into ReturnStatement. EmitReturnStatement handled a syntactically bare return as ret void, but every value-bearing return fell through aggregate materialization. RuntimeUnit has no aggregate representation, so valid Unit-valued early returns failed during LLVM generation. The repair evaluates and type-checks the Unit expression for its effects, performs ordinary local cleanup, and emits ret void before aggregate materialization. This surfaced only after the selfhost llvmType helper was rewritten from a mutable Text accumulator into its natural single-subject when, which removed an earlier borrow diagnostic and let the same compiler reach writeIntegerLiteral.",
+      "focusedFixture": "1735-unit-value-return-in-enum-arm places a Unit-returning println flow inside an Option.Some arm and freezes exact output 7. verify-unit-value-return-focused binds the production emitter, exact native output, the void function ABI, ret void, direct-call closure, input hashes, and the 100-source selfhost fixture 1393 that reaches writeIntegerLiteral.",
+      "closureGate": "Preserve expression effects and exactly-once local cleanup while lowering both bare and value-bearing Unit returns to ret void. The frozen pre-fix compiler must fail fixture 1735 with RuntimeUnit aggregate materialization and no LLVM or executable; the current compiler must pass all six focused checks, including the 100-source selfhost LLVM text consumer. Keep candidate-fixed until the affected rebuilt selfhost differential and final accumulated Stage2/Stage3 promotion complete.",
+      "closedEvidence": [
+        "The e6206236 compiler builds with warning zero and fails the frozen fixture before products with runtime value RuntimeUnit with type Unit is not supported in an inline struct field while emitting .finishEarly.",
+        "The current compiler passes verify-unit-value-return-focused 6/6: authority and input hashes, exact output, void ABI plus ret void, direct-call closure, and 100-source selfhost fixture 1393 exact execution.",
+        "The original selfhost llvmType borrow diagnostic is no longer the immediate build blocker after replacing its mutable multi-assignment ladder with one exhaustive subject when; the full accumulated selfhost and Stage promotion remain unclaimed."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-12-407/as-us-001.json",
+        "inputFingerprint": "85F28B09C7C33B789F6B40A5DCD680C5C08798A54ED43201CA19A79A82F19217",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-12-407/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-12-407/candidate.json"
+      }
     }
   ]
 }
