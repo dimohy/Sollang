@@ -1166,10 +1166,16 @@ ticks, `Skip` advances to the next aligned tick, and `Delay` schedules from the
 observed wake time. `cancel(move self)` and `close(move self)` explicitly end an
 idle schedule, while cancellation of an in-flight wait consumes its Task.
 Browser targets reject this async surface rather than blocking. The
-current-source self-host candidate executes the focused zero-parameter
-`Duration.sleep`/`await` slice through an affine Task and scheduler-owned timer
-queue. General self-host async state-machine parity and network/process deadline
-consumers remain unfinished slices.
+current-source self-host candidate executes `Duration.sleep`/`await` through an
+affine Task and scheduler-owned timer queue. An ordinary async wrapper stores
+its result at context offset zero and stores every primary and additional input
+in later aligned slots; its worker reloads those values in source order before
+calling the async body. Scalar inputs and an affine Dictionary input pass the
+focused normal-completion contract. A standalone Windows or Linux native async
+module emits the complete Task scheduler even when its source root contains no
+stdlib runtime module. Captures, direct chained await with an affine additional
+input, cancellation before the body first executes, general state-machine
+parity, and network/process deadline consumers remain unfinished slices.
 
 `sleep` registers its Task in the executor's deadline-ordered timer queue. It
 does not allocate an OS thread and does not remain in the runnable queue. When
@@ -1184,12 +1190,15 @@ with the fully constructed `Err(E)`. The internal readiness worker stores that
 Result in the Task context and returns `true`; it never returns the enum through
 the worker's Boolean readiness ABI. The managed Windows/Linux backend implements
 this complete contract; the browser target rejects async functions. The
-self-host LLVM candidate currently implements only the focused zero-parameter
-async function plus canonical `Duration.sleep`/`await` Task boundary. Parameters
-and captures, multiple suspension states, typed spills and resume, fallible
-completion, cancellation ownership, and platform differential execution remain
-required before claiming self-host parity. Synchronous output equivalence alone
-is never async evidence.
+self-host LLVM candidate currently implements the canonical
+`Duration.sleep`/`await` Task boundary plus aligned primary and additional
+parameter transfer for ordinary async functions. Focused native execution
+includes distinct scalar Tasks and affine Dictionary normal completion, and the
+standalone scheduler executes on Windows and Linux. Captures, direct chained
+await with an affine additional input, multiple suspension states, typed spills
+and resume, fallible completion, cancellation ownership, and accumulated
+Stage2/Stage3 remain required before claiming self-host parity. Synchronous
+output equivalence alone is never async evidence.
 
 ## Local Functions
 

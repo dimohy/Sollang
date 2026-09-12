@@ -22,6 +22,63 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
         }
 }
 
+alignedAsyncContextOffset offset: Int, alignment: Int -> Int {
+    alignment <= 1 -> if { offset -> return }
+    ((offset + alignment - 1) / alignment) * alignment
+}
+
+asyncContextValueSize nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[nodeIndex] -> effectiveTypeId(context, state) => typeId
+    context.typeSizes[typeId] => valueSize
+    valueSize > 0 -> if { valueSize } else { 1 }
+}
+
+asyncResultContextSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncContextValueSize(context, state)
+}
+
+asyncParameterContextOffset functionIndex: Int, targetParameterIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncResultContextSize(context, state) => offset!
+    context.ir[functionIndex] => function
+    function.operand1 => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        offset! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => offset!
+        parameterIndex! == targetParameterIndex -> if { offset! -> return }
+        offset! + (parameterIndex! -> asyncContextValueSize(context, state)) => offset!
+        -1 => parameterIndex!
+    }
+    function.nextOperand => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        offset! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => offset!
+        parameterIndex! == targetParameterIndex -> if { offset! -> return }
+        offset! + (parameterIndex! -> asyncContextValueSize(context, state)) => offset!
+        parameter.nextOperand => parameterIndex!
+    }
+    -1
+}
+
+asyncContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncResultContextSize(context, state) => size!
+    context.ir[functionIndex] => function
+    function.operand1 => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        size! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => size!
+        size! + (parameterIndex! -> asyncContextValueSize(context, state)) => size!
+        -1 => parameterIndex!
+    }
+    function.nextOperand => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        size! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => size!
+        size! + (parameterIndex! -> asyncContextValueSize(context, state)) => size!
+        parameter.nextOperand => parameterIndex!
+    }
+    size!
+}
+
 emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
     context.ir[requestedFunctionIndex] => function
     requestedFunctionIndex -> emitFunctionNamed("_async_body", context, state) => functionEnd
@@ -30,13 +87,54 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "entry:" -> println
     "  %async_context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0" -> println
     "  %async_context = load ptr, ptr %async_context_slot, align 8" -> println
+    function.operand1 >= 0 -> if {
+        context.ir[function.operand1] => asyncPrimaryParameter
+        requestedFunctionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncPrimaryOffset
+        "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncPrimaryOffset)" -> println
+        "  %async_arg = load " -> print
+        asyncPrimaryParameter -> writeIrType(context, state)
+        ", ptr %async_arg_address, align " -> print
+        asyncPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
+    }
+    function.nextOperand => asyncAdditionalParameterIndex!
+    1 => asyncAdditionalParameterOrdinal!
+    asyncAdditionalParameterIndex! >= 0 -> while {
+        context.ir[asyncAdditionalParameterIndex!] => asyncAdditionalParameter
+        requestedFunctionIndex -> asyncParameterContextOffset(asyncAdditionalParameterIndex!, context, state) => asyncAdditionalOffset
+        "  %async_arg$(asyncAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncAdditionalOffset)" -> println
+        "  %async_arg$(asyncAdditionalParameterOrdinal!) = load " -> print
+        asyncAdditionalParameter -> writeIrType(context, state)
+        ", ptr %async_arg$(asyncAdditionalParameterOrdinal!)_address, align " -> print
+        asyncAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+        asyncAdditionalParameter.nextOperand => asyncAdditionalParameterIndex!
+        asyncAdditionalParameterOrdinal! + 1 => asyncAdditionalParameterOrdinal!
+    }
     function.typeOrigin == 1 and function.typeSymbol == 0
         -> if {
-            "  call void @sollang_m$(function.sourceModule)_s$(function.symbol)_async_body()" -> println
+            "  call void @sollang_m$(function.sourceModule)_s$(function.symbol)_async_body(" -> print
         } else {
             "  %async_result = call " -> print
             function -> writeIrType(context, state)
-            " @sollang_m$(function.sourceModule)_s$(function.symbol)_async_body()" -> println
+            " @sollang_m$(function.sourceModule)_s$(function.symbol)_async_body(" -> print
+        }
+    function.operand1 >= 0 -> if {
+        context.ir[function.operand1] -> writeIrType(context, state)
+        " %async_arg" -> print
+        function.nextOperand >= 0 -> if { ", " -> print }
+    }
+    function.nextOperand => asyncWorkerArgumentIndex!
+    1 => asyncWorkerArgumentOrdinal!
+    asyncWorkerArgumentIndex! >= 0 -> while {
+        context.ir[asyncWorkerArgumentIndex!] => asyncWorkerArgument
+        asyncWorkerArgument -> writeIrType(context, state)
+        " %async_arg$(asyncWorkerArgumentOrdinal!)" -> print
+        asyncWorkerArgument.nextOperand >= 0 -> if { ", " -> print }
+        asyncWorkerArgument.nextOperand => asyncWorkerArgumentIndex!
+        asyncWorkerArgumentOrdinal! + 1 => asyncWorkerArgumentOrdinal!
+    }
+    ")" -> println
+    not (function.typeOrigin == 1 and function.typeSymbol == 0)
+        -> if {
             "  store " -> print
             function -> writeIrType(context, state)
             " %async_result, ptr %async_context, align " -> print
@@ -53,18 +151,56 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "  ret void" -> println
     "}" -> println
 
-    "define %sollang.task @sollang_m$(function.sourceModule)_s$(function.symbol)() {" -> println
+    "define %sollang.task @sollang_m$(function.sourceModule)_s$(function.symbol)(" -> print
+    function.operand1 >= 0 -> if {
+        context.ir[function.operand1] => asyncWrapperPrimaryParameter
+        asyncWrapperPrimaryParameter -> writeIrType(context, state)
+        " %arg" -> print
+        function.nextOperand >= 0 -> if { ", " -> print }
+    }
+    function.nextOperand => asyncWrapperAdditionalParameterIndex!
+    1 => asyncWrapperAdditionalParameterOrdinal!
+    asyncWrapperAdditionalParameterIndex! >= 0 -> while {
+        context.ir[asyncWrapperAdditionalParameterIndex!] => asyncWrapperAdditionalParameter
+        asyncWrapperAdditionalParameter -> writeIrType(context, state)
+        " %arg$(asyncWrapperAdditionalParameterOrdinal!)" -> print
+        asyncWrapperAdditionalParameter.nextOperand >= 0
+            -> if { ", " -> print }
+        asyncWrapperAdditionalParameter.nextOperand => asyncWrapperAdditionalParameterIndex!
+        asyncWrapperAdditionalParameterOrdinal! + 1 => asyncWrapperAdditionalParameterOrdinal!
+    }
+    ") {" -> println
     "entry:" -> println
-    1 => asyncContextSize!
-    function.typeId >= 0 and function.typeId < (context.typeSizes -> len) and context.typeSizes[function.typeId] > 0
-        -> if { context.typeSizes[function.typeId] => asyncContextSize! }
-    "  %async_context = call ptr @malloc(i64 $(asyncContextSize!))" -> println
+    requestedFunctionIndex -> asyncContextStorageSize(context, state) => asyncContextSize
+    "  %async_context = call ptr @malloc(i64 $(asyncContextSize))" -> println
     "  %async_context_allocated = icmp ne ptr %async_context, null" -> println
     "  br i1 %async_context_allocated, label %async_initialize, label %async_allocation_failed" -> println
     "async_allocation_failed:" -> println
     "  call void @llvm.trap()" -> println
     "  unreachable" -> println
     "async_initialize:" -> println
+    function.operand1 >= 0 -> if {
+        context.ir[function.operand1] => asyncStoredPrimaryParameter
+        requestedFunctionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncStoredPrimaryOffset
+        "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredPrimaryOffset)" -> println
+        "  store " -> print
+        asyncStoredPrimaryParameter -> writeIrType(context, state)
+        " %arg, ptr %async_arg_address, align " -> print
+        asyncStoredPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
+    }
+    function.nextOperand => asyncStoredAdditionalParameterIndex!
+    1 => asyncStoredAdditionalParameterOrdinal!
+    asyncStoredAdditionalParameterIndex! >= 0 -> while {
+        context.ir[asyncStoredAdditionalParameterIndex!] => asyncStoredAdditionalParameter
+        requestedFunctionIndex -> asyncParameterContextOffset(asyncStoredAdditionalParameterIndex!, context, state) => asyncStoredAdditionalOffset
+        "  %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredAdditionalOffset)" -> println
+        "  store " -> print
+        asyncStoredAdditionalParameter -> writeIrType(context, state)
+        " %arg$(asyncStoredAdditionalParameterOrdinal!), ptr %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address, align " -> print
+        asyncStoredAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+        asyncStoredAdditionalParameter.nextOperand => asyncStoredAdditionalParameterIndex!
+        asyncStoredAdditionalParameterOrdinal! + 1 => asyncStoredAdditionalParameterOrdinal!
+    }
     "  %async_handle = call ptr @sollang_task_start(ptr @sollang_m$(function.sourceModule)_s$(function.symbol)_async_worker, ptr @free, ptr @sollang_m$(function.sourceModule)_s$(function.symbol)_async_cancel, ptr %async_context)" -> println
     "  %async_started = icmp ne ptr %async_handle, null" -> println
     "  br i1 %async_started, label %async_ready, label %async_start_failed" -> println

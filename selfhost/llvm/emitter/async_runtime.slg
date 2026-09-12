@@ -467,13 +467,8 @@ emitCommonRuntime: -> Unit uses Console {
     """ -> println
 }
 
-public emitWindowsRuntime functions: llvmRuntime.RuntimeFunctionSymbols -> Unit uses Console {
+emitWindowsWaitRuntime: -> Unit uses Console {
     "declare dllimport void @Sleep(i32)" -> println
-    "define internal i64 @sollang_now_millis() {" -> println
-    "entry:" -> println
-    "  %value = call i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)()" -> println
-    "  ret i64 %value" -> println
-    "}" -> println
     """
     define internal void @sollang_wait_millis(i64 %requested) {
     entry:
@@ -484,16 +479,33 @@ public emitWindowsRuntime functions: llvmRuntime.RuntimeFunctionSymbols -> Unit 
       ret void
     }
     """ -> println
-    emitCommonRuntime()
 }
 
-public emitLinuxRuntime functions: llvmRuntime.RuntimeFunctionSymbols -> Unit uses Console {
-    "declare i32 @nanosleep(ptr, ptr)" -> println
+public emitWindowsRuntime functions: llvmRuntime.RuntimeFunctionSymbols -> Unit uses Console {
     "define internal i64 @sollang_now_millis() {" -> println
     "entry:" -> println
     "  %value = call i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)()" -> println
     "  ret i64 %value" -> println
     "}" -> println
+    emitWindowsWaitRuntime()
+    emitCommonRuntime()
+}
+
+public emitStandaloneWindowsRuntime: -> Unit uses Console {
+    "declare dllimport i64 @GetTickCount64()" -> println
+    """
+    define internal i64 @sollang_now_millis() {
+    entry:
+      %value = call i64 @GetTickCount64()
+      ret i64 %value
+    }
+    """ -> println
+    emitWindowsWaitRuntime()
+    emitCommonRuntime()
+}
+
+emitLinuxWaitRuntime: -> Unit uses Console {
+    "declare i32 @nanosleep(ptr, ptr)" -> println
     """
     define internal void @sollang_wait_millis(i64 %millis) {
     entry:
@@ -509,5 +521,35 @@ public emitLinuxRuntime functions: llvmRuntime.RuntimeFunctionSymbols -> Unit us
       ret void
     }
     """ -> println
+}
+
+public emitLinuxRuntime functions: llvmRuntime.RuntimeFunctionSymbols -> Unit uses Console {
+    "define internal i64 @sollang_now_millis() {" -> println
+    "entry:" -> println
+    "  %value = call i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)()" -> println
+    "  ret i64 %value" -> println
+    "}" -> println
+    emitLinuxWaitRuntime()
+    emitCommonRuntime()
+}
+
+public emitStandaloneLinuxRuntime: -> Unit uses Console {
+    "declare i32 @clock_gettime(i32, ptr)" -> println
+    """
+    define internal i64 @sollang_now_millis() {
+    entry:
+      %time = alloca [2 x i64], align 8
+      %ignored = call i32 @clock_gettime(i32 1, ptr %time)
+      %seconds_slot = getelementptr inbounds [2 x i64], ptr %time, i64 0, i64 0
+      %nanoseconds_slot = getelementptr inbounds [2 x i64], ptr %time, i64 0, i64 1
+      %seconds = load i64, ptr %seconds_slot, align 8
+      %nanoseconds = load i64, ptr %nanoseconds_slot, align 8
+      %seconds_millis = mul i64 %seconds, 1000
+      %nanoseconds_millis = udiv i64 %nanoseconds, 1000000
+      %value = add i64 %seconds_millis, %nanoseconds_millis
+      ret i64 %value
+    }
+    """ -> println
+    emitLinuxWaitRuntime()
     emitCommonRuntime()
 }

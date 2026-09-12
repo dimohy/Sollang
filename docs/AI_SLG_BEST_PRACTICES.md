@@ -994,12 +994,17 @@ started first. Do not detach tasks, hide unbounded task creation, hold a mutable
 borrow across overlap, or assume `async` grants `File`, `Clock`, or `Process`.
 
 Current self-host support is intentionally narrower than the managed contract.
-The focused zero-parameter async function plus canonical
-`Duration.sleep`/`await` path owns a real affine Task and scheduler timer queue;
-it is not a synchronous compatibility lowering. Do not infer support for
-parameters, captures, multiple suspension states, typed spill/resume, fallible
-completion, or cancellation ownership until their focused fixtures and required
-platform gates pass.
+The canonical `Duration.sleep`/`await` path owns a real affine Task and scheduler
+timer queue; it is not a synchronous compatibility lowering. Ordinary async
+functions preserve primary and additional inputs in one aligned typed Task
+context, including an affine input on the verified normal-completion path.
+Standalone Windows and Linux native modules emit their own complete scheduler
+when no stdlib runtime module is present. Prefer binding a Task owner and then
+awaiting it when ownership or overlap should be explicit. Direct chained await
+with an affine additional input, captures, cancellation before first execution,
+multiple suspension states, typed spill/resume, fallible completion, and full
+cancellation ownership remain unsupported until their focused fixtures and
+required platform gates pass.
 
 For structured logging, let `std.log.Logger.record` filter before constructing
 fields. Match the returned `Option<Record>`; only the `Some` branch should

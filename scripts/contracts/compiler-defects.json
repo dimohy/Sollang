@@ -6904,6 +6904,76 @@
         "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-414/baseline.json",
         "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-414/candidate.json"
       }
+    },
+    {
+      "id": "C2026-09-13-415",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "selfhost affine Task parameter context ABI",
+      "rootCause": "The selfhost async wrapper exposed the source parameters but allocated context storage only for the result, the worker reloaded no inputs, and it invoked the parameterized async body without arguments. LLVM remained structurally callable enough to link in some paths while runtime values became nondeterministic. The repair defines one aligned typed context layout with the result at offset zero, stores every primary and additional input before Task publication, and reloads the exact values in the worker before calling the async body.",
+      "focusedFixture": "c415-async-scalar-parameters starts two Tasks with distinct scalar inputs and c415-async-owned-parameter transfers an affine Dictionary through an explicitly owned Task. verify-selfhost-async-parameters-focused requires managed/selfhost exact execution, aligned wrapper-store/worker-load structure, standalone runtime closure, LLVM assembly, and direct-call closure in 11/11 checks.",
+      "closureGate": "Keep result and parameter context slots aligned by their authoritative semantic sizes and preserve exact source parameter order without hidden wrappers or per-parameter allocations. Windows focused execution passes 11/11, including affine owned-input normal completion. Captures, owned-input cancellation before first execution, multiple suspension states and typed spill/resume, fallible completion, and final accumulated Stage2/Stage3 remain separate promotion gates, so this defect stays candidate-fixed.",
+      "closedEvidence": [
+        "artifacts/scratch/c415-async-parameter-probe/selfhost.exe.ll preserves the pre-fix parameterless worker call while fixture 225 printed nondeterministic integers.",
+        "artifacts/scratch/incremental-c415-async-parameter-v3-standalone-runtime.result.json records a terminal candidate build pass with exit code zero and empty failure and orphan-process sets.",
+        "artifacts/scratch/selfhost-async-parameters-49ff4fe523644a8781938a8f217e3ee9/result.json records PASS 11/11 for candidate SHA-256 CB11A3804B2D98E80F77CEA183FBE24B5BF39633A856AA3DC810DBEDBA61545A."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-415/as-us-001.json",
+        "inputFingerprint": "3F5E7D3FFEA874D191749492CD479FE6097D335CC932E6C1F60925DDE2EAF9CA",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-415/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-415/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-416",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "selfhost standalone native Task runtime call-definition closure",
+      "rootCause": "Async capability detection emitted Task values and scheduler calls for a standalone async program, but native context preparation emitted the scheduler definitions only when a stdlib runtime module was present. The module therefore called sollang_task_join without a definition. The repair separates platform wait primitives from stdlib runtime ownership and emits a complete standalone scheduler with GetTickCount64/Sleep on Windows and clock_gettime/nanosleep on Linux whenever async capability alone requires it.",
+      "focusedFixture": "225-structured-async is compiled against a minimal readable source root containing no stdlib runtime module. The focused Windows verifier and Linux raw-LLVM path require Task start/join/release definitions, direct-call closure, llvm-as, native link, exact execution 36 then 49, and real platform clock/wait primitives.",
+      "closureGate": "Every native module that emits a Task scheduler call must contain the matching definition regardless of stdlib runtime-module presence. Windows focused verification passes within 11/11 and Linux standalone LLVM assembles, links, and executes exactly. Preserve browser capability behavior and keep candidate-fixed until final accumulated Stage2/Stage3 promotion covers the current source fingerprint.",
+      "closedEvidence": [
+        "artifacts/scratch/incremental-c415-async-parameter-v2-managed-recovery.result.json preserves llvm-as failure on undefined sollang_task_join with zero orphan processes.",
+        "artifacts/scratch/selfhost-async-parameters-49ff4fe523644a8781938a8f217e3ee9/result.json records the Windows standalone Task runtime and exact execution pass.",
+        "artifacts/scratch/c416-linux-standalone/standalone.ll has SHA-256 C7F71925FCFB64885D39BD3A7929B660636D8F7CA953182457B5909ADAAC72A3 and its linked Linux executable prints 36 then 49."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-416/as-us-001.json",
+        "inputFingerprint": "95DD977C8219D77D78C6563A86D3D2B8B3B37B59420E7591DF2CD81737791275",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-416/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-416/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-417",
+      "classification": "latent-defect",
+      "state": "open",
+      "owner": "selfhost inherent method call resolution with additional arguments",
+      "rootCause": "Isolation is pending. The current selfhost candidate leaves counter.weighted(6, 2) with declaration identity -1/-1 and a Unit initializer even though the managed compiler resolves the concrete Counter receiver and Int result. The failure is independent of the preceding async operations and reaches the pre-LLVM S054/V006 gates.",
+      "focusedFixture": "c417-instance-method-additional-arguments isolates one concrete receiver, two additional Int arguments, and exact output method=32. Regression 406 preserves the original mixed call surface and expected output.",
+      "closureGate": "Identify and repair the authoritative receiver-aware semantic resolution path without a name-based or fixture-specific fallback. Require managed/selfhost exact output, nonnegative declaration identity before LLVM, warning and note zero, llvm-as, direct-call closure, retained generic/qualified method controls, and final accumulated Stage2/Stage3 promotion.",
+      "closedEvidence": [],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-417/as-us-001.json",
+        "inputFingerprint": "D9E0EEE31853FFEBD2AAA38AD5328AB93A194CB7EE566333B5F606B786DB95C7",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-417/baseline.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-418",
+      "classification": "latent-defect",
+      "state": "open",
+      "owner": "selfhost direct async-call await flow topology with affine additional input",
+      "rootCause": "Isolation is pending. In a direct flow from an async call with a moved additional Dictionary argument into await, selfhost emits the Task-producing call but no Task join/release and binds the Task value as the awaited Int result. The equivalent explicitly owned Task followed by await executes correctly, so the defect is in direct flow topology or await source/result association rather than the parameter context ABI.",
+      "focusedFixture": "c418-direct-owned-async-await isolates 30 -> consumeOwned(scores!) -> await => result and must print owned=31. c415-async-owned-parameter is the explicit-Task positive control; regression 234 retains direct scalar await and regression 406 retains the original broader case.",
+      "closureGate": "Preserve an explicit async-call stage and an await stage for direct flows with scalar and affine additional arguments, associate await with the exact Task producer, transfer ownership once, and emit join/release before consuming the underlying result. Require managed/selfhost exact execution, Typed IR topology, warning and note zero, llvm-as, direct-call closure, positive explicit-Task and direct-scalar controls, cancellation ownership follow-up, and final accumulated Stage2/Stage3 promotion.",
+      "closedEvidence": [],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-418/as-us-001.json",
+        "inputFingerprint": "4D0C44A1D9EC702A9BAA6972A946C08129843E1B0CC3B58B85A30B5A3394ACE3",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-418/baseline.json"
+      }
     }
   ]
 }

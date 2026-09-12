@@ -424,16 +424,22 @@ Compiler follow-up exposed by the time foundation: the managed backend stores a
 propagated `Err` in the async Task result slot and completes the internal `i1`
 readiness worker through its Boolean ABI. Fixture 1691 executes both the
 successful and propagated-error paths. The current-source self-host LLVM
-candidate now owns the first structured scheduler/timer slice: fixture 1066
-executes a zero-parameter async function, returns an affine Task from the exact
-`std.time.Duration.sleep` intrinsic, and consumes it through `await` without a
-blocking compatibility shim. The focused gate passes 11/11 with native exact
-execution, LLVM assembly, and direct-call closure. This is not broad async
-parity: parameters and captures, multiple suspension states, typed spill/resume,
-fallible completion, cancellation ownership, Windows/Linux differential
-execution, and accumulated Stage2/Stage3 promotion remain. Fixture 1062 protects
-the self-host value and instance-resolution foundation. A blocking sleep shim
-remains forbidden.
+candidate now owns the first structured scheduler/timer slice. Fixture 1066
+returns an affine Task from the exact `std.time.Duration.sleep` intrinsic and
+consumes it through `await` without a blocking compatibility shim. Async
+function wrappers place their result and every primary or additional parameter
+in one aligned typed context; workers reload the exact parameter order before
+calling the body. Focused fixtures execute distinct scalar inputs and an affine
+Dictionary input through normal completion. A standalone native async module
+also emits its complete scheduler without depending on the stdlib runtime
+module; fixture 225 assembles, links, and prints `36` then `49` on Windows and
+Linux. The combined focused gate passes 11/11 on Windows. This is not broad
+async parity: captures, direct chained await with an affine additional input,
+owned-input cancellation before first execution, multiple suspension states,
+typed spill/resume, fallible completion, full cancellation ownership, and
+accumulated Stage2/Stage3 promotion remain. Fixture 1062 protects the self-host
+value and instance-resolution foundation. A blocking sleep shim remains
+forbidden.
 `std.time` is the single public time API. Direct `sys.runtime` clock primitives
 remain internal implementation boundaries only; the former compatibility
 surface and global aliases are removed. Negative legacy durations are not
