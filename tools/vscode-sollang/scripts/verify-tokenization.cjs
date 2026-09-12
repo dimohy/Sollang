@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const textmate = require("vscode-textmate");
 const oniguruma = require("vscode-oniguruma");
-const { findArrowOffsets } = require("../arrow-highlighting");
+const { characterLiteralEnd, findArrowOffsets } = require("../arrow-highlighting");
 const Module = require("module");
 
 const extensionRoot = path.resolve(__dirname, "..");
@@ -33,7 +33,7 @@ function scopesFor(tokens, line, text) {
 }
 
 function verifyDecorationRuntime() {
-  const source = "value -> transform => result # -> =>\n\"-> =>\" -> println";
+  const source = "value -> transform => result # -> =>\n\"-> =>\" -> println\n'\"' -> println";
   const decorationTypes = [];
   const decorationCalls = [];
   const document = {
@@ -101,28 +101,40 @@ function verifyDecorationRuntime() {
     throw new Error(`decoration theme colors mismatch: ${JSON.stringify(colors)}`);
   }
   if (decorationCalls.length !== 2
-    || decorationCalls[0].ranges.length !== 2
+    || decorationCalls[0].ranges.length !== 3
     || decorationCalls[1].ranges.length !== 1) {
     throw new Error(`decoration activation mismatch: ${JSON.stringify(decorationCalls)}`);
   }
 }
 
 async function main() {
+  for (const source of ["'\u001b'", "'\"'", "'\\n'", "'\\''", "'😀'"]) {
+    if (characterLiteralEnd(source, 0) !== source.length) {
+      throw new Error(`valid character literal was not consumed exactly: ${JSON.stringify(source)}`);
+    }
+  }
+  for (const source of ["'''", "''", "'ab'", "'\\x'", "'\uD800'"]) {
+    if (characterLiteralEnd(source, 0) !== 1) {
+      throw new Error(`invalid character literal was consumed: ${JSON.stringify(source)}`);
+    }
+  }
+
   const arrowFixture = [
     "value -> transform => result # -> =>",
     "\"-> =>\" -> println",
     "\"\\\" -> print",
     "UInt16(value) -> hexDigit -> print",
+    "'\"' -> print => quote",
     "\"\"\"",
     "-> =>",
     "\"\"\" => rawText"
   ].join("\n");
   const highlighted = findArrowOffsets(arrowFixture);
   const highlightedText = (ranges) => ranges.map(([start, end]) => arrowFixture.slice(start, end));
-  if (JSON.stringify(highlightedText(highlighted.flow)) !== JSON.stringify(["->", "->", "->", "->", "->"])) {
+  if (JSON.stringify(highlightedText(highlighted.flow)) !== JSON.stringify(["->", "->", "->", "->", "->", "->"])) {
     throw new Error(`flow decoration lexer mismatch: ${JSON.stringify(highlighted.flow)}`);
   }
-  if (JSON.stringify(highlightedText(highlighted.binding)) !== JSON.stringify(["=>", "=>"])) {
+  if (JSON.stringify(highlightedText(highlighted.binding)) !== JSON.stringify(["=>", "=>", "=>"])) {
     throw new Error(`binding decoration lexer mismatch: ${JSON.stringify(highlighted.binding)}`);
   }
   verifyDecorationRuntime();
@@ -153,13 +165,25 @@ async function main() {
     ["workspace { members: [\"packages/base\"] }", "workspace", "keyword.control.declaration.manifest.sollang"],
     ["workspace { members: [\"packages/base\"] }", "members", "keyword.control.declaration.manifest.sollang"],
     ["project { dependencies: {} }", "dependencies", "keyword.control.declaration.manifest.sollang"],
-    ["self -> inspect", "self", "variable.language.special.sollang"]
+    ["self -> inspect", "self", "variable.language.special.sollang"],
+    ["'\u001b' -> print", "'\u001b'", "constant.character.sollang"],
+    ["'\"' -> print", "'\"'", "constant.character.sollang"],
+    ["'\\n' -> print", "'\\n'", "constant.character.sollang"],
+    ["'\\'' -> print", "'\\''", "constant.character.sollang"],
+    ["'😀' -> print", "'😀'", "constant.character.sollang"]
   ];
   for (const [line, text, expectedScope] of assertions) {
     const result = grammar.tokenizeLine(line);
     const scopes = scopesFor(result.tokens, line, text);
     if (!scopes.includes(expectedScope)) {
       throw new Error(`${JSON.stringify(text)} scopes ${scopes.join(" ")} do not include ${expectedScope}`);
+    }
+  }
+
+  for (const source of ["'''", "''", "'ab'", "'\\x'", "'\uD800'"]) {
+    const result = grammar.tokenizeLine(`${source} -> print`);
+    if (result.tokens.some((token) => token.scopes.includes("constant.character.sollang"))) {
+      throw new Error(`invalid character literal received character scope: ${JSON.stringify(source)}`);
     }
   }
 
@@ -182,6 +206,31 @@ async function main() {
     || !followingLineScopes.includes("storage.type.builtin.sollang")) {
     throw new Error(
       `backslash delimiter leaked string state: ${followingLineScopes.join(" ")}`);
+  }
+
+  let characterDelimiterStack = textmate.INITIAL;
+  const characterDelimiterLines = [
+    "'\"' -> print",
+    "UInt16(value) / UInt16(16) -> hexDigit -> print"
+  ];
+  const characterDelimiterTokens = [];
+  for (const line of characterDelimiterLines) {
+    const result = grammar.tokenizeLine(line, characterDelimiterStack);
+    characterDelimiterStack = result.ruleStack;
+    characterDelimiterTokens.push(result.tokens);
+  }
+  const characterScopes = scopesFor(characterDelimiterTokens[0], characterDelimiterLines[0], "\"");
+  if (!characterScopes.includes("constant.character.sollang")
+    || characterScopes.includes("string.quoted.double.sollang")) {
+    throw new Error(`double-quote character literal scopes mismatch: ${characterScopes.join(" ")}`);
+  }
+  const characterFollowingScopes = scopesFor(
+    characterDelimiterTokens[1],
+    characterDelimiterLines[1],
+    "UInt16");
+  if (characterFollowingScopes.includes("string.quoted.double.sollang")
+    || !characterFollowingScopes.includes("storage.type.builtin.sollang")) {
+    throw new Error(`character literal leaked string state: ${characterFollowingScopes.join(" ")}`);
   }
 
   const extensionManifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));

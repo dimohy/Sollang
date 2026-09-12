@@ -6,6 +6,21 @@ function quoteRunLength(text, start) {
     return end - start;
 }
 
+function characterLiteralEnd(text, start) {
+    let index = start + 1;
+    if (index >= text.length || text[index] === "\n" || text[index] === "\r") return start + 1;
+    if (text[index] === "\\") {
+        const escaped = text[index + 1];
+        if (escaped === undefined || !"0bfnrt\\'\"".includes(escaped)) return start + 1;
+        index += 2;
+    } else {
+        const scalar = text.codePointAt(index);
+        if (text[index] === "'" || (scalar >= 0xD800 && scalar <= 0xDFFF)) return start + 1;
+        index += scalar > 0xFFFF ? 2 : 1;
+    }
+    return index < text.length && text[index] === "'" ? index + 1 : start + 1;
+}
+
 function findArrowOffsets(text) {
     const flow = [];
     const binding = [];
@@ -39,6 +54,11 @@ function findArrowOffsets(text) {
             continue;
         }
 
+        if (character === "'") {
+            index = characterLiteralEnd(text, index);
+            continue;
+        }
+
         if (character === '"') {
             const runLength = quoteRunLength(text, index);
             index += runLength;
@@ -67,4 +87,4 @@ function findArrowOffsets(text) {
     return { flow, binding };
 }
 
-module.exports = { findArrowOffsets };
+module.exports = { characterLiteralEnd, findArrowOffsets };

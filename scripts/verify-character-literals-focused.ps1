@@ -15,15 +15,18 @@ $selfhostManifest = Join-Path $root 'examples/regression/expected/1732-selfhost-
 $constantFixture = Join-Path $root 'examples/regression/1733-selfhost-character-constant-evaluation.slg'
 $constantExpected = Join-Path $root 'examples/regression/expected/1733-selfhost-character-constant-evaluation.stdout.txt'
 $constantManifest = Join-Path $root 'examples/regression/expected/1733-selfhost-character-constant-evaluation.sources.txt'
+$selfhostGuidFixture = Join-Path $root 'examples/regression/1734-selfhost-guid-character-ranges.slg'
+$selfhostGuidExpected = Join-Path $root 'examples/regression/expected/1734-selfhost-guid-character-ranges.stdout.txt'
+$selfhostGuidManifest = Join-Path $root 'examples/regression/expected/1734-selfhost-guid-character-ranges.sources.txt'
 $output = Join-Path $root ('artifacts/scratch/character-literals-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $resultPath = Join-Path $output 'result.json'
 $record = [ordered]@{
     schemaVersion = 1
-    scope = 'managed-selfhost-character-literals-and-stdlib-runtime-textual-bytes'
+    scope = 'managed-selfhost-character-literals-and-stdlib-runtime-textual-bytes-and-control-shapes'
     status = 'running'
     completed = 0
-    total = 12
+    total = 14
     checks = @()
 }
 
@@ -65,6 +68,9 @@ try {
         $constantFixture,
         $constantExpected,
         $constantManifest,
+        $selfhostGuidFixture,
+        $selfhostGuidExpected,
+        $selfhostGuidManifest,
         (Join-Path $root 'syntax/sollang.lexer'),
         (Join-Path $root 'syntax/sollang.grammar'),
         (Join-Path $root 'syntax/generated/sollang_grammar.slg'),
@@ -125,6 +131,11 @@ try {
 
     $stdlibSources = @(Get-ChildItem -LiteralPath (Join-Path $root 'stdlib') -Filter '*.slg' -File -Recurse)
     if ($stdlibSources.Count -eq 0) { throw 'stdlib/runtime source inventory is empty' }
+    $record.stdlibSourceHashes = [ordered]@{}
+    foreach ($source in $stdlibSources | Sort-Object FullName) {
+        $relative = [IO.Path]::GetRelativePath($root, $source.FullName).Replace('\\', '/')
+        $record.stdlibSourceHashes[$relative] = (Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash
+    }
     $stdlibText = ($stdlibSources | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
     foreach ($forbidden in @(
         'suffix == 42',
@@ -150,18 +161,59 @@ try {
             throw "binary protocol/table numeric control drifted: $($binaryControl.Path)"
         }
     }
+    if ($stdlibText -match '\belse\s*\{\s*\}') {
+        throw 'stdlib/runtime retained an empty else body; express the fallback action or use the appropriate control shape'
+    }
     $record.stdlibSourceCount = $stdlibSources.Count
     Complete-Check 'all-stdlib-runtime-textual-byte-scan-and-binary-controls'
 
-    & (Join-Path $root 'scripts/format-authoritative-slg.ps1') -Check -Source @(
+    # A single subject with mutually exclusive outcomes uses one `when`.
+    # Independent phase checks remain separate when a successful arm advances
+    # state and deliberately allows the next phase to run in the same call.
+    foreach ($control in @(
+        @{ Path = 'stdlib/sys/path.slg'; Text = 'code -> when {' },
+        @{ Path = 'stdlib/sys/directory.slg'; Text = 'code -> when {' },
+        @{ Path = 'stdlib/sys/runtime/process.slg'; Text = 'self.completionState -> when {' },
+        @{ Path = 'stdlib/sys/runtime/process.slg'; Text = 'polled.state -> when {' },
+        @{ Path = 'stdlib/std/encoding/base64.slg'; Text = 'plan.valueLength -> when {' },
+        @{ Path = 'stdlib/std/encoding/base64.slg'; Text = 'self.pendingLength -> when {' },
+        @{ Path = 'stdlib/std/compress/zstd.slg'; Text = 'bytes -> when {' },
+        @{ Path = 'stdlib/std/compress/brotli.slg'; Text = 'code -> when {' },
+        @{ Path = 'stdlib/std/compress/gzip.slg'; Text = 'treeKind -> when {' },
+        @{ Path = 'stdlib/std/compress/gzip.slg'; Text = 'blockType -> when {' },
+        @{ Path = 'stdlib/std/compress/brotli/prefix_code.slg'; Text = 'low.value -> when {' },
+        @{ Path = 'stdlib/std/crypto/field25519.slg'; Text = 'bitIndex -> when {' },
+        @{ Path = 'stdlib/std/uri.slg'; Text = 'text -> byte(schemeScan!) => byte' + "`n" + '        byte -> when {' },
+        @{ Path = 'stdlib/std/net/http.slg'; Text = 'source -> byte(index!) => byte' + "`n" + '        byte -> when {' },
+        @{ Path = 'stdlib/std/text/json.slg'; Text = 'first -> when {' },
+        @{ Path = 'stdlib/std/text/json.slg'; Text = 'state -> when {' },
+        @{ Path = 'stdlib/std/text/regex.slg'; Text = 'suffix -> when {' }
+    )) {
+        $controlText = [IO.File]::ReadAllText((Join-Path $root $control.Path)).Replace("`r`n", "`n")
+        if (-not $controlText.Contains($control.Text, [StringComparison]::Ordinal)) {
+            throw "stdlib/runtime mutually exclusive control shape drifted: $($control.Path): $($control.Text)"
+        }
+    }
+    foreach ($sequential in @(
+        @{ Path = 'stdlib/std/compress/gzip.slg'; Text = 'decoder.dynamicPhase == 0 -> if {' },
+        @{ Path = 'stdlib/std/compress/gzip.slg'; Text = 'decoder.dynamicPhase == 1 -> if {' },
+        @{ Path = 'stdlib/std/compress/zstd/sequence.slg'; Text = 'mode == 3 -> if {' }
+    )) {
+        if (-not [IO.File]::ReadAllText((Join-Path $root $sequential.Path)).Contains($sequential.Text, [StringComparison]::Ordinal)) {
+            throw "stdlib/runtime intentional sequential phase control drifted: $($sequential.Path)"
+        }
+    }
+    Complete-Check 'all-stdlib-runtime-mutually-exclusive-and-sequential-control-shapes'
+
+    $formatSources = @($stdlibSources.FullName) + @(
         $positive,
         $selfhostFixture,
         $constantFixture,
-        (Join-Path $root 'stdlib/std/text/regex.slg'),
         (Join-Path $root 'selfhost/syntax/source.slg'),
         (Join-Path $root 'selfhost/syntax/lexer.slg'),
         (Join-Path $root 'selfhost/syntax/diagnostics.slg')
     )
+    & (Join-Path $root 'scripts/format-authoritative-slg.ps1') -Check -Source $formatSources
     Complete-Check 'authoritative-format'
 
     $generatedOne = Join-Path $output 'grammar-one.slg'
@@ -187,6 +239,10 @@ try {
     $constantSources = @(Get-Content -LiteralPath $constantManifest | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { Join-Path $root $_ })
     Invoke-Exact -Sources $constantSources -ExpectedPath $constantExpected -Name 'selfhost-character-constant-evaluation'
     Complete-Check 'selfhost-character-constant-evaluation-exact-output'
+
+    $selfhostGuidSources = @(Get-Content -LiteralPath $selfhostGuidManifest | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { Join-Path $root $_ })
+    Invoke-Exact -Sources $selfhostGuidSources -ExpectedPath $selfhostGuidExpected -Name 'selfhost-guid-character-ranges'
+    Complete-Check 'selfhost-guid-character-range-exact-output'
 
     foreach ($name in $negativeNames) {
         $source = Join-Path $root "examples/regression/diagnostics/$name.slg"

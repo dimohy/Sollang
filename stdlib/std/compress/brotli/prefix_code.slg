@@ -208,14 +208,21 @@ readBits input: [UInt8], position: prefix.Position, width: Int -> Result<Bits, E
 
 readFixedCodeLength input: [UInt8], position: prefix.Position -> Result<Bits, Error> {
     input -> readBits(position, 2)? => low
-    low.value == 0 -> if { Result<Bits, Error>.Ok(Bits { value: 0, position: low.position }) -> return }
-    low.value == 1 -> if { Result<Bits, Error>.Ok(Bits { value: 4, position: low.position }) -> return }
-    low.value == 2 -> if { Result<Bits, Error>.Ok(Bits { value: 3, position: low.position }) -> return }
-    input -> readBits(low.position, 1)? => third
-    third.value == 0 -> if { Result<Bits, Error>.Ok(Bits { value: 2, position: third.position }) -> return }
-    input -> readBits(third.position, 1)? => fourth
-    fourth.value == 0 -> if { 1 } else { 5 } => value
-    Result<Bits, Error>.Ok(Bits { value: value, position: fourth.position })
+    low.value -> when {
+        == 0 { Result<Bits, Error>.Ok(Bits { value: 0, position: low.position }) -> return }
+        == 1 { Result<Bits, Error>.Ok(Bits { value: 4, position: low.position }) -> return }
+        == 2 { Result<Bits, Error>.Ok(Bits { value: 3, position: low.position }) -> return }
+        else {
+            input -> readBits(low.position, 1)? => third
+            third.value == 0 -> if {
+                Result<Bits, Error>.Ok(Bits { value: 2, position: third.position })
+            } else {
+                input -> readBits(third.position, 1)? => fourth
+                fourth.value == 0 -> if { 1 } else { 5 } => value
+                Result<Bits, Error>.Ok(Bits { value: value, position: fourth.position })
+            }
+        }
+    }
 }
 
 buildTable parser: ref Parser, lengths: [Int], rootBits: Int -> Result<prefix.Table, Error> {
@@ -695,10 +702,11 @@ impl FixedCodeLengthReader {
                             read -> when {
                                 Incomplete(bits) { Result<FixedCodeLengthRead, Error>.Ok(model.FixedCodeLengthRead.NeedMore(bits)) -> return }
                                 Complete(value) {
-                                    value == 0 -> if { 0 } else {
-                                        value == 1 -> if { 4 } else {
-                                            value == 2 -> if { 3 } else { -1 }
-                                        }
+                                    value -> when {
+                                        == 0 { 0 }
+                                        == 1 { 4 }
+                                        == 2 { 3 }
+                                        else { -1 }
                                     } => decoded
                                     decoded >= 0 -> if {
                                         decoded => self.value

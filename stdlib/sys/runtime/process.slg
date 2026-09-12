@@ -27,31 +27,29 @@ impl Child {
     # Observes completion without blocking. A terminal result is cached so
     # repeated polls and a later consuming wait never reap or close twice.
     public tryWait: mut self -> Result<Option<ExitStatus>, Text> uses Process {
-        self.completionState == 1 -> if {
-            Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.Some(ExitStatus { code: self.exitCode })) -> return
+        self.completionState -> when {
+            == 1 { Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.Some(ExitStatus { code: self.exitCode })) }
+            == 2 { Result<Option<ExitStatus>, Text>.Err("signal") }
+            else {
+                self.token -> pollChild => polled
+                polled.state -> when {
+                    == 2 { Result<Option<ExitStatus>, Text>.Err("wait") }
+                    == 0 { Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.None) }
+                    == 3 {
+                        0 => self.token
+                        2 => self.completionState
+                        Result<Option<ExitStatus>, Text>.Err("signal")
+                    }
+                    == 1 {
+                        0 => self.token
+                        polled.exitCode => self.exitCode
+                        1 => self.completionState
+                        Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.Some(ExitStatus { code: self.exitCode }))
+                    }
+                    else { Result<Option<ExitStatus>, Text>.Err("wait") }
+                }
+            }
         }
-        self.completionState == 2 -> if {
-            Result<Option<ExitStatus>, Text>.Err("signal") -> return
-        }
-        self.token -> pollChild => polled
-        polled.state == 2 -> if {
-            Result<Option<ExitStatus>, Text>.Err("wait") -> return
-        }
-        polled.state == 0 -> if {
-            Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.None) -> return
-        }
-        polled.state == 3 -> if {
-            0 => self.token
-            2 => self.completionState
-            Result<Option<ExitStatus>, Text>.Err("signal") -> return
-        }
-        polled.state == 1 -> unless {
-            Result<Option<ExitStatus>, Text>.Err("wait") -> return
-        }
-        0 => self.token
-        polled.exitCode => self.exitCode
-        1 => self.completionState
-        Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.Some(ExitStatus { code: self.exitCode }))
     }
 
     public wait: move self -> Result<ExitStatus, Text> uses Process = intrinsic

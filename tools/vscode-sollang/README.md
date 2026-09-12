@@ -1,7 +1,7 @@
 # Sollang Language Support
 
-Version: 0.6.3
-Updated: 2026-07-26
+Version: 0.6.4
+Updated: 2026-09-12
 
 VS Code language support for Sollang `.slg` files and language-shaped project
 manifests.
@@ -13,7 +13,8 @@ source is left unchanged and the compiler's real parser diagnostic is shown.
 ## Features
 
 - Registers `.slg`, `sollang.project`, and `sollang.workspace` as `sollang`.
-- Highlights comments, interpolated strings, indentation-normalized raw multiline
+- Highlights comments, character literals such as `'a'`, `'\n'`, and `'"'`,
+  interpolated strings, indentation-normalized raw multiline
   strings, declarations (`struct`, nested `struct`, `enum`, `effect`, `trait`,
   `impl`), generics, async/effect clauses, `await`/`cancel` flow targets,
   receiver-only and parenthesized flow
@@ -28,7 +29,7 @@ source is left unchanged and the compiler's real parser diagnostic is shown.
   editor decorations so a pipeline remains visually traceable even when the
   active theme gives all operators the same TextMate color. String and comment
   contents are not decorated.
-- Adds indentation and bracket pairing for `{}`, `[]`, `()`, and `"`.
+- Adds indentation and bracket pairing for `{}`, `[]`, `()`, `"`, and `'`.
 - Formats `.slg` documents with the compiler's generated parser.
 - Provides snippets for `main`, functions, async functions, structs, enums,
   trait implementations, raw multiline strings, flow calls, `each`, `repeat`,
@@ -40,7 +41,7 @@ From this folder:
 
 ```powershell
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\sollang-language-support-0.6.3.vsix --force
+code --install-extension .\sollang-language-support-0.6.4.vsix --force
 ```
 
 For extension development, open this folder in VS Code and run the extension host

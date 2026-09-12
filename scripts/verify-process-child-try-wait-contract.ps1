@@ -37,8 +37,9 @@ Assert-NotContains 'stdlib/sys/process.slg' 'public exitCode: Int' 'opaque Child
 Assert-Contains 'stdlib/sys/runtime/process.slg' $contract.api 'public tryWait signature'
 Assert-Contains 'stdlib/sys/runtime/process.slg' '0 => self.token' 'completed owner token clear'
 Assert-Contains 'stdlib/sys/runtime/process.slg' '1 => self.completionState' 'completed owner cache commit'
-Assert-Contains 'stdlib/sys/runtime/process.slg' 'polled.state == 3 -> if {' 'terminal signal cache path'
-Assert-Contains 'stdlib/sys/runtime/process.slg' 'polled.state == 1 -> unless {' 'unknown poll state fail closed'
+Assert-Contains 'stdlib/sys/runtime/process.slg' 'polled.state -> when {' 'exclusive poll-state dispatch'
+Assert-Contains 'stdlib/sys/runtime/process.slg' '== 3 {' 'terminal signal cache path'
+Assert-Contains 'stdlib/sys/runtime/process.slg' 'else { Result<Option<ExitStatus>, Text>.Err("wait") }' 'unknown poll state fail closed'
 Assert-Contains 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs' '"sys.process.pollChild" => RequireProcessPollChildIntrinsicSignature(' 'managed poll intrinsic binding'
 Assert-Contains 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Process.cs' 'EmitRuntimePollChildProcessIntrinsic' 'managed poll lowering'
 Assert-Contains 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Process.cs' 'process_wait_cached_result' 'managed cached wait lowering'
@@ -53,4 +54,4 @@ Assert-Contains 'selfhost/llvm/text/platform_io.slg' '@sollang_poll_process' 'se
 foreach ($fixture in $contract.fixtures) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $fixture) -PathType Leaf)) { throw "missing tryWait fixture: $fixture" }
 }
-Write-Host "[process Child.tryWait contract] PASS 27/27 source and fixture authorities"
+Write-Host "[process Child.tryWait contract] PASS 28/28 source and fixture authorities"

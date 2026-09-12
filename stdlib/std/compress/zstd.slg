@@ -172,17 +172,19 @@ appendFrameHeader output: mut [UInt8; ~], length: Int, checksum: Bool -> Unit {
     output -> push(253)
     length -> contentSizeBytes => bytes
     checksum -> if { 4 } else { 0 } => checksumFlag
-    bytes == 1 -> if {
-        output -> push(UInt8(32 + checksumFlag))
-        output -> push(UInt8(length))
-    }
-    bytes == 2 -> if {
-        output -> push(UInt8(96 + checksumFlag))
-        output -> appendLe16(length - 256)
-    }
-    bytes == 4 -> if {
-        output -> push(UInt8(160 + checksumFlag))
-        output -> appendLe32(length)
+    bytes -> when {
+        == 1 {
+            output -> push(UInt8(32 + checksumFlag))
+            output -> push(UInt8(length))
+        }
+        == 2 {
+            output -> push(UInt8(96 + checksumFlag))
+            output -> appendLe16(length - 256)
+        }
+        else {
+            output -> push(UInt8(160 + checksumFlag))
+            output -> appendLe32(length)
+        }
     }
 }
 

@@ -3876,8 +3876,10 @@ n == 9 -> if {
 } -> label
 ```
 
-For multiple ordered conditions, `when` is preferred over chaining many nested
-`else if` branches:
+For multiple ordered conditions, `when` is preferred over chaining nested
+`if`/`else` expressions. Sollang does not add a prefix-style `elsif condition`
+after the flow-style `condition -> if`, because that would reverse the reading
+direction inside one decision:
 
 ```sollang
 when {

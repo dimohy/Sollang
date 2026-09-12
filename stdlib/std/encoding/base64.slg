@@ -101,35 +101,48 @@ usesPadding codec: Codec -> Bool {
 }
 
 alphabetValue codec: Codec, byte: UInt8 -> Int {
-    byte >= 'A' and byte <= 'Z' -> if { Int(byte - 'A') -> return }
-    byte >= 'a' and byte <= 'z' -> if { Int(byte - 'a') + 26 -> return }
-    byte >= '0' and byte <= '9' -> if { Int(byte - '0') + 52 -> return }
-    codec.alphabet -> when {
-        Standard {
-            byte == '+' -> if { 62 -> return }
-            byte == '/' -> if { 63 -> return }
-        }
-        UrlSafe {
-            byte == '-' -> if { 62 -> return }
-            byte == '_' -> if { 63 -> return }
+    when {
+        byte >= 'A' and byte <= 'Z' { Int(byte - 'A') }
+        byte >= 'a' and byte <= 'z' { Int(byte - 'a') + 26 }
+        byte >= '0' and byte <= '9' { Int(byte - '0') + 52 }
+        else {
+            codec.alphabet -> when {
+                Standard {
+                    byte -> when {
+                        == '+' { 62 }
+                        == '/' { 63 }
+                        else { -1 }
+                    }
+                }
+                UrlSafe {
+                    byte -> when {
+                        == '-' { 62 }
+                        == '_' { 63 }
+                        else { -1 }
+                    }
+                }
+            }
         }
     }
-    -1
 }
 
 alphabetDigit codec: Codec, value: Int -> UInt8 {
-    value < 26 -> if { UInt8(value + 'A') -> return }
-    value < 52 -> if { UInt8(value - 26 + 'a') -> return }
-    value < 62 -> if { UInt8(value - 52 + '0') -> return }
-    value == 62 -> if {
-        codec.alphabet -> when {
-            Standard { '+' -> return }
-            UrlSafe { '-' -> return }
+    value -> when {
+        < 26 { UInt8(value + 'A') }
+        < 52 { UInt8(value - 26 + 'a') }
+        < 62 { UInt8(value - 52 + '0') }
+        == 62 {
+            codec.alphabet -> when {
+                Standard { UInt8('+') }
+                UrlSafe { UInt8('-') }
+            }
         }
-    }
-    codec.alphabet -> when {
-        Standard { '/' }
-        UrlSafe { '_' }
+        else {
+            codec.alphabet -> when {
+                Standard { UInt8('/') }
+                UrlSafe { UInt8('_') }
+            }
+        }
     }
 }
 
@@ -324,20 +337,23 @@ impl Codec {
             self -> usesPadding -> if {
                 errorDecodePlan(errors.Kind.MissingPadding, UIntSize(input -> len)) -> return
             }
-            plan.valueLength == 1 -> if {
-                errorDecodePlan(errors.Kind.InvalidLength, UIntSize(input -> len)) -> return
-            }
-            plan.valueLength == 2 -> if {
-                plan.value1 % 16 == 0 -> unless {
-                    errorDecodePlan(errors.Kind.NonZeroPaddingBits, plan.offset1) -> return
+            plan.valueLength -> when {
+                == 1 {
+                    errorDecodePlan(errors.Kind.InvalidLength, UIntSize(input -> len)) -> return
                 }
-                outputLength! + 1 => outputLength!
-            }
-            plan.valueLength == 3 -> if {
-                plan.value2 % 4 == 0 -> unless {
-                    errorDecodePlan(errors.Kind.NonZeroPaddingBits, plan.offset2) -> return
+                == 2 {
+                    plan.value1 % 16 == 0 -> unless {
+                        errorDecodePlan(errors.Kind.NonZeroPaddingBits, plan.offset1) -> return
+                    }
+                    outputLength! + 1 => outputLength!
                 }
-                outputLength! + 2 => outputLength!
+                == 3 {
+                    plan.value2 % 4 == 0 -> unless {
+                        errorDecodePlan(errors.Kind.NonZeroPaddingBits, plan.offset2) -> return
+                    }
+                    outputLength! + 2 => outputLength!
+                }
+                else { errorDecodePlan(errors.Kind.InvalidLength, UIntSize(input -> len)) -> return }
             }
         }
         outputLength! <= maxOutputBytes -> unless {
@@ -417,14 +433,16 @@ impl Encoder {
         0 => index!
         index! < (input -> len) -> while {
             input[index!] => byte
-            self.pendingLength == 0 -> if {
-                byte => self.pending0
-                1 => self.pendingLength
-            } else {
-                self.pendingLength == 1 -> if {
+            self.pendingLength -> when {
+                == 0 {
+                    byte => self.pending0
+                    1 => self.pendingLength
+                }
+                == 1 {
                     byte => self.pending1
                     2 => self.pendingLength
-                } else {
+                }
+                else {
                     appendTriple(self.codec, self.pending0, self.pending1, byte, output)
                     0 => self.pendingLength
                 }
@@ -439,32 +457,36 @@ impl Encoder {
     }
 
     public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
-        0 => added!
-        self.pendingLength > 0 -> if {
-            self.codec -> usesPadding -> if { 4 } else { self.pendingLength + 1 } => added!
-        }
-        added! <= self.maxOutputBytes - self.produced
-            -> unless {
-                errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return
+        self.pendingLength -> when {
+            == 0 { Result<Int, Error>.Ok(0) }
+            == 1 {
+                self.codec -> usesPadding -> if { 4 } else { 2 } => added
+                added <= self.maxOutputBytes - self.produced
+                    -> unless { errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return }
+                output -> reserve((output -> len) + added)
+                Int(self.pending0) => bits
+                output -> push(self.codec -> alphabetDigit(bits / 4))
+                output -> push(self.codec -> alphabetDigit((bits % 4) * 16))
+                self.codec -> usesPadding -> if {
+                    output -> push('=')
+                    output -> push('=')
+                }
+                Result<Int, Error>.Ok(added)
             }
-        output -> reserve((output -> len) + added!)
-        self.pendingLength == 1 -> if {
-            Int(self.pending0) => bits
-            output -> push(self.codec -> alphabetDigit(bits / 4))
-            output -> push(self.codec -> alphabetDigit((bits % 4) * 16))
-            self.codec -> usesPadding -> if {
-                output -> push('=')
-                output -> push('=')
+            == 2 {
+                self.codec -> usesPadding -> if { 4 } else { 3 } => added
+                added <= self.maxOutputBytes - self.produced
+                    -> unless { errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return }
+                output -> reserve((output -> len) + added)
+                Int(self.pending0) * 256 + Int(self.pending1) => bits
+                output -> push(self.codec -> alphabetDigit(bits / 1_024 % 64))
+                output -> push(self.codec -> alphabetDigit(bits / 16 % 64))
+                output -> push(self.codec -> alphabetDigit((bits % 16) * 4))
+                self.codec -> usesPadding -> if { output -> push('=') }
+                Result<Int, Error>.Ok(added)
             }
+            else { errorInt(errors.Kind.InvalidLength, self.inputOffset) }
         }
-        self.pendingLength == 2 -> if {
-            Int(self.pending0) * 256 + Int(self.pending1) => bits
-            output -> push(self.codec -> alphabetDigit(bits / 1_024 % 64))
-            output -> push(self.codec -> alphabetDigit(bits / 16 % 64))
-            output -> push(self.codec -> alphabetDigit((bits % 16) * 4))
-            self.codec -> usesPadding -> if { output -> push('=') }
-        }
-        Result<Int, Error>.Ok(added!)
     }
 }
 
@@ -528,36 +550,38 @@ impl Decoder {
     }
 
     public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
-        self.valueLength == 0 -> if { Result<Int, Error>.Ok(0) -> return }
-        self.codec -> usesPadding -> if {
-            errorInt(errors.Kind.MissingPadding, self.inputOffset) -> return
-        }
-        self.valueLength == 1 -> if {
-            errorInt(errors.Kind.InvalidLength, self.inputOffset) -> return
-        }
-        self.valueLength == 2 -> if {
-            self.value1 % 16 == 0 -> unless {
-                errorInt(errors.Kind.NonZeroPaddingBits, self.offset1) -> return
-            }
-            1 => added
-            added <= self.maxOutputBytes - self.produced
-                -> unless {
-                    errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return
+        self.valueLength == 0 -> if {
+            Result<Int, Error>.Ok(0)
+        } else {
+            self.codec -> usesPadding -> if {
+                errorInt(errors.Kind.MissingPadding, self.inputOffset)
+            } else {
+                self.valueLength -> when {
+                    == 1 { errorInt(errors.Kind.InvalidLength, self.inputOffset) }
+                    == 2 {
+                        self.value1 % 16 == 0 -> unless {
+                            errorInt(errors.Kind.NonZeroPaddingBits, self.offset1) -> return
+                        }
+                        1 => added
+                        added <= self.maxOutputBytes - self.produced
+                            -> unless { errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return }
+                        output -> reserve((output -> len) + added)
+                        appendDecoded(self.value0, self.value1, -1, -1, output)
+                        Result<Int, Error>.Ok(added)
+                    }
+                    else {
+                        self.value2 % 4 == 0 -> unless {
+                            errorInt(errors.Kind.NonZeroPaddingBits, self.offset2) -> return
+                        }
+                        2 => added
+                        added <= self.maxOutputBytes - self.produced
+                            -> unless { errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return }
+                        output -> reserve((output -> len) + added)
+                        appendDecoded(self.value0, self.value1, self.value2, -1, output)
+                        Result<Int, Error>.Ok(added)
+                    }
                 }
-            output -> reserve((output -> len) + added)
-            appendDecoded(self.value0, self.value1, -1, -1, output)
-            Result<Int, Error>.Ok(added) -> return
-        }
-        self.value2 % 4 == 0 -> unless {
-            errorInt(errors.Kind.NonZeroPaddingBits, self.offset2) -> return
-        }
-        2 => added
-        added <= self.maxOutputBytes - self.produced
-            -> unless {
-                errorInt(errors.Kind.OutputLimitExceeded, self.inputOffset) -> return
             }
-        output -> reserve((output -> len) + added)
-        appendDecoded(self.value0, self.value1, self.value2, -1, output)
-        Result<Int, Error>.Ok(added)
+        }
     }
 }

@@ -287,13 +287,11 @@ utf8SequenceLength source: ref file.SourceText, start: UIntSize, end: UIntSize -
         source -> byte(start + 1) => second
         source -> byte(start + 2) => third
         third >= 128 and third <= 191 -> unless { 0 -> return }
-        first == 224 -> if {
-            second >= 160 and second <= 191 -> if { 3 -> return } else { 0 -> return }
+        first -> when {
+            == 224 { second >= 160 and second <= 191 -> if { 3 -> return } else { 0 -> return } }
+            == 237 { second >= 128 and second <= 159 -> if { 3 -> return } else { 0 -> return } }
+            else { second >= 128 and second <= 191 -> if { 3 -> return } else { 0 -> return } }
         }
-        first == 237 -> if {
-            second >= 128 and second <= 159 -> if { 3 -> return } else { 0 -> return }
-        }
-        second >= 128 and second <= 191 -> if { 3 -> return } else { 0 -> return }
     }
     first >= 240 and first <= 244 -> if {
         start + 3 < end -> unless { 0 -> return }
@@ -302,13 +300,11 @@ utf8SequenceLength source: ref file.SourceText, start: UIntSize, end: UIntSize -
         source -> byte(start + 3) => fourth
         third >= 128 and third <= 191 -> unless { 0 -> return }
         fourth >= 128 and fourth <= 191 -> unless { 0 -> return }
-        first == 240 -> if {
-            second >= 144 and second <= 191 -> if { 4 -> return } else { 0 -> return }
+        first -> when {
+            == 240 { second >= 144 and second <= 191 -> if { 4 -> return } else { 0 -> return } }
+            == 244 { second >= 128 and second <= 143 -> if { 4 -> return } else { 0 -> return } }
+            else { second >= 128 and second <= 191 -> if { 4 -> return } else { 0 -> return } }
         }
-        first == 244 -> if {
-            second >= 128 and second <= 143 -> if { 4 -> return } else { 0 -> return }
-        }
-        second >= 128 and second <= 191 -> if { 4 -> return } else { 0 -> return }
     }
     0
 }
@@ -530,55 +526,47 @@ first == '{' or first == '[' -> if {
                 makeToken(kind, start, start + 1, start, start + 1, 0, depth) => token
                 emitToken(reader, token) -> return
             }
-            first == 't' -> if {
-                reader.source -> literalMatches(start, reader.end, "true")
-                    -> unless {
-                        errorToken(errors.Kind.InvalidLiteral, start) -> return
+            first -> when {
+                == 't' {
+                    reader.source -> literalMatches(start, reader.end, "true")
+                        -> unless { errorToken(errors.Kind.InvalidLiteral, start) -> return }
+                    start + 4 => after
+                    after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
+                        -> if { errorToken(errors.Kind.InvalidLiteral, after) -> return }
+                    after => reader.index
+                    makeToken(model.TokenKind.True, start, after, start, after, 0, depth) => token
+                    emitToken(reader, token) -> return
+                }
+                == 'f' {
+                    reader.source -> literalMatches(start, reader.end, "false")
+                        -> unless { errorToken(errors.Kind.InvalidLiteral, start) -> return }
+                    start + 5 => after
+                    after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
+                        -> if { errorToken(errors.Kind.InvalidLiteral, after) -> return }
+                    after => reader.index
+                    makeToken(model.TokenKind.False, start, after, start, after, 0, depth) => token
+                    emitToken(reader, token) -> return
+                }
+                == 'n' {
+                    reader.source -> literalMatches(start, reader.end, "null")
+                        -> unless { errorToken(errors.Kind.InvalidLiteral, start) -> return }
+                    start + 4 => after
+                    after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
+                        -> if { errorToken(errors.Kind.InvalidLiteral, after) -> return }
+                    after => reader.index
+                    makeToken(model.TokenKind.Null, start, after, start, after, 0, depth) => token
+                    emitToken(reader, token) -> return
+                }
+                else {
+                    first == '-' or (first -> isDigit) -> if {
+                        reader.source -> scanNumber(start, reader.end)? => after
+                        after => reader.index
+                        makeToken(model.TokenKind.Number, start, after, start, after, 0, depth) => token
+                        emitToken(reader, token) -> return
                     }
-                start + 4 => after
-                after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
-                    -> if {
-                        errorToken(errors.Kind.InvalidLiteral, after) -> return
-                    }
-                after => reader.index
-                makeToken(model.TokenKind.True, start, after, start, after, 0, depth) => token
-                emitToken(reader, token) -> return
+                    errorToken(errors.Kind.ExpectedValue, start)
+                }
             }
-            first == 'f' -> if {
-                reader.source -> literalMatches(start, reader.end, "false")
-                    -> unless {
-                        errorToken(errors.Kind.InvalidLiteral, start) -> return
-                    }
-                start + 5 => after
-                after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
-                    -> if {
-                        errorToken(errors.Kind.InvalidLiteral, after) -> return
-                    }
-                after => reader.index
-                makeToken(model.TokenKind.False, start, after, start, after, 0, depth) => token
-                emitToken(reader, token) -> return
-            }
-            first == 'n' -> if {
-                reader.source -> literalMatches(start, reader.end, "null")
-                    -> unless {
-                        errorToken(errors.Kind.InvalidLiteral, start) -> return
-                    }
-                start + 4 => after
-                after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
-                    -> if {
-                        errorToken(errors.Kind.InvalidLiteral, after) -> return
-                    }
-                after => reader.index
-                makeToken(model.TokenKind.Null, start, after, start, after, 0, depth) => token
-                emitToken(reader, token) -> return
-            }
-            first == '-' or (first -> isDigit) -> if {
-                reader.source -> scanNumber(start, reader.end)? => after
-                after => reader.index
-                makeToken(model.TokenKind.Number, start, after, start, after, 0, depth) => token
-                emitToken(reader, token) -> return
-            }
-            errorToken(errors.Kind.ExpectedValue, start)
         }
 
         appendCodePoint output: mut [UInt8; ~], codePoint: Int -> Unit {
@@ -795,13 +783,12 @@ impl Reader {
         maxOutputBytes >= 0 -> unless {
             errorBytes(errors.Kind.InvalidLimit, token.start) -> return
         }
-        false => stringToken!
         token.kind -> when {
-            String { true => stringToken! }
-            Name { true => stringToken! }
-            else { }
-        }
-        stringToken! -> unless {
+            String { true }
+            Name { true }
+            else { false }
+        } => stringToken
+        stringToken -> unless {
             errorBytes(errors.Kind.WrongTokenKind, token.start) -> return
         }
         token.decodedLength <= maxOutputBytes -> unless {
@@ -849,7 +836,7 @@ impl Reader {
                     output! -> appendCodePoint(codePoint!)
                     next! => index!
                 }
-                else { }
+                else { errorBytes(errors.Kind.InvalidStringEscape, index!) -> return }
             }
             escaped != 'u' -> if { index! + 2 => index! }
         }
@@ -931,35 +918,38 @@ public next: mut self -> Result<Token, Error> {
     makeToken(model.TokenKind.Name, start, scan.end, start + 1, scan.contentEnd, scan.decodedLength, depth) => token
     emitToken(self, token) -> return
 }
-state == 22 -> if {
-    self.index < self.end and (self.source -> byte(self.index)) == ':'
-        -> unless {
-            errorToken(errors.Kind.ExpectedColon, self.index) -> return
-        }
-    self.index + 1 => self.index
-    setTopState(self.stack, 23)
-}
-state == 23 -> if {
-    setTopState(self.stack, 24)
-    scanValue(self, depth) -> return
-}
-state == 24 -> if {
-    self.index < self.end -> unless {
-        errorToken(errors.Kind.UnexpectedEnd, self.index) -> return
+state -> when {
+    == 22 {
+        self.index < self.end and (self.source -> byte(self.index)) == ':'
+            -> unless {
+                errorToken(errors.Kind.ExpectedColon, self.index) -> return
+            }
+        self.index + 1 => self.index
+        setTopState(self.stack, 23)
     }
-    self.source -> byte(self.index) => byte
-    byte == '}' -> if {
-    popState(self.stack) => discarded
-    self.index => start
+    == 23 {
+        setTopState(self.stack, 24)
+        scanValue(self, depth) -> return
+    }
+    == 24 {
+        self.index < self.end -> unless {
+            errorToken(errors.Kind.UnexpectedEnd, self.index) -> return
+        }
+        self.source -> byte(self.index) => byte
+        byte == '}' -> if {
+        popState(self.stack) => discarded
+        self.index => start
+        self.index + 1 => self.index
+        makeToken(model.TokenKind.EndObject, start, self.index, start, self.index, 0, topIndex) => token
+        emitToken(self, token) -> return
+    }
+    byte == ',' -> unless {
+        errorToken(errors.Kind.ExpectedCommaOrEnd, self.index) -> return
+    }
+    setTopState(self.stack, 21)
     self.index + 1 => self.index
-    makeToken(model.TokenKind.EndObject, start, self.index, start, self.index, 0, topIndex) => token
-    emitToken(self, token) -> return
 }
-byte == ',' -> unless {
-    errorToken(errors.Kind.ExpectedCommaOrEnd, self.index) -> return
-}
-setTopState(self.stack, 21)
-self.index + 1 => self.index
+else { continue }
 }
 }
 errorToken(errors.Kind.UnexpectedEnd, self.index)
@@ -992,7 +982,7 @@ public finish: mut self -> Result<Unit, Error> {
         self -> next? => token
         token.kind -> when {
             DocumentEnd { false => reading! }
-            else { }
+            else { continue }
         }
     }
     Result<Unit, Error>.Ok

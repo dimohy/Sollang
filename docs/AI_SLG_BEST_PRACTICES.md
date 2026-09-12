@@ -693,7 +693,10 @@ frame -> when {
 
 Use `if` for one local yes/no decision, `unless` for one failure-only guard,
 and `when` for ordered multi-way choice. This is a semantic choice, not merely
-a formatting preference.
+a formatting preference. Do not introduce a prefix-style `elsif condition`
+after a flow-style `condition -> if`; that reverses the reading direction
+inside one decision. Keep a binary choice as `if { ... } else { ... }`, and
+write three or more ordered conditions as one full-condition `when`.
 
 Use inclusive `..` and half-open `..<` ranges deliberately. Use `while` for a
 state-driven loop, `fold` for one accumulated value, and `each` for direct

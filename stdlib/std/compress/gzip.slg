@@ -322,31 +322,35 @@ streamAlignByte decoder: mut Decoder -> Unit {
 }
 
 streamTreeMaxBits decoder: ref Decoder, treeKind: Int -> Int {
-    treeKind == 0 -> if { decoder.literalTree.maxBits -> return }
-    treeKind == 1 -> if { decoder.distanceTree.maxBits -> return }
-    decoder.codeLengthTree.maxBits
+    treeKind -> when {
+        == 0 { decoder.literalTree.maxBits }
+        == 1 { decoder.distanceTree.maxBits }
+        else { decoder.codeLengthTree.maxBits }
+    }
 }
 
 streamTreeFirstCode decoder: ref Decoder, treeKind: Int, bits: Int -> Int {
-    treeKind == 0 -> if { decoder.literalTree.firstCodes[bits] -> return }
-    treeKind == 1 -> if { decoder.distanceTree.firstCodes[bits] -> return }
-    decoder.codeLengthTree.firstCodes[bits]
+    treeKind -> when {
+        == 0 { decoder.literalTree.firstCodes[bits] }
+        == 1 { decoder.distanceTree.firstCodes[bits] }
+        else { decoder.codeLengthTree.firstCodes[bits] }
+    }
 }
 
 streamTreeCount decoder: ref Decoder, treeKind: Int, bits: Int -> Int {
-    treeKind == 0 -> if { decoder.literalTree.counts[bits] -> return }
-    treeKind == 1 -> if { decoder.distanceTree.counts[bits] -> return }
-    decoder.codeLengthTree.counts[bits]
+    treeKind -> when {
+        == 0 { decoder.literalTree.counts[bits] }
+        == 1 { decoder.distanceTree.counts[bits] }
+        else { decoder.codeLengthTree.counts[bits] }
+    }
 }
 
 streamTreeSymbol decoder: ref Decoder, treeKind: Int, bits: Int, symbolOffset: Int -> Int {
-    treeKind == 0 -> if {
-        decoder.literalTree.symbols[decoder.literalTree.firstSymbols[bits] + symbolOffset] -> return
+    treeKind -> when {
+        == 0 { decoder.literalTree.symbols[decoder.literalTree.firstSymbols[bits] + symbolOffset] }
+        == 1 { decoder.distanceTree.symbols[decoder.distanceTree.firstSymbols[bits] + symbolOffset] }
+        else { decoder.codeLengthTree.symbols[decoder.codeLengthTree.firstSymbols[bits] + symbolOffset] }
     }
-    treeKind == 1 -> if {
-        decoder.distanceTree.symbols[decoder.distanceTree.firstSymbols[bits] + symbolOffset] -> return
-    }
-    decoder.codeLengthTree.symbols[decoder.codeLengthTree.firstSymbols[bits] + symbolOffset]
 }
 
 streamDecodeSymbol decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor, treeKind: Int -> Result<SymbolRead, Error> {
@@ -1248,30 +1252,34 @@ streamBlockHeader decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor
     read.available -> unless { Result<Bool, Error>.Ok(false) -> return }
     read.value % 2 == 1 => decoder.finalBlock
     read.value / 2 => blockType
-    blockType == 0 -> if {
-        decoder -> streamAlignByte
-        decoder_phases.Phase.StoredHeader => decoder.phase
-        Result<Bool, Error>.Ok(true) -> return
+    blockType -> when {
+        == 0 {
+            decoder -> streamAlignByte
+            decoder_phases.Phase.StoredHeader => decoder.phase
+            Result<Bool, Error>.Ok(true) -> return
+        }
+        == 1 {
+            fixedLiteralTree(decoder.processedInputBytes)? => decoder.literalTree
+            fixedDistanceTree(decoder.processedInputBytes)? => decoder.distanceTree
+            0 => decoder.compressedPhase
+            decoder_phases.Phase.Compressed => decoder.phase
+            Result<Bool, Error>.Ok(true) -> return
+        }
+        == 2 {
+            0 => decoder.dynamicPhase
+            0 => decoder.dynamicIndex
+            [Int; ~] => decoder.codeLengthLengths
+            [Int; ~] => decoder.dynamicLengths
+            decoder_phases.Phase.Dynamic => decoder.phase
+            Result<Bool, Error>.Ok(true) -> return
+        }
+        else {
+            Result<Bool, Error>.Err(Error {
+                kind: errors.Kind.UnsupportedDeflateBlock
+                offset: UIntSize(decoder.processedInputBytes)
+            }) -> return
+        }
     }
-    blockType == 1 -> if {
-        fixedLiteralTree(decoder.processedInputBytes)? => decoder.literalTree
-        fixedDistanceTree(decoder.processedInputBytes)? => decoder.distanceTree
-        0 => decoder.compressedPhase
-        decoder_phases.Phase.Compressed => decoder.phase
-        Result<Bool, Error>.Ok(true) -> return
-    }
-    blockType == 2 -> if {
-        0 => decoder.dynamicPhase
-        0 => decoder.dynamicIndex
-        [Int; ~] => decoder.codeLengthLengths
-        [Int; ~] => decoder.dynamicLengths
-        decoder_phases.Phase.Dynamic => decoder.phase
-        Result<Bool, Error>.Ok(true) -> return
-    }
-    Result<Bool, Error>.Err(Error {
-        kind: errors.Kind.UnsupportedDeflateBlock
-        offset: UIntSize(decoder.processedInputBytes)
-    })
 }
 
 streamStoredHeader decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Result<Bool, Error> {

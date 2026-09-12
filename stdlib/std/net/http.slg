@@ -193,13 +193,15 @@ lineEnd source: ref file.SourceText, start: UIntSize, headEnd: UIntSize -> Resul
     start => index!
     index! < headEnd -> while {
         source -> byte(index!) => byte
-        byte == '\r' -> if {
-            index! + 1 < headEnd and (source -> byte(index! + 1)) == '\n'
-                -> if { Result<UIntSize, Error>.Ok(index!) -> return }
-            errorOffset(errors.Kind.BareCarriageReturn, index!) -> return
+        byte -> when {
+            == '\r' {
+                index! + 1 < headEnd and (source -> byte(index! + 1)) == '\n'
+                    -> if { Result<UIntSize, Error>.Ok(index!) -> return }
+                errorOffset(errors.Kind.BareCarriageReturn, index!) -> return
+            }
+            == '\n' { errorOffset(errors.Kind.BareLineFeed, index!) -> return }
+            else { index! + 1 => index! }
         }
-        byte == '\n' -> if { errorOffset(errors.Kind.BareLineFeed, index!) -> return }
-        index! + 1 => index!
     }
     headEnd < (source -> len) -> if {
         errorOffset(errors.Kind.HeadLimitExceeded, headEnd)
